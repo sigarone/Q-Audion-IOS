@@ -39,19 +39,70 @@ enum PairwiseChainKeyResolver {
         }
     }
 
-    /// Same lookup ladder as `ChatMessageSendService`:
-    /// 1. `auto:<peerIdPrefix8>:<peerId>` (ContactKeyExchange-derived PSK).
-    /// 2. Bare `peerId` (legacy / manually-bound).
-    /// Throws `.pskMissing` — never a guessable fallback — when neither
-    /// is bound.
-    static func resolvePsk(peerId: String, vault: SovereignKeyVault) throws -> Data {
+    /// Candidate PSK names bound to `peerId`, newest-first.
+    ///
+    /// 1. `auto:<peerIdPrefix8>:<peerId>` — ContactKeyExchange-derived PSK.
+    /// 2. Bare `peerId` — legacy / manually-bound.
+    /// 3. `msg-psk:<peerId>` — the CALL-derived message PSK, peer-bound by
+    ///    `AppState.persistMessagePsk`.
+    ///
+    /// W-AVATARPSK (2026-08-02). Entry 3 is the fix for the reason a call
+    /// between two devices exchanged no avatar even after the trigger and
+    /// cooldown work landed. Android's resolver is
+    /// `SovereignKeyVault.findNewestForContact(contactId)`, and its call
+    /// handshake (`PqcHandshake`, line ~1483) persists the call-derived
+    /// message PSK with `contactId = peerContactId` — so on Android a
+    /// COMPLETED CALL is by itself sufficient to have a pairwise PSK bound
+    /// to that peer, which is exactly why call-only Android contacts
+    /// exchange avatars. iOS derives the identical secret
+    /// (`HKDF(sessionKey, salt: callId, info: "q-audion-msg-psk-v1")`, same
+    /// bytes on both ends of the same call) but filed it ONLY under
+    /// `call-<callIdPrefix8>` — keyed on the CALL, with no peer binding —
+    /// so this resolver could never find it and every avatar attempt on a
+    /// call-only relationship failed `.pskMissing`, silently, forever.
+    ///
+    /// Ordering mirrors Android's `maxWithOrNull(compareBy { ratchetVersion
+    /// }.thenBy { createdAt })` as closely as the iOS vault allows: it has
+    /// no per-entry ratchetVersion, so recency alone decides, with the
+    /// list order above as a deterministic tie-break when the Keychain
+    /// reports no creation date. Converging on "newest wins" is what makes
+    /// the two platforms pick the SAME key: right after a call both sides
+    /// have just written the same call-derived PSK, so it is the newest
+    /// entry on both.
+    private static func candidatesNewestFirst(peerId: String, vault: SovereignKeyVault) -> [String] {
         let prefix = peerId.count > 8 ? String(peerId.prefix(8)) : peerId
-        let autoName = "auto:\(prefix):\(peerId)"
-        if let stored = try vault.loadPsk(name: autoName), !stored.isEmpty {
-            return stored
+        let ranked: [String] = ["auto:\(prefix):\(peerId)", peerId, "msg-psk:\(peerId)"]
+        var dates: [String: Date] = [:]
+        for entry in vault.listPskEntries() {
+            if let created = entry.createdAt { dates[entry.name] = created }
         }
-        if let stored = try vault.loadPsk(name: peerId), !stored.isEmpty {
-            return stored
+        var rows: [(name: String, rank: Int, date: Date?)] = []
+        for (i, name) in ranked.enumerated() {
+            rows.append((name: name, rank: i, date: dates[name]))
+        }
+        rows.sort { lhs, rhs in
+            switch (lhs.date, rhs.date) {
+            case let (l?, r?):
+                if l != r { return l > r }
+                return lhs.rank < rhs.rank
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return lhs.rank < rhs.rank
+            }
+        }
+        return rows.map { $0.name }
+    }
+
+    /// Resolves the newest PSK genuinely bound to `peerId`. Throws
+    /// `.pskMissing` — never a guessable fallback — when none is bound.
+    static func resolvePsk(peerId: String, vault: SovereignKeyVault) throws -> Data {
+        for name in candidatesNewestFirst(peerId: peerId, vault: vault) {
+            if let stored = try vault.loadPsk(name: name), !stored.isEmpty {
+                return stored
+            }
         }
         throw ResolveError.pskMissing
     }

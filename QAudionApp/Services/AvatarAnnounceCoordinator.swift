@@ -66,6 +66,23 @@ final class AvatarAnnounceCoordinator {
         /// is fanning it out. `version` has just been bumped, so the
         /// cooldown is not what gates this one.
         case avatarChanged
+
+        /// Compact numeric form for the remote log. The shipper's fail-closed
+        /// redactor blobs any token it cannot prove structured —
+        /// `trigger=callConnect` and `reason=already-marked-sent` both arrive
+        /// as `[REDACTED:blob]`, which is how a whole call's worth of avatar
+        /// evidence turned out to be unreadable in a log pull. `trig=2`
+        /// survives intact, so every line below carries a numeric tail
+        /// alongside the human-readable prose (the prose still shows in the
+        /// on-device ring buffer and the Xcode console).
+        var code: Int {
+            switch self {
+            case .chatDecrypt:   return 1
+            case .callConnect:   return 2
+            case .keyExchange:   return 3
+            case .avatarChanged: return 4
+            }
+        }
     }
 
     /// Background trigger ceiling — see the class doc, point 1.
@@ -131,10 +148,17 @@ final class AvatarAnnounceCoordinator {
 
     private func performAnnounce(to peerId: String, trigger: Trigger) async {
         let peer8 = String(peerId.prefix(8))
-        let trig = trigger.rawValue
+        let trigCode = trigger.code
         let version = appState.selfAvatarVersion
+        // W-AVATARSHIP2 (2026-08-02): these two skip lines were `.debug`, and
+        // the device→Loki pipeline ships zero DEBUG records in practice (104
+        // records across a full call: 103 INFO, 1 WARN). So the decisive
+        // branch — the one that says WHY nothing was sent — was invisible in
+        // every log pull, leaving "ran and skipped" indistinguishable from
+        // "never ran" all over again. They are `.info` now: two lines per
+        // call at most, worth their weight.
         guard version > 0 else {
-            RTLog.debug("avatar", "skip to=\(peer8) trigger=\(trig) reason=no-self-avatar-yet")
+            RTLog.info("avatar", "skip no-self-avatar to=\(peer8) code=1 trig=\(trigCode) selfver=0")
             return
         }
         let priorSent = Self.lastVersionSent(toPeer: peerId)
@@ -146,16 +170,20 @@ final class AvatarAnnounceCoordinator {
         if priorSent >= version && !staleEnoughToRetry {
             let ageSec: Int = priorSentAt.map { Int(Date().timeIntervalSince($0)) } ?? -1
             Self.logSkipAlreadySent(
-                peer8: peer8, trigger: trig, priorSent: priorSent,
+                peer8: peer8, trigCode: trigCode, priorSent: priorSent,
                 version: version, ageSec: ageSec, cooldownSec: Int(cooldown))
             return
         }
         guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
               let jpegBytes = try? Data(contentsOf: cacheURL) else {
-            RTLog.warn("avatar", "skip to=\(peer8) trigger=\(trig) reason=self-file-missing-or-unreadable")
+            // Reachable state, not a corner case: a photo chosen in a build
+            // that predates the E2EE transport left a server avatar_url and
+            // NO local self.jpg. The user has to re-pick it once — same on
+            // Android, whose AvatarFileStore has no backfill either.
+            RTLog.warn("avatar", "skip self-file-missing to=\(peer8) code=3 trig=\(trigCode) selfver=\(version)")
             return
         }
-        await sendEnvelope(to: peerId, peer8: peer8, trigger: trig,
+        await sendEnvelope(to: peerId, peer8: peer8, trigCode: trigCode,
                            jpegBytes: jpegBytes, version: version)
     }
 
@@ -164,7 +192,7 @@ final class AvatarAnnounceCoordinator {
     private func sendEnvelope(
         to peerId: String,
         peer8: String,
-        trigger: String,
+        trigCode: Int,
         jpegBytes: Data,
         version: Int
     ) async {
@@ -179,9 +207,9 @@ final class AvatarAnnounceCoordinator {
             switch outcome {
             case .delivered, .sent:
                 Self.markSent(version: version, toPeer: peerId)
-                RTLog.info("avatar", "sent to=\(peer8) version=\(version) trigger=\(trigger)")
+                RTLog.info("avatar", "send ok=1 to=\(peer8) version=\(version) trig=\(trigCode)")
             case .failed(let reason):
-                RTLog.warn("avatar", "send NOT delivered to=\(peer8) trigger=\(trigger) reason=\(reason)")
+                RTLog.warn("avatar", "send ok=0 code=1 to=\(peer8) version=\(version) trig=\(trigCode) reason=\(reason)")
             }
         } catch AvatarAnnounceSender.SendError.pskMissing {
             // Fail-closed, exactly like Android's send path: no PSK bound to
@@ -189,9 +217,9 @@ final class AvatarAnnounceCoordinator {
             // caller that owns the relationship (the call-connect hook)
             // triggers the key exchange; doing it from here as well would
             // make every avatar attempt wire-chatty.
-            RTLog.warn("avatar", "send skipped to=\(peer8) trigger=\(trigger) reason=psk-missing")
+            RTLog.warn("avatar", "send ok=0 code=2 to=\(peer8) version=\(version) trig=\(trigCode)")
         } catch {
-            RTLog.warn("avatar", "send threw to=\(peer8) trigger=\(trigger) error=\(error)")
+            RTLog.warn("avatar", "send ok=0 code=3 to=\(peer8) version=\(version) trig=\(trigCode) error=\(error)")
         }
     }
 
@@ -226,13 +254,13 @@ final class AvatarAnnounceCoordinator {
         let cached = ContactsStore().load()
             .first(where: { $0.userId == senderId })?.avatarVersion ?? -1
         guard version > cached else {
-            RTLog.info("avatar", "receive skip from=\(peer8) version=\(version) cached=\(cached)")
+            RTLog.info("avatar", "recv applied=0 code=1 from=\(peer8) version=\(version) cached=\(cached)")
             return
         }
         do {
             try envelope.att.validate()
         } catch {
-            RTLog.warn("avatar", "receive failed validation from=\(peer8) error=\(error)")
+            RTLog.warn("avatar", "recv applied=0 code=2 from=\(peer8) error=\(error)")
             return
         }
         await downloadAndApply(envelope, senderId: senderId, peer8: peer8, version: version)
@@ -252,20 +280,20 @@ final class AvatarAnnounceCoordinator {
             let applied = ContactsStore().setAvatarLocalPath(
                 userId: senderId, path: fileURL, version: version)
             guard applied else {
-                RTLog.debug("avatar", "receive applied=false from=\(peer8) version=\(version)")
+                RTLog.info("avatar", "recv applied=0 code=3 from=\(peer8) version=\(version)")
                 return
             }
-            RTLog.info("avatar", "receive applied from=\(peer8) version=\(version)")
+            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version)")
             NotificationCenter.default.post(
                 name: AppState.chatRefreshNotification,
                 object: nil,
                 userInfo: ["peerUserId": senderId]
             )
         } catch AvatarAnnounceReceiver.ReceiveError.pskMissing {
-            RTLog.warn("avatar", "receive from=\(peer8) reason=psk-missing — triggering key exchange")
+            RTLog.warn("avatar", "recv applied=0 code=4 from=\(peer8)")
             appState.triggerKeyExchange(with: senderId)
         } catch {
-            RTLog.error("avatar", "receive failed from=\(peer8): \(error)")
+            RTLog.error("avatar", "recv applied=0 code=5 from=\(peer8): \(error)")
         }
     }
 
@@ -329,15 +357,15 @@ final class AvatarAnnounceCoordinator {
     /// indistinguishable from "never ran" in a log pull.
     private static func logSkipAlreadySent(
         peer8: String,
-        trigger: String,
+        trigCode: Int,
         priorSent: Int,
         version: Int,
         ageSec: Int,
         cooldownSec: Int
     ) {
-        let head: String = "skip to=" + peer8 + " trigger=" + trigger
-        let body: String = " reason=already-marked-sent priorSent=\(priorSent) currentVersion=\(version)"
-        let tail: String = " sentAgeSec=\(ageSec) cooldownSec=\(cooldownSec)"
-        RTLog.debug("avatar", head + body + tail)
+        let head: String = "skip already-sent to=" + peer8 + " code=2"
+        let body: String = " trig=\(trigCode) priorsent=\(priorSent) version=\(version)"
+        let tail: String = " age=\(ageSec) cd=\(cooldownSec)"
+        RTLog.info("avatar", head + body + tail)
     }
 }

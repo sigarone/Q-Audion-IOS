@@ -8944,6 +8944,35 @@ final class AppState: ObservableObject {
         } catch {
             print("[AppState] persistMessagePsk failed contact=\(peerContactId.prefix(8))…: \(error)")
         }
+        // W-AVATARPSK (2026-08-02) — second, PEER-BOUND copy of the same
+        // bytes. The entry above is keyed on the CALL, which is all the
+        // group-control lookup (`lookupGroupCtrlPskByEpoch`) needs, but it
+        // leaves the key unreachable to anything that asks "what PSK do I
+        // share with THIS peer" — `PairwiseChainKeyResolver`, and therefore
+        // every avatar/attachment control envelope. Android has no such gap:
+        // `PqcHandshake` stores its identical call-derived PSK with
+        // `contactId = peerContactId` and its resolver is
+        // `findNewestForContact`, which is precisely why a call alone is
+        // enough for two Android devices to exchange avatars while iOS —
+        // deriving the same secret from the same call — always failed
+        // `.pskMissing` and fell back to a ContactKeyExchange OFFER that a
+        // dropped WS can (and did, call cdd13e68) silently swallow.
+        //
+        // The `msg-psk` prefix is deliberate, not cosmetic:
+        // `KeyExportPolicy.origin(name:)` classifies it `.callDerived`, which
+        // keeps this entry non-exportable AND out of
+        // `PskAdvertising.fingerprintsForAdvertisement` — a call-derived key
+        // must never become a candidate 1:1 audio PSK. A name outside that
+        // convention would have silently defaulted into the eligible set.
+        guard !peerContactId.isEmpty else { return }
+        let peerBoundName = "msg-psk:" + peerContactId
+        do {
+            try SovereignKeyVault().storePsk(
+                name: peerBoundName, key: msgPsk, fingerprint: String(fp), keyClass: .shared)
+            RTLog.info("avatar", "call-derived PSK bound to peer=\(peerContactId.prefix(8))")
+        } catch {
+            RTLog.warn("avatar", "peer-bound call PSK store failed peer=\(peerContactId.prefix(8)) error=\(error)")
+        }
     }
 
     /// W396 — lazy-create the responder integration the first time we
@@ -10995,12 +11024,21 @@ final class AppState: ObservableObject {
         let hasPsk = (try? PairwiseChainKeyResolver.resolvePsk(
             peerId: peerId, vault: SovereignKeyVault()
         )) != nil
-        // W-AVATARCOOLDOWN (2026-08-02): the redaction in the log shipper
-        // eats `hasPsk=<bool>` (the substring "psk" is on the deny list), so
-        // the branch is logged as its own word instead — this is the ONE
-        // line that says which way a call-connect went.
-        let pskState: String = hasPsk ? "psk-present" : "psk-absent"
-        RTLog.info("avatar", "call-connect exchange peer=\(peerId.prefix(8)) state=\(pskState)")
+        // W-AVATARCOOLDOWN (2026-08-02): the log shipper's deny-scrub eats any
+        // token containing "psk", so the first attempt at this line shipped as
+        // `[REDACTED:blob] exchange [REDACTED:blob] [REDACTED:blob]` — the one
+        // line that says which way a call-connect went, redacted into
+        // uselessness. Branch word carries no "psk" substring now, and the two
+        // preconditions that decide whether anything can be sent at all ride
+        // along, so ONE call is enough to know why nothing happened.
+        // Numeric values only: the redactor keeps `selffile=0` but blobs
+        // `selffile=yes` (verified by running the shipper's own `redact_body`
+        // over these exact strings), and a blobbed value is no evidence at all.
+        let keyReady: Int = hasPsk ? 1 : 0
+        let selfVer: Int = self.selfAvatarVersion
+        let selfFile: Int = AvatarUploader.selfAvatarCacheURL != nil ? 1 : 0
+        let line: String = "callconnect ready=\(keyReady) selfver=\(selfVer) selffile=\(selfFile)"
+        RTLog.info("avatar", line)
         if hasPsk {
             maybeAnnounceAvatarTo(peerId, trigger: .callConnect)
         } else {
