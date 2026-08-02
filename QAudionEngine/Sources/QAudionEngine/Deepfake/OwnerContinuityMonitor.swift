@@ -23,14 +23,28 @@ import Foundation
 /// `SpeakerVerifier` is not `.ready` (no enrolled Voice-as-Key template) —
 /// this must never nag or penalize a user who has not opted in.
 ///
-/// Score scale: `verifier.verify(pcmFrame:)` returns RAW cosine similarity
-/// (`[-1, 1]`, see `SpeakerVerifier`'s class doc) — `verifiedThreshold`/
-/// `uncertainThreshold` below are calibrated against THAT scale, matching
-/// Android's `analysis/VoicePrintVault.verify()` (also raw cosine) and its
-/// `OwnerContinuityMonitor`'s real-device-tuned thresholds exactly. Do NOT
-/// feed a V-score (`[0, 1]`-mapped) here — that scale belongs to Tier 2's
-/// `ContactVoiceContinuityGate` only, see `SpeakerVerifier`'s class doc for
-/// why the two must not be conflated.
+/// Score scale — W-VSCORESCALE (2026-08-02). `verifier.verify(pcmFrame:)`
+/// returns a RAW COSINE in `[-1, 1]`, and this class converts it to
+/// `V_score = (cosine + 1) / 2` BEFORE thresholding, because
+/// `verifiedThreshold`/`uncertainThreshold` are V_score-scale values.
+///
+/// The previous version of this doc asserted the opposite — that the
+/// thresholds were calibrated against raw cosine and that a V-score must
+/// NOT be fed here — and the code thresholded the raw cosine directly. That
+/// was wrong in a way that disabled the whole signal. Those two constants
+/// were carried over from Android's `OwnerContinuityMonitor`, which had in
+/// turn carried them from `ContactVoiceContinuityGate`, and that gate is fed
+/// `SpeakerVerifier.computeVerificationScore` — a V_score. The number
+/// travelled across three classes and two platforms while its scale was
+/// silently dropped on the way.
+///
+/// Consequence, measured on Android before the identical fix there: 0.62 on
+/// raw cosine is V_score 0.81, a bar genuine speech never clears. The owner's
+/// own voice scored raw cosine 0.056–0.539 (mean 0.336) across a real call —
+/// as V_score, mean 0.668, comfortably over the 0.62 bar. Zero of 14 windows
+/// passed on the wrong scale; 11 of 14 passed on the right one. On iOS this
+/// surfaced as the peer's microphone shield sitting permanently on
+/// `.uncertain` (purple) no matter how long the owner spoke.
 public final class OwnerContinuityMonitor: @unchecked Sendable {
     public enum Level: String { case verified, uncertain, mismatch }
     public enum State: Equatable {
@@ -167,8 +181,19 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         let chunk = buffer
         buffer.removeAll(keepingCapacity: true)
 
-        let rawScore = verifier.verify(pcmFrame: chunk)
-        let smoothed = ema.map { Self.emaAlpha * rawScore + (1 - Self.emaAlpha) * $0 } ?? rawScore
+        // W-VSCORESCALE — convert to the scale the thresholds actually live
+        // on before comparing. `verify` returns a raw cosine; the constants
+        // are V_score values inherited (via Android) from
+        // ContactVoiceContinuityGate, which is fed
+        // SpeakerVerifier.computeVerificationScore. Thresholding the cosine
+        // directly made the effective bar V_score 0.81 and pinned the signal
+        // at .uncertain/.mismatch forever. See the class doc for the measured
+        // numbers. The conversion is affine and monotonic, so it changes no
+        // ordering — only that the value and the bar are finally in the same
+        // units. Smooth AFTER converting so `ema` is a V_score too.
+        let cosine = verifier.verify(pcmFrame: chunk)
+        let vScore = min(max((cosine + 1) / 2, 0), 1)
+        let smoothed = ema.map { Self.emaAlpha * vScore + (1 - Self.emaAlpha) * $0 } ?? vScore
         ema = smoothed
 
         let level: Level
@@ -179,6 +204,34 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         } else {
             level = .mismatch
         }
+        // Log BOTH numbers, same shape as SpeakerVerifier's own line and
+        // Android's — so no future trace can be read on the wrong scale
+        // again, which is the mistake that produced this bug and then a
+        // wrong diagnosis of it.
+        //
+        // `print` and not RTLog: RTLog lives in the app target
+        // (RuntimeLogSink.swift) and this file is in the QAudionEngine
+        // package, which cannot import it. print() rides the stdout tee,
+        // whose "stdout" tag is in ship-ios-logs.py's allow-list, so this
+        // actually reaches Loki — RTLog.debug would not have (DEBUG is
+        // dropped before shipping).
+        //
+        // Field widths obey the 12-character rule (see CallService's note):
+        // every `key=value` token must stay under 12 chars or the shipper's
+        // RE_BASE64_BLOB eats it. Hence the 3-letter level codes rather than
+        // `level.rawValue` — `lv=uncertain` is exactly 12 and would vanish,
+        // while `lv=verified`/`lv=mismatch` would survive, i.e. the log would
+        // have silently dropped precisely the state we are debugging.
+        // Verified against the shipper's real redact_body for all three.
+        let c = String(format: "%.3f", cosine)
+        let v = String(format: "%.3f", vScore)
+        let lv: String
+        switch level {
+        case .verified:  lv = "ver"
+        case .uncertain: lv = "unc"
+        case .mismatch:  lv = "mis"
+        }
+        print("[OwnerCont] cos=" + c + " v=" + v + " lv=" + lv)
         lock.lock()
         _mismatchStreak = (level == .mismatch) ? _mismatchStreak + 1 : 0
         lock.unlock()
