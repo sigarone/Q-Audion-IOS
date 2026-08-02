@@ -100,6 +100,59 @@ final class AppState: ObservableObject {
             self?.objectWillChange.send()
         }
 
+    /// W-AVATARCONNECT (2026-08-02) — ONE observer that fires the avatar
+    /// exchange whenever a call reaches a connected state, whichever code
+    /// path got it there.
+    ///
+    /// This is the piece that was still missing after the PSK binding fix.
+    /// The hook used to hang off `finalizeCallActive()` and
+    /// `performAcceptIncoming()` — two specific transition sites — but the
+    /// app has FIVE places that move a call to `.active`/`.encrypted`, and
+    /// all three entry points into `finalizeCallActive` are guarded on
+    /// `callState == .ringing`. Proven on the 19:25 call (1.0.927, this
+    /// device the initiator: `[PQC_DIAG_V4] initiator … fire=true`): the
+    /// call connected, audio ran both ways for minutes, `persistMessagePsk`
+    /// bound the call PSK to the peer — and neither `call_answer:` nor
+    /// `callconnect` appeared in the log, because the state reached
+    /// `.encrypted` through the sasReady observer instead, so the hook was
+    /// never on that path.
+    ///
+    /// Android has never had this problem: `QAudionApplication
+    /// .startCallAvatarExchange` collects `callController.state` in ONE
+    /// place and fires on `Connected` with a `previousCallId` dedupe,
+    /// independent of how the state got there. This is that, in Combine.
+    /// The two existing call sites are left in place: they are now
+    /// redundant rather than wrong, and the coordinator's per-peer
+    /// serialisation plus the 2-minute call cooldown collapse a duplicate
+    /// into a single send.
+    private lazy var callConnectAvatarObserver: AnyCancellable =
+        $callState
+            .sink { [weak self] newState in
+                guard let self else { return }
+                // Clear the per-call latch on teardown. Without this a call
+                // whose id was not bound yet (the latch then falls back to
+                // the peer id) would dedupe every LATER call to that same
+                // peer for the rest of the process lifetime.
+                if newState == .idle || newState == .ended {
+                    self.avatarExchangeFiredForCall = nil
+                    return
+                }
+                guard newState == .active || newState == .encrypted else { return }
+                guard let peerId = self.callContactId, !peerId.isEmpty else { return }
+                // Dedupe per call, mirroring Android's `previousCallId`
+                // check — the state can bounce .active → .encrypted (and a
+                // rekey can bounce it again) within one call.
+                let callKey = ((self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+                    .getActiveCallId()) ?? peerId
+                guard self.avatarExchangeFiredForCall != callKey else { return }
+                self.avatarExchangeFiredForCall = callKey
+                self.maybeExchangeAvatarOnCallConnect()
+            }
+
+    /// Call id (or peer id when no call id is bound yet) the avatar exchange
+    /// has already fired for — see `callConnectAvatarObserver`.
+    private var avatarExchangeFiredForCall: String?
+
     /// W74: long-lived backend provider whose WebSocket stays open as
     /// long as the user is authenticated. Server marks the user as
     /// `online` for as long as this WS is connected (see
@@ -1985,6 +2038,10 @@ final class AppState: ObservableObject {
         // anything can publish a presence update. `lazy` means touching it
         // here is a no-op on every call after the first.
         _ = presenceServiceForwarding
+        // W-AVATARCONNECT — materialize the call-connect avatar observer for
+        // the same reason: `lazy` means it does not exist until touched, and
+        // it has to be listening before the first call publishes a state.
+        _ = callConnectAvatarObserver
         // W-EARTOUCH — re-evaluate proximity monitoring on every audio route
         // change (Bluetooth/wired headset connect or disconnect mid-call),
         // not just the manual speaker toggle already covered in setSpeaker().
