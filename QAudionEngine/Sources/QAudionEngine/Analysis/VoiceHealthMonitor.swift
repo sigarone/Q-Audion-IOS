@@ -6,7 +6,20 @@ public final class VoiceHealthMonitor {
     public func analyze(pitch: VoiceAnalysisResult.Pitch, pcmFrame: Data) -> VoiceAnalysisResult.VoiceHealth {
         guard pitch.voiced else { return VoiceAnalysisResult.VoiceHealth(hnr: 0, breathiness: 1.0) }
         let hnr = estimateHNR(pcmFrame)
-        let breathiness = max(0, 1.0 - hnr / 20.0)
+        // Clamped at BOTH ends (2026-08-02). It was `max(0, …)` only, so the
+        // floor was enforced and the ceiling was not: HNR is a ratio in dB and
+        // goes NEGATIVE whenever noise dominates the harmonic part, which
+        // makes `1 - hnr/20` exceed 1. Measured 1.5292995 on a random-noise
+        // frame — the exact value `testNoiseInputHealth` reported before this
+        // class was excluded from CI on 2026-06-19.
+        //
+        // [0, 1] is the contract everywhere else in this file and its tests:
+        // the unvoiced early-return above hands back exactly 1.0, and
+        // `testShortFrameWithVoicedPitch` pins 1.0 for a zero-HNR frame. The
+        // value is rendered directly in the in-call diagnostics
+        // (`InCallScreen`, `LiveInCallScreen`), so out-of-range readings
+        // reached the UI on any noisy frame.
+        let breathiness = min(1.0, max(0, 1.0 - hnr / 20.0))
         return VoiceAnalysisResult.VoiceHealth(hnr: hnr, breathiness: breathiness)
     }
 

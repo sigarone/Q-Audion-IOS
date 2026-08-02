@@ -204,6 +204,7 @@ final class CrossPlatformTestVectors: XCTestCase {
     }
 
     func testSovereignIdentityKeychainPersistence() throws {
+        try KeychainAvailability.requireKeychain()
         let manager = SovereignIdentityManager()
         let identity = manager.generateIdentity(serverUrl: "https://voip.bcrypto.com", displayName: "Persist")
         try manager.saveIdentity(identity)
