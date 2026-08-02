@@ -704,6 +704,46 @@ public final class AudioCapture {
         return (sumSq / Double(frames)).squareRoot() * 100
     }
 
+    /// Receive-side playout health. Every field below was already being
+    /// counted and, until now, read by NOTHING — grep for `underruns` /
+    /// `hardDrops` / `playoutConcealed` outside this file returned zero hits,
+    /// so none of it ever reached a log line, let alone Loki. That made the
+    /// iOS receiver the one leg of a call whose audio quality could not be
+    /// measured at all: a user reporting choppy audio could not be confirmed
+    /// or contradicted from telemetry (W-IOSAUDIOSTARVE, 2026-08-02).
+    ///
+    /// The counters discriminate between the two causes that look identical
+    /// from the outside:
+    ///   - starved CONSUMER — high `underruns` + high `concealed`, `depth`
+    ///     normal or low. The render side could not keep up.
+    ///   - bursty ARRIVAL — high `hardDrops` + `overruns`, `depth` spiking
+    ///     toward capacity. Frames arrived clumped.
+    /// `pushed` is the denominator; without it the drop counts cannot be read
+    /// as a rate.
+    public struct PlayoutStats: Sendable {
+        public let pushed: Int64
+        public let underruns: Int64
+        public let overruns: Int64
+        public let hardDrops: Int64
+        public let silenceDrops: Int64
+        public let concealed: Int
+        public let depth: Int
+    }
+
+    /// Snapshot of [PlayoutStats]. Cheap (six lock-guarded reads); safe from
+    /// any thread. Cumulative for the call — the caller reports deltas.
+    public var playoutStats: PlayoutStats {
+        PlayoutStats(
+            pushed: playoutJitter.pushed,
+            underruns: playoutJitter.underruns,
+            overruns: playoutJitter.overruns,
+            hardDrops: playoutJitter.hardDrops,
+            silenceDrops: playoutJitter.silenceDrops,
+            concealed: playoutConcealed,
+            depth: playoutJitter.depth,
+        )
+    }
+
     public func consumeLevelStats() -> LevelStats {
         let rms = rmsSampleCount > 0 ? (sumSqAmplitude / Double(rmsSampleCount)).squareRoot() : 0
         let limiterPct = rmsSampleCount > 0

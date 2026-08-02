@@ -1264,9 +1264,78 @@ final class CallService: @unchecked Sendable {
                     print("[CallService] RX: decrypted frame but audioCapture is nil — not audible")
                 }
                 if self.framesDecryptedRx % 250 == 0 {
+                    // W-IOSAUDIOSTARVE (2026-08-02): was
+                    // "<n> frames decrypted+played" — prose, which
+                    // ship-ios-logs.py's positive-allow-list redactor drops
+                    // WHOLESALE (verified against its own redact_body: the old
+                    // wording returns ship=False, empty body). That is why the
+                    // shipped corpus contained TX heartbeats and not a single
+                    // RX one, and nobody noticed.
+                    //
+                    // ⚠ THE 12-CHARACTER RULE — read before adding any field
+                    // here or anywhere else that must reach Loki. The shipper's
+                    // RE_BASE64_BLOB is /[A-Za-z0-9+/=_\-]{12,}/ and it runs on
+                    // the WHOLE line: ANY unbroken run of 12+ alphanumeric-ish
+                    // characters is replaced by [REDACTED:blob]. A `key=value`
+                    // token is one such run, so the token — key plus '=' plus
+                    // digits — must stay UNDER 12 characters or it silently
+                    // vanishes in transit while looking perfectly fine on the
+                    // device. `frames=180000` is 13 and dies; `rx=180000` is 9
+                    // and survives. That is the entire reason for the terse key
+                    // names below, and it is why every line here was verified
+                    // against the real redact_body with realistic values before
+                    // being committed.
                     let n: String = self.framesDecryptedRx.description
-                    let line: String = "[CallService] RX heartbeat: " + n + " frames decrypted+played"
+                    let line: String = "[CallService] RX heartbeat: rx=" + n
                     print(line)
+                    // W-IOSAUDIOSTARVE (2026-08-02) — playout health, every 250
+                    // frames (~5 s), alongside the frame count above.
+                    //
+                    // These counters were incremented and read by NOTHING, so
+                    // the iOS receiver was the one leg of a call whose audio
+                    // quality could not be measured: a "seghettato" report was
+                    // impossible to confirm or contradict from telemetry, and
+                    // the fix for it therefore impossible to verify.
+                    //
+                    // Deliberately emitted as flat key=value pairs of integers:
+                    // ship-ios-logs.py's redactor is a POSITIVE allow-list on
+                    // structured shape (see its HARD PRIVACY INVARIANT header),
+                    // so prose would be dropped to [REDACTED:blob] and the
+                    // numbers would never reach Loki — which is exactly how
+                    // this blind spot survived.
+                    //
+                    // Reading the result: underruns+concealed high with depth
+                    // normal = the render side could not keep up (starved
+                    // consumer). hardDrops+overruns high with depth near
+                    // capacity = frames arrived clumped (bursty wire). pushed
+                    // is the denominator; without it none of the rest is a rate.
+                    //
+                    // Keys are two characters BECAUSE OF THE 12-CHARACTER RULE
+                    // above, not for brevity: `underruns=489` is 13 characters
+                    // and ships as [REDACTED:blob], `un=489` is 6 and arrives.
+                    // At two characters the token survives up to a six-digit
+                    // value, i.e. ~1 hour of continuous call at 50 fps — well
+                    // past any real session. Verified against the shipper's own
+                    // redact_body at 1250, 180000 and pathological values.
+                    //   pu = pushed      un = underruns   ov = overruns
+                    //   hd = hardDrops   cc = concealed   dp = depth
+                    // `silenceDrops` is deliberately not emitted: tiers 1/2
+                    // discard frames that were inaudible anyway, so it is the
+                    // least diagnostic of the seven. It stays on `PlayoutStats`
+                    // for in-process callers. A seventh field needs its own
+                    // line — appending here would push the line past the
+                    // structured-shape budget.
+                    if let cap = self.audioCapture {
+                        let s = cap.playoutStats
+                        let stats: String = "[CallService] RX playout:"
+                            + " pu=" + s.pushed.description
+                            + " un=" + s.underruns.description
+                            + " ov=" + s.overruns.description
+                            + " hd=" + s.hardDrops.description
+                            + " cc=" + s.concealed.description
+                            + " dp=" + s.depth.description
+                        print(stats)
+                    }
                 }
                 let rxSamples = self.updateWaveformSamples(from: pcm)
                 self.onRxWaveformUpdate?(rxSamples)
