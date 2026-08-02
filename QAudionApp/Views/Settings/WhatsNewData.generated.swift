@@ -9,10 +9,28 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.929",
+              date: "2026-08-02",
+              title: "v1.0.929",
+              bullets: [
+                "feat(groups): delete a group chat from this device (leave + purge + tombstone)",
+              ]),
+        .init(id: "v1.0.928",
+              date: "2026-08-02",
+              title: "v1.0.928",
+              bullets: [
+                "fix(voice-auth): iOS had the same V_score/cosine scale bug as Android",
+                "ci: audit the 11 long-standing test skips (diagnostic, do not merge as-is) (#40)",
+                "test(voice): fix the SpeakerVerifier tests instead of skipping them",
+                "ci(engine-tests): skip only the three simulator-impossible voice cases",
+                "test(storage): fix the ConversationStore regression CI caught, drop a stale pin",
+                "test(storage): make the encrypted stores testable, cover LocalStoreCipher",
+              ]),
         .init(id: "v1.0.927",
               date: "2026-08-02",
               title: "v1.0.927",
               bullets: [
+                "chore: regenerate changelog for v1.0.927",
                 "fix(storage): encrypt message content at rest, unblock the invisible failures",
               ]),
         .init(id: "v1.0.926",
@@ -140,24 +158,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.910",
                 "refactor(deepfake): remove unused DeepfakeClassifier ref, document real fusion state",
                 "test(voice): fix stale 5-prompt assertion after 3-phrase Italian rewrite",
-              ]),
-        .init(id: "v1.0.909",
-              date: "2026-07-30",
-              title: "v1.0.909",
-              bullets: [
-                "chore: regenerate changelog for v1.0.909",
-                "fix(avatar): trigger E2EE avatar exchange on call-connect, not just chat decrypt",
-              ]),
-        .init(id: "v1.0.908",
-              date: "2026-07-30",
-              title: "v1.0.908",
-              bullets: [
-                "chore: regenerate changelog for v1.0.908",
-                "feat(voice): real Voice-as-Key pipeline + per-contact voice learning",
-                "fix(ci): disable standalone iOS KAT job, real coverage is in engine-tests.yml",
-                "fix(kat): dedupe SPM resource basename collision",
-                "fix(kat): vendor cross-platform vectors instead of CI curl",
-                "feat(kat): wire real cross-platform KAT against bcrypto-server vectors",
               ]),
     ]
 }
