@@ -13,6 +13,7 @@ extension ReleaseNote {
               date: "2026-08-02",
               title: "v1.0.925",
               bullets: [
+                "chore: regenerate changelog for v1.0.925",
                 "fix(avatar): bind the call-derived PSK to the peer, like Android does",
               ]),
         .init(id: "v1.0.924",
