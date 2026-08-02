@@ -29,6 +29,33 @@ public final class KeychainGroupSessionVault: GroupSessionVault, @unchecked Send
         return try? GroupSessionSnapshotCodec.decode(blob)
     }
 
+    /// W-GRPDEL (2026-08-02) — see the protocol doc. Deletes every keychain
+    /// item of this service whose account matches `<groupIdHex>|<any epoch>|<selfId>`.
+    ///
+    /// The epoch is not known here (the descending probe in
+    /// `GroupChatService.loadFromVault` exists precisely because it is not),
+    /// so the items are enumerated and filtered by account rather than
+    /// deleted by an exact query. Two things are deliberate:
+    ///
+    ///   - The `kSecAttrService` is pinned to this class's own service
+    ///     (`com.bcrypto.qaudion.group.v1`), so the 1:1 ratchet vault and
+    ///     every other keychain item this app owns are structurally out of
+    ///     reach — the filter cannot over-reach even if the account matching
+    ///     were wrong.
+    ///   - Deletion is per-account, and only for accounts matching BOTH the
+    ///     group prefix and the identity suffix. Another group the user is
+    ///     still in keeps its snapshots.
+    ///
+    /// `errSecItemNotFound` from the enumeration is the normal "no crypto
+    /// state for this group" case and is swallowed.
+    public func purge(groupIdBytes: Data, selfId: String) {
+        let prefix = "\(GroupSenderKey.toHex(groupIdBytes))|"
+        let suffix = "|\(selfId)"
+        for account in allAccounts() where account.hasPrefix(prefix) && account.hasSuffix(suffix) {
+            deleteBlob(account: account)
+        }
+    }
+
     // MARK: - Internal
 
     private static func account(_ gid: Data, _ epoch: UInt32, _ selfId: String) -> String {
@@ -47,6 +74,31 @@ public final class KeychainGroupSessionVault: GroupSessionVault, @unchecked Send
         let status = SecItemCopyMatching(q as CFDictionary, &item)
         if status != errSecSuccess { return nil }
         return item as? Data
+    }
+
+    /// Every account string currently stored under this vault's service.
+    /// Empty on `errSecItemNotFound` (nothing saved yet) and on any other
+    /// status — a keychain that will not enumerate must not crash a delete.
+    private func allAccounts() -> [String] {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var items: AnyObject?
+        let status = SecItemCopyMatching(q as CFDictionary, &items)
+        guard status == errSecSuccess, let rows = items as? [[String: Any]] else { return [] }
+        return rows.compactMap { $0[kSecAttrAccount as String] as? String }
+    }
+
+    private func deleteBlob(account: String) {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: account,
+        ]
+        _ = SecItemDelete(q as CFDictionary)
     }
 
     private func writeBlob(account: String, blob: Data) {
