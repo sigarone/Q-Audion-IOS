@@ -8,6 +8,15 @@ final class ContactsStoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        // A unit-test bundle in the simulator has no usable keychain:
+        // `SecItemAdd` returns -34018 (errSecMissingEntitlement), the store
+        // fails closed, and every round-trip assertion below fails on an
+        // empty read. That is why this whole suite went red the moment
+        // at-rest encryption landed (2026-08-01) and stayed red — masking
+        // any real regression in the store. Inject a fixed key instead of
+        // asking the keychain; the encrypt/decrypt path under test is
+        // identical either way, only the key SOURCE differs.
+        ContactsStore.testKeyOverride = Data(repeating: 0x2b, count: 32)
         let suite = "test.contactsstore.\(UUID().uuidString)"
         UserDefaults().removePersistentDomain(forName: suite)
         // Suite name is a freshly generated, well-formed non-empty string; UserDefaults(suiteName:) never returns nil for it.
@@ -17,6 +26,7 @@ final class ContactsStoreTests: XCTestCase {
     }
 
     override func tearDown() {
+        ContactsStore.testKeyOverride = nil
         store = nil
         defaults = nil
         super.tearDown()

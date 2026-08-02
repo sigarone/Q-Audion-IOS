@@ -127,7 +127,20 @@ public enum LocalStoreCipher {
 
     // MARK: - Key management
 
+    /// Test seam. `internal`, so it exists only for `@testable import` and
+    /// is invisible to the app target — production code can never set it.
+    ///
+    /// Without this the encrypted stores are literally untestable in CI: a
+    /// unit-test bundle in the simulator has no usable keychain, every
+    /// `SecItemAdd` returns `-34018 errSecMissingEntitlement`, and the store
+    /// fails closed. That is not a hypothetical — it is why every single
+    /// `ContactsStoreTests` case has been red since at-rest encryption
+    /// landed on 2026-08-01, which in turn means a real regression in this
+    /// code would be invisible behind an already-red suite.
+    internal static var testKeyOverride: Data?
+
     private static func loadOrCreateKey() -> Data? {
+        if let override = testKeyOverride { return override }
         if let existing = readKey() { return existing }
         let fresh = SymmetricKey(size: .bits256)
         let freshData = fresh.withUnsafeBytes { Data($0) }

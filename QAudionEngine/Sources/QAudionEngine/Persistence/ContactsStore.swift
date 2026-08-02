@@ -353,7 +353,12 @@ public final class ContactsStore {
     /// Keychain failure (never falls back to an in-memory-only or
     /// predictable key — a lost/inaccessible key means `encode`/`decode`
     /// both fail closed rather than silently degrading to plaintext).
+    /// Test seam — see `LocalStoreCipher.testKeyOverride` for why this
+    /// exists. `internal`, reachable only through `@testable import`.
+    internal static var testKeyOverride: Data?
+
     private static func loadOrCreateKey() -> Data? {
+        if let override = testKeyOverride { return override }
         if let existing = readKey() { return existing }
         // Not found (or corrupted length) — mint a fresh key.
         let fresh = SymmetricKey(size: .bits256)
