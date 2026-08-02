@@ -261,6 +261,51 @@ final class GroupMembershipApi {
         return await fire(req, label: "groups.removeMember[\(userId)]")
     }
 
+    /// POST /api/v1/groups/{gid}/leave — self-leave.
+    ///
+    /// W-GRPDEL (2026-08-02): iOS never called this. `AppState.leaveGroup`
+    /// tore down local state and shipped a P2P `member_left` envelope, but
+    /// the server was never told — so `GET /api/v1/groups` kept listing the
+    /// group and `reconcileAllGroupsFromServer` re-bootstrapped it, usually
+    /// under the raw-hex placeholder name. That is the "the group comes
+    /// back, renamed to a hex fragment" symptom.
+    ///
+    /// Server contract (`bcrypto-server/cmd/bcrypto-lite/groups_membership.go`,
+    /// `handleLeaveGroup`): body `{signed_envelope_b64, leaver_signature_b64}`
+    /// — note the LEAVER field name, not `admin_signature_b64` like every
+    /// other endpoint here, because the signer is the subject rather than an
+    /// admin. The envelope must carry `t = "member_left"` with `uid` equal
+    /// to the caller (the server rejects anything else 422). Reply is the
+    /// usual `membershipResponse`.
+    ///
+    /// Since server commit 54c9f5d, leaving a group you already left answers
+    /// **200 with no membership change** rather than 400 — do not treat that
+    /// as an error, it is the idempotency this whole feature depends on.
+    ///
+    /// `timeoutSeconds` is bounded well below URLSession's 60s default: the
+    /// caller purges local state after this returns, and a user tapping
+    /// "delete" must not watch the row sit there while a black-holed network
+    /// times out.
+    func leaveGroup(
+        groupIdWire: String,
+        signedEnvelopeB64: String,
+        leaverSignatureB64: String,
+        timeoutSeconds: TimeInterval = 8
+    ) async -> GroupMembershipResult? {
+        guard let url = endpoint("/api/v1/groups/\(groupIdWire)/leave") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = timeoutSeconds
+        addAuth(&req)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "signed_envelope_b64": signedEnvelopeB64,
+            "leaver_signature_b64": leaverSignatureB64,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return await fire(req, label: "groups.leave[\(groupIdWire)]")
+    }
+
     /// POST /api/v1/groups/{gid}/admins/{uid} — admin promotes `userId`.
     func promoteAdmin(
         groupIdWire: String,

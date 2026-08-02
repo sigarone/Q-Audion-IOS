@@ -45,6 +45,10 @@ struct GroupInfoScreen: View {
     @State private var renameDraft = ""
     @State private var avatarPickerItem: PhotosPickerItem?
     @State private var pendingAdminToggle: GroupMemberRowUi?
+    /// W-GRPDEL (2026-08-02) — confirmation for the explicit "Elimina chat"
+    /// action, kept separate from `showingLeaveConfirm` so each has its own
+    /// copy.
+    @State private var showingDeleteConfirm = false
     let onLeft: () -> Void
 
     // Fase 1A — admin membership affordances. Defaulted so pre-existing
@@ -60,6 +64,10 @@ struct GroupInfoScreen: View {
     private let onSetAvatar: (Data) -> Void
     private let onPromoteAdmin: (String) -> Void
     private let onDemoteAdmin: (String) -> Void
+    /// W-GRPDEL — "Elimina chat". Defaulted to `onLeft` so any call site
+    /// that has not been updated still gets a working (and now
+    /// server-authoritative) destructive action rather than a dead button.
+    private let onDelete: () -> Void
 
     init(state: GroupInfoUiState,
          isSelfAdmin: Bool = false,
@@ -70,7 +78,8 @@ struct GroupInfoScreen: View {
          onSetAvatar: @escaping (Data) -> Void = { _ in },
          onPromoteAdmin: @escaping (String) -> Void = { _ in },
          onDemoteAdmin: @escaping (String) -> Void = { _ in },
-         onLeft: @escaping () -> Void = {}) {
+         onLeft: @escaping () -> Void = {},
+         onDelete: (() -> Void)? = nil) {
         _state = State(initialValue: state)
         self.isSelfAdmin = isSelfAdmin
         self.addableContacts = addableContacts
@@ -81,6 +90,7 @@ struct GroupInfoScreen: View {
         self.onPromoteAdmin = onPromoteAdmin
         self.onDemoteAdmin = onDemoteAdmin
         self.onLeft = onLeft
+        self.onDelete = onDelete ?? onLeft
     }
 
     var body: some View {
@@ -115,6 +125,9 @@ struct GroupInfoScreen: View {
                         Spacer().frame(height: 24)
                         leaveRow
                             .padding(.horizontal, 16)
+                        Spacer().frame(height: 10)
+                        deleteRow
+                            .padding(.horizontal, 16)
 
                         if let err = state.error {
                             errorBanner(err)
@@ -134,7 +147,20 @@ struct GroupInfoScreen: View {
             Button("Annulla", role: .cancel) {}
             Button("Esci", role: .destructive) { handleLeave() }
         } message: {
-            Text("Non riceverai più i messaggi di questo gruppo. Per rientrare dovrai essere reinvitato da un admin.")
+            // W-GRPDEL — the old copy said only "non riceverai più i
+            // messaggi", which was not the whole truth: leaving already
+            // removed the chat from this device, and now also purges its
+            // history. Say so rather than surprising the user.
+            Text("Uscirai dal gruppo e la chat verrà rimossa da questo dispositivo, con tutti i suoi messaggi. Per rientrare dovrai essere reinvitato da un admin.")
+        }
+        // W-GRPDEL — the explicitly deletion-labelled action. Reachable here
+        // and from the chat list (swipe / long-press on the group row).
+        .alert("Eliminare la chat \"\(state.name)\"?",
+               isPresented: $showingDeleteConfirm) {
+            Button("Annulla", role: .cancel) {}
+            Button("Elimina", role: .destructive) { handleDelete() }
+        } message: {
+            Text("La chat e tutti i suoi messaggi verranno eliminati da questo dispositivo e uscirai dal gruppo. L'operazione non può essere annullata.")
         }
         .sheet(isPresented: $showingInviteQr) {
             // W52: medium detent così la QR è ben visibile ma il sheet
@@ -451,6 +477,40 @@ struct GroupInfoScreen: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Delete row (W-GRPDEL)
+
+    /// "Elimina chat" — the deletion-labelled affordance, available to ANY
+    /// member (never gated on creator/admin). Deliberately a separate row
+    /// from `leaveRow` above so the destructive intent is stated in the
+    /// user's own words; both end in the same operation, because on this
+    /// platform a group whose row is gone has no screen that can reach its
+    /// history.
+    private var deleteRow: some View {
+        Button(action: { showingDeleteConfirm = true }) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(extras.riskHigh.opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "trash")
+                        .foregroundStyle(extras.riskHigh)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                Text("Elimina chat")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(extras.riskHigh)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Elimina chat di gruppo")
+    }
+
     // MARK: - Helpers
 
     /// W321: builds "Aggiornato …" relative-time string with locale
@@ -476,6 +536,20 @@ struct GroupInfoScreen: View {
         ))
         dismiss()
         onLeft()
+    }
+
+    /// W-GRPDEL — "Elimina chat". Same shape as `handleLeave`: the caller
+    /// owns the groupId and wires `AppState.deleteGroupChat`, which is
+    /// fail-open (it purges locally and tombstones the id whatever the
+    /// server leave does), so this snackbar states the outcome that is
+    /// always true.
+    private func handleDelete() {
+        snackbar?.show(.init(
+            text: "Chat di gruppo eliminata.",
+            severity: .info
+        ))
+        dismiss()
+        onDelete()
     }
 
     private func errorBanner(_ msg: String) -> some View {

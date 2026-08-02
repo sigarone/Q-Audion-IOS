@@ -6219,6 +6219,22 @@ final class AppState: ObservableObject {
         // first contact). No registry entry → we haven't joined yet; the
         // sender_key_init that joins us is still in flight. Buffer + no
         // ACK (server keeps it pending until we catch up).
+        // W-GRPDEL — a frame for a group this device deleted. The sender does
+        // not know we left, and store-and-forward can replay frames queued
+        // before the delete, so this is expected traffic rather than an
+        // error. Drop it instead of buffering: the 128-slot retry buffer is
+        // shared with every other group's genuinely-recoverable frames, and
+        // nothing here will ever become decryptable (the crypto state was
+        // purged). ACK when live so the server stops re-delivering — without
+        // that, a failed server-side leave means this repeats forever.
+        if GroupTombstoneStore.shared.isTombstoned(groupHex) {
+            let dropShort: String = String(groupHex.prefix(8))
+            let dropLive: String = live ? "1" : "0"
+            let dropLine: String = "inbound frame dropped g=" + dropShort + " live=" + dropLive
+            RTLog.info("groupdel", dropLine)
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
         guard let entry = GroupRegistry.shared.entry(for: groupHex), !selfId.isEmpty else {
             bufferGroupWire(data, live: live)
             return
@@ -12715,6 +12731,16 @@ extension AppState {
             print("[AppState] handleInboundGroupInvite: already member of \(env.g), ignoring re-invite")
             return
         }
+        // W-GRPDEL — an invite for a group this device deleted is still
+        // surfaced: that prompt is exactly how the user gets back in, and
+        // accepting it (`acceptGroupInvite`) is what lifts the tombstone.
+        // Receiving one deliberately does NOT lift it — no local group state
+        // is created here, so blocking the prompt would only take away the
+        // way back, while auto-clearing would hand the resurrection hole to
+        // anyone able to send us an envelope.
+        if GroupTombstoneStore.shared.isTombstoned(env.g) {
+            RTLog.info("groupdel", "invite prompt for tombstoned g=\(env.g.prefix(8))")
+        }
         NotificationCenter.default.post(
             name: AppState.groupInviteReceivedNotification,
             object: nil,
@@ -12737,6 +12763,19 @@ extension AppState {
         guard let selfId = currentUserId, !selfId.isEmpty else {
             print("[AppState] acceptGroupInvite: no currentUserId")
             return
+        }
+        // W-GRPDEL — accepting is the explicit act, so it is what lifts a
+        // tombstone. Note the asymmetry with `handleInboundGroupInvite`,
+        // which deliberately does NOT: merely RECEIVING an invite creates no
+        // local group state, and clearing on receipt would let anyone who
+        // can send us one re-open the resurrection hole for a group we
+        // deleted.
+        if GroupTombstoneStore.shared.isTombstoned(groupId) {
+            guard !shouldSkipGroupResurrection(source: .acceptedInvite, hasTombstone: true) else {
+                RTLog.info("groupdel", "invite accept refused g=\(groupId.prefix(8))")
+                return
+            }
+            GroupTombstoneStore.shared.clear(groupId, reason: "acceptedInvite")
         }
         let entry = GroupRegistry.Entry(
             id: groupId, name: name, members: members,
@@ -12999,6 +13038,19 @@ extension AppState {
             // group_invite envelope). Persist a minimal registry entry
             // with admin=sender_id so subsequent member_added events
             // pass authorization.
+            //
+            // W-GRPDEL — this envelope names US as the added member, which
+            // is an EXPLICIT re-add: it lifts a tombstone rather than being
+            // blocked by one. (The `entry != nil` branch above cannot be
+            // reached for a tombstoned group — the delete removed the row.)
+            if GroupTombstoneStore.shared.isTombstoned(groupId) {
+                guard !shouldSkipGroupResurrection(
+                    source: .p2pMemberAddedNamingSelf, hasTombstone: true) else {
+                    RTLog.info("groupdel", "p2p member_added refused g=\(groupId.prefix(8))")
+                    return
+                }
+                GroupTombstoneStore.shared.clear(groupId, reason: "p2pMemberAddedNamingSelf")
+            }
             let now = Date()
             let entry = GroupRegistry.Entry(
                 id: groupId,
@@ -13077,16 +13129,152 @@ extension AppState {
             userInfo: ["groupId": groupId])
     }
 
-    /// W403 — leave a group voluntarily. Ships a `member_left` envelope
-    /// to every other member via 1:1 ratchet, then drops local state.
+    /// W403 — leave a group voluntarily ("Esci dal gruppo").
+    ///
+    /// W-GRPDEL (2026-08-02): this used to ship a P2P `member_left` envelope,
+    /// drop the registry entry and invalidate the crypto session — and NEVER
+    /// tell the server. `GET /api/v1/groups` therefore kept listing the group,
+    /// and `reconcileAllGroupsFromServer` re-bootstrapped it seconds later,
+    /// usually under the `xxxxxxxx…` hex placeholder because the metadata
+    /// blob no longer decrypted. That is the "the group I left keeps coming
+    /// back with a weird name" report, and it made those chats undeletable.
+    ///
+    /// Leaving and deleting are the same operation on this platform — once
+    /// the row is gone there is no screen that can reach the history — so
+    /// this now delegates to ``deleteGroupChat(groupId:)``, which does the
+    /// three steps in order: server leave, full local purge, tombstone. The
+    /// two entry points differ only in their UI copy (this one is the
+    /// "Esci dal gruppo" row; the other is "Elimina chat").
     @MainActor
     public func leaveGroup(groupId: String) {
-        guard let selfId = currentUserId, !selfId.isEmpty else { return }
-        guard let entry = GroupRegistry.shared.entry(for: groupId) else { return }
+        deleteGroupChat(groupId: groupId)
+    }
+
+    // MARK: - W-GRPDEL: delete a group chat ("delete for me + leave")
+
+    /// Remove a group chat from THIS device, whoever created it.
+    ///
+    /// Deliberately NOT gated on being creator or admin: any member may get
+    /// a conversation off their own phone. What it does, in this order:
+    ///
+    ///   0. tell the remaining members over the 1:1 ratchet (`member_left`),
+    ///      so a P2P-only group converges even if the server never hears;
+    ///   1. `POST /api/v1/groups/{gid}/leave` — idempotent since server
+    ///      commit 54c9f5d, so a group we already left answers 200;
+    ///   2. purge ALL local state for the group (registry row, message
+    ///      history + cached blobs, sender-key/vault crypto state, every
+    ///      pending queue keyed on it);
+    ///   3. write a persistent tombstone.
+    ///
+    /// **Steps 2 and 3 are unconditional.** If the leave call fails for any
+    /// reason — offline, 401, 403, 5xx, timeout, cert pinning, no identity
+    /// key — the local delete still happens and the user still sees the chat
+    /// disappear. Making the purge depend on the network is exactly how this
+    /// bug existed in the first place. The failure is surfaced in the
+    /// `groupdel` log, not by refusing to delete.
+    ///
+    /// Fire-and-forget wrapper for UI call sites; `deleteGroupChatAndWait`
+    /// is the awaitable form.
+    @MainActor
+    public func deleteGroupChat(groupId groupHex: String) {
+        Task { @MainActor in
+            _ = await self.deleteGroupChatAndWait(groupId: groupHex)
+        }
+    }
+
+    /// Awaitable form of ``deleteGroupChat(groupId:)``. Returns what the
+    /// server leave did, purely so a caller can surface a soft notice — the
+    /// local delete has already happened by the time this returns, whatever
+    /// the outcome says.
+    @MainActor
+    @discardableResult
+    public func deleteGroupChatAndWait(groupId rawGroupId: String) async -> GroupLeaveOutcome {
+        let groupHex = normalizedGroupTombstoneKey(rawGroupId)
+        guard !groupHex.isEmpty else {
+            RTLog.warn("groupdel", "delete aborted: empty group id")
+            return .notAttempted
+        }
+        let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
+        let known: Int = GroupRegistry.shared.entry(for: groupHex) != nil ? 1 : 0
+        let gShort: String = String(groupHex.prefix(8))
+        let reqLine: String = "delete requested g=" + gShort + " known=" + String(describing: known)
+        RTLog.info("groupdel", reqLine)
+
+        // Step 0 — P2P courtesy notice to the remaining members, sent BEFORE
+        // the purge because it needs the roster the purge is about to drop.
+        shipMemberLeftEnvelope(groupHex: groupHex, selfId: selfId)
+
+        // Step 1 — server leave (best-effort by design).
+        let outcome = await leaveGroupOnServer(groupHex: groupHex, selfId: selfId)
+        let outcomeLabel: String = Self.leaveOutcomeLabel(outcome)
+        let outLine: String = "leave outcome=" + outcomeLabel + " g=" + gShort
+        RTLog.info("groupdel", outLine)
+
+        // Step 2 — purge. Unconditional: see the type-level note.
+        if shouldPurgeLocalGroupState(after: outcome) {
+            purgeLocalGroupState(groupHex: groupHex, selfId: selfId)
+        }
+
+        // Step 3 — tombstone. Also unconditional, and most important
+        // precisely when step 1 failed: the server still has us in the
+        // group, so the next reconcile would otherwise resurrect it.
+        //
+        // The tombstone records WHETHER step 1 succeeded, and that single bit
+        // is what later lets `reconcileAllGroupsFromServer` tell "an admin
+        // re-added me" apart from "my leave never landed" — see
+        // `reconcileTombstoneDecision`. Without it, "the server still lists
+        // me" is ambiguous and can never be used as a re-add signal, which is
+        // what left an offline user locked out of a group forever.
+        if shouldWriteGroupTombstone(after: outcome) {
+            GroupTombstoneStore.shared.mark(
+                groupHex, serverLeaveOk: serverLeaveConfirmed(outcome))
+        }
+
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": groupHex])
+        let doneLine: String = "delete complete g=" + gShort + " outcome=" + outcomeLabel
+        RTLog.info("groupdel", doneLine)
+        return outcome
+    }
+
+    /// Short, greppable label for a leave outcome — string interpolation of
+    /// the enum itself would embed the associated value in a shape that is
+    /// awkward to grep for (SWIFT6_PATTERNS also discourages multi-segment
+    /// interpolation in log call sites).
+    fileprivate static func leaveOutcomeLabel(_ outcome: GroupLeaveOutcome) -> String {
+        switch outcome {
+        case .left: return "left"
+        case .unreachable: return "unreachable"
+        case .notAttempted: return "not_attempted"
+        // String(describing:) not String(_:) — SWIFT6_PATTERNS rule 3.
+        case .rejected(let status): return "rejected_" + String(describing: status)
+        }
+    }
+
+    /// Ship the P2P `qa_grp:1 member_left` envelope to every other member
+    /// over the 1:1 ratchet. Best-effort and silent-by-design when we have
+    /// no local roster (a group known only to the server, or already
+    /// purged) — the server fan-out is the other half of this signal.
+    @MainActor
+    fileprivate func shipMemberLeftEnvelope(groupHex: String, selfId: String) {
+        guard !selfId.isEmpty else {
+            RTLog.warn("groupdel", "member_left skipped g=\(groupHex.prefix(8)) why=no_self_id")
+            return
+        }
+        guard let entry = GroupRegistry.shared.entry(for: groupHex) else {
+            RTLog.info("groupdel", "member_left skipped g=\(groupHex.prefix(8)) why=no_local_roster")
+            return
+        }
         let now = Int64(Date().timeIntervalSince1970)
         let env = GroupInviteEnvelope.MemberLeft(
-            g: groupId, e: 1, member: selfId, from: selfId, ts: now)
-        guard let json = GroupInviteEnvelope.encodeMemberLeft(env) else { return }
+            g: groupHex, e: entry.epoch, member: selfId, from: selfId, ts: now)
+        guard let json = GroupInviteEnvelope.encodeMemberLeft(env) else {
+            RTLog.warn("groupdel", "member_left skipped g=\(groupHex.prefix(8)) why=encode_failed")
+            return
+        }
+        var shipped = 0
         for recipient in entry.members where recipient != selfId {
             NotificationCenter.default.post(
                 name: AppState.groupSenderKeyCtlNotification,
@@ -13095,13 +13283,161 @@ extension AppState {
                     "recipient": recipient,
                     "envelopeJson": json,
                 ])
+            shipped += 1
         }
-        GroupRegistry.shared.remove(groupId: groupId)
-        GroupChatService.shared.invalidate(groupId: groupId)
-        NotificationCenter.default.post(
-            name: AppState.groupRegistryChangedNotification,
-            object: nil,
-            userInfo: ["groupId": groupId])
+        let shipLine: String = "member_left shipped g=" + String(groupHex.prefix(8)) + " n=" + String(describing: shipped)
+        RTLog.info("groupdel", shipLine)
+    }
+
+    /// Step 1 — `POST /api/v1/groups/{gid}/leave`, signed with this
+    /// device's Ed25519 identity key.
+    ///
+    /// Every "we cannot even try" branch returns `.notAttempted` WITH a log
+    /// line rather than failing silently: a delete that quietly skipped the
+    /// server is precisely the kind of thing that stayed undiagnosable here
+    /// for days.
+    @MainActor
+    fileprivate func leaveGroupOnServer(groupHex: String, selfId: String) async -> GroupLeaveOutcome {
+        guard !selfId.isEmpty else {
+            RTLog.warn("groupdel", "leave not attempted g=\(groupHex.prefix(8)) why=no_self_id")
+            return .notAttempted
+        }
+        guard let groupIdWire = Self.hexToDashedUUID(groupHex) else {
+            RTLog.warn("groupdel", "leave not attempted g=\(groupHex.prefix(8)) why=bad_group_id")
+            return .notAttempted
+        }
+        guard let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) else {
+            RTLog.warn("groupdel", "leave not attempted g=\(groupHex.prefix(8)) why=no_auth")
+            return .notAttempted
+        }
+        guard let identity = sovereignIdentity.loadIdentity() else {
+            RTLog.warn("groupdel", "leave not attempted g=\(groupHex.prefix(8)) why=no_identity")
+            return .notAttempted
+        }
+        // `e_proposed` for a leave is current + 1 (leave bumps, §7.2). The
+        // server does not validate it on this endpoint (`store.LeaveGroup`
+        // ignores the field), and by design we may no longer have a local
+        // entry at all — so a missing epoch falls back to 1 rather than
+        // aborting a delete the user already confirmed.
+        let baseEpoch = GroupRegistry.shared.entry(for: groupHex)?.epoch ?? 1
+        let now = Int64(Date().timeIntervalSince1970)
+        let envelope = GroupMembershipEnvelope.build(
+            actorUserId: selfId,
+            eProposed: baseEpoch &+ 1,
+            groupIdWire: groupIdWire,
+            operation: GroupMembershipEnvelope.opLeave,
+            tsUnixSeconds: now,
+            subjectUserId: selfId)
+        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else {
+            RTLog.warn("groupdel", "leave not attempted g=\(groupHex.prefix(8)) why=sign_failed")
+            return .notAttempted
+        }
+        guard let res = await api.leaveGroup(
+            groupIdWire: groupIdWire,
+            signedEnvelopeB64: envelope.base64EncodedString(),
+            leaverSignatureB64: sig.base64EncodedString()) else {
+            // No HTTP response at all — offline, DNS, TLS/pinning, timeout.
+            return classifyGroupLeave(succeeded: false, httpStatus: nil)
+        }
+        return classifyGroupLeave(succeeded: res.isSuccess, httpStatus: res.statusCode)
+    }
+
+    /// Retry a server leave that never landed, from the reconcile sweep.
+    ///
+    /// W-GRPDEL — the delete is fail-open by design: if the leave call could
+    /// not be made or was refused, the chat still disappears locally and a
+    /// tombstone is written. That leaves one loose end, though — the server
+    /// (and therefore every other member) still believes this user is in the
+    /// group. Nothing used to close it: the UI said the user had left, and
+    /// the code never tried again. This is the retry that makes that true.
+    ///
+    /// Only ever called for a group that HAS a tombstone whose
+    /// `serverLeaveOk` is false and which the server still lists us in —
+    /// i.e. `reconcileTombstoneDecision` returning
+    /// `.keepTombstoneAndRetryLeave`. It never clears the tombstone: a
+    /// successful retry means the delete finally completed, not that the
+    /// user wants the chat back.
+    ///
+    /// Throttled by `shouldRetryServerLeaveNow`, because the reconcile sweep
+    /// fires on every chat-list appear and every WS reconnect and this is a
+    /// signed POST.
+    @MainActor
+    fileprivate func retryPendingGroupLeave(groupHex: String, selfId: String) async {
+        let gShort: String = String(groupHex.prefix(8))
+        let lastAttempt = GroupTombstoneStore.shared.lastLeaveRetryAt(groupHex)
+        guard shouldRetryServerLeaveNow(lastAttemptAt: lastAttempt, now: Date()) else {
+            RTLog.debug("groupdel", "leave retry throttled g=" + gShort)
+            return
+        }
+        // Claim the slot BEFORE awaiting the network, not after.
+        // `reconcileAllGroupsFromServer` has several call sites (chat-list
+        // appear, WS reconnect) and two sweeps can overlap across this
+        // suspension point — stamping only on completion would let both see
+        // a stale `lastLeaveRetryAt` and both fire, which is exactly the
+        // storm the throttle exists to prevent. `serverLeaveOk: false` never
+        // downgrades a recorded success, so this claim cannot lose
+        // information.
+        GroupTombstoneStore.shared.noteLeaveRetry(groupHex, serverLeaveOk: false)
+        RTLog.info("groupdel", "leave retry starting g=" + gShort)
+        let outcome = await leaveGroupOnServer(groupHex: groupHex, selfId: selfId)
+        let confirmed = serverLeaveConfirmed(outcome)
+        if confirmed {
+            GroupTombstoneStore.shared.noteLeaveRetry(groupHex, serverLeaveOk: true)
+        }
+        let outcomeLabel: String = Self.leaveOutcomeLabel(outcome)
+        let line: String = "leave retry outcome=" + outcomeLabel + " g=" + gShort
+        RTLog.info("groupdel", line)
+        // A leave that lands here can only mean the local state was already
+        // purged at delete time, so there is nothing further to tear down —
+        // the tombstone stays, and the next sweep will simply not see this
+        // group in the listing any more.
+    }
+
+    /// Step 2 — drop every piece of local state keyed on this group.
+    ///
+    /// Scoped to ONE group throughout: the registry row, its message
+    /// history (and the decrypted attachment blobs on disk), its
+    /// sender-key/vault crypto state, and every pending/in-flight queue
+    /// that keys on it. No other group is touched — deleting one chat must
+    /// never cost the user a group they are still in.
+    @MainActor
+    fileprivate func purgeLocalGroupState(groupHex: String, selfId: String) {
+        GroupRegistry.shared.remove(groupId: groupHex)
+        // W-GRPDEL: `clear` had zero callers before this — group history
+        // (and its decrypted blobs) survived every leave, unreachable from
+        // any screen. It is also what makes this a real delete rather than
+        // a hide.
+        GroupMessageStore.shared.clear(groupHex: groupHex)
+        // In-memory session + EVERY persisted vault snapshot for this
+        // group. `invalidate` alone would leave the Keychain snapshots, and
+        // the next `session(...)` would reload the group we just deleted.
+        GroupChatService.shared.purgeLocalState(groupId: groupHex, selfId: selfId)
+
+        // Pending queues. A buffered frame for a deleted group would
+        // otherwise sit there occupying one of the 128 slots shared with
+        // every OTHER group's genuinely-recoverable frames.
+        let beforeWires = bufferedGroupWires.count
+        bufferedGroupWires.removeAll { buffered in
+            guard let raw = buffered.data["group_id"] as? String else { return false }
+            return normalizedGroupTombstoneKey(raw) == groupHex
+        }
+        let droppedWires: Int = beforeWires - bufferedGroupWires.count
+        bufferedGroupMetadata.removeValue(forKey: groupHex)
+        attemptedEpochReseal.removeValue(forKey: groupHex)
+
+        // Typing debounce is keyed on the DASHED id (GroupChatScreen passes
+        // `groupId.uuidString.lowercased()`); both forms are removed so a
+        // future call-site change cannot leave a stranded timer that fires
+        // `group_typing` for a group we left.
+        let dashed = Self.hexToDashedUUID(groupHex) ?? groupHex
+        for key in [dashed, groupHex] {
+            groupTypingStopWorkItems[key]?.cancel()
+            groupTypingStopWorkItems.removeValue(forKey: key)
+            groupTypingActive.removeValue(forKey: key)
+        }
+
+        let purgeLine: String = "purged g=" + String(groupHex.prefix(8)) + " wires=" + String(describing: droppedWires)
+        RTLog.info("groupdel", purgeLine)
     }
 
     // MARK: - Fase 1A — admin add / remove member
@@ -13563,9 +13899,28 @@ extension AppState {
             // e.g. an Android/Desktop admin added us). Bootstrap exactly like
             // `applyMemberAdded`'s auto-bootstrap branch.
             guard members.contains(selfId) else { return }
+            // W-GRPDEL — the roster containing us says nothing about whether
+            // this is a re-add: it contains us on every snapshot/catch-up
+            // replay too. Only `operation` + `subject_user_id` distinguish
+            // "an admin added me back" (lifts a tombstone) from "the server
+            // re-stated the roster" (must respect one).
+            //
+            // `replay` is load-bearing here, not decoration. The server runs
+            // `replayMembershipCatchup` at EVERY start — so after every
+            // deploy — and it rebuilds each event from the group's last
+            // membership-log entry, meaning a replayed event carries a real
+            // `member_added` with a real `subject_user_id`. Field for field
+            // it is identical to a genuine re-add; `replay: true` (set by
+            // `fanOutMembershipChanged`, parsed above) is the only thing
+            // that separates them. Ignore it and every deploy resurrects
+            // every deleted group chat.
+            let source = classifyMembershipEventForTombstone(
+                operation: operation, subjectUserId: subject, selfUserId: selfId,
+                isReplay: replay)
             bootstrapGroupFromServer(
                 groupHex: groupHex, members: members, admins: admins,
-                actor: actor, selfId: selfId, replay: replay, serverEpoch: serverEpoch)
+                actor: actor, selfId: selfId, replay: replay, serverEpoch: serverEpoch,
+                source: source)
             return
         }
 
@@ -13618,11 +13973,32 @@ extension AppState {
     /// event that lists us as a member. Mirrors the auto-bootstrap branch of
     /// `applyMemberAdded` (registry entry → GroupChatService session →
     /// markBootstrapped → drain buffered group frames → snackbar).
+    /// - Parameter source: how we learned about this group. W-GRPDEL — this
+    ///   is the single choke point every server-driven resurrection goes
+    ///   through, so the tombstone check lives here rather than being
+    ///   re-implemented at each call site. A PASSIVE source (a reconcile
+    ///   listing, a snapshot replay) is refused for a group the user
+    ///   deleted; an EXPLICIT re-add lifts the tombstone and proceeds.
+    ///   Deliberately not defaulted: defaulting it either way makes one of
+    ///   the two user-visible failures (a resurrected chat, or a group the
+    ///   user can never be re-added to) the silent outcome of forgetting it.
     @MainActor
     fileprivate func bootstrapGroupFromServer(
         groupHex: String, members: [String], admins: [String],
-        actor: String, selfId: String, replay: Bool, serverEpoch: UInt32
+        actor: String, selfId: String, replay: Bool, serverEpoch: UInt32,
+        source: GroupResurrectionSource
     ) {
+        if GroupTombstoneStore.shared.isTombstoned(groupHex) {
+            guard !shouldSkipGroupResurrection(source: source, hasTombstone: true) else {
+                let refusedLine: String = "bootstrap refused g=" + String(groupHex.prefix(8)) + " src=" + String(describing: source)
+                RTLog.info("groupdel", refusedLine)
+                return
+            }
+            // An explicit re-add: an admin put this user back. Lift the mark
+            // so the group can live again, otherwise the tombstone would be
+            // a life sentence on this device.
+            GroupTombstoneStore.shared.clear(groupHex, reason: String(describing: source))
+        }
         let adminForName = admins.first ?? actor
         let entry = GroupRegistry.Entry(
             id: groupHex,
@@ -13719,11 +14095,70 @@ extension AppState {
         for entry in entries {
             guard entry.members.contains(selfId) else { continue }
             let groupHex = entry.groupIdWire.replacingOccurrences(of: "-", with: "").lowercased()
+            // W-GRPDEL — THE resurrection path, AND the only clear path that
+            // works for a user who was offline.
+            //
+            // This sweep runs on every chat-list appear and every WS
+            // reconnect. Whenever the leave call did not land the server
+            // still lists the user as a member, so a deleted group would
+            // reappear within seconds (typically renamed to the `xxxxxxxx…`
+            // hex placeholder, since its metadata blob no longer decrypts).
+            // A bare listing is not consent.
+            //
+            // But a listing paired with the recorded leave outcome IS
+            // decisive, and that is what fixes the hole the live path could
+            // never cover: `fanOutMembershipChanged` only reaches members
+            // holding a fresh WebSocket at that instant, so a user whose
+            // phone was off when an admin re-added them never saw the event
+            // and stayed locked out of that group permanently. Ten minutes
+            // offline was enough. Membership STATE, unlike an event, is
+            // still true whenever the device next comes back — and it is
+            // immune to the catch-up replay, which changes no state.
+            let decision = reconcileTombstoneDecision(
+                hasTombstone: GroupTombstoneStore.shared.isTombstoned(groupHex),
+                serverLeaveConfirmed: GroupTombstoneStore.shared.isServerLeaveConfirmed(groupHex),
+                serverListsSelfAsMember: true)  // guarded by `members.contains(selfId)` above
+            switch decision {
+            case .reconcileNormally:
+                break  // not tombstoned — fall through to the ordinary path
+            case .keepTombstone:
+                // Unreachable while `serverListsSelfAsMember` is pinned true
+                // above, but switched exhaustively so a future edit that
+                // loosens that guard has to say what it means here.
+                RTLog.info("groupdel", "reconcile kept tombstone g=\(groupHex.prefix(8))")
+                continue
+            case .keepTombstoneAndRetryLeave:
+                // The leave never reached the server. NOT a re-add — nobody
+                // was ever told this user left, so there was nothing to add
+                // them back from. The chat stays gone (the user asked for
+                // that) and we finally deliver the retry.
+                await retryPendingGroupLeave(groupHex: groupHex, selfId: selfId)
+                continue
+            case .clearTombstoneAndAdmit:
+                // Leave confirmed, yet the server lists this user again: the
+                // only thing that makes both true is somebody re-adding
+                // them. Lift the mark and let the group reconcile fresh, as
+                // a new group.
+                RTLog.info("groupdel", "reconcile re-add detected g=\(groupHex.prefix(8))")
+                GroupTombstoneStore.shared.clear(
+                    groupHex, reason: "reconcileReAddAfterConfirmedLeave")
+            }
             if GroupRegistry.shared.entry(for: groupHex) == nil {
+                // `source` distinguishes the two ways we can reach this line.
+                // After a `.clearTombstoneAndAdmit` the tombstone is already
+                // gone, so `bootstrapGroupFromServer`'s guard is a no-op
+                // either way — passing the deduced source keeps the reconcile
+                // path honest in the same vocabulary as the live one rather
+                // than relying on that ordering.
+                let source: GroupResurrectionSource =
+                    decision == .clearTombstoneAndAdmit
+                    ? .reconcileReAddAfterConfirmedLeave
+                    : .passiveReconcileListing
                 bootstrapGroupFromServer(
                     groupHex: groupHex, members: entry.members, admins: entry.admins,
                     actor: entry.admins.first ?? "", selfId: selfId, replay: true,
-                    serverEpoch: entry.groupEpoch)
+                    serverEpoch: entry.groupEpoch,
+                    source: source)
             } else {
                 applyServerRoster(
                     groupHex: groupHex, members: entry.members, admins: entry.admins,

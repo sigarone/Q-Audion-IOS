@@ -71,6 +71,14 @@ struct ChatListScreen: View {
     /// preview / unread / last-activity (GroupMessageStore posts a
     /// NotificationCenter event rather than an @Published property).
     @State private var groupRefreshToken: Int = 0
+    /// W-GRPDEL (2026-08-02) — group row awaiting delete confirmation.
+    /// Group rows had NO delete affordance at all: swipe and long-press were
+    /// wired for 1:1 conversations only, and the single way out of a group
+    /// was "Esci dal gruppo" buried in the info sheet — which did not tell
+    /// the server, so the chat came back on the next reconcile. Deleting is
+    /// irreversible locally, hence the confirmation.
+    @State private var pendingGroupDelete: GroupRowUi? = nil
+    @State private var showingGroupDeleteConfirm = false
 
     /// Sentinel Identifiable per `.fullScreenCover(item:)` con il
     /// groupId + name appena creati.
@@ -372,6 +380,64 @@ struct ChatListScreen: View {
                 )
             }
         }
+        // W-GRPDEL — irreversible locally, so it is confirmed. The copy says
+        // plainly that this also leaves the group, because "delete for me"
+        // and "leave" are the same act here: there is no screen that can
+        // reach a group's history once its row is gone.
+        .alert("Eliminare questa chat di gruppo?",
+               isPresented: $showingGroupDeleteConfirm,
+               presenting: pendingGroupDelete) { row in
+            Button("Annulla", role: .cancel) { pendingGroupDelete = nil }
+            Button("Elimina", role: .destructive) { confirmGroupDelete(row) }
+        } message: { row in
+            Text(Self.groupDeleteWarning(for: row.name))
+        }
+    }
+
+    // MARK: - Group delete (W-GRPDEL)
+
+    /// Message body for the delete confirmation. Built here rather than
+    /// inline in the `@ViewBuilder` closure — SWIFT6_PATTERNS rule 1.
+    private static func groupDeleteWarning(for name: String) -> String {
+        return "\"" + name + "\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
+    }
+
+    /// Run the delete. Any member may do this — it is deliberately not
+    /// gated on being creator or admin.
+    ///
+    /// `AppState.deleteGroupChatAndWait` is fail-open: it purges locally and
+    /// writes the tombstone whatever the server leave does, so the row
+    /// disappears even offline. The first snackbar therefore states the local
+    /// outcome, which is the one that is always true.
+    ///
+    /// W-GRPDEL — when the server leave did NOT land, say so instead of
+    /// letting the confirmation's "uscirai dal gruppo" stand as if it had.
+    /// The other members still see this user in the group until the leave
+    /// actually reaches the server. The notice may promise a retry only
+    /// because there now IS one: `reconcileAllGroupsFromServer` re-issues the
+    /// leave on the next sweep for exactly this case (a tombstone whose
+    /// `serverLeaveOk` is false while the server still lists us). Do not
+    /// reword this into a promise the code stops keeping.
+    private func confirmGroupDelete(_ row: GroupRowUi) {
+        pendingGroupDelete = nil
+        let groupHex = row.hex
+        snackbar?.show(.init(text: "Chat di gruppo eliminata.", severity: .info))
+        Task { @MainActor in
+            let outcome = await appState.deleteGroupChatAndWait(groupId: groupHex)
+            groupRefreshToken &+= 1
+            guard !serverLeaveConfirmed(outcome) else { return }
+            snackbar?.show(.init(text: Self.groupLeavePendingNotice, severity: .warning))
+        }
+    }
+
+    /// Copy for the "deleted here, but the server does not know yet" case.
+    /// Bound as a static rather than inline — SWIFT6_PATTERNS rule 1.
+    private static let groupLeavePendingNotice =
+        "Chat eliminata da questo dispositivo. Non è stato possibile completare l'uscita dal gruppo: l'app riproverà automaticamente."
+
+    private func requestGroupDelete(_ row: GroupRowUi) {
+        pendingGroupDelete = row
+        showingGroupDeleteConfirm = true
     }
 
     // MARK: - Section partitioning
@@ -570,6 +636,26 @@ struct ChatListScreen: View {
             .padding(.vertical, 4)
         }
         .listRowBackground(scheme.background)
+        // W-GRPDEL — same trailing-swipe idiom the 1:1 rows have had all
+        // along (`conversationRow` below). Group rows had no swipe action at
+        // all, which is why deleting one meant hunting through the info
+        // sheet for "Esci dal gruppo".
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                requestGroupDelete(row)
+            } label: {
+                Label("Elimina chat", systemImage: "trash")
+            }
+        }
+        // Long-press mirrors the swipe, for the same reason the 1:1 rows do
+        // it (W119): iPad / trackpad users cannot reach swipe actions.
+        .contextMenu {
+            Button(role: .destructive) {
+                requestGroupDelete(row)
+            } label: {
+                Label("Elimina chat", systemImage: "trash")
+            }
+        }
     }
 
     /// Preview line for a group row: the last message (truncated like the

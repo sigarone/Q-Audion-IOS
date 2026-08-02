@@ -378,11 +378,49 @@ public final class GroupMessageStore: ObservableObject {
         }
     }
 
+    /// Drop this group's entire local history.
+    ///
+    /// W-GRPDEL (2026-08-02): until then this method had **zero callers** —
+    /// no path in the app ever purged group message history, so leaving a
+    /// group left its decrypted plaintext (and its decrypted attachment
+    /// blobs) on the device forever, unreachable from any screen because
+    /// the chat-list row is sourced from `GroupRegistry`. That is both dead
+    /// weight and a privacy hole; `AppState.deleteGroupChat` now calls this.
+    ///
+    /// Cached attachment blobs are reclaimed too, using the exact
+    /// capture-then-remove contract `deleteExpiredMessages` already
+    /// established: paths are captured BEFORE the rows are dropped, disk
+    /// removal happens AFTER the in-memory removal + `persist()`, and a
+    /// missing file or filesystem error is logged and swallowed rather than
+    /// aborting the purge. Purging rows the user asked to delete must never
+    /// fail because of a stale path.
     public func clear(groupHex: String) {
-        guard byGroup[groupHex] != nil else { return }
+        guard let rows = byGroup[groupHex] else {
+            // Normal (a group deleted before it ever received anything), but
+            // logged anyway — W-GRPDEL requires every branch of the delete
+            // path to leave a trace, including the ones that do nothing.
+            RTLog.debug("groupdel", "history purge no-op g=" + String(groupHex.prefix(8)))
+            return
+        }
+        let cachedPathsToRemove = rows.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty }
         byGroup.removeValue(forKey: groupHex)
         if lastRead.removeValue(forKey: groupHex) != nil { persistReadMarkers() }
         persist()
+        let gShort: String = String(groupHex.prefix(8))
+        var reclaimed = 0
+        for path in cachedPathsToRemove {
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            do {
+                try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+                reclaimed += 1
+            } catch {
+                RTLog.warn("groupdel", "blob cleanup failed g=" + gShort)
+            }
+        }
+        let rowCount: String = String(describing: rows.count)
+        let blobCount: String = String(describing: reclaimed)
+        let line: String = "history purged g=" + gShort + " rows=" + rowCount + " blobs=" + blobCount
+        RTLog.info("groupdel", line)
         postDidChange(groupHex)
     }
 

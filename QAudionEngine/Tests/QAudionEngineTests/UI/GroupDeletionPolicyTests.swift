@@ -149,12 +149,24 @@ final class GroupDeletionPolicyTests: XCTestCase {
         XCTAssertTrue(clearsGroupTombstone(.acceptedInvite))
     }
 
+    /// A reconcile sweep that has ALREADY been checked against the recorded
+    /// leave outcome is an explicit re-add — that is the whole point of
+    /// `reconcileTombstoneDecision`, and the case exists so the deduction
+    /// travels through the same choke point as the live one. Note the
+    /// contrast with `.passiveReconcileListing` above: same HTTP reply,
+    /// opposite verdict, because only one of them has been corroborated.
+    func testAReconcileDeducedReAddClearsTheTombstone() {
+        XCTAssertTrue(clearsGroupTombstone(.reconcileReAddAfterConfirmedLeave))
+        XCTAssertFalse(clearsGroupTombstone(.passiveReconcileListing))
+    }
+
     /// Pins the split exhaustively, so a source added later has to be
     /// classified deliberately instead of inheriting whichever side the
     /// author happened to write first.
-    func testExactlyThreeSourcesCountAsAnExplicitReAdd() {
+    func testExactlyFourSourcesCountAsAnExplicitReAdd() {
         let expected: Set<GroupResurrectionSource> = [
             .membershipEventAddingSelf, .p2pMemberAddedNamingSelf, .acceptedInvite,
+            .reconcileReAddAfterConfirmedLeave,
         ]
         let actual = Set(GroupResurrectionSource.allCases.filter { clearsGroupTombstone($0) })
         XCTAssertEqual(actual, expected)
@@ -177,6 +189,25 @@ final class GroupDeletionPolicyTests: XCTestCase {
         XCTAssertFalse(shouldSkipGroupResurrection(source: .membershipEventAddingSelf, hasTombstone: true))
         XCTAssertFalse(shouldSkipGroupResurrection(source: .p2pMemberAddedNamingSelf, hasTombstone: true))
         XCTAssertFalse(shouldSkipGroupResurrection(source: .acceptedInvite, hasTombstone: true))
+        XCTAssertFalse(shouldSkipGroupResurrection(
+            source: .reconcileReAddAfterConfirmedLeave, hasTombstone: true))
+    }
+
+    // MARK: - serverLeaveConfirmed
+
+    /// The one bit the tombstone has to remember. Only a 2xx means the server
+    /// recorded the departure; every other outcome leaves it believing this
+    /// user is still a member, which is exactly what
+    /// `reconcileTombstoneDecision` needs to know later.
+    func testOnlyARealDepartureCountsAsAConfirmedServerLeave() {
+        XCTAssertTrue(serverLeaveConfirmed(.left))
+        XCTAssertFalse(serverLeaveConfirmed(.unreachable))
+        XCTAssertFalse(serverLeaveConfirmed(.notAttempted))
+        for status in [400, 401, 403, 404, 409, 422, 500, 503] {
+            XCTAssertFalse(
+                serverLeaveConfirmed(.rejected(status: status)),
+                "a \(status) leaves the server still listing us as a member")
+        }
     }
 
     // MARK: - classifyMembershipEventForTombstone
@@ -188,16 +219,19 @@ final class GroupDeletionPolicyTests: XCTestCase {
     /// contains us on every snapshot replay too.
     func testOnlyAnAddOperationNamingSelfCountsAsAReAdd() {
         XCTAssertEqual(
-            classifyMembershipEventForTombstone(operation: "add", subjectUserId: "u1", selfUserId: "u1"),
+            classifyMembershipEventForTombstone(
+                operation: "add", subjectUserId: "u1", selfUserId: "u1", isReplay: false),
             .membershipEventAddingSelf)
         XCTAssertEqual(
-            classifyMembershipEventForTombstone(operation: "member_added", subjectUserId: "u1", selfUserId: "u1"),
+            classifyMembershipEventForTombstone(
+                operation: "member_added", subjectUserId: "u1", selfUserId: "u1", isReplay: false),
             .membershipEventAddingSelf)
     }
 
     func testAnAddNamingSomebodyElseIsNotAReAddOfSelf() {
         XCTAssertEqual(
-            classifyMembershipEventForTombstone(operation: "add", subjectUserId: "u2", selfUserId: "u1"),
+            classifyMembershipEventForTombstone(
+                operation: "add", subjectUserId: "u2", selfUserId: "u1", isReplay: false),
             .serverMembershipSnapshot)
     }
 
@@ -206,14 +240,53 @@ final class GroupDeletionPolicyTests: XCTestCase {
     /// the single most likely thing to resurrect a deleted group.
     func testASnapshotReplayIsNeverAReAddEvenThoughItListsUs() {
         XCTAssertEqual(
-            classifyMembershipEventForTombstone(operation: "snapshot", subjectUserId: "", selfUserId: "u1"),
+            classifyMembershipEventForTombstone(
+                operation: "snapshot", subjectUserId: "", selfUserId: "u1", isReplay: true),
             .serverMembershipSnapshot)
+    }
+
+    /// THE deploy-day regression. `replayMembershipCatchup` runs at every
+    /// server start and re-emits the LAST membership-log entry verbatim — so
+    /// a group whose most recent mutation was an add is replayed carrying a
+    /// real `member_added` and a real `subject_user_id`. Field-for-field it
+    /// is indistinguishable from a genuine re-add; only `replay: true` tells
+    /// them apart. Read as an add, it clears the tombstone and every deleted
+    /// group chat comes back on every deploy.
+    ///
+    /// Worth knowing how total this was: `member_added` is emitted by the
+    /// replay path and ONLY the replay path (every live `fanOutMembershipChanged`
+    /// call site sends a REST verb — `add`, `remove`, `leave`, `admin_add`,
+    /// `admin_remove`). So before the `isReplay` guard, that branch did not
+    /// occasionally misread a replay — it could fire on nothing else.
+    func testACatchUpReplayOfARealAddIsNotAReAdd() {
+        let live = classifyMembershipEventForTombstone(
+            operation: "member_added", subjectUserId: "u1", selfUserId: "u1", isReplay: false)
+        let replayed = classifyMembershipEventForTombstone(
+            operation: "member_added", subjectUserId: "u1", selfUserId: "u1", isReplay: true)
+        XCTAssertEqual(live, .membershipEventAddingSelf,
+                       "the live event is still a genuine re-add")
+        XCTAssertEqual(replayed, .serverMembershipSnapshot,
+                       "the replay of that same add must NOT resurrect the group")
+        XCTAssertFalse(clearsGroupTombstone(replayed))
+    }
+
+    /// `replay` wins over every operation vocabulary, not just the one the
+    /// regression above happened to use.
+    func testTheReplayFlagOverridesEveryAddVocabulary() {
+        for op in ["add", "member_added"] {
+            XCTAssertEqual(
+                classifyMembershipEventForTombstone(
+                    operation: op, subjectUserId: "u1", selfUserId: "u1", isReplay: true),
+                .serverMembershipSnapshot,
+                "a replayed \(op) is a snapshot")
+        }
     }
 
     func testRemovesAndAdminOpsAreNotReAdds() {
         for op in ["remove", "leave", "member_removed", "member_left", "admin_add", "admin_remove", ""] {
             XCTAssertEqual(
-                classifyMembershipEventForTombstone(operation: op, subjectUserId: "u1", selfUserId: "u1"),
+                classifyMembershipEventForTombstone(
+                    operation: op, subjectUserId: "u1", selfUserId: "u1", isReplay: false),
                 .serverMembershipSnapshot,
                 "operation \(op) must not clear a tombstone")
         }
@@ -221,7 +294,128 @@ final class GroupDeletionPolicyTests: XCTestCase {
 
     func testAnEmptySelfIdCanNeverMatchTheSubject() {
         XCTAssertEqual(
-            classifyMembershipEventForTombstone(operation: "add", subjectUserId: "", selfUserId: ""),
+            classifyMembershipEventForTombstone(
+                operation: "add", subjectUserId: "", selfUserId: "", isReplay: false),
             .serverMembershipSnapshot)
+    }
+
+    // MARK: - reconcileTombstoneDecision  (the offline-proof re-add signal)
+
+    /// Requirement E, and the reason this function exists. The live clear
+    /// path only ever fires for a user holding a fresh WebSocket at the
+    /// instant of the re-add — the server's fan-out skips everybody else — so
+    /// a user who was merely offline was locked out of that group forever.
+    /// This branch needs no event at all: "I definitely left, and the server
+    /// nonetheless says I am a member" can only be true if somebody put me
+    /// back, and it stays true for as long as the phone is off.
+    func testAConfirmedLeavePlusStillBeingListedIsAReAdd() {
+        XCTAssertEqual(
+            reconcileTombstoneDecision(
+                hasTombstone: true, serverLeaveConfirmed: true, serverListsSelfAsMember: true),
+            .clearTombstoneAndAdmit)
+    }
+
+    /// The same "server lists me" fact with the opposite recorded outcome.
+    /// This is NOT a re-add: the leave never landed, so nobody was ever told
+    /// this user departed and there was nothing to add them back from. The
+    /// chat must stay gone — the user asked for that — and the leave gets
+    /// retried, which is the retry the UI is allowed to promise.
+    func testAnUnconfirmedLeavePlusStillBeingListedRetriesInsteadOfResurrecting() {
+        XCTAssertEqual(
+            reconcileTombstoneDecision(
+                hasTombstone: true, serverLeaveConfirmed: false, serverListsSelfAsMember: true),
+            .keepTombstoneAndRetryLeave)
+    }
+
+    /// Steady state after a good delete: the server no longer lists us, so
+    /// there is nothing to decide and nothing to retry.
+    func testNotBeingListedKeepsTheTombstoneWhateverTheLeaveDid() {
+        for confirmed in [true, false] {
+            XCTAssertEqual(
+                reconcileTombstoneDecision(
+                    hasTombstone: true, serverLeaveConfirmed: confirmed,
+                    serverListsSelfAsMember: false),
+                .keepTombstone,
+                "confirmed=\(confirmed)")
+        }
+    }
+
+    /// A group the user never deleted must be completely unaffected, on all
+    /// four input combinations — this function runs over every group in the
+    /// reconcile sweep, not just tombstoned ones.
+    func testWithoutATombstoneEveryCombinationReconcilesNormally() {
+        for confirmed in [true, false] {
+            for listed in [true, false] {
+                XCTAssertEqual(
+                    reconcileTombstoneDecision(
+                        hasTombstone: false, serverLeaveConfirmed: confirmed,
+                        serverListsSelfAsMember: listed),
+                    .reconcileNormally,
+                    "confirmed=\(confirmed) listed=\(listed)")
+            }
+        }
+    }
+
+    /// The two clear paths — live event and reconcile deduction — must agree
+    /// about the end state, otherwise being online or offline at the moment
+    /// of the re-add would leave the device in a different place.
+    func testTheLiveAndReconcileClearPathsConvergeOnTheSameVerdict() {
+        let liveSource = classifyMembershipEventForTombstone(
+            operation: "add", subjectUserId: "u1", selfUserId: "u1", isReplay: false)
+        let reconcile = reconcileTombstoneDecision(
+            hasTombstone: true, serverLeaveConfirmed: true, serverListsSelfAsMember: true)
+        XCTAssertTrue(clearsGroupTombstone(liveSource))
+        XCTAssertEqual(reconcile, .clearTombstoneAndAdmit)
+        XCTAssertTrue(clearsGroupTombstone(.reconcileReAddAfterConfirmedLeave))
+    }
+
+    /// Exhaustive truth table, so a future edit cannot quietly flip one cell.
+    func testTheDecisionTableIsExhaustivelyPinned() {
+        let expected: [(Bool, Bool, Bool, GroupTombstoneReconcileDecision)] = [
+            (false, false, false, .reconcileNormally),
+            (false, false, true,  .reconcileNormally),
+            (false, true,  false, .reconcileNormally),
+            (false, true,  true,  .reconcileNormally),
+            (true,  false, false, .keepTombstone),
+            (true,  false, true,  .keepTombstoneAndRetryLeave),
+            (true,  true,  false, .keepTombstone),
+            (true,  true,  true,  .clearTombstoneAndAdmit),
+        ]
+        for (tomb, confirmed, listed, want) in expected {
+            XCTAssertEqual(
+                reconcileTombstoneDecision(
+                    hasTombstone: tomb, serverLeaveConfirmed: confirmed,
+                    serverListsSelfAsMember: listed),
+                want,
+                "tombstone=\(tomb) confirmed=\(confirmed) listed=\(listed)")
+        }
+    }
+
+    // MARK: - shouldRetryServerLeaveNow
+
+    /// The reconcile sweep runs on every chat-list appear and every WS
+    /// reconnect, so an unthrottled retry would fire a signed POST per tab
+    /// tap at a server that is evidently already refusing or unreachable.
+    func testTheFirstRetryIsAlwaysAllowedAndRapidRepeatsAreNot() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(shouldRetryServerLeaveNow(lastAttemptAt: nil, now: now))
+        XCTAssertFalse(shouldRetryServerLeaveNow(
+            lastAttemptAt: now.addingTimeInterval(-5), now: now))
+        XCTAssertFalse(shouldRetryServerLeaveNow(
+            lastAttemptAt: now.addingTimeInterval(-59), now: now))
+        XCTAssertTrue(shouldRetryServerLeaveNow(
+            lastAttemptAt: now.addingTimeInterval(-60), now: now))
+        XCTAssertTrue(shouldRetryServerLeaveNow(
+            lastAttemptAt: now.addingTimeInterval(-3600), now: now))
+    }
+
+    /// A wall clock that moved backwards (timezone edit, NTP correction, a
+    /// restored backup) must not freeze the retry until real time catches
+    /// up — that would silently strand a delete that never reached the
+    /// server.
+    func testAClockThatWentBackwardsDoesNotStrandTheRetry() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(shouldRetryServerLeaveNow(
+            lastAttemptAt: now.addingTimeInterval(86_400), now: now))
     }
 }

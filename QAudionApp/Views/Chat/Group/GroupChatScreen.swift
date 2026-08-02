@@ -222,10 +222,20 @@ struct GroupChatScreen: View {
                         // remaining members through the 1:1 ratchet, then
                         // tears down local registry + GroupChatService
                         // session for this groupId.
-                        let gidHex = groupId.uuidString
-                            .replacingOccurrences(of: "-", with: "")
-                            .lowercased()
-                        appState.leaveGroup(groupId: gidHex)
+                        // W-GRPDEL: `leaveGroup` now also calls the server
+                        // leave endpoint and tombstones the id, so the
+                        // group can no longer be resurrected by the next
+                        // reconcile.
+                        appState.leaveGroup(groupId: groupHex)
+                        showingInfo = false
+                        dismiss()
+                    },
+                    onDelete: {
+                        // W-GRPDEL: "Elimina chat" — server leave, full
+                        // local purge (history + crypto state included),
+                        // tombstone. Fail-open: the chat goes away even if
+                        // the server call does not land.
+                        appState.deleteGroupChat(groupId: groupHex)
                         showingInfo = false
                         dismiss()
                     }

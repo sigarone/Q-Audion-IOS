@@ -249,6 +249,30 @@ public final class GroupChatService {
         bufferedInits.removeValue(forKey: groupId)
     }
 
+    /// W-GRPDEL (2026-08-02) — `invalidate` PLUS the persistent vault
+    /// snapshots, for a group the user is deleting.
+    ///
+    /// `invalidate` alone drops only the in-memory caches: the Keychain
+    /// still holds a snapshot for every epoch this device ever saw (the
+    /// vault is append-only by design — `loadFromVault`'s descending probe
+    /// depends on that), so the very next `session(...)` for this group
+    /// would reload the sender-key state of a group the user just deleted.
+    ///
+    /// Scoped to this group and this identity by
+    /// `GroupSessionVault.purge` — every other group the user is still in
+    /// keeps its chains. Never call this for a group the user is staying
+    /// in: the send chain is not recoverable and the peers' recv chains
+    /// would be stranded.
+    public func purgeLocalState(groupId: String, selfId: String) {
+        invalidate(groupId: groupId)
+        guard let gid = bytes(for: groupId), !selfId.isEmpty else {
+            RTLog.warn("groupdel", "vault purge skipped g=\(groupId.prefix(8)) badId=1")
+            return
+        }
+        Self.vault.purge(groupIdBytes: gid, selfId: selfId)
+        RTLog.info("groupdel", "vault purged g=\(groupId.prefix(8))")
+    }
+
     // MARK: - Fase 1A membership ops (admin + remaining-member crypto)
 
     /// Admin-side ADD. Install `newMember` into our roster (engine
