@@ -123,14 +123,53 @@ struct QAudionAvatar: View {
         }
         .task(id: url) {
             localImage = nil
+            let resolvedURL = QAudionAvatar.resolveIfStale(url)
             let loaded = await Task.detached(priority: .utility) { () -> UIImage? in
-                guard let data = try? Data(contentsOf: url) else { return nil }
+                guard let data = try? Data(contentsOf: resolvedURL) else { return nil }
                 return UIImage(data: data)
             }.value
             if !Task.isCancelled {
                 localImage = loaded
             }
         }
+    }
+
+    /// W-AVATARSTALEPATH (2026-08-03): `avatarUrl` is persisted (`ContactsStore`
+    /// / `AvatarAnnounceCoordinator.peerAvatarFileURL`, same for the self
+    /// avatar in `AvatarUploader`) as an ABSOLUTE `file://` path rooted in
+    /// the app's sandbox container. That container's UUID is NOT stable
+    /// across every TestFlight update/reinstall — when it rotates, every
+    /// previously-cached avatar's stored path points at a directory that no
+    /// longer exists. `Data(contentsOf:)` then fails SILENTLY (caught,
+    /// discarded by the caller, falls back to the initials placeholder)
+    /// with no error anywhere, so `ContactsStore`'s row still claims a
+    /// cached version while the image is permanently gone. Confirmed live
+    /// 2026-08-03: `AvatarAnnounceCoordinator`'s own bookkeeping reported a
+    /// peer already cached (`recv applied=0 code=1 ... cached=2`) — i.e.
+    /// "already up to date" — while nothing rendered on screen.
+    ///
+    /// Self-heal: the file's LAST PATH COMPONENT (`<senderId-or-hash>.jpg`
+    /// / `self.jpg`) is stable — only the container prefix rotates, and
+    /// every avatar in this codebase lives under the same
+    /// `applicationSupportDirectory/qaudion/avatars/` convention (see
+    /// `AvatarUploader.selfAvatarCacheURL` and
+    /// `AvatarAnnounceCoordinator.peerAvatarFileURL`). If the stored
+    /// absolute path doesn't resolve, re-root that same filename under the
+    /// CURRENT container and use that instead — recovers immediately
+    /// without waiting for a fresh `avatar_announce`, which the per-peer
+    /// cooldown may not send again for up to an hour. Falls back to the
+    /// original URL (same behaviour as before this fix — a clean "no
+    /// image" placeholder) if the file genuinely isn't cached anywhere.
+    private static func resolveIfStale(_ url: URL) -> URL {
+        guard url.isFileURL, !FileManager.default.fileExists(atPath: url.path) else { return url }
+        guard let currentDir = try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false
+        ) else { return url }
+        let recomputed = currentDir
+            .appendingPathComponent("qaudion/avatars", isDirectory: true)
+            .appendingPathComponent(url.lastPathComponent)
+        return FileManager.default.fileExists(atPath: recomputed.path) ? recomputed : url
     }
 
     @ViewBuilder
