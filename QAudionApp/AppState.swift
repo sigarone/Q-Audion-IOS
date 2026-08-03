@@ -1750,9 +1750,17 @@ final class AppState: ObservableObject {
         )
         provider.getRestClient().setDeviceRenewFallback {
             // deviceId is persisted by AuthService at login under
-            // "com.qaudion.auth.device_id". Read it lazily so a
-            // log-in / log-out cycle picks up the new value.
-            guard let did = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+            // "com.qaudion.auth.device_id" AND, since SEC-DEVICEID-REINSTALL,
+            // Keychain-backed via TokenVault (checked first — it's the copy
+            // that actually survives an app delete+reinstall, see
+            // TokenVault.saveDeviceId's doc). Read it lazily so a log-in /
+            // log-out cycle picks up the new value. Calls TokenVault/
+            // UserDefaults directly rather than `self.authService` — this
+            // closure is `@Sendable` and both of those are safe to touch
+            // from any executor, unlike a MainActor-isolated AppState
+            // property access.
+            guard let did = TokenVault.loadDeviceId() ??
+                    UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                   !did.isEmpty else {
                 throw BCryptoError.unauthorized
             }
@@ -1991,8 +1999,11 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Leg 2: Ed25519 device-renew.
-        guard let did = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+        // Leg 2: Ed25519 device-renew. SEC-DEVICEID-REINSTALL: Keychain
+        // first (survives app delete+reinstall), UserDefaults fallback —
+        // see TokenVault.saveDeviceId's doc.
+        guard let did = TokenVault.loadDeviceId() ??
+                UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
               !did.isEmpty else {
             // No device credential to renew with: do NOT clear — just back off.
             let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -7749,9 +7760,13 @@ final class AppState: ObservableObject {
             // Sourcing both publish and sign from `sovereignIdentity
             // .loadIdentity()?.signingPublic` makes them a single source of
             // truth so a peer's verify reaches the real Ed25519 signature check.
+            // SEC-DEVICEID-REINSTALL: Keychain first (survives app
+            // delete+reinstall), UserDefaults fallback — see
+            // TokenVault.saveDeviceId's doc.
             if let signingPub = sovereignIdentity.loadIdentity()?.signingPublic,
                signingPub.count == 32,
-               let deviceId = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+               let deviceId = TokenVault.loadDeviceId() ??
+                UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                !deviceId.isEmpty {
                 do {
                     try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
@@ -7780,9 +7795,13 @@ final class AppState: ObservableObject {
             // (server-authoritative) still win whenever the pending entry
             // carries them, so this is only the fallback the guard needs to
             // even attempt the branch.
+            // SEC-DEVICEID-REINSTALL: Keychain first (survives app
+            // delete+reinstall), UserDefaults fallback — see
+            // TokenVault.saveDeviceId's doc.
             var v2Context: KmsPollerService.V2Context? = nil
             if let userIdStr = currentUserId, let userUuid = UUID(uuidString: userIdStr),
-               let deviceIdStr = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+               let deviceIdStr = TokenVault.loadDeviceId() ??
+                UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                let deviceUuid = UUID(uuidString: deviceIdStr) {
                 v2Context = KmsPollerService.V2Context(
                     userId: userUuid, deviceId: deviceUuid, serverId: CryptoConstants.kmsServerId())

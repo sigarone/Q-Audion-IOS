@@ -19,6 +19,17 @@ final class AuthService {
     /// written by AppState's device-renew fallback (which still pokes the
     /// raw UserDefaults keys) so a cold start never reloads a stale
     /// plaintext token.
+    ///
+    /// SEC-DEVICEID-REINSTALL (2026-08-03): also sweeps `deviceId` into
+    /// the Keychain (see `TokenVault.saveDeviceId` doc for why this one
+    /// matters — UserDefaults is wiped on reinstall, the Keychain isn't,
+    /// and a refresh token that outlives its deviceId can never self-heal
+    /// via device-renew). Deliberately does NOT remove the UserDefaults
+    /// copy afterward — several call sites still read
+    /// `UserDefaults...forKey: "com.qaudion.auth.device_id"` directly
+    /// (identity-key publish, group creation); leaving it in place keeps
+    /// them working unchanged while the Keychain becomes the copy that
+    /// actually survives a reinstall.
     private func migrateTokensToKeychainIfNeeded() {
         let ud = UserDefaults.standard
         if TokenVault.loadAccessToken() == nil,
@@ -29,8 +40,13 @@ final class AuthService {
            let legacyRefresh = ud.string(forKey: refreshTokenKey), !legacyRefresh.isEmpty {
             TokenVault.saveRefreshToken(legacyRefresh)
         }
+        if TokenVault.loadDeviceId() == nil,
+           let legacyDeviceId = ud.string(forKey: deviceIdKey), !legacyDeviceId.isEmpty {
+            TokenVault.saveDeviceId(legacyDeviceId)
+        }
         // Remove the plaintext copies regardless — the Keychain is now
-        // authoritative for both tokens.
+        // authoritative for both tokens. deviceId's UserDefaults copy is
+        // intentionally kept (see doc above).
         ud.removeObject(forKey: tokenKey)
         ud.removeObject(forKey: refreshTokenKey)
     }
@@ -77,13 +93,18 @@ final class AuthService {
     }
 
     func saveCredentials(_ creds: AuthCredentials) {
-        // SECURITY C-5 — tokens → Keychain; userId/deviceId stay in
-        // UserDefaults (not credentials; deviceId is read directly by
-        // AppState's device-renew fallback under deviceIdKey).
+        // SECURITY C-5 — tokens → Keychain; userId stays in UserDefaults
+        // (not a credential). deviceId is written to BOTH: UserDefaults
+        // for the existing direct readers (AppState identity-key/group
+        // call sites), and the Keychain (SEC-DEVICEID-REINSTALL) so it
+        // survives an app delete+reinstall exactly like the refresh token
+        // it is paired with — see `TokenVault.saveDeviceId` doc for the
+        // live-device incident this closes.
         TokenVault.saveAccessToken(creds.accessToken)
         if let refresh = creds.refreshToken, !refresh.isEmpty {
             TokenVault.saveRefreshToken(refresh)
         }
+        TokenVault.saveDeviceId(creds.deviceId)
         UserDefaults.standard.set(creds.userId, forKey: userIdKey)
         UserDefaults.standard.set(creds.deviceId, forKey: deviceIdKey)
     }
@@ -112,6 +133,19 @@ final class AuthService {
 
     func loadUserId() -> String? {
         UserDefaults.standard.string(forKey: userIdKey)
+    }
+
+    /// SEC-DEVICEID-REINSTALL (2026-08-03) — authoritative deviceId read.
+    /// Keychain first (survives reinstall); UserDefaults only as a
+    /// fallback for the narrow window before `migrateTokensToKeychainIfNeeded`
+    /// has run once. New call sites should use this instead of reading
+    /// `UserDefaults...forKey: "com.qaudion.auth.device_id"` directly.
+    func loadDeviceId() -> String? {
+        migrateTokensToKeychainIfNeeded()
+        if let fromKeychain = TokenVault.loadDeviceId(), !fromKeychain.isEmpty {
+            return fromKeychain
+        }
+        return UserDefaults.standard.string(forKey: deviceIdKey)
     }
 
     func clearToken() {

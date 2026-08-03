@@ -26,6 +26,8 @@ enum TokenVault {
     /// Logical account keys inside the `service` scope.
     private static let accessAccount = "access_token"
     private static let refreshAccount = "refresh_token"
+    /// SEC-DEVICEID-REINSTALL (2026-08-03) — see `saveDeviceId` doc.
+    private static let deviceIdAccount = "device_id"
 
     // MARK: - Public API
 
@@ -45,10 +47,33 @@ enum TokenVault {
         load(account: refreshAccount)
     }
 
+    /// SEC-DEVICEID-REINSTALL (2026-08-03) — the device-renew silent-auth
+    /// fallback (`AppState.wireDeviceRenewFallback`) needs this deviceId to
+    /// even ATTEMPT recovery. It used to live only in `UserDefaults`, which
+    /// iOS wipes on app delete — while the Keychain-stored refresh token
+    /// (`loadRefreshToken` above) survives delete+reinstall by design. That
+    /// split let a device end up with a real (but now-dead) refresh token
+    /// and NO deviceId: every refresh 401 fell through to the fallback,
+    /// which read a `nil` deviceId and threw before ever calling
+    /// `/auth/device-challenge` — confirmed on a live device via the server
+    /// journal (five straight "refresh token rejected" cycles, zero
+    /// device-challenge/device-renew requests, over 6 hours) while a
+    /// second device with an intact Keychain+UserDefaults pair self-healed
+    /// via device-renew every ~10-15 min all day. Keychain-backing this
+    /// value the same way as the tokens closes that split for good.
+    static func saveDeviceId(_ deviceId: String) {
+        save(account: deviceIdAccount, value: deviceId)
+    }
+
+    static func loadDeviceId() -> String? {
+        load(account: deviceIdAccount)
+    }
+
     /// Remove every credential item in the `com.qaudion.auth` scope.
     static func clear() {
         delete(account: accessAccount)
         delete(account: refreshAccount)
+        delete(account: deviceIdAccount)
     }
 
     // MARK: - Keychain primitives
