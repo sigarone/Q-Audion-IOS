@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.936",
+              date: "2026-08-03",
+              title: "v1.0.936",
+              bullets: [
+                "fix(call): make the audio-start gate diagnosable remotely, not just via Xcode",
+                "fix(auth): Keychain-persist deviceId so it survives reinstall like the refresh token",
+              ]),
         .init(id: "v1.0.935",
               date: "2026-08-03",
               title: "v1.0.935",
               bullets: [
+                "chore: regenerate changelog for v1.0.935",
                 "feat(attachments): converge iOS onto Android's qa_fa_announce:1 wire format",
               ]),
         .init(id: "v1.0.934",
@@ -146,13 +154,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.917",
                 "fix(upload): crash in tus chunk-loop Data slicing (100% reproducible on camera avatar upload)",
-              ]),
-        .init(id: "v1.0.916",
-              date: "2026-07-31",
-              title: "v1.0.916",
-              bullets: [
-                "chore: regenerate changelog for v1.0.916",
-                "fix(avatar): fix discarded send outcomes, unguarded key-exchange send, silent receive-path failures",
               ]),
     ]
 }
