@@ -259,7 +259,7 @@ public final class LiveLogStreamer {
         chunkSeq += 1
         let mySeq: Int = chunkSeq
         let chunkBytes: Int = data.count
-        lastSeq = snap.highestSeq
+        let highestSeqInChunk: Int64 = snap.highestSeq
 
         let userIdRaw: String = getUserId() ?? "anon"
         // SECURITY L-6 — do NOT leak the raw user-id prefix in the
@@ -276,6 +276,36 @@ public final class LiveLogStreamer {
 
         inflight = true
         lastUploadStartedAt = now
+        // W-LIVELOGHANG (2026-08-03): a hung tus PATCH (no per-attempt bound
+        // on the underlying `TusUploadClient` call — network-saturated by
+        // live call RTP is exactly when this hits) used to leave `inflight`
+        // stuck `true` forever, silently freezing this pump for the rest of
+        // the process lifetime. `skippedDueToInflight` never logs, so the
+        // ONE window this evidence matters most (a live call) went dark
+        // with zero trace — confirmed live: a real receiving device
+        // produced exactly ONE chunk across an entire ~8-minute call, then
+        // resumed only after something unrelated eventually unstuck it.
+        //
+        // Fix: a watchdog keyed on `mySeq` force-clears `inflight` if the
+        // matching upload hasn't finished within `uploadTimeoutSeconds`.
+        // The original upload keeps running in the background (nothing
+        // here cancels it — `TusUploadClient`/`URLSession` own that), but
+        // the PUMP no longer waits on it forever; if it later succeeds,
+        // its own completion still runs and advances `lastSeq`/counters
+        // (harmless double-report if the watchdog already logged the
+        // timeout). A `[weak self]` + sequence-number guard means a
+        // watchdog for an OLD chunk can never clobber a NEWER upload that
+        // is already legitimately in flight.
+        let watchdogSeq: Int = mySeq
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: LiveLogStreamer.uploadTimeoutSeconds * 1_000_000_000)
+            guard let self, self.inflight, self.chunkSeq == watchdogSeq else { return }
+            self.inflight = false
+            self.failedUploads += 1
+            let seqStr: String = String(watchdogSeq)
+            let line: String = "livelog upload timeout seq=" + seqStr
+            RTLog.warn("net", line)
+        }
         Task {
             await self.uploadChunk(
                 serverUrl: serverUrlLocal,
@@ -283,25 +313,42 @@ public final class LiveLogStreamer {
                 filename: filename,
                 data: data,
                 chunkBytes: chunkBytes,
-                seq: mySeq)
+                seq: mySeq,
+                highestSeqInChunk: highestSeqInChunk)
         }
     }
+
+    /// Bound for the watchdog above — see its comment for why it exists.
+    private static let uploadTimeoutSeconds: UInt64 = 12
 
     private func uploadChunk(serverUrl: String,
                              token: String,
                              filename: String,
                              data: Data,
                              chunkBytes: Int,
-                             seq: Int) async {
+                             seq: Int,
+                             highestSeqInChunk: Int64) async {
         let cfg: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: cfg)
         do {
             let fileId: String = try await provider.storageApi.uploadFile(
                 data: data, filename: filename)
+            // A watchdog may already have timed THIS seq out and moved on
+            // (see enqueueSend) — a late success arriving after that must
+            // not resurrect `inflight`/`lastSeq` state for a chunk the pump
+            // has already given up on and possibly superseded.
+            guard chunkSeq == seq else { return }
             lastUploadedFileId = fileId
             lastUploadedAt = Date()
             totalUploadedChunks += 1
             totalUploadedBytes += chunkBytes
+            // W-LIVELOGHANG — only advance the read cursor on a CONFIRMED
+            // send. Advancing it unconditionally in flushOnce() (the old
+            // behaviour) meant a failed/timed-out chunk's lines were gone
+            // forever — the next flush started reading past them, so a
+            // transient failure silently and permanently dropped evidence
+            // instead of retrying it on the next tick.
+            lastSeq = highestSeqInChunk
             inflight = false
             let shouldLog: Bool = totalUploadedChunks <= 3 || (totalUploadedChunks % 50) == 0
             if shouldLog {
@@ -311,8 +358,23 @@ public final class LiveLogStreamer {
                 RTLog.info("livelog", line)
             }
         } catch {
+            // A watchdog may have already cleared `inflight` and logged a
+            // timeout for this same `seq` (see enqueueSend) — only bump
+            // the failure counter/log here if this completion is still the
+            // one the pump is waiting on, so a late-arriving failure after
+            // a watchdog timeout doesn't double-count.
+            guard chunkSeq == seq else { return }
             failedUploads += 1
             inflight = false
+            // W-LIVELOGHANG — the OLD catch block was silent (no RTLog at
+            // all), so a run of failures was indistinguishable from the
+            // pump never having started. "net" (not "livelog") so this
+            // actually ships once the pump recovers, instead of being
+            // filtered out by entriesSince's own livelog self-exclusion.
+            let seqStr: String = String(seq)
+            let failStr: String = String(failedUploads)
+            let line: String = "livelog upload error seq=" + seqStr + " totalfail=" + failStr
+            RTLog.warn("net", line)
         }
     }
 
