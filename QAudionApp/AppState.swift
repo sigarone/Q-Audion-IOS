@@ -7849,6 +7849,77 @@ final class AppState: ObservableObject {
     /// first place, this left every backgrounded Android→iOS call ringing on
     /// the iPad but NEVER reaching the key sync. Routing opaque blobs here on
     /// replay closes that hole.
+    /// SEC-WIREUNIFY (2026-08-03) — persist a fully downloaded+decrypted
+    /// `qa_fa_announce:1` file attachment as a new inbound message row.
+    /// Unlike the `qa_ctl:1 attach_announce` path (which creates a
+    /// placeholder row immediately via `handleIncomingMessage` and fills
+    /// in media info once the async fetch completes), this envelope
+    /// never rides `msg_send` — no row exists yet when this fires, so the
+    /// row is inserted complete in one shot, mirroring Android's
+    /// `InboundFileAttachmentDispatcher.persistInboxRow` (get-or-create
+    /// the 1:1 conversation, then insert the message).
+    @MainActor
+    private func handleReceivedFileAttachment(_ result: ChatFileAttachmentReceiver.Result, senderId: String) {
+        let store = ConversationStore()
+        let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
+        let conv: Conversation
+        if let e = existing {
+            conv = e
+        } else {
+            let resolvedName = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            conv = Conversation(
+                id: UUID(),
+                peerUserId: senderId,
+                peerDisplayName: resolvedName,
+                lastMessagePreview: "",
+                lastActivity: Date(),
+                unreadCount: 0,
+                pinned: false,
+                kind: .oneToOne
+            )
+            store.upsertConversation(conv)
+        }
+
+        let mime = result.mime.lowercased()
+        let friendly: String
+        if mime.hasPrefix("audio/") {
+            friendly = "🎤 Nota vocale"
+        } else if mime.hasPrefix("image/") {
+            friendly = "🖼️ Immagine"
+        } else if mime.hasPrefix("video/") {
+            friendly = "🎬 Video"
+        } else {
+            friendly = "📎 Allegato"
+        }
+
+        let msg = Message(
+            id: UUID(),
+            conversationId: conv.id,
+            direction: .incoming,
+            plaintext: friendly,
+            sentAt: Date(),
+            deliveredAt: Date(),
+            readAt: nil,
+            status: .delivered,
+            senderUserId: senderId,
+            mediaLocalPath: result.localUrl.path,
+            mediaMimeType: result.mime
+        )
+        store.appendMessage(msg)
+        let isMuted = conv.muted
+        store.recordNewMessage(
+            conversationId: conv.id,
+            lastMessagePreview: friendly,
+            lastActivity: Date(),
+            incrementUnread: !isMuted
+        )
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification,
+            object: nil,
+            userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+        )
+    }
+
     private func dispatchInboundOpaque(senderId: String, blobStr: String) {
         guard let cke = contactKeyExchange else { return }
 
@@ -7887,6 +7958,28 @@ final class AppState: ObservableObject {
                 }
             default:
                 break
+            }
+            return
+        }
+
+        // Path A1 — SEC-WIREUNIFY (2026-08-03) `qa_fa_announce:1`
+        // cross-platform file-attachment announce. Self-authenticating
+        // (X25519 ECDH + AES-GCM wrap over the content key) — needs no
+        // outer ratchet, so it rides raw `opaque_message` like the QUAD
+        // handshake above rather than the normal msg_send channel
+        // `qa_ctl:1 attach_announce` uses. `parse` returns nil for any
+        // payload that isn't this envelope (wrong `t` marker, not base64
+        // JSON, etc.), so this is a safe no-op fall-through for every
+        // other opaque_message consumer below.
+        if let envelope = FileAttachmentAnnounceWireEnvelope.parse(wirePayloadB64: blobStr) {
+            let receiver = ChatFileAttachmentReceiver(appState: self)
+            Task { [weak self] in
+                do {
+                    let result = try await receiver.receive(envelope: envelope)
+                    await self?.handleReceivedFileAttachment(result, senderId: senderId)
+                } catch {
+                    RTLog.warn("chat", "file-attachment receive failed sender=\(senderId.prefix(8)) fileId=\(envelope.fileId.prefix(8)): \(error)")
+                }
             }
             return
         }

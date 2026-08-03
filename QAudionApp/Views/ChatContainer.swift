@@ -848,89 +848,55 @@ final class ChatContainer: ObservableObject {
         overrideTimerSeconds: Int? = nil,
         exportBlocked: Bool = false
     ) async {
-        let prep = ChatVoiceNoteSender(appState: appState)
-        let markerJson: String
+        // SEC-WIREUNIFY (2026-08-03): voice notes now ship over the
+        // cross-platform `qa_fa_announce:1` scheme (X25519-per-device
+        // wrap + XChaCha20-Poly1305 chunks) instead of the iPhone-only
+        // `qfile` marker — see `ChatFileAttachmentSender`. The optimistic
+        // local bubble (msgId/convId, local media path) was already
+        // created by the caller before this async continuation runs;
+        // only the terminal status needs updating here. No TUS-resume
+        // breadcrumb is written for new sends on this path (see the type
+        // doc on `ChatFileAttachmentSender` — resume is a follow-up, not
+        // a correctness requirement for the cross-platform fix).
+        try? await Task.sleep(nanoseconds: 200_000_000)  // same flush window as before
+        let bytes: Data
         do {
-            markerJson = try await prep.prepareMarkerJson(
-                for: recording,
+            bytes = try Data(contentsOf: recording.fileURL)
+        } catch {
+            print("[ChatContainer] voice note read failed: \(error)")
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .generic) }
+            return
+        }
+        let sender = ChatFileAttachmentSender(appState: appState)
+        do {
+            try await sender.send(
+                data: bytes,
+                mime: recording.mimeType,
+                filename: "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a",
                 recipientUserId: peerId,
-                timerOverrideSeconds: overrideTimerSeconds,
-                exportBlocked: exportBlocked,
-                onProgress: { bytesUploaded, totalBytes in
-                    // W446: called from TusUploadClient's upload loop,
-                    // not guaranteed to already be on the MainActor —
-                    // hop explicitly before touching @Published state.
-                    // Re-read `.value` at the point of use so this stays
-                    // weak across the hop (the box itself is safe to
-                    // capture strongly — it has no effect on
-                    // ChatContainer's refcount).
-                    Task { @MainActor in
-                        weakContainer.value?.updateUploadProgress(
-                            messageId: msgId,
-                            bytesUploaded: bytesUploaded,
-                            totalBytes: totalBytes
-                        )
-                    }
-                },
-                // W-TUSRESUME: every send (not just retries) writes a
-                // resume breadcrumb keyed by this message's own id, so
-                // if the app is killed mid-upload on the FIRST attempt,
-                // the next retry still has something to resume from
-                // (the persisted state predates any retry).
-                resumeClientMsgId: msgId.uuidString
+                ephemeralSpecSec: overrideTimerSeconds.map(Int64.init),
+                exportAllowed: !exportBlocked
             )
-        } catch let e as ChatVoiceNoteSender.Error {
-            print("[ChatContainer] voice note prep failed: \(e.localizedDescription)")
-            let reason: SendFailureReason = {
-                if case .pskMissing = e { return .pskMissing }
-                return .uploadFailure
-            }()
+        } catch let e as ChatFileAttachmentSender.SendError {
+            print("[ChatContainer] voice note send failed: \(e.localizedDescription)")
             await MainActor.run {
-                weakContainer.value?.markFailed(messageId: msgId, reason: reason)
+                weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure)
             }
             return
         } catch {
-            print("[ChatContainer] voice note prep failed: \(error)")
+            print("[ChatContainer] voice note send failed: \(error)")
             await MainActor.run {
                 weakContainer.value?.markFailed(messageId: msgId, reason: .generic)
             }
             return
         }
-        // Marker prepared — encrypt-and-ship via the same WS send
-        // pipeline as a regular text message. The wire `plaintext`
-        // is the marker JSON; the local store keeps the friendly
-        // display text untouched.
-        let outcome = await sendService.sendEncrypted(
-            messageId: msgId,
-            peerUserId: peerId,
-            plaintext: markerJson
-        )
         await MainActor.run {
             guard let self = weakContainer.value else { return }
-            // W446: upload is done (prepareMarkerJson already
-            // returned) and we're now at a terminal send outcome —
-            // clear the local progress entry so the bubble falls
-            // back to the normal status-derived delivery icon.
             self.clearUploadProgress(messageId: msgId)
-            switch outcome {
-            case .delivered(let serverMsgId):
-                self.store.setServerMessageId(
-                    localId: msgId,
-                    conversationId: convId,
-                    serverMessageId: serverMsgId
-                )
-                self.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-            case .sent:
-                self.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-            case .failed(let reason):
-                self.markFailed(messageId: msgId, reason: reason)
-            }
+            self.store.updateMessageStatus(
+                id: msgId, conversationId: convId,
+                newStatus: .delivered, deliveredAt: Date()
+            )
             self.refreshFromStore()
         }
     }
@@ -1506,71 +1472,33 @@ final class ChatContainer: ObservableObject {
         sendService: ChatMessageSendService,
         appState: AppState
     ) async {
-        let prep = ChatVoiceNoteSender(appState: appState)
-        let markerJson: String
+        // SEC-WIREUNIFY (2026-08-03): see completeVoiceNoteSend's
+        // identical comment — images now ship over `qa_fa_announce:1`.
+        let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            markerJson = try await prep.prepareAttachmentMarkerJson(
-                bytes: jpeg,
+            try await sender.send(
+                data: jpeg,
                 mime: "image/jpeg",
                 filename: "image-\(msgId.uuidString).jpg",
-                durationMs: nil,
                 recipientUserId: peerId,
-                timerOverrideSeconds: overrideTimerSeconds,
-                onProgress: { bytesUploaded, totalBytes in
-                    // W446: see sendVoiceNote — hop to MainActor
-                    // before touching @Published upload state. Re-read
-                    // `.value` at the point of use so this stays weak
-                    // across the hop.
-                    Task { @MainActor in
-                        weakContainer.value?.updateUploadProgress(
-                            messageId: msgId,
-                            bytesUploaded: bytesUploaded,
-                            totalBytes: totalBytes
-                        )
-                    }
-                },
-                // W-TUSRESUME: see sendVoiceNote — breadcrumb keyed by
-                // this message's own id so a first-attempt kill still
-                // leaves something to resume from on retry.
-                resumeClientMsgId: msgId.uuidString
+                ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
             )
-        } catch let e as ChatVoiceNoteSender.Error {
-            print("[ChatContainer] sendImage prep failed: \(e.localizedDescription)")
-            let reason: SendFailureReason = {
-                if case .pskMissing = e { return .pskMissing }
-                return .uploadFailure
-            }()
-            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: reason) }
+        } catch let e as ChatFileAttachmentSender.SendError {
+            print("[ChatContainer] sendImage failed: \(e.localizedDescription)")
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
             return
         } catch {
-            print("[ChatContainer] sendImage prep failed: \(error)")
+            print("[ChatContainer] sendImage failed: \(error)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
             return
         }
-        let outcome = await sendService.sendEncrypted(
-            messageId: msgId, peerUserId: peerId, plaintext: markerJson
-        )
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
-            switch outcome {
-            case .delivered(let serverMsgId):
-                self.store.setServerMessageId(
-                    localId: msgId, conversationId: convId,
-                    serverMessageId: serverMsgId
-                )
-                self.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-            case .sent:
-                self.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-            case .failed(let reason):
-                self.markFailed(messageId: msgId, reason: reason)
-            }
+            self.store.updateMessageStatus(
+                id: msgId, conversationId: convId,
+                newStatus: .delivered, deliveredAt: Date()
+            )
             self.refreshFromStore()
         }
     }
@@ -1850,67 +1778,34 @@ final class ChatContainer: ObservableObject {
         sendService: ChatMessageSendService,
         appState: AppState
     ) async {
-        let prep = ChatVoiceNoteSender(appState: appState)
-        let markerJson: String
+        // SEC-WIREUNIFY (2026-08-03): see completeVoiceNoteSend's
+        // identical comment — generic files now ship over
+        // `qa_fa_announce:1`.
+        let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            markerJson = try await prep.prepareAttachmentMarkerJson(
-                bytes: data,
+            try await sender.send(
+                data: data,
                 mime: mime,
                 filename: filename,
-                durationMs: nil,
                 recipientUserId: peerId,
-                timerOverrideSeconds: overrideTimerSeconds,
-                onProgress: { bytesUploaded, totalBytes in
-                    // W446: see sendVoiceNote — hop to MainActor
-                    // before touching @Published upload state. Re-read
-                    // `.value` at the point of use so this stays weak
-                    // across the hop.
-                    Task { @MainActor in
-                        weakContainer.value?.updateUploadProgress(
-                            messageId: msgId,
-                            bytesUploaded: bytesUploaded,
-                            totalBytes: totalBytes
-                        )
-                    }
-                }
+                ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
             )
-        } catch let e as ChatVoiceNoteSender.Error {
-            print("[ChatContainer] sendFileAttachment prep failed: \(e.localizedDescription)")
-            let reason: SendFailureReason = {
-                if case .pskMissing = e { return .pskMissing }
-                return .uploadFailure
-            }()
-            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: reason) }
+        } catch let e as ChatFileAttachmentSender.SendError {
+            print("[ChatContainer] sendFileAttachment failed: \(e.localizedDescription)")
+            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
             return
         } catch {
-            print("[ChatContainer] sendFileAttachment prep failed: \(error)")
+            print("[ChatContainer] sendFileAttachment failed: \(error)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
             return
         }
-        let outcome = await sendService.sendEncrypted(
-            messageId: msgId, peerUserId: peerId, plaintext: markerJson
-        )
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
-            switch outcome {
-            case .delivered(let serverMsgId):
-                self.store.setServerMessageId(
-                    localId: msgId, conversationId: convId,
-                    serverMessageId: serverMsgId
-                )
-                self.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-            case .sent:
-                self.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-            case .failed(let reason):
-                self.markFailed(messageId: msgId, reason: reason)
-            }
+            self.store.updateMessageStatus(
+                id: msgId, conversationId: convId,
+                newStatus: .delivered, deliveredAt: Date()
+            )
             self.refreshFromStore()
         }
     }
