@@ -1714,12 +1714,24 @@ final class CallService: @unchecked Sendable {
         // handleCallAnswered, and CallKit didActivate all reach here). Refusing
         // it while a group call owns VP-IO closes EVERY path to the crashing
         // setVoiceProcessingEnabled at once (see `isGroupCallActive` kdoc).
+        // W-AUDIOGATEDIAG (2026-08-03): the three guards below were
+        // print()-only — invisible in every remote log pull. Found while
+        // chasing a live "call connects, video track received, zero audio
+        // TX/RX heartbeat ever" report with no way to tell WHICH gate was
+        // blocking. `ship-ios-logs.py`'s redactor is stricter than the
+        // documented "numeric survives" rule suggests — every one of these
+        // exact strings was verified to survive `redact_body` before
+        // shipping (several plausible variants, incl. any extra
+        // `word=word` field or a compound word like "capturefail", did
+        // NOT and were silently dropped). `gate` is a numeric code, not a
+        // string: 1=group_active 2=no_session 3=no_answer. "call" is
+        // already allow-listed in TAG_SCOPE_PREFIXES.
         if isGroupCallActive?() == true {
-            print("[CallService] startAudioIOIfReady SKIPPED — group call active (VP-IO owned by LiveKit)")
+            RTLog.warn("call", "audioIO skip=1 gate=1")
             return
         }
         guard audioSessionActive else {
-            print("[CallService] audio I/O deferred — waiting for CallKit didActivate")
+            RTLog.info("call", "audioIO defer=1 gate=2")
             return
         }
         // W574b pre-answer gate: for outgoing calls CallKit fires didActivate
@@ -1731,7 +1743,7 @@ final class CallService: @unchecked Sendable {
         // `.active` immediately after the OFFER is sent, which defeated
         // the v1.0.618 isCallActive?() version of this gate.
         guard peerAnswered else {
-            print("[CallService] audio I/O deferred — peer has not answered yet")
+            RTLog.info("call", "audioIO defer=1 gate=3")
             return
         }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
@@ -1742,10 +1754,23 @@ final class CallService: @unchecked Sendable {
         if let capture = audioCapture {
             do {
                 try capture.start()
+                // W-AUDIOGATEDIAG (2026-08-03): confirms all three gates
+                // above actually cleared and AVAudioEngine.start() itself
+                // succeeded — the one line that, if present, rules out
+                // startAudioIOIfReady as the cause of a "no audio"
+                // report and points at TX encode/send or RX decode/
+                // playback instead. Was previously unlogged entirely
+                // (silence on success gave no positive confirmation).
+                RTLog.info("call", "audioIO started=1")
             } catch {
-                let desc: String = error.localizedDescription
-                let line: String = "[CallService] AudioCapture start failed: " + desc + " — chiamata continua senza HW VP"
-                print(line)
+                // Was print()-only — invisible in every remote log pull.
+                // The error description is deliberately NOT included: it's
+                // free-form English text, and a multi-word free-form run
+                // makes the redactor drop the WHOLE line (verified against
+                // the real redact_body), not just scrub the offending part
+                // — better a bare positive/negative signal that reliably
+                // ships than a detailed one that silently doesn't.
+                RTLog.warn("call", "audioIO capfail=1")
             }
         }
         // Diagnostics: mark audio I/O live once the single engine has started.
@@ -1795,7 +1820,13 @@ final class CallService: @unchecked Sendable {
             guard !self.audioSessionActive,
                   self.callIntegration != nil,
                   self.peerAnswered else { return }
-            print("[CallService] W574b — didActivate not seen 1s after answer; self-activating audio session (fallback)")
+            // Was print()-only. If this fires it means CallKit never
+            // called didActivate within 1s of answer — a real signal
+            // worth seeing remotely, not just a harmless fallback.
+            // Verified against the real redact_body (see the gate-comment
+            // on startAudioIOIfReady) — several plausible spellings of
+            // this exact field were silently dropped before "selfact".
+            RTLog.warn("call", "audioIO selfact=1")
             self.handleAudioSessionActivated()
         }
     }
