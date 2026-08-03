@@ -560,9 +560,28 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// [onParticipantsChanged] one so GroupCallController can bootstrap new
     /// members into the sender-key roster and rekey on departure using the
     /// server-canonical epoch.
+    /// W-GRPUPDATEDIAG (2026-08-03): this handler had ZERO logging — a
+    /// join that never surfaced a roster looked IDENTICAL to
+    /// `group_call_update` never arriving at all, whether the real cause
+    /// was the server never delivering it (the W-GRPSTALEWS class of bug
+    /// documented server-side, cmd/bcrypto-lite/main.go's
+    /// `group_call_join` handler) or it arriving and failing this
+    /// function's own guard. Confirmed live: a join whose server log
+    /// showed `group_call_join ... stale_ws_routed_cross_node=0` (i.e.
+    /// the server believed delivery succeeded) still left the client
+    /// stuck at 0 participants until `armGroupCallJoinTimeout`'s 20s
+    /// safety net fired — with no client-side trace to say which side
+    /// actually failed. These two lines exist purely to answer that
+    /// question the next time it happens.
     private func handleGroupCallUpdate(data: [String: Any]) {
         guard let cid = data["call_id"] as? String,
-              let participantIds = data["participants"] as? [String] else { return }
+              let participantIds = data["participants"] as? [String] else {
+            let hasCallId = data["call_id"] != nil
+            let hasParticipants = data["participants"] != nil
+            print("[BCryptoGroupCallManager] group_call_update UNPARSEABLE hasCallId=\(hasCallId) hasParticipants=\(hasParticipants)")
+            return
+        }
+        print("[BCryptoGroupCallManager] group_call_update RECEIVED call=\(cid.prefix(8)) participants=\(participantIds.count)")
         let capableIds = data["sender_keys_capable"] as? [String] ?? []
         let epoch = (data["sender_key_epoch"] as? NSNumber)?.int64Value ?? 1
         // W-RAWKEY256 (2026-07-20) — same `?? []` fallback idiom as
