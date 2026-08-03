@@ -60,50 +60,77 @@ public final class BCryptoStorageApiImpl: StorageApi {
     }
 
     /// W-TUSRESUME — same as ``uploadFile(data:filename:onProgress:)`` with
-    /// an optional resume-breadcrumb context. When `resumeContext` is
-    /// supplied AND the file takes the TUS chunked path, `resumeContext.
+    /// an optional resume-breadcrumb context. `resumeContext.
     /// onFileIdMinted` is wired to `TusUploadClient.upload(onCreated:)` —
     /// fired right after `create()` succeeds, before the chunk loop starts
     /// — so the caller (ultimately `FileTransfer.upload`, see
     /// `onResumeStateReady` there) can persist a `TusResumeState` for a
     /// future cross-launch resume instead of re-uploading from byte zero.
-    /// Ignored entirely on the small-file multipart fast-path — single
-    /// atomic POST has nothing to resume.
+    ///
+    /// W-STORAGESPLIT (2026-08-03): this used to branch on a 1 MB
+    /// threshold — payloads at or under it went to the LEGACY multipart
+    /// endpoint `POST /api/v1/files/upload`, which writes only into the
+    /// server's separate legacy `bucketFiles`/`FileMeta` record (`main.go
+    /// handleFileUpload` → `StoreFileMetaTagged`). Every 1:1 attachment/
+    /// voice-note/photo send calls `issueToken` immediately after upload
+    /// (`ChatVoiceNoteSender`, `ChatAttachAnnounceSender`,
+    /// `GroupAttachmentSender`), and the server's issue-token handler
+    /// (`files_tus.go HandleIssueToken` → `loadRecord`) reads ONLY the
+    /// tus.io record store — a completely disjoint bucket the legacy
+    /// endpoint never writes to. So any payload at or under 1 MB — which
+    /// is virtually every voice note (5-minute cap, typical AAC bitrate)
+    /// and most photos — 404'd on `issueToken` deterministically, every
+    /// time. That is the confirmed root cause of "invio sempre fallito":
+    /// not intermittent, not content-type-specific, a hard split between
+    /// two storage systems that never reconcile.
+    ///
+    /// Always routing through `TusUploadClient` closes the gap outright
+    /// rather than teaching the legacy endpoint about capability tokens
+    /// (which would mean maintaining two parallel storage/auth models
+    /// forever): tus already has no minimum-size requirement — `create()`
+    /// takes whatever `data.count` is — and is already the mandatory path
+    /// for avatars (`AvatarAnnounceSender`, migrated 2026-07-30 for the
+    /// identical class of bug, W-AVATAR404) and every attachment sender.
+    /// Matches Android exactly: `FileAttachmentSender.kt` has no size
+    /// threshold at all and always uses `TusUploader`.
     public func uploadFile(
         data: Data,
         filename: String,
         onProgress: ((Int64, Int64) -> Void)?,
         resumeContext: (clientMsgId: String, sourceBytes: Data, onFileIdMinted: (String) -> Void)?
     ) async throws -> String {
-        // W443 — TUS resumable protocol for files > 1 MB; multipart fast-path
-        // for small payloads (voice notes ~50–200 KB, thumbnails).
-        let tusSizeThreshold = 1_048_576   // 1 MB
-        if data.count > tusSizeThreshold {
-            let capturedRest = rest
-            let tusClient = TusUploadClient(
-                session: capturedRest.urlSession,
-                serverUrl: capturedRest.serverUrl,
-                getToken: { capturedRest.accessToken }
-            )
-            return try await tusClient.upload(
-                data: data,
-                onProgress: onProgress,
-                onCreated: resumeContext?.onFileIdMinted
-            )
-        }
-        // Existing multipart POST for small payloads.
-        let boundary = "Boundary-\(UUID().uuidString)"
-        let body = createMultipartBody(boundary: boundary, fieldName: "file",
-                                       fileName: filename, data: data)
-        let headers = ["Content-Type": "multipart/form-data; boundary=\(boundary)"]
-        let response = try await rest.post("/api/v1/files/upload", body: body, headers: headers)
-        guard let json = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
-              let fileId = json["file_id"] as? String else { throw BCryptoError.decodingError }
-        return fileId
+        let capturedRest = rest
+        let tusClient = TusUploadClient(
+            session: capturedRest.urlSession,
+            serverUrl: capturedRest.serverUrl,
+            getToken: { capturedRest.accessToken }
+        )
+        return try await tusClient.upload(
+            data: data,
+            onProgress: onProgress,
+            onCreated: resumeContext?.onFileIdMinted
+        )
     }
 
+    /// W-STORAGESPLIT (2026-08-03): mirrors the upload-side fix — was
+    /// `GET /api/v1/files/{fileId}`, the LEGACY owner-only route
+    /// (`main.go handleFileDownload`), which 404s for anyone who isn't
+    /// the uploader and has no concept of a recipient capability token at
+    /// all. A recipient downloading a peer's attachment is never the
+    /// uploader, so this 404'd unconditionally for every cross-user
+    /// receive that reached it. Routes through the tus recipient-token
+    /// endpoint instead, matching every other cross-user download path in
+    /// this codebase (`AvatarAnnounceReceiver`, `ChatVoiceNoteReceiver`).
+    ///
+    /// `StorageApi.downloadFile(fileId:)` (the protocol requirement this
+    /// satisfies) has no token parameter, so this overload only serves
+    /// SELF-owned downloads (log export, own-backup-adjacent reads) where
+    /// no recipient token exists or is needed — a genuine cross-user
+    /// attachment/voice-note download goes through
+    /// `downloadTokenClient.downloadCiphertext(fileId:claim:)` directly,
+    /// never through this method.
     public func downloadFile(fileId: String) async throws -> Data {
-        return try await rest.get("/api/v1/files/\(fileId)")
+        return try await rest.get("/api/v1/files/tus/\(fileId)")
     }
 
     /// W-TUSRESUME — expose the TUS resume primitives (`head`/`resume`)

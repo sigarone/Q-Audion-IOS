@@ -120,7 +120,10 @@ final class ChatVoiceNoteSender {
             } catch {
                 // Fall back to the legacy qfile path on any error so
                 // the user can still send during the rollover.
-                print("[ChatVoiceNoteSender] attach_announce path failed, falling back to qfile: \(error)")
+                // W-ATTACHVISIBILITY (2026-08-03): was print() — console-only,
+                // invisible to any remote log pull. "voicenote" is already
+                // allow-listed in ship-ios-logs.py's TAG_SCOPE_PREFIXES.
+                RTLog.warn("voicenote", "attach_announce path failed, falling back to qfile: \(error)")
             }
         }
 
@@ -558,31 +561,35 @@ final class ChatVoiceNoteSender {
         )
     }
 
-    /// Same lookup ladder as ``ChatMessageSendService``:
-    /// 1. `auto:<peerIdPrefix8>:<peerId>` (ContactKeyExchange-derived PSK).
-    /// 2. Bare `peerId` (legacy / manually-bound).
-    /// Returns `nil` — never a fallback key — when neither is bound.
+    /// Delegates to ``PairwiseChainKeyResolver/resolvePsk(peerId:vault:)``
+    /// — the SAME resolver `ChatMessageSendService`/`ChatAttachAnnounceSender`
+    /// already use. Returns `nil` — never a fallback key — when no real
+    /// PSK is bound.
     ///
-    /// FIX H1-PARITY (2026-07-30): this used to fall through to
-    /// `SHA256("qaudion-fallback-psk:" + sortedPair)` — a hash of the two
-    /// PUBLIC userIds, server-guessable, zero real confidentiality — on
-    /// this DEFAULT (non-experimental) attachment/voice-note path used by
-    /// every 1:1 file send in production. `FileTransfer.upload`/
-    /// `resumeUpload` were ALREADY written to fail closed
-    /// (`throw .noPskAvailable`) when `vault.forContact`/`primary` return
-    /// nil — this function just never let that happen. Same bug class
-    /// `ChatMessageSendService` already fixed under the name FIX H1;
-    /// callers now catch `.noPskAvailable` and trigger a key exchange
-    /// instead of silently sending under a guessable key.
+    /// W-VOICEPSKPICK (2026-08-03): this used to keep its OWN copy of a
+    /// fixed 2-candidate ladder (`auto:<prefix>:<peerId>` then bare
+    /// `peerId`), predating `PairwiseChainKeyResolver`'s 2026-08-02 fix
+    /// that added a third candidate (`msg-psk:<peerId>`, the call-derived
+    /// message PSK) and switched to picking whichever bound PSK is
+    /// NEWEST rather than a fixed name order. Any contact whose only
+    /// bound key was that call-derived one — a call-only relationship
+    /// that never ran `ContactKeyExchange`, exactly the scenario that
+    /// fix exists for — resolved a PSK here for a TEXT message but
+    /// `nil` here for a voice note/photo/file to the SAME contact: this
+    /// was the one remaining copy of the ladder nobody had migrated.
+    ///
+    /// FIX H1-PARITY (2026-07-30) is still the reason this fails closed
+    /// rather than falling back to `SHA256("qaudion-fallback-psk:" +
+    /// sortedPair)` — a hash of the two PUBLIC userIds, server-guessable,
+    /// zero real confidentiality. `FileTransfer.upload`/`resumeUpload`
+    /// already throw `.noPskAvailable` on `nil` here and the caller
+    /// triggers a key exchange; that contract is unchanged by this fix,
+    /// only which real PSKs get a chance to satisfy it.
     private static func resolvePsk(
         vault: SovereignKeyVault,
         peerUserId: String,
         senderId: String
     ) -> Data? {
-        let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
-        let autoName = "auto:\(prefix):\(peerUserId)"
-        if let psk = try? vault.loadPsk(name: autoName), !psk.isEmpty { return psk }
-        if let psk = try? vault.loadPsk(name: peerUserId), !psk.isEmpty { return psk }
-        return nil
+        try? PairwiseChainKeyResolver.resolvePsk(peerId: peerUserId, vault: vault)
     }
 }

@@ -141,7 +141,8 @@ final class GroupAttachmentSender {
                 dl[member] = GroupDownloadEntry(
                     tok: issued.tokenHex, exp: issued.expiresAtMs, max: issued.maxUses)
             } catch {
-                print("[GroupAttachmentSender] issue-token for \(member) failed: \(error)")
+                // W-ATTACHVISIBILITY (2026-08-03): was print() — console-only.
+                RTLog.warn("voicenote", "group issue-token for \(member.prefix(8)) failed: \(error)")
             }
         }
         guard !dl.isEmpty else {
