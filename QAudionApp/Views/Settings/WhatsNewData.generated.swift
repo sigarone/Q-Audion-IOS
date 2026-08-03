@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.937",
+              date: "2026-08-03",
+              title: "v1.0.937",
+              bullets: [
+                "fix(avatar): self-heal a stale sandbox-container avatar path",
+                "fix(livelog): bound the upload pump, stop losing evidence on a hung chunk",
+              ]),
         .init(id: "v1.0.936",
               date: "2026-08-03",
               title: "v1.0.936",
               bullets: [
+                "chore: regenerate changelog for v1.0.936",
                 "fix(call): make the audio-start gate diagnosable remotely, not just via Xcode",
                 "fix(auth): Keychain-persist deviceId so it survives reinstall like the refresh token",
               ]),
@@ -147,13 +155,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.918",
                 "fix: real root cause of avatar-upload crash — CryptoKit Data index-base, not tus slicing",
-              ]),
-        .init(id: "v1.0.917",
-              date: "2026-07-31",
-              title: "v1.0.917",
-              bullets: [
-                "chore: regenerate changelog for v1.0.917",
-                "fix(upload): crash in tus chunk-loop Data slicing (100% reproducible on camera avatar upload)",
               ]),
     ]
 }
