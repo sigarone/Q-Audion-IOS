@@ -110,9 +110,23 @@ final class GroupAttachmentReceiver {
         }
 
         // 3. Write to temp for the bubble.
+        //
+        // W-GRPATTACHPATH (2026-08-03): `att.id` is base64 (16 raw bytes),
+        // and base64's alphabet includes `/` — roughly a 1-in-5 chance
+        // across a 16-char prefix. `appendingPathComponent` treats that
+        // `/` as a real path separator, so an id containing one silently
+        // turns this into a write inside a subdirectory that was never
+        // created, and `write(to:)` doesn't auto-create intermediates —
+        // NSFileWriteNoSuchFileError, every time that id happens to
+        // contain a slash. Confirmed live 2026-08-03: exactly one
+        // recipient in a group failed to receive a file everyone else
+        // got, with `writeFailed("The folder "<garbled>" doesn't exist")`
+        // — the id's own bytes, split on an embedded `/`. Same bug exists
+        // in `ChatAttachAnnounceReceiver` (1:1) — fixed there too.
         let dir = FileManager.default.temporaryDirectory
         let ext = GroupAttachmentSender.fileExtension(forMime: att.mime, filename: att.filename)
-        let url = dir.appendingPathComponent("grpattach-\(att.id.prefix(16))\(ext)")
+        let safeId = String(att.id.prefix(16)).replacingOccurrences(of: "/", with: "_")
+        let url = dir.appendingPathComponent("grpattach-\(safeId)\(ext)")
         do {
             try plaintext.write(to: url, options: [.atomic])
         } catch {

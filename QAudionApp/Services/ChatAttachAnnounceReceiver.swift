@@ -125,9 +125,19 @@ final class ChatAttachAnnounceReceiver {
         }
 
         // 4. Write to temp.
+        //
+        // W-GRPATTACHPATH (2026-08-03): `att.id` is base64 (16 raw bytes)
+        // and its alphabet includes `/`, which `appendingPathComponent`
+        // treats as a real path separator — an id containing one turns
+        // this into a write inside a subdirectory that was never created
+        // (write(to:) doesn't auto-create intermediates), failing with
+        // NSFileWriteNoSuchFileError. Confirmed live on the group-chat
+        // twin of this receiver (GroupAttachmentReceiver) — same
+        // construction here, fixed the same way.
         let tempDir = FileManager.default.temporaryDirectory
         let ext = Self.fileExtension(forMime: envelope.att.mime)
-        let url = tempDir.appendingPathComponent("attach-\(envelope.att.id.prefix(16))\(ext)")
+        let safeId = String(envelope.att.id.prefix(16)).replacingOccurrences(of: "/", with: "_")
+        let url = tempDir.appendingPathComponent("attach-\(safeId)\(ext)")
         do {
             try plaintext.write(to: url, options: [.atomic])
         } catch {
