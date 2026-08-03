@@ -346,8 +346,29 @@ public final class GroupCallController: @unchecked Sendable {
     /// previous WS. Clears the OLD manager's slots too, so a zombie socket
     /// that later revives can't double-deliver stale events into this
     /// controller.
+    /// W-GRPREBINDDIAG (2026-08-03): this is the THIRD incident on this
+    /// exact class of bug (see W-GRPSTALEMGR above and W-GRPREJOIN in
+    /// `rejoinAfterReconnect`) — a WS reconnect confirmed live (server
+    /// `ws: opened` mid-join, 2026-08-03T19:22:01Z) triggered
+    /// `rejoinAfterReconnect`'s resend exactly as designed, yet the
+    /// roster still never arrived. `rejoinAfterReconnect` sends on
+    /// whatever `manager` THIS controller currently holds — if the
+    /// reconnect that produced the new WS did not route through
+    /// `ensureGroupCallController` (the only caller of `rebind`), or
+    /// called it with the SAME manager instance (the guard below is a
+    /// silent no-op either way), the resend goes out through a manager
+    /// still bound to the dead connection's handlers. No prior incident
+    /// description mentions a reconnect specifically racing a
+    /// CXAnswerCallAction failure -> direct-accept fallback, which is
+    /// what tonight's occurrence did. Logging both branches so the next
+    /// occurrence shows whether `rebind` even ran for this reconnect,
+    /// closing the gap the last two fixes couldn't see.
     public func rebind(manager newManager: BCryptoGroupCallManager) {
-        guard newManager !== manager else { return }
+        guard newManager !== manager else {
+            print("[GroupCallController] rebind NOOP — called with the SAME manager instance already held")
+            return
+        }
+        print("[GroupCallController] rebind SWAPPED manager instance (old WS's handlers cleared)")
         let old = manager
         old.onStateChanged = nil
         old.onParticipantsChanged = nil
