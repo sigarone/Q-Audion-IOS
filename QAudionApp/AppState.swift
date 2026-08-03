@@ -15352,10 +15352,42 @@ extension AppState {
         // join, same reasoning as the cold-start branch above: the panel's
         // binding must already be in place by the time the call UI appears.
         groupCallViewModel?.bindGroupId(invite.groupId)
-        // The SAME join path as before: single source of truth for the WS
-        // `group_call_join` AND the GroupSession crypto bootstrap.
-        controller.join(callId: invite.callId, video: invite.hasVideo)
-        armGroupCallJoinTimeout(callId: invite.callId)
+        // W-GRPJOINRACE (2026-08-03, root cause of the zero-participant
+        // group join, not a fourth patch on the recovery machinery):
+        // `presentIncomingGroupCall`'s foreground branch kicks
+        // `reviveSignalingSocket()` at RING time, fire-and-forget. A human
+        // answering in ~2s (entirely normal) beats that revival to the
+        // finish line if the persistent connection genuinely needed a
+        // rebuild — confirmed live 2026-08-03T19:22:00-01Z: the join fired
+        // at 19:22:00.187, a brand new `ws: opened` landed at 19:22:01.094,
+        // ~900ms LATER. `controller` (captured above) always refers to the
+        // one long-lived GroupCallController — `rebind()` swaps its
+        // INTERNAL manager in place, so this reference stays valid — but
+        // calling `.join()` before that swap has happened sends
+        // `group_call_join` through whatever (possibly about-to-die)
+        // connection the manager held at THAT instant. `rejoinAfterReconnect`
+        // exists to paper over exactly this, but the roster still failed
+        // to arrive tonight even with it firing — recovering from the race
+        // isn't as reliable as never entering it. Wait for the CURRENT
+        // live connection to actually be authenticated (a no-op, near-
+        // instant await when it already is — the common case) before
+        // joining, so the join always fires on the connection that will
+        // still be there to receive `group_call_update`.
+        let callId = invite.callId
+        let hasVideo = invite.hasVideo
+        Task { [weak self] in
+            guard let self else { return }
+            if let live = self.liveProvider {
+                _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 10)
+            }
+            guard self.groupCallController === controller,
+                  case .connecting(let cid) = self.groupCallControllerState,
+                  cid == callId else { return }
+            // The SAME join path as before: single source of truth for the WS
+            // `group_call_join` AND the GroupSession crypto bootstrap.
+            controller.join(callId: callId, video: hasVideo)
+            self.armGroupCallJoinTimeout(callId: callId)
+        }
     }
 
     /// Reject the incoming group call. There is deliberately NO wire message:
