@@ -1018,8 +1018,7 @@ struct InCallScreen: View {
                 trustShield(
                     tint: peerOwnerContinuityLevel == .mismatch ? extras.riskHigh
                         : (peerOwnerContinuityLevel == .uncertain ? extras.pqcAccent : extras.success),
-                    shieldAsset: "TrustBadgeVoiceKeyShield",
-                    glyphAsset: "TrustBadgeVoiceKeyGlyph",
+                    icon: "mic.fill",
                     info: .voiceKey,
                     accessibilityLabel: peerOwnerContinuityLevel == .mismatch
                         ? "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato"
@@ -1035,8 +1034,7 @@ struct InCallScreen: View {
                 trustShield(
                     tint: contactVoiceLevel == .mismatch ? extras.riskHigh
                         : (contactVoiceLevel == .uncertain ? extras.pqcAccent : extras.success),
-                    shieldAsset: "TrustBadgeContactVoiceShield",
-                    glyphAsset: "TrustBadgeContactVoiceGlyph",
+                    icon: "ear",
                     info: .contactVoice,
                     accessibilityLabel: contactVoiceLevel == .verified
                         ? "La voce del contatto corrisponde a quella già conosciuta"
@@ -1058,8 +1056,7 @@ struct InCallScreen: View {
             if mutualNfcInCommon {
                 trustShield(
                     tint: extras.success,
-                    shieldAsset: "TrustBadgeNfcShield",
-                    glyphAsset: "TrustBadgeNfcGlyph",
+                    icon: "wave.3.right.circle.fill",
                     info: .nfc,
                     accessibilityLabel: "NFC in comune con il contatto"
                 )
@@ -1076,8 +1073,7 @@ struct InCallScreen: View {
             if pskMixedThisCall {
                 trustShield(
                     tint: extras.success,
-                    shieldAsset: "TrustBadgePskShield",
-                    glyphAsset: "TrustBadgePskGlyph",
+                    label: "PSK",
                     info: .psk,
                     accessibilityLabel: "Chiave pre-condivisa mescolata in questa chiamata"
                 )
@@ -1093,8 +1089,7 @@ struct InCallScreen: View {
             if sasWords.count == 6 {
                 trustShield(
                     tint: sasVerified ? extras.success : extras.pqcAccent,
-                    shieldAsset: "TrustBadgeSasShield",
-                    glyphAsset: "TrustBadgeSasGlyph",
+                    label: "SAS",
                     info: .sas,
                     accessibilityLabel: sasVerified ? "Identità verificata (SAS)" : "Verifica identità (SAS) in sospeso"
                 )
@@ -1105,14 +1100,12 @@ struct InCallScreen: View {
             // shield on this bar and Android's identical change.
             trustShield(
                 tint: pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant,
-                shieldAsset: "TrustBadgePqcShield",
-                glyphAsset: "TrustBadgePqcGlyph",
+                label: "PQC",
                 info: .pqc,
                 accessibilityLabel: pqcActive ? "Scambio post-quantistico attivo" : "Scambio post-quantistico non attivo"
             )
             trustShield(
                 tint: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
-                shieldAsset: "TrustBadgeTransportShield",
                 label: transportMode.shortLabel,
                 info: .transport,
                 accessibilityLabel: "Percorso di rete: \(transportMode.label)"
@@ -1145,28 +1138,58 @@ struct InCallScreen: View {
         )
     }
 
-    /// One trust-bar fact: a colored shield (custom asset, replacing the old
-    /// SF Symbol `shield.fill`) with a small baked icon/label glyph asset
-    /// centered on top, tappable to open `info`'s tap-to-explain `.alert`.
-    /// Shape/color language shared by every badge on `trustBar` — only
-    /// `tint`/`shieldAsset`/`glyphAsset`/`label`/`info` differ per fact, and
-    /// `tint` ALONE carries the verified/pending/absent state (no separate
-    /// checkmark).
+    /// The real Google Material "shield" filled-icon outline (24x24 grid),
+    /// as a `Shape` rather than the SF Symbol `shield.fill` — needed so the
+    /// SAME outline can be filled with `tint` AND stroked with a second
+    /// gold color at once (a `Shape` supports independent `.fill`/`.stroke`
+    /// modifiers; an `Image(systemName:)` can only be tinted as one flat
+    /// color). Same path data used on Android (`SHIELD_PATH_DATA` in
+    /// `GuardianRibbon.kt`) for pixel-identical shape cross-platform.
+    private struct TrustShieldOutline: Shape {
+        func path(in rect: CGRect) -> Path {
+            let s = rect.width / 24
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: rect.minX + x * s, y: rect.minY + y * s)
+            }
+            var p = Path()
+            p.move(to: pt(12, 1))
+            p.addLine(to: pt(3, 5))
+            p.addLine(to: pt(3, 11))
+            p.addCurve(to: pt(12, 23), control1: pt(3, 16.55), control2: pt(6.84, 21.74))
+            p.addCurve(to: pt(21, 11), control1: pt(17.16, 21.74), control2: pt(21, 16.55))
+            p.addLine(to: pt(21, 5))
+            p.addLine(to: pt(12, 1))
+            p.closeSubpath()
+            return p
+        }
+    }
+
+    private static let trustShieldGold = LinearGradient(
+        colors: [Color(red: 0.953, green: 0.824, blue: 0.478), Color(red: 0.831, green: 0.686, blue: 0.216), Color(red: 0.592, green: 0.443, blue: 0.106)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// One trust-bar fact: a colored shield with a small black icon or
+    /// short black label centered on top, tappable to open `info`'s
+    /// tap-to-explain `.alert`. Shape/color language shared by every badge
+    /// on `trustBar` — only `tint`/`icon`/`label`/`info` differ per fact,
+    /// and `tint` ALONE carries the verified/pending/absent state (no
+    /// separate checkmark).
     ///
-    /// W-SHIELDART (2026-08-04) — `shieldAsset` is the new shield-silhouette
-    /// template image extracted from the hand-made Stitch reference the
-    /// user approved (`template-rendering-intent: template` in the asset
-    /// catalog, so `.foregroundStyle(tint)` recolors it exactly like the
-    /// old SF Symbol did). `glyphAsset` is the matching baked icon/label
-    /// mask for facts whose text never changes (voice key/contact
-    /// voice/NFC/PSK/SAS/PQC). `label` stays a plain dynamic `Text` overlay
-    /// for Transport — its text genuinely varies at runtime
-    /// (P2P/TURN/RELAY/CONNECTING…), a baked raster can't represent that.
-    /// Pass exactly one of `glyphAsset`/`label`.
+    /// W-SHIELDGOLD (2026-08-04, Pavel pick "C" from the gold proposal) —
+    /// back to the plain Material shield silhouette (not the ornate Stitch
+    /// artwork from the previous attempt, which read as "worse than the
+    /// original"). Bigger than before (30pt → 36pt) and finished as a
+    /// small medal: `tint` still fills the shield exactly like the old
+    /// `shield.fill` SF Symbol did, plus a gold gradient stroke around the
+    /// rim and two gold studs at the top shoulders. The inner icon/label
+    /// is now BLACK instead of white — white on top of pale/desaturated
+    /// tints was hard to read; black holds contrast against every tint in
+    /// the palette.
     private func trustShield(
         tint: Color,
-        shieldAsset: String,
-        glyphAsset: String? = nil,
+        icon: String? = nil,
         label: String? = nil,
         info: TrustBadgeInfo,
         accessibilityLabel: String
@@ -1175,30 +1198,24 @@ struct InCallScreen: View {
             trustBadgeInfo = info
         } label: {
             ZStack {
-                Image(shieldAsset)
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(tint)
-                    .frame(width: 30, height: 30)
-                if let glyphAsset {
-                    Image(glyphAsset)
-                        .renderingMode(.template)
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
+                TrustShieldOutline().fill(tint)
+                TrustShieldOutline().stroke(Self.trustShieldGold, lineWidth: 1.6)
+                Circle().fill(Self.trustShieldGold).frame(width: 3.4, height: 3.4).offset(x: -12.6, y: -10.2)
+                Circle().fill(Self.trustShieldGold).frame(width: 3.4, height: 3.4).offset(x: 12.6, y: -10.2)
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.black)
                 } else if let label {
                     Text(label)
-                        .font(.system(size: 7, weight: .bold, design: .monospaced))
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(0.2)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.black)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
-                        .offset(y: -1)
                 }
             }
-            .frame(width: 30, height: 30)
+            .frame(width: 36, height: 36)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
