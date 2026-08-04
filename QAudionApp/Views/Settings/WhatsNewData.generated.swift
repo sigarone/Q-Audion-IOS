@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.939",
+              date: "2026-08-04",
+              title: "v1.0.939",
+              bullets: [
+                "fix(call): retry group_call_join, the prior fix closed a real race but not the root cause",
+              ]),
         .init(id: "v1.0.938",
               date: "2026-08-03",
               title: "v1.0.938",
               bullets: [
+                "chore: regenerate changelog for v1.0.938",
                 "fix(call): wait for the live connection before joining a group call",
                 "fix(call): trace whether rebind() actually swaps the manager on this reconnect",
                 "fix(call): make group_call_update silently-dropped-or-never-arrived diagnosable",
@@ -151,13 +158,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.920",
                 "fix(security): encrypt contacts store at rest (was plaintext UserDefaults)",
-              ]),
-        .init(id: "v1.0.919",
-              date: "2026-08-01",
-              title: "v1.0.919",
-              bullets: [
-                "chore: regenerate changelog for v1.0.919",
-                "feat(voice-auth): port CAM++ Tier 1/Tier 2 voice-auth from Android",
               ]),
     ]
 }
