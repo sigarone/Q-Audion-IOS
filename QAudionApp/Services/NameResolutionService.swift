@@ -329,6 +329,16 @@ final class NameResolutionService: @unchecked Sendable {
                 // value is only a synthetic bare-extension/placeholder,
                 // safe to upgrade to the real device-contact name.
                 if hadExistingRow {
+                    // W-NAMEOVERWRITE-DIAG (2026-08-04): Pavel reported a
+                    // group call reverting a just-renamed contact back to
+                    // an old value. hasRealLocalName() SHOULD block this
+                    // path once a real rename is stored, but the only way
+                    // to confirm whether THIS write is the culprit (vs.
+                    // apply()'s below, vs. something in GroupCallView not
+                    // yet found) is to see the before/after value on the
+                    // next real occurrence — never logged before now.
+                    let before = self.contactsStore.load().first(where: { $0.userId == id })?.displayName ?? "<none>"
+                    RTLog.warn("NameResolve", "Phase1 overwriteDisplayName id=\(id.prefix(8)) before=\"\(before)\" after=\"\(match.name)\" (device-contact match)")
                     contactsStore.overwriteDisplayName(userId: id, to: match.name)
                 }
                 RTLog.info("NameResolve", "device-contact match for \(id.prefix(8))… -> \"\(match.name)\"")
@@ -380,6 +390,14 @@ final class NameResolutionService: @unchecked Sendable {
             // synthetic bare-extension name to a real server name).
             guard Self.mayOverwrite(s.displayName, with: resolved),
                   s.displayName != resolved else { return }
+            // W-NAMEOVERWRITE-DIAG (2026-08-04): same incident as Phase 1's
+            // twin log above — see enrichFromCallProfile. mayOverwrite
+            // SHOULD block this once a real rename is stored; log the
+            // before/after + WHY it was allowed (placeholder vs. bare
+            // extension) so the next occurrence proves whether this is the
+            // actual culprit instead of guessing.
+            let why = DisplayName.isPlaceholderName(s.displayName) ? "placeholder" : "bare-extension"
+            RTLog.warn("NameResolve", "apply() upsert id=\(id.prefix(8)) before=\"\(s.displayName)\" after=\"\(resolved)\" reason=\(why)")
             contactsStore.upsert(ContactsStore.StoredContact(
                 userId: id,
                 displayName: resolved,
