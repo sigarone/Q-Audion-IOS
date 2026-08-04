@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.941",
+              date: "2026-08-04",
+              title: "v1.0.941",
+              bullets: [
+                "fix(contacts): log the before/after at both contact-name write sites",
+              ]),
         .init(id: "v1.0.940",
               date: "2026-08-04",
               title: "v1.0.940",
               bullets: [
+                "chore: regenerate changelog for v1.0.940",
                 "fix(auth): predictively refresh the token on a PushKit call wake, not just app foreground",
                 "feat(call): redesign trust-bar shield badges with real artwork",
               ]),
@@ -152,13 +159,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.922",
                 "fix(security): fix TOCTOU race in ContactsStore Keychain key creation",
-              ]),
-        .init(id: "v1.0.921",
-              date: "2026-08-01",
-              title: "v1.0.921",
-              bullets: [
-                "chore: regenerate changelog for v1.0.921",
-                "fix(avatar): ship avatar-tagged logs to Loki, log silent failure paths",
               ]),
     ]
 }
