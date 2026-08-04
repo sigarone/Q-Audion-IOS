@@ -15387,6 +15387,47 @@ extension AppState {
             // `group_call_join` AND the GroupSession crypto bootstrap.
             controller.join(callId: callId, video: hasVideo)
             self.armGroupCallJoinTimeout(callId: callId)
+            // W-GRPJOINRETRY (2026-08-04): waiting for authentication (above)
+            // closed the STALE-MANAGER race, confirmed live — rebind now
+            // correctly swaps to the fresh manager before this fires. The
+            // roster STILL failed to arrive on the next real attempt anyway,
+            // with the new per-message diagnostics proving `group_call_update`
+            // never reached `handleGroupCallUpdate` at all (no RECEIVED, no
+            // UNPARSEABLE — just silence). Root cause is server-documented,
+            // not a guess: cmd/bcrypto-lite/main.go's WSClient.lastInboundNano
+            // comment states iOS URLSession WebSockets get suspended by the OS
+            // right as CallKit's audio session takes over, the TCP connection
+            // LINGERS so the server's own liveness check still reports
+            // "online" and `sendToUser` returns true, but the bytes vanish
+            // into the suspended socket — the same class of loss
+            // `callTeardownGrace` (20s) already works around for call
+            // teardown, just not for this broadcast. The server doc'd
+            // recovery window is "reconnects within 1-4s", so a single
+            // fire-and-forget join can lose its one and only roster reply to
+            // a transport gap that's gone again a few seconds later.
+            //
+            // Genuine retry, not a fallback: resend the SAME correct request
+            // (group_call_join, which the server already treats as an
+            // idempotent rejoin — see `rejoinAfterReconnect`) a few times
+            // while still connecting, so a retry landing after the socket
+            // recovers gets the roster instead of relying on the one attempt
+            // that raced the suspension window.
+            // Absolute offsets from join, all comfortably inside the 20s
+            // armGroupCallJoinTimeout above (which tears the call down and
+            // would make any later retry a correctly-guarded no-op) — each
+            // sleep is the DELTA from the previous mark, not the delay
+            // itself, so the retries land at ~3s/6s/10s/14s, not
+            // ~3s/9s/19s/33s.
+            var elapsedSec = 0.0
+            for markSec in [3.0, 6.0, 10.0, 14.0] {
+                let deltaSec = markSec - elapsedSec
+                elapsedSec = markSec
+                try? await Task.sleep(nanoseconds: UInt64(deltaSec * 1_000_000_000))
+                guard self.groupCallController === controller,
+                      case .connecting(let stillCid) = self.groupCallControllerState,
+                      stillCid == callId else { return }
+                controller.rejoinAfterReconnect()
+            }
         }
     }
 
