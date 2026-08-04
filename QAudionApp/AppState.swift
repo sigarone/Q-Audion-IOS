@@ -9706,6 +9706,30 @@ final class AppState: ObservableObject {
     @MainActor
     private func reviveSignalingSocket() async {
         guard isAuthenticated else { return }
+        // W-PUSHTOKENPREDICT (2026-08-04): the SAME predictive check
+        // `willEnterForeground` already does (tokenIsNearExpiry ->
+        // runProactiveRefresh, FORCED-QR FIX 2026-06-24) — but a PushKit
+        // VoIP wake for an incoming call (1:1 or group) does NOT reliably
+        // fire `UIApplication.willEnterForegroundNotification` before this
+        // function runs, since PushKit wakes the process through its own
+        // delegate callback, independent of the UIScene lifecycle. Every
+        // caller of `reviveSignalingSocket()` is exactly that wake path
+        // (`onIncomingCall`/`onIncomingGroupCall`), so this was the one
+        // place a long-idle device could still try to authenticate with an
+        // access token that had already silently expired in the
+        // background — reactively caught by the server's refresh-token
+        // reuse detector + the device-renew fallback instead of being
+        // avoided outright. Confirmed live 2026-08-04: both call
+        // participants hit "refresh token REUSE attack — outside
+        // benign-race grace" (tombstone_age_ms in the minutes-to-hours
+        // range — a token that had been dead for a long idle period, not
+        // a same-session race) right as a call was being set up. Refresh
+        // BEFORE attempting to authenticate, same as the manual-foreground
+        // path already does, so a call answered after a long idle period
+        // never has to fall back to reactive recovery in the first place.
+        if tokenIsNearExpiry() {
+            await runProactiveRefresh()
+        }
         if let live = liveProvider {
             if live.persistentConnection.state == .disconnected {
                 liveProvider = nil
