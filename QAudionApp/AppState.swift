@@ -1694,6 +1694,32 @@ final class AppState: ObservableObject {
     /// through `runProactiveRefresh()` so the second caller awaits the
     /// in-flight task instead of issuing a duplicate refresh.
     private var proactiveRefreshTask: Task<Void, Never>?
+
+    /// W-GRPWAKERACE (2026-08-04): single-flight guard for the "wake socket
+    /// up" sequence (token-freshness check + refresh + liveProvider check +
+    /// reconnect-or-ensureAuthenticated) shared by `reviveSignalingSocket()`
+    /// (PushKit incoming-call wake) and `willEnterForeground` (scene
+    /// activation). Answering an incoming group call fires BOTH almost
+    /// simultaneously — CallKit's `CXAnswerCallAction` drives the scene to
+    /// `.active` right as the PushKit handler is still running. Before this
+    /// guard, each caller independently awaited the SAME single-flight
+    /// token refresh (`runProactiveRefresh`) and then, on resuming,
+    /// independently re-checked `liveProvider` and reconnected — the exact
+    /// "two rapid calls... each create their own BCryptoBackendProvider"
+    /// race `connectPersistentSocket()`'s own doc comment already warned
+    /// about (previously triggered by login + willEnterForeground; now also
+    /// reachable via PushKit-wake + willEnterForeground on every group-call
+    /// answer). Live-confirmed 2026-08-04: server logs show 2-3
+    /// "replacing stale ws device" events within ~500ms of ring, and the
+    /// resulting orphaned provider's `GroupCallController`/
+    /// `BCryptoGroupCallManager` wiring never gets used again — the
+    /// participant roster (`group_call_update`) that arrives later never
+    /// reaches a live handler even though the server delivered it
+    /// successfully. Funneling both callers through one in-flight `Task`
+    /// makes the whole sequence run exactly once per wake, and the second
+    /// caller just awaits the first's result instead of racing it.
+    private var wakeSocketRefreshTask: Task<Void, Never>?
+
     // Swift 6 — nonisolated so the `@Sendable` device-renew fallback closure
     // (and persistAccessTokenTtl / the token-persist paths) can reference this
     // constant key without crossing main-actor isolation. It is an immutable
@@ -2357,39 +2383,23 @@ final class AppState: ObservableObject {
             // when the outer closure binds `[weak self]` and forwards.
             Task { @MainActor [weak self] in
                 guard let self = self, self.isAuthenticated else { return }
-                // FORCED-QR FIX (2026-06-24): refresh the access token ahead of
-                // any work on resume so a token that expired while backgrounded
-                // is renewed silently (via /auth/refresh → Ed25519 device-renew)
-                // instead of letting the next request 401-cascade. Never clears
-                // the session on failure.
-                if self.tokenIsNearExpiry() {
-                    await self.runProactiveRefresh()
-                } else {
-                    self.scheduleProactiveTokenRefresh()
-                }
                 // W-PUSHHEAL: re-assert the VoIP token on every foreground so a token
                 // the server cleared on a dead push (410) is re-registered the moment
                 // the user opens the app — the natural recovery action, no re-login
                 // needed. Best-effort; the register path already retries on failure.
                 self.reassertVoipPushTokenRegistration()
                 self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
-                if let live = self.liveProvider {
-                    // Drop the provider only when its WS is already known
-                    // dead — otherwise let `ensureAuthenticated` decide
-                    // whether to force-reconnect (it checks freshness via
-                    // `lastInboundAt`, not just the state enum).
-                    if live.persistentConnection.state == .disconnected {
-                        self.liveProvider = nil
-                        self.connectPersistentSocket()
-                    } else {
-                        // `ensureAuthenticated` polls with `Task.sleep` so
-                        // awaiting it from MainActor releases the main
-                        // thread between checks — no detached hop needed.
-                        _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 5)
-                    }
-                } else {
-                    self.connectPersistentSocket()
-                }
+                // FORCED-QR FIX (2026-06-24) / W-GRPWAKERACE (2026-08-04): the
+                // token-refresh + liveProvider-reconnect decision now runs
+                // through the SAME single-flight `ensureSocketFreshOnWake()`
+                // that `reviveSignalingSocket()` uses (PushKit call wake).
+                // Answering an incoming group call fires both this
+                // notification AND the PushKit handler within milliseconds
+                // of each other; before this guard, each independently
+                // reconnected, orphaning one of the two providers along
+                // with its `GroupCallController` wiring (see that
+                // function's kdoc for the live-confirmed evidence).
+                await self.ensureSocketFreshOnWake()
             }
         }
         #endif
@@ -9727,19 +9737,57 @@ final class AppState: ObservableObject {
         // BEFORE attempting to authenticate, same as the manual-foreground
         // path already does, so a call answered after a long idle period
         // never has to fall back to reactive recovery in the first place.
-        if tokenIsNearExpiry() {
-            await runProactiveRefresh()
+        //
+        // W-GRPWAKERACE: routed through the shared single-flight
+        // `ensureSocketFreshOnWake()` — see its kdoc. Answering a group
+        // call fires this AND `willEnterForeground` within milliseconds of
+        // each other; running the refresh+reconnect decision independently
+        // in both let each one see `liveProvider` as `.disconnected` and
+        // build its OWN `BCryptoBackendProvider`, orphaning whichever one
+        // lost the race along with its `GroupCallController` rebind — the
+        // late `group_call_update` then lands on a socket nothing is
+        // listening on anymore.
+        await ensureSocketFreshOnWake()
+    }
+
+    /// W-GRPWAKERACE (2026-08-04): single-flight "wake the socket up"
+    /// sequence — see `wakeSocketRefreshTask`'s kdoc for the race this
+    /// closes. Shared by `reviveSignalingSocket()` (PushKit call wake) and
+    /// the `willEnterForeground` handler so only ONE of them actually runs
+    /// the token-refresh + liveProvider-reconnect decision per wake; the
+    /// other awaits the same in-flight task instead of racing it with its
+    /// own independent `liveProvider = nil; connectPersistentSocket()`.
+    @MainActor
+    private func ensureSocketFreshOnWake() async {
+        if let inFlight = wakeSocketRefreshTask {
+            await inFlight.value
+            return
         }
-        if let live = liveProvider {
-            if live.persistentConnection.state == .disconnected {
-                liveProvider = nil
-                connectPersistentSocket()
+        let task: Task<Void, Never> = Task { @MainActor in
+            if self.tokenIsNearExpiry() {
+                await self.runProactiveRefresh()
             } else {
-                _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 10)
+                // Re-arm the proactive timer on every wake — it can be lost
+                // across a background suspension (DispatchSourceTimer is not
+                // guaranteed to survive), and this is the same reschedule
+                // `willEnterForeground` always did before routing through
+                // this shared function.
+                self.scheduleProactiveTokenRefresh()
             }
-        } else {
-            connectPersistentSocket()
+            if let live = self.liveProvider {
+                if live.persistentConnection.state == .disconnected {
+                    self.liveProvider = nil
+                    self.connectPersistentSocket()
+                } else {
+                    _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 10)
+                }
+            } else {
+                self.connectPersistentSocket()
+            }
         }
+        wakeSocketRefreshTask = task
+        await task.value
+        wakeSocketRefreshTask = nil
     }
 
     /// Resolve the incoming-call display name for the native CallKit UI,
