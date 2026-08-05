@@ -12968,8 +12968,21 @@ extension AppState {
                         ?? self.activeCallKitId?.uuidString.lowercased() ?? ""
                     let videoSelfIsRoleA = pinned?.selfIsRoleA
                         ?? PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", self.callContactId ?? "")
-                    pipeline.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
-                    print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
+                    // P0-3 follow-up (post-remediation audit, 2026-08-05) — video
+                    // was never covered by the identity-hold gate: this rotate
+                    // ran unconditionally even when the handshake verdict was
+                    // `.abort`, contradicting the gate's "hold ALL media" intent
+                    // (audio already deferred via pendingIdentityGatedMedia). Same
+                    // stash-and-replay pattern as the audio install closures.
+                    let rotateVideo: () -> Void = { [weak pipeline] in
+                        pipeline?.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+                        print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
+                    }
+                    if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
+                        self.pendingIdentityGatedMedia[videoCallId.lowercased(), default: []].append(rotateVideo)
+                    } else {
+                        rotateVideo()
+                    }
                 }
                 // Advance the call-state machine to .encrypted now that
                 // the ML-KEM session key is live. Guards against regressing
@@ -15897,7 +15910,18 @@ extension AppState {
         let videoCallId = callingImpl?.getActiveCallId() ?? ""
         let videoSelfIsRoleA = PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", peerId)
         self.activeVideoCallIdentity = (callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
-        pipeline.rotatePqcSealer(self.callPqcSessionKey, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+        // P0-3 follow-up (post-remediation audit, 2026-08-05) — same hold as
+        // the wireSasReadyToController rotate above: defer while this call's
+        // identity verdict is unverified, replayed by
+        // confirmIdentityAndReleaseMedia() once the user reconfirms the SAS.
+        let initialRotateVideo: () -> Void = { [weak pipeline, weak self] in
+            pipeline?.rotatePqcSealer(self?.callPqcSessionKey, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+        }
+        if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
+            self.pendingIdentityGatedMedia[videoCallId.lowercased(), default: []].append(initialRotateVideo)
+        } else {
+            initialRotateVideo()
+        }
 
         // Task 10 (2026-07-01) — Android's real, shipped WS-relay video
         // fallback (`BcryptoWsVideoRelayTransport`) never uses
