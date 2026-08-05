@@ -142,6 +142,20 @@ enum PairwiseChainKeyResolver {
         selfId: String, peerId: String, infoLabel: String, vault: SovereignKeyVault
     ) throws -> Data {
         let psk = try resolvePsk(peerId: peerId, vault: vault)
+        return deriveChainKey(psk: psk, selfId: selfId, peerId: peerId, infoLabel: infoLabel)
+    }
+
+    /// Same derivation as above, from an ALREADY-RESOLVED PSK — for callers
+    /// that must try more than one candidate on receive (see
+    /// `orderedPskCandidates`'s kdoc: a call rebinds a fresh call-derived
+    /// PSK per contact, so "newest" can disagree between sender and
+    /// receiver by a few seconds around a call). A sender never needs this
+    /// overload — it always encrypts under its own single newest PSK, no
+    /// ambiguity — so `deriveChainKey(selfId:peerId:infoLabel:vault:)`
+    /// above stays the right call for every send-side site.
+    static func deriveChainKey(
+        psk: Data, selfId: String, peerId: String, infoLabel: String
+    ) -> Data {
         let pair = [selfId, peerId].sorted().joined(separator: ":")
         let info = Data("\(infoLabel):\(pair)".utf8)
         let derived = HKDF<SHA256>.deriveKey(

@@ -93,26 +93,43 @@ final class AvatarAnnounceReceiver {
             throw ReceiveError.decodeFailed(String(describing: error))
         }
 
-        let chainKey: Data
-        do {
-            chainKey = try PairwiseChainKeyResolver.deriveChainKey(
-                selfId: recipientId, peerId: senderId,
-                infoLabel: "avatar-chain-v1", vault: vault
-            )
-        } catch PairwiseChainKeyResolver.ResolveError.pskMissing {
-            throw ReceiveError.pskMissing
-        }
+        // W-AVATARPSKPICK (2026-08-05, live-log confirmed): this used to
+        // derive the chain key from the single "newest" PSK
+        // (`deriveChainKey(...vault:)`) — the same single-candidate shape
+        // W-MSGPSKPICK (2026-08-02) already fixed for the message-receive
+        // path (`AppState.handleIncomingMessage`), for the identical
+        // reason: a call rebinds a fresh call-derived PSK for this contact
+        // on BOTH devices, and if that rebind lands between the sender's
+        // encrypt and this device's decrypt, "newest" can disagree by one
+        // slot — the receiver then derives a different chain key than the
+        // sender used, and `AttachmentEncryption.decryptAttachment`'s AEAD
+        // open fails outright with no fallback. Confirmed live: two
+        // `recv applied=0 code=5 ... decodeFailed("openFailed")` entries
+        // for the same peer, each racing multiple `call-derived PSK bound
+        // to peer=<id>` events within the same few seconds — exactly the
+        // W-MSGPSKPICK race, just never ported to this receiver. Mirror
+        // that fix: try every PSK genuinely bound to this peer, newest
+        // first, same as the message path's `pskCandidates` retry.
+        let pskCandidates = PairwiseChainKeyResolver.orderedPskCandidates(peerId: senderId, vault: vault)
+        guard !pskCandidates.isEmpty else { throw ReceiveError.pskMissing }
 
-        do {
-            return try AttachmentEncryption.decryptAttachment(
-                messageChainKey: chainKey,
-                ciphertext: ciphertext,
-                meta: meta,
-                expectedSha256Plain: expectedSha
-            )
-        } catch {
-            throw ReceiveError.decodeFailed(String(describing: error))
+        var lastError: Error = ReceiveError.decodeFailed("no PSK candidate opened")
+        for psk in pskCandidates {
+            let chainKey = PairwiseChainKeyResolver.deriveChainKey(
+                psk: psk, selfId: recipientId, peerId: senderId, infoLabel: "avatar-chain-v1")
+            do {
+                return try AttachmentEncryption.decryptAttachment(
+                    messageChainKey: chainKey,
+                    ciphertext: ciphertext,
+                    meta: meta,
+                    expectedSha256Plain: expectedSha
+                )
+            } catch {
+                lastError = error
+                continue
+            }
         }
+        throw ReceiveError.decodeFailed(String(describing: lastError))
     }
 
     private static func uuidBytes(from str: String) -> Data? {
