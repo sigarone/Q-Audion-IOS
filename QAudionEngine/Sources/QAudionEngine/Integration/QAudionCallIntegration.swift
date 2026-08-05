@@ -659,6 +659,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// anti-MITM gate). nil ⇒ no UI wired (silent — behaviourally unchanged).
     public var onInvalidHandshakeSignature: ((String) -> Void)?
 
+    /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — fired (callId)
+    /// whenever the handshake identity verdict is `.abort` (any of
+    /// `sig_invalid` / `identity_key_mismatch` / `sig_required_missing` /
+    /// `sig_malformed` — a signature was required and did not verify).
+    /// W-NOBRICK still lets the crypto handshake itself complete (the
+    /// session key must become available so the SAS words exist to compare
+    /// in the first place), but AppState uses this signal to hold back the
+    /// ACTUAL media path (relay sealers + v4 ratchet bootstrap) until the
+    /// user manually reconfirms the SAS in-call — this closes the fail-open
+    /// gap where an unverified identity used to gate nothing but an
+    /// advisory banner, matching the "blocking SAS gate" policy already
+    /// shipped on Android/Desktop. Fired on BOTH the OFFER and ACCEPT
+    /// verdict switches below, once per call leg. nil ⇒ no gate wired
+    /// (silent — behaviourally unchanged for tests/legacy callers).
+    public var onHandshakeIdentityUnverified: ((String) -> Void)?
+
     /// Has this peer ever had a SIGNED v4 bundle verify (spec §4
     /// `v4_capable_pinned`)? Wired from a UserDefaults-backed set in AppState.
     public var isPeerV4Pinned: ((String) -> Bool)?
@@ -1463,6 +1479,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     if code == "sig_invalid" {
                         onInvalidHandshakeSignature?(callerId)
                     }
+                    // P0-3 — hold MEDIA (not the handshake) behind a blocking SAS
+                    // reconfirmation. Fired for every abort code: the crypto session
+                    // still completes below so the SAS words exist, but AppState
+                    // won't install the relay sealers / v4 bootstrap until the user
+                    // confirms.
+                    onHandshakeIdentityUnverified?(callId)
                     // Protocol continuity only: build the offer_binding under the
                     // bundle's carried key so the ACCEPT we emit stays internally
                     // consistent. This pins NOTHING and trusts NOTHING — the verdict
@@ -2036,10 +2058,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // recompute the binding from the OFFER WE SENT (stashed in step (a))
             // so the policy rebuilds the ACCEPT transcript with the SAME
             // expected binding the responder signed; a real ACCEPT cannot be
-            // paired with a forged OFFER (spec §3 / threat §7). `.abort` LOGS and
-            // RETURNS WITHOUT initSession (no session is installed for an aborted
-            // handshake). `.authenticated` commits the pin / v4 flag, then falls
-            // through to the existing decapsulate + initSession.
+            // paired with a forged OFFER (spec §3 / threat §7). `.abort` LOGS,
+            // fires `onHandshakeIdentityUnverified` (P0-3), and — W-NOBRICK —
+            // STILL FALLS THROUGH to decapsulate + initSession exactly like
+            // `.authenticated`: the crypto session (and therefore the SAS words)
+            // must exist for the user to have anything to reconfirm. What is now
+            // actually held back is MEDIA — AppState won't install the relay
+            // sealers / v4 ratchet bootstrap for this call until the user
+            // reconfirms the SAS. `.authenticated` commits the pin / v4 flag,
+            // then falls through to the same decapsulate + initSession.
             // W-KCMAC — hoisted to case-scope (was a local of the `if
             // verificationEnabled` block) so the KCMAC gate below can read our
             // OWN sent-OFFER v2 binding (`kc_transcript`'s `offer_binding`) even
@@ -2092,6 +2119,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     if code == "sig_invalid" {
                         onInvalidHandshakeSignature?(callerId)
                     }
+                    // P0-3 — same media-hold signal as the OFFER side above.
+                    onHandshakeIdentityUnverified?(callId)
                 case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
                     applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
                     acceptSigOk = true

@@ -264,6 +264,10 @@ struct LiveInCallScreen: View {
                 peerScreenSharing: appState.peerScreenShareActive,
                 // D11 / W-NOBRICK — non-blocking identity-change advisory banner.
                 identityUnauthenticatedChange: appState.callIdentityUnauthenticatedChange,
+                // P0-3 — see AppState.awaitingIdentityConfirmation's doc: unlike
+                // the advisory-only flag above, this ONE reflects a REAL media
+                // hold; confirming SAS below (handleConfirmSas) releases it.
+                awaitingIdentityConfirmation: appState.awaitingIdentityConfirmation,
                 // W-ASSURANCE (ship step 6) — mapped to display copy HERE
                 // (not in AppState) specifically so `secretLabel` is the
                 // already-resolved, UI-safe `cachedPeerDisplayName` — AppState
@@ -375,6 +379,10 @@ struct LiveInCallScreen: View {
         let fp = SasVerificationStore.fingerprint(forWords: words)
         SasVerificationStore.shared.recordVerified(
             peerUserId: peer, fingerprint: fp, identityTag: identityTag)
+        // P0-3 — release whatever media (relay sealers / v4 bootstrap) AppState
+        // held back for this call's unverified handshake identity, if any was.
+        // No-op when the gate was never engaged (the common case).
+        appState.confirmIdentityAndReleaseMedia()
     }
 
     /// C-3 — the identity binding for the SAS record, from the key currently

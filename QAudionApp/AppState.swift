@@ -702,6 +702,56 @@ final class AppState: ObservableObject {
     /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
     /// MainActor); reset at the start of every new call.
     @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — true when the
+    /// handshake identity verdict for the ACTIVE call was `.abort` (a
+    /// signature was required and did not verify). Unlike
+    /// `callIdentityUnauthenticatedChange` above (advisory-only, never gates
+    /// media), this flag reflects a REAL hold: `onRelaySessionReady` /
+    /// `onV4BootstrapReady` below stash their media-install work in
+    /// `pendingIdentityGatedMedia` instead of running it while this is true.
+    /// Set by `handleHandshakeIdentityUnverified(callId:)` (wired to the
+    /// integration's `onHandshakeIdentityUnverified` on both the responder and
+    /// caller legs); cleared by `confirmIdentityAndReleaseMedia()` when the
+    /// user taps "CONFERMA COINCIDONO" on the SAS panel, and reset at the
+    /// start of every new call same lifecycle as `callIdentityUnauthenticatedChange`.
+    @Published var awaitingIdentityConfirmation: Bool = false
+    /// Lowercased callId -> deferred media-install closures (relay sealer
+    /// install, v4 ratchet bootstrap) held back while that call's handshake
+    /// identity verdict was `.abort`. Drained and run once by
+    /// `confirmIdentityAndReleaseMedia()`.
+    private var pendingIdentityGatedMedia: [String: [() -> Void]] = [:]
+    /// Lowercased callIds whose handshake verdict was `.abort` — consulted by
+    /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
+    /// their media-install work immediately or stash it above.
+    private var identityUnverifiedCallIds: Set<String> = []
+
+    /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
+    /// the responder (OFFER-verify) and caller (ACCEPT-verify) integration
+    /// instances. MainActor-isolated like the sibling `onUnauthenticatedIdentityChange`
+    /// / `onInvalidHandshakeSignature` handlers just above.
+    @MainActor
+    private func handleHandshakeIdentityUnverified(callId: String) {
+        let cid = callId.lowercased()
+        guard !cid.isEmpty else { return }
+        identityUnverifiedCallIds.insert(cid)
+        awaitingIdentityConfirmation = true
+    }
+
+    /// P0-3 — called from the in-call "CONFERMA COINCIDONO" SAS button
+    /// (`LiveInCallScreen.handleConfirmSas`). Releases whatever media was held
+    /// back for the active call's identity-unverified gate. No-op (safe to
+    /// call unconditionally) when the gate was never engaged for this call.
+    @MainActor
+    func confirmIdentityAndReleaseMedia() {
+        guard let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() else {
+            return
+        }
+        let cid = activeCallId.lowercased()
+        identityUnverifiedCallIds.remove(cid)
+        awaitingIdentityConfirmation = false
+        let actions = pendingIdentityGatedMedia.removeValue(forKey: cid) ?? []
+        for action in actions { action() }
+    }
     /// W-ASSURANCE (ship step 6) — THIS call's LIVE `AssuranceState` verdict.
     /// `nil` until `emitKeyConfirmationTelemetry` resolves one (peer doesn't
     /// support mix ⇒ almost immediately; otherwise after the kc_mac exchange
@@ -4029,6 +4079,9 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            // P0-3: a fresh incoming call must not inherit a stale media hold
+            // from a previous call's aborted handshake.
+            self.awaitingIdentityConfirmation = false
             // W-ASSURANCE: same reset — a fresh incoming call must not show a
             // stale live-assurance verdict from a previous call.
             self.callAssuranceState = nil
@@ -9253,9 +9306,21 @@ final class AppState: ObservableObject {
                 let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
                 let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
                 let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
-                self.callService.installRelaySealers(
-                    sessionKey: sessionKey, callId: cid,
-                    srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                // P0-3 — hold the audio media install if this call's handshake
+                // identity verdict was `.abort`; run it immediately otherwise.
+                // persistMessagePsk / consumeDeferredAnswerIfReady below are
+                // NOT media and are unaffected by the gate.
+                let cidLower = cid.lowercased()
+                let installAudioMedia: () -> Void = { [weak self] in
+                    self?.callService.installRelaySealers(
+                        sessionKey: sessionKey, callId: cid,
+                        srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                }
+                if self.identityUnverifiedCallIds.contains(cidLower) {
+                    self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
+                } else {
+                    installAudioMedia()
+                }
                 // W-GRPDIAG-4 — see persistMessagePsk doc above.
                 self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                 // Cold-start answer race — the relay session key is now live, so
@@ -9331,8 +9396,8 @@ final class AppState: ObservableObject {
         // selfEpochId/peerEpochId are the 16-zero cross-platform constant (Android
         // zeroEpoch). The integration only fires when every input is real, so no
         // placeholder ever reaches here.
-        integration.onV4BootstrapReady = { peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
-            Task {
+        integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
+            let bootstrap: () -> Void = {
                 let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                     peerId: peerId,
                     effectiveSecret: effectiveSecret,
@@ -9343,6 +9408,21 @@ final class AppState: ObservableObject {
                     transcriptHash: transcriptHash
                 )
                 print("[PQC_DIAG_V4] bootstrapV4AndPersist peer=\(peerId.prefix(8)) ok=\(ok)")
+            }
+            // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
+            // so resolve the active call's id to key the same gate. Safe: this
+            // fires well after call setup has already bound the active call.
+            Task { @MainActor [weak self] in
+                guard let self = self else { bootstrap(); return }
+                guard let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased() else {
+                    bootstrap()
+                    return
+                }
+                if self.identityUnverifiedCallIds.contains(cid) {
+                    self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
+                } else {
+                    bootstrap()
+                }
             }
         }
         // W-KCMAC (ship step 5) — responder leg. See `handleKcMacReady`'s doc.
@@ -9500,6 +9580,15 @@ final class AppState: ObservableObject {
                 if self.callContactId == nil || self.callContactId == peerId {
                     self.callIdentityUnauthenticatedChange = true
                 }
+            }
+        }
+        // P0-3 — responder leg (OFFER-verify). Fired from the `.abort` case in
+        // QAudionCallIntegration's OFFER verdict switch, BEFORE onRelaySessionReady
+        // / onV4BootstrapReady fire for this same call, so the gate is always set
+        // before there is anything to gate.
+        integration.onHandshakeIdentityUnverified = { [weak self] cid in
+            Task { @MainActor [weak self] in
+                self?.handleHandshakeIdentityUnverified(callId: cid)
             }
         }
 
@@ -10469,6 +10558,9 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        // P0-3: a fresh outgoing call must not inherit a stale media hold
+        // from a previous call's aborted handshake.
+        awaitingIdentityConfirmation = false
         // W-ASSURANCE: same reset for the fresh outgoing call.
         callAssuranceState = nil
         callAssuranceExpectedNfc = false
@@ -10787,6 +10879,20 @@ final class AppState: ObservableObject {
                         self.callContactId = nil
                     }
                 }
+                // P0-3 (2026-08-05, coordinated fix plan cluster 3) — caller leg
+                // (ACCEPT-verify). This leg previously wired neither
+                // `onUnauthenticatedIdentityChange` nor `onInvalidHandshakeSignature`
+                // (so the outgoing-call side never even showed the advisory
+                // banner); this new gate is wired regardless, since it must hold
+                // media on BOTH call directions. Fires BEFORE onRelaySessionReady /
+                // onV4BootstrapReady below for the same call (verdict evaluation
+                // in QAudionCallIntegration happens earlier in the ACCEPT path than
+                // either of those).
+                integration.onHandshakeIdentityUnverified = { [weak self] cid in
+                    Task { @MainActor [weak self] in
+                        self?.handleHandshakeIdentityUnverified(callId: cid)
+                    }
+                }
                 // W389: forward the real ML-KEM-1024 session key into
                 // CallSessionKeyBroker so AppState.callPqcSessionKey
                 // swaps from the W369 transitional PSK-derived seed to
@@ -10881,8 +10987,8 @@ final class AppState: ObservableObject {
                 // shared signed handshake. selfEpochId/peerEpochId are the 16-zero
                 // cross-platform constant (Android zeroEpoch). The integration only
                 // fires when every input is real, so no placeholder reaches here.
-                integration.onV4BootstrapReady = { peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
-                    Task {
+                integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
+                    let bootstrap: () -> Void = {
                         let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                             peerId: peerId,
                             effectiveSecret: effectiveSecret,
@@ -10893,6 +10999,20 @@ final class AppState: ObservableObject {
                             transcriptHash: transcriptHash
                         )
                         print("[PQC_DIAG_V4] bootstrapV4AndPersist peer=\(peerId.prefix(8)) ok=\(ok)")
+                    }
+                    // P0-3 — same active-callId resolution as the responder leg
+                    // above (this closure carries no callId parameter either).
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { bootstrap(); return }
+                        guard let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased() else {
+                            bootstrap()
+                            return
+                        }
+                        if self.identityUnverifiedCallIds.contains(cid) {
+                            self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
+                        } else {
+                            bootstrap()
+                        }
                     }
                 }
                 // W-KCMAC (ship step 5) — caller leg. See `handleKcMacReady`'s doc.

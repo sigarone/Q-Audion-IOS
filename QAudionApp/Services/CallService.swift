@@ -426,22 +426,34 @@ final class CallService: @unchecked Sendable {
             relaySlotLock.withLock { (relaySealerSend, relaySealerCallId, relaySealerKeyFp) }
         if dedupSend != nil, dedupCallId == cid, dedupKeyFp == kfp { return }
         let hadSealer: Bool = (dedupSend != nil)
+        // P0-4 (2026-08-05, coordinated fix plan cluster 3) — the legacy
+        // non-directional fallback that used to run here (single shared master
+        // key via `PqcRtpFrameSealer(pqcSessionKey:callId:)` + `makeSibling()`,
+        // each sealer counting its own AES-GCM nonce from 0) let caller-frame-N
+        // and callee-frame-N reuse the exact same (key, nonce) pair —
+        // catastrophic AEAD failure. This M-15 seal is a WS-relay-specific
+        // OUTER wrap on top of `integration.processOutgoingAudio`'s own
+        // per-frame encryption (the real E2EE layer, unconditional and
+        // unaffected by this flag — see `unsealRelayFrame`'s doc: frames pass
+        // through UNCHANGED whenever no sealer is installed, which is exactly
+        // the pre-handshake posture this now also uses when directional keys
+        // were never negotiated). So the correct fix is to SKIP installing
+        // this specific outer wrap, not to fabricate an unsafe shared key.
+        guard srtpDirKeyV1 else {
+            let p: String = String(cid.prefix(8))
+            let line: String = "[CallService] W574x-iOS: srtpDirKeyV1 not negotiated callId=" + p + "… — P0-4 fail-closed: skipping non-directional M-15 outer seal"
+            print(line)
+            return
+        }
         do {
             // W574x — directional per-direction keys when both peers negotiated
             // srtpDirKeyV1 (fixes bidirectional AES-GCM nonce reuse). Role A =
             // the lexicographically-smaller userId (computed by the caller, same
-            // rule as Android/Desktop). Otherwise the legacy single-key sealer.
-            let send: PqcRtpFrameSealer
-            let recv: PqcRtpFrameSealer
-            if srtpDirKeyV1 {
-                let pair = try PqcRtpFrameSealer.createDirectional(
-                    pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA)
-                send = pair.send
-                recv = pair.recv
-            } else {
-                send = try PqcRtpFrameSealer(pqcSessionKey: sessionKey, callId: cid)
-                recv = send.makeSibling()
-            }
+            // rule as Android/Desktop).
+            let pair = try PqcRtpFrameSealer.createDirectional(
+                pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA)
+            let send = pair.send
+            let recv = pair.recv
             relaySlotLock.withLock {
                 relaySealerSend = send
                 relaySealerRecv = recv
