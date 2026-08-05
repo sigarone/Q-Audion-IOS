@@ -32,7 +32,7 @@ final class ChatAttachAnnounceReceiver {
         case writeFailed(String)
         case invalidId
         /// FIX H1-PARITY (2026-07-30): no real pairwise PSK bound yet for
-        /// this sender — see `deterministicChainKey`'s kdoc.
+        /// this sender — see `PairwiseChainKeyResolver.orderedPskCandidates`.
         case pskMissing
 
         var errorDescription: String? {
@@ -100,10 +100,20 @@ final class ChatAttachAnnounceReceiver {
         } catch {
             throw ReceiveError.decodeFailed(String(describing: error))
         }
-        let chainKey: Data
-        do {
-            chainKey = try Self.deterministicChainKey(senderId: senderId, recipientUserId: recipientId, vault: vault)
-        } catch ReceiveError.pskMissing {
+        // W-ATTACHPSKPICK (2026-08-05) — same fix as AvatarAnnounceReceiver
+        // (identical bug, sibling receiver): this used to derive the chain
+        // key from a single "newest PSK" candidate
+        // (`deterministicChainKey`, now removed). A completed call rebinds
+        // a fresh call-derived PSK for this contact on BOTH devices; if
+        // that rebind lands between the sender's encrypt and this
+        // device's decrypt, each side can consider a DIFFERENT PSK
+        // "newest", so the derived chain key differs and the AEAD open
+        // fails outright with no fallback — the identical race
+        // W-MSGPSKPICK (2026-08-02) already fixed for the message-receive
+        // path. Try every PSK genuinely bound to this peer, newest first,
+        // one AEAD open each, same as that fix and the avatar receiver.
+        let pskCandidates = PairwiseChainKeyResolver.orderedPskCandidates(peerId: senderId, vault: vault)
+        guard !pskCandidates.isEmpty else {
             // FIX H1-PARITY: no real pairwise PSK bound yet for this
             // sender — kick off a key exchange and fail closed rather
             // than falling back to a server-guessable key.
@@ -112,16 +122,26 @@ final class ChatAttachAnnounceReceiver {
         }
 
         // 3. Decrypt + verify SHA-256.
-        let plaintext: Data
-        do {
-            plaintext = try AttachmentEncryption.decryptAttachment(
-                messageChainKey: chainKey,
-                ciphertext: ciphertext,
-                meta: meta,
-                expectedSha256Plain: expectedSha
-            )
-        } catch {
-            throw ReceiveError.decodeFailed(String(describing: error))
+        var plaintext: Data? = nil
+        var lastError: Error = ReceiveError.decodeFailed("no PSK candidate opened")
+        for psk in pskCandidates {
+            let chainKey = PairwiseChainKeyResolver.deriveChainKey(
+                psk: psk, selfId: recipientId, peerId: senderId, infoLabel: "attach-chain-v1")
+            do {
+                plaintext = try AttachmentEncryption.decryptAttachment(
+                    messageChainKey: chainKey,
+                    ciphertext: ciphertext,
+                    meta: meta,
+                    expectedSha256Plain: expectedSha
+                )
+                break
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+        guard let plaintext else {
+            throw ReceiveError.decodeFailed(String(describing: lastError))
         }
 
         // 4. Write to temp.
@@ -147,24 +167,6 @@ final class ChatAttachAnnounceReceiver {
     }
 
     // MARK: - Helpers
-
-    /// Mirrors `ChatAttachAnnounceSender.deterministicChainKey` exactly
-    /// (same FIX H1-PARITY fail-closed PSK ladder, factored into
-    /// ``PairwiseChainKeyResolver``) — from the receiver's side, the
-    /// PEER whose PSK is looked up is `senderId` (the other party), not
-    /// `recipientUserId` (self).
-    private static func deterministicChainKey(
-        senderId: String, recipientUserId: String, vault: SovereignKeyVault
-    ) throws -> Data {
-        do {
-            return try PairwiseChainKeyResolver.deriveChainKey(
-                selfId: recipientUserId, peerId: senderId,
-                infoLabel: "attach-chain-v1", vault: vault
-            )
-        } catch PairwiseChainKeyResolver.ResolveError.pskMissing {
-            throw ReceiveError.pskMissing
-        }
-    }
 
     private static func uuidBytes(from str: String) -> Data? {
         // W388: `UUID.uuid` is a get-only computed property; copy the tuple
