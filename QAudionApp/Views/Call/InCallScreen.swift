@@ -244,6 +244,14 @@ struct InCallScreen: View {
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner
     /// only; it MUST NOT gate audio/video. SAS remains the terminal gate.
     let identityUnauthenticatedChange: Bool
+    /// XC-1 (2026-08-05, post-remediation audit follow-up) — true when the
+    /// active call's peer presented a signature that failed to verify UNDER
+    /// THE KEY WE ALREADY TRUST (a forgery-shaped failure), as distinct from
+    /// `identityUnauthenticatedChange` above (an actual key change ∉ the
+    /// published set). Drives its own accurate banner — see
+    /// `signatureInvalidBanner`'s doc for why this must NOT share copy with
+    /// `identityChangeBanner`.
+    let handshakeSignatureInvalid: Bool
     /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — true when the
     /// handshake identity verdict for THIS call was `.abort` (a signature was
     /// required and did not verify). Unlike `identityUnauthenticatedChange`
@@ -364,6 +372,7 @@ struct InCallScreen: View {
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
          identityUnauthenticatedChange: Bool = false,
+         handshakeSignatureInvalid: Bool = false,
          awaitingIdentityConfirmation: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
          mutualNfcInCommon: Bool = false,
@@ -410,6 +419,7 @@ struct InCallScreen: View {
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
+        self.handshakeSignatureInvalid = handshakeSignatureInvalid
         self.awaitingIdentityConfirmation = awaitingIdentityConfirmation
         self.assurancePresentation = assurancePresentation
         self.mutualNfcInCommon = mutualNfcInCommon
@@ -546,6 +556,43 @@ struct InCallScreen: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Avviso di sicurezza: la chiave identità del contatto è cambiata e non è pubblicata dal server. Verifica le parole SAS.")
+    }
+
+    /// XC-1 advisory: the peer's handshake signature did NOT verify under the
+    /// key we ALREADY trust (pin or server-fetched) — a forgery-shaped
+    /// failure, distinct from `identityChangeBanner` above (which is a real
+    /// key CHANGE not in the published set). Deliberately does NOT claim "key
+    /// changed" or "not published on server" — neither is true for this
+    /// verdict; saying so would misdirect the user. Advisory ONLY (never
+    /// gates media); the user confirms the SAS to be sure.
+    private var signatureInvalidBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(extras.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("FIRMA NON VERIFICATA")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(0.6)
+                    .foregroundStyle(extras.warning)
+                Text("La firma di questa chiamata non corrisponde alla chiave già fidata del contatto. Non significa che la chiave sia cambiata o non pubblicata. Confronta le parole SAS per verificare.")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(extras.warning.opacity(0.55), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Avviso di sicurezza: la firma di questa chiamata non corrisponde alla chiave fidata del contatto. Verifica le parole SAS.")
     }
 
     // MARK: - P0-3 identity-hold banner (media IS gated — distinct from the
@@ -738,6 +785,13 @@ struct InCallScreen: View {
                 if identityUnauthenticatedChange {
                     Spacer().frame(height: 10)
                     identityChangeBanner.padding(.horizontal, 20)
+                }
+
+                // XC-1 — sibling advisory for the sig_invalid verdict; deliberately
+                // a separate banner with accurate copy (see the field's doc).
+                if handshakeSignatureInvalid {
+                    Spacer().frame(height: 10)
+                    signatureInvalidBanner.padding(.horizontal, 20)
                 }
 
                 // P0-3 — this one actually gates media (see the field's doc).
