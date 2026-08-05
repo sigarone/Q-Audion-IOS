@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.944",
+              date: "2026-08-05",
+              title: "v1.0.944",
+              bullets: [
+                "fix(groups): verify Ed25519 signature on group_membership_changed for known groups",
+                "fix(groups): distribute post-removal rekey seed via locally-known roster",
+              ]),
         .init(id: "v1.0.943",
               date: "2026-08-04",
               title: "v1.0.943",
               bullets: [
+                "chore: regenerate changelog for v1.0.943",
                 "fix(call): serialize wake-time socket reconnect to close group_call_update loss",
               ]),
         .init(id: "v1.0.942",
@@ -150,15 +158,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.925",
                 "fix(avatar): bind the call-derived PSK to the peer, like Android does",
-              ]),
-        .init(id: "v1.0.924",
-              date: "2026-08-02",
-              title: "v1.0.924",
-              bullets: [
-                "chore: regenerate changelog for v1.0.924",
-                "fix(avatar): port Android's working announce coordinator to iOS",
-                "fix(audio): move per-frame RX analysis off the audio path (iOS starvation)",
-                "fix(contacts): surface the silent save-lost path in the encrypted store",
               ]),
     ]
 }

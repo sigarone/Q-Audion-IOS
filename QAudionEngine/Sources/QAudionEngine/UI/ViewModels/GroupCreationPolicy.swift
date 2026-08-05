@@ -202,22 +202,24 @@ public func groupCreatePublishVerdict(
 /// verify signatures and treats an unattested frame as a hint only).
 ///
 /// **Honest scope — read before trusting this for anything else.** This is a
-/// PRESENCE check, not a verification: iOS does not check the signature
-/// cryptographically anywhere in the membership path
-/// (`handleGroupMembershipChanged` trusts the bearer-authed, cert-pinned WS
-/// session — its own kdoc says so), and a hostile server can put arbitrary
-/// bytes in both fields. So this defends against exactly one thing: the
-/// server's OWN legitimately-unsigned frames (creation fan-out, crash-recovery
-/// snapshot) being misread as attested user actions. That is the same class of
-/// guard as the `replay` flag — a correctness rule about server-generated
-/// non-attestations, not a cryptographic control — and it is the class of bug
-/// that actually bites (a deploy-time replay resurrecting every deleted chat
-/// is on record; a hostile bcrypto server rewriting rosters is not, and would
-/// have far more direct paths anyway, since iOS applies the roster verbatim).
+/// PRESENCE check, not a verification, and it gates ONLY the unknown-group
+/// bootstrap decision (tombstone lift vs. respect) — a hostile server can
+/// still put arbitrary bytes in both fields here. So this defends against
+/// exactly one thing: the server's OWN legitimately-unsigned frames (creation
+/// fan-out, crash-recovery snapshot) being misread as attested user actions.
+/// That is the same class of guard as the `replay` flag — a correctness rule
+/// about server-generated non-attestations, not a cryptographic control.
 ///
-/// Real verification — Desktop already does Ed25519 over
-/// `canonicalMembershipJson` — is the follow-up that would make this a
-/// security boundary. Until then, do not describe it as one.
+/// Real Ed25519 verification of `group_membership_changed` for a group
+/// ALREADY known locally — the follow-up this doc used to call out as
+/// outstanding — now exists: `AppState.handleGroupMembershipChanged` verifies
+/// via `GroupMembershipVerifier` (coordinated fix plan cluster 2,
+/// 2026-08-05), mirroring the server's `verifyEnvelopeSignature` and
+/// Android's `verifyMembershipEnvelope`. This function's scope was
+/// deliberately NOT widened to cover the unknown-group bootstrap decision
+/// too: there, a hostile server has more direct paths anyway, since nothing
+/// signs a group into existence — the founding roster itself is a
+/// server-stated fact, not an attestation, on every platform.
 public func membershipEventIsAttested(envelopeB64: String, signatureB64: String) -> Bool {
     let env = envelopeB64.trimmingCharacters(in: .whitespacesAndNewlines)
     let sig = signatureB64.trimmingCharacters(in: .whitespacesAndNewlines)
