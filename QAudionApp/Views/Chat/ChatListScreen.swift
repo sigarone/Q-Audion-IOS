@@ -296,6 +296,16 @@ struct ChatListScreen: View {
             for: GroupMessageStore.didChangeNotification)) { _ in
             groupRefreshToken &+= 1
         }
+        // Bug fix (2026-08-05): a fresh avatar_announce lands via
+        // AvatarAnnounceCoordinator -> ContactsStore.setAvatarLocalPath,
+        // which posts .contactsDidChange — the rubrica (ContactsListView)
+        // already observes it, but this screen didn't, so a 1:1 row kept
+        // showing the OLD avatar (or the initials placeholder) until the
+        // user left and re-entered the tab. Reload so `conversationRow`
+        // re-reads `appState.cachedContacts` with the new avatarUrl.
+        .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
+            container.loadFromStore()
+        }
         // W94: navigationDestination triggered by the deep-link state.
         // When a notification tap publishes appState.pendingDeepLinkConversationId,
         // the onChange below captures the matching item and flips the
@@ -698,6 +708,17 @@ struct ChatListScreen: View {
             contacts: appState.cachedContacts)
     }
 
+    /// Bug fix (2026-08-05): the 1:1 row never read the rubrica's
+    /// `avatarUrl` at all — `conversationRow` built `QAudionAvatar` with no
+    /// `imageURL` argument, so it always fell back to the initials
+    /// placeholder regardless of what `ContactsStore`/`AvatarAnnounceCoordinator`
+    /// had cached. Group rows already do this correctly via `row.avatarUrl`
+    /// (see `groupRow` above) — this mirrors that for the 1:1 case.
+    private func resolvedRowAvatarUrl(_ item: ConversationListViewModel.Item) -> URL? {
+        guard item.kind != .group else { return nil }
+        return appState.cachedContacts.first(where: { $0.userId == item.peerUserId })?.avatarUrl
+    }
+
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
         let rowTitle = resolvedRowTitle(item)
         return NavigationLink(destination: chatDestination(for: item)) {
@@ -706,6 +727,7 @@ struct ChatListScreen: View {
                 // online via PresenceService, gray when offline. Group
                 // avatars don't get a dot.
                 QAudionAvatar(displayName: rowTitle,
+                              imageURL: resolvedRowAvatarUrl(item),
                               kind: item.kind == .group ? .group : .person,
                               size: 44,
                               presenceDot: item.kind == .group

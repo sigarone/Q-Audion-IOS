@@ -4156,9 +4156,22 @@ final class AppState: ObservableObject {
             // value (forUser's documented order), where before the wire
             // value won outright — deliberate, matching every other
             // consolidated call site; see canonicalFunctionLocation notes.
+            // Bug fix (2026-08-05): the OUTGOING call path (`startCall`,
+            // search `_historyExt` below) already falls back to a PREVIOUS
+            // call record's `peerExtension` when the rubrica has none yet —
+            // this incoming path never did, so the SAME contact (known only
+            // by an earlier call's PBX extension, no rubrica `extension`
+            // field set) resolved a DIFFERENT name (and therefore a
+            // different avatar-circle glyph — `initials()`/`shortNumber`
+            // both derive from this string) depending on whether the call
+            // was placed or received. Mirror the fallback here too.
+            let _incomingHistoryExt: String? = PersistentCallRecordStore.shared.records
+                .first(where: { $0.peerUserId == senderId && $0.peerExtension != nil })?
+                .peerExtension.flatMap { $0 > 0 ? String($0) : nil }
             let resolvedCallerName: String = DisplayName.forUser(
                 senderId,
                 serverDisplay: wireCallerDisplay,
+                knownExtension: _incomingHistoryExt,
                 contacts: self.cachedContacts
             )
             // Commit 540b79c0 parity — `call_incoming` is the responder's
@@ -4350,12 +4363,23 @@ final class AppState: ObservableObject {
                         let incomingRecordId = callUUID.uuidString
                         let isVid: Bool = (callType == "video")
                         self.activeOutgoingRecordId = incomingRecordId
+                        // Bug fix (2026-08-05): persist the resolved extension too
+                        // (previously always nil on the incoming path) — otherwise
+                        // the avatar's `shortNumber` mode (absolute priority over
+                        // initials, see QAudionAvatar kdoc) never activates for an
+                        // incoming-call history row even when the peer's extension
+                        // IS known, unlike the outgoing path.
+                        let incomingPeerExt: Int? = DisplayName.resolvedExtension(
+                            for: senderId, serverDisplay: wireCallerDisplay,
+                            knownExtension: _incomingHistoryExt,
+                            contacts: self.cachedContacts).flatMap { Int($0) }
                         PersistentCallRecordStore.shared.beginCall(
                             id: incomingRecordId,
                             peerUserId: senderId,
                             peerDisplayName: resolvedCallerName,
                             direction: .incoming,
-                            isVideo: isVid
+                            isVideo: isVid,
+                            peerExtension: incomingPeerExt
                         )
                         // W396: pre-create the responder integration
                         // so the early PQC OFFER (which arrives
@@ -4467,13 +4491,24 @@ final class AppState: ObservableObject {
             // cachedContacts is main-isolated AppState state (this handler is
             // invoked on the WS delegate background thread — see call_incoming).
             DispatchQueue.main.async {
+                // Bug fix (2026-08-05): same call-history extension fallback as
+                // the `call_incoming` handler above — see that fix's comment.
+                let missedHistoryExt: String? = PersistentCallRecordStore.shared.records
+                    .first(where: { $0.peerUserId == callerId && $0.peerExtension != nil })?
+                    .peerExtension.flatMap { $0 > 0 ? String($0) : nil }
                 let resolvedName: String = callerId.isEmpty
                     ? "Sconosciuto"
                     : DisplayName.forUser(
                         callerId,
                         serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
+                        knownExtension: missedHistoryExt,
                         contacts: self.cachedContacts
                     )
+                let missedPeerExt: Int? = callerId.isEmpty ? nil : DisplayName.resolvedExtension(
+                    for: callerId,
+                    serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
+                    knownExtension: missedHistoryExt,
+                    contacts: self.cachedContacts).flatMap { Int($0) }
                 // Record the missed call directly (dedup by call_id). A `.missed`
                 // insert — NOT markMissed — because this device never registered
                 // an in-progress record for this call (it was busy, no ring).
@@ -4482,7 +4517,8 @@ final class AppState: ObservableObject {
                     peerUserId: callerId,
                     peerDisplayName: resolvedName,
                     direction: .missed,
-                    isVideo: isVid
+                    isVideo: isVid,
+                    peerExtension: missedPeerExt
                 )
                 // Passive reminder only. The `.missedCall` category posts a plain
                 // banner (no ringtone, no audio-session seizure — unlike the
