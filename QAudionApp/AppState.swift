@@ -7859,23 +7859,76 @@ final class AppState: ObservableObject {
     /// to several minutes during which a peer verifying this device's
     /// handshake could see `identity_key_mismatch`.
     ///
-    /// This adds:
-    ///  (a) a persisted last-confirmed fingerprint (`deviceId|ed25519PubB64`)
-    ///      in UserDefaults (not secret — both halves are already public) so
-    ///      a repeat sweep for an UNCHANGED identity skips the network round-
-    ///      trip entirely, and a future diagnostic can tell "never confirmed"
-    ///      from "confirmed, this is a stale symptom";
+    /// XC-3 (2026-08-05, v2 bundle parity follow-up) — iOS was the only
+    /// platform still publishing the v1-only shape (`ed25519_pub_b64` +
+    /// `device_id`). Android (`DeviceKeyProvisioner.publishIdentityBundleV2`)
+    /// and Desktop (`IdentityKeyStore`) both already publish the FULL v2
+    /// bundle (PQ + X25519 legs, self-signed) — see the "known gap" this
+    /// closes, documented at `attemptGroupCtrlKmsPreBootstrap`'s header:
+    /// without a v2 publish, a remote sender's KMS-prebootstrap attempt TO
+    /// this device sees "no PQ leg" and silently skips prebootstrap, and any
+    /// peer verifying this device's v2 bundle self-sig (D11 trust-on-publish)
+    /// never gets that stronger cross-check either. `DeviceKeyManager`'s
+    /// X25519/ML-KEM pair is, per that same receive-side doc, "the only
+    /// long-term PQ/X25519 keypair iOS has today" — reused here as the
+    /// bundle's PQ/X25519 legs, exactly as the receive path already assumes.
+    /// Falls back to the pre-existing v1-only publish when those keys aren't
+    /// provisioned yet, or the uuid/preimage/signature construction fails for
+    /// any reason — never a hard failure, only a capability degrade, mirroring
+    /// Android's own v1 fallback in `publishIdentityBundleV2`.
+    ///
+    /// Shared mechanics (both v1 and v2) via `publishWithRetry`:
+    ///  (a) a persisted last-confirmed fingerprint in UserDefaults (not secret
+    ///      — every component is already public) so a repeat sweep for an
+    ///      UNCHANGED identity skips the network round-trip, and switching
+    ///      from a confirmed v1 fingerprint to v2 (or vice versa) always
+    ///      forces at least one fresh attempt (the fingerprint format
+    ///      includes a `v1|`/`v2|` tag, so the two never collide);
     ///  (b) a short bounded retry (2 extra attempts, 2s/5s backoff) IN THIS
-    ///      SAME sweep when the current fingerprint has never been confirmed,
-    ///      instead of silently deferring to whichever sweep trigger fires
-    ///      next.
-    /// Still fully best-effort: exhausting the retries just logs and returns,
-    /// exactly as before — never blocks or throws to the caller.
+    ///      SAME sweep instead of silently deferring to whichever sweep
+    ///      trigger fires next.
     @MainActor
     private func publishIdentityKeyWithRetry(
-        provider: BCryptoBackendProvider, signingPub: Data, deviceId: String
+        provider: BCryptoBackendProvider, deviceKeyManager: DeviceKeyManager,
+        signingPub: Data, deviceId: String
     ) async {
-        let fingerprint = "\(deviceId)|\(signingPub.base64EncodedString())"
+        let createdAtMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        if let sovereign = sovereignIdentity.loadIdentity(), sovereign.signingPrivate.count == 32,
+           let ikPqPub = try? deviceKeyManager.currentKeys()?.mlkemPub, ikPqPub.count == 1568,
+           let ikX25519Pub = try? deviceKeyManager.currentX25519Pub(), ikX25519Pub.count == 32,
+           let userIdStr = currentUserId,
+           let uuidRaw = try? KmsPreBootstrapCbor.uuidStringToRaw(userIdStr) {
+            do {
+                let preimage = try IdentityKeyV2Preimage.buildV2(
+                    uuidRaw: uuidRaw, ed25519Pub: signingPub, ikPqPub: ikPqPub,
+                    ikX25519Pub: ikX25519Pub, createdAtMs: createdAtMs
+                )
+                let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: sovereign.signingPrivate)
+                let selfSig = try signer.signature(for: preimage)
+                let fingerprint = "v2|\(signingPub.base64EncodedString())|" +
+                    "\(ikPqPub.base64EncodedString())|\(ikX25519Pub.base64EncodedString())"
+                await publishWithRetry(fingerprint: fingerprint) {
+                    try await provider.kmsClient.publishUserIdentityBundleV2(
+                        ed25519Pub: signingPub, ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub,
+                        selfSig: selfSig, createdAtMs: createdAtMs
+                    )
+                }
+                return
+            } catch {
+                print("[AppState] identity v2 bundle build failed, falling back to v1 publish: \(error)")
+            }
+        }
+        let fingerprint = "v1|\(deviceId)|\(signingPub.base64EncodedString())"
+        await publishWithRetry(fingerprint: fingerprint) {
+            try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
+        }
+    }
+
+    /// Shared retry-with-backoff + confirmed-fingerprint bookkeeping for
+    /// `publishIdentityKeyWithRetry`'s v1/v2 publish attempts. See that
+    /// function's doc for the full rationale.
+    @MainActor
+    private func publishWithRetry(fingerprint: String, publish: @escaping () async throws -> Void) async {
         let publishedKey = "com.qaudion.identity.published_fingerprint"
         guard UserDefaults.standard.string(forKey: publishedKey) != fingerprint else {
             return // already confirmed published for this exact identity
@@ -7886,7 +7939,7 @@ final class AppState: ObservableObject {
                 try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
             }
             do {
-                try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
+                try await publish()
                 UserDefaults.standard.set(fingerprint, forKey: publishedKey)
                 return
             } catch {
@@ -7929,7 +7982,9 @@ final class AppState: ObservableObject {
                let deviceId = TokenVault.loadDeviceId() ??
                 UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                !deviceId.isEmpty {
-                await publishIdentityKeyWithRetry(provider: provider, signingPub: signingPub, deviceId: deviceId)
+                await publishIdentityKeyWithRetry(
+                    provider: provider, deviceKeyManager: manager, signingPub: signingPub, deviceId: deviceId
+                )
             }
             // CL-5.4 — wire the earbud relay so hw_only/earbud_pair keys are
             // forwarded to the SE via GATT rather than attempting SW decryption.
