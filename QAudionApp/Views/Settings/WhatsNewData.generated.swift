@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.947",
+              date: "2026-08-05",
+              title: "v1.0.947",
+              bullets: [
+                "fix(avatar): wire ContactsStore avatar into chat list + call history rows",
+              ]),
         .init(id: "v1.0.946",
               date: "2026-08-05",
               title: "v1.0.946",
               bullets: [
+                "chore: regenerate changelog for v1.0.946",
                 "fix(security): split sig_invalid from identity_key_mismatch banner; harden identity-key publish (#44)",
                 "fix(security): P0-3/P0-5 follow-up from post-remediation audit (iOS)",
               ]),
@@ -153,13 +160,6 @@ extension ReleaseNote {
                 "ci(engine-tests): skip only the three simulator-impossible voice cases",
                 "test(storage): fix the ConversationStore regression CI caught, drop a stale pin",
                 "test(storage): make the encrypted stores testable, cover LocalStoreCipher",
-              ]),
-        .init(id: "v1.0.927",
-              date: "2026-08-02",
-              title: "v1.0.927",
-              bullets: [
-                "chore: regenerate changelog for v1.0.927",
-                "fix(storage): encrypt message content at rest, unblock the invisible failures",
               ]),
     ]
 }
