@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.945",
+              date: "2026-08-05",
+              title: "v1.0.945",
+              bullets: [
+                "fix(security): P0-5 wipe/logout doesn't clear crypto keys (iOS)",
+                "fix(call): P0-3/P0-4 coordinated security fixes (iOS)",
+              ]),
         .init(id: "v1.0.944",
               date: "2026-08-05",
               title: "v1.0.944",
               bullets: [
+                "chore: regenerate changelog for v1.0.944",
                 "fix(groups): verify Ed25519 signature on group_membership_changed for known groups",
                 "fix(groups): distribute post-removal rekey seed via locally-known roster",
               ]),
@@ -151,13 +159,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.925",
                 "feat(telemetry): make iOS playout health measurable at last",
-              ]),
-        .init(id: "v1.0.925",
-              date: "2026-08-02",
-              title: "v1.0.925",
-              bullets: [
-                "chore: regenerate changelog for v1.0.925",
-                "fix(avatar): bind the call-derived PSK to the peer, like Android does",
               ]),
     ]
 }
