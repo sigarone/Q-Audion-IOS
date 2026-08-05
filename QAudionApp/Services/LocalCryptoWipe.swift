@@ -46,6 +46,11 @@ enum LocalCryptoWipe {
         ContactsStore().wipeAll()
         ConversationStore().wipeAll()
         ThreatReportLogStore().wipeAll()
+        // XC-2: the identity-key publish confirmed-fingerprint (AppState
+        // .publishIdentityKeyWithRetry) must not survive a wipe — a stale
+        // entry here would make the next account's first sweep skip
+        // publishing if it happened to reuse the same device id.
+        UserDefaults.standard.removeObject(forKey: "com.qaudion.identity.published_fingerprint")
         print("[LocalCryptoWipe] wipeAll completed")
     }
 }

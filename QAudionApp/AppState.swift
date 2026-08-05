@@ -702,6 +702,21 @@ final class AppState: ObservableObject {
     /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
     /// MainActor); reset at the start of every new call.
     @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// XC-1 (2026-08-05, post-remediation audit follow-up) — true when the
+    /// active call's peer presented a signature that FAILED to verify UNDER
+    /// THE KEY WE ALREADY TRUST (pin or server-fetched) — i.e. NOT a key
+    /// change (`identity_key_mismatch` is the separate, distinct verdict for
+    /// that). Previously this shared `callIdentityUnauthenticatedChange`
+    /// above, so the UI showed "CHIAVE IDENTITÀ CAMBIATA — la chiave del
+    /// contatto è cambiata e non risulta pubblicata dal server" for a
+    /// forgery-shaped signature failure too, which is simply the wrong
+    /// explanation for that verdict (confirmed live 2026-08-05: a real call
+    /// hit `sig_invalid`, not `identity_key_mismatch`, and the banner text
+    /// misdescribed it). Split so `InCallScreen` can show accurate copy per
+    /// verdict. Advisory ONLY — never gates media (`awaitingIdentityConfirmation`
+    /// is the one that does); reset at the start of every new call same
+    /// lifecycle as `callIdentityUnauthenticatedChange`.
+    @Published var callHandshakeSignatureInvalid: Bool = false
     /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — true when the
     /// handshake identity verdict for the ACTIVE call was `.abort` (a
     /// signature was required and did not verify). Unlike
@@ -4079,6 +4094,8 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            // XC-1: same reset for the sibling sig_invalid banner.
+            self.callHandshakeSignatureInvalid = false
             // P0-3: a fresh incoming call must not inherit a stale media hold
             // from a previous call's aborted handshake.
             self.awaitingIdentityConfirmation = false
@@ -7793,17 +7810,55 @@ final class AppState: ObservableObject {
     /// only when `CallsGate.callKitFreeMode` (alert-push for incoming calls).
     static let apnsTokenReceived = Notification.Name("com.bcrypto.qaudion.apnsTokenReceived")
 
-    /// W77: dispatch inbound `opaque_message` envelopes. The QUAD frame
-    /// inside the payload carries either:
-    /// 2026-05-06 — KMS pipeline orchestrator. Closes the
-    /// WIRE_SPEC §5 "iOS KMS app-level wiring" gap: gathers the
-    /// device's long-term keys via DeviceKeyManager (provisioning
-    /// them if it's the first launch), then runs one
-    /// KmsPollerService.pollOnce sweep against /api/v1/kms/pending.
-    /// Decrypted PSKs land in SovereignKeyVault and become
-    /// immediately usable by the PqcHandshake fingerprint
-    /// negotiation. Best-effort — failures are logged so a transient
-    /// network blip on app launch doesn't break the call surface.
+    /// XC-2 (2026-08-05, post-remediation audit follow-up) — reliability
+    /// hardening for the identity-key publish call. Previously this was a
+    /// single best-effort attempt per `runKmsSweep` with no persisted
+    /// "confirmed published" bookkeeping — unlike Android's
+    /// `DeviceKeyProvisioner.ensureIdentityPublished`, which tracks a
+    /// confirmed-200 fingerprint (`PREF_IDENTITY_PUBLISHED`) and force-
+    /// republishes on any mismatch. A transient failure here (observed live
+    /// 2026-08-05: `NSURLErrorCancelled`, Code=-999) silently left the server
+    /// holding a stale/absent identity key until the NEXT sweep (WS reconnect,
+    /// the ~300s `KmsPeriodicPoller` tick, or a `kms_key_available` event) — up
+    /// to several minutes during which a peer verifying this device's
+    /// handshake could see `identity_key_mismatch`.
+    ///
+    /// This adds:
+    ///  (a) a persisted last-confirmed fingerprint (`deviceId|ed25519PubB64`)
+    ///      in UserDefaults (not secret — both halves are already public) so
+    ///      a repeat sweep for an UNCHANGED identity skips the network round-
+    ///      trip entirely, and a future diagnostic can tell "never confirmed"
+    ///      from "confirmed, this is a stale symptom";
+    ///  (b) a short bounded retry (2 extra attempts, 2s/5s backoff) IN THIS
+    ///      SAME sweep when the current fingerprint has never been confirmed,
+    ///      instead of silently deferring to whichever sweep trigger fires
+    ///      next.
+    /// Still fully best-effort: exhausting the retries just logs and returns,
+    /// exactly as before — never blocks or throws to the caller.
+    @MainActor
+    private func publishIdentityKeyWithRetry(
+        provider: BCryptoBackendProvider, signingPub: Data, deviceId: String
+    ) async {
+        let fingerprint = "\(deviceId)|\(signingPub.base64EncodedString())"
+        let publishedKey = "com.qaudion.identity.published_fingerprint"
+        guard UserDefaults.standard.string(forKey: publishedKey) != fingerprint else {
+            return // already confirmed published for this exact identity
+        }
+        let delaysMs: [UInt64] = [0, 2_000, 5_000]
+        for (attempt, delayMs) in delaysMs.enumerated() {
+            if delayMs > 0 {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            }
+            do {
+                try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
+                UserDefaults.standard.set(fingerprint, forKey: publishedKey)
+                return
+            } catch {
+                print("[AppState] identity key publish failed (attempt \(attempt + 1)/\(delaysMs.count), non-fatal): \(error)")
+            }
+        }
+    }
+
     @MainActor
     private func runKmsSweep() async {
         guard let provider = liveProvider else { return }
@@ -7838,11 +7893,7 @@ final class AppState: ObservableObject {
                let deviceId = TokenVault.loadDeviceId() ??
                 UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                !deviceId.isEmpty {
-                do {
-                    try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
-                } catch {
-                    print("[AppState] identity key publish failed (non-fatal): \(error)")
-                }
+                await publishIdentityKeyWithRetry(provider: provider, signingPub: signingPub, deviceId: deviceId)
             }
             // CL-5.4 — wire the earbud relay so hw_only/earbud_pair keys are
             // forwarded to the SE via GATT rather than attempting SW decryption.
@@ -9585,7 +9636,7 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 SasVerificationStore.shared.clear(peerUserId: peerId)
                 if self.callContactId == nil || self.callContactId == peerId {
-                    self.callIdentityUnauthenticatedChange = true
+                    self.callHandshakeSignatureInvalid = true
                 }
             }
         }
@@ -10571,6 +10622,8 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        // XC-1: same reset for the sibling sig_invalid banner.
+        callHandshakeSignatureInvalid = false
         // P0-3: a fresh outgoing call must not inherit a stale media hold
         // from a previous call's aborted handshake.
         awaitingIdentityConfirmation = false
@@ -10893,17 +10946,39 @@ final class AppState: ObservableObject {
                     }
                 }
                 // P0-3 (2026-08-05, coordinated fix plan cluster 3) — caller leg
-                // (ACCEPT-verify). This leg previously wired neither
-                // `onUnauthenticatedIdentityChange` nor `onInvalidHandshakeSignature`
-                // (so the outgoing-call side never even showed the advisory
-                // banner); this new gate is wired regardless, since it must hold
-                // media on BOTH call directions. Fires BEFORE onRelaySessionReady /
+                // (ACCEPT-verify). This gate is wired regardless of call direction,
+                // since it must hold media on BOTH. Fires BEFORE onRelaySessionReady /
                 // onV4BootstrapReady below for the same call (verdict evaluation
                 // in QAudionCallIntegration happens earlier in the ACCEPT path than
                 // either of those).
                 integration.onHandshakeIdentityUnverified = { [weak self] cid in
                     Task { @MainActor [weak self] in
                         self?.handleHandshakeIdentityUnverified(callId: cid)
+                    }
+                }
+                // XC-1 (2026-08-05, post-remediation audit follow-up) — this leg
+                // previously wired NEITHER `onUnauthenticatedIdentityChange` NOR
+                // `onInvalidHandshakeSignature` (only the media-hold gate above),
+                // so an outgoing call never showed the advisory banner and never
+                // cleared the peer's stored SAS verification on a sig_invalid
+                // verdict (`SasVerificationStore.clear`) — confirmed live
+                // 2026-08-05 (a real ACCEPT-verify hit `sig_invalid` on this exact
+                // leg). Mirrors the responder leg's wiring above verbatim.
+                integration.onUnauthenticatedIdentityChange = { [weak self] peerId in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        if self.callContactId == nil || self.callContactId == peerId {
+                            self.callIdentityUnauthenticatedChange = true
+                        }
+                    }
+                }
+                integration.onInvalidHandshakeSignature = { [weak self] peerId in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        SasVerificationStore.shared.clear(peerUserId: peerId)
+                        if self.callContactId == nil || self.callContactId == peerId {
+                            self.callHandshakeSignatureInvalid = true
+                        }
                     }
                 }
                 // W389: forward the real ML-KEM-1024 session key into

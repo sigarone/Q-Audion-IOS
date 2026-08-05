@@ -264,6 +264,9 @@ struct LiveInCallScreen: View {
                 peerScreenSharing: appState.peerScreenShareActive,
                 // D11 / W-NOBRICK — non-blocking identity-change advisory banner.
                 identityUnauthenticatedChange: appState.callIdentityUnauthenticatedChange,
+                // XC-1 — sibling advisory for the sig_invalid verdict (distinct
+                // copy from the identity-change banner above).
+                handshakeSignatureInvalid: appState.callHandshakeSignatureInvalid,
                 // P0-3 — see AppState.awaitingIdentityConfirmation's doc: unlike
                 // the advisory-only flag above, this ONE reflects a REAL media
                 // hold; confirming SAS below (handleConfirmSas) releases it.
