@@ -342,6 +342,23 @@ public final class SovereignKeyVault {
         NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
     }
 
+    /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — bulk wipe for
+    /// `remote_wipe` / account deletion. One Keychain call, no
+    /// `kSecAttrAccount` filter, so it removes every PSK this vault holds
+    /// regardless of name — the caller doesn't need `listPskNames()` first.
+    /// `errSecItemNotFound` (vault already empty) is not an error.
+    public func clearAll() throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeyVaultError.deleteFailed(status)
+        }
+        NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
+    }
+
     public func listPskNames() -> [String] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

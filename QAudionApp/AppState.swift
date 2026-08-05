@@ -5896,12 +5896,19 @@ final class AppState: ObservableObject {
         // sends this when an admin or recovery flow has triggered a
         // remote wipe. Server also tries to send an FCM push but
         // hub.go:615 SKIPS the push for ios-apns devices, so the WS
-        // envelope is the ONLY path. Before this fix, iOS users
-        // could ignore wipe commands. Action: clear auth + force
-        // sign-out. (TODO: future — also wipe local stores.)
+        // envelope is the ONLY path.
+        //
+        // P0-5 (2026-08-05, coordinated fix plan cluster 5) — this used to
+        // ONLY clear the auth token, leaving every crypto key (sovereign
+        // identity, PSK vault, both ratchet vaults, group sessions, peer
+        // identity pins) and all contacts/conversations/threat reports on
+        // the device. LocalCryptoWipe.wipeAll() closes that — same policy
+        // decision already shipped on Android/Desktop ("logout wipes crypto
+        // keys same as remote-wipe").
         ws.registerHandler(type: "remote_wipe") { [weak self] _, _ in
             DispatchQueue.main.async {
                 self?.authService.clearToken()
+                LocalCryptoWipe.wipeAll()
                 self?.errorMessage = "Account cancellato remotamente."
             }
         }
@@ -10268,6 +10275,12 @@ final class AppState: ObservableObject {
 
     func logout() {
         authService.clearToken()
+        // P0-5 (2026-08-05, coordinated fix plan cluster 5, user decision:
+        // "logout wipes crypto keys same as remote-wipe" — same policy
+        // already shipped on Android's LogoutViewModel/RemoteWipeHandler).
+        // A user-initiated logout used to leave every crypto key + contact/
+        // conversation/threat-report store on the device untouched.
+        LocalCryptoWipe.wipeAll()
         engine?.destroySession()
         engine?.release()
         engine = nil
