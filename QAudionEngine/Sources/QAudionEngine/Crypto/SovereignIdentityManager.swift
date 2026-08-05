@@ -246,6 +246,24 @@ public final class SovereignIdentityManager {
     /// Check if sovereign identity exists.
     public func hasSovereignIdentity() -> Bool { loadIdentity() != nil }
 
+    /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — permanently erase
+    /// the sovereign identity keypair from the Keychain. Neither
+    /// `remote_wipe` nor account deletion used to call this at all: this
+    /// class had NO delete method whatsoever, so the X25519/Ed25519 identity
+    /// keys survived every wipe path. `errSecItemNotFound` is not an error —
+    /// wiping an identity that was never saved (or already wiped) is a no-op.
+    public func deleteIdentity() throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: "primary",
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeyVaultError.deleteFailed(status)
+        }
+    }
+
     // MARK: - Binary Serialization (matches Android wire format)
 
     /// Full identity: [version:1][encPriv:32][encPub:32][sigPriv:32][sigPub:32]

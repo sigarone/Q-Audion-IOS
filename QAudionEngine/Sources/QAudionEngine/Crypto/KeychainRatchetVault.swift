@@ -68,6 +68,17 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         deleteBlob(service: Self.serviceV4, account: Self.account(epochId: epochId, peerId: peerId))
     }
 
+    /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — bulk wipe for
+    /// `remote_wipe` / account deletion. `delete(epochId:peerId:)` /
+    /// `deleteV4(epochId:peerId:)` only ever remove ONE known `(epochId,
+    /// peerId)` pair; neither wipe path knew every pair to call them with, so
+    /// every ratchet chain-key snapshot (both v3.1 and v4 services) survived
+    /// every wipe. One Keychain call per service, no account filter.
+    public func wipeAll() {
+        deleteAllInService(Self.service)
+        deleteAllInService(Self.serviceV4)
+    }
+
     // MARK: - Internal
 
     private static func account(epochId: String, peerId: String) -> String {
@@ -131,5 +142,22 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
             kSecAttrAccount as String: account,
         ]
         _ = SecItemDelete(query as CFDictionary)
+    }
+
+    private func deleteAllInService(_ service: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        // wipeAll() is deliberately non-throwing (best-effort, called from
+        // LocalCryptoWipe.wipeAll() alongside independent steps that must not
+        // block each other), but a failure here must not be silent — log it
+        // so a stuck wipe is at least observable, matching the two-status
+        // convention (success / item-not-found are the only expected codes)
+        // used everywhere else in this file's throwing methods.
+        if status != errSecSuccess && status != errSecItemNotFound {
+            print("[KeychainRatchetVault] wipeAll: SecItemDelete failed for service=\(service) status=\(status)")
+        }
     }
 }

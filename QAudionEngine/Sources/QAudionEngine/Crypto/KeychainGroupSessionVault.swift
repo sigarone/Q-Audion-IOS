@@ -56,6 +56,26 @@ public final class KeychainGroupSessionVault: GroupSessionVault, @unchecked Send
         }
     }
 
+    /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — bulk wipe for
+    /// `remote_wipe` / account deletion. `purge(groupIdBytes:selfId:)` only
+    /// clears ONE known group's snapshots; neither wipe path knew every group
+    /// the user was ever in, so every group session key survived every wipe.
+    /// One Keychain call, no account filter — removes every group snapshot
+    /// regardless of group/epoch/self.
+    public func wipeAll() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        // Deliberately non-throwing (best-effort, called from LocalCryptoWipe
+        // .wipeAll() alongside independent steps), but not silent — log an
+        // unexpected status so a stuck wipe is observable.
+        if status != errSecSuccess && status != errSecItemNotFound {
+            print("[KeychainGroupSessionVault] wipeAll: SecItemDelete failed status=\(status)")
+        }
+    }
+
     // MARK: - Internal
 
     private static func account(_ gid: Data, _ epoch: UInt32, _ selfId: String) -> String {

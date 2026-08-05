@@ -244,6 +244,14 @@ struct InCallScreen: View {
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner
     /// only; it MUST NOT gate audio/video. SAS remains the terminal gate.
     let identityUnauthenticatedChange: Bool
+    /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — true when the
+    /// handshake identity verdict for THIS call was `.abort` (a signature was
+    /// required and did not verify). Unlike `identityUnauthenticatedChange`
+    /// above, this ONE actually gates media: `AppState` holds back the relay
+    /// sealers / v4 ratchet bootstrap until the user taps "CONFERMA COINCIDONO"
+    /// below, same blocking-SAS-gate policy already shipped on Android/Desktop.
+    /// The banner exists so the user understands WHY audio hasn't started yet.
+    let awaitingIdentityConfirmation: Bool
     /// W-ASSURANCE (ship step 6) — THIS call's LIVE `AssuranceState.decide()`
     /// verdict, mapped to display copy by `AssuranceStateUI.present(...)`.
     /// nil ⇒ no key-confirmation attempt has resolved yet (rendered as no
@@ -356,6 +364,7 @@ struct InCallScreen: View {
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
          identityUnauthenticatedChange: Bool = false,
+         awaitingIdentityConfirmation: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
          mutualNfcInCommon: Bool = false,
          pskMixedThisCall: Bool = false,
@@ -401,6 +410,7 @@ struct InCallScreen: View {
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
+        self.awaitingIdentityConfirmation = awaitingIdentityConfirmation
         self.assurancePresentation = assurancePresentation
         self.mutualNfcInCommon = mutualNfcInCommon
         self.pskMixedThisCall = pskMixedThisCall
@@ -536,6 +546,44 @@ struct InCallScreen: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Avviso di sicurezza: la chiave identità del contatto è cambiata e non è pubblicata dal server. Verifica le parole SAS.")
+    }
+
+    // MARK: - P0-3 identity-hold banner (media IS gated — distinct from the
+    //         advisory-only banner above)
+
+    /// Shown while `awaitingIdentityConfirmation` is true: the handshake
+    /// identity signature was required and did not verify, so `AppState` is
+    /// holding back audio/video until the user confirms the SAS below.
+    /// Deliberately a stronger visual (`riskHigh`) than `identityChangeBanner`
+    /// (`warning`) — that one is advisory-only, this one reflects a real gate.
+    private var identityHoldBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(extras.riskHigh)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("AUDIO IN ATTESA DI CONFERMA")
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(0.6)
+                    .foregroundStyle(extras.riskHigh)
+                Text("La firma dell'identità non è stata verificata. Confronta le parole SAS qui sotto per attivare audio e video.")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(extras.riskHigh.opacity(0.6), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Audio e video in attesa: verifica le parole SAS per continuare la chiamata in sicurezza.")
     }
 
     // MARK: - W-ASSURANCE (ship step 6) — live per-call verdict section body
@@ -690,6 +738,12 @@ struct InCallScreen: View {
                 if identityUnauthenticatedChange {
                     Spacer().frame(height: 10)
                     identityChangeBanner.padding(.horizontal, 20)
+                }
+
+                // P0-3 — this one actually gates media (see the field's doc).
+                if awaitingIdentityConfirmation {
+                    Spacer().frame(height: 10)
+                    identityHoldBanner.padding(.horizontal, 20)
                 }
 
                 if sasWords.count == 6 {

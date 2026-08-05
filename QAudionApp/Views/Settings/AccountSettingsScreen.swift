@@ -294,9 +294,17 @@ final class AccountSettingsContainer: ObservableObject {
             do {
                 // Best-effort server delete; ignore errors below.
                 try? await provider.accountApi.deleteAccount()
-                // Local logout — clears the keychain + tokens.
+                // Server-side session invalidation (DELETE /api/v1/auth/logout).
                 try await provider.accountApi.logout()
                 await MainActor.run {
+                    // P0-5 (2026-08-05, coordinated fix plan cluster 5) — the
+                    // comment above USED to (incorrectly) claim `logout()`
+                    // "clears the keychain + tokens" locally; it is only the
+                    // network call above. LocalCryptoWipe.wipeAll() is the
+                    // actual local wipe — every crypto key + contact/
+                    // conversation/threat-report store, matching a GDPR
+                    // right-to-be-forgotten deletion, not just a session drop.
+                    LocalCryptoWipe.wipeAll()
                     self.isLoading = false
                     self.errorMessage = nil
                     // Caller (host SwiftUI view) should observe the
