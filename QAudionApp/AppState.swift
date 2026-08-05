@@ -14393,16 +14393,22 @@ extension AppState {
             // makes; a bare server assertion is not one. Hence the
             // `isAttested` overload.
             //
-            // HONEST SCOPE: this is a presence check, NOT verification — iOS
-            // still does not verify the signature (see this extension's kdoc),
-            // and a hostile server could fill both fields with noise. It
-            // therefore defends against the server's own legitimately-unsigned
+            // HONEST SCOPE: this is a presence check, NOT verification, and
+            // it is SPECIFIC to the unknown-group bootstrap decision below —
+            // a hostile server could still fill both fields with noise here.
+            // It defends against the server's own legitimately-unsigned
             // frames being misread as user actions — the same class of guard
-            // as `replay`, and the class that actually bites — not against a
-            // hostile server, which on iOS has more direct paths anyway since
-            // the roster is applied verbatim. Real Ed25519 verification (which
-            // Desktop already does) is the follow-up that would make this a
-            // security boundary; until then it must not be described as one.
+            // as `replay` — not against a hostile server forging an add,
+            // which for a group we do not yet know has no roster to protect
+            // anyway (bootstrap starts from zero either way). The
+            // KNOWN-group path (below, past the `guard existing != nil`)
+            // now performs real Ed25519 verification via
+            // `GroupMembershipVerifier` (coordinated fix plan cluster 2,
+            // 2026-08-05) — this presence check's scope was deliberately
+            // NOT widened to the unknown-group bootstrap decision, since
+            // there a hostile server has more direct paths anyway (nothing
+            // signs a group into existence, so the founding roster itself
+            // is a server-stated fact, not an attestation).
             //
             // A legitimately re-added user is not locked out: the attested
             // live path still clears, and the offline-proof
@@ -14431,7 +14437,68 @@ extension AppState {
             return
         }
 
-        // Server-authoritative roster.
+        // Server-authoritative roster mutation on a group we ALREADY know.
+        //
+        // Coordinated fix plan (cluster 2, 2026-08-05) — this used to apply
+        // `applyServerRoster`/`applyRemovalRekey`/`shipSenderKeyInits` with
+        // ZERO cryptographic attestation (this extension's own kdoc used to
+        // admit it: "iOS still does not verify the signature"). Every
+        // operation EXCEPT `snapshot` now requires a real Ed25519
+        // verification (`GroupMembershipVerifier`, mirroring Android's
+        // `verifyMembershipEnvelope` and the server's
+        // `verifyEnvelopeSignature` byte for byte) BEFORE any side effect
+        // runs — failure drops the ENTIRE event, not just one field.
+        // `snapshot` stays unverified by design: it is a server-stated
+        // roster fact with no signing actor, same reason group CREATION
+        // ships an empty envelope (Android's own `verifyMembershipEnvelope`
+        // skips exactly this one operation value too).
+        let existingMembersSnapshot: [String] = existing?.members ?? members
+        guard operation != "snapshot" else {
+            applyVerifiedGroupMembershipChange(
+                data, groupHex: groupHex, members: members, admins: admins,
+                serverEpoch: serverEpoch, operation: operation, isRemoval: isRemoval,
+                subject: subject, actor: actor, replay: replay, selfId: selfId,
+                existingMembers: existingMembersSnapshot)
+            return
+        }
+        guard let provider = liveProvider else {
+            let gShortNoProvider: String = String(groupHex.prefix(8))
+            RTLog.warn("group", "group_membership_changed: no live provider, dropping unverifiable event g=" + gShortNoProvider)
+            return
+        }
+        let envelopeB64: String = (data["envelope_canonical_b64"] as? String) ?? ""
+        let signatureB64: String = (data["envelope_signature_b64"] as? String) ?? ""
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let verified = await GroupMembershipVerifier.verify(
+                groupIdWire: rawGroupId, groupIdHex: groupHex, wireOperation: operation,
+                actorUserId: actor, subjectUserId: subject,
+                envelopeCanonicalB64: envelopeB64, envelopeSignatureB64: signatureB64,
+                kmsClient: provider.kmsClient, sovereignIdentity: self.sovereignIdentity)
+            guard verified else {
+                let gShortFailed: String = String(groupHex.prefix(8))
+                RTLog.warn("group", "group_membership_changed: signature verify failed, dropping event g=" + gShortFailed)
+                return
+            }
+            self.applyVerifiedGroupMembershipChange(
+                data, groupHex: groupHex, members: members, admins: admins,
+                serverEpoch: serverEpoch, operation: operation, isRemoval: isRemoval,
+                subject: subject, actor: actor, replay: replay, selfId: selfId,
+                existingMembers: existingMembersSnapshot)
+        }
+    }
+
+    /// Apply a `group_membership_changed` mutation whose signature has
+    /// already been verified by `GroupMembershipVerifier` — or which is
+    /// `snapshot`, never signed (see `handleGroupMembershipChanged`'s call
+    /// site for the fail-closed gate). Extracted so the synchronous
+    /// snapshot path and the async verified path share one implementation.
+    @MainActor
+    fileprivate func applyVerifiedGroupMembershipChange(
+        _ data: [String: Any], groupHex: String, members: [String], admins: [String],
+        serverEpoch: UInt32, operation: String, isRemoval: Bool, subject: String,
+        actor: String, replay: Bool, selfId: String, existingMembers: [String]
+    ) {
         applyServerRoster(groupHex: groupHex, members: members, admins: admins, serverEpoch: serverEpoch)
         applyInlineGroupMetadataIfPresent(data, groupHex: groupHex, selfId: selfId)
 
@@ -14458,25 +14525,28 @@ extension AppState {
             //
             // Coordinated fix plan (cluster 2, 2026-08-04): the fresh rekey
             // seed must be distributed only to peers WE already know are
-            // members, never to `members` as carried by this WS event —
-            // that field is not covered by any signature (iOS does not yet
-            // verify group_membership_changed at all, see
-            // membershipEventIsAttested's honest-scope note above), so a
-            // compromised/malicious server could pad an attacker's account
-            // into it and this client would hand them the group's live
-            // send-chain seed with zero attestation. `existing` is OUR own
-            // locally-tracked roster captured above, BEFORE
-            // `applyServerRoster` overwrote the registry with this same
-            // untrusted event — use it instead.
-            let trustedMembers: [String] = existing?.members ?? members
-            applyRemovalRekey(groupHex: groupHex, members: trustedMembers, selfId: selfId, removed: subject)
+            // members, never to `members` as carried by this WS event — the
+            // signed envelope covers WHO was removed (`uid`), not the
+            // resulting roster shape, so a compromised/malicious server
+            // could still pad an attacker's account into `members` and this
+            // client would hand them the group's live send-chain seed.
+            // `existingMembers` is OUR own locally-tracked roster captured
+            // BEFORE `applyServerRoster` overwrote the registry with this
+            // same untrusted event — use it instead.
+            applyRemovalRekey(groupHex: groupHex, members: existingMembers, selfId: selfId, removed: subject)
         } else if !isRemoval, !subject.isEmpty, subject != selfId {
-            // A member was ADDED: ship OUR sender_key_init to them over the 1:1
-            // ratchet so they can decrypt our group frames. Identical fan-out to
-            // `createGroup` (groupSenderKeyCtlNotification → ChatMessageSendService).
-            // `pendingInitsAfterBootstrap` is idempotent — it returns only the
-            // members we have not shipped to yet (i.e. the new one).
-            shipSenderKeyInits(groupHex: groupHex, members: members, selfId: selfId)
+            // Coordinated fix plan (cluster 2, 2026-08-05) — same reasoning
+            // as the removal branch above, mirrored for the add path (the
+            // ONE gap the earlier session's fix explicitly left open): the
+            // verified envelope proves actor added `subject`, not that the
+            // resulting roster is exactly `members[]`. Ship the sender-key
+            // -init only to peers we already trust (`existingMembers`) plus
+            // the ONE subject this event's signature specifically vouches
+            // for — never the raw untrusted `members` array.
+            let trustedRecipients: [String] = existingMembers.contains(subject)
+                ? existingMembers
+                : existingMembers + [subject]
+            shipSenderKeyInits(groupHex: groupHex, members: trustedRecipients, selfId: selfId)
             // W-GRPNAME — the newcomer's recv chain starts ABOVE the index the
             // current metadata blob was sealed at, so the name they fetch is
             // undecryptable for them (full mechanism in
