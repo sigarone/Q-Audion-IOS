@@ -291,30 +291,39 @@ final class AccountSettingsContainer: ObservableObject {
         }
         Task {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
-            do {
-                // Best-effort server delete; ignore errors below.
-                try? await provider.accountApi.deleteAccount()
-                // Server-side session invalidation (DELETE /api/v1/auth/logout).
-                try await provider.accountApi.logout()
-                await MainActor.run {
-                    // P0-5 (2026-08-05, coordinated fix plan cluster 5) — the
-                    // comment above USED to (incorrectly) claim `logout()`
-                    // "clears the keychain + tokens" locally; it is only the
-                    // network call above. LocalCryptoWipe.wipeAll() is the
-                    // actual local wipe — every crypto key + contact/
-                    // conversation/threat-report store, matching a GDPR
-                    // right-to-be-forgotten deletion, not just a session drop.
-                    LocalCryptoWipe.wipeAll()
-                    self.isLoading = false
-                    self.errorMessage = nil
-                    // Caller (host SwiftUI view) should observe the
-                    // auth state and route back to onboarding.
-                }
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
-                }
+            // Best-effort server delete; ignore errors — BCryptoAccountApiImpl's
+            // own doc says the caller "MUST treat the JWT as invalidated even
+            // on error", so a failure here doesn't change what we do next.
+            try? await provider.accountApi.deleteAccount()
+            // Server-side session invalidation (DELETE /api/v1/auth/logout).
+            // Best-effort too now (was a throwing call that gated everything
+            // below it): a 401 here is actually the EXPECTED shape right after
+            // deleteAccount() just invalidated the same token, and post-
+            // remediation audit (2026-08-05) found that letting it throw
+            // skipped the local wipe entirely — the exact P0-5 gap this
+            // function exists to close, on its own targeted call site.
+            try? await provider.accountApi.logout()
+            await MainActor.run {
+                // P0-5 (2026-08-05, coordinated fix plan cluster 5) — the
+                // comment above USED to (incorrectly) claim `logout()`
+                // "clears the keychain + tokens" locally; it is only the
+                // network call above. LocalCryptoWipe.wipeAll() is the
+                // actual local wipe — every crypto key + contact/
+                // conversation/threat-report store, matching a GDPR
+                // right-to-be-forgotten deletion, not just a session drop.
+                LocalCryptoWipe.wipeAll()
+                // Follow-up (post-remediation audit) — unlike AppState.logout()
+                // and the remote_wipe handler, this path never invalidated the
+                // local token or flipped isAuthenticated, so a deleted account
+                // kept looking "logged in" locally until an unrelated hard-401
+                // round trip caught up. Clear both explicitly, same as the
+                // other two wipe call sites.
+                self.appState?.authService.clearToken()
+                self.appState?.isAuthenticated = false
+                self.isLoading = false
+                self.errorMessage = nil
+                // Caller (host SwiftUI view) should observe the
+                // auth state and route back to onboarding.
             }
         }
     }
