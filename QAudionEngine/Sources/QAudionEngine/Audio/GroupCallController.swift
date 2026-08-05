@@ -68,10 +68,45 @@ public final class GroupCallController: @unchecked Sendable {
     /// (see that method's kdoc): a peer missing from this set just can't
     /// decrypt our audio yet, it doesn't block sending to everyone else.
     private var initSentTo: Set<String> = []
-    /// W-GRPSENDERKEY-NACK — peers we've already sent a `sender_key_nack`
-    /// this call (see `onE2eeStateChanged` wiring in `handleSfuToken`);
-    /// rate-limits to one nack per peer per call.
-    private var nackedPeers: Set<String> = []
+    /// W-GRPSENDERKEY-NACK (2026-08-06, live-confirmed via call e138ea75:
+    /// b649b53f's video stayed at `in_frames_dec=0` for 46+ straight
+    /// seconds while 878cbce9's recovered) — one bounded retry attempt per
+    /// STUCK (peer, track kind) pair, not one nack ever per peer for the
+    /// whole call. The old `Set<String>` deduped by identity alone and
+    /// discarded the `kind` parameter at the `onE2eeStateChanged` call
+    /// site — an audio-track `missing_key` event consumed the one
+    /// allowed nack for that peer, so a LATER, independent video-track
+    /// `missing_key` for the SAME peer silently no-opped: no send, no
+    /// log, invisible in every log channel this codebase ships (this
+    /// whole subsystem is `print()`-only, see `onGroupCallControlEnvelope`).
+    /// Keyed by `"\(identity)|\(kind)"` so audio and video track their own
+    /// independent retry budget for the same peer.
+    private struct StuckTrackNackState {
+        var lastNackAt: Date
+        var attempts: Int
+    }
+    /// (identity, kind) pairs currently considered "stuck" (last observed
+    /// state was missing_key/decryption_failed) with their retry bookkeeping.
+    /// Cleared per-pair the moment that pair reports a non-concerning state
+    /// again (see `onE2eeStateChanged`), and cleared wholesale in `teardown`.
+    private var nackedPeers: [String: StuckTrackNackState] = [:]
+    /// Last state LiveKit reported for each (identity, kind) pair — the
+    /// retry timer (`tickNackRetries`) reads this so it never re-nacks a
+    /// pair that has already recovered since its last observed event.
+    private var lastKnownE2eeState: [String: String] = [:]
+    /// Ticks `tickNackRetries()` every `Self.nackRetryCooldown` seconds
+    /// while an SFU room is connected — the ONLY way a genuinely stuck
+    /// pair gets more than the single attempt `onE2eeStateChanged` fires
+    /// on its own, since nothing guarantees LiveKit re-fires that delegate
+    /// callback for a track that never recovers. Started in
+    /// `handleSfuToken`, stopped in `teardown`.
+    private var nackRetryTimer: DispatchSourceTimer?
+    /// Bounded: at most 4 retries per (identity, kind) pair, 5s apart —
+    /// same shape as the 1:1 path's `VideoStallSelfHeal` escalation ladder
+    /// (bounded, not infinite), scaled down for this simpler one-signal
+    /// (resend key) mechanism instead of a 3-rung ladder.
+    private static let nackRetryCooldown: TimeInterval = 5.0
+    private static let nackRetryMaxAttempts = 4
 
     // ─── W-GRPLIVEKIT: LiveKit SFU media transport (capability-gated) ──
     // When `usingSfu` (default true), an active call first requests a
@@ -592,6 +627,15 @@ public final class GroupCallController: @unchecked Sendable {
         // see the kdoc on `_state`/`lock` near the top of this file).
         var installedSenderId: String?
         var nackRetryEnv: SenderKeyInitEnvelope?
+        // W-GRPSENDERKEY-NACK follow-up (2026-08-06) — a failed install here
+        // used to be `print()`-only, i.e. invisible in every log channel
+        // this codebase actually ships (Loki/W417/telemetry batch). That
+        // was the second confirmed gap behind the b649b53f video stall
+        // (call e138ea75): a resent sender_key_init that arrived and threw
+        // (e.g. GroupSession's epoch-mismatch check) left zero trace
+        // anywhere reachable — routed to `groupTelemetry` below instead,
+        // same channel `applySfuRemoteKey`'s own diagnostics already use.
+        var installFailure: (sender: String, epoch: UInt32, reason: String)?
         let envType = obj["t"] as? String ?? "?"
         switch envType {
         case "sender_key_init":
@@ -609,6 +653,7 @@ public final class GroupCallController: @unchecked Sendable {
                 print("[GroupCallController][telemetry] sender_key_init INSTALLED sender=\(fromUserId.prefix(8)) epoch=\(e) idx=\(idx)")
             } catch {
                 print("[GroupCallController][telemetry] sender_key_init FAILED sender=\(fromUserId.prefix(8)) epoch=\(e) reason=\(error)")
+                installFailure = (sender: fromUserId, epoch: e, reason: "\(error)")
             }
         case "sender_key_rotate":
             guard let e = (obj["e"] as? NSNumber)?.uint32Value,
@@ -624,6 +669,7 @@ public final class GroupCallController: @unchecked Sendable {
                 print("[GroupCallController][telemetry] sender_key_rotate INSTALLED sender=\(fromUserId.prefix(8)) epoch=\(e)")
             } catch {
                 print("[GroupCallController][telemetry] sender_key_rotate FAILED sender=\(fromUserId.prefix(8)) epoch=\(e) reason=\(error)")
+                installFailure = (sender: fromUserId, epoch: e, reason: "\(error)")
             }
         case "sender_key_nack":
             // W-GRPSENDERKEY-NACK — fromUserId has no usable key from us
@@ -649,6 +695,13 @@ public final class GroupCallController: @unchecked Sendable {
         }
         if let retryEnv = nackRetryEnv {
             sendSenderKeyEnvelope(peer: fromUserId, selfId: manager.selfUserId, env: retryEnv)
+        }
+        if let failure = installFailure {
+            groupTelemetry?("call.media.sender_key_install_failed", callId, [
+                "sender": failure.sender,
+                "epoch": failure.epoch,
+                "reason": failure.reason
+            ])
         }
     }
 
@@ -794,19 +847,21 @@ public final class GroupCallController: @unchecked Sendable {
         room.onSpeakingParticipantsChanged = { [weak self] identities in self?.onActiveSpeakersChanged?(identities) }
         // W-GRPTELEM: straight passthrough — see `groupTelemetry`'s kdoc.
         room.onTelemetry = { [weak self] kind, cid, attrs in self?.groupTelemetry?(kind, cid, attrs) }
-        // W-GRPSENDERKEY-NACK (2026-07-17) — LiveKit's own E2EE state is the
-        // most direct signal that WE never got a usable key for a peer
-        // (mirrors Android's onE2eeStateChanged; see sendSenderKeyNackEnvelope's
-        // kdoc for the full root-cause chain: sendSenderKeyEnvelope only
-        // confirms local encrypt+dispatch, never actual delivery, and
-        // onUpdate's retry loop only re-evaluates on roster changes, so a
-        // control envelope lost in-flight — e.g. during the WS reconnect
-        // that fires on every group-call participant join/leave — leaves
-        // that peer permanently silent for the rest of the call). Rate-
-        // limited via nackedPeers, one nack per peer per call.
-        room.onE2eeStateChanged = { [weak self] identity, _, state in
+        // W-GRPSENDERKEY-NACK (2026-07-17, retry added 2026-08-06) — LiveKit's
+        // own E2EE state is the most direct signal that WE never got a usable
+        // key for a peer (mirrors Android's onE2eeStateChanged; see
+        // sendSenderKeyNackEnvelope's kdoc for the full root-cause chain:
+        // sendSenderKeyEnvelope only confirms local encrypt+dispatch, never
+        // actual delivery, and onUpdate's retry loop only re-evaluates on
+        // roster changes, so a control envelope lost in-flight — e.g. during
+        // the WS reconnect that fires on every group-call participant
+        // join/leave — used to leave that peer permanently silent for the
+        // rest of the call). Deduped + retried per (identity, kind) pair via
+        // `nackedPeers`/`tickNackRetries` — see that struct's kdoc for why
+        // identity-alone dedup was the confirmed root cause of a live,
+        // permanent, single-peer video stall (call e138ea75, 2026-08-06).
+        room.onE2eeStateChanged = { [weak self] identity, kind, state in
             guard let self = self else { return }
-            guard state == "missing_key" || state == "decryption_failed" else { return }
             // W-GRPE2EESELF (2026-07-20, Android parity) — `didUpdateE2EEState`
             // fires for OUR OWN published tracks too, not just remote
             // subscribed ones (see `LiveKitGroupCallRoom.resolveIdentity`,
@@ -822,13 +877,29 @@ public final class GroupCallController: @unchecked Sendable {
             // made a healthy self-track e2ee OK event indistinguishable from
             // a genuine roster-unlisted 3rd SFU participant in the raw logs.
             guard identity != self.manager.selfUserId, identity != "self" else { return }
+            let dedupKey = "\(identity)|\(kind)"
+            let isConcerning = (state == "missing_key" || state == "decryption_failed")
             self.lock.lock()
-            let alreadyNacked = self.nackedPeers.contains(identity)
-            if !alreadyNacked { self.nackedPeers.insert(identity) }
+            self.lastKnownE2eeState[dedupKey] = state
+            guard isConcerning else {
+                // Recovered (or never was stuck) — drop retry bookkeeping so
+                // a FUTURE regression on this exact pair gets a fresh nack
+                // immediately instead of waiting out a stale cooldown.
+                self.nackedPeers.removeValue(forKey: dedupKey)
+                self.lock.unlock()
+                return
+            }
+            let firstSighting = self.nackedPeers[dedupKey] == nil
+            if firstSighting {
+                self.nackedPeers[dedupKey] = StuckTrackNackState(lastNackAt: Date(), attempts: 1)
+            }
             self.lock.unlock()
-            guard !alreadyNacked else { return }
+            guard firstSighting else { return }
             self.sendSenderKeyNackEnvelope(peer: identity, selfId: self.manager.selfUserId)
         }
+
+        stopNackRetryTimer()
+        startNackRetryTimer()
 
         lock.lock()
         sfuRoom = room
@@ -1300,6 +1371,69 @@ public final class GroupCallController: @unchecked Sendable {
         }
     }
 
+    /// W-GRPSENDERKEY-NACK retry (2026-08-06) — starts the periodic re-check
+    /// that gives a genuinely stuck (identity, kind) pair more than the
+    /// single attempt `onE2eeStateChanged` fires on its own. Idempotent:
+    /// cancels any prior timer first (mirrors `BCryptoWebSocketClient
+    /// .startPingTimer`'s exact same lock/cancel/reassign/unlock/resume
+    /// shape). Called once per SFU room connect in `handleSfuToken`.
+    private func startNackRetryTimer() {
+        lock.lock()
+        nackRetryTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + Self.nackRetryCooldown, repeating: Self.nackRetryCooldown)
+        timer.setEventHandler { [weak self] in self?.tickNackRetries() }
+        nackRetryTimer = timer
+        lock.unlock()
+        timer.resume()
+    }
+
+    private func stopNackRetryTimer() {
+        lock.lock()
+        let timer = nackRetryTimer
+        nackRetryTimer = nil
+        lock.unlock()
+        timer?.cancel()
+    }
+
+    /// Re-sends `sender_key_nack` to every (identity, kind) pair that is
+    /// STILL reporting missing_key/decryption_failed as of its last observed
+    /// event, hasn't exhausted `nackRetryMaxAttempts`, and is past its
+    /// cooldown — the actual safety net against a single lost nack or a
+    /// single lost resend on the best-effort, unconfirmed-delivery WS
+    /// control channel (`sendSenderKeyEnvelope`'s kdoc). Coalesces multiple
+    /// stuck kinds for the SAME peer into one nack per tick (the underlying
+    /// key install is per-identity, not per-track — no need to nack twice).
+    private func tickNackRetries() {
+        lock.lock()
+        let now = Date()
+        var peersToRetry: Set<String> = []
+        // Collect updates first, apply after the loop — mutating a
+        // Dictionary's values in place while iterating it is not a
+        // sanctioned pattern (unlike a plain Array), even for existing keys.
+        var updates: [(key: String, state: StuckTrackNackState)] = []
+        for (key, st) in nackedPeers {
+            guard st.attempts < Self.nackRetryMaxAttempts else { continue }
+            guard now.timeIntervalSince(st.lastNackAt) >= Self.nackRetryCooldown else { continue }
+            guard let state = lastKnownE2eeState[key],
+                  state == "missing_key" || state == "decryption_failed" else { continue }
+            guard let identity = key.split(separator: "|").first.map(String.init) else { continue }
+            var updated = st
+            updated.attempts += 1
+            updated.lastNackAt = now
+            updates.append((key: key, state: updated))
+            peersToRetry.insert(identity)
+        }
+        for (key, state) in updates { nackedPeers[key] = state }
+        lock.unlock()
+        guard !peersToRetry.isEmpty else { return }
+        let selfId = manager.selfUserId
+        for peer in peersToRetry {
+            print("[GroupCallController][telemetry] sender_key_nack RETRY peer=\(peer.prefix(8))")
+            sendSenderKeyNackEnvelope(peer: peer, selfId: selfId)
+        }
+    }
+
     /// App-layer hook: given (peer, selfId, plaintext envelope JSON), seal
     /// via the shared pairwise 1:1 ratchet + ship as an `opaque_message`,
     /// returning whether the send actually went out. Injected rather than
@@ -1336,6 +1470,7 @@ public final class GroupCallController: @unchecked Sendable {
         activeCallId = nil
         initSentTo.removeAll()
         nackedPeers.removeAll()
+        lastKnownE2eeState.removeAll()
         wantsVideo = false
         // Tier-1: reset per-call transient state so a subsequent call
         // (this controller is long-lived across calls) never leaks the
@@ -1345,7 +1480,10 @@ public final class GroupCallController: @unchecked Sendable {
         let room = sfuRoom
         sfuRoom = nil
         usingSfu = true // reset the capability flag for the NEXT call
+        let retryTimer = nackRetryTimer
+        nackRetryTimer = nil
         lock.unlock()
+        retryTimer?.cancel()
         if let cid = endedCallId {
             groupTelemetry?("call.media.ended", cid, ["reason": reason])
         }
