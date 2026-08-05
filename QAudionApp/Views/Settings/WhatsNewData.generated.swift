@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.948",
+              date: "2026-08-05",
+              title: "v1.0.948",
+              bullets: [
+                "feat(security): publish full v2 identity bundle on iOS (parity with Android/Desktop) (#45)",
+              ]),
         .init(id: "v1.0.947",
               date: "2026-08-05",
               title: "v1.0.947",
               bullets: [
+                "chore: regenerate changelog for v1.0.947",
                 "fix(avatar): wire ContactsStore avatar into chat list + call history rows",
               ]),
         .init(id: "v1.0.946",
@@ -149,17 +156,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.929",
                 "feat(groups): delete a group chat from this device (leave + purge + tombstone)",
-              ]),
-        .init(id: "v1.0.928",
-              date: "2026-08-02",
-              title: "v1.0.928",
-              bullets: [
-                "fix(voice-auth): iOS had the same V_score/cosine scale bug as Android",
-                "ci: audit the 11 long-standing test skips (diagnostic, do not merge as-is) (#40)",
-                "test(voice): fix the SpeakerVerifier tests instead of skipping them",
-                "ci(engine-tests): skip only the three simulator-impossible voice cases",
-                "test(storage): fix the ConversationStore regression CI caught, drop a stale pin",
-                "test(storage): make the encrypted stores testable, cover LocalStoreCipher",
               ]),
     ]
 }
