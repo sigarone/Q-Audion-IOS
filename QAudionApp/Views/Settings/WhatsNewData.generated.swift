@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.950",
+              date: "2026-08-06",
+              title: "v1.0.950",
+              bullets: [
+                "fix(security): bound and dedupe group-call sender_key_nack per track kind",
+              ]),
         .init(id: "v1.0.949",
               date: "2026-08-05",
               title: "v1.0.949",
               bullets: [
+                "chore: regenerate changelog for v1.0.949",
                 "fix(security): retry all bound PSK candidates on attachment decrypt",
                 "fix(security): retry all bound PSK candidates on avatar decrypt",
               ]),
@@ -150,13 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.931",
                 "fix(crypto): agree with Android on which pairwise PSK encrypts a 1:1 message",
-              ]),
-        .init(id: "v1.0.930",
-              date: "2026-08-02",
-              title: "v1.0.930",
-              bullets: [
-                "chore: regenerate changelog for v1.0.930",
-                "fix(avatar): fire the exchange from call state, not from two transition sites",
               ]),
     ]
 }
