@@ -143,6 +143,40 @@ public final class BCryptoKmsClient {
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
 
+    /// XC-3 (2026-08-05, v2 bundle parity follow-up) — publish the FULL v2
+    /// identity bundle: the PQ (ML-KEM-1024) and X25519 long-term legs, plus
+    /// a self-signature over `IdentityKeyV2Preimage.buildV2`'s canonical
+    /// preimage. Same endpoint as the v1 publish above (`version` in the
+    /// body is what routes the server to the v2 path), same field names as
+    /// Android `DeviceKeyProvisioner.publishIdentityBundleV2` / Desktop
+    /// `IdentityKeyStore`'s v2 publish (server
+    /// `cmd/bcrypto-lite/users_identity_key.go::handlePublishIdentityKeyV2`).
+    ///
+    /// `uuid` is deliberately NOT sent — the server derives it from the JWT
+    /// (`claims.UserID`), never from client input, so the CALLER's local
+    /// preimage must already have been built with that same uuid (see
+    /// `AppState.publishIdentityKeyWithRetry`) or the self-sig verify (server-
+    /// side, over the server's OWN uuid) will fail with 400 `self_sig invalid`.
+    public func publishUserIdentityBundleV2(
+        ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data, selfSig: Data, createdAtMs: Int64
+    ) async throws {
+        precondition(ed25519Pub.count == 32, "Ed25519 public key must be 32 bytes")
+        precondition(ikX25519Pub.count == 32, "X25519 public key must be 32 bytes")
+        precondition(selfSig.count == 64, "self-signature must be 64 bytes")
+        let dict: [String: Any] = [
+            "public_key_b64": ed25519Pub.base64EncodedString(),
+            "alg": "Ed25519",
+            "ed25519_pub_b64": ed25519Pub.base64EncodedString(),
+            "ik_pq_pub_b64": ikPqPub.base64EncodedString(),
+            "ik_x25519_pub_b64": ikX25519Pub.base64EncodedString(),
+            "version": 2,
+            "created_at_ms": createdAtMs,
+            "self_sig_b64": selfSig.base64EncodedString(),
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
+    }
+
     /// Fetch a peer's published long-term Ed25519 identity key (RAW 32 bytes),
     /// or `nil` when the peer has not published one (404) or on any transport /
     /// decode error. This is the iOS mirror of Android
