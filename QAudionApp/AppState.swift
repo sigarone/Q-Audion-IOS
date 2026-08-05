@@ -14455,7 +14455,21 @@ extension AppState {
             // This REPLACES the pre-Fase-1A `invalidate`, which (with the old
             // hardcoded epoch-1 load) silently reverted the group to a stale
             // key state on the next send/receive.
-            applyRemovalRekey(groupHex: groupHex, members: members, selfId: selfId, removed: subject)
+            //
+            // Coordinated fix plan (cluster 2, 2026-08-04): the fresh rekey
+            // seed must be distributed only to peers WE already know are
+            // members, never to `members` as carried by this WS event —
+            // that field is not covered by any signature (iOS does not yet
+            // verify group_membership_changed at all, see
+            // membershipEventIsAttested's honest-scope note above), so a
+            // compromised/malicious server could pad an attacker's account
+            // into it and this client would hand them the group's live
+            // send-chain seed with zero attestation. `existing` is OUR own
+            // locally-tracked roster captured above, BEFORE
+            // `applyServerRoster` overwrote the registry with this same
+            // untrusted event — use it instead.
+            let trustedMembers: [String] = existing?.members ?? members
+            applyRemovalRekey(groupHex: groupHex, members: trustedMembers, selfId: selfId, removed: subject)
         } else if !isRemoval, !subject.isEmpty, subject != selfId {
             // A member was ADDED: ship OUR sender_key_init to them over the 1:1
             // ratchet so they can decrypt our group frames. Identical fan-out to
