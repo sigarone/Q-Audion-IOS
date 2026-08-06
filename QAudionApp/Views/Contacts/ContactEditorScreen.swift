@@ -313,9 +313,11 @@ struct ContactEditorScreen: View {
             statusMessage: statusMessage.trimmingCharacters(in: .whitespaces),
             extensionText: trimmedExt
         )
-        // Hand off to the caller; a real implementation would hit the
-        // ContactsStore + bcrypto directory. We dismiss optimistically;
-        // errors should be propagated back via a future async overload.
+        // Hand off to the caller (ContactsScreen for .add, ContactDetailScreen
+        // for .edit), which does the real ContactsStore + bcrypto directory
+        // work asynchronously — see saveNewContact(_:) / the .edit onSave
+        // closure at each call site. We dismiss optimistically; success/
+        // failure feedback lands as a snackbar after this screen is gone.
         onSave(draft)
         busy = false
         dismiss()

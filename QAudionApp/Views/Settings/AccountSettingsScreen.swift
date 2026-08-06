@@ -140,7 +140,7 @@ final class AccountSettingsContainer: ObservableObject {
 
     func loadFromServer() {
         guard let provider = makeProvider() else {
-            errorMessage = "Not signed in"
+            errorMessage = "Accesso non effettuato"
             isLoading = false
             return
         }
@@ -212,7 +212,7 @@ final class AccountSettingsContainer: ObservableObject {
     @discardableResult
     func saveProfile() async -> Bool {
         guard let provider = makeProvider() else {
-            errorMessage = "Not signed in"
+            errorMessage = "Accesso non effettuato"
             return false
         }
         // Persist the local public phone on every save. The setter
@@ -247,7 +247,7 @@ final class AccountSettingsContainer: ObservableObject {
     /// to a desktop. Best-effort; errors surface as errorMessage.
     func exportMyData(presenting: UIViewController) {
         guard let provider = makeProvider() else {
-            errorMessage = "Not signed in"
+            errorMessage = "Accesso non effettuato"
             return
         }
         Task {
@@ -286,7 +286,7 @@ final class AccountSettingsContainer: ObservableObject {
     /// Caller wraps this in a confirmation alert per UX guidelines.
     func deleteAccount() {
         guard let provider = makeProvider() else {
-            errorMessage = "Not signed in"
+            errorMessage = "Accesso non effettuato"
             return
         }
         Task {

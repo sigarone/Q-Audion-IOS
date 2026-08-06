@@ -363,15 +363,23 @@ struct ChatListScreen: View {
             // stub UUID + snackbar feedback.
             NavigationStack {
                 CreateGroupScreen { newGroupId in
-                    // W40.C: dopo create, presentiamo full-screen
-                    // il GroupChatScreen del nuovo gruppo. Il nome è
-                    // un placeholder finché l'engine non espone i
-                    // metadati del gruppo (membership / admins).
+                    // W40.C: dopo create, presentiamo full-screen il
+                    // GroupChatScreen del nuovo gruppo. CreateGroupScreen's
+                    // handleCreate() already persists name+members into
+                    // GroupRegistry via appState.createGroup() BEFORE this
+                    // callback fires -- read them back instead of the old
+                    // "Nuovo gruppo"/1-membro placeholder, which otherwise
+                    // stuck around until the user backed out and re-entered
+                    // the chat (GroupChatScreen never refreshes state.name/
+                    // memberCount from the registry after initial load).
                     showingNewGroup = false
+                    let hex = newGroupId.uuidString
+                        .replacingOccurrences(of: "-", with: "").lowercased()
+                    let registryEntry = GroupRegistry.shared.entry(for: hex)
                     openedGroup = OpenedGroup(
                         id: newGroupId,
-                        name: "Nuovo gruppo",
-                        memberCount: 1   // placeholder: solo "Tu"
+                        name: registryEntry?.name ?? "Nuovo gruppo",
+                        memberCount: registryEntry?.members.count ?? 1
                     )
                 }
                 .navigationBarBackButtonHidden(true)

@@ -124,7 +124,8 @@ struct OutgoingCallScreen: View {
                     background: extras.riskHigh,
                     iconColor: scheme.onPrimary
                 )
-                Text(String(format: "Ring %d:%02d", elapsedSeconds / 60, elapsedSeconds % 60))
+                .accessibilityLabel("Termina chiamata")
+                Text(String(format: "Squillo da %d:%02d", elapsedSeconds / 60, elapsedSeconds % 60))
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(extras.success)
                 Spacer().frame(height: 24)

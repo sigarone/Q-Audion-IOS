@@ -309,6 +309,7 @@ struct GroupCallChatPanel: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
+            .accessibilityLabel("Invia")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(scheme.surface)

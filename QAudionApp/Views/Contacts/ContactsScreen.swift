@@ -123,28 +123,75 @@ struct ContactsScreen: View {
             container.setSearchQuery(newValue)
         }
         .sheet(isPresented: $showingNewContact) {
-            // W23.E: full ContactEditor in Add mode. Pure local form for
-            // now (the persist hook prints + dismisses); will be wired
-            // to ContactsStore + bcrypto directory when the engine
-            // surfaces the resolve-by-extension API.
+            // W23.E: full ContactEditor in Add mode.
+            // 2026-08-06 fix: this used to only print(draft) + show a
+            // "salvato in rubrica" snackbar unconditionally — nothing was
+            // ever written to ContactsStore, so the contact never actually
+            // appeared anywhere. The old comment said this was waiting on
+            // the engine to surface a resolve-by-extension API; that API
+            // (BCryptoSystemClient/AccountApi.lookupByExtension, already
+            // used for dial-by-extension in AppState.dialAndCall) has
+            // existed the whole time — this call site was just never
+            // updated to use it. Now genuinely resolves the extension to a
+            // real userId and persists via ContactsStore.upsert, with an
+            // honest error snackbar (not a fake success) if either step
+            // fails.
             NavigationStack {
                 ContactEditorScreen(
                     mode: .add,
                     onSave: { draft in
-                        print("[ContactEditor] new contact draft: \(draft)")
-                        // W34: feedback transitorio via snackbar globale.
-                        // Il messaggio scompare in 4s di default; il
-                        // wiring persistente verso ContactsStore arriva
-                        // quando l'engine espone l'API resolve-by-extension
-                        // del bcrypto directory.
-                        snackbar?.show(.init(
-                            text: "Contatto \(draft.displayName) salvato in rubrica.",
-                            severity: .info
-                        ))
+                        saveNewContact(draft)
                     }
                 )
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
+            }
+        }
+    }
+
+    private func saveNewContact(_ draft: ContactEditorScreen.Draft) {
+        guard let ext = Int64(draft.extensionText) else {
+            snackbar?.show(.init(text: "Interno non valido.", severity: .error))
+            return
+        }
+        guard let provider = appState.liveProvider else {
+            snackbar?.show(.init(text: "Non connesso al server — riprova.", severity: .error))
+            return
+        }
+        Task {
+            do {
+                guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
+                    await MainActor.run {
+                        snackbar?.show(.init(
+                            text: "Interno \(ext) non assegnato — verifica il numero.",
+                            severity: .error
+                        ))
+                    }
+                    return
+                }
+                let contact = ContactsStore.StoredContact(
+                    userId: profile.userId,
+                    displayName: draft.displayName,
+                    phoneHash: "",
+                    avatarUrl: nil,
+                    lastSeen: nil,
+                    isVerified: false,
+                    extension: draft.extensionText
+                )
+                ContactsStore().upsert(contact)
+                await MainActor.run {
+                    snackbar?.show(.init(
+                        text: "Contatto \(draft.displayName) salvato in rubrica.",
+                        severity: .info
+                    ))
+                }
+            } catch {
+                await MainActor.run {
+                    snackbar?.show(.init(
+                        text: "Salvataggio fallito: \(error.localizedDescription)",
+                        severity: .error
+                    ))
+                }
             }
         }
     }

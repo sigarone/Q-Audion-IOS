@@ -706,6 +706,7 @@ private struct DialPadSheet: View {
                             .buttonStyle(.plain)
                             .disabled(input.isEmpty)
                             .padding(.trailing, 16)
+                            .accessibilityLabel("Cancella ultima cifra")
                         }
                     }
                     .frame(height: 64)
@@ -750,6 +751,7 @@ private struct DialPadSheet: View {
                         .buttonStyle(.plain)
                         .disabled(input.isEmpty)
                         .animation(.easeInOut(duration: 0.2), value: input.isEmpty)
+                        .accessibilityLabel("Chiama")
                         Spacer()
                     }
                     .padding(.top, 8)

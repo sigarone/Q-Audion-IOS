@@ -2396,6 +2396,7 @@ struct InCallScreen: View {
                             .background(Circle().fill(scheme.surfaceVariant))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Chiudi")
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 18)
@@ -2663,6 +2664,7 @@ struct InCallScreen: View {
                 background: muted ? extras.warning : scheme.surfaceVariant,
                 iconColor: muted ? extras.onWarning : scheme.onSurface
             )
+            .accessibilityLabel(muted ? "Riattiva microfono" : "Disattiva microfono")
             Spacer(minLength: 0)
             CircularAction(
                 icon: speakerOn ? "speaker.wave.3.fill" : "speaker.fill",
@@ -2671,6 +2673,7 @@ struct InCallScreen: View {
                 background: speakerOn ? extras.success : scheme.surfaceVariant,
                 iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
             )
+            .accessibilityLabel(speakerOn ? "Disattiva altoparlante" : "Attiva altoparlante")
             Spacer(minLength: 0)
             if hasVideo {
                 CircularAction(
@@ -2680,6 +2683,7 @@ struct InCallScreen: View {
                     background: cameraOn ? extras.success : scheme.surfaceVariant,
                     iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
                 )
+                .accessibilityLabel(cameraOn ? "Disattiva video" : "Attiva video")
             } else {
                 CircularAction(
                     icon: "video.badge.plus",
@@ -2688,6 +2692,7 @@ struct InCallScreen: View {
                     background: scheme.surfaceVariant,
                     iconColor: scheme.onSurface
                 )
+                .accessibilityLabel("Passa a videochiamata")
             }
             Spacer(minLength: 0)
             // W538: screen-share (hidden on Mac Catalyst).
@@ -2699,6 +2704,7 @@ struct InCallScreen: View {
                     background: screenSharing ? extras.success : scheme.surfaceVariant,
                     iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
                 )
+                .accessibilityLabel(screenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
                 Spacer(minLength: 0)
             }
         }
@@ -2718,6 +2724,7 @@ struct InCallScreen: View {
                 background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
                 iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
             )
+            .accessibilityLabel(voiceEnhancement ? "Disattiva miglioramento voce" : "Attiva miglioramento voce")
             Spacer(minLength: 0)
             // No add-participant API exists yet (spec: render present but
             // disabled/no-op, matching Android's current state — do not
@@ -2731,6 +2738,7 @@ struct InCallScreen: View {
                 iconColor: scheme.onSurface,
                 isDisabled: true
             )
+            .accessibilityLabel("Aggiungi partecipante, non disponibile")
             Spacer(minLength: 0)
             // Hangup — prominent, larger than secondary buttons, anchors
             // the end of the dock (matches the reference's "End" slot).
@@ -2741,6 +2749,7 @@ struct InCallScreen: View {
                 background: extras.riskHigh,
                 iconColor: scheme.onPrimary
             )
+            .accessibilityLabel("Termina chiamata")
             Spacer(minLength: 0)
         }
     }

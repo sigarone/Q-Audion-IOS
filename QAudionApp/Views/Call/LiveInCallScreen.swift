@@ -445,6 +445,7 @@ struct LiveInCallScreen: View {
                     .foregroundColor(.gray)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Chiudi")
         }
     }
 

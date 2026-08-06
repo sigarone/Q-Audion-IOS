@@ -536,11 +536,13 @@ struct ChatDetailScreen: View {
             PqcBadge(active: stubPqcActive)
 
             // W445: ephemeral timer button. Tap opens the timer chooser.
-            // Icon changes to a filled variant with accent color when a
-            // timer is active so the user knows disappearing messages are on.
+            // Accent color signals when a timer is active so the user knows
+            // disappearing messages are on. (No confirmed filled SF Symbol
+            // variant for "timer" to pair with it -- both branches of the
+            // old ternary here referenced the same icon name, a no-op.)
             Button { showingEphemeralPicker = true } label: {
                 let timerActive = (container.viewModel.conversation.ephemeralTimerSeconds ?? 0) > 0
-                Image(systemName: timerActive ? "timer" : "timer")
+                Image(systemName: "timer")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(timerActive ? extras.warning : scheme.onSurface.opacity(0.6))
                     .frame(width: 30, height: 36)

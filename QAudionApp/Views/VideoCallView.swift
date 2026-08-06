@@ -305,6 +305,7 @@ struct VideoCallView: View {
                         .foregroundColor(sasVerified ? .green : .white)
                 }
                 .padding(.trailing, 8)
+                .accessibilityLabel(sasVerified ? "Identità verificata (SAS)" : "Verifica identità (SAS) in sospeso")
             }
 
             // W502: diagnostics toggle button.
@@ -318,6 +319,7 @@ struct VideoCallView: View {
                     .background(Circle().fill(Color.white.opacity(0.12)))
             }
             .padding(.trailing, 4)
+            .accessibilityLabel("Diagnostica")
 
             CallSecurityBadge()
         }
@@ -499,7 +501,7 @@ struct VideoCallView: View {
             }
             videoButton(
                 icon: isCameraOn ? "video.fill" : "video.slash.fill",
-                label: isCameraOn ? "Cam ON" : "Cam OFF",
+                label: isCameraOn ? "Video attivo" : "Video spento",
                 isActive: !isCameraOn
             ) {
                 appState.videoSetCameraEnabled(!isCameraOn)
@@ -563,6 +565,7 @@ struct VideoCallView: View {
                         .foregroundColor(.gray)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Chiudi")
             }
             Divider().background(Color.white.opacity(0.2))
             videoDiagTransport

@@ -410,6 +410,7 @@ struct GroupCallView: View {
                     .background(viewModel.isMuted ? Color.red.opacity(0.3) : Color.white.opacity(0.15))
                     .clipShape(Circle())
             }
+            .accessibilityLabel(viewModel.isMuted ? "Riattiva microfono" : "Disattiva microfono")
 
             // W-GRPVIDEO: camera on/off. Only shown once the call is
             // actually riding the LiveKit SFU (isUsingSfu) — the
@@ -429,6 +430,7 @@ struct GroupCallView: View {
                         .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
                         .clipShape(Circle())
                 }
+                .accessibilityLabel(viewModel.isVideoEnabled ? "Disattiva video" : "Attiva video")
             }
 
             // W-GRPSCREENSHARE: screen-share on/off. Same SFU-only
@@ -542,6 +544,7 @@ struct GroupCallView: View {
                     .background(Color.red)
                     .clipShape(Circle())
             }
+            .accessibilityLabel("Termina chiamata")
         }
     }
 

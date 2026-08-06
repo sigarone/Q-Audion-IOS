@@ -156,7 +156,38 @@ struct ContactDetailScreen: View {
                     initialStatusMessage: "",
                     initialExtension: "",
                     onSave: { draft in
-                        print("[ContactEditor] edited contact draft: \(draft)")
+                        // 2026-08-06 fix: this used to only print(draft) --
+                        // zero feedback, zero persistence, editing a
+                        // contact silently changed nothing. ContactsStore
+                        // has no combined displayName+extension setter, so
+                        // rebuild the record from the existing one (same
+                        // pattern ContactsStore's own overwriteDisplayName/
+                        // rebuild helpers use internally) and upsert it.
+                        let store = ContactsStore()
+                        guard let existing = store.load().first(where: { $0.userId == item.userId }) else {
+                            snackbar?.show(.init(text: "Contatto non trovato.", severity: .error))
+                            return
+                        }
+                        let updated = ContactsStore.StoredContact(
+                            userId: existing.userId,
+                            displayName: draft.displayName,
+                            phoneHash: existing.phoneHash,
+                            avatarUrl: existing.avatarUrl,
+                            lastSeen: existing.lastSeen,
+                            isVerified: existing.isVerified,
+                            pubkey: existing.pubkey,
+                            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+                            verifiedAtMs: existing.verifiedAtMs,
+                            verificationMethod: existing.verificationMethod,
+                            presenceAuth: existing.presenceAuth,
+                            presenceFloor: existing.presenceFloor,
+                            phoneNumber: existing.phoneNumber,
+                            extension: draft.extensionText.isEmpty ? existing.`extension` : draft.extensionText,
+                            avatarVersion: existing.avatarVersion,
+                            voiceVerifiedAt: existing.voiceVerifiedAt
+                        )
+                        store.upsert(updated)
+                        snackbar?.show(.init(text: "Contatto aggiornato.", severity: .info))
                     }
                 )
                 .navigationBarBackButtonHidden(true)

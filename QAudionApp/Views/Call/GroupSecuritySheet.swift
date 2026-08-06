@@ -89,6 +89,7 @@ struct GroupSecuritySheet: View {
                     .background(Circle().fill(scheme.surfaceVariant))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Chiudi")
         }
         .padding(.horizontal, 18)
         .padding(.top, 18)
