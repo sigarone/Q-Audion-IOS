@@ -80,6 +80,17 @@ struct HomeView: View {
                 presentingInCall = false
             }
         }
+        // W-CONTACTOPEN (2026-08-06): screens outside the Chats tab
+        // (ContactsScreen, CallHistoryView) publish appState.pendingDeepLinkConversationId
+        // to open a chat with a peer. ChatListScreen's own onChange (unchanged)
+        // does the actual push onto its NavigationStack; this just makes sure
+        // the Chats tab is the one visible when that happens, instead of the
+        // push silently queuing behind whatever tab the user is currently on.
+        .onChange(of: appState.pendingDeepLinkConversationId) { newId in
+            if newId != nil {
+                selectedTab = .chats
+            }
+        }
     }
 
     // MARK: - W55 layouts
