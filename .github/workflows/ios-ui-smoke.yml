@@ -91,26 +91,37 @@ jobs:
           go-version: '1.22'
           cache: false
 
-      # quiche.xcframework (MASQUE CONNECT-UDP) -- same cache key as
-      # ios-testflight.yml so a warm cache from a release build is reused.
-      - name: Cache quiche xcframework
-        id: cache-quiche
-        uses: actions/cache@v5
-        with:
-          path: QAudionApp/Vendor/quiche.xcframework
-          key: quiche-xcframework-${{ runner.os }}-0.22.0-${{ hashFiles('scripts/build-quiche-xcframework.sh') }}
-
-      - name: Build quiche xcframework
-        if: steps.cache-quiche.outputs.cache-hit != 'true'
-        env:
-          QUICHE_REF: '0.22.0'
+      # quiche.xcframework (MASQUE) is DEVICE-ONLY by design --
+      # scripts/build-quiche-xcframework.sh's own header comment says so
+      # explicitly ("Add the sim slice later only if simulator runs are
+      # needed") because of a known Rust/BoringSSL cross-compile snag
+      # (ring/boring-sys's C build doesn't tag its simulator-target object
+      # files correctly, so xcodebuild -create-xcframework rejects the
+      # merge with "multiple platforms not supported"). Fixing that needs
+      # Mac-side cargo iteration this workflow's author couldn't do
+      # (no Mac available when this was written 2026-08-06). Real fix
+      # if this is ever needed for more than a smoke test: add an
+      # aarch64-apple-ios-sim slice to that script with the right
+      # per-dependency C flags, then drop the project.yml patch below.
+      #
+      # For a UI smoke test we don't need MASQUE at all --
+      # AppMasqueQuicheTransport.swift is already gated
+      # `#if canImport(Cquiche)`, so simply never linking the framework
+      # compiles that path out cleanly (same pattern already proven for
+      # Reality.xcframework's optional linking). Strip the framework
+      # reference from a LOCAL copy of project.yml for this CI checkout
+      # only -- the committed file (and ios-testflight.yml's real,
+      # device-only build) is never touched.
+      - name: Strip quiche.xcframework dependency (Simulator lane only)
         run: |
           set -e
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source "$HOME/.cargo/env"
+          sed -i.bak '/- framework: Vendor\/quiche.xcframework/,+1d' QAudionApp/project.yml
+          rm QAudionApp/project.yml.bak
+          if grep -q "framework: Vendor/quiche.xcframework" QAudionApp/project.yml; then
+            echo "::error::sed failed to remove the quiche.xcframework dependency line"
+            exit 1
           fi
-          bash scripts/build-quiche-xcframework.sh
+          echo "quiche.xcframework dependency removed from this run's project.yml (committed file untouched)"
 
       # Reality.xcframework (VLESS+REALITY) -- same cache key as
       # engine-tests.yml's ios-simulator-tests job so a warm cache is reused.
