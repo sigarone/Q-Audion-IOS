@@ -39,8 +39,17 @@ public struct EnhancedDeviceItem: Identifiable, Equatable {
         self.kind = Self.deriveKind(platform: raw.platform,
                                     deviceName: raw.deviceName)
         self.isCurrentDevice = raw.isCurrentDevice
+        // 2026-08-06 fix: every non-current device used to hardcode
+        // .voiceMatched regardless of whether any voice verification ever
+        // happened for it — DeviceRow renders that in the same green
+        // "VOICE MATCHED" badge as a real .enterprise trust level, so
+        // every linked device looked like it carried a genuine security
+        // attestation that was actually fabricated. .unverified is the
+        // honest default until the engine surfaces a real per-device
+        // trust signal (same TODO the old comment already flagged, just
+        // landing on the non-misleading placeholder instead).
         self.trustLevel = trustOverride
-            ?? (raw.isCurrentDevice ? .enterprise : .voiceMatched)
+            ?? (raw.isCurrentDevice ? .enterprise : .unverified)
         self.lastSeenLabel = Self.formatLastSeen(raw.lastSeen)
         self.platformTag = Self.platformTag(for: raw.platform,
                                             deviceName: raw.deviceName)

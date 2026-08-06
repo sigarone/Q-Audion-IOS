@@ -816,31 +816,62 @@ struct ContactDetailScreen: View {
 
     // MARK: - Security log card
 
+    /// 2026-08-06 fix: this used to show two hardcoded, fabricated events
+    /// ("oggi · 14:32" SAS ceremony, "ieri · 09:14" voiceprint match)
+    /// whenever `item.isVerified` was true, regardless of whether either
+    /// ever actually happened for this contact — fake audit-trail data
+    /// presented as genuine in a security-focused app. `item` (a plain
+    /// `ContactsListViewModel.Item`) only carries a bare `isVerified: Bool`
+    /// with no timestamp, but `ContactsStore.StoredContact` (loaded
+    /// separately here) already has REAL `verifiedAtMs`/`verificationMethod`/
+    /// `voiceVerifiedAt` fields that were just never read by this screen.
+    /// Uses only that real data now; falls back to an honest "not
+    /// available" message rather than inventing specifics when a legacy
+    /// row is verified but has no stored timestamp.
     private var securityLogCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let stored = ContactsStore().load().first(where: { $0.userId == item.userId })
+        return VStack(alignment: .leading, spacing: 8) {
             Text("EVENTI DI SICUREZZA CONDIVISI")
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.2)
                 .foregroundStyle(scheme.primary)
                 .padding(.bottom, 4)
 
-            if item.isVerified {
+            if let verifiedMs = stored?.verifiedAtMs {
                 eventRow(severity: extras.success,
-                         when: "oggi · 14:32",
-                         summary: "Cerimonia SAS completata via voce")
+                         when: Self.formatEventDate(verifiedMs),
+                         summary: "Identità verificata (\(stored?.verificationMethod ?? "SAS"))")
+            }
+            if let voiceMs = stored?.voiceVerifiedAt {
                 eventRow(severity: extras.success,
-                         when: "ieri · 09:14",
-                         summary: "Voiceprint match · C=0.94")
-            } else {
-                Text("Nessuna cerimonia SAS registrata per questo contatto. Avvia una verifica vocale o NFC.")
-                    .qaudionStyle(type.bodySmall)
-                    .foregroundStyle(scheme.onSurfaceVariant)
+                         when: Self.formatEventDate(voiceMs),
+                         summary: "Voce verificata")
+            }
+            if stored?.verifiedAtMs == nil && stored?.voiceVerifiedAt == nil {
+                if item.isVerified {
+                    Text("Contatto verificato. Data e metodo della verifica non disponibili per questo record.")
+                        .qaudionStyle(type.bodySmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                } else {
+                    Text("Nessuna cerimonia SAS registrata per questo contatto. Avvia una verifica vocale o NFC.")
+                        .qaudionStyle(type.bodySmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 4).fill(scheme.surfaceVariant.opacity(0.6)))
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(scheme.outline.opacity(0.5), lineWidth: 1))
+    }
+
+    private static func formatEventDate(_ epochMs: Int64) -> String {
+        let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f.string(from: date)
     }
 
     private func eventRow(severity: Color, when: String, summary: String) -> some View {

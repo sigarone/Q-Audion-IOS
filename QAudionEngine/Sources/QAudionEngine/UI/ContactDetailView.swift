@@ -7,6 +7,11 @@ public struct ContactDetailView: View {
     public var onVerifySas: (() -> Void)?
     public var onBlock: (() -> Void)?
     public var onDelete: (() -> Void)?
+    /// 2026-08-06 fix: "Delete contact" used to fire onDelete?() immediately
+    /// on tap, no confirmation -- a single mis-tap on a destructive-role
+    /// button permanently deleted the contact, unlike the newer
+    /// ContactDetailScreen which has an alert. Confirmed via @State here.
+    @State private var confirmingDelete = false
 
     public init(viewModel: ContactDetailViewModel = .mock,
                 onCall: (() -> Void)? = nil,
@@ -65,6 +70,12 @@ public struct ContactDetailView: View {
             dangerSection
         }
         .navigationTitle(viewModel.displayName)
+        .alert("Eliminare questo contatto?", isPresented: $confirmingDelete) {
+            Button("Elimina", role: .destructive) { onDelete?() }
+            Button("Annulla", role: .cancel) { }
+        } message: {
+            Text("Questa azione non può essere annullata.")
+        }
     }
 
     @ViewBuilder
@@ -113,15 +124,15 @@ public struct ContactDetailView: View {
     }
 
     private var identitySection: some View {
-        Section("Identity") {
-            LabeledContent("User ID") {
+        Section("Identità") {
+            LabeledContent("ID utente") {
                 Text(viewModel.userId).font(.caption.monospaced()).lineLimit(1)
             }
-            LabeledContent("Fingerprint") {
+            LabeledContent("Impronta") {
                 Text(viewModel.fingerprint).font(.body.monospaced())
             }
             HStack {
-                Text("Trust")
+                Text("Fiducia")
                 Spacer()
                 trustBadge
             }
@@ -132,16 +143,16 @@ public struct ContactDetailView: View {
         Group {
             switch viewModel.trustLevel {
             case .unverified:
-                Label("Unverified", systemImage: "questionmark.circle")
+                Label("Non verificato", systemImage: "questionmark.circle")
                     .foregroundStyle(.orange)
             case .sasVerified:
-                Label("SAS verified", systemImage: "checkmark.seal.fill")
+                Label("SAS verificato", systemImage: "checkmark.seal.fill")
                     .foregroundStyle(.green)
             case .nfcPaired:
-                Label("NFC paired", systemImage: "wave.3.right")
+                Label("Associato via NFC", systemImage: "wave.3.right")
                     .foregroundStyle(.blue)
             case .both:
-                Label("Fully verified", systemImage: "shield.lefthalf.filled")
+                Label("Completamente verificato", systemImage: "shield.lefthalf.filled")
                     .foregroundStyle(.green)
             }
         }
@@ -149,31 +160,31 @@ public struct ContactDetailView: View {
     }
 
     private var actionsSection: some View {
-        Section("Actions") {
+        Section("Azioni") {
             Button(action: { onCall?() }, label: {
-                Label("Call", systemImage: "phone.fill")
+                Label("Chiama", systemImage: "phone.fill")
             })
             Button(action: { onChat?() }, label: {
                 Label("Chat", systemImage: "message.fill")
             })
             if viewModel.trustLevel == .unverified {
                 Button(action: { onVerifySas?() }, label: {
-                    Label("Verify SAS", systemImage: "lock.shield")
+                    Label("Verifica SAS", systemImage: "lock.shield")
                 })
             }
         }
     }
 
     private var statsSection: some View {
-        Section("Stats") {
-            LabeledContent("Recent calls") {
+        Section("Statistiche") {
+            LabeledContent("Chiamate recenti") {
                 Text("\(viewModel.recentCallCount)")
             }
-            LabeledContent("Unread messages") {
+            LabeledContent("Messaggi non letti") {
                 Text("\(viewModel.unreadMessageCount)")
             }
             if let last = viewModel.lastSeen {
-                LabeledContent("Last seen") {
+                LabeledContent("Ultimo accesso") {
                     Text(last, style: .relative)
                         .foregroundStyle(.secondary)
                 }
@@ -186,11 +197,11 @@ public struct ContactDetailView: View {
             Button(role: viewModel.isBlocked ? .none : .destructive,
                    action: { onBlock?() },
                    label: {
-                Label(viewModel.isBlocked ? "Unblock" : "Block",
+                Label(viewModel.isBlocked ? "Sblocca" : "Blocca",
                       systemImage: viewModel.isBlocked ? "lock.open" : "hand.raised.fill")
             })
-            Button(role: .destructive, action: { onDelete?() }, label: {
-                Label("Delete contact", systemImage: "trash")
+            Button(role: .destructive, action: { confirmingDelete = true }, label: {
+                Label("Elimina contatto", systemImage: "trash")
             })
         }
     }

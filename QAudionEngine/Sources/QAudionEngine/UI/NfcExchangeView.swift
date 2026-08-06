@@ -22,7 +22,7 @@ public struct NfcExchangeView: View {
             Spacer().frame(height: 32)
         }
         .padding()
-        .navigationTitle("NFC Pairing")
+        .navigationTitle("Associazione NFC")
     }
 
     private var stateIcon: some View {
@@ -56,17 +56,17 @@ public struct NfcExchangeView: View {
 
     private var stateLabelText: String {
         switch driver.state {
-        case .idle: return "Ready to pair"
-        case .waiting: return "Hold your iPhone near the Android device"
-        case .exchanging: return "Exchanging keys\u{2026}"
+        case .idle: return "Pronto per l\u{2019}associazione"
+        case .waiting: return "Avvicina l\u{2019}iPhone al dispositivo Android"
+        case .exchanging: return "Scambio chiavi\u{2026}"
         case .sasConfirm(_, let peer): return "Confronta questo codice con \(peer)"
-        case .success(let peer): return "Paired with \(peer)"
-        case .error(let msg): return "Error: \(msg)"
+        case .success(let peer): return "Associato con \(peer)"
+        case .error(let msg): return "Errore: \(msg)"
         }
     }
 
     private var stateHelp: some View {
-        Text("iPhone acts as the NFC reader. Android device must have Q-Audion\u{2019}s HCE service enabled.")
+        Text("L\u{2019}iPhone funge da lettore NFC. Il dispositivo Android deve avere il servizio HCE di Q-Audion attivo.")
             .font(.caption)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
@@ -106,14 +106,14 @@ public struct NfcExchangeView: View {
         switch driver.state {
         case .idle, .error:
             Button(action: driver.start) {
-                Label("Start pairing", systemImage: "play.fill")
+                Label("Avvia associazione", systemImage: "play.fill")
                     .font(.title3).padding()
                     .frame(maxWidth: 240)
                     .background(.blue).foregroundStyle(.white).clipShape(Capsule())
             }
         case .waiting, .exchanging:
             Button(action: driver.cancel) {
-                Label("Cancel", systemImage: "xmark")
+                Label("Annulla", systemImage: "xmark")
                     .font(.title3).padding()
                     .frame(maxWidth: 240)
                     .background(.gray).foregroundStyle(.white).clipShape(Capsule())
@@ -140,7 +140,7 @@ public struct NfcExchangeView: View {
             }
         case .success:
             Button(action: driver.reset) {
-                Label("Done", systemImage: "checkmark")
+                Label("Fatto", systemImage: "checkmark")
                     .font(.title3).padding()
                     .frame(maxWidth: 240)
                     .background(.green).foregroundStyle(.white).clipShape(Capsule())
@@ -205,8 +205,15 @@ private final class NfcExchangeDriver: ObservableObject {
     // MARK: - Lifecycle
 
     func start() {
-        state = .idle
+        // 2026-08-06 fix: this used to set state = .idle BEFORE checking
+        // apduExchange, so when identity init failed (line ~184's honest
+        // Italian error) tapping "Start pairing" silently discarded that
+        // error and reset to a blank "ready" screen with no explanation --
+        // recoverable only by dismissing and reopening the sheet. Check
+        // the guard first so a real init failure stays visible instead of
+        // being wiped by a no-op tap.
         guard let ex = apduExchange else { return }
+        state = .idle
         ex.start()
     }
 

@@ -440,6 +440,14 @@ struct ContactsListView: View {
             guard let pk = pubkey else { return "????.????.????.????" }
             return (try? Fingerprint.format(pubkey: pk)) ?? "????.????.????.????"
         }()
+        // 2026-08-06 fix: this used to hardcode isBlocked: false regardless
+        // of the real BlockedContactsStore state, and onBlock always called
+        // .add(...) -- a contact already blocked via ContactsScreen's
+        // Blocked tab showed here as "not blocked, tap to Block" with no
+        // way to unblock from this legacy screen. Read the real state and
+        // toggle both directions, matching ContactsScreen/ContactDetailScreen's
+        // own block/unblock behavior.
+        let reallyBlocked = BlockedContactsStore.isBlocked(item.userId)
         let detail = ContactDetailViewModel(
             userId: item.userId,
             displayName: item.displayName,
@@ -447,7 +455,7 @@ struct ContactsListView: View {
             fingerprint: fingerprint,
             avatarUrl: item.avatarUrl,
             trustLevel: item.isVerified ? .sasVerified : .unverified,
-            isBlocked: false,
+            isBlocked: reallyBlocked,
             lastSeen: nil,
             recentCallCount: 0,
             unreadMessageCount: item.unreadMessageCount
@@ -462,7 +470,11 @@ struct ContactsListView: View {
             },
             onVerifySas: nil,
             onBlock: {
-                BlockedContactsStore.add(item.userId)
+                if reallyBlocked {
+                    BlockedContactsStore.remove(item.userId)
+                } else {
+                    BlockedContactsStore.add(item.userId)
+                }
             },
             onDelete: {
                 ContactsStore().remove(userId: item.userId)

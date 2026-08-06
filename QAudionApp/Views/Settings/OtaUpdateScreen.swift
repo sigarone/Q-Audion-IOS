@@ -50,9 +50,17 @@ final class OtaUpdateContainer: ObservableObject {
     @Published var error: String? = nil
     @Published var justUpdatedToVersion: String? = nil
 
-    /// SHA-256 della pubkey Ed25519 di firma OTA. Hardcoded per ora,
-    /// lo proverà dall'engine quando wires (`AppUpdateChecker.pubkey`).
-    let pubkeyFingerprint: String = "a1b2c3d4 e5f60718 29304142 53647586 97a8b9ca dbecfd0e"
+    /// SHA-256 della pubkey Ed25519 di firma OTA.
+    /// 2026-08-06 fix: questo era un valore fittizio (sequenza esadecimale
+    /// inventata, non un vero digest) mostrato come se fosse la vera
+    /// fingerprint della chiave di firma OTA — dato di fiducia
+    /// sicurezza fabbricato in un'app che tratta proprio di sicurezza.
+    /// `AppUpdateChecker` non espone oggi alcuna pubkey reale (nessun
+    /// fetch da `/api/v1/updates/publickey`, nessuna costante pinnata) —
+    /// il commento precedente presupponeva un hook che non esiste ancora.
+    /// `nil` finché quel fetch non è realmente implementato; la UI mostra
+    /// "non disponibile" invece di un valore inventato.
+    let pubkeyFingerprint: String? = nil
 
     init() {
         // Read real version from bundle instead of hardcoding old values.
@@ -350,9 +358,9 @@ struct OtaUpdateScreen: View {
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
-            Text(container.pubkeyFingerprint)
+            Text(container.pubkeyFingerprint ?? "Non disponibile")
                 .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(scheme.onSurface)
+                .foregroundStyle(container.pubkeyFingerprint == nil ? scheme.onSurfaceVariant : scheme.onSurface)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
