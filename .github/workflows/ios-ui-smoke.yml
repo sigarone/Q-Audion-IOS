@@ -12,16 +12,25 @@
 # against it. Screenshots + Maestro's own debug output are uploaded as
 # artifacts regardless of pass/fail.
 #
-# UNVERIFIED as of first commit (2026-08-06): no physical/virtual Mac was
-# available to dry-run this file before adding it. The Xcode-select, Go,
-# quiche.xcframework and Reality.xcframework steps are copied verbatim
-# from ios-testflight.yml / engine-tests.yml (known-working there) to
-# minimize new failure surface, but this is the first time QAudionApp is
-# built for iOS Simulator with the PacketTunnel extension's WireGuardKitGo
-# preBuildScript in the loop -- GOOS=ios Go cross-compilation for a
-# simulator destination (vs. the device/archive builds it's only ever been
-# exercised against) is the most likely first-run failure point. Expect to
-# iterate once workflow_dispatch actually runs it.
+# Iteration history (2026-08-06, no Mac available to dry-run locally --
+# every fix below came from reading real CI logs, gh run watch/view):
+#   run 31078668610: xcodegen not installed -- added the "Install xcodegen"
+#     step (was missing from the ios-testflight.yml pattern this copied).
+#   run 31078878215: quiche.xcframework has no Simulator slice (built
+#     device-only on purpose, see build-quiche-xcframework.sh) -- dropped
+#     its cache/build steps, strip the framework dependency from a LOCAL
+#     project.yml copy instead (AppMasqueQuicheTransport.swift is already
+#     `#if canImport(Cquiche)`-gated, so not linking it compiles clean).
+#   run 31079254653: same class of problem, WireGuardKitGo this time --
+#     `libwg-go.a` (built by the QAudionPacketTunnel target's "Build
+#     WireGuard Go" script phase) is GOOS=ios device-only, Go has no
+#     Simulator-ABI Darwin runtime shims out of the box -- dropped the
+#     now-unused Go setup step, strip the QAudionPacketTunnel target embed
+#     from the same local project.yml copy (VPN tunnel isn't exercised by
+#     the onboarding screen; NetworkExtension.framework SDK linkage stays).
+# Still unverified end-to-end as of this commit -- next run tests whether
+# QAudionBroadcastExtension (pure Swift, no native cross-compile) and the
+# simulator boot/install/Maestro steps below all hold up.
 #
 # Requires Maestro flow(s) under apps/qaudion-ios/maestro/ -- see
 # smoke-launch.yaml for the first one (cold launch -> onboarding welcome
@@ -82,15 +91,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      # WireGuardKitGo CGO cross-compilation for the PacketTunnel extension's
-      # preBuildScript -- copied from ios-testflight.yml step 3b. UNVERIFIED
-      # for a Simulator destination (see file header).
-      - name: Set up Go (WireGuardKitGo)
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.22'
-          cache: false
-
       # quiche.xcframework (MASQUE) is DEVICE-ONLY by design --
       # scripts/build-quiche-xcframework.sh's own header comment says so
       # explicitly ("Add the sim slice later only if simulator runs are
@@ -112,16 +112,35 @@ jobs:
       # reference from a LOCAL copy of project.yml for this CI checkout
       # only -- the committed file (and ios-testflight.yml's real,
       # device-only build) is never touched.
-      - name: Strip quiche.xcframework dependency (Simulator lane only)
+      #
+      # Same story as quiche above, different native toolchain: run
+      # 31079254653 failed the Simulator link with "Undefined symbols ...
+      # _darwin_arm_init_mach_exception_handler" from libwg-go.a --
+      # WireGuardKitGo's `GOOS=ios` CGO cross-compile only ever targets
+      # real iOS DEVICE (Go's runtime has no simulator-ABI variant of its
+      # Darwin syscall shims out of the box), and the "Build WireGuard Go"
+      # script phase inside the QAudionPacketTunnel target has never had a
+      # reason to know about Simulator until this workflow. Real fix if
+      # ever needed beyond a smoke test: teach that Makefile/script a
+      # Simulator-target Go build (nontrivial CGO cross-compile work,
+      # can't iterate without a Mac). A UI smoke test needs none of this --
+      # the VPN tunnel extension isn't exercised by the onboarding screen,
+      # and NetworkExtension.framework (the SDK the main app's own VPN
+      # code links against) stays untouched -- only the extension TARGET
+      # embed is dropped, so it's never built for this lane.
+      - name: Strip quiche.xcframework + QAudionPacketTunnel (Simulator lane only)
         run: |
           set -e
-          sed -i.bak '/- framework: Vendor\/quiche.xcframework/,+1d' QAudionApp/project.yml
+          sed -i.bak \
+            -e '/- framework: Vendor\/quiche.xcframework/,+1d' \
+            -e '/- target: QAudionPacketTunnel/,+1d' \
+            QAudionApp/project.yml
           rm QAudionApp/project.yml.bak
-          if grep -q "framework: Vendor/quiche.xcframework" QAudionApp/project.yml; then
-            echo "::error::sed failed to remove the quiche.xcframework dependency line"
+          if grep -qE "framework: Vendor/quiche.xcframework|target: QAudionPacketTunnel" QAudionApp/project.yml; then
+            echo "::error::sed failed to remove quiche/PacketTunnel dependency lines"
             exit 1
           fi
-          echo "quiche.xcframework dependency removed from this run's project.yml (committed file untouched)"
+          echo "quiche.xcframework + QAudionPacketTunnel dependencies removed from this run's project.yml (committed file untouched)"
 
       # Reality.xcframework (VLESS+REALITY) -- same cache key as
       # engine-tests.yml's ios-simulator-tests job so a warm cache is reused.
