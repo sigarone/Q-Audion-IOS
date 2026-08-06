@@ -12,6 +12,6 @@ appId: com.qaudion.app
     id: "register-email-field"
 - inputRandomEmail
 - tapOn: "Crea account"
-- assertVisible:
-    text: "Write down these 12 words"
+- extendedWaitUntil:
+    visible: "Write down these 12 words"
     timeout: 30000
