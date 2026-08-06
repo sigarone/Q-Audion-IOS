@@ -1,0 +1,17 @@
+appId: com.qaudion.app
+---
+# Diagnostic-only flow (2026-08-06): no launchApp -- relies on the CI
+# workflow having already launched the app via `xcrun simctl launch -e
+# CFNETWORK_DIAGNOSTICS=3 ...` so the verbose env var survives (Maestro's
+# own launchApp kills+relaunches without it). Just drives the registration
+# steps to reproduce the hang, so the resulting verbose CFNetwork logs can
+# be inspected for what happens after transport-ready. Delete once the
+# register/extension network stall is root-caused.
+- tapOn: "Registrati senza numero (solo interno)"
+- tapOn:
+    id: "register-email-field"
+- inputRandomEmail
+- tapOn: "Crea account"
+- assertVisible:
+    text: "Write down these 12 words"
+    timeout: 30000
