@@ -158,14 +158,14 @@ struct NotificationsSettingsScreen: View {
                                 set: { container.toggleInAppSound($0) }
                             )
                         )
-                        SettingsToggleRow(
-                            title: "Vibrazione",
-                            subtitle: "Vibra alla ricezione di chiamate / messaggi",
-                            isOn: Binding(
-                                get: { container.viewModel.vibrationEnabled },
-                                set: { container.toggleVibration($0) }
-                            )
-                        )
+                        // 2026-08-06 fix: removed the "Vibrazione" toggle that
+                        // used to live here — NotificationsGate.vibrationEnabled
+                        // had zero real readers (confirmed: no call/message path
+                        // ever consulted it), so it silently did nothing, and it
+                        // duplicated/collided in name with the master haptics
+                        // switch on the Privacy screen (Impostazioni → Privacy →
+                        // Vibrazione), which IS wired to HapticFeedback and
+                        // actually controls this.
                     }
 
                     SettingsSectionHeader("MODALITÀ NON DISTURBARE")
