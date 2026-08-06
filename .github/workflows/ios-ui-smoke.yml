@@ -129,6 +129,14 @@ jobs:
           GOTOOLCHAIN: auto
         run: bash scripts/build-reality-xcframework.sh
 
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
       - name: Generate Xcode project
         working-directory: QAudionApp
         run: |
