@@ -223,8 +223,13 @@ jobs:
           # Verbose CFNetwork/URLSession logging -- only matters for flows
           # that skip their own launchApp (e.g. diag-register.yaml), since
           # a flow's own launchApp kills+relaunches without these env vars.
-          # Harmless no-op for normal flows.
-          xcrun simctl launch -e CFNETWORK_DIAGNOSTICS=3 -e OS_ACTIVITY_MODE=debug "$UDID" "$BUNDLE_ID"
+          # Harmless no-op for normal flows. `simctl launch` has no `-e`
+          # flag (first attempt: "Invalid device: -e") -- env vars for the
+          # LAUNCHED process go through shell vars prefixed SIMCTL_CHILD_,
+          # stripped of that prefix by simctl itself. Documented Apple
+          # mechanism, not a flag.
+          SIMCTL_CHILD_CFNETWORK_DIAGNOSTICS=3 SIMCTL_CHILD_OS_ACTIVITY_MODE=debug \
+            xcrun simctl launch "$UDID" "$BUNDLE_ID"
           sleep 5
 
       - name: Install Maestro
