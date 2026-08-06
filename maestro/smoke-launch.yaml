@@ -1,0 +1,9 @@
+appId: com.qaudion.app
+---
+# Cold-launch smoke test: app must reach the onboarding welcome screen
+# without crashing (SplashScreen -> OnboardingRoot.welcome, ContentView.swift
+# mainStack, no authenticated session on a fresh simulator install).
+- launchApp
+- assertVisible: "Benvenuto a Q-Audion."
+- assertVisible: "Hybrid PQC · Voice-first · Deepfake Guard"
+- takeScreenshot: onboarding-welcome

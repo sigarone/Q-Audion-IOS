@@ -1,0 +1,229 @@
+# GitHub Actions -- Q-Audion iOS UI smoke test (Maestro, simulator).
+#
+# Manual-only (workflow_dispatch): this repo's macOS runner minutes are
+# rate-limited on the free tier (10x credit multiplier on private repos,
+# 200 min/month free -- see ios-testflight.yml's own note). This job does
+# NOT run on every push/PR to avoid burning that budget; trigger it by
+# hand from the Actions tab when you want to verify the UI still boots.
+#
+# What it does: builds QAudionApp for the iOS Simulator (NOT an archive/
+# IPA -- no signing, no App Store Connect secrets needed), boots a
+# simulator, installs the app, and runs a Maestro flow (maestro/*.yaml)
+# against it. Screenshots + Maestro's own debug output are uploaded as
+# artifacts regardless of pass/fail.
+#
+# UNVERIFIED as of first commit (2026-08-06): no physical/virtual Mac was
+# available to dry-run this file before adding it. The Xcode-select, Go,
+# quiche.xcframework and Reality.xcframework steps are copied verbatim
+# from ios-testflight.yml / engine-tests.yml (known-working there) to
+# minimize new failure surface, but this is the first time QAudionApp is
+# built for iOS Simulator with the PacketTunnel extension's WireGuardKitGo
+# preBuildScript in the loop -- GOOS=ios Go cross-compilation for a
+# simulator destination (vs. the device/archive builds it's only ever been
+# exercised against) is the most likely first-run failure point. Expect to
+# iterate once workflow_dispatch actually runs it.
+#
+# Requires Maestro flow(s) under apps/qaudion-ios/maestro/ -- see
+# smoke-launch.yaml for the first one (cold launch -> onboarding welcome
+# screen, no login required).
+
+name: iOS UI Smoke Test (Maestro)
+
+on:
+  workflow_dispatch:
+    inputs:
+      flow:
+        description: 'Maestro flow file to run (relative to maestro/). Leave empty to run all flows in the directory.'
+        required: false
+        default: 'smoke-launch.yaml'
+
+jobs:
+  ui-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      BUNDLE_ID: com.qaudion.app
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '26'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Same pattern as ios-testflight.yml -- pin to the newest installed
+      # 26.x Xcode on the runner image.
+      - name: Select Xcode
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
+
+      - name: Cache SPM packages
+        id: cache-spm
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      # WireGuardKitGo CGO cross-compilation for the PacketTunnel extension's
+      # preBuildScript -- copied from ios-testflight.yml step 3b. UNVERIFIED
+      # for a Simulator destination (see file header).
+      - name: Set up Go (WireGuardKitGo)
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+          cache: false
+
+      # quiche.xcframework (MASQUE CONNECT-UDP) -- same cache key as
+      # ios-testflight.yml so a warm cache from a release build is reused.
+      - name: Cache quiche xcframework
+        id: cache-quiche
+        uses: actions/cache@v5
+        with:
+          path: QAudionApp/Vendor/quiche.xcframework
+          key: quiche-xcframework-${{ runner.os }}-0.22.0-${{ hashFiles('scripts/build-quiche-xcframework.sh') }}
+
+      - name: Build quiche xcframework
+        if: steps.cache-quiche.outputs.cache-hit != 'true'
+        env:
+          QUICHE_REF: '0.22.0'
+        run: |
+          set -e
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source "$HOME/.cargo/env"
+          fi
+          bash scripts/build-quiche-xcframework.sh
+
+      # Reality.xcframework (VLESS+REALITY) -- same cache key as
+      # engine-tests.yml's ios-simulator-tests job so a warm cache is reused.
+      - name: Cache reality xcframework
+        id: cache-reality
+        uses: actions/cache@v5
+        with:
+          path: QAudionApp/Vendor/Reality.xcframework
+          key: reality-xcframework-sim-${{ runner.os }}-${{ hashFiles('RealityCore/go.sum', 'scripts/build-reality-xcframework.sh') }}
+
+      - name: Build reality xcframework
+        if: steps.cache-reality.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          GOTOOLCHAIN: auto
+        run: bash scripts/build-reality-xcframework.sh
+
+      - name: Generate Xcode project
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      # No signing needed -- Simulator builds don't require a provisioning
+      # profile or distribution cert, unlike ios-testflight.yml's archive.
+      - name: Build QAudionApp for Simulator
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath /tmp/dd-ios-ui \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-sim.log \
+          || (echo ""; echo "=== BUILD FAILED -- full build-sim.log ==="; cat build-sim.log; exit 1)
+
+      - name: Upload build log
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-sim-log-${{ github.run_number }}
+          path: QAudionApp/build-sim.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Boot simulator + install + launch app
+        run: |
+          set -e
+          APP_PATH=$(find /tmp/dd-ios-ui -name "QAudionApp.app" -path "*iphonesimulator*" | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "QAudionApp.app not found under /tmp/dd-ios-ui"; exit 1
+          fi
+          echo "App: $APP_PATH"
+
+          UDID=$(xcrun simctl list devices available | grep "iPhone 17 (" | head -1 | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
+          if [ -z "$UDID" ]; then
+            echo "No 'iPhone 17' simulator preinstalled -- creating one"
+            RUNTIME=$(xcrun simctl list runtimes | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | tail -1)
+            UDID=$(xcrun simctl create "iPhone 17" "com.apple.CoreSimulator.SimDeviceType.iPhone-17" "$RUNTIME")
+          fi
+          echo "UDID=$UDID"
+          echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
+
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP_PATH"
+          xcrun simctl launch "$UDID" "$BUNDLE_ID"
+          sleep 5
+
+      - name: Install Maestro
+        run: |
+          brew tap mobile-dev-inc/tap
+          brew install mobile-dev-inc/tap/maestro
+          maestro --version
+
+      - name: Run Maestro flow(s)
+        run: |
+          set -e
+          FLOW_INPUT="${{ github.event.inputs.flow }}"
+          if [ -n "$FLOW_INPUT" ]; then
+            echo "Running single flow: maestro/$FLOW_INPUT"
+            maestro test "maestro/$FLOW_INPUT"
+          else
+            echo "Running every flow under maestro/"
+            maestro test maestro/
+          fi
+
+      - name: Capture final screenshot
+        if: always()
+        continue-on-error: true
+        run: xcrun simctl io "$SIM_UDID" screenshot ios-ui-smoke-final.png
+
+      - name: Upload screenshot
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ui-smoke-screenshot-${{ github.run_number }}
+          path: ios-ui-smoke-final.png
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Maestro debug output
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: maestro-debug-${{ github.run_number }}
+          path: ~/.maestro/tests/**
+          if-no-files-found: ignore
+          retention-days: 7

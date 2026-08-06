@@ -1,0 +1,208 @@
+# GitHub Actions -- provision WebDriverAgent (WDA) for a real iOS test
+# device, signed with this repo's own paid Apple Developer team.
+#
+# WHY THIS EXISTS: interactive iOS UI debugging/automation (tap, read the
+# accessibility tree, screenshot) needs WDA running ON the device and
+# talking XCTest's wire protocol -- which normally requires Xcode attached.
+# go-ios (github.com/danielpaulus/go-ios) reimplements that wire protocol
+# in pure Go, so once WDA is INSTALLED + SIGNED on the device, day-to-day
+# control (`ios runwda`, `ios forward`, HTTP calls to WDA's REST API) works
+# from a plain Windows machine with zero Xcode/Mac involved. This workflow
+# is the one-time (or occasional, e.g. after a profile expires) Mac-side
+# step: build + sign the WDA runner app here, download it, install once via
+# go-ios from Windows. See CLAUDE.md "iOS UI debugging" section.
+#
+# UNVERIFIED as of first commit (2026-08-06) -- no Mac available to dry-run.
+# Signing an IOS_APP_DEVELOPMENT profile (not IOS_APP_STORE, which is all
+# ios-testflight.yml has ever exercised) is new territory for this repo's
+# CI. Most likely first-run snags:
+#   - fetch-signing-files --type IOS_APP_DEVELOPMENT may need an existing
+#     "Apple Development" certificate; if CERTIFICATE_PRIVATE_KEY (the repo
+#     secret) is a Distribution key, per CLAUDE.md sec 3, it CANNOT sign an
+#     IOS_APP_DEVELOPMENT profile. This workflow tries WITHOUT a
+#     --certificate-key first (lets the API mint a fresh Development
+#     keypair) -- if that succeeds, capture the generated private key from
+#     the step output and save it as a new secret WDA_CERTIFICATE_PRIVATE_KEY
+#     so future runs reuse the SAME certificate instead of minting a new one
+#     every time (Apple caps unrevoked Development certs per account).
+#   - WebDriverAgent's Xcode project (cloned fresh from appium/WebDriverAgent
+#     each run, not vendored) may need scheme/target names adjusted if
+#     upstream renames anything -- pinned to tag v16.1.5, bump deliberately.
+
+name: iOS WDA Provision (real device)
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_udid:
+        description: 'iPhone UDID to register as a test device (get it via `ios-cli list` on Windows after `ios-cli tunnel start --userspace`). Leave empty to skip registration and just rebuild WDA for already-registered devices.'
+        required: false
+      device_name:
+        description: 'Label for the device in App Store Connect (only used when device_udid is set).'
+        required: false
+        default: 'Q-Audion test iPhone'
+
+jobs:
+  register-device:
+    if: ${{ github.event.inputs.device_udid != '' }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install codemagic-cli-tools
+        run: |
+          set -e
+          if command -v pipx >/dev/null 2>&1; then
+            echo "pipx already installed"
+          else
+            brew install pipx
+          fi
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          pipx install --force codemagic-cli-tools 2>&1 | grep -v "WARNING: Skipping setuptools" || true
+
+      - name: Register device UDID
+        env:
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set +e
+          OUT=$(app-store-connect devices register \
+            --name "${{ github.event.inputs.device_name }}" \
+            --udid "${{ github.event.inputs.device_udid }}" 2>&1)
+          rc=$?
+          echo "$OUT"
+          if [ $rc -eq 0 ]; then
+            echo "Device registered."
+          elif echo "$OUT" | grep -qiE "already exist|already registered|duplicate"; then
+            echo "Device already registered -- treating as success."
+          else
+            echo "::error::Device registration failed (rc=$rc) -- see output above."
+            exit 1
+          fi
+
+  build-wda:
+    needs: register-device
+    if: always() && (needs.register-device.result == 'success' || needs.register-device.result == 'skipped')
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      XCODE_VERSION: '26'
+      WDA_BUNDLE_ID: com.facebook.WebDriverAgentRunner.xctrunner
+    steps:
+      - name: Select Xcode
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
+
+      - name: Clone WebDriverAgent (appium fork, pinned)
+        run: |
+          git clone --branch v16.1.5 --depth 1 https://github.com/appium/WebDriverAgent.git wda-src
+
+      - name: Install codemagic-cli-tools
+        run: |
+          set -e
+          if command -v pipx >/dev/null 2>&1; then
+            echo "pipx already installed"
+          else
+            brew install pipx
+          fi
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          pipx install --force codemagic-cli-tools 2>&1 | grep -v "WARNING: Skipping setuptools" || true
+
+      # Development-type signing -- DIFFERENT from ios-testflight.yml's
+      # IOS_APP_STORE distribution signing. See file header for the
+      # Development-vs-Distribution certificate caveat.
+      - name: Set up Development signing
+        env:
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # Optional -- only set after a first successful run where you've
+          # saved the auto-generated Development cert's private key (see
+          # file header). Empty on the very first run.
+          WDA_CERTIFICATE_PRIVATE_KEY: ${{ secrets.WDA_CERTIFICATE_PRIVATE_KEY }}
+        run: |
+          set -e
+          keychain initialize
+
+          if [ -n "$WDA_CERTIFICATE_PRIVATE_KEY" ]; then
+            CERT_KEY_PATH=/tmp/wda_dev_cert_key.pem
+            printf '%s' "$WDA_CERTIFICATE_PRIVATE_KEY" > "$CERT_KEY_PATH"
+            chmod 600 "$CERT_KEY_PATH"
+            app-store-connect fetch-signing-files "$WDA_BUNDLE_ID" \
+              --type IOS_APP_DEVELOPMENT \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "No WDA_CERTIFICATE_PRIVATE_KEY secret set -- letting the API mint a fresh Development keypair+certificate."
+            echo "::warning::First run: capture the generated certificate's private key from the ASC output above (or App Store Connect > Certificates) and save it as secret WDA_CERTIFICATE_PRIVATE_KEY, else every future run mints a NEW certificate (Apple caps unrevoked Development certs per account)."
+            app-store-connect fetch-signing-files "$WDA_BUNDLE_ID" \
+              --type IOS_APP_DEVELOPMENT \
+              --create \
+              --platform IOS \
+              --strict-match-identifier
+          fi
+
+          keychain add-certificates
+          xcode-project use-profiles --project wda-src/WebDriverAgent.xcodeproj
+
+      - name: Build WebDriverAgentRunner for real device
+        working-directory: wda-src
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            2>&1 | tee build-wda.log \
+          || (echo ""; echo "=== BUILD FAILED -- full build-wda.log ==="; cat build-wda.log; exit 1)
+
+      - name: Upload build log
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: wda-build-log-${{ github.run_number }}
+          path: wda-src/build-wda.log
+          retention-days: 7
+          if-no-files-found: warn
+
+      # go-ios accepts an app zipped in the standard IPA layout
+      # (Payload/<name>.app inside a .zip named .ipa) OR a bare unzipped
+      # .app folder -- packaging as a proper IPA here so `ios install
+      # --path=WebDriverAgentRunner.ipa` on Windows works either way.
+      - name: Package WDA runner as IPA
+        run: |
+          set -e
+          RUNNER_APP=$(find wda-src/build -maxdepth 6 -iname "WebDriverAgentRunner-Runner.app" -path "*iphoneos*" | head -1)
+          if [ -z "$RUNNER_APP" ]; then
+            echo "WebDriverAgentRunner-Runner.app not found under wda-src/build"
+            find wda-src/build -maxdepth 6 -iname "*.app" || true
+            exit 1
+          fi
+          echo "Runner app: $RUNNER_APP"
+          WORK=$(mktemp -d)
+          mkdir -p "$WORK/Payload"
+          cp -R "$RUNNER_APP" "$WORK/Payload/"
+          ( cd "$WORK" && zip -qr "$GITHUB_WORKSPACE/WebDriverAgentRunner.ipa" Payload )
+          ls -lh "$GITHUB_WORKSPACE/WebDriverAgentRunner.ipa"
+
+      - name: Upload WebDriverAgentRunner.ipa
+        uses: actions/upload-artifact@v7
+        with:
+          name: wda-runner-ipa
+          path: WebDriverAgentRunner.ipa
+          retention-days: 90
+          if-no-files-found: error
