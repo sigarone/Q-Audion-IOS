@@ -1,0 +1,114 @@
+appId: com.qaudion.app
+---
+# Reusable auth flow for screen-coverage: registers a brand-new,
+# throwaway "extension-only" account (no phone/SMS -- just a random email,
+# see ExtensionOnlyRegisterScreen.swift) and completes the mandatory
+# recovery-phrase reveal, landing on HomeView. A fresh account every run --
+# no stored test credentials to rotate/leak, and it exercises the real
+# registration + recovery-reveal UX as a side benefit.
+#
+# The recovery-phrase confirm step (setupConfirmEntry) requires retyping
+# the exact 12 words just shown -- not skippable by design (it's a real
+# security control). Solved by reading each word off screen
+# (mnemonic-word-N accessibilityIdentifier, RecoverySeedView.swift) into a
+# named JS variable via evalScript (copyTextFrom only has ONE
+# maestro.copiedText slot, so each word must be snapshotted before the
+# next copy overwrites it), then typing each one back on the next screen
+# (mnemonic-input-N).
+#
+# Other flows needing an authenticated session should `runFlow` this file
+# first, then continue from HomeView (assert "Chat" tab visible at the end).
+
+- launchApp
+- tapOn: "Registrati senza numero (solo interno)"
+- tapOn:
+    id: "register-email-field"
+- inputRandomEmail
+- tapOn: "Crea account"
+
+# --- Recovery phrase: read the 12 words off screen ---
+- assertVisible: "Write down these 12 words"
+- copyTextFrom:
+    id: "mnemonic-word-0"
+- evalScript: ${output.word0 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-1"
+- evalScript: ${output.word1 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-2"
+- evalScript: ${output.word2 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-3"
+- evalScript: ${output.word3 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-4"
+- evalScript: ${output.word4 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-5"
+- evalScript: ${output.word5 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-6"
+- evalScript: ${output.word6 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-7"
+- evalScript: ${output.word7 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-8"
+- evalScript: ${output.word8 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-9"
+- evalScript: ${output.word9 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-10"
+- evalScript: ${output.word10 = maestro.copiedText}
+- copyTextFrom:
+    id: "mnemonic-word-11"
+- evalScript: ${output.word11 = maestro.copiedText}
+
+- tapOn: "I've written them down"
+
+# --- Confirm step: type the 12 captured words back in order ---
+- assertVisible: "Confirm your mnemonic"
+- tapOn:
+    id: "mnemonic-input-0"
+- inputText: ${output.word0}
+- tapOn:
+    id: "mnemonic-input-1"
+- inputText: ${output.word1}
+- tapOn:
+    id: "mnemonic-input-2"
+- inputText: ${output.word2}
+- tapOn:
+    id: "mnemonic-input-3"
+- inputText: ${output.word3}
+- tapOn:
+    id: "mnemonic-input-4"
+- inputText: ${output.word4}
+- tapOn:
+    id: "mnemonic-input-5"
+- inputText: ${output.word5}
+- tapOn:
+    id: "mnemonic-input-6"
+- inputText: ${output.word6}
+- tapOn:
+    id: "mnemonic-input-7"
+- inputText: ${output.word7}
+- tapOn:
+    id: "mnemonic-input-8"
+- inputText: ${output.word8}
+- tapOn:
+    id: "mnemonic-input-9"
+- inputText: ${output.word9}
+- tapOn:
+    id: "mnemonic-input-10"
+- inputText: ${output.word10}
+- tapOn:
+    id: "mnemonic-input-11"
+- inputText: ${output.word11}
+- hideKeyboard
+- tapOn: "Confirm"
+
+# --- Done screen -> HomeView ---
+- assertVisible: "Done"
+- tapOn: "Done"
+- assertVisible: "Chat"

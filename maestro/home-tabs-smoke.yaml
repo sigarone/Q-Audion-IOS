@@ -1,0 +1,13 @@
+appId: com.qaudion.app
+---
+# Screen-coverage flow #2: authenticate via the reusable register flow,
+# then visit every HomeView tab and screenshot it. First real coverage
+# beyond the onboarding welcome screen (smoke-launch.yaml).
+- runFlow: auth-extension-register.yaml
+- takeScreenshot: home-chat-tab
+- tapOn: "Contatti"
+- takeScreenshot: home-contacts-tab
+- tapOn: "Chiamate"
+- takeScreenshot: home-calls-tab
+- tapOn: "Impostazioni"
+- takeScreenshot: home-settings-tab

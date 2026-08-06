@@ -82,6 +82,7 @@ struct ExtensionOnlyRegisterScreen: View {
                             .textContentType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .accessibilityIdentifier("register-email-field")
                             .foregroundStyle(.white)
                             .padding(14)
                             .background(

@@ -73,6 +73,10 @@ public struct RecoverySeedView: View {
                         .frame(width: 24, alignment: .leading)
                     Text(word)
                         .font(.body.monospaced().weight(.semibold))
+                        // UI-test hook: lets an automated flow read each
+                        // word back off screen and retype it on the next
+                        // step, instead of needing a stored test mnemonic.
+                        .accessibilityIdentifier("mnemonic-word-\(idx)")
                     Spacer()
                 }
                 .padding(8)
@@ -106,6 +110,7 @@ public struct RecoverySeedView: View {
                         TextField("word", text: bindingFor(idx))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .accessibilityIdentifier("mnemonic-input-\(idx)")
                             .padding(6)
                             .background(Color(.systemGray6))
                             .cornerRadius(6)
