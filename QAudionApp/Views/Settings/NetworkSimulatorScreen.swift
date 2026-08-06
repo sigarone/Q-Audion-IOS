@@ -4,10 +4,13 @@ import QAudionEngine
 /// Dev-only profile for the in-call `NetworkConditionSimulator`. 1:1 with
 /// Android `NetworkConditionSimulator.Profile` — same six presets, same
 /// Italian labels, same `(outboundDelayMs, outboundLossRatio,
-/// inboundLossRatio, offline)` tuple. Engine wiring pending: today this is
-/// a UI-only stub (the iOS `CallController` still flies the production
-/// fast path). When the engine surfaces a per-call simulator hook,
-/// `NetworkSimulatorContainer.select(_:)` will plumb to it.
+/// inboundLossRatio, offline)` tuple.
+///
+/// 2026-08-06 correction: this used to say "UI-only stub, engine wiring
+/// pending" — stale. W69 already wired `NetworkSimulatorContainer.select(_:)`
+/// straight to `NetworkConditionSimulator.shared.setProfile(_:)`, and
+/// `CallService.swift`'s TX/RX frame path (search "W69" there) genuinely
+/// drops/delays frames per the active profile. Real, live, not a stub.
 public struct NetSimProfile: Identifiable, Equatable {
     public let id: String
     public let label: String
@@ -65,9 +68,9 @@ extension NetSimProfile {
     ]
 }
 
-/// Container for the dev simulator screen. UI-only stub today; when the
-/// engine wires `NetworkConditionSimulator` on iOS, `select(_:)` will
-/// dispatch the choice to the engine via a future `appState.setNetSim(_:)`.
+/// Container for the dev simulator screen. `select(_:)` dispatches straight
+/// to the shared `NetworkConditionSimulator`, which `CallService`'s TX/RX
+/// frame handlers consult live (W69) — real effect, not a stub.
 @MainActor
 final class NetworkSimulatorContainer: ObservableObject {
     @Published var active: NetSimProfile = NetSimProfile.presets.first!

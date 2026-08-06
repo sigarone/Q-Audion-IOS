@@ -83,38 +83,6 @@ public enum CallsGate {
         UserDefaults.standard.set(value, forKey: keyCallKitFree)
     }
 
-    // MARK: - W443 call session security (parity with Android SettingsViewModel)
-
-    /// Controls AASIST live deepfake detection during calls.
-    /// Default ON — mirrors Android `deepfakeGuard = true`.
-    public static let keyDeepfakeGuard    = "qaudion.calls.deepfake_guard_enabled"
-    /// Controls adaptive re-keying frequency scaled by Confidence Index.
-    /// Default ON — mirrors Android `adaptiveRekeying = true`.
-    public static let keyAdaptiveRekeying = "qaudion.calls.adaptive_rekeying_enabled"
-    /// Controls constant bitrate padding to resist traffic analysis.
-    /// Default ON — mirrors Android `adaptivePadding = true`.
-    public static let keyAdaptivePadding  = "qaudion.calls.adaptive_padding_enabled"
-
-    // SECURITY M-8: these three are call-session security flags
-    // (deepfake detection, adaptive re-keying, traffic-analysis
-    // padding). They are now backed by the Keychain instead of
-    // UserDefaults so they cannot be silently downgraded by anything
-    // with plist/backup access. Default-true semantics are preserved
-    // when the key is absent; public API is unchanged.
-    public static var deepfakeGuardEnabled:    Bool { readSecureBool(keyDeepfakeGuard,    default: true) }
-    public static var adaptiveRekeyingEnabled: Bool { readSecureBool(keyAdaptiveRekeying, default: true) }
-    public static var adaptivePaddingEnabled:  Bool { readSecureBool(keyAdaptivePadding,  default: true) }
-
-    public static func setDeepfakeGuard(_ value: Bool) {
-        writeSecureBool(keyDeepfakeGuard, value)
-    }
-    public static func setAdaptiveRekeying(_ value: Bool) {
-        writeSecureBool(keyAdaptiveRekeying, value)
-    }
-    public static func setAdaptivePadding(_ value: Bool) {
-        writeSecureBool(keyAdaptivePadding, value)
-    }
-
     // MARK: - R-4 (vkey-v1) sovereign-only video policy
 
     /// Sovereign-only video policy. When ON the client MUST NOT advertise

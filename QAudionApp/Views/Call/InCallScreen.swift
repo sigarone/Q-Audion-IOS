@@ -774,10 +774,6 @@ struct InCallScreen: View {
 
                 guardianRibbon.padding(.horizontal, 20)
 
-                Spacer().frame(height: 8)
-
-                trustChainCard.padding(.horizontal, 20)
-
                 // D11 / W-NOBRICK — non-blocking security advisory. Shown when the
                 // peer's identity key changed and is NOT in the server-published
                 // per-device set. Advisory ONLY: it never gates audio/video; the
@@ -2415,6 +2411,21 @@ struct InCallScreen: View {
                             assuranceSectionBody(assurancePresentation)
                         }
                     }
+
+                    // 2026-08-06 fix: this used to render unconditionally in
+                    // the main call scroll (scrollContent), visible for the
+                    // WHOLE call — Android renders the identical component
+                    // (GuardianRibbon.kt's TrustChainCard, same "CUSTODY OF
+                    // YOUR VOICE" mic↔seal↔peer diagram, ported from the same
+                    // trust-chain.html mockup) only inside its SecuritySheet,
+                    // reached by tapping TrustBar's shield-to-expand icon.
+                    // Moved here to match — it carries its own internal
+                    // header/chrome already, so it isn't wrapped in
+                    // securitySection() like the plain rows below it.
+                    trustChainCard
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 14)
+                    Divider().background(scheme.outline.opacity(0.25))
 
                     if sasWords.count == 6 {
                         securitySection(title: "SAS · leggi ad alta voce per verificare \(peerDisplayName)") {

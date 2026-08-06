@@ -66,28 +66,9 @@ struct CallsSettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
-    // W443: call session security toggles — Keychain-backed via CallsGate
-    // (SECURITY M-8). @AppStorage bypasses the Keychain store and breaks
-    // the engine reads, so we use @State + explicit CallsGate setters.
-    @State private var deepfakeGuardEnabled: Bool = false
-    @State private var adaptiveRekeyingEnabled: Bool = false
-    @State private var adaptivePaddingEnabled: Bool = false
-
     // W-NOCALLKIT — revert switch for the CallKit-free incoming-call mode.
     // UserDefaults-backed via CallsGate (not Keychain); read once on appear.
     @State private var callKitFreeMode: Bool = false
-
-    @AppStorage("qaudion.calls.metered_cap_enabled")
-    private var meteredCapEnabled: Bool = false
-
-    @AppStorage("qaudion.calls.metered_max_quality")
-    private var meteredMaxQuality: MeteredQuality = .low
-
-    enum MeteredQuality: String, CaseIterable, RawRepresentable {
-        case low    = "Bassa"
-        case medium = "Media"
-        case high   = "Alta"
-    }
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
@@ -155,50 +136,6 @@ struct CallsSettingsScreen: View {
                         .padding(.horizontal, 14)
                         .padding(.top, 4)
 
-                    // W503: metered-network cap — parity with Android
-                    // SettingsScreen root VIDEO_QUALITY / meteredNetworkCap.
-                    // When enabled, caps codec quality on cellular/metered
-                    // connections to reduce data usage without touching Wi-Fi.
-                    SettingsSectionHeader("RETE DATI")
-                    VStack(spacing: 8) {
-                        SettingsToggleRow(
-                            title: "Risparmio dati in chiamata",
-                            subtitle: "Limita qualità codec su rete cellulare",
-                            isOn: $meteredCapEnabled
-                        )
-                        if meteredCapEnabled {
-                            meteredQualityPicker
-                        }
-                    }
-
-                    SettingsSectionHeader("SICUREZZA CHIAMATE")
-                    VStack(spacing: 8) {
-                        SettingsToggleRow(
-                            title: "Deepfake Guard",
-                            subtitle: "Analisi deepfake live on-device durante ogni chiamata",
-                            isOn: Binding(
-                                get: { deepfakeGuardEnabled },
-                                set: { v in deepfakeGuardEnabled = v; CallsGate.setDeepfakeGuard(v) }
-                            )
-                        )
-                        SettingsToggleRow(
-                            title: "Re-keying adattivo",
-                            subtitle: "Frequenza di rinnovo chiavi scalata con il Confidence Index",
-                            isOn: Binding(
-                                get: { adaptiveRekeyingEnabled },
-                                set: { v in adaptiveRekeyingEnabled = v; CallsGate.setAdaptiveRekeying(v) }
-                            )
-                        )
-                        SettingsToggleRow(
-                            title: "Adaptive Padding CBR",
-                            subtitle: "Bitrate costante per resistere all'analisi del traffico",
-                            isOn: Binding(
-                                get: { adaptivePaddingEnabled },
-                                set: { v in adaptivePaddingEnabled = v; CallsGate.setAdaptivePadding(v) }
-                            )
-                        )
-                    }
-
                     // W-NOCALLKIT — experimental: replace iOS CallKit + PushKit
                     // with a fully custom in-app incoming-call ring. Revertible:
                     // OFF restores the proven CallKit path. Requires app restart.
@@ -222,35 +159,8 @@ struct CallsSettingsScreen: View {
         }
         .navigationTitle("Chiamate")
         .onAppear {
-            deepfakeGuardEnabled = CallsGate.deepfakeGuardEnabled
-            adaptiveRekeyingEnabled = CallsGate.adaptiveRekeyingEnabled
-            adaptivePaddingEnabled = CallsGate.adaptivePaddingEnabled
             callKitFreeMode = CallsGate.callKitFreeMode
         }
-    }
-
-    // MARK: - Metered quality picker
-
-    private var meteredQualityPicker: some View {
-        HStack {
-            Text("Qualità massima su cellulare")
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Picker("", selection: $meteredMaxQuality) {
-                ForEach(MeteredQuality.allCases, id: \.self) { q in
-                    Text(q.rawValue).tag(q)
-                }
-            }
-            .pickerStyle(.menu)
-            .tint(scheme.primary)
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
     }
 
     private var anyAudioProcDisabled: Bool {

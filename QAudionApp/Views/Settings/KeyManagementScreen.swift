@@ -89,16 +89,6 @@ struct KeyManagementScreen: View {
                             .padding(.horizontal, 14)
                     }
 
-                    SettingsSectionHeader("DISPOSITIVI")
-                    NavigationLink {
-                        DeviceManagementScreen(state: appState)
-                    } label: {
-                        SettingsRow(icon: "iphone",
-                                    iconColor: scheme.primary,
-                                    title: "Dispositivi collegati")
-                    }
-                    .buttonStyle(.plain)
-
                     if let err = coordinator.errorMessage {
                         errorBanner(err).padding(.top, 12)
                     }
