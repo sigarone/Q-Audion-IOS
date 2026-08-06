@@ -197,7 +197,20 @@ public final class BCryptoAccountApiImpl: AccountApi {
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/register/extension", body: body)
-        return try JSONDecoder().decode(OtpAuthResult.self, from: data)
+        do {
+            return try JSONDecoder().decode(OtpAuthResult.self, from: data)
+        } catch {
+            // 2026-08-06 diagnostic -- a Simulator-only decode failure was
+            // reported here with zero visibility into what actually came
+            // back (network layer confirmed 200 + full body via
+            // CFNETWORK_DIAGNOSTICS, but the raw bytes were never logged).
+            // print() is captured by RuntimeLogSink's stdout tee even from
+            // this package (no RTLog here -- app-layer only). Remove once
+            // root-caused, or keep as a general decode-failure diagnostic.
+            let preview = String(data: data.prefix(2000), encoding: .utf8) ?? "<non-UTF8, \(data.count) bytes>"
+            print("[BCryptoAccountApiImpl] registerExtensionOnly decode failed: \(error). Raw response (\(data.count) bytes): \(preview)")
+            throw error
+        }
     }
 
     public func requestEmailVerification(email: String) async throws -> EmailVerifyRequestResponse {

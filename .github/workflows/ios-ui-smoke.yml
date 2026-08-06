@@ -259,19 +259,16 @@ jobs:
             -o /tmp/resp-h2.json -D /tmp/headers-h2.txt 2>&1 | tail -40
           echo "--- h2 response headers ---"; cat /tmp/headers-h2.txt
           echo "--- h2 response body ($(wc -c < /tmp/resp-h2.json) bytes) ---"; cat /tmp/resp-h2.json; echo
-          echo ""
-          # The app's own Network.framework logs show its request going out
-          # over HTTP/3 (QUIC), NOT HTTP/2 like the curl call above -- this
-          # is the one variable that test didn't control for. curl on the
-          # macOS runner image ships with HTTP/3 support (unlike the local
-          # dev-box curl used to draft this diagnostic, which lacked it).
-          echo "=== POST /api/v1/auth/register/extension over HTTP/3 (body printed) ==="
-          curl --http3 -sv -m 15 -X POST "https://voip.bcrypto.com/api/v1/auth/register/extension" \
-            -H "Content-Type: application/json" \
-            -d '{"email":"ci-diag-h3-'"$(date +%s)"'@example.invalid","platform":"ios"}' \
-            -o /tmp/resp-h3.json -D /tmp/headers-h3.txt 2>&1 | tail -40
-          echo "--- h3 response headers ---"; cat /tmp/headers-h3.txt
-          echo "--- h3 response body ($(wc -c < /tmp/resp-h3.json) bytes) ---"; cat /tmp/resp-h3.json; echo
+          # HTTP/3 comparison dropped (2026-08-06, run 31090156305): this
+          # runner's curl/libcurl build has no --http3 support ("the
+          # installed libcurl version doesn't support this"), same as the
+          # local dev-box curl used to draft the attempt. The 1148 vs 727
+          # byte difference between the app's CFNetwork summary and this
+          # curl's on-disk body is most likely just a measurement-layer
+          # mismatch (CFNetwork's response_bytes counts transport/QUIC
+          # framing, not decoded HTTP body) rather than a different
+          # response -- raw-response logging added directly in
+          # BCryptoAccountApiImpl.registerExtensionOnly is the real answer.
 
       - name: Run Maestro flow(s)
         run: |
