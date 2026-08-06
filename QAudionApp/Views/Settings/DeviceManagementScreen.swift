@@ -135,7 +135,7 @@ final class DeviceManagementContainer: ObservableObject {
     /// here — `.mock` now stays reserved for SwiftUI previews only (no
     /// production call site passes it).
     init(initial: DeviceManagementViewModel? = nil, appState: AppState? = nil) {
-        let resolved = initial ?? Self.currentDeviceOnly(appState: appState)
+        let resolved = initial ?? Self.currentDeviceOnly(deviceId: appState?.authService.loadDeviceId())
         self.viewModel = resolved
         self.enhanced = resolved.devices.map { EnhancedDeviceItem(from: $0) }
         self.lastRefreshAt = Date()
@@ -147,8 +147,16 @@ final class DeviceManagementContainer: ObservableObject {
     /// actual device name/OS version. No network round-trip: mirrors
     /// Android's `buildCurrentDevice()`, which is local-only for the
     /// same reason (no server list endpoint to call).
-    private static func currentDeviceOnly(appState: AppState?) -> DeviceManagementViewModel {
-        let deviceId = appState?.authService.loadDeviceId() ?? "local-device"
+    ///
+    /// Takes `deviceId` as a plain `String?`, NOT `AppState` directly —
+    /// CLAUDE.md §16: a new function taking `AppState` as a parameter
+    /// type has caused a silent "Build IPA" failure before (Swift 6
+    /// Sendable-inference walking AppState's ~2000-line type graph
+    /// exceeds a compiler budget, and xcbeautify swallows the resulting
+    /// diagnostic). Callers already have `appState` and extract the one
+    /// primitive value they need before calling in.
+    private static func currentDeviceOnly(deviceId: String?) -> DeviceManagementViewModel {
+        let deviceId = deviceId ?? "local-device"
         let name = UIDevice.current.name.isEmpty ? "Questo dispositivo" : UIDevice.current.name
         let now = Date()
         let device = DeviceManagementViewModel.Device(
@@ -208,7 +216,7 @@ final class DeviceManagementContainer: ObservableObject {
     /// honest AND actually useful: it picks up a device-name change
     /// (Settings → General → About → Name) without needing a relaunch.
     func refresh() {
-        let resolved = Self.currentDeviceOnly(appState: appState)
+        let resolved = Self.currentDeviceOnly(deviceId: appState?.authService.loadDeviceId())
         viewModel = resolved
         enhanced = resolved.devices.map { EnhancedDeviceItem(from: $0) }
         lastRefreshAt = Date()
