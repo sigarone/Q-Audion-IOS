@@ -11,6 +11,11 @@ struct KeyManagementScreen: View {
     @State private var showingRotateConfirm = false
     @State private var showingIdentityText = false
     @State private var showingQrScanner = false
+    /// 2026-08-06 fix: the vault-entry trash button used to call
+    /// `coordinator.deletePsk` directly on tap, no confirmation —
+    /// inconsistent with "Ruota chiavi" right above it on the same
+    /// screen, which does confirm before acting.
+    @State private var pendingDeletePskName: String?
 
     private let appState: AppState
 
@@ -123,6 +128,21 @@ struct KeyManagementScreen: View {
         } message: {
             Text("Verranno generate nuove chiavi. Tutti i contatti dovranno ri-verificare la tua identità. Continuare?")
         }
+        .alert("Eliminare questa chiave?",
+               isPresented: Binding(
+                   get: { pendingDeletePskName != nil },
+                   set: { if !$0 { pendingDeletePskName = nil } }
+               )) {
+            Button("Annulla", role: .cancel) { pendingDeletePskName = nil }
+            Button("Elimina", role: .destructive) {
+                if let name = pendingDeletePskName {
+                    coordinator.deletePsk(name: name)
+                }
+                pendingDeletePskName = nil
+            }
+        } message: {
+            Text("La chiave verrà rimossa dal vault locale. Se serve di nuovo, andrà ri-scambiata con il contatto.")
+        }
         .sheet(isPresented: $showingQrScanner) {
             QrScannerSheet { decoded in
                 if case .identity(let identity) = decoded {
@@ -189,13 +209,14 @@ struct KeyManagementScreen: View {
                         }
                         Spacer()
                         Button {
-                            coordinator.deletePsk(name: entry.name)
+                            pendingDeletePskName = entry.name
                         } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 14))
                                 .foregroundStyle(extras.riskHigh.opacity(0.7))
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Elimina chiave")
                     }
                     .padding(.horizontal, 14)
                     .frame(minHeight: 52)

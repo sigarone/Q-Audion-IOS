@@ -52,7 +52,7 @@ private struct BugReportCard: View {
             Image(systemName: "ladybug.fill")
                 .foregroundColor(.red)
                 .font(.system(size: 18, weight: .semibold))
-            Text("Bug Report")
+            Text("Segnala un problema")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.primary)
             Spacer()
@@ -63,6 +63,7 @@ private struct BugReportCard: View {
                     .foregroundColor(Color(.systemGray3))
                     .font(.system(size: 22))
             }
+            .accessibilityLabel("Chiudi")
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)

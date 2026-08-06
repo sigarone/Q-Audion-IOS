@@ -270,6 +270,11 @@ struct MyPhonesScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// 2026-08-06 fix: the trash button used to call `container.removePhone`
+    /// immediately on tap, no confirmation — every other destructive action
+    /// added across Settings this pass (sign-out, device revoke, cache
+    /// wipe, PSK delete, threat-report delete) confirms first.
+    @State private var pendingRemovePhone: String?
 
     var body: some View {
         ZStack {
@@ -299,6 +304,22 @@ struct MyPhonesScreen: View {
         }
         .navigationTitle("I miei numeri")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Rimuovere questo numero?",
+               isPresented: Binding(
+                   get: { pendingRemovePhone != nil },
+                   set: { if !$0 { pendingRemovePhone = nil } }
+               )) {
+            Button("Annulla", role: .cancel) { pendingRemovePhone = nil }
+            Button("Rimuovi", role: .destructive) {
+                if let phone = pendingRemovePhone {
+                    container.removePhone(phone)
+                    snackbar?.show(.init(text: "Numero rimosso.", severity: .info))
+                }
+                pendingRemovePhone = nil
+            }
+        } message: {
+            Text("I contatti non potranno più raggiungerti su questo numero.")
+        }
     }
 
     /// W295: format the last-saved timestamp as 'Aggiornato N minuti fa'
@@ -406,8 +427,7 @@ struct MyPhonesScreen: View {
                 .foregroundStyle(scheme.onSurface)
             Spacer(minLength: 0)
             Button {
-                container.removePhone(phone)
-                snackbar?.show(.init(text: "Numero rimosso.", severity: .info))
+                pendingRemovePhone = phone
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 16, weight: .regular))

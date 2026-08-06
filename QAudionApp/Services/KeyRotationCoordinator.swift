@@ -35,7 +35,6 @@ final class KeyRotationCoordinator: ObservableObject {
     @Published private(set) var vaultKeys: [(name: String, fingerprint: String)] = []
 
     private let appState: AppState
-    private var currentKeyPair: Curve25519.KeyAgreement.PrivateKey
 
     /// W-VAULTREFRESH — real root cause of "vault doesn't show the new key
     /// immediately, has to leave/re-enter the screen": `vaultKeys` used to
@@ -56,13 +55,26 @@ final class KeyRotationCoordinator: ObservableObject {
     /// not just this coordinator's own two methods — refreshes the list.
     private var vaultObserver: NSObjectProtocol?
 
+    /// 2026-08-06 fix: this used to call `Curve25519.KeyAgreement.PrivateKey()`
+    /// unconditionally on every init — a brand-new RANDOM keypair every time
+    /// this screen (or `MyIdentityQrSheet`, which shares this coordinator)
+    /// opened. The fingerprint/QR shown to the user is the actual
+    /// out-of-band identity-verification surface — it changed on every
+    /// visit and never matched a key any peer could verify against, making
+    /// the whole ceremony non-functional. `SecurityDashboardScreen` already
+    /// fixed the equivalent gap (W407, see its `deriveDisplayPubkey`) but
+    /// this class — despite carrying the same W407 tag in its own header —
+    /// was never updated to match. Now resolves, in order: the most
+    /// recently persisted rotation (if the user has rotated before, that IS
+    /// the current key by `rotate()`'s own contract), else the real
+    /// sovereign identity pubkey (same source SecurityDashboard uses), else
+    /// a last-resort unpersisted keypair for the narrow window before any
+    /// identity exists at all (e.g. mid-FastSetup before save).
     init(appState: AppState) {
         self.appState = appState
-        let keyPair = Curve25519.KeyAgreement.PrivateKey()
-        self.currentKeyPair = keyPair
-        let pubBytes = keyPair.publicKey.rawRepresentation
-        self.currentFingerprint = (try? Fingerprint.format(pubkey: pubBytes)) ?? "????.????.????.????"
         let userId = appState.currentUserId ?? "unknown-user"
+        let (pubBytes, fingerprint) = Self.resolveDisplayIdentity(vault: SovereignKeyVault())
+        self.currentFingerprint = fingerprint
         let identity = IdentityQrCode.Identity(userId: userId, pubkey: pubBytes)
         self.currentIdentityQr = try? IdentityQrCode.encode(identity: identity)
         loadVaultKeys()
@@ -84,6 +96,33 @@ final class KeyRotationCoordinator: ObservableObject {
         if let token = vaultObserver {
             NotificationCenter.default.removeObserver(token)
         }
+    }
+
+    /// Resolves what to actually display as "your identity" — see the
+    /// `init` doc comment above for the fallback order and why.
+    private static func resolveDisplayIdentity(vault: SovereignKeyVault) -> (pubkey: Data, fingerprint: String) {
+        if let rotated = mostRecentRotation(vault: vault) {
+            return rotated
+        }
+        if let identity = SovereignIdentityManager().loadIdentity() {
+            let pub = identity.encryptionPublic
+            let fp = (try? Fingerprint.format(pubkey: pub)) ?? "????.????.????.????"
+            return (pub, fp)
+        }
+        let pub = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let fp = (try? Fingerprint.format(pubkey: pub)) ?? "????.????.????.????"
+        return (pub, fp)
+    }
+
+    private static func mostRecentRotation(vault: SovereignKeyVault) -> (pubkey: Data, fingerprint: String)? {
+        let latest = vault.listPskEntries()
+            .filter { $0.name.hasPrefix("rotated_ephemeral.") }
+            .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+            .first
+        guard let latest,
+              let pub = try? vault.loadPsk(name: latest.name),
+              let fp = vault.getFingerprint(name: latest.name) else { return nil }
+        return (pub, fp)
     }
 
     /// Reload the PSK list from SovereignKeyVault (call after import or delete).
@@ -152,7 +191,6 @@ final class KeyRotationCoordinator: ObservableObject {
             }
 
             await MainActor.run {
-                self.currentKeyPair = newKey
                 self.currentFingerprint = newFingerprint
                 self.currentIdentityQr = qrString
                 self.lastRotationDate = Date()

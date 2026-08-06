@@ -71,7 +71,7 @@ struct ProfileHeroCard: View {
             Spacer(minLength: 8)
 
             Button(action: onEditTap) {
-                Text("EDIT")
+                Text("MODIFICA")
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
                     .foregroundStyle(scheme.primary)

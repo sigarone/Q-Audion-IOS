@@ -30,7 +30,7 @@ struct MyIdentityQrSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Identity Fingerprint") {
+                Section("Impronta identità") {
                     Text(coordinator.currentFingerprint)
                         .font(.title3.monospaced().weight(.bold))
                         .frame(maxWidth: .infinity, alignment: .center)

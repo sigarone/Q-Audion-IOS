@@ -58,6 +58,14 @@ final class AppState: ObservableObject {
     /// launch, before the next getProfile() round-trip completes.
     /// Populated by the startup getProfile() path and by AccountSettingsContainer.loadFromServer().
     @Published var currentUserDialExtension: String?
+    /// 2026-08-06 fix: the SettingsScreen hero card used to show a
+    /// hardcoded "Disponibile per chiamate sicure." literal for every
+    /// account regardless of what the user actually set on
+    /// AccountSettingsScreen — the real value was never cached here, only
+    /// inside AccountSettingsContainer's own viewModel. Mirrors
+    /// `currentUserDialExtension`'s cache pattern so the hero card shows
+    /// the real status immediately, including right after an edit.
+    @Published var currentUserStatusMessage: String?
     @Published var errorMessage: String?
 
     /// W466 — short, human-readable label for the logged-in account,
@@ -2917,6 +2925,10 @@ final class AppState: ObservableObject {
                !cachedExt.isEmpty {
                 self.currentUserDialExtension = cachedExt
             }
+            if let cachedStatus = UserDefaults.standard.string(forKey: "currentUserStatusMessage"),
+               !cachedStatus.isEmpty {
+                self.currentUserStatusMessage = cachedStatus
+            }
             // FORCED-QR FIX (2026-06-24): build the config WITH the stored
             // refresh token so the auto-wired primary refresher (POST
             // /auth/refresh) can actually fire on the launch getProfile()'s
@@ -2956,6 +2968,13 @@ final class AppState: ObservableObject {
                         print("[AppState] getProfile: dialExtension nil/0 — clearing cached extension, will show UUID prefix in Settings")
                         self.currentUserDialExtension = nil
                         UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
+                    }
+                    if let status = profile.statusMessage, !status.isEmpty {
+                        self.currentUserStatusMessage = status
+                        UserDefaults.standard.set(status, forKey: "currentUserStatusMessage")
+                    } else {
+                        self.currentUserStatusMessage = nil
+                        UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
                     }
                     self.isAuthenticated = true
                     // FORCED-QR FIX (2026-06-24): the cascade inside getProfile()
@@ -3097,6 +3116,10 @@ final class AppState: ObservableObject {
                 let extStr = String(ext)
                 self.currentUserDialExtension = extStr
                 UserDefaults.standard.set(extStr, forKey: "currentUserDialExtension")
+            }
+            if let status = profile.statusMessage, !status.isEmpty {
+                self.currentUserStatusMessage = status
+                UserDefaults.standard.set(status, forKey: "currentUserStatusMessage")
             }
         }
     }

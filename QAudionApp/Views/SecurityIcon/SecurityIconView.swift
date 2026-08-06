@@ -326,7 +326,7 @@ struct SecurityIconHeaderView: View {
 
     private func stateLabel(_ spec: SecurityIconSpec) -> String {
         switch spec.state {
-        case .idle:       return "Idle"
+        case .idle:       return "Inattivo"
         case .connected:  return "Protetto · \(spec.profile.displayName)"
         case .encrypting: return "Cifratura attiva · \(spec.profile.displayName)"
         case .rekeying:   return "Rotazione chiave…"

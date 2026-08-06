@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import QAudionEngine
 
 /// Modello UI-only enrichito vs il `DeviceManagementViewModel.Device` engine.
@@ -117,11 +118,49 @@ final class DeviceManagementContainer: ObservableObject {
     /// preserving the .mock-only init for previews/tests.
     private weak var appState: AppState?
 
-    init(initial: DeviceManagementViewModel = .mock, appState: AppState? = nil) {
-        self.viewModel = initial
-        self.enhanced = initial.devices.map { EnhancedDeviceItem(from: $0) }
+    /// 2026-08-06 fix: the real server (`bcrypto-lite`) only registers a
+    /// DELETE handler on `/api/v1/devices/` — there is no `GET`/list
+    /// endpoint (confirmed against `account_lifecycle.go`/`main.go`; the
+    /// old `refresh()` below silently discarded whatever it got back).
+    /// `initial: DeviceManagementViewModel = .mock` used to be the
+    /// unconditional default for every real caller too, since
+    /// `DeviceManagementScreen.init(state:)` never passed `initial:` —
+    /// every user permanently saw the developer's own hardcoded devices
+    /// ("Pavel's iPhone 13", "Pixel 7", "Pavel's MacBook Pro") including a
+    /// live REVOCA button wired to a DELETE call against a nonexistent
+    /// device id. Android hit the identical missing-endpoint gap first
+    /// (see `DeviceManagerViewModel.kt`'s own kdoc) and settled on the
+    /// honest fix: show only the real current device, sourced from local
+    /// auth state, until the server ships a real list endpoint. Mirrored
+    /// here — `.mock` now stays reserved for SwiftUI previews only (no
+    /// production call site passes it).
+    init(initial: DeviceManagementViewModel? = nil, appState: AppState? = nil) {
+        let resolved = initial ?? Self.currentDeviceOnly(appState: appState)
+        self.viewModel = resolved
+        self.enhanced = resolved.devices.map { EnhancedDeviceItem(from: $0) }
         self.lastRefreshAt = Date()
         self.appState = appState
+    }
+
+    /// Builds a single-device view model from real local state — the
+    /// device id `AuthService` persisted at login/register, plus the
+    /// actual device name/OS version. No network round-trip: mirrors
+    /// Android's `buildCurrentDevice()`, which is local-only for the
+    /// same reason (no server list endpoint to call).
+    private static func currentDeviceOnly(appState: AppState?) -> DeviceManagementViewModel {
+        let deviceId = appState?.authService.loadDeviceId() ?? "local-device"
+        let name = UIDevice.current.name.isEmpty ? "Questo dispositivo" : UIDevice.current.name
+        let now = Date()
+        let device = DeviceManagementViewModel.Device(
+            deviceId: deviceId,
+            deviceName: name,
+            platform: .iOS,
+            linkedAt: now,
+            lastSeen: now,
+            isCurrentDevice: true,
+            canRevoke: false
+        )
+        return DeviceManagementViewModel(devices: [device])
     }
 
     /// W408 — real revocation: DELETE /api/v1/devices/<id> with the
@@ -161,37 +200,18 @@ final class DeviceManagementContainer: ObservableObject {
         }
     }
 
+    /// 2026-08-06 fix: there is no server list endpoint to call (see
+    /// `init`'s comment) — the old body called `GET /api/v1/devices/`
+    /// (a route the server never registers for GET) and threw away
+    /// whatever came back either way, so the "AGGIORNA" button never did
+    /// anything but bump a timestamp. Rebuilding from local state is
+    /// honest AND actually useful: it picks up a device-name change
+    /// (Settings → General → About → Name) without needing a relaunch.
     func refresh() {
-        // W408: refresh from server when an AppState is bound; otherwise
-        // fall back to the mock data the init hydrated us with.
-        guard let appState = appState,
-              let token = appState.authService.loadToken(), !token.isEmpty else {
-            enhanced = viewModel.devices.map { EnhancedDeviceItem(from: $0) }
-            lastRefreshAt = Date()
-            return
-        }
-        let serverUrl = appState.serverUrl
-        Task { [weak self] in
-            do {
-                let config = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
-                let provider = BCryptoBackendProvider(config: config)
-                let data = try await provider.getRestClient().get("/api/v1/devices/")
-                // The server response shape (devices: [...]) is intentionally
-                // not strictly typed here — for now we just stamp the refresh
-                // timestamp and let the next list-load pull the fresh data
-                // through the existing DeviceManagementViewModel path.
-                _ = data
-                await MainActor.run {
-                    guard let self = self else { return }
-                    self.lastRefreshAt = Date()
-                }
-            } catch {
-                await MainActor.run {
-                    guard let self = self else { return }
-                    self.errorMessage = "Aggiornamento fallito: \(error.localizedDescription)"
-                }
-            }
-        }
+        let resolved = Self.currentDeviceOnly(appState: appState)
+        viewModel = resolved
+        enhanced = resolved.devices.map { EnhancedDeviceItem(from: $0) }
+        lastRefreshAt = Date()
     }
 }
 

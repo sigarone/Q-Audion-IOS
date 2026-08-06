@@ -120,18 +120,41 @@ struct PrivacySettingsScreen: View {
     @AppStorage("qaudion.haptics.enabled")
     private var hapticsEnabled: Bool = true
 
-    // MARK: - W441 device security AppStorage keys
-    // These keys mirror PrivacyGate.keyScreenshotProtection /
-    // keyAppLockEnabled / keyAppLockTimeoutMs so toggling here
-    // is immediately visible to AppLockService and QAudionApp.
-    @AppStorage("qaudion.privacy.screenshot_protection")
-    private var screenshotProtectionEnabled: Bool = false
+    // MARK: - W441 device security — bound through PrivacyGate directly
+    //
+    // 2026-08-06 fix: these three used to be @AppStorage, writing plain
+    // UserDefaults keys. PrivacyGate's readers (SECURITY M-28) are
+    // Keychain-first with a ONE-TIME UserDefaults→Keychain migration that
+    // DELETES the UserDefaults key once it runs — and AppLockService calls
+    // those readers on nearly every foreground event, so the migration
+    // fires almost immediately after the first toggle. Every subsequent
+    // edit here (including trying to turn it back OFF) wrote to a
+    // UserDefaults key the readers never looked at again, so the real
+    // app-lock/screenshot-protection state silently stopped tracking the
+    // switch — and the switch's own displayed position went stale too,
+    // since @AppStorage reset to its declared default once its backing key
+    // was deleted. Binding straight through PrivacyGate's get/set removes
+    // the second, shadow storage location entirely.
+    private var screenshotProtectionEnabled: Binding<Bool> {
+        Binding(
+            get: { PrivacyGate.screenshotProtectionEnabled },
+            set: { PrivacyGate.setScreenshotProtectionEnabled($0) }
+        )
+    }
 
-    @AppStorage("qaudion.privacy.app_lock_enabled")
-    private var appLockEnabled: Bool = false
+    private var appLockEnabled: Binding<Bool> {
+        Binding(
+            get: { PrivacyGate.appLockEnabled },
+            set: { PrivacyGate.setAppLockEnabled($0) }
+        )
+    }
 
-    @AppStorage("qaudion.privacy.app_lock_timeout_ms")
-    private var appLockTimeoutMs: Int = 60_000
+    private var appLockTimeoutMs: Binding<Int> {
+        Binding(
+            get: { PrivacyGate.appLockTimeoutMs },
+            set: { PrivacyGate.setAppLockTimeoutMs($0) }
+        )
+    }
 
     private let appLockTimeoutOptions: [(label: String, ms: Int)] = [
         ("1 minuto",   60_000),
@@ -243,14 +266,14 @@ struct PrivacySettingsScreen: View {
                         SettingsToggleRow(
                             title: "Protezione screenshot",
                             subtitle: "Oscura il contenuto nell'anteprima app e avvisa se viene fatto uno screenshot",
-                            isOn: $screenshotProtectionEnabled
+                            isOn: screenshotProtectionEnabled
                         )
                         SettingsToggleRow(
                             title: "Blocco app",
                             subtitle: "Richiede Face ID / Touch ID / codice quando l'app torna in primo piano",
-                            isOn: $appLockEnabled
+                            isOn: appLockEnabled
                         )
-                        if appLockEnabled {
+                        if appLockEnabled.wrappedValue {
                             appLockTimeoutRow
                         }
                     }
@@ -400,7 +423,7 @@ struct PrivacySettingsScreen: View {
 
             Spacer(minLength: 6)
 
-            Picker("Blocca dopo", selection: $appLockTimeoutMs) {
+            Picker("Blocca dopo", selection: appLockTimeoutMs) {
                 ForEach(appLockTimeoutOptions, id: \.ms) { option in
                     Text(option.label).tag(option.ms)
                 }

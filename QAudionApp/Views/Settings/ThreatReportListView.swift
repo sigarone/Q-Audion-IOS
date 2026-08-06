@@ -174,17 +174,30 @@ struct ThreatReportListView: View {
     /// Mirrors the strings displayed by `ThreatReportView`'s picker.
     private func humanCategory(_ raw: String) -> String {
         switch raw {
-        case "deepfake_detected": return "Deepfake detected"
-        case "voice_mismatch": return "Voice mismatch"
-        case "key_tampering": return "Key tampering"
-        case "suspicious_network": return "Suspicious network"
-        case "panic_wipe_triggered": return "Panic wipe triggered"
-        case "other": return "Other"
+        case "deepfake_detected": return "Deepfake rilevato"
+        case "voice_mismatch": return "Voce non corrispondente"
+        case "key_tampering": return "Manomissione chiavi"
+        case "suspicious_network": return "Rete sospetta"
+        case "panic_wipe_triggered": return "Wipe di emergenza attivato"
+        case "other": return "Altro"
         default:
             // Forward-compat: capitalise unknown raw values so future
             // server-side categories still render readably.
             return raw.replacingOccurrences(of: "_", with: " ").capitalized
         }
+    }
+}
+
+/// Human-readable severity label. Shared by list icon tooltip (via
+/// accessibility) and the detail screen's plain-text row — the raw
+/// `entry.severity` string stays untranslated for icon-switch matching.
+private func humanSeverity(_ raw: String) -> String {
+    switch raw {
+    case "critical": return "Critica"
+    case "high": return "Alta"
+    case "medium": return "Media"
+    case "low": return "Bassa"
+    default: return raw.capitalized
     }
 }
 
@@ -200,33 +213,33 @@ private struct ThreatReportDetailView: View {
 
     var body: some View {
         Form {
-            Section("Category") {
-                LabeledContent("Kind") {
+            Section("Categoria") {
+                LabeledContent("Tipo") {
                     Text(entry.category)
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
                 }
-                LabeledContent("Severity") {
-                    Text(entry.severity)
+                LabeledContent("Gravità") {
+                    Text(humanSeverity(entry.severity))
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("Submitted") {
-                LabeledContent("At") {
+            Section("Inviata") {
+                LabeledContent("Quando") {
                     Text(entry.submittedAt, style: .date)
                     + Text(" · ")
                     + Text(entry.submittedAt, style: .time)
                 }
                 if let sid = entry.sessionId {
-                    LabeledContent("Session") {
+                    LabeledContent("Sessione") {
                         Text(sid)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }
                 }
             }
-            Section("Details") {
+            Section("Dettagli") {
                 Text(entry.details)
                     .font(.body)
                     .textSelection(.enabled)

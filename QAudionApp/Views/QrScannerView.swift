@@ -71,6 +71,7 @@ struct QrScannerView: View {
                             .padding(12)
                             .background(.black.opacity(0.5), in: Circle())
                     }
+                    .accessibilityLabel("Annulla")
                     Spacer()
                 }
                 .padding()

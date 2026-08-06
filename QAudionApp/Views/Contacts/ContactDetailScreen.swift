@@ -479,7 +479,7 @@ struct ContactDetailScreen: View {
                     .tracking(1.2)
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Spacer()
-                TrustChip(changed ? "IDENTITÀ CAMBIATA" : (verified ? "SAS VERIFIED" : "PENDING"),
+                TrustChip(changed ? "IDENTITÀ CAMBIATA" : (verified ? "SAS VERIFICATO" : "IN ATTESA"),
                           accent: changed ? extras.riskHigh : (verified ? extras.success : extras.warning))
             }
             .padding(.bottom, 12)

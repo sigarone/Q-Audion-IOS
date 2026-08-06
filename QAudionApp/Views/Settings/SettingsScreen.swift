@@ -49,6 +49,13 @@ struct SettingsScreen: View {
     /// wipe forces re-download of voice notes + images from peers,
     /// which costs bandwidth on cellular — worth a confirmation tap.
     @State private var showClearCacheConfirm: Bool = false
+    /// 2026-08-06 fix: the ProfileHeroCard's "MODIFICA" pill used to call
+    /// an empty `onEditTap` closure with a comment claiming "navigation
+    /// handled via row below" — it wasn't, tapping it did nothing. Drives
+    /// a hidden NavigationLink to the same AccountSettingsScreen the
+    /// "Profilo" row below already reaches, instead of duplicating that
+    /// destination's construction.
+    @State private var showAccountFromEdit: Bool = false
     /// W113: bump on every clear to force the SettingsRow subtitle
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
@@ -144,14 +151,27 @@ struct SettingsScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     topBar
-                    ProfileHeroCard(
-                        displayName: profileDisplayName,
-                        handle: profileHandle,
-                        statusMessage: "Disponibile per chiamate sicure.",
-                        avatarUrl: AvatarUploader.selfAvatarCacheURL,
-                        shortNumber: appState.currentUserDialExtension,
-                        onEditTap: { /* navigation handled via row below */ }
-                    )
+                    ZStack {
+                        ProfileHeroCard(
+                            displayName: profileDisplayName,
+                            handle: profileHandle,
+                            statusMessage: appState.currentUserStatusMessage ?? "Disponibile per chiamate sicure.",
+                            avatarUrl: AvatarUploader.selfAvatarCacheURL,
+                            shortNumber: appState.currentUserDialExtension,
+                            onEditTap: { showAccountFromEdit = true }
+                        )
+                        // 2026-08-06 fix: hidden NavigationLink driving the
+                        // MODIFICA pill to the same destination as the
+                        // "Profilo" row in accountSection below — the pill
+                        // used to call an empty closure and do nothing.
+                        NavigationLink(isActive: $showAccountFromEdit) {
+                            LazyView {
+                                AccountSettingsScreen(appState: appState)
+                                    .onAppear { print("[Settings] AccountSettingsScreen appeared (via EDIT)") }
+                            }
+                        } label: { EmptyView() }
+                        .opacity(0)
+                    }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
 

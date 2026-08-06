@@ -186,6 +186,16 @@ final class AccountSettingsContainer: ObservableObject {
                     } else {
                         UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
                     }
+                    // 2026-08-06 fix: mirror statusMessage to AppState too,
+                    // same as dialExtension above — this is what makes the
+                    // SettingsScreen hero card show the REAL status instead
+                    // of a hardcoded literal, including right after Save.
+                    self.appState?.currentUserStatusMessage = profile.statusMessage
+                    if let status = profile.statusMessage, !status.isEmpty {
+                        UserDefaults.standard.set(status, forKey: "currentUserStatusMessage")
+                    } else {
+                        UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
+                    }
                     self.isLoading = false
                 }
             } catch {

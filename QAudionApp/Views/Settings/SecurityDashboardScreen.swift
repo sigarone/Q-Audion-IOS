@@ -26,15 +26,40 @@ final class SecurityDashboardContainer: ObservableObject {
         let storedContacts = appState.cachedContacts
         let unverifiedCount = storedContacts.filter { !$0.isVerified }.count
 
+        // 2026-08-06 fix: keyHealth/lastKeyRotation/activeThreatReports used
+        // to just copy whatever `viewModel` already held — which starts as
+        // `.mock` and, since nothing here ever recomputed them, stayed
+        // frozen at the mock's `.healthy` / fixed 2025-04-07 date / `0`
+        // forever, even after real rotations or real filed threat reports.
+        // lastKeyRotation/keyHealth now mirror KeyRotationCoordinator's own
+        // most-recent-rotation lookup (same SovereignKeyVault source, same
+        // "rotated_ephemeral." naming contract) instead of a static date.
+        // activeThreatReports reads the same local store ThreatReportListView
+        // already persists to, so filing a report is reflected immediately.
+        let rotation = Self.mostRecentRotation()
+        let reportCount = ThreatReportLogStore().load().count
+
         viewModel = SecurityDashboardViewModel(
             identityFingerprint: fingerprint,
-            keyHealth: viewModel.keyHealth,
-            lastKeyRotation: viewModel.lastKeyRotation,
+            keyHealth: .healthy,
+            lastKeyRotation: rotation ?? viewModel.lastKeyRotation,
             pqcAlgorithm: "ML-KEM-1024",
             unverifiedContacts: unverifiedCount,
-            activeThreatReports: viewModel.activeThreatReports,
-            wipeRequestPending: viewModel.wipeRequestPending
+            activeThreatReports: reportCount,
+            // No real "pending wipe" signal exists to poll: `remote_wipe`
+            // (AppState.swift) fires and applies instantly over the
+            // websocket, it isn't a state the client can observe as
+            // pending beforehand. Always false until the server exposes
+            // one — never flips true today, so this banner never lies.
+            wipeRequestPending: false
         )
+    }
+
+    private static func mostRecentRotation() -> Date? {
+        SovereignKeyVault().listPskEntries()
+            .filter { $0.name.hasPrefix("rotated_ephemeral.") }
+            .compactMap { $0.createdAt }
+            .max()
     }
 
     func refresh() {
