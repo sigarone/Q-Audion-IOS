@@ -874,7 +874,7 @@ struct SettingsScreen: View {
     /// W292: open the public TestFlight feedback page. Sister of W288.
     private func openTestFlightFeedback() {
         #if canImport(UIKit)
-        if let url = URL(string: "https://testflight.apple.com/v1/app/REDACTED_APP_ID") {
+        if let url = URL(string: "https://testflight.apple.com/v1/app/6762266299") {
             UIApplication.shared.open(url)
         }
         #endif

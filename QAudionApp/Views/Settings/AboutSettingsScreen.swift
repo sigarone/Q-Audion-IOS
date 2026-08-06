@@ -293,12 +293,12 @@ struct AboutSettingsScreen: View {
                         // W288: open TestFlight feedback URL in browser.
                         // The standard public TestFlight feedback URL
                         // for an app uses the App Apple ID; ours is
-                        // REDACTED_APP_ID per CLAUDE.md.
+                        // 6762266299 (see ios-testflight.yml's APP_APPLE_ID).
                         Button {
                             #if canImport(UIKit)
                             // Hardcode the public feedback URL since
                             // the App Apple ID is stable.
-                            let url = URL(string: "https://testflight.apple.com/v1/app/REDACTED_APP_ID")
+                            let url = URL(string: "https://testflight.apple.com/v1/app/6762266299")
                             if let u = url {
                                 UIApplication.shared.open(u)
                             }
