@@ -163,7 +163,14 @@ struct SettingsScreen: View {
                     privacySection
                     datiSection
                     infoSection
+                    // App Store 2.1 — dev/QA-only tools (P3 hardware sim,
+                    // earbud diagnostics, call-design showcase, network
+                    // simulator, local-data reset). Compiled out entirely
+                    // when QAUDION_DEV_TOOLS isn't in
+                    // SWIFT_ACTIVE_COMPILATION_CONDITIONS (see project.yml).
+                    #if QAUDION_DEV_TOOLS
                     sviluppatoreSection
+                    #endif
 
                     Spacer().frame(height: 24)
                     signOutButton

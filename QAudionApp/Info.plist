@@ -2,8 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- App Store metadata consistency: the entire UI is hardcoded Italian
+	     (no Localizable.strings/*.lproj, single-language app, not a
+	     rejection cause by itself). CFBundleDevelopmentRegion should match
+	     the actual shipped language. Separately, set the "Italian" primary
+	     language in App Store Connect's app metadata before submission,
+	     that's a dashboard setting, not derived from this key. -->
 	<key>CFBundleDevelopmentRegion</key>
-	<string>en</string>
+	<string>it</string>
 	<key>CFBundleDisplayName</key>
 	<string>Q-Audion</string>
 	<key>CFBundleExecutable</key>

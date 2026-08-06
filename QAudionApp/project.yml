@@ -98,6 +98,15 @@ targets:
         # toolchain rotations. Pin it so TestFlight/App Store always
         # accepts iPad installs alongside iPhone.
         TARGETED_DEVICE_FAMILY: "1,2"
+        # App Store 2.1 App Completeness — gates SettingsScreen's
+        # "SVILUPPATORE" section (P3ControlScreen/EarbudDiagScreen/
+        # CallDesignShowcase/NetworkSimulatorScreen/DevResetScreen), which
+        # was shipping unguarded in every build including TestFlight.
+        # ON by default so current TestFlight Internal QA workflow is
+        # unchanged. MUST be removed from this line before a public App
+        # Store submission build (see SettingsScreen.swift's `#if
+        # QAUDION_DEV_TOOLS` guard around sviluppatoreSection).
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) QAUDION_DEV_TOOLS
         # MASQUE: quiche (static lib) bundles BoringSSL; link the C++ runtime
         # and the resolver it needs. -lresolv satisfies res_* symbols; -lc++
         # satisfies BoringSSL's C++ bits. Harmless if unused.

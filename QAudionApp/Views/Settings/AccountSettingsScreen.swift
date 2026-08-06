@@ -406,6 +406,10 @@ struct AccountSettingsScreen: View {
     /// W445: shows AvatarIconPicker sheet.
     @State private var showingIconPicker = false
     @State private var showLogoutConfirm = false
+    /// App Store 5.1.1(v) — in-app account deletion. container.deleteAccount()
+    /// already existed (DELETE /api/v1/account + full local wipe) but had no
+    /// UI caller anywhere in the app before this.
+    @State private var showDeleteAccountConfirm = false
     /// 2026-07-31: camera capture for the avatar — parity with Android
     /// ("Scatta foto") and Desktop, which both already had a camera option
     /// alongside the file/library picker. `PhotosPicker` only reaches the
@@ -498,6 +502,8 @@ struct AccountSettingsScreen: View {
                     saveButton
                     Spacer().frame(height: 12)
                     logoutButton
+                    Spacer().frame(height: 12)
+                    deleteAccountButton
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
@@ -528,6 +534,18 @@ struct AccountSettingsScreen: View {
             Button("Annulla", role: .cancel) { }
         } message: {
             Text("Dovrai accedere di nuovo per usare le chat e le chiamate.")
+        }
+        .confirmationDialog(
+            "Eliminare definitivamente l'account?",
+            isPresented: $showDeleteAccountConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Elimina account", role: .destructive) {
+                container.deleteAccount()
+            }
+            Button("Annulla", role: .cancel) { }
+        } message: {
+            Text("Il tuo account, i contatti, le chat e le chiavi crittografiche verranno cancellati in modo permanente sia dal server che da questo dispositivo. Questa azione non può essere annullata.")
         }
         .onChange(of: selectedItem) { newItem in
             guard let item = newItem else { return }
@@ -899,6 +917,35 @@ struct AccountSettingsScreen: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    /// App Store 5.1.1(v) — permanent, in-app account deletion. Same visual
+    /// treatment as logoutButton (both destructive-risk actions) but placed
+    /// below it since it's the more severe of the two.
+    private var deleteAccountButton: some View {
+        Button {
+            showDeleteAccountConfirm = true
+        } label: {
+            HStack {
+                Image(systemName: "trash")
+                    .font(.system(size: 16, weight: .regular))
+                Text("Elimina account")
+                    .qaudionStyle(type.bodyMedium)
+            }
+            .foregroundStyle(extras.riskHigh)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(extras.riskHigh.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(extras.riskHigh.opacity(0.4), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(container.isLoading)
     }
 
     private func errorBanner(_ msg: String) -> some View {
