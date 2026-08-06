@@ -252,10 +252,26 @@ jobs:
           echo "=== GET /api/v1/health ==="
           curl -sv -m 15 "https://voip.bcrypto.com/api/v1/health" 2>&1 | tail -40
           echo ""
-          echo "=== POST /api/v1/auth/register/extension (throwaway email) ==="
+          echo "=== POST /api/v1/auth/register/extension over HTTP/2 (body printed) ==="
           curl -sv -m 15 -X POST "https://voip.bcrypto.com/api/v1/auth/register/extension" \
             -H "Content-Type: application/json" \
-            -d '{"email":"ci-diag-'"$(date +%s)"'@example.invalid","platform":"ios"}' 2>&1 | tail -60
+            -d '{"email":"ci-diag-h2-'"$(date +%s)"'@example.invalid","platform":"ios"}' \
+            -o /tmp/resp-h2.json -D /tmp/headers-h2.txt 2>&1 | tail -40
+          echo "--- h2 response headers ---"; cat /tmp/headers-h2.txt
+          echo "--- h2 response body ($(wc -c < /tmp/resp-h2.json) bytes) ---"; cat /tmp/resp-h2.json; echo
+          echo ""
+          # The app's own Network.framework logs show its request going out
+          # over HTTP/3 (QUIC), NOT HTTP/2 like the curl call above -- this
+          # is the one variable that test didn't control for. curl on the
+          # macOS runner image ships with HTTP/3 support (unlike the local
+          # dev-box curl used to draft this diagnostic, which lacked it).
+          echo "=== POST /api/v1/auth/register/extension over HTTP/3 (body printed) ==="
+          curl --http3 -sv -m 15 -X POST "https://voip.bcrypto.com/api/v1/auth/register/extension" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"ci-diag-h3-'"$(date +%s)"'@example.invalid","platform":"ios"}' \
+            -o /tmp/resp-h3.json -D /tmp/headers-h3.txt 2>&1 | tail -40
+          echo "--- h3 response headers ---"; cat /tmp/headers-h3.txt
+          echo "--- h3 response body ($(wc -c < /tmp/resp-h3.json) bytes) ---"; cat /tmp/resp-h3.json; echo
 
       - name: Run Maestro flow(s)
         run: |
