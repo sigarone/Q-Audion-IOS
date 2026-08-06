@@ -9,10 +9,37 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.951",
+              date: "2026-08-06",
+              title: "v1.0.951",
+              bullets: [
+                "fix(build): avoid AppState-as-parameter-type pattern in DeviceManagementScreen",
+                "fix(settings): resolve placeholder App Apple ID for TestFlight feedback links",
+                "fix(contacts): wire chat icon to real ChatDetailScreen navigation",
+                "fix(settings): remove dead Vibrazione toggle from Notifications screen",
+                "fix(call+settings): move trust-chain diagram to tap sheet, prune dead toggles",
+                "fix(settings): kill fake identity/device data, dead toggles, missing confirms",
+                "fix(ios): App Store audit batch 2 — no more fabricated security data",
+                "fix(ios): App Store audit batch 1 — accessibility, real bugs, honest UI",
+                "diag: log raw response body on registerExtensionOnly decode failure",
+                "diag(ci): compare HTTP/2 vs HTTP/3 raw response for register endpoint",
+                "fix(ci): diag-register.yaml used invalid assertVisible timeout property",
+                "fix(ci): simctl launch has no -e flag, use SIMCTL_CHILD_ env prefix",
+                "diag(ci): verbose CFNetwork logging + no-launchApp diag flow for register hang",
+                "diag(ci): raw curl to register endpoint before Maestro run",
+                "feat(ci): reusable auth flow + Home tab screen coverage for Maestro",
+                "fix(ios): App Store review compliance — account deletion, dev-tools gate, locale",
+                "docs: mark ios-ui-smoke.yml as green after first successful run",
+                "fix(ci): drop QAudionPacketTunnel from the Simulator UI-smoke build too",
+                "fix(ci): drop quiche.xcframework from the Simulator UI-smoke build",
+                "fix(ci): install xcodegen before generating QAudionApp project in ios-ui-smoke",
+                "ci(ios): add manual UI-smoke (Maestro/Simulator) and WDA real-device provisioning workflows",
+              ]),
         .init(id: "v1.0.950",
               date: "2026-08-06",
               title: "v1.0.950",
               bullets: [
+                "chore: regenerate changelog for v1.0.950",
                 "fix(security): bound and dedupe group-call sender_key_nack per track kind",
               ]),
         .init(id: "v1.0.949",
@@ -150,13 +177,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.932",
                 "fix(build): add the GroupCreationPolicy definition its callers already use",
-              ]),
-        .init(id: "v1.0.931",
-              date: "2026-08-02",
-              title: "v1.0.931",
-              bullets: [
-                "chore: regenerate changelog for v1.0.931",
-                "fix(crypto): agree with Android on which pairwise PSK encrypts a 1:1 message",
               ]),
     ]
 }
