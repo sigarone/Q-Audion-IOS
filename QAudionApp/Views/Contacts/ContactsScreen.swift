@@ -491,11 +491,30 @@ struct ContactsScreen: View {
         ContactDetailScreen(item: item)
     }
 
+    /// Find existing or create new conversation for this peer, then publish
+    /// the deep-link so HomeView switches to the Chats tab and
+    /// ChatListScreen pushes ChatDetailScreen. Mirrors
+    /// `ContactsListView.openOrCreateChat` / `CallHistoryView.openOrCreateChat`
+    /// — same find-or-create + deep-link pattern, applied to the Contacts tab.
     private func openChat(_ item: ContactsListViewModel.Item) {
-        // Hand off to ChatListScreen / ChatDetailScreen would require
-        // navigating across tabs; for now we just leave the row's
-        // primary tap open the detail screen and the chat icon is a
-        // stub. A future wave can switch tabs + push the chat detail.
+        let store = ConversationStore()
+        let convId: UUID
+        if let existing = store.loadConversations().first(where: { $0.peerUserId == item.userId }) {
+            convId = existing.id
+        } else {
+            let newConv = Conversation(
+                id: UUID(),
+                peerUserId: item.userId,
+                peerDisplayName: item.displayName,
+                lastMessagePreview: nil,
+                lastActivity: Date(),
+                unreadCount: 0,
+                pinned: false
+            )
+            store.upsertConversation(newConv)
+            convId = newConv.id
+        }
+        appState.pendingDeepLinkConversationId = convId
     }
 
     private func openCall(_ item: ContactsListViewModel.Item) {
