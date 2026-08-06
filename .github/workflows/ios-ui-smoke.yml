@@ -229,6 +229,25 @@ jobs:
           brew install mobile-dev-inc/tap/maestro
           maestro --version
 
+      # Diagnostic (2026-08-06) -- home-tabs-smoke.yaml's registration step
+      # fails with a generic decode error and zero matching bcrypto-lite
+      # server log entry, meaning the request never reached origin.
+      # Cert-pinning was checked and ruled out (PinnedServerHost's pins
+      # match the live chain). Hits the real endpoint from THIS runner's
+      # network path (same as the Simulator's traffic) to see the raw
+      # response -- rules in/out a Cloudflare-edge block of the runner's
+      # IP before guessing further. Remove once the root cause is fixed.
+      - name: DIAGNOSTIC - raw curl to register endpoint
+        continue-on-error: true
+        run: |
+          echo "=== GET /api/v1/health ==="
+          curl -sv -m 15 "https://voip.bcrypto.com/api/v1/health" 2>&1 | tail -40
+          echo ""
+          echo "=== POST /api/v1/auth/register/extension (throwaway email) ==="
+          curl -sv -m 15 -X POST "https://voip.bcrypto.com/api/v1/auth/register/extension" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"ci-diag-'"$(date +%s)"'@example.invalid","platform":"ios"}' 2>&1 | tail -60
+
       - name: Run Maestro flow(s)
         run: |
           set -e
