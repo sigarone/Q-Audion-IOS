@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import QAudionEngine
 
 /// SECURITY C-5 + M-2 — single source of truth for auth-token storage.
 ///
@@ -126,5 +127,23 @@ enum TokenVault {
 
     private static func delete(account: String) {
         SecItemDelete(baseQuery(account: account) as CFDictionary)
+    }
+}
+
+// MARK: - BCryptoBackendProvider persistence wiring
+
+extension BCryptoBackendProvider {
+    /// Wire this provider's `onTokenRotated` hook so ANY rotation it
+    /// performs (leg-1 REST refresh, leg-2 device-renew, or a manual
+    /// `applyTokenPair`) is written into the shared Keychain. Call on
+    /// EVERY `BCryptoBackendProvider` construction — see `onTokenRotated`'s
+    /// doc for the forced-logout / QR-re-pair bug this closes.
+    @discardableResult
+    func persistingRotatedTokens() -> BCryptoBackendProvider {
+        onTokenRotated = { access, refresh in
+            TokenVault.saveAccessToken(access)
+            if let r = refresh, !r.isEmpty { TokenVault.saveRefreshToken(r) }
+        }
+        return self
     }
 }

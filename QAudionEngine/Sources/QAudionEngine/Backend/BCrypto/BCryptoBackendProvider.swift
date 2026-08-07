@@ -104,6 +104,27 @@ public final class BCryptoBackendProvider: BackendProvider {
         // socket nor registers anything WS-side.
     }
 
+    /// Invoked every time `applyTokenPair` rotates the token pair — leg-1
+    /// REST `/auth/refresh` (wired automatically by `init`'s default
+    /// `tokenRefresher`), leg-2 Ed25519 device-renew, or an external manual
+    /// call. Lets the app layer persist the rotated pair to the shared
+    /// Keychain (`TokenVault`) for EVERY provider construction, not just the
+    /// hand-wired main-session ones. Without this, a provider built with a
+    /// stored refresh token (e.g. `AppState.makeUploadProvider()`'s ephemeral
+    /// fallback when `liveProvider` is nil, or the cold-start `getProfile`
+    /// provider) whose 401-triggered leg-1 refresh fires rotates the family
+    /// on the SERVER but keeps the new pair ONLY in this instance's
+    /// in-memory `config`, discarded when the provider is deallocated right
+    /// after the call — leaving the Keychain holding an already-consumed
+    /// refresh token. The NEXT unrelated refresh (main session, another
+    /// one-off call, WS reconnect) then presents that dead token; the
+    /// server's reuse detector treats it as theft outside its 15s
+    /// benign-race grace window and invalidates the WHOLE refresh-token
+    /// family, forcing a full logout + QR re-pair even though nothing was
+    /// compromised. Confirmed via the prod audit log (`refresh_token_reuse`
+    /// / "family invalidated") recurring for weeks on two real accounts.
+    public var onTokenRotated: ((_ access: String, _ refresh: String?) -> Void)?
+
     /// Propagate a refreshed (access, refresh) pair to the internal clients so
     /// subsequent requests and WebSocket reconnects authenticate with the new
     /// credentials. Called by the REST client's auto-refresh flow and by
@@ -115,6 +136,7 @@ public final class BCryptoBackendProvider: BackendProvider {
         // socket built later reads the now-updated `config` at creation time.
         _wsClient?.updateConfig(config)
         restClient.updateConfig(config)
+        onTokenRotated?(access, refresh)
     }
 
     /// Switch all transport components to a different server URL.

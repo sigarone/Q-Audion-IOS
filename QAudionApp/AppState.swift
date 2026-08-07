@@ -1913,6 +1913,7 @@ final class AppState: ObservableObject {
         )
         let p = BCryptoBackendProvider(config: cfg)
         wireDeviceRenewFallback(on: p)
+        p.persistingRotatedTokens()
         return p
     }
 
@@ -2064,6 +2065,7 @@ final class AppState: ObservableObject {
             )
             let p = BCryptoBackendProvider(config: cfg)
             wireDeviceRenewFallback(on: p)
+            p.persistingRotatedTokens()
             self.liveProvider = p
             provider = p
         }
@@ -2942,6 +2944,7 @@ final class AppState: ObservableObject {
             )
             let provider = BCryptoBackendProvider(config: backendConfig)
             wireDeviceRenewFallback(on: provider)
+            provider.persistingRotatedTokens()
             Task {
                 do {
                     let profile = try await provider.accountApi.getProfile()
@@ -3259,8 +3262,19 @@ final class AppState: ObservableObject {
             wireSasReadyToController()
             groupFanOutWired = true
         }
-        let config = pinnedConfig(token: token)
+        // ALWAYS-REACHABLE (2026-08-07): carry the refresh token + wire the
+        // Ed25519 device-renew fallback at construction time, same as every
+        // other liveProvider builder in this file (makeUploadProvider,
+        // performProactiveRefresh, cold-start getProfile). Previously this
+        // was the ONE liveProvider-creating path missing both — a 401 on any
+        // ordinary REST call through this provider (before the post-WS-auth
+        // `runKmsSweep()` got around to calling `wireDeviceRenewFallback`
+        // moments later) had neither refresh leg armed and surfaced
+        // `.unauthorized` immediately instead of self-healing.
+        let config = pinnedConfig(token: token, refreshToken: authService.loadRefreshToken())
         let provider = BCryptoBackendProvider(config: config)
+        wireDeviceRenewFallback(on: provider)
+        provider.persistingRotatedTokens()
         self.liveProvider = provider
         // Server selection: probe all nodes and connect to the fastest one.
         // Runs in background — does not delay the login flow.
@@ -10520,6 +10534,7 @@ final class AppState: ObservableObject {
         }
         let backendConfig = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
+        provider.persistingRotatedTokens()
 
         // Step A — short extension (solo cifre, lunghezza ≤ 7).
         let digitsOnly = trimmed.allSatisfy { $0.isNumber }
@@ -10631,6 +10646,7 @@ final class AppState: ObservableObject {
         }
         let backendConfig = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
+        provider.persistingRotatedTokens()
 
         // Step A — short extension (digits only, length <= 7).
         let digitsOnly = trimmed.allSatisfy { $0.isNumber }
