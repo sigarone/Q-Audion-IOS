@@ -63,15 +63,22 @@ final class ChatVoiceNoteReceiver {
         guard let claim = marker.qfile.downloadClaim else {
             throw Error.missingClaim
         }
-        guard let token = appState.authService.loadToken(), !token.isEmpty,
-              let selfUserId = appState.currentUserId, !selfUserId.isEmpty else {
+        let hasToken = appState.authService.loadToken()?.isEmpty == false
+        guard hasToken, let selfUserId = appState.currentUserId, !selfUserId.isEmpty else {
             throw Error.downloadFailed("non autenticato")
         }
 
-        // Build a fresh provider per fetch — REST-only, no WS overhead.
-        let provider = BCryptoBackendProvider(
-            config: BackendConfig.pinned(serverUrl: appState.serverUrl, accessToken: token)
-        )
+        // UPLOAD-401 FIX (2026-07-03) / 2026-08-07 parity — use the
+        // refresher-wired provider builder instead of a bare
+        // BCryptoBackendProvider(config: .pinned(serverUrl:accessToken:)).
+        // The bare form carries no refresh token and never wires the
+        // Ed25519 device-renew fallback, so once the access token expired
+        // mid-session every voice-note download (and every retry) would
+        // 401 permanently with no self-heal. ChatAttachAnnounceReceiver
+        // (the cross-platform sibling of this file) already got this fix
+        // in 2026-07-03; this legacy iPhone-only qfile-v3 path did not.
+        // See AppState.makeUploadProvider's doc for the full incident.
+        let provider = appState.makeUploadProvider()
 
         // Capture the claim in the closure so FileTransfer.download's
         // generic downloadFile(fileId:) call ends up redeeming the
