@@ -347,7 +347,18 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// initialising the PQC handshake. Pre-negotiation step 1.
     /// Server forwards this back to the caller verbatim — see bcrypto-server
     /// pre-negotiation flow in cmd/bcrypto-lite/main.go (call_processing case).
+    ///
+    /// Same pre-flight gate as `sendCallAnswer` — this fires the moment the
+    /// incoming call_offer arrives, i.e. potentially the very first thing
+    /// this device does after a background/push wake, before the WS has
+    /// necessarily reconnected. Every caller already wraps this in
+    /// `try? await` (AppState), so a timeout degrades to a silent drop —
+    /// same as today, just no longer racing a doomed send.
     public func sendCallProcessing(callId: String, callerId: String) async throws {
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoCallingError.wsUnavailable
+        }
         ws.send(type: "call_processing", data: [
             "call_id": callId,
             "caller_id": callerId,
@@ -356,8 +367,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
 
     /// Notify the caller that the responder finished the PQC OFFER deserialisation
     /// and is ready to ring. Pre-negotiation step 2 — caller can now show "Ringing".
-    /// See bcrypto-server pre-negotiation flow.
+    /// See bcrypto-server pre-negotiation flow. Same pre-flight gate as
+    /// `sendCallProcessing` above, same reasoning.
     public func sendCallReady(callId: String, callerId: String) async throws {
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoCallingError.wsUnavailable
+        }
         ws.send(type: "call_ready", data: [
             "call_id": callId,
             "caller_id": callerId,
