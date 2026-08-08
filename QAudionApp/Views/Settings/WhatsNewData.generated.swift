@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.953",
+              date: "2026-08-08",
+              title: "v1.0.953",
+              bullets: [
+                "fix(call): apply the same WS-readiness gate to call_processing/call_ready",
+                "fix(call): gate call_answer/call_accepted on WS reconnect, not best-effort",
+                "fix(chat): arm refresh legs on the legacy voice-note download path",
+              ]),
         .init(id: "v1.0.952",
               date: "2026-08-07",
               title: "v1.0.952",
               bullets: [
+                "chore: regenerate changelog for v1.0.952",
                 "fix(auth): persist refresh-token rotation from every BCryptoBackendProvider",
               ]),
         .init(id: "v1.0.951",
@@ -170,13 +179,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.934",
                 "fix(attachments): stop routing small files through the storage system issueToken never checks",
-              ]),
-        .init(id: "v1.0.933",
-              date: "2026-08-03",
-              title: "v1.0.933",
-              bullets: [
-                "chore: regenerate changelog for v1.0.933",
-                "fix(avatar): stop reporting a contact write that never landed",
               ]),
     ]
 }
