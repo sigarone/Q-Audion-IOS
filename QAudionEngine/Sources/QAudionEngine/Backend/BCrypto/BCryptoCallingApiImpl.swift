@@ -149,6 +149,25 @@ public final class BCryptoCallingApiImpl: CallingApi {
         capabilities: [String],
         hasVideo: Bool
     ) async throws {
+        // Same pre-flight gate as sendCallOffer/sendCallOfferWithId — this
+        // is the CALLEE-side counterpart and was missing it. An incoming
+        // call that wakes the app from background hits CallKit's report
+        // rejected (domain=com.apple.CallKit.error.incomingcall code=2) and
+        // falls back to the in-app manual-answer path while the persistent
+        // WS is still a suspended iOS ghost task; without this gate the
+        // send() call below takes the best-effort "STALE socket — kicking
+        // reconnect; attempting send anyway" branch, which sends into the
+        // task `forceReconnect()` just cancelled and fails immediately
+        // instead of waiting for the reconnect it triggered. The caller
+        // then retries call_offer for 30s and gives up — the callee's
+        // CallKit UI showed answered but the call never actually connects.
+        // First attempt reliably fails this way; only a second attempt
+        // (giving the WS time to reconnect on its own) succeeds. Confirmed
+        // 2026-08-08 against accounts 133/134's device logs.
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoCallingError.wsUnavailable
+        }
         // Idempotency: drop duplicate answers for the same call session.
         // Can occur if the WebRTC onAnswerCreated callback fires twice or
         // if AppState logic races after receiving call_incoming twice.
@@ -349,7 +368,18 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// from `call_answer` (network-readiness, may be automatic) — see
     /// WIRE_SPEC.md §3.5. Server stamps sender_id/recipient_id and relays,
     /// same envelope class as call_processing/call_ready above.
+    ///
+    /// Same pre-flight gate as `sendCallAnswer`/`sendCallOffer` — see the
+    /// comment on `sendCallAnswer` for the failure mode this closes. The
+    /// caller (`AppState`) already wraps this in `try? await`, so a
+    /// timeout here degrades to today's silent drop rather than bricking
+    /// the call — it just now actually waits for the reconnect instead of
+    /// firing into a task that was cancelled a moment earlier.
     public func sendCallAccepted(callId: String) async throws {
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if !ready {
+            throw BCryptoCallingError.wsUnavailable
+        }
         ws.send(type: "call_accepted", data: [
             "call_id": callId,
         ])
