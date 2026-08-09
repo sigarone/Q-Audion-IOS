@@ -6215,6 +6215,16 @@ final class AppState: ObservableObject {
                 // permanently off whenever callState wasn't .ringing at
                 // answer time (e.g. still .active from the outgoing flow).
                 self.callService.handleCallAnswered()
+                // Mirror of the mic unblock above, for video: the direct
+                // dial path starts the local video pipeline paused (see
+                // startVideoPipeline's startPaused call site in
+                // dialAndCall) — the peer has now genuinely answered, so
+                // resume real camera capture/transmission. No-op if this
+                // wasn't a video call (videoPipeline is nil) or already
+                // running (setVideoPaused(false) is idempotent).
+                if self.isVideoCall {
+                    self.videoPipeline?.setVideoPaused(false)
+                }
                 // call_accepted two-flag latch (WIRE_SPEC §3.5): this is
                 // the "local handshake done" flag. If the callee's real-user
                 // accept already landed, finalize now; otherwise stash and
@@ -11306,8 +11316,22 @@ final class AppState: ObservableObject {
             // Best-effort: if camera permission is denied or hardware
             // is unavailable, the call continues without video (the
             // UI placeholders stay visible).
+            //
+            // startPaused: true — `callState = .active` above fires the
+            // instant beginAndroidOutgoing's call_offer/PQC OFFER round-trip
+            // returns, NOT once the callee actually answers (that mismatch
+            // is exactly what CallService.startAudioIOIfReady's own
+            // `peerAnswered` gate was added to fix for audio — see its
+            // kdoc). Without startPaused here the camera opened and began
+            // encoding/transmitting real frames toward a call nobody had
+            // accepted yet — reproduced against accounts 127/128,
+            // 2026-08-09. The camera/local preview still comes up
+            // immediately for responsive UX (same as the mid-call
+            // upgradeToVideo path already does); the call_answer WS handler
+            // resumes real capture via setVideoPaused(false) once the peer
+            // genuinely accepts.
             if video {
-                await startVideoPipeline(for: contactId)
+                await startVideoPipeline(for: contactId, startPaused: true)
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
             // PARALLEL with the legacy SDP-less PQC path during the
