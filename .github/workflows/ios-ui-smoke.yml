@@ -16,11 +16,9 @@
 # every fix below came from reading real CI logs, gh run watch/view):
 #   run 31078668610: xcodegen not installed -- added the "Install xcodegen"
 #     step (was missing from the ios-testflight.yml pattern this copied).
-#   run 31078878215: quiche.xcframework has no Simulator slice (built
-#     device-only on purpose, see build-quiche-xcframework.sh) -- dropped
-#     its cache/build steps, strip the framework dependency from a LOCAL
-#     project.yml copy instead (AppMasqueQuicheTransport.swift is already
-#     `#if canImport(Cquiche)`-gated, so not linking it compiles clean).
+#   run 31078878215: quiche.xcframework had no Simulator slice -- worked
+#     around by stripping it from a LOCAL project.yml copy. Moot since the
+#     MASQUE/QUIC transport was removed fleet-wide; no quiche step remains.
 #   run 31079254653: same class of problem, WireGuardKitGo this time --
 #     `libwg-go.a` (built by the QAudionPacketTunnel target's "Build
 #     WireGuard Go" script phase) is GOOS=ios device-only, Go has no
@@ -91,30 +89,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      # quiche.xcframework (MASQUE) is DEVICE-ONLY by design --
-      # scripts/build-quiche-xcframework.sh's own header comment says so
-      # explicitly ("Add the sim slice later only if simulator runs are
-      # needed") because of a known Rust/BoringSSL cross-compile snag
-      # (ring/boring-sys's C build doesn't tag its simulator-target object
-      # files correctly, so xcodebuild -create-xcframework rejects the
-      # merge with "multiple platforms not supported"). Fixing that needs
-      # Mac-side cargo iteration this workflow's author couldn't do
-      # (no Mac available when this was written 2026-08-06). Real fix
-      # if this is ever needed for more than a smoke test: add an
-      # aarch64-apple-ios-sim slice to that script with the right
-      # per-dependency C flags, then drop the project.yml patch below.
-      #
-      # For a UI smoke test we don't need MASQUE at all --
-      # AppMasqueQuicheTransport.swift is already gated
-      # `#if canImport(Cquiche)`, so simply never linking the framework
-      # compiles that path out cleanly (same pattern already proven for
-      # Reality.xcframework's optional linking). Strip the framework
-      # reference from a LOCAL copy of project.yml for this CI checkout
-      # only -- the committed file (and ios-testflight.yml's real,
-      # device-only build) is never touched.
-      #
-      # Same story as quiche above, different native toolchain: run
-      # 31079254653 failed the Simulator link with "Undefined symbols ...
+      # QAudionPacketTunnel is DEVICE-ONLY: run 31079254653 failed the
+      # Simulator link with "Undefined symbols ...
       # _darwin_arm_init_mach_exception_handler" from libwg-go.a --
       # WireGuardKitGo's `GOOS=ios` CGO cross-compile only ever targets
       # real iOS DEVICE (Go's runtime has no simulator-ABI variant of its
@@ -127,20 +103,22 @@ jobs:
       # the VPN tunnel extension isn't exercised by the onboarding screen,
       # and NetworkExtension.framework (the SDK the main app's own VPN
       # code links against) stays untouched -- only the extension TARGET
-      # embed is dropped, so it's never built for this lane.
-      - name: Strip quiche.xcframework + QAudionPacketTunnel (Simulator lane only)
+      # embed is dropped, so it's never built for this lane. Stripped from
+      # a LOCAL copy of project.yml for this CI checkout only -- the
+      # committed file (and ios-testflight.yml's real, device-only build)
+      # is never touched.
+      - name: Strip QAudionPacketTunnel (Simulator lane only)
         run: |
           set -e
           sed -i.bak \
-            -e '/- framework: Vendor\/quiche.xcframework/,+1d' \
             -e '/- target: QAudionPacketTunnel/,+1d' \
             QAudionApp/project.yml
           rm QAudionApp/project.yml.bak
-          if grep -qE "framework: Vendor/quiche.xcframework|target: QAudionPacketTunnel" QAudionApp/project.yml; then
-            echo "::error::sed failed to remove quiche/PacketTunnel dependency lines"
+          if grep -qE "target: QAudionPacketTunnel" QAudionApp/project.yml; then
+            echo "::error::sed failed to remove the PacketTunnel dependency lines"
             exit 1
           fi
-          echo "quiche.xcframework + QAudionPacketTunnel dependencies removed from this run's project.yml (committed file untouched)"
+          echo "QAudionPacketTunnel dependency removed from this run's project.yml (committed file untouched)"
 
       # Reality.xcframework (VLESS+REALITY) -- same cache key as
       # engine-tests.yml's ios-simulator-tests job so a warm cache is reused.

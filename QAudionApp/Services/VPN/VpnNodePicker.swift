@@ -5,9 +5,12 @@
 //   score = 0.4 · latencyScore + 0.4 · (1 − load) + 0.2 · jurisdictionScore
 //   latencyScore = 1 / (1 + latencyMs/300)
 //
-// TCP-pings each node's QUIC host:port (UDP latency isn't measurable without raw
-// sockets) with a 100ms cap, then returns the best — so the client prefers it-mi-2
-// over de-1 when nearer / less loaded, instead of taking `nodes.first`.
+// TCP-pings each node's WireGuard endpoint host:port (UDP latency isn't measurable
+// without raw sockets) with a 100ms cap, then returns the best — so the client
+// prefers it-mi-2 over de-1 when nearer / less loaded, instead of taking
+// `nodes.first`. The endpoint arrives in the server's legacy `quic_addr` JSON
+// field (see VpnNode.quicAddr); there is no QUIC involved, it is the WireGuard
+// UDP endpoint.
 
 import Foundation
 import Network
@@ -54,7 +57,8 @@ enum VpnNodePicker {
         }
     }
 
-    /// TCP-connect to the node's QUIC host:port as a latency proxy; 100ms cap → 999.
+    /// TCP-connect to the node's WireGuard endpoint host:port as a latency
+    /// proxy; 100ms cap → 999.
     private static func measureLatencyMs(_ node: VpnNode) async -> Int {
         let parts = node.quicAddr.split(separator: ":", maxSplits: 1)
         let host = String(parts.first ?? "")

@@ -19,12 +19,10 @@ DerivedData/
 # Graphify (AST graph cache)
 graphify-out/
 
-# MASQUE: quiche QUIC/H3 backend — built in CI (or locally) by
-# scripts/build-quiche-xcframework.sh, never committed (large binary).
-# Reality (VLESS+REALITY over xray-core, scripts/build-reality-xcframework.sh)
-# also lands here (Reality.xcframework) — same rule, no separate entry needed.
+# Vendored xcframeworks built in CI (or locally), never committed (large
+# binaries): Reality.xcframework (VLESS+REALITY over xray-core, built by
+# scripts/build-reality-xcframework.sh) lands here.
 QAudionApp/Vendor/
-.quiche-build/
 
 # Local Stitch reference screenshots (not committed)
 .stitch_*.png

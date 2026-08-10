@@ -2261,16 +2261,6 @@ final class AppState: ObservableObject {
             }
         }
 
-        // MASQUE CONNECT-UDP — register the quiche-backed transport (linked
-        // only in the app target via Vendor/quiche.xcframework) and enable the
-        // gated MASQUE TURN fallback. If Cquiche isn't linked, the factory
-        // stays nil and the call path ignores MASQUE entirely (falls back to
-        // WSS-TURN / Tor). See Transport/Masque/ in QAudionEngine.
-        #if canImport(Cquiche)
-        MasqueTransportFactory.register { AppMasqueQuicheTransport() }
-        MasqueFeature.isEnabled = true
-        #endif
-
         // W541-3 — start structured telemetry pump (encrypted batch
         // POST every 5 s). Same primitives-only API constraint as
         // LiveLogStreamer per CLAUDE.md "Hard-won lesson 16".

@@ -16,10 +16,9 @@
 # `-target="ios" requires Xcode` — i.e. everything below that line is
 # genuinely untested pending a real CI/macOS run.
 #
-# Unlike build-quiche-xcframework.sh (which clones an EXTERNAL repo pinned by
-# QUICHE_REF), the Reality Go source lives IN THIS REPO (../RealityCore) —
-# there is no external ref to pin; the cache key below is the hash of that
-# module's own go.sum + this script, so any change to either invalidates it.
+# The Reality Go source lives IN THIS REPO (../RealityCore), not an external
+# clone — there is no external ref to pin; the cache key below is the hash of
+# that module's own go.sum + this script, so any change to either invalidates it.
 set -euo pipefail
 
 ROOT="${ROOT:-$(pwd)}"
@@ -56,9 +55,9 @@ fi
 # build ios/arm64 (device) AND iossimulator/arm64+amd64, stitching all three
 # into one xcframework. Needed because engine-tests.yml's ios-simulator-tests
 # job links this into a Simulator xcodebuild — device-only (ios/arm64, the
-# original choice here, mirroring build-quiche-xcframework.sh) can only ever
-# be consumed by the TestFlight archive job, leaving the wiring completely
-# CI-unverified until the next tag push. The extra simulator slices cost
+# original choice here) can only ever be consumed by the TestFlight archive
+# job, leaving the wiring completely CI-unverified until the next tag push.
+# The extra simulator slices cost
 # more build time but let the fast, every-push simulator job actually prove
 # the binaryTarget links and RealityManager's real branch compiles.
 mkdir -p "$(dirname "$OUT_XC")"

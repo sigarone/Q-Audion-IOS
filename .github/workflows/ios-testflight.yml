@@ -220,45 +220,16 @@ jobs:
           cache: false
 
       # ----------------------------------------------------------
-      # 3c) Build quiche.xcframework -- MASQUE CONNECT-UDP backend.
-      #     Cached by QUICHE_REF so repeat builds skip the ~10 min
-      #     cargo + BoringSSL compile. Produces QAudionApp/Vendor/
-      #     quiche.xcframework (the `Cquiche` module imported by
-      #     AppMasqueQuicheTransport). Runs BEFORE xcodegen so the
-      #     project.yml framework reference resolves. macos runners
-      #     ship rustup/cargo preinstalled.
-      # ----------------------------------------------------------
-      - name: Cache quiche xcframework
-        id: cache-quiche
-        uses: actions/cache@v5
-        with:
-          path: QAudionApp/Vendor/quiche.xcframework
-          key: quiche-xcframework-${{ runner.os }}-0.22.0-${{ hashFiles('scripts/build-quiche-xcframework.sh') }}
-
-      - name: Build quiche xcframework
-        if: steps.cache-quiche.outputs.cache-hit != 'true'
-        env:
-          QUICHE_REF: '0.22.0'
-        run: |
-          set -e
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source "$HOME/.cargo/env"
-          fi
-          bash scripts/build-quiche-xcframework.sh
-
-      # ----------------------------------------------------------
-      # 3d) Build Reality.xcframework -- VLESS+REALITY-over-xray-core
+      # 3c) Build Reality.xcframework -- VLESS+REALITY-over-xray-core
       #     censorship-bypass transport (github.com/xtls/libxray), the
       #     PRIMARY bypass mechanism per bcrypto-server's
       #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md (Tor stays, additive,
       #     unchanged -- design doc §7). Source lives in ../RealityCore (this
       #     repo, not an external clone); cache key is that module's own
-      #     go.sum + this build script, since there is no external ref to pin
-      #     the way QUICHE_REF pins cloudflare/quiche. Produces
-      #     QAudionApp/Vendor/Reality.xcframework (the `Reality` module).
-      #     Runs BEFORE xcodegen for consistency with the quiche step, though
-      #     Reality is consumed via QAudionEngine (SPM), not project.yml.
+      #     go.sum + this build script, since there is no external ref to pin.
+      #     Produces QAudionApp/Vendor/Reality.xcframework (the `Reality`
+      #     module). Runs BEFORE xcodegen, though Reality is consumed via
+      #     QAudionEngine (SPM), not project.yml.
       #
       #     NOTE (2026-07-08): wired for real -- QAudionEngine/Package.swift's
       #     `hasRealityXcframework` check adds this as a real binaryTarget +
@@ -713,16 +684,6 @@ jobs:
             plutil -replace MinimumOSVersion -string "16.0" "$FW/Info.plist"
           else
             echo "onnxruntime.framework not in IPA -- skipping MinimumOSVersion patch"
-          fi
-
-          # Remove libquiche.a from the app bundle root.
-          # Xcode 26 copies the static xcframework's .a into the bundle even with
-          # embed:false in project.yml. Apple validation (altool 409) rejects any
-          # standalone .a in the bundle. The symbols are already linked into the
-          # QAudionApp binary; the .a copy is spurious and safe to delete.
-          if [ -f "Payload/QAudionApp.app/libquiche.a" ]; then
-            rm "Payload/QAudionApp.app/libquiche.a"
-            echo "Removed spurious Payload/QAudionApp.app/libquiche.a"
           fi
 
           IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \

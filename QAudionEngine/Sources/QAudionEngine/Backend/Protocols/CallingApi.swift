@@ -352,10 +352,6 @@ public struct RelayResponse: Decodable, Equatable {
     public let relays: [RelayServer]
     public let wssTurnUrl: String?
     public let onionAddress: String?
-    /// Top-level `masque_url` — the MASQUE proxy endpoint for the HTTP/3
-    /// CONNECT-UDP TURN fallback. Optional: older servers omit it; the
-    /// MASQUE path is gated and inert when this is nil. Mirrors Android.
-    public let masqueUrl: String?
     /// Top-level `reality` block — the VLESS+REALITY censorship-bypass front
     /// parameters (design doc §4 / bcrypto-server
     /// CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Present ONLY when the server
@@ -365,11 +361,10 @@ public struct RelayResponse: Decodable, Equatable {
     /// `onionAddress` — never a default route.
     public let reality: RealityRelayParams?
 
-    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, masqueUrl: String? = nil, reality: RealityRelayParams? = nil) {
+    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, reality: RealityRelayParams? = nil) {
         self.relays = relays
         self.wssTurnUrl = wssTurnUrl
         self.onionAddress = onionAddress
-        self.masqueUrl = masqueUrl
         self.reality = reality
     }
 
@@ -380,8 +375,6 @@ public struct RelayResponse: Decodable, Equatable {
             ?? c.decodeIfPresent(String.self, forKey: .wssTurnUrlSnake)
         self.onionAddress = try c.decodeIfPresent(String.self, forKey: .onionAddress)
             ?? c.decodeIfPresent(String.self, forKey: .onionAddressSnake)
-        self.masqueUrl = try c.decodeIfPresent(String.self, forKey: .masqueUrl)
-            ?? c.decodeIfPresent(String.self, forKey: .masqueUrlSnake)
         self.reality = try c.decodeIfPresent(RealityRelayParams.self, forKey: .reality)
     }
 
@@ -391,8 +384,6 @@ public struct RelayResponse: Decodable, Equatable {
         case wssTurnUrlSnake = "wss_turn_url"
         case onionAddress
         case onionAddressSnake = "onion_address"
-        case masqueUrl
-        case masqueUrlSnake = "masque_url"
         case reality
     }
 }

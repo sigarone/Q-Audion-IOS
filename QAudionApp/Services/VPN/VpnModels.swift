@@ -15,6 +15,9 @@ struct VpnNode: Codable, Identifiable, Hashable {
     let lat: Double
     let lon: Double
     /// WireGuard endpoint "host:port" (also the primary connect address).
+    /// Named `quicAddr` only because the server's JSON key is the legacy
+    /// `quic_addr` — nothing on this path speaks QUIC. Renaming needs a
+    /// server-side wire change, so the key (and the property) stay as-is.
     let quicAddr: String
     let wsAddr: String
     let loadPct: Double

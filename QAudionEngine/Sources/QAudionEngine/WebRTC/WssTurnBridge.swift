@@ -103,9 +103,11 @@ public final class WssTurnBridge: @unchecked Sendable {
 
     // MARK: - STUN/TURN wire parsing (RFC 5389 §6, RFC 5766 §2/§11.4/§14.1)
     //
-    // `internal` (module-visible, not `private`) so `MasqueTurnBridge` — the
-    // sibling HTTP/3 TURN fallback bridge, same hijack-fix shape, same
-    // module — reuses this parsing instead of duplicating it (2026-07-09).
+    // These were made `internal` (module-visible, not `private`) in 2026-07-09
+    // so the sibling MASQUE/HTTP-3 TURN bridge could reuse the same parsing.
+    // That bridge is gone (MASQUE/QUIC removed fleet-wide), so today the only
+    // consumer is this class. Left `internal` rather than re-narrowed to
+    // `private` to keep the removal a pure deletion; safe to tighten later.
 
     enum StunMessageClass {
         case request
