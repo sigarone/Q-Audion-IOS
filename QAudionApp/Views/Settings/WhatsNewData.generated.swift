@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.956",
+              date: "2026-08-10",
+              title: "v1.0.956",
+              bullets: [
+                "feat(audio): negotiated 60 ms / 256-byte long audio profile — receive side",
+              ]),
         .init(id: "v1.0.955",
               date: "2026-08-10",
               title: "v1.0.955",
               bullets: [
+                "chore: regenerate changelog for v1.0.955",
                 "fix(telemetry): report padOverflowFrames on the iOS call teardown summary",
                 "refactor(transport): remove the MASQUE/QUIC stack from iOS",
                 "fix(audio): port the block/ceiling contract and pad-overflow guard to iOS",
@@ -173,14 +180,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.937",
                 "fix(avatar): self-heal a stale sandbox-container avatar path",
                 "fix(livelog): bound the upload pump, stop losing evidence on a hung chunk",
-              ]),
-        .init(id: "v1.0.936",
-              date: "2026-08-03",
-              title: "v1.0.936",
-              bullets: [
-                "chore: regenerate changelog for v1.0.936",
-                "fix(call): make the audio-start gate diagnosable remotely, not just via Xcode",
-                "fix(auth): Keychain-persist deviceId so it survives reinstall like the refresh token",
               ]),
     ]
 }
