@@ -7,8 +7,18 @@ public final class QAudionAudioProcessor {
     public var onEncodedFrame: ((Data) -> Void)?
     private var isMuted = false
 
-    public init(codec: OpusCodec = OpusCodec(), jitterBufferCapacity: Int = AudioConstants.jitterBufferFramesWsRelay) {
-        self.codec = codec; self.jitterBuffer = JitterBuffer(capacity: jitterBufferCapacity)
+    /// W-LONGAUDIO (2026-08-10) — the jitter capacity is a DURATION, not a frame
+    /// count. `jitterBufferMsWsRelay` is 160 ms, which is 8 frames at 20 ms
+    /// (unchanged) and 3 at 60 ms. Sized in frames it would have been 480 ms of
+    /// standing latency on a long-profile call.
+    public init(codec: OpusCodec = OpusCodec(),
+                jitterBufferMs: Int = AudioConstants.jitterBufferMsWsRelay) {
+        self.codec = codec
+        self.jitterBuffer = JitterBuffer(
+            capacity: AudioConstants.framesForMs(jitterBufferMs,
+                                                 frameDurationMs: codec.encodeFrameDurationMs),
+            frameDurationMs: codec.encodeFrameDurationMs
+        )
     }
 
     public func processOutgoing(pcmFrame: Data) -> Data? {
@@ -22,6 +32,13 @@ public final class QAudionAudioProcessor {
     public func processIncoming(opusFrame: Data) -> Data? {
         jitterBuffer.push(opusFrame)
         guard let frame = jitterBuffer.pop() else { return codec.decodePLC() }
+        // W-PADOVERFLOW (2026-08-10) — a zero-length body is the fleet's
+        // "this packet carries no audio" convention (see `OpusCodec.fallbackEncode`
+        // and `QAudionEngine.processOutgoingAudio`). Conceal it like the lost
+        // frame it represents. Without this, `codec.decode` rejects the empty
+        // frame, returns nil, and the `??` fallbacks upstream hand an EMPTY
+        // buffer to the playout path as if it were PCM.
+        guard !frame.isEmpty else { return codec.decodePLC() }
         return codec.decode(frame)
     }
 

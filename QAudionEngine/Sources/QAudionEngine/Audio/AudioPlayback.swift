@@ -24,13 +24,30 @@ public final class AudioPlayback {
         self.engine = engine; self.playerNode = player; self.format = fmt; isRunning = true
     }
 
+    /// W-LONGAUDIO (2026-08-10) — sized from THE FRAME, not from the encode
+    /// constant.
+    ///
+    /// This class is not on the live 1:1 path any more (single-engine fix: the
+    /// player node moved onto `AudioCapture`'s engine, and `CallService` only
+    /// ever constructs and stops this one — grep for `audioPlayback?.playFrame`
+    /// returns nothing). It is fixed anyway because the old shape is a trap
+    /// waiting for whoever rewires it: `frameCapacity` was pinned to 960 samples
+    /// and the `memcpy` was clamped to 1920 bytes, so a 60 ms frame would have
+    /// been silently TRUNCATED to its first third — two thirds of every word
+    /// dropped, at the right rate, with nothing logged.
+    ///
+    /// The length is arithmetic, not a guess: decoded PCM here is Int16 mono, so
+    /// samples = bytes / 2.
     public func playFrame(_ pcmData: Data) {
         guard isRunning, let player = playerNode, let fmt = format else { return }
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(AudioConstants.samplesPerFrame)) else { return }
-        buffer.frameLength = AVAudioFrameCount(AudioConstants.samplesPerFrame)
+        let samples = pcmData.count / 2
+        guard samples > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: fmt,
+                                            frameCapacity: AVAudioFrameCount(samples)) else { return }
+        buffer.frameLength = AVAudioFrameCount(samples)
         pcmData.withUnsafeBytes { raw in
             if let src = raw.baseAddress, let dst = buffer.int16ChannelData?[0] {
-                memcpy(dst, src, min(pcmData.count, AudioConstants.bytesPerFrame))
+                memcpy(dst, src, samples * 2)
             }
         }
         player.scheduleBuffer(buffer)

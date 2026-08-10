@@ -141,9 +141,125 @@ public enum AudioConstants {
         return min(max(kbps, 1), max(1, ceilingKbps))
     }
 
-    public static let jitterBufferFramesP2P = 3
-    public static let jitterBufferFramesWsRelay = 8
-    public static let jitterBufferFramesSignalRelay = 150
-    public static let playbackRingBufferFrames = 10
+    // ── W-LONGAUDIO (2026-08-10): frame counts are durations in disguise ──
+    //
+    // Every constant below was chosen as a DURATION and then written down as a
+    // number of frames, because there was only ever one frame duration. The
+    // moment a second one exists that arithmetic is silently wrong by 3x: a
+    // "150 frame" relay buffer is 3 s at 20 ms and 9 s at 60 ms, and nothing
+    // in the type system notices.
+    //
+    // The millisecond value is now the constant and the frame count is derived
+    // at the point of use. The old names are kept as derived properties so no
+    // call site has to move and so the two can never disagree.
+
+    /// Jitter depth for a direct peer-to-peer path: 60 ms.
+    public static let jitterBufferMsP2P = 60
+    /// Jitter depth for the WS relay: 160 ms.
+    public static let jitterBufferMsWsRelay = 160
+    /// Jitter depth for the store-and-forward signal relay: 3 s.
+    public static let jitterBufferMsSignalRelay = 3000
+    /// Playback ring depth: 200 ms.
+    public static let playbackRingBufferMs = 200
+
+    /// Frames covering `ms` at `frameDurationMs`, rounded to NEAREST and never
+    /// below 1.
+    ///
+    /// Rounding, not truncation, is load-bearing. Two watermarks 20 ms apart
+    /// (140 and 160) both floor to 2 frames at 60 ms and stop being two
+    /// watermarks at all — a tier boundary that silently ceases to exist is
+    /// exactly the class of bug this profile is most likely to introduce.
+    /// At 20 ms every value in this file is an exact multiple, so rounding is
+    /// provably a no-op there and today's numbers are unchanged.
+    public static func framesForMs(_ ms: Int, frameDurationMs: Int = AudioConstants.frameDurationMs) -> Int {
+        guard frameDurationMs > 0 else { return 1 }
+        return max(1, (ms + frameDurationMs / 2) / frameDurationMs)
+    }
+
+    /// 3 at 20 ms — unchanged.
+    public static var jitterBufferFramesP2P: Int { framesForMs(jitterBufferMsP2P) }
+    /// 8 at 20 ms — unchanged.
+    public static var jitterBufferFramesWsRelay: Int { framesForMs(jitterBufferMsWsRelay) }
+    /// 150 at 20 ms — unchanged.
+    public static var jitterBufferFramesSignalRelay: Int { framesForMs(jitterBufferMsSignalRelay) }
+    /// 10 at 20 ms — unchanged.
+    public static var playbackRingBufferFrames: Int { framesForMs(playbackRingBufferMs) }
+
     public static let comfortNoiseAmplitude: Int16 = 100
+}
+
+/// W-LONGAUDIO (2026-08-10) — the two audio wire profiles, as one value.
+///
+/// A profile is exactly two independent numbers — how long a frame is, and how
+/// big the constant plaintext block that carries it is — plus everything
+/// derivable from them. They are independent axes on purpose: a 40 ms frame
+/// fits today's 120-byte block, so neither number may ever be inferred from
+/// the other.
+///
+/// `standard` is what every build ships and what every un-negotiated call
+/// uses. `long60x256` is reached ONLY through capability negotiation with a
+/// peer that advertised it (see `CallCapabilities.resolveAudioProfile`), and
+/// only in a build whose send kill switch is on. There is no third profile and
+/// no way to construct an arbitrary one from outside this file: the memberwise
+/// initialiser is private so a stray `AudioProfile(frameDurationMs: 33, ...)`
+/// cannot appear in a call path.
+///
+/// Mirrors Kotlin `com.bcrypto.qaudion.audio.AudioProfile` and the Desktop
+/// `AudioProfile` object. All arithmetic below is `AudioConstants`', so the
+/// three platforms cannot compute different sizes from the same profile.
+public struct AudioProfile: Equatable, Sendable {
+    /// Opus frame duration in milliseconds. 20 or 60.
+    public let frameDurationMs: Int
+    /// Total constant plaintext block: 2-byte length header + Opus frame +
+    /// CSPRNG filler. 120 or 256.
+    public let blockBytes: Int
+
+    private init(frameDurationMs: Int, blockBytes: Int) {
+        self.frameDurationMs = frameDurationMs
+        self.blockBytes = blockBytes
+    }
+
+    /// Today's profile, and the only one a build sends without negotiating:
+    /// 20 ms frames in a 120-byte block at 32 kbps CBR.
+    public static let standard = AudioProfile(frameDurationMs: 20, blockBytes: AudioConstants.blockBytesStandard)
+
+    /// `aprof-60x256-v1`: 60 ms frames in a 256-byte block at 32 kbps CBR.
+    /// Same audio quality as `standard`; a third of the packets, and therefore
+    /// a third of the fixed 67 bytes of seal and envelope per packet.
+    public static let long60x256 = AudioProfile(frameDurationMs: 60, blockBytes: AudioConstants.blockBytesLong)
+
+    /// PCM samples in one frame of this profile. 960 / 2880.
+    public var samplesPerFrame: Int { AudioConstants.sampleRate / 1000 * frameDurationMs }
+
+    /// PCM bytes in one frame of this profile (mono S16). 1920 / 5760.
+    public var bytesPerFrame: Int { samplesPerFrame * (AudioConstants.bitsPerSample / 8) * AudioConstants.channels }
+
+    /// Bytes the Opus CBR frame occupies inside the block. 80 / 240.
+    public func opusBytes(bitrateBps: Int = AudioConstants.opusBitrate) -> Int {
+        AudioConstants.opusCbrBytes(bitrateBps: bitrateBps, frameDurationMs: frameDurationMs)
+    }
+
+    /// The highest bitrate whose frame still fits this profile's block, in bps.
+    /// 41600 for `standard`, 32000 for `long60x256`.
+    ///
+    /// Note the direction: the LONG profile's ceiling is LOWER than the
+    /// standard one's, and it has exactly zero headroom — 32 kbps at 60 ms is
+    /// 240 bytes against a 240-byte budget. Every bitrate that reaches the
+    /// encoder must be clamped with the ACTIVE profile's numbers, never with
+    /// the defaults, or a user preference of 40 kbps overflows every single
+    /// frame and the call degrades to constant-rate silence.
+    public var maxBitrateBps: Int {
+        AudioConstants.maxBitrateForBlock(blockBytes: blockBytes, frameDurationMs: frameDurationMs)
+    }
+
+    /// Clamp `kbps` to what this profile's block can carry.
+    public func clamp(kbps: Int) -> Int {
+        AudioConstants.clampToBlock(kbps, blockBytes: blockBytes, frameDurationMs: frameDurationMs)
+    }
+
+    /// Frames covering `ms` at this profile's frame duration, rounded to
+    /// nearest, never below 1.
+    public func framesForMs(_ ms: Int) -> Int {
+        AudioConstants.framesForMs(ms, frameDurationMs: frameDurationMs)
+    }
 }

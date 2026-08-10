@@ -441,7 +441,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 recipientId: recipientId,
                 sdp: sdp,
                 // R-4: same sovereign-only strip on the WebRTC-rail offer.
-                capabilities: advertisedCapabilitiesFilter(CallCapabilities.local),
+                capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps()),
                 callerDisplay: callerDisplay,
                 hasVideo: callHasVideo
             )
@@ -449,7 +449,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             try await callingApi.sendCallOffer(
                 recipientId: recipientId,
                 sdp: sdp,
-                capabilities: advertisedCapabilitiesFilter(CallCapabilities.local),
+                capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps()),
                 callerDisplay: callerDisplay,
                 hasVideo: callHasVideo
             )
@@ -570,7 +570,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             sdp: answerSdp,
             // R-4 (DEFECT 2): strip `vkey-v1` when sovereign-only is on so
             // a sovereign user who ANSWERS also refuses phone-level video.
-            capabilities: advertisedCapabilitiesFilter(CallCapabilities.local),
+            capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps()),
             hasVideo: !audioOnly
         )
         state = .connecting

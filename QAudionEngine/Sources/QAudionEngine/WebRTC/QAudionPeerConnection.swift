@@ -351,6 +351,10 @@ public final class QAudionPeerConnection: NSObject {
     /// `peer` is `nil` for legacy clients that didn't include the
     /// `capabilities` field on their `call_offer`/`call_answer`; the
     /// negotiate function downgrades that to useSFrame=false.
+    /// W-LONGAUDIO (2026-08-10) — the result now also carries the peer's RAW
+    /// list (`negotiate` copies it from the `peer` argument). No wire change and
+    /// no new field on any message: the list was already here and was simply
+    /// being discarded after the intersection was taken.
     public func acceptPeerCapabilities(_ peer: [String]?) {
         let n = CallCapabilities.negotiate(peer: peer)
         peerCapsLock.lock(); peerCallCapabilities = n; peerCapsLock.unlock()

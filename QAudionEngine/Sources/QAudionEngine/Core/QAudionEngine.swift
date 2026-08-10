@@ -51,6 +51,26 @@ public final class QAudionEngine: @unchecked Sendable {
     private static let adaptiveTarget = AudioConstants.blockBytesStandard
     private static let adaptiveHeader = AudioConstants.lengthHeaderBytes
 
+    // ── W-LONGAUDIO (2026-08-10) — the per-call audio profile ──
+    //
+    // The block size is now a property of the CALL, not of the build. It is
+    // latched exactly once, before capture starts, and is terminal: there is no
+    // setter that can move it afterwards, no re-evaluation and no mid-call
+    // switch, in any direction, for any reason. That is not caution about
+    // complexity — a block that can change mid-call makes the packet size a
+    // function of something other than the profile, and the constant-size
+    // property stops being provable.
+    //
+    // Defaults to `.standard` and stays there unless `latchAudioProfile` is
+    // called with something else, which requires a peer that negotiated it and a
+    // build with the send kill switch on. A call that never latches sends
+    // byte-identical wire to every build that shipped before this one.
+    private var audioProfile: AudioProfile = .standard
+    private var audioProfileLatched = false
+
+    /// The block this call seals into. 120 unless the long profile was latched.
+    private var adaptiveTargetForCall: Int { audioProfile.blockBytes }
+
     public init(config: EngineConfig = .production()) { self.config = config }
 
     public func initialize() throws {
@@ -62,15 +82,60 @@ public final class QAudionEngine: @unchecked Sendable {
         rxSessionManager = SessionManager()
         aeadCipher = AeadCipher()
         pqcKeyExchange = PqcKeyExchange()
+        // W-LONGAUDIO — reset the profile BEFORE the processor is built, so a
+        // new call can never inherit the previous one's block. `initialize()` is
+        // the start of a call's life; the latch happens later, after the
+        // handshake, and only if the peer agreed.
+        audioProfile = .standard
+        audioProfileLatched = false
         audioProcessor = QAudionAudioProcessor(
             codec: OpusCodec(config: .secure()),
-            jitterBufferCapacity: AudioConstants.jitterBufferFramesWsRelay
+            jitterBufferMs: AudioConstants.jitterBufferMsWsRelay
         )
         // W479 — reset adaptive-padding state so each call starts clean.
         useAdaptivePadding = false
         sessionKey = nil
         txSeqAdaptive = 0
         state = .initialized
+    }
+
+    /// W-LONGAUDIO (2026-08-10) — latch the audio profile for this call.
+    ///
+    /// Call ONCE, after the capability negotiation result is in hand and before
+    /// audio capture starts. Rebuilds the Opus codec for the profile's frame
+    /// duration and block, and re-sizes the jitter buffer in milliseconds.
+    ///
+    /// Idempotent and TERMINAL by construction: the second call is refused, not
+    /// applied. If the negotiation result is not available when this runs, the
+    /// caller passes `.standard` (or does not call at all) and the call runs
+    /// standard for its whole life — which is the correct outcome, not a
+    /// condition to retry out of. A retry loop here would reintroduce exactly the
+    /// mid-call switch the constant-rate property forbids.
+    ///
+    /// - Returns: `true` if this call latched the profile; `false` if it was
+    ///   already latched, or the engine is past the point where it is safe.
+    @discardableResult
+    public func latchAudioProfile(_ profile: AudioProfile) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !audioProfileLatched else { return false }
+        guard state == .initialized || state == .sessionActive else { return false }
+        audioProfileLatched = true
+        guard profile != audioProfile else { return true }
+        audioProfile = profile
+        // Rebuild the codec around the new operating point. `Config(profile:)`
+        // clamps the bitrate to what the block can carry before libopus sees it,
+        // which for the long profile is 32 kbps with zero headroom.
+        audioProcessor = QAudionAudioProcessor(
+            codec: OpusCodec(config: OpusCodec.Config(profile: profile)),
+            jitterBufferMs: AudioConstants.jitterBufferMsWsRelay
+        )
+        return true
+    }
+
+    /// The profile this call is sealing into. `.standard` until latched.
+    public var activeAudioProfile: AudioProfile {
+        lock.lock(); defer { lock.unlock() }
+        return audioProfile
     }
 
     /// W479 — `adaptivePadding: true` switches audio to the
@@ -144,20 +209,26 @@ public final class QAudionEngine: @unchecked Sendable {
             // it (see processIncomingAudio), and the constant-rate, constant-
             // size property holds. The counter still fires so the
             // misconfiguration is visible in `EngineStats`.
-            let budget = Self.adaptiveTarget - Self.adaptiveHeader
+            // W-LONGAUDIO (2026-08-10) — the block is THIS CALL's, latched once.
+            // 120 unless `latchAudioProfile` was given the long profile, which
+            // requires a peer that advertised both tags and a build with the
+            // send kill switch on. Everything below is unchanged arithmetic
+            // around a different constant, so a standard call is byte-identical.
+            let target = adaptiveTargetForCall
+            let budget = target - Self.adaptiveHeader
             let overflow = opus.count > budget
             if overflow { stats.padOverflowFrames &+= 1 }
             let bodyLen = overflow ? 0 : opus.count
             // Build 2-byte-len-header + opus + CSPRNG filler, always exactly
-            // `adaptiveTarget` bytes of plaintext.
+            // `target` bytes of plaintext.
             var rng = SystemRandomNumberGenerator()
             let hi = UInt8((bodyLen >> 8) & 0xFF)
             let lo = UInt8(bodyLen & 0xFF)
-            let tailLen = Self.adaptiveTarget - Self.adaptiveHeader - bodyLen
+            let tailLen = target - Self.adaptiveHeader - bodyLen
             let tail: [UInt8] = tailLen > 0
                 ? (0..<tailLen).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
                 : []
-            var padded = Data(capacity: Self.adaptiveTarget)
+            var padded = Data(capacity: target)
             padded.append(hi); padded.append(lo)
             if bodyLen > 0 { padded.append(contentsOf: opus) }
             padded.append(contentsOf: tail)
@@ -365,6 +436,7 @@ public final class QAudionEngine: @unchecked Sendable {
     public func reconfigureAudioCodec(bitrateKbps: Int, plp: Int) {
         lock.lock()
         let proc = audioProcessor
+        let profile = audioProfile
         lock.unlock()
         guard let proc else { return }
         // W-BLOCKSIZE — this is the mid-call bitrate change, and mid-call is
@@ -375,9 +447,31 @@ public final class QAudionEngine: @unchecked Sendable {
         // later can never silently push a frame past what the block holds.
         // Today the derived ceiling is the looser of the two (41 kbps at 120 B
         // / 20 ms), so nothing about the current operating point changes.
-        let clampedBr = AudioConstants.clampToBlock(min(max(bitrateKbps, 8), 40))
+        //
+        // W-LONGAUDIO (2026-08-10) — clamp with the ACTIVE profile's block and
+        // frame duration, and rebuild the config from the profile.
+        //
+        // Both halves of that are load-bearing, and both were wrong for a long
+        // profile call:
+        //
+        //   • the clamp took `clampToBlock`'s STANDARD defaults, so a stored
+        //     preference of 40 kbps sailed through the 41 kbps standard ceiling
+        //     and then encoded 300 bytes into a 240-byte budget — overflow on
+        //     EVERY frame, which the pad logic turns into constant-rate silence.
+        //     The long profile's ceiling is 32 kbps and has exactly zero
+        //     headroom: 32 kbps at 60 ms is 240 bytes against 240 available.
+        //     The 14 spare bytes are `blockSafetyBytes`, not budget.
+        //
+        //   • the rebuilt `Config` took the DEFAULT 20 ms / 120 B, so a mid-call
+        //     retune would have silently reset a latched 60 ms encoder back to
+        //     20 ms — a mid-call profile switch, arriving through the auto-tuner
+        //     rather than through anything that looks like a profile decision.
+        //
+        // The 40 kbps product cap stays; `profile.clamp` is the wire gate
+        // underneath it.
+        let clampedBr = profile.clamp(kbps: min(max(bitrateKbps, 8), 40))
         proc.codec.reconfigure(OpusCodec.Config(
-            bitrate: clampedBr * 1000, complexity: 10, enableHpf: true))
+            profile: profile, bitrate: clampedBr * 1000, complexity: 10, enableHpf: true))
         proc.codec.setPacketLossPct(max(0, min(plp, 100)))
     }
 }

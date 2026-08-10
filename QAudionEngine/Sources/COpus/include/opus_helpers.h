@@ -63,4 +63,38 @@ static inline int opus_helper_set_dtx(OpusEncoder *enc, opus_int32 dtx) {
     return opus_encoder_ctl(enc, OPUS_SET_DTX(dtx));
 }
 
+/* W-LONGAUDIO (2026-08-10) — pin the encoder's frame duration explicitly.
+ *
+ * libopus infers the frame duration from the `frame_size` argument passed to
+ * `opus_encode`, and that inference is what sizes a CBR packet. Setting it
+ * explicitly makes the operating point a stated fact rather than a derived
+ * one, which matters the moment two frame durations exist in the fleet: a
+ * mismatch between what we ask for and what we hand over stops being silent.
+ *
+ * Pass one of the OPUS_FRAMESIZE_* constants from opus_defines.h
+ * (OPUS_FRAMESIZE_20_MS = 5004, OPUS_FRAMESIZE_60_MS = 5006). */
+static inline int opus_helper_set_expert_frame_duration(OpusEncoder *enc,
+                                                        opus_int32 frame_duration) {
+    return opus_encoder_ctl(enc, OPUS_SET_EXPERT_FRAME_DURATION(frame_duration));
+}
+
+/* W-LONGAUDIO (2026-08-10) — the decoder's own record of how long the LAST
+ * packet it decoded was, in samples per channel.
+ *
+ * This is the only correct input to packet-loss concealment. opus.h is
+ * explicit that in the PLC case (`data == NULL`) `frame_size` is not buffer
+ * capacity but "exactly the duration of audio that is missing"; concealing a
+ * different duration than the stream carries walks the playout clock away
+ * from the sender's with every concealed frame and no counter moves. Deriving
+ * that duration from a negotiated profile would be wrong on an endpoint that
+ * holds no negotiation state, and wrong again if the peer's frame duration
+ * ever differs from what was negotiated. The decoder always knows.
+ *
+ * Writes samples-per-channel into *samples. Returns OPUS_OK (0) on success;
+ * on any error *samples is left untouched, so the caller must initialise it. */
+static inline int opus_helper_get_last_packet_duration(OpusDecoder *dec,
+                                                       opus_int32 *samples) {
+    return opus_decoder_ctl(dec, OPUS_GET_LAST_PACKET_DURATION(samples));
+}
+
 #endif /* OPUS_HELPERS_H */

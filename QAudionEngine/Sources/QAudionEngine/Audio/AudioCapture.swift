@@ -25,9 +25,49 @@ public final class AudioCapture {
     // ── W-IOSJITTER wiring (2026-07-26) ────────────────────────────────────────
     /// The playout buffer the sealed-audio path never had. See `playFrame`.
     private let playoutJitter = PlayoutJitterBuffer()
+
+    // ── W-LONGAUDIO (2026-08-10) — the two frame durations are not the same ──
+    //
+    // What we SEND and what we are SENT are independent. Truth-table row 8 makes
+    // that explicit: the capability array is unauthenticated, so a relay can
+    // strip the send tag in one direction only and leave the two ends latched
+    // differently. Both directions still carry audio, and they do so precisely
+    // because receive is unconditional and never consults what we latched.
+    //
+    // So: capture geometry follows the LATCHED profile, playout geometry follows
+    // the OBSERVED inbound frames. Deriving one from the other is the bug this
+    // split exists to prevent — and it was the shipped behaviour, because
+    // `AudioPlayback` took its frame size from the encode constant.
+
+    /// The profile this call CAPTURES and ENCODES at. `.standard` unless a call
+    /// negotiated otherwise and the send kill switch is on. Set once per call,
+    /// before `start()`; never changes mid-call.
+    public private(set) var captureProfile: AudioProfile = .standard
+
+    /// Duration of the frames currently ARRIVING, in ms, observed from their PCM
+    /// length. 20 until something longer shows up.
+    ///
+    /// Stored in [PlayoutJitterBuffer] rather than here because it is written on
+    /// whatever thread decrypts network audio and read on main by the pump; the
+    /// buffer already owns a lock for exactly this pair of threads, and adding a
+    /// second unsynchronised copy next to it is how the W-PLAYOUTRACE freeze
+    /// happened.
+    private var inboundFrameDurationMs: Int { playoutJitter.inboundFrameDurationMs }
+
+    /// Latch the send-side profile for this call. Must be called before
+    /// `start()`; ignored afterwards, because the capture graph and the encoder
+    /// are already built around the previous value and mid-call switching is
+    /// forbidden (no re-latch, in any direction, for any reason).
+    @discardableResult
+    public func setCaptureProfile(_ profile: AudioProfile) -> Bool {
+        guard !isRunning else { return false }
+        captureProfile = profile
+        return true
+    }
+
     /// Last frame actually delivered, for repeat-based concealment on underrun.
     private var lastDeliveredPlayoutFrame: Data?
-    private var playoutConcealBudget = 6
+    private var playoutConcealBudget = AudioConstants.framesForMs(120)
     /// Concealed frames this call — the number that makes an underrun visible.
     private var playoutConcealed = 0
 
@@ -994,6 +1034,23 @@ public final class AudioCapture {
             self.inputSink = sink
         }
 
+        // W-LONGAUDIO (2026-08-10) — this stays at the 20 ms constant on EVERY
+        // profile, deliberately, and that is what keeps iOS out of a whole class
+        // of retuning bug.
+        //
+        // The mic DSP downstream of this tap — the make-up AGC, the noise-floor
+        // follower (`nextNoiseFloor`, τ ≈ 25 s "at 50 fps"), the limiter — has
+        // per-BUFFER time constants, calibrated against this cadence. On Android
+        // the equivalent constants are per Opus FRAME, so a 60 ms profile moves
+        // every one of them and each has to be re-derived. Here the tap cadence
+        // and the Opus frame size are already separate concerns: `rechunkAndEmit`
+        // accumulates whatever the tap delivers into exact encoder frames, which
+        // is the job it was written for. Asking the tap for 2880 samples would
+        // couple them for no benefit and silently stretch every DSP time
+        // constant by 3x on a long call.
+        //
+        // (It is a hint either way — VP-IO ties the real buffer to the hardware
+        // I/O duration and ignores this value entirely.)
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
@@ -1096,6 +1153,19 @@ public final class AudioCapture {
         // authority over the engine: if a handler never fires, the pump stalls at the
         // in-flight target and frames queue in OUR buffer, where the emergency tier
         // bounds the backlog — the failure mode is bounded latency, not a dead call.
+        //
+        // W-LONGAUDIO (2026-08-10) — take the playout geometry from THIS frame.
+        //
+        // The frame is decoded PCM, so its duration is arithmetic, not a guess:
+        // 48 kHz mono Int16 is 96 bytes per ms. Every watermark downstream is a
+        // duration, and sizing them from what we ENCODE (which is what
+        // `AudioPlayback` did, and what this path inherited) means the receiver's
+        // buffer geometry is chosen by the transmitter's profile — wrong in
+        // exactly the asymmetric case the negotiation cannot rule out.
+        //
+        // No negotiation state is consulted, deliberately: this is correct on an
+        // endpoint that never negotiated anything.
+        noteInboundFrameDuration(pcmBytes: pcmData.count)
         playoutJitter.push(pcmData)
         // W-PLAYOUTRACE (2026-07-26) — hop to main BEFORE touching the engine.
         //
@@ -1434,7 +1504,12 @@ public final class AudioCapture {
     /// every onFrame delivery is exactly bytesPerFrame.
     private func rechunkAndEmit(rawPcm raw: Data) {
         self.pcmAccumulator.append(raw)
-        let frameBytes = AudioConstants.bytesPerFrame
+        // W-LONGAUDIO (2026-08-10) — chunk to the LATCHED profile's frame, not to
+        // the module constant. The Opus encoder accepts exactly the frame size it
+        // was configured for and nothing else, so on a long-profile call every
+        // 1920-byte chunk this used to emit would be rejected by `encode` and the
+        // whole call would go out silent at a perfectly constant rate.
+        let frameBytes = captureProfile.bytesPerFrame
         var consumed = 0
         var emitted = 0
         while self.pcmAccumulator.count - consumed >= frameBytes {
@@ -1449,6 +1524,12 @@ public final class AudioCapture {
         // callback. 1 (occasionally 2) is a steady 50 fps stream; a large
         // value means the hardware is clumping our I/O and the peer's
         // jitter buffer sees bursts, not a stream. Counter only.
+        // W-LONGAUDIO — `emitted` is a count of frames from one tap callback, so
+        // its meaning as a burst indicator scales with the frame duration: at
+        // 60 ms the same hardware clumping produces a third of the count. The
+        // counter is reported alongside the profile so the two are read together;
+        // it is deliberately NOT rescaled here, because rescaling would make the
+        // raw number incomparable with the historical series.
         if emitted > self.txBurstMaxThisCall { self.txBurstMaxThisCall = emitted }
         if consumed > 0 {
             self.pcmAccumulator = consumed < self.pcmAccumulator.count
@@ -1475,7 +1556,19 @@ public final class AudioCapture {
     /// still belongs to the tier logic. This is defence in depth for the real fix
     /// (analysis moved off the audio path) — not a substitute for it: a permanently
     /// overloaded consumer will still starve any finite buffer.
-    private static let playoutInFlightTarget = 4
+    ///
+    /// W-LONGAUDIO (2026-08-10) — 80 ms, not "4 frames". Held as a duration it
+    /// stays 4 buffers at 20 ms (unchanged) and becomes 1 at 60 ms; held as a
+    /// count it would have been 240 ms of standing latency added to every
+    /// long-profile call, which is the exact quantity this feature exists to
+    /// avoid paying.
+    private static let playoutInFlightTargetMs = 80
+
+    /// 4 at 20 ms — unchanged.
+    private var playoutInFlightTarget: Int {
+        AudioConstants.framesForMs(Self.playoutInFlightTargetMs,
+                                   frameDurationMs: inboundFrameDurationMs)
+    }
 
     /// Drain the jitter buffer onto the player node up to the in-flight target.
     ///
@@ -1487,7 +1580,8 @@ public final class AudioCapture {
     /// nothing left to keep in sync across threads.
     private func pumpPlayout() {
         dispatchPrecondition(condition: .onQueue(.main))
-        while playoutInFlight < Self.playoutInFlightTarget {
+        let target = playoutInFlightTarget
+        while playoutInFlight < target {
             guard let frame = playoutJitter.popWithDriftCatchup() else {
                 // Underrun. Conceal rather than leave a hole: a repeat of the last
                 // delivered frame at -6 dB is crude, but the alternative here is
@@ -1503,10 +1597,30 @@ public final class AudioCapture {
             }
             // Budget re-arms on every real frame: concealment is for a gap, not a
             // substitute for a stream that has stopped arriving.
-            playoutConcealBudget = Self.playoutConcealMax
+            playoutConcealBudget = playoutConcealMax
             lastDeliveredPlayoutFrame = frame
             scheduleForPlayout(frame)
         }
+    }
+
+    /// W-LONGAUDIO (2026-08-10) — update the playout geometry from a decoded
+    /// frame's own length.
+    ///
+    /// 48 kHz mono Int16 is 96 bytes per millisecond. Anything that does not
+    /// resolve to a duration Opus can actually carry is IGNORED rather than
+    /// acted on: a zero-length frame (the silent-frame convention), a partial
+    /// buffer, or a corrupt one must not be allowed to resize the buffer that is
+    /// currently holding good audio.
+    ///
+    /// Only a genuine change does any work, so the steady-state cost on a 20 ms
+    /// call is one integer division and one comparison per frame.
+    private func noteInboundFrameDuration(pcmBytes: Int) {
+        let bytesPerMs = AudioConstants.sampleRate / 1000 * (AudioConstants.bitsPerSample / 8) * AudioConstants.channels
+        guard bytesPerMs > 0, pcmBytes > 0, pcmBytes % bytesPerMs == 0 else { return }
+        let ms = pcmBytes / bytesPerMs
+        guard ms > 0, ms <= AudioConstants.maxFrameDurationMs, ms != inboundFrameDurationMs else { return }
+        playoutJitter.setInboundFrameDurationMs(ms)
+        print("[AudioCapture] W-LONGAUDIO: inbound frame duration now \(ms) ms — playout watermarks re-derived")
     }
 
     /// Halve every sample. `Int16` stays in range by construction, so no clamping.
@@ -1520,10 +1634,20 @@ public final class AudioCapture {
         return out
     }
 
-    /// At most this many consecutive concealed frames (=120 ms) before we stop and
-    /// let the gap be a gap. Repeating one frame indefinitely turns a dropout into a
-    /// buzz, which is worse than the silence it replaced.
-    private static let playoutConcealMax = 6
+    /// At most this much consecutive concealment before we stop and let the gap be
+    /// a gap. Repeating one frame indefinitely turns a dropout into a buzz, which
+    /// is worse than the silence it replaced.
+    ///
+    /// W-LONGAUDIO (2026-08-10) — 120 ms, not "6 frames". The audible limit is how
+    /// LONG the same frame is repeated, so as a frame count it would have stretched
+    /// to 360 ms of buzz on a long-profile call.
+    private static let playoutConcealMaxMs = 120
+
+    /// 6 at 20 ms — unchanged.
+    private var playoutConcealMax: Int {
+        AudioConstants.framesForMs(Self.playoutConcealMaxMs,
+                                   frameDurationMs: inboundFrameDurationMs)
+    }
 
     private func scheduleForPlayout(_ pcmData: Data) {
         // W574j — build the playback buffer in the player node's LIVE output

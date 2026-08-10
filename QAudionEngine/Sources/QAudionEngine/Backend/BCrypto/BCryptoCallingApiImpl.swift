@@ -46,7 +46,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         try await sendCallOffer(
             recipientId: recipientId,
             sdp: sdp,
-            capabilities: CallCapabilities.local,
+            // W-LONGAUDIO (2026-08-10) — through the gated accessor, never the
+            // raw base list. This convenience overload had `CallCapabilities.local`
+            // inline, which bypasses the earbud filter entirely: on an earbud
+            // call it would advertise `aprof-60x256-recv-v1` on the phone's
+            // behalf and invite 60 ms frames into a 960-sample earbud decode
+            // buffer. Android had the identical leak on its ring notification.
+            capabilities: CallCapabilities.localCaps(),
             callerDisplay: nil
         )
     }
@@ -119,7 +125,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         try await sendCallAnswer(
             recipientId: recipientId,
             sdp: sdp,
-            capabilities: CallCapabilities.local
+            // W-LONGAUDIO — gated accessor; see `sendCallOffer` above.
+            capabilities: CallCapabilities.localCaps()
         )
     }
 
@@ -265,7 +272,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
             callId: callId,
             recipientId: recipientId,
             sdp: sdp,
-            capabilities: CallCapabilities.local,
+            // W-LONGAUDIO — gated accessor; see `sendCallOffer` above.
+            capabilities: CallCapabilities.localCaps(),
             callerDisplay: nil,
             hasVideo: false
         )

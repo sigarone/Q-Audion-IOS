@@ -3951,6 +3951,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func reconfigureAudioCodec(bitrateKbps: Int, plp: Int) {
         engine.reconfigureAudioCodec(bitrateKbps: bitrateKbps, plp: plp)
     }
+
+    /// W-LONGAUDIO (2026-08-10) — latch this call's audio profile on the engine.
+    /// Once per call, after the handshake, before capture starts. See
+    /// `QAudionEngine.latchAudioProfile` for why it is terminal.
+    @discardableResult
+    public func latchAudioProfile(_ profile: AudioProfile) -> Bool {
+        engine.latchAudioProfile(profile)
+    }
+
+    /// The profile this call is sealing into. `.standard` until latched.
+    public var activeAudioProfile: AudioProfile { engine.activeAudioProfile }
 }
 
 public enum IntegrationError: Error {

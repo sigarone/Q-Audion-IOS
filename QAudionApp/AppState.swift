@@ -1452,7 +1452,39 @@ final class AppState: ObservableObject {
     /// the WebRTC controller in `handleIncomingWebRtcOffer` once the
     /// controller is built. Reset back to `nil` when the call ends.
     /// `nil` = legacy peer (no `capabilities` field on the wire).
+    ///
+    /// WARNING — W-LONGAUDIO (2026-08-10): THIS VALUE IS NOT BOUND TO A CALL.
+    /// It is written on `call_incoming` (responder) and `call_answer` (caller)
+    /// and, historically, never cleared: after a call to a modern peer it keeps
+    /// that peer's list until some later call happens to overwrite it. Every
+    /// existing reader is a video-path reader that only runs mid-call, which is
+    /// why it survived. It MUST NOT be used on its own to decide anything about
+    /// the audio WIRE FORMAT — read the call-bound pair below instead.
     var pendingPeerCapabilities: [String]?
+
+    /// W-LONGAUDIO (2026-08-10) — the peer's advertised list PAIRED WITH the
+    /// wire `call_id` it arrived for. The only input the audio-profile latch is
+    /// allowed to read.
+    ///
+    /// This exists because §1.6 clause 2 of the long-audio contract is "a
+    /// negotiation result exists for THIS call", and without an id the latch
+    /// could only enforce "…for SOME call". The concrete failure it closes: we
+    /// place call #1 to a peer advertising `aprof-60x256-recv-v1` +
+    /// `aprof-60x256-v1`, the call ends, we place call #2 to a legacy peer whose
+    /// `call_answer` carries no `capabilities` key — the stale list is still in
+    /// `pendingPeerCapabilities`, both activation clauses pass, and we start
+    /// sending 60 ms frames to a peer that cannot decode one of them. It also
+    /// closes the second route to the same outcome: the `call_answer` write is
+    /// deferred through `DispatchQueue.main.async`, so even a CORRECT fresh list
+    /// can land after the latch has already read the previous call's value —
+    /// with the id attached, "not written yet" is a mismatch and therefore
+    /// STANDARD.
+    ///
+    /// A `let` of a lock-guarded reference type rather than two `var`s on this
+    /// @MainActor class, because the latch reads it from the PQC handshake
+    /// thread: see the type's own doc for why the two halves must move together
+    /// and why the id is compared case-insensitively.
+    let peerCapabilityBinding = PeerCapabilityBinding()
 
     @Published var rekeyCount: Int = 0
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
@@ -3319,6 +3351,33 @@ final class AppState: ObservableObject {
             else { return nil }
             return impl.getActiveCallId()
         }
+        // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
+        // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
+        // stashed by the `call_incoming` handler (responder side) and by the
+        // `call_answer` handler (caller side), so it is populated in both
+        // directions before the PQC handshake reaches `.active`.
+        //
+        // Read exactly once per call, at the audio-profile latch. `nil` — a
+        // legacy peer, an unparsed array, or simply a race lost — resolves to
+        // the standard profile, which is the correct answer and not something to
+        // wait for.
+        //
+        // THE ARGUMENT IS THE POINT. The caller states which call it is latching
+        // for, and this returns the peer list ONLY if that is the call the list
+        // was captured for. Anything else — no id from the caller, no id stored,
+        // or two ids that differ — is `nil`, i.e. STANDARD. Without the
+        // comparison this closure answers "the last list I saw from anybody",
+        // which is how a third party's capabilities could decide THIS call's
+        // wire format (contract §1.6 clause 2).
+        //
+        // Reads `peerCapabilityBinding`, NOT `pendingPeerCapabilities`. The
+        // binding is a `let` holding a lock-guarded pair, so this closure — which
+        // runs on the PQC handshake thread, not main — takes the list and the id
+        // it belongs to in one atomic step. Two loose properties would let a
+        // reader pair a fresh id with a stale list.
+        callService.getPeerCapabilities = { [weak self] callId in
+            self?.peerCapabilityBinding.capabilities(forCallId: callId)
+        }
         // W-KCMAC (ship step 5) — same live-getter pattern as `getCallId` above,
         // read at teardown (`CallService.teardownAudioStack`) so `psk_mix_n`/
         // `kc_mac_result`/`assurance_state`/`expected_but_missing` ride the
@@ -4208,6 +4267,15 @@ final class AppState: ObservableObject {
             // the controller as soon as it's built, and so the
             // CallSetupHandler-equivalent code paths see the same set.
             self.pendingPeerCapabilities = data["capabilities"] as? [String]
+            // W-LONGAUDIO (2026-08-10) — bind the SAME list to the call it
+            // arrived for. `callIdStr` is this envelope's own `call_id` (:4163),
+            // the SAME string `bindIncomingCallId` installs a few lines below as
+            // the active call id — so the latch's `getCallId()` and this compare
+            // equal for this call and for no other. An empty id (a server that
+            // omitted the field) binds nothing, which the reader treats as
+            // "cannot prove it belongs to this call" → STANDARD.
+            self.peerCapabilityBinding.store(callId: callIdStr,
+                                             capabilities: self.pendingPeerCapabilities)
             // W77: bind the inbound call_id on the calling impl so the
             // subsequent `sendCallAnswer` / `sendCallHangup` envelopes
             // use the SAME id the server registered for this call.
@@ -6130,8 +6198,34 @@ final class AppState: ObservableObject {
             // (same class as the call_incoming crash). Hop the write to main. It is
             // persisted state read later at video-upgrade time, so deferring it one
             // main tick is correct (nothing in this handler reads it synchronously).
+            // W-LONGAUDIO (2026-08-10) — capture the envelope's own call_id on
+            // this thread (same field :6236 reads below) and store it with the
+            // list, atomically, on the main hop. Without the id this write is
+            // the caller-side half of the "third party's capabilities decide
+            // THIS call's wire format" defect: it only ever OVERWRITES with a
+            // non-empty list and never clears, so a legacy peer's answer leaves
+            // the PREVIOUS peer's tags standing.
+            //
+            // Note this is the one site where the deferral itself is a hazard:
+            // the latch can run before this main hop lands. With the id that is
+            // a mismatch — the stored id still belongs to the previous call — so
+            // the race resolves to STANDARD instead of to stale tags.
+            let answerEnvelopeCallId = (data["call_id"] as? String) ?? ""
             if let pc = peerCaps, !pc.isEmpty {
-                DispatchQueue.main.async { [weak self] in self?.pendingPeerCapabilities = pc }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.pendingPeerCapabilities = pc
+                    // Prefer the envelope id; fall back to the bound active call
+                    // exactly as the earbud branch below does. Read here rather
+                    // than on the WS thread because this closure already runs on
+                    // main. An empty result binds nothing → the audio latch
+                    // cannot prove ownership → STANDARD.
+                    let cid = !answerEnvelopeCallId.isEmpty
+                        ? answerEnvelopeCallId
+                        : ((self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+                            .getActiveCallId() ?? "")
+                    self.peerCapabilityBinding.store(callId: cid, capabilities: pc)
+                }
             }
             // earbud-relay-v1 (caller side) — the callee answered from a
             // phone whose bonded earbud owns the audio key. The SW PQC
@@ -12363,6 +12457,22 @@ final class AppState: ObservableObject {
         #endif
         webRtcController = nil
         remoteWebRtcVideoTrack = nil
+        // W-LONGAUDIO (2026-08-10) — drop the peer-capability BINDING for the
+        // call that just ended. Belt and braces: the reader already refuses a
+        // list whose stored id is not the active call's, so a stale id can never
+        // match a fresh UUID. Clearing it makes the "no proof of ownership"
+        // state the DEFAULT between calls rather than something that depends on
+        // two UUIDs differing.
+        //
+        // `pendingPeerCapabilities` itself is deliberately NOT cleared here.
+        // Every other reader of it is a video-path reader that runs mid-call —
+        // the two upgrade responders (:5142, :5284), the caller-side upgrade
+        // (:12876) and `handleIncomingWebRtcOffer` (:16995). Clearing it would
+        // also be an improvement for them (a legacy peer's answer currently
+        // leaves the PREVIOUS peer's tags standing there too), but that is a
+        // behaviour change in a subsystem this work does not touch and cannot
+        // compile or test, so it is left alone and reported instead.
+        peerCapabilityBinding.clear()
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.
         resetRemoteVideoRenderGate()

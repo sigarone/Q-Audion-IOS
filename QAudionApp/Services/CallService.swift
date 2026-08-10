@@ -3,6 +3,65 @@ import AVFoundation  // AVAudioSession for speaker override
 import CryptoKit     // W574l — one-way key fingerprint for seal-key diagnostics
 import QAudionEngine
 
+/// W-LONGAUDIO (2026-08-10) — the peer's advertised capability list AND the
+/// wire `call_id` it arrived for, as ONE value that can only be read or written
+/// as a pair.
+///
+/// Two separate stored properties would not do. The list is written by a
+/// signalling handler on the main queue and read by `latchAudioProfileForCall`
+/// on the PQC handshake thread, and two independent non-atomic stores have two
+/// interleavings: a reader that sees the NEW list with the OLD id fails the
+/// comparison and gets `nil` (harmless — that is STANDARD), but a reader that
+/// sees the NEW id with the OLD list gets the PREVIOUS peer's tags stamped with
+/// this call's id, which is the exact defect the id was added to close, smuggled
+/// back in through store ordering. Nothing in the language forbids that
+/// interleaving: these are plain properties with no barrier between them.
+///
+/// So both live behind one `NSLock`, held only long enough to copy the pair in
+/// or out — the same contract `CallService.relaySlotLock` documents for the
+/// relay sealer slots, and for the same reason.
+///
+/// This type is a value CARRIER, not the rule: the rule itself is
+/// `CallCapabilities.peerCapabilities(forCallId:capturedForCallId:capturedList:)`
+/// in the engine, where it is unit-testable without an AppState.
+final class PeerCapabilityBinding: @unchecked Sendable {
+    private let lock = NSLock()
+    /// Deliberately NOT named `callId`/`capabilities`: the accessor below has
+    /// base name `capabilities`, and a stored property sharing it would make
+    /// every unqualified reference inside this type an overload-resolution
+    /// question rather than a lookup.
+    private var capturedCallId: String?
+    private var capturedCapabilities: [String]?
+
+    /// Record `capabilities` as belonging to `callId`. An empty or missing id
+    /// stores `nil`, which can never match anything — "captured, but we cannot
+    /// say for which call" is treated exactly like "not captured".
+    func store(callId: String?, capabilities: [String]?) {
+        lock.lock(); defer { lock.unlock() }
+        let id = callId ?? ""
+        capturedCallId = id.isEmpty ? nil : id
+        capturedCapabilities = capabilities
+    }
+
+    /// Forget the binding. Called when a call ends so the between-calls state is
+    /// "no proof of ownership" by default rather than by two UUIDs differing.
+    func clear() {
+        lock.lock(); defer { lock.unlock() }
+        capturedCallId = nil
+        capturedCapabilities = nil
+    }
+
+    /// The peer's list, but only if it was captured for `wantedCallId`.
+    func capabilities(forCallId wantedCallId: String?) -> [String]? {
+        lock.lock(); defer { lock.unlock() }
+        return CallCapabilities.peerCapabilities(
+            forCallId: wantedCallId,
+            capturedForCallId: capturedCallId,
+            capturedList: capturedCapabilities
+        )
+    }
+}
+
 // Swift 6 — CallService coordinates its OWN concurrency (it is not @MainActor):
 // the TX audio pipeline is serialised on the private `txAudioQueue`, decoded-RX
 // diagnostic counters are touched on the capture/decode threads, and every
@@ -259,10 +318,29 @@ final class CallService: @unchecked Sendable {
     /// Android + Desktop peers accept the frame instead of dropping
     /// it for missing/mismatched call_id. Wired by AppState at login.
     public typealias CallIdProvider = () -> String?
+    /// W-LONGAUDIO (2026-08-10) — the PEER's raw advertised capability list
+    /// **for the call whose wire id is passed in**, exactly as it arrived on
+    /// `call_incoming` (responder) or `call_answer` (caller).
+    ///
+    /// The parameter is not a convenience: it is the enforcement of §1.6 clause
+    /// 2, "a negotiation result exists for THIS call". The provider returns the
+    /// list only when it was captured for that exact call id, and `nil`
+    /// otherwise — no id, no stored id, or two ids that differ. A nullary
+    /// version of this getter can only answer "the last list I saw from
+    /// anybody", which lets a PREVIOUS call's peer decide THIS call's wire
+    /// format; that is the one outcome the whole design exists to prevent.
+    ///
+    /// Read once, at the latch, and never again. `nil` is a perfectly good
+    /// answer: it means the call runs the standard profile for its whole life,
+    /// which is the correct outcome rather than something to wait or retry for.
+    /// Wired by AppState to its ``PeerCapabilityBinding``, which holds the list
+    /// and the id it was captured for behind one lock.
+    public typealias PeerCapabilitiesProvider = (String?) -> [String]?
     public var getWsClient: WsClientProvider?
     public var getPeerId: PeerIdProvider?
     public var isCallActive: CallActiveProvider?
     public var getCallId: CallIdProvider?
+    public var getPeerCapabilities: PeerCapabilitiesProvider?
     /// W-GRPVPIO-CRASH-3 (2026-07-17) — returns true while a GROUP call owns
     /// the shared VoiceProcessingIO hardware unit (LiveKit's SFU room drives
     /// it directly). Injected by AppState (`{ groupCallKitId != nil }`).
@@ -371,6 +449,95 @@ final class CallService: @unchecked Sendable {
     /// lock ONLY to copy the reference in/out — never across seal/open/network or
     /// any call that might re-enter (NSLock is non-recursive).
     private let relaySlotLock = NSLock()
+
+    /// W-LONGAUDIO (2026-08-10) — resolve and latch this call's audio profile.
+    ///
+    /// Called exactly once, from the `.active` handshake transition. Everything
+    /// it consults is already in hand: the peer's raw advertised list (injected
+    /// by AppState) and the local list from the gated accessor. It performs the
+    /// intersection itself rather than reading the WebRTC controller's cached
+    /// result, because on a WS-relay audio call — which is how iOS carries voice
+    /// — there may be no live PeerConnection at all, and reaching for one would
+    /// make the profile depend on whether video happened to be negotiated.
+    ///
+    /// Every failure is the same failure: STANDARD. No peer list, an unparsed
+    /// one, an earbud in the call, the kill switch off, or a peer that only
+    /// advertised half the pair — all land on today's wire, silently and
+    /// completely.
+    private func latchAudioProfileForCall() {
+        // ── The peer list must belong to THIS call, and be provably so ──
+        //
+        // §1.6 clause 2 is "a negotiation result exists for THIS call". Ask for
+        // the active call's wire id first and hand it to the provider, which
+        // returns the peer's advertised list ONLY if that is the call the list
+        // was captured for.
+        //
+        // Everything that can go wrong here lands on the same answer. No active
+        // call id yet (the handshake beat the id binding), no stored list, a
+        // list captured for a DIFFERENT call, or a fresh list whose main-actor
+        // write has not landed yet — all of them are `nil`, which negotiates to
+        // an empty intersection and resolves to STANDARD. There is deliberately
+        // no wait and no retry: the contract's answer to "the negotiation result
+        // has not arrived" is that the call runs standard for its whole life.
+        let activeCallId = getCallId?()
+        let peerCaps = getPeerCapabilities?(activeCallId)
+        let negotiated = CallCapabilities.negotiate(
+            local: CallsGate.filterAdvertisedCapabilities(CallCapabilities.localCaps()),
+            peer: peerCaps
+        )
+        // On iOS the sovereign earbud is always the PEER's: there is no iOS
+        // earbud transport, so we detect the tag rather than advertise it. That
+        // peer relays sealed frames to firmware with a 960-sample decode buffer.
+        //
+        // Reads the SAME call-bound `peerCaps` as the negotiation above, so an
+        // unbindable list cannot make this true either. That direction is safe
+        // by construction: `peerCaps == nil` makes this `false`, and `false` can
+        // only ever move the resolver toward LONG — but the resolver has already
+        // failed clause 3 on the empty intersection, so the answer is STANDARD
+        // regardless. The two checks are independent and both must hold.
+        let earbudInCall = CallCapabilities.peerAdvertisedEarbudRelay(peerCaps)
+        let profile = CallCapabilities.resolveAudioProfile(
+            negotiated: negotiated,
+            earbudInCall: earbudInCall
+        )
+        // ── Ordering: CAPTURE bounds the ENGINE, never the reverse ──
+        //
+        // This method runs from THREE sites — the PQC `.active` transition, the
+        // incoming-answer audio setup, and immediately before `capture.start()`
+        // — because none of them is guaranteed to come first. On an outgoing
+        // call CallKit's `didActivate` can precede the handshake entirely.
+        //
+        // Capture is the side with the hard constraint: its geometry cannot
+        // change once the AVAudioEngine is running. The engine's latch, by
+        // contrast, is terminal but can be taken late. So capture is asked
+        // FIRST, and a refusal downgrades the whole call to standard — the "any
+        // doubt, fall back silently and completely" rule, applied to an ordering
+        // race instead of to a parse failure.
+        //
+        // Getting this backwards is not a subtle bug: an engine encoding at
+        // 60 ms behind a re-chunker still emitting 1920-byte frames rejects
+        // every single `encode`, and the call connects, holds a perfectly
+        // constant packet rate, and transmits nothing at all.
+        let capture = audioCapture
+        var agreed = profile
+        if profile != .standard, capture?.setCaptureProfile(profile) != true {
+            agreed = .standard
+        }
+        callIntegration?.latchAudioProfile(agreed)
+        // Read back what the engine actually holds: an earlier visit may have
+        // latched it, and the latch is terminal.
+        let effective = callIntegration?.activeAudioProfile ?? .standard
+        if effective != agreed, capture?.setCaptureProfile(effective) != true,
+           capture?.captureProfile != effective {
+            // Unreachable under the ordering above (the engine only ever holds a
+            // long profile that capture already accepted). Logged rather than
+            // assumed away, because the symptom would be a silent call.
+            print("[CallService] W-LONGAUDIO: profile mismatch — engine \(effective.frameDurationMs) ms vs capture \(capture?.captureProfile.frameDurationMs ?? -1) ms")
+        }
+        if effective != .standard || profile != effective {
+            print("[CallService] W-LONGAUDIO: audio profile \(effective.frameDurationMs) ms / \(effective.blockBytes) B (resolved \(profile.frameDurationMs) ms)")
+        }
+    }
 
     /// One-way 8-hex fingerprint of a key — safe to log (does NOT reveal key
     /// bytes). Used only to compare seal keys across the two peers' logs.
@@ -665,6 +832,23 @@ final class CallService: @unchecked Sendable {
                 // here processOutgoingAudio can succeed, so any failure past this
                 // point is a REAL crypto error (counted in tx_enc_err).
                 self.txSessionReady = true
+                // W-LONGAUDIO (2026-08-10) — THE LATCH. Once per call, here.
+                //
+                // This is the one point that satisfies both halves of the
+                // requirement: it runs strictly AFTER the PQC handshake outcome
+                // is known (that is what `.active` means) and strictly BEFORE
+                // capture starts, since the audio engines are started later by
+                // CallKit's `didActivate`. It must precede
+                // `reconfigureAudioCodec` below, because that call clamps the
+                // bitrate against whatever profile is latched — clamping first
+                // and latching second would apply the standard ceiling to a long
+                // profile and overflow every frame.
+                //
+                // No setter, no re-evaluation, no retry: `latchAudioProfile`
+                // refuses a second call. If the peer's capabilities have not
+                // arrived yet the resolver returns `.standard` and the call runs
+                // standard for its whole life.
+                self.latchAudioProfileForCall()
                 // Engine is now initialized — apply tuner-persisted codec params.
                 self.callIntegration?.reconfigureAudioCodec(
                     bitrateKbps: AudioCodecPrefs.bitrateKbps,
@@ -929,15 +1113,24 @@ final class CallService: @unchecked Sendable {
         // covers the race where `didActivate` somehow already fired.
         self.audioPlayback = playback
         self.audioCapture = capture
+        // Bind the integration BEFORE the latch below: `latchAudioProfileForCall`
+        // reads `callIntegration` to reach the engine, and this method is a
+        // second, independent entry to the latch (the first is the `.active`
+        // handshake transition in `startCall`, which the incoming path does not
+        // run). Moved up from below for that reason; nothing else depends on the
+        // ordering, since `drainRxPreBuffer` runs later either way.
+        self.callIntegration = integration
+        // W-LONGAUDIO (2026-08-10) — latch before the engines start. Idempotent:
+        // if the handshake path already latched, the engine refuses this one and
+        // the capture profile is taken from what the engine actually holds. On a
+        // build with the send kill switch off this resolves to `.standard` on
+        // every path, which is byte-identical to what shipped before it existed.
+        latchAudioProfileForCall()
         // W574b — WE are the answering side: this method only runs from the
         // answer handler, so the call is answered by definition. Unblock the
         // pre-answer mic gate before the (possibly deferred) engine start.
         peerAnswered = true
         startAudioIOIfReady()
-
-        // Bind the integration so handleIncomingEncryptedFrame can decrypt
-        // inbound audio_frame packets.
-        self.callIntegration = integration
         // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
         // fix): the incoming path never wired `getVoiceAnalysis().onResult`,
         // so the ribbon gauges + spectrum stayed dead on EVERY incoming call
@@ -1070,7 +1263,9 @@ final class CallService: @unchecked Sendable {
             sdp: vestigialSdp,
             // R-4 (vkey-v1): strip `vkey-v1` when sovereign-only is on so
             // we never advertise phone-level video E2EE to the peer.
-            capabilities: CallsGate.filterAdvertisedCapabilities(CallCapabilities.local),
+            // W-LONGAUDIO (2026-08-10): via the gated accessor, so the audio
+            // profile tags are subject to the earbud filter as well.
+            capabilities: CallsGate.filterAdvertisedCapabilities(CallCapabilities.localCaps()),
             callerDisplay: callerDisplay,
             hasVideo: hasVideo
         )
@@ -1789,6 +1984,24 @@ final class CallService: @unchecked Sendable {
         // AVAudioSession muted the output route → total silence). audioPlayback
         // is left intentionally unused/nil.
         if let capture = audioCapture {
+            // W-LONGAUDIO (2026-08-10) — last chance to align capture with the
+            // engine, and the one that closes the ordering hole.
+            //
+            // The other two latch sites run from the handshake and from the
+            // incoming-answer setup, and neither is guaranteed to precede this
+            // one: on an OUTGOING call CallKit fires `didActivate` — and hence
+            // this method — as soon as the call UI appears, which can be before
+            // the PQC handshake reaches `.active`. `setCaptureProfile` refuses
+            // once the engine is running, so a latch that lands after `start()`
+            // would leave the encoder expecting 5760-byte frames while the
+            // re-chunker still emits 1920: every `encode` rejected, every frame
+            // sent as constant-size silence. Running it here, immediately before
+            // `start()`, means whichever site fires first, capture agrees with
+            // the engine by the time a single sample is captured.
+            //
+            // Idempotent on the engine (the latch is terminal), and a no-op on
+            // any build with the send kill switch off.
+            latchAudioProfileForCall()
             do {
                 try capture.start()
                 // W-AUDIOGATEDIAG (2026-08-03): confirms all three gates
