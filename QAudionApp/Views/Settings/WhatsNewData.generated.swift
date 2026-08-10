@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.957",
+              date: "2026-08-11",
+              title: "v1.0.957",
+              bullets: [
+                "feat(relay): binary framing, in-call stats parity, and three numbers that stopped lying",
+              ]),
         .init(id: "v1.0.956",
               date: "2026-08-10",
               title: "v1.0.956",
               bullets: [
+                "chore: regenerate changelog for v1.0.956",
                 "feat(audio): negotiated 60 ms / 256-byte long audio profile — receive side",
               ]),
         .init(id: "v1.0.955",
@@ -172,14 +179,6 @@ extension ReleaseNote {
                 "fix(call): trace whether rebind() actually swaps the manager on this reconnect",
                 "fix(call): make group_call_update silently-dropped-or-never-arrived diagnosable",
                 "fix(attachments): sanitize base64 id before use as a path component",
-              ]),
-        .init(id: "v1.0.937",
-              date: "2026-08-03",
-              title: "v1.0.937",
-              bullets: [
-                "chore: regenerate changelog for v1.0.937",
-                "fix(avatar): self-heal a stale sandbox-container avatar path",
-                "fix(livelog): bound the upload pump, stop losing evidence on a hung chunk",
               ]),
     ]
 }
