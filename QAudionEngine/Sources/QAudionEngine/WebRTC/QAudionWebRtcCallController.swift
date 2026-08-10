@@ -110,6 +110,102 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// call is connected. Created on ICE-connected, invalidated on close.
     private var videoStatsTimer: Timer?
 
+    // ── W-NETVIS (Android→iOS parity, 2026-08-10) — media-path RTT ───────────
+    //
+    // Android reads RTT from the SELECTED ICE candidate pair
+    // (`PeerConnectionHolder.collectDiagnostics`, PeerConnectionHolder.kt:3914
+    // -3922: first a `candidate-pair` with state=="succeeded" AND
+    // (nominated||selected), else any succeeded pair; `currentRoundTripTime`
+    // × 1000). This is the identical statistic, read the identical way, so the
+    // two platforms' RITARDO columns describe the same quantity during one
+    // call.
+    //
+    // What is NOT copied from Android is WHEN the number is shown. On Android
+    // the WS-relay downgrade never closes the PeerConnection
+    // (`CallTransportFactory.downgradeToWsRelay`, CallTransportFactory.kt:944
+    // -973) and the stats call is wired straight to it regardless of transport
+    // mode (CallModule.kt:293-294), so a relay call — every Android↔iOS call —
+    // still shows a plausible RTT measured on an ICE pair that carries no
+    // voice at all. Here the reading is published only while the sealed-audio
+    // DataChannel is open, i.e. only while this pair IS the leg carrying the
+    // audio (`isAudioDataChannelOpen`, checked by the caller). On the WS-relay
+    // path the value stays nil and the band renders "—", which is the honest
+    // answer: no measurement of the media path exists there.
+    private var _mediaRttMs: Double?
+    /// NSLock-protected for the same reason as [answerLock]: `pc.statistics`
+    /// delivers its report on a WebRTC-internal thread while the sampler that
+    /// reads this runs on the main actor.
+    private let mediaRttLock = NSLock()
+
+    /// Last RTT measured on the selected ICE candidate pair, in milliseconds.
+    /// `nil` when no succeeded pair exists yet (ICE still converging, ICE
+    /// failed, or the peer connection is gone) — never a stale or invented
+    /// number. Refreshed by [pollMediaRttOnce].
+    public var mediaRttMs: Double? {
+        mediaRttLock.lock()
+        defer { mediaRttLock.unlock() }
+        return _mediaRttMs
+    }
+
+    /// True while the sealed-audio DataChannel ("qaudion-audio") is open, i.e.
+    /// while voice is riding the P2P WebRTC leg rather than the WS relay. Same
+    /// predicate `sendAudioFrameData` itself tests (`QAudionPeerConnection
+    /// .isAudioDataChannelOpen`, QAudionPeerConnection.swift:274-277), so
+    /// "is RTT meaningful" and "where does audio actually go" can never
+    /// disagree.
+    public var isAudioDataChannelOpen: Bool {
+        peerConnection?.isAudioDataChannelOpen() ?? false
+    }
+
+    private func setMediaRttMs(_ value: Double?) {
+        mediaRttLock.lock()
+        _mediaRttMs = value
+        mediaRttLock.unlock()
+    }
+
+    /// Sample the selected candidate pair's `currentRoundTripTime` once.
+    /// Async (libwebrtc delivers the stats report on its own thread); the
+    /// result lands in [mediaRttMs] for the next read. Cheap enough for the
+    /// 1 Hz call sampler — one `getStats` per second is well under the video
+    /// telemetry poll this file already runs at 3 s.
+    public func pollMediaRttOnce() {
+        guard let pc = peerConnection?.peerConnection else {
+            setMediaRttMs(nil)
+            return
+        }
+        pc.statistics { [weak self] report in
+            guard let self else { return }
+            // Android's pair choice, verbatim: a succeeded pair that is
+            // nominated or selected; failing that, the first succeeded pair.
+            // The RTT is carried out of the loop rather than the stats object
+            // itself so this reads no SDK type name beyond what
+            // `pollVideoStatsOnce` above already relies on.
+            var havePreferred = false
+            var haveFallback = false
+            var preferredRttSec: Double?
+            var fallbackRttSec: Double?
+            for (_, s) in report.statistics {
+                guard s.type == "candidate-pair",
+                      (s.values["state"] as? String) == "succeeded" else { continue }
+                let rttSec = (s.values["currentRoundTripTime"] as? NSNumber)?.doubleValue
+                if !haveFallback {
+                    haveFallback = true
+                    fallbackRttSec = rttSec
+                }
+                let nominated = (s.values["nominated"] as? NSNumber)?.boolValue ?? false
+                let selected = (s.values["selected"] as? NSNumber)?.boolValue ?? false
+                if (nominated || selected), !havePreferred {
+                    havePreferred = true
+                    preferredRttSec = rttSec
+                }
+            }
+            // No succeeded pair ⇒ ICE never converged (or has failed) ⇒ there
+            // is nothing to report. nil, not a carried-over previous value.
+            let seconds = havePreferred ? preferredRttSec : fallbackRttSec
+            self.setMediaRttMs(seconds.map { $0 * 1000.0 })
+        }
+    }
+
     // WIRE_SPEC §8.7 (INT-4a) — receiver-side decode-stall detector state,
     // driven off the 3s `pollVideoStatsOnce` cadence. `framesDecoded` is
     // monotonic; when it fails to advance across consecutive polls WHILE
@@ -1166,6 +1262,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         stopCameraCapture()
         stopVideoStatsTelemetry()
+        // W-NETVIS — the pair this was measured on is gone; the band must show
+        // "—" for the next call rather than the previous call's last RTT.
+        setMediaRttMs(nil)
         wssTurnBridge?.stop()
         wssTurnBridge = nil
         peerConnection?.close()

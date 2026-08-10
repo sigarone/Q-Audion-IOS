@@ -240,6 +240,240 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     ///   tasks fail ping together 50 s later.
     private var connectionGeneration: Int = 0
 
+    // MARK: - Binary relay framing (per socket, default OFF)
+
+    /// True iff THIS socket's `authenticated` payload carried `bin_relay: 1`.
+    ///
+    /// Per SOCKET, never per user and never per call: one user holds several
+    /// sockets at once (a watch is a real second socket) and the server fans a
+    /// relayed `audio_frame` out to all of them. Keying the wire form by user
+    /// or by call is what makes the second device go mute with no error
+    /// anywhere.
+    ///
+    /// Reset to `false` on every `connect()`, `disconnect()`, `forceReconnect()`
+    /// and `handleDisconnect()` — a reconnect starts from text and stays there
+    /// unless the NEW socket is granted the echo again. Guarded by `lock`.
+    private var _binRelayNegotiated: Bool = false
+
+    /// Count of inbound binary frames dropped on this client, for whatever
+    /// reason (socket not negotiated, malformed header, no registered audio
+    /// handler). Counts FRAMES, never bytes, and describes nothing about the
+    /// plaintext. Exists because the failure mode this whole contract is built
+    /// to prevent is binary arriving somewhere that silently eats it.
+    private var _binaryFramesDropped: UInt64 = 0
+
+    /// Count of inbound binary frames successfully parsed and dispatched.
+    /// Frames, never bytes.
+    private var _binaryFramesReceived: UInt64 = 0
+
+    /// Per-call terminal latch for the OUTBOUND wire form. See
+    /// ``BinaryRelayWireFormLatch`` for the four rules it enforces.
+    private let wireFormLatch = BinaryRelayWireFormLatch()
+
+    // MARK: - Binary relay LIVENESS FALLBACK (not disableable)
+    //
+    // The one precondition this whole feature was built on — "a binary
+    // WebSocket frame actually traverses the path" — has NOT been demonstrated.
+    // The server sits behind Cloudflare (every request line carries `cf_ray`,
+    // logged at cmd/bcrypto-lite/main.go:5724) and Caddy, and contract §7
+    // Gate 0 (send a binary frame to wss://voip.bcrypto.com/ws and look for
+    // `ws: dropping binary frame`) has never been run — it cannot be, until
+    // the server speaks binary at all. Cloudflare proxies binary WS frames in
+    // general; that is not the same statement as "on this account, through
+    // this tunnel, under this config".
+    //
+    // So the design does not depend on it being true. Once this socket has
+    // negotiated binary, the client watches for inbound audio ACTUALLY
+    // ARRIVING — in either form. If none does while our own audio is flowing,
+    // the socket goes back to text, tells the server, and says so in a log line
+    // shaped to survive the redactor on the way to Loki.
+    //
+    // This is the relay path: the callers who could not establish P2P, i.e.
+    // the worst networks. Silent total audio loss there is the single worst
+    // outcome of this feature, and it is the failure this block exists to make
+    // impossible. There is deliberately NO flag, capability, remote config or
+    // debug-menu entry that can switch it off.
+    //
+    // The SERVER runs the same watch from its end, and its version needs one
+    // thing from us. It disarms on an inbound BINARY packet — proof the path
+    // carries binary — and in the receive-first step there is no such packet,
+    // because this client receives binary and sends text on purpose. So a
+    // client that has seen binary arrive says so once, with `bin_relay: 1` on
+    // an ordinary `audio_frame` (see `_binRelayAckPending`). That single field
+    // is the difference between a server-side detector and a server-side timer
+    // that vetoes every negotiated socket after three seconds.
+
+    /// Wall clock (`timeIntervalSinceReferenceDate`) at which the liveness
+    /// watch armed on this socket: the first outbound audio frame sent after
+    /// the socket negotiated binary. `0` = not armed.
+    private var _binLivenessArmedAt: TimeInterval = 0
+
+    /// Outbound audio frames — any form — sent since the watch armed. The
+    /// window means nothing unless we were genuinely transmitting into it.
+    private var _binLivenessOutboundFrames: Int = 0
+
+    /// Wall clock of the last inbound `audio_frame` of ANY form (text envelope
+    /// or parsed binary packet). Compared against `_binLivenessArmedAt`.
+    private var _binLivenessLastInboundAudioAt: TimeInterval = 0
+
+    /// Latched once the fallback fires: this socket is on text for the rest of
+    /// its life and no later `authenticated` echo may re-grant it. Cleared only
+    /// by `connect()`, i.e. by a genuinely new socket.
+    private var _binRelayFallbackTripped: Bool = false
+
+    /// True while this socket owes the server ONE downgrade report — the
+    /// integer field `bin_relay: 0`, which rides the next outbound text
+    /// `audio_frame` (see ``sendAudioFrameAsText(recipientId:frame:callId:)``).
+    ///
+    /// Held until it is actually written rather than fired once and forgotten.
+    /// Losing it is not cosmetic: the server's `client.binRelay` stays true, it
+    /// keeps writing binary into a socket that has stopped ACCEPTING binary
+    /// (this client dropped the grant when it tripped), and it keeps expecting a
+    /// binary uplink that will never come. Our own watchdog cannot fire twice —
+    /// `_binRelayFallbackTripped` latches — so nothing would ever recover that
+    /// socket, including on the NEXT call placed over it. Pending survives the
+    /// end of a call for exactly that reason, and is cleared only by the write
+    /// or by the socket dying (`resetBinLivenessStateLocked`).
+    private var _binRelayDowngradeReportPending: Bool = false
+
+    /// True while this socket owes the server ONE AFFIRMATIVE ACK — the integer
+    /// field `bin_relay: 1`, riding the next outbound text `audio_frame`. Same
+    /// field, same carrier, same shape as the downgrade report above; the value
+    /// is what distinguishes them.
+    ///
+    /// This is the POSITIVE half of the signal, and it exists because the server
+    /// cannot otherwise tell "my binary downlink is being eaten" from "this
+    /// client only sends text". In the RECEIVE-FIRST rollout step this client
+    /// advertises that it can RECEIVE binary and keeps SENDING text, so no
+    /// binary uplink ever reaches the server — and the server's own watchdog is
+    /// disarmed only by an inbound BINARY packet (`noteInboundBinaryAudio`,
+    /// cmd/bcrypto-lite/binary_relay.go:363, ticked by `noteBinaryDelivered`
+    /// at :383). Without this ack that watchdog fires on every negotiated
+    /// socket after its 3 s window whether or not anything is broken: it stops
+    /// being a detector and becomes an unconditional timer, and the metric
+    /// built to answer "does binary traverse Cloudflare" reports a fallback on
+    /// every call.
+    ///
+    /// It means exactly ONE thing: "binary frames are reaching me on this
+    /// socket." It is not a request, not a negotiation, and it never turns
+    /// anything on in either direction — the only input that may grant binary
+    /// is still this socket's own `authenticated` payload carrying
+    /// `bin_relay: 1` (``isBinRelayGrant``), and the only thing this client
+    /// does with the ack is state a fact about traffic that already arrived.
+    ///
+    /// Armed once, on the first binary packet this socket parses, and cleared
+    /// when it is written. If a downgrade report is somehow also pending the
+    /// report wins and the ack is dropped — see
+    /// ``takeBinRelayNoticeForOutboundFrame()``.
+    private var _binRelayAckPending: Bool = false
+
+    /// Latched once the ack has actually gone out. Per SOCKET, once — never per
+    /// frame. The statement is about the socket, and repeating it would put a
+    /// variable-size field on a constant-rate stream for no added information.
+    /// Cleared only by `connect()`, i.e. by a genuinely new socket.
+    private var _binRelayAckSent: Bool = false
+
+    /// Inbound binary packets received before this socket's own `authenticated`
+    /// echo was parsed — held, not dropped. The server flips its own
+    /// `client.binRelay` BEFORE it enqueues `authenticated`
+    /// (cmd/bcrypto-lite/main.go:6069-6070 vs the enqueue below it) and its
+    /// writer goroutine `select`s over the text `Send` and binary `SendBin`
+    /// channels (main.go:5740-5765) — Go picks uniformly at random when both
+    /// are ready, so a relayed audio packet can reach the socket BEFORE the
+    /// text frame that tells us binary is on. Dropping those is a burst of
+    /// lost peer audio on every mid-call reconnect, which is a regression
+    /// against today's single-FIFO text path. Bounded two ways; see
+    /// ``binRelayPendingMaxFrames`` and ``binRelayPendingHoldMs``.
+    private var _pendingBinaryFrames: [Data] = []
+
+    /// Wall clock at which the first frame currently in `_pendingBinaryFrames`
+    /// was held. `0` = queue empty.
+    private var _pendingBinaryFirstHeldAt: TimeInterval = 0
+
+    /// The SERVER's own veto window, restated here rather than re-derived:
+    /// `binRelayLivenessWindow = 3 * time.Second`
+    /// (cmd/bcrypto-lite/binary_relay.go). The server watches the same failure
+    /// from the other end — it has been writing binary into this socket and has
+    /// heard no inbound audio from it in either form — and its veto is the
+    /// STRICTLY BETTER repair, because it is bidirectional: it stops the server
+    /// sending binary AND stops it expecting a binary uplink, in one move, for
+    /// both directions of this socket.
+    static let binRelayServerVetoWindowMs: Int = 3000
+
+    /// How long the client will wait for inbound audio, in ms, after binary is
+    /// negotiated and its own audio is flowing, before falling back to text.
+    ///
+    /// Derived, not invented, and in this ORDER — the ordering is the point:
+    ///   * ``binRelayServerVetoWindowMs`` (3 s) first, in full. The server gets
+    ///     the first move because its veto repairs both legs; a client window
+    ///     shorter than the server's pre-empts that repair and leaves the server
+    ///     still expecting binary from us. This is why the constant is no longer
+    ///     the old 1800 ms.
+    ///   * plus `PlayoutJitterBuffer.capacityMs * 3` (1800 ms,
+    ///     PlayoutJitterBuffer.swift:60) as the client's own floor: 600 ms is
+    ///     the hard cap on how much audio the receiver can hold, so one buffer
+    ///     of nothing arriving is already the most the playout path can hide,
+    ///     and three is not jitter under any reading — the relay path's jitter
+    ///     target is 160 ms (`AudioConstants.jitterBufferMsWsRelay`), so this
+    ///     margin alone is over 11× the delay variation the path is built for.
+    ///
+    /// 4800 ms is ABOVE ``mediaKickWindowSec`` (3 s), which the old 1800 ms
+    /// deliberately sat below. That is not a regression: the media kick fires
+    /// only on a socket `send()` already considers stale — no inbound frame of
+    /// ANY type for `pingIntervalSec * 2` (40 s). A socket that is merely
+    /// missing AUDIO still answers pings, so it is never stale on this
+    /// timescale and the kick does not race this window at all.
+    ///
+    /// User-visible worst case: the buffer drains at 600 ms and there is
+    /// silence until the server's veto lands (~3 s) or, if it never does, until
+    /// 4800 ms — then audio resumes on text. A hiccup, not a dead call.
+    static let binRelayLivenessWindowMs: Int =
+        BCryptoWebSocketClient.binRelayServerVetoWindowMs
+        + PlayoutJitterBuffer.capacityMs * 3
+
+    /// Outbound audio frames required inside the window before its expiry means
+    /// anything. Half of what the LONGEST supported frame duration
+    /// (`AudioConstants.maxFrameDurationMs`, 60 ms) yields across the window,
+    /// so a sender on either the 20 ms or the 60 ms profile clears it with room
+    /// to spare, while a client that is not actually transmitting never does
+    /// and therefore never trips the fallback on its own silence.
+    static let binRelayLivenessMinOutboundFrames: Int =
+        BCryptoWebSocketClient.binRelayLivenessWindowMs
+        / (2 * AudioConstants.maxFrameDurationMs)
+
+    /// Cap on inbound binary packets held across the `authenticated` race.
+    /// Small on purpose: this covers a two-channel write race on one socket,
+    /// not an outage.
+    static let binRelayPendingMaxFrames: Int = 16
+
+    /// How long a held packet may wait before it is too stale to be worth
+    /// playing. `PlayoutJitterBuffer.emergencyWatermarkMs`
+    /// (PlayoutJitterBuffer.swift:69) is the deepest the playout buffer will
+    /// ever let itself get before it starts dropping audio to catch up; a
+    /// packet older than that would be discarded downstream anyway.
+    static let binRelayPendingHoldMs: Int = PlayoutJitterBuffer.emergencyWatermarkMs
+
+    /// True iff this socket negotiated binary relay framing. Read-only.
+    public var binRelayNegotiated: Bool {
+        lock.lock(); defer { lock.unlock() }; return _binRelayNegotiated
+    }
+
+    /// Inbound binary frames dropped (frames, not bytes). Read-only diagnostic.
+    public var binaryFramesDropped: UInt64 {
+        lock.lock(); defer { lock.unlock() }; return _binaryFramesDropped
+    }
+
+    /// Inbound binary frames parsed and dispatched (frames, not bytes).
+    public var binaryFramesReceived: UInt64 {
+        lock.lock(); defer { lock.unlock() }; return _binaryFramesReceived
+    }
+
+    /// True once the liveness fallback has fired on this socket. Read-only;
+    /// there is no setter and no way to clear it short of a new connection.
+    public var binRelayFallbackTripped: Bool {
+        lock.lock(); defer { lock.unlock() }; return _binRelayFallbackTripped
+    }
+
     // MARK: - Network path monitoring (always-reachable Phase 2)
 
     /// Watches for connectivity changes (path → satisfied, WiFi↔cellular
@@ -470,6 +704,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         guard _state == .disconnected else { lock.unlock(); return }
         _state = .connecting
         currentSocksPort = socksPort
+        // A NEW socket has negotiated nothing. The binary wire form is a
+        // property of one connection and never survives it: no cached value,
+        // no inference, no carry-over. The flag can only go true again when
+        // this socket's own `authenticated` payload grants it.
+        _binRelayNegotiated = false
+        resetBinLivenessStateLocked()
+        // The fallback latch is per SOCKET, so a genuinely new connection is
+        // the one and only thing that clears it.
+        _binRelayFallbackTripped = false
+        // Same rule for the affirmative ack: "binary reaches me" is a claim
+        // about ONE socket, so the replacement socket has never made it and
+        // must be able to make it again once it too sees a binary frame.
+        _binRelayAckSent = false
         // Bump generation so any zombie receiveLoop or handleDisconnect closure
         // that fires after this point sees a stale generation and returns early.
         connectionGeneration &+= 1
@@ -573,6 +820,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         sessionDelegate = nil
         _state = .disconnected
         _lastDisconnectReason = "explicit disconnect()"
+        // The socket is gone; so is anything it negotiated.
+        _binRelayNegotiated = false
+        resetBinLivenessStateLocked()
         reconnectAttempt = 0
         pingTimer?.cancel()
         pingTimer = nil
@@ -600,6 +850,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         webSocketTask = nil
         _state = .disconnected
         _lastDisconnectReason = "forceReconnect()"
+        // Same rule as connect()/disconnect(): the replacement socket starts
+        // from text and only its own echo can grant binary again.
+        _binRelayNegotiated = false
+        resetBinLivenessStateLocked()
         pingTimer?.cancel()
         pingTimer = nil
         // NOTE: deliberately do NOT reset reconnectAttempt here. Resetting it
@@ -808,7 +1062,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             mediaKickLock.lock()
             defer { mediaKickLock.unlock() }
             let now = Date()
-            if now.timeIntervalSince(lastMediaKick) > 3.0 {
+            if now.timeIntervalSince(lastMediaKick) > mediaKickWindowSec {
                 lastMediaKick = now
                 return true
             }
@@ -821,6 +1075,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// W574c — rate limiter state for media-frame reconnect kicks.
     private static var lastMediaKick = Date.distantPast
     private static let mediaKickLock = NSLock()
+
+    /// The W574c window, named rather than restated. Same 3 s it has always
+    /// been — this is only so ``binRelayLivenessWindowMs`` can be bounded
+    /// against the real number instead of a copy of it.
+    static let mediaKickWindowSec: TimeInterval = 3.0
 
     public func sendOpaqueMessage(recipientId: String, payload: Data) {
         send(type: "opaque_message", data: ["recipient_id": recipientId, "data": payload.base64EncodedString()])
@@ -847,12 +1106,389 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// asymmetric one-way audio (Android→iOS works because iOS doesn't
     /// filter; iOS→Android dies because Android does).
     public func sendAudioFrame(recipientId: String, frame: Data, callId: String? = nil) {
+        // Wire form is resolved ONCE per call and held (see
+        // BinaryRelayWireFormLatch). Both compile-time switches are tested
+        // before anything else, so a shipped build with them off never reads
+        // the socket flag, never touches the lock here, and behaves identically
+        // to the code that shipped before binary framing existed — it costs two
+        // Bool tests against `let false` constants. The latch re-checks the
+        // send switch — one source of truth, checked twice.
+        var form = BinaryRelayWireFormLatch.WireForm.text
+        if CallCapabilities.binRelaySendEnabled {
+            form = wireFormLatch.resolve(
+                callId: callId,
+                socketNegotiated: binRelayNegotiated,
+                sendEnabled: CallCapabilities.binRelaySendEnabled
+            )
+        }
+        // LIVENESS WATCH. Deliberately OUTSIDE the `binRelaySendEnabled` test
+        // above and outside the switch below: during the receive-first rollout
+        // step this client negotiates binary and still SENDS text, and that is
+        // precisely the configuration in which a path that eats binary leaves
+        // us stone deaf while our own uplink looks perfect. The watch keys off
+        // "this socket negotiated binary" and "our audio is flowing", never off
+        // which form we happen to be sending.
+        //
+        // The compile-time test here is NOT a way to switch the fallback off:
+        // with `binRelayReceiveEnabled` false this build never asks for binary,
+        // so no socket can ever negotiate it and there is nothing to fall back
+        // from. It exists so a shipped build folds this whole block away and
+        // the 50 fps send path keeps costing exactly what it cost before this
+        // feature existed. Whenever binary CAN happen, the watch runs, and no
+        // flag, capability, remote config or debug entry can stop it.
+        if CallCapabilities.binRelayReceiveEnabled {
+            noteOutboundAudioForLiveness()
+        }
+        switch form {
+        case .binary:
+            // The latch only ever returns .binary for a call id the encoder
+            // also accepts, so a nil here means the frame length fell outside
+            // [1, 32750] — unreachable for a sealed audio frame (187 / 323).
+            //
+            // If it somehow happens, DROP this one frame. The previous
+            // behaviour here (ship it as text) put one 479-byte text packet in
+            // the middle of a stream of 205-byte binary ones, with a WebSocket
+            // opcode change to match: both are visible to a passive observer,
+            // and the constant-rate property is the entire reason this header
+            // is fixed-size. Losing one 20 ms frame costs one concealment; a
+            // size flip costs the property.
+            guard let cid = callId,
+                  let packet = BinaryRelayFraming.encodeAudio(callId: cid, frame: frame) else {
+                noteBinaryDrop(.encodeRefused)
+                return
+            }
+            sendBinary(packet, kickType: "audio_frame")
+        case .text:
+            sendAudioFrameAsText(recipientId: recipientId, frame: frame, callId: callId)
+        }
+    }
+
+    /// Arm (or advance) the liveness watch for one outbound audio frame, and
+    /// trip the fallback if the window has expired with nothing inbound.
+    ///
+    /// Runs on the audio TX queue at frame rate, so it does exactly one lock
+    /// acquisition in the common case and no allocation.
+    private func noteOutboundAudioForLiveness() {
+        let now = Date().timeIntervalSinceReferenceDate
+        lock.lock()
+        guard _binRelayNegotiated, !_binRelayFallbackTripped else {
+            // Not negotiated (or already fallen back): nothing to watch.
+            lock.unlock()
+            return
+        }
+        if _binLivenessArmedAt == 0 {
+            _binLivenessArmedAt = now
+            _binLivenessOutboundFrames = 1
+            lock.unlock()
+            return
+        }
+        _binLivenessOutboundFrames &+= 1
+        // Any inbound audio at all, in any form, since we armed ⇒ the path
+        // works. Re-arm from now so the watch keeps covering the call rather
+        // than being satisfied once and never looking again.
+        if _binLivenessLastInboundAudioAt > _binLivenessArmedAt {
+            _binLivenessArmedAt = now
+            _binLivenessOutboundFrames = 1
+            lock.unlock()
+            return
+        }
+        let elapsedMs = (now - _binLivenessArmedAt) * 1000
+        guard elapsedMs >= Double(Self.binRelayLivenessWindowMs),
+              _binLivenessOutboundFrames >= Self.binRelayLivenessMinOutboundFrames,
+              webSocketTask != nil else {
+            lock.unlock()
+            return
+        }
+        // TRIP. Text for the rest of this socket; only a new connection can
+        // undo it, and nothing in configuration can prevent it.
+        _binRelayNegotiated = false
+        _binRelayFallbackTripped = true
+        let sent = _binLivenessOutboundFrames
+        let dropped = _binaryFramesDropped
+        let rx = _binaryFramesReceived
+        let heldCount = _pendingBinaryFrames.count
+        resetBinLivenessStateLocked()
+        // AFTER the reset, which clears this flag along with the rest of the
+        // watch state. The report is what makes the trip more than half a fix:
+        // without it this socket has stopped accepting binary while the server
+        // still believes binary works, and no later event on either side can
+        // put that right.
+        _binRelayDowngradeReportPending = true
+        lock.unlock()
+
+        // Loud, and shaped to survive the trip to Loki. The stdout tee records
+        // every `print` at INFO with tag "stdout" (RuntimeLogSink.swift, the
+        // W416 block; "stdout" is in the shipper's TAG_SCOPE_PREFIXES at
+        // ship-ios-logs.py:569), and the shipper's redactor is a fail-closed
+        // allow-list: integer `k=v` pairs survive intact, while an unrecognised
+        // prose token can cost the WHOLE line, not just that word.
+        //
+        // This exact wording was executed against `scripts/ship-ios-logs.py`'s
+        // own `redact_body` and comes back unchanged. Do NOT reword it without
+        // re-running that check — "binrelay liveness fallback to text" and
+        // "binrelay fallback text" both come back dropped, i.e. invisible, and
+        // an invisible fallback is the failure this whole block exists to
+        // prevent being invisible. `binfb` is the WHICH-SIDE code: 1 = our own
+        // watchdog fired, 2 = the server told us (see
+        // ``honourServerBinRelayVeto``). The word "veto" does NOT survive the
+        // redactor, so the distinction is an integer, not a word — re-verified
+        // 2026-08-10 against the same `redact_body`. `rpt=1` means the
+        // downgrade report is QUEUED for the next outbound audio frame, not
+        // that it is already on the wire; `rpt=0` (the server-told case) means
+        // there is nothing to report back.
+        let line: String = "[BCryptoWS] binrelay fallback to text" +
+            " binfb=1 rpt=1 win=" + String(Self.binRelayLivenessWindowMs) +
+            " sent=" + String(sent) +
+            " rx=" + String(rx) +
+            " drop=" + String(dropped) +
+            " held=" + String(heldCount)
+        print(line)
+
+        // Telling the server is NOT done here. It is one integer field,
+        // `bin_relay: 0`, on the next outbound `audio_frame` — the frame this
+        // client is already sending at 50 fps — parsed by the server at
+        // cmd/bcrypto-lite/main.go:6294 into `vetoBinRelay`, which is the same
+        // terminal downgrade its own watchdog performs. That is the ONE
+        // spelling of this signal (it is also honoured on `authenticate`,
+        // main.go:6123); the `bin_relay_fallback` message type this used to
+        // send existed nowhere on the server — the WS switch has no `default:`
+        // case, so it was read by nothing, and a signal read by nothing is the
+        // same as no signal.
+        //
+        // It rides an existing frame rather than a re-`authenticate` because
+        // this has to be sendable at the exact moment audio is already broken:
+        // a re-auth on a live socket re-registers the client, re-broadcasts
+        // presence, may rotate the token pair and re-runs pending delivery.
+        // Far too heavy for that moment.
+    }
+
+    /// Record that inbound audio arrived, in whatever form. Caller must NOT
+    /// hold `lock`.
+    private func noteInboundAudioForLiveness() {
+        let now = Date().timeIntervalSinceReferenceDate
+        lock.lock()
+        _binLivenessLastInboundAudioAt = now
+        lock.unlock()
+    }
+
+    /// Clear the liveness watch and anything held for the echo race. Caller
+    /// holds `lock`. Deliberately does NOT clear `_binRelayFallbackTripped` —
+    /// that is per socket and only `connect()` resets it.
+    ///
+    /// It DOES clear the pending downgrade report, because every caller other
+    /// than the trip itself is a socket that is going away (`connect`,
+    /// `disconnect`, `forceReconnect`, `handleDisconnect`) or a server veto: in
+    /// all of those there is nothing left to report — the server's own
+    /// `client.binRelay` dies with the socket, and a veto means the server is
+    /// the one telling US. The trip therefore sets the flag AFTER calling this.
+    ///
+    /// It clears the pending AFFIRMATIVE ACK for the same reason and in the
+    /// same breath: a socket that is going away has nobody to tell, and on the
+    /// two paths that stay (our own trip, the server's veto) this socket is now
+    /// on text for the rest of its life — an ack claiming binary reaches it
+    /// would contradict the downgrade riding the very next frame. It does NOT
+    /// clear `_binRelayAckSent`, which is per socket like the fallback latch.
+    private func resetBinLivenessStateLocked() {
+        _binLivenessArmedAt = 0
+        _binLivenessOutboundFrames = 0
+        _binLivenessLastInboundAudioAt = 0
+        _pendingBinaryFrames.removeAll(keepingCapacity: false)
+        _pendingBinaryFirstHeldAt = 0
+        _binRelayDowngradeReportPending = false
+        _binRelayAckPending = false
+    }
+
+    /// Arm the affirmative ack. Caller HOLDS `lock`.
+    ///
+    /// Folded into a lock the caller already owns rather than taking its own:
+    /// this runs on the inbound audio path at frame rate, and after the first
+    /// frame every call is three Bool reads.
+    ///
+    /// Gated on the fallback latch: a socket already back on text must not
+    /// claim binary reaches it. Nothing here can put a socket ON binary.
+    private func armBinRelayAckLocked() {
+        guard !_binRelayAckSent,
+              !_binRelayAckPending,
+              !_binRelayFallbackTripped else { return }
+        _binRelayAckPending = true
+    }
+
+    /// Lock-taking wrapper around ``armBinRelayAckLocked()``. The seam the
+    /// tests drive, so the ordering rules can be exercised without opening a
+    /// socket; the live path arms inside ``dispatchBinaryAudio(_:)``'s existing
+    /// lock acquisition instead.
+    func noteInboundBinaryFrameForAck() {
+        lock.lock()
+        armBinRelayAckLocked()
+        lock.unlock()
+    }
+
+    /// Take the ONE `bin_relay` transport notice this socket owes, if any, for
+    /// exactly one outbound text `audio_frame`. Returns the integer to place on
+    /// that frame, or `nil` when nothing is owed — which is every frame of a
+    /// healthy socket after the first.
+    ///
+    /// The two values are mutually exclusive by construction, and the DOWNGRADE
+    /// WINS. Both can be pending at once — a socket can receive binary (arming
+    /// the ack), then go deaf and trip the liveness watch before the ack has
+    /// found a text frame to ride — and in that order the ack is stale: the
+    /// client is already back on text and the server must stop writing binary
+    /// to it. Sending `1` there would tell the server the exact opposite of the
+    /// repair, on the one frame that had to carry the repair.
+    ///
+    /// One lock acquisition, on the 50 fps send path, exactly as the
+    /// take-and-clear it replaces.
+    func takeBinRelayNoticeForOutboundFrame() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        let owesDowngrade = _binRelayDowngradeReportPending
+        let owesAck = _binRelayAckPending
+        if owesDowngrade {
+            // The downgrade consumes the ack with it: a stale ack outliving the
+            // trip would tell the server the opposite of the fix.
+            _binRelayDowngradeReportPending = false
+            _binRelayAckPending = false
+        } else if owesAck {
+            _binRelayAckPending = false
+            _binRelayAckSent = true
+        }
+        return Self.binRelayNotice(owesDowngrade: owesDowngrade, owesAck: owesAck)
+    }
+
+    /// The precedence rule as a pure function of what is owed, so it can be
+    /// pinned by a test without a socket, a server or a mutable client.
+    /// `nil` = the frame carries no `bin_relay` key at all, which is every
+    /// frame of a healthy socket after the first.
+    static func binRelayNotice(owesDowngrade: Bool, owesAck: Bool) -> Int? {
+        if owesDowngrade { return 0 }
+        if owesAck { return 1 }
+        return nil
+    }
+
+    /// True while this socket owes the affirmative ack. Read-only diagnostic.
+    var binRelayAckPending: Bool {
+        lock.lock(); defer { lock.unlock() }; return _binRelayAckPending
+    }
+
+    /// True once this socket has sent the affirmative ack. Read-only; once per
+    /// socket, cleared only by `connect()`.
+    var binRelayAckSent: Bool {
+        lock.lock(); defer { lock.unlock() }; return _binRelayAckSent
+    }
+
+    /// The text `audio_frame` envelope: same three keys, same absence of any
+    /// timestamp, same `send(type:data:)` path, same `websocket.MessageText` on
+    /// the wire. Split out of ``sendAudioFrame(recipientId:frame:callId:)``
+    /// verbatim so the binary branch cannot drift it.
+    ///
+    /// ONE exception, and only on a socket that negotiated binary: a fourth
+    /// key, `bin_relay`, on exactly ONE frame. Two possible values, one meaning
+    /// each, and the server reads them in the same place
+    /// (cmd/bcrypto-lite/main.go:6323, `BinRelay *int`):
+    ///
+    ///   * `0` — the DOWNGRADE REPORT. Our liveness watch fired; this socket is
+    ///     back on text and the server must stop writing binary into it.
+    ///   * `1` — the AFFIRMATIVE ACK. A binary frame reached us on this socket,
+    ///     so the server's watchdog can be disarmed without ever seeing a
+    ///     binary uplink from us. This is what makes the watchdog a detector
+    ///     rather than a timer during the receive-first step, where the uplink
+    ///     is text by design.
+    ///
+    /// Both describe the TRANSPORT, never the plaintext; neither is relayed
+    /// onward (`buildAudioRelay` builds the peer's frame from scratch and knows
+    /// nothing about this field); and both are absent from every other frame,
+    /// so the constant-size property costs one packet each, once per socket.
+    ///
+    /// The ack has no binary carrier: the 18-byte header has room for a magic,
+    /// a version/kind nibble pair and a call id, and nothing else. That costs
+    /// nothing — a socket sending binary proves the same fact by sending it,
+    /// which is the disarm the server already has. If a build ever sends binary
+    /// on one call and text on another over one socket, the ack simply rides
+    /// the first text frame, because the claim is about the socket.
+    private func sendAudioFrameAsText(recipientId: String, frame: Data, callId: String?) {
         var data: [String: Any] = [
             "recipient_id": recipientId,
             "frame": frame.base64EncodedString(),
         ]
         if let cid = callId, !cid.isEmpty { data["call_id"] = cid }
+        // THE TRANSPORT NOTICE — one spelling, one place, two values.
+        //
+        // An integer `bin_relay` on an ordinary `audio_frame`, read by the
+        // server as `*int` (absent ≠ zero) at cmd/bcrypto-lite/main.go:6323.
+        // `0` calls `vetoBinRelay`, which stops it writing binary to this
+        // socket AND stops it expecting a binary uplink — the whole repair, in
+        // one field, on a frame we were sending anyway. `1` is the affirmative
+        // ack: binary reached us here, so its watchdog can stand down without
+        // ever seeing binary come back the other way.
+        //
+        // Take-and-clear: exactly one frame carries each. WebSocket is over
+        // TCP, so a frame that reaches `task.send` reaches the server; and if
+        // the socket dies instead, both flags die with it in
+        // `resetBinLivenessStateLocked()` and the replacement socket owes
+        // nothing. Neither is cleared at end of call, so if this call ends
+        // before another frame goes out, the first frame of the next call on
+        // this socket carries it.
+        //
+        // Guarded by the compile-time ask for the same reason the liveness
+        // watch is (see `sendAudioFrame`): with `binRelayReceiveEnabled` false
+        // no socket can ever negotiate binary, so nothing can ever trip and
+        // nothing can ever arrive to acknowledge — the guard folds this away
+        // and the text path costs exactly what it cost before this feature
+        // existed. It is not, and cannot be used as, a way to switch either
+        // signal off.
+        if CallCapabilities.binRelayReceiveEnabled,
+           let notice = takeBinRelayNoticeForOutboundFrame() {
+            data["bin_relay"] = notice
+        }
         send(type: "audio_frame", data: data)
+    }
+
+    /// Binary sibling of ``send(type:data:)``. Mirrors its task/staleness
+    /// policy exactly — drop with a log when there is no task, kick a
+    /// rate-limited reconnect for the same message types, attempt the send
+    /// anyway on a stale-but-live socket — so a call on the binary path
+    /// self-heals identically to one on the text path.
+    ///
+    /// - Parameter kickType: the message type used for the reconnect-kick
+    ///   whitelist, so `audio_frame` keeps its 3 s rate limit instead of
+    ///   spawning one reconnect per frame at 50 fps.
+    private func sendBinary(_ payload: Data, kickType: String) {
+        // ONE acquisition for both the task pointer and the negotiation flag.
+        // Reading them separately is a real TOCTOU: `forceReconnect()` and
+        // `connect()` clear the flag and install a new task between the two
+        // reads, so a frame whose form was resolved against socket A gets
+        // written to socket B — for which the server has `binRelay == false`
+        // and which therefore drops it and counts a protocol error
+        // (cmd/bcrypto-lite/main.go:5871-5877), with no error surfaced here.
+        lock.lock()
+        let task = webSocketTask
+        let stillNegotiated = _binRelayNegotiated
+        lock.unlock()
+        guard stillNegotiated else {
+            // The socket lost (or never had) the grant between form resolution
+            // and here. INVARIANT 2: binary must never reach a peer that did
+            // not agree. Drop this one frame — the next frame re-resolves and
+            // the latch downgrades the call to text terminally.
+            noteBinaryDrop(.sendNotNegotiated)
+            return
+        }
+        let stale = !isFreshlyAuthenticated()
+        if task == nil {
+            print("[BCryptoWS] sendBinary(\(kickType)) DROPPED — webSocketTask is nil (WS not connected)")
+            if Self.shouldKickReconnect(forType: kickType) {
+                forceReconnect()
+            }
+            return
+        }
+        if stale && Self.shouldKickReconnect(forType: kickType) {
+            print("[BCryptoWS] sendBinary(\(kickType)) STALE socket — kicking reconnect; attempting send anyway (best-effort)")
+            forceReconnect()
+        }
+        task?.send(.data(payload)) { error in
+            if let error = error {
+                print("[BCryptoWS] sendBinary(\(kickType)) FAILED: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Task 10 (2026-07-01) — `fragIdx`/`totalFrags`/`isKeyFrame` are
@@ -891,7 +1527,99 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     }
 
     private func authenticate(token: String) {
-        send(type: "authenticate", data: ["token": token])
+        var data: [String: Any] = ["token": token]
+        // Binary relay framing is negotiated per socket, inside the existing
+        // auth handshake — no new message type, one added field. An old server
+        // unmarshals into an anonymous struct and drops the unknown key, so a
+        // client that asks behaves identically against a server that cannot
+        // answer. While `binRelayReceiveEnabled` is false the field is absent
+        // entirely and this frame is byte-for-byte what it was before.
+        if CallCapabilities.binRelayReceiveEnabled {
+            data["bin_relay"] = 1
+        }
+        send(type: "authenticate", data: data)
+    }
+
+    /// The ONE input that may turn binary framing on for a socket: a literal
+    /// integer `1` under `bin_relay` in that socket's `authenticated` payload.
+    ///
+    /// Deliberately strict. Absent key, wrong type, wrong value, or a JSON
+    /// boolean `true` (which `NSNumber` would otherwise happily report as 1)
+    /// all mean text forever on this socket. Being generous here would let a
+    /// malformed reply latch the wire form, and the safety of the whole design
+    /// rests on the negotiation shape alone — no client consumes
+    /// `audio_relay_degraded` or `call_relay_reject`, so a framing mismatch
+    /// surfaces nowhere.
+    /// Internal (not private) so the negotiation-strictness test can drive it
+    /// directly without opening a socket.
+    static func isBinRelayGrant(_ raw: Any?) -> Bool {
+        guard let number = raw as? NSNumber else { return false }
+        #if canImport(Darwin)
+        // JSONSerialization represents JSON `true` as kCFBooleanTrue, which
+        // bridges to NSNumber with intValue 1. Reject it explicitly.
+        if CFGetTypeID(number) == CFBooleanGetTypeID() { return false }
+        #endif
+        return number.intValue == 1 && number.doubleValue == 1.0
+    }
+
+    /// The server→client half of the SAME signal: a literal integer `0` under
+    /// `bin_relay`, on whatever message the server is already sending us.
+    ///
+    /// One field, one value, both directions — client→server `bin_relay: 0` is
+    /// our downgrade report, server→client `bin_relay: 0` is the server's veto.
+    /// There is no second message type and no second spelling in either
+    /// direction.
+    ///
+    /// Same strictness as ``isBinRelayGrant``, and for the same reason: absent
+    /// key, wrong type, a string `"0"`, or a JSON boolean `false` (which
+    /// `NSNumber` would report as 0) are NOT a veto. Being generous here would
+    /// let a malformed or unrelated payload silently downgrade a healthy call.
+    static func isBinRelayVeto(_ raw: Any?) -> Bool {
+        guard let number = raw as? NSNumber else { return false }
+        #if canImport(Darwin)
+        if CFGetTypeID(number) == CFBooleanGetTypeID() { return false }
+        #endif
+        return number.intValue == 0 && number.doubleValue == 0.0
+    }
+
+    /// Honour the server's veto: this socket is on text for the rest of its
+    /// life, exactly as if our own watchdog had fired, and it may not be
+    /// re-granted by a later `authenticated` echo.
+    ///
+    /// Terminal because the server's own flag is terminal (`binRelayVetoed`,
+    /// cmd/bcrypto-lite/binary_relay.go:289 — CAS'd once, never cleared) and
+    /// because a text→binary flip mid-call would change every packet size at a
+    /// moment correlated with a network event.
+    ///
+    /// No report is queued back: the server is the one telling US, and both
+    /// sides now agree. Generation-guarded like every other binary-relay state
+    /// change, so a zombie socket's buffered frame cannot downgrade the live
+    /// one.
+    private func honourServerBinRelayVeto(generation: Int) {
+        lock.lock()
+        guard generation == connectionGeneration else { lock.unlock(); return }
+        let alreadyText = _binRelayFallbackTripped && !_binRelayNegotiated
+        _binRelayNegotiated = false
+        _binRelayFallbackTripped = true
+        let sent = _binLivenessOutboundFrames
+        let dropped = _binaryFramesDropped
+        let rx = _binaryFramesReceived
+        let heldCount = _pendingBinaryFrames.count
+        resetBinLivenessStateLocked()
+        lock.unlock()
+        // Once per socket, not once per frame: the server may repeat the field.
+        guard !alreadyText else { return }
+        // Same prose as the self-trip line, on purpose — that exact wording is
+        // what survives `scripts/ship-ios-logs.py`'s fail-closed redactor, and
+        // "veto"/"server" in the prose does NOT (re-verified 2026-08-10). The
+        // side that decided is the integer: binfb=2 is the server.
+        let line: String = "[BCryptoWS] binrelay fallback to text" +
+            " binfb=2 rpt=0 win=" + String(Self.binRelayLivenessWindowMs) +
+            " sent=" + String(sent) +
+            " rx=" + String(rx) +
+            " drop=" + String(dropped) +
+            " held=" + String(heldCount)
+        print(line)
     }
 
     private func receiveLoop(generation: Int) {
@@ -910,8 +1638,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             switch result {
             case .success(let message):
                 switch message {
-                case .string(let text): self.handleMessage(text)
-                case .data(let data): if let text = String(data: data, encoding: .utf8) { self.handleMessage(text) }
+                case .string(let text): self.handleMessage(text, generation: generation)
+                case .data(let data): self.handleBinaryMessage(data, generation: generation)
                 @unknown default: break
                 }
                 self.receiveLoop(generation: generation)
@@ -921,7 +1649,189 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
     }
 
-    private func handleMessage(_ text: String) {
+    /// Inbound WebSocket BINARY frame.
+    ///
+    /// INVARIANT 1 — a client that has not negotiated binary must behave
+    /// byte-identically to today, on both send and receive, INCLUDING which
+    /// WebSocket message arms it handles at all. So the `.data` arm still does
+    /// exactly what it did before this feature existed
+    /// (`String(data:encoding:.utf8)` → ``handleMessage(_:generation:)``)
+    /// whenever this socket has not negotiated binary — which is every shipped
+    /// build and every build through rollout steps 1-4. The earlier revision
+    /// removed that unconditionally and made every non-negotiated client's
+    /// receive path differ from today's; that was the breach and this restores
+    /// it.
+    ///
+    /// The `0xB1` test in front of the UTF-8 attempt does not change the
+    /// outcome and is not meant to: `0xB1` lies in the UTF-8 continuation range
+    /// `0x80...0xBF`, so it can never begin a valid UTF-8 sequence and
+    /// `String(data:encoding:.utf8)` returns nil for such a packet anyway. It
+    /// is there so the drop is counted under a reason that says what happened
+    /// rather than "this wasn't text".
+    ///
+    /// A binary frame on a socket that did not negotiate is dropped with a
+    /// counter — no error, no state change, no log spam at 50 frames a second,
+    /// and above all no path that can error the call.
+    private func handleBinaryMessage(_ data: Data, generation: Int) {
+        lock.lock()
+        // GENERATION GUARD. `handleDisconnect` re-checks the generation for
+        // exactly this reason and the inbound dispatch did not: a zombie task
+        // from a replaced socket delivers buffered frames long after
+        // `connect()` has moved on (the "replacing stale ws device × N"
+        // pattern this class documents above), and those frames must not be
+        // handled against the live socket's state.
+        let live = (generation == connectionGeneration)
+        let negotiated = live && _binRelayNegotiated
+        lock.unlock()
+
+        guard negotiated else {
+            // ── today's behaviour, unchanged ──
+            if data.first != BinaryRelayFraming.magic,
+               let text = String(data: data, encoding: .utf8) {
+                handleMessage(text, generation: generation)
+                return
+            }
+            // ── the `authenticated` echo race ──
+            // The server sets `client.binRelay` before it enqueues
+            // `authenticated`, and its writer goroutine picks between the text
+            // and binary channels at random when both are ready, so a relayed
+            // packet can beat the echo that tells us binary is on. Dropping it
+            // costs a burst of peer audio on every mid-call reconnect —
+            // a regression against today's single-FIFO text path, on the worst
+            // networks. Hold it instead; `authenticated` either drains or
+            // discards the queue a few milliseconds later.
+            if live, holdPendingBinaryIfRacingTheEcho(data) { return }
+            noteBinaryDrop(live ? .notNegotiated : .staleGeneration)
+            return
+        }
+
+        // Only now — on a socket that DID negotiate — does an inbound binary
+        // frame count as traffic for the staleness detector. Doing this
+        // unconditionally would refresh `lastInboundAt` for non-UTF-8 binary
+        // frames that today refresh nothing, which is a receive-side behaviour
+        // change for a non-negotiated client.
+        lock.lock()
+        lastInboundAt = Date().timeIntervalSinceReferenceDate
+        lock.unlock()
+
+        dispatchBinaryAudio(data)
+    }
+
+    /// Parse one binary packet and hand it to the registered `audio_frame`
+    /// handler. Shared by the live receive path and the pending-queue drain, so
+    /// a held frame is delivered through exactly the same code.
+    private func dispatchBinaryAudio(_ data: Data) {
+        guard let parsed = BinaryRelayFraming.parseAudio(data) else {
+            // Malformed header, wrong magic, a future version, or the reserved
+            // video kind. Drop this ONE frame; the call and the socket live on.
+            noteBinaryDrop(.malformed)
+            return
+        }
+
+        lock.lock()
+        let handler = messageHandlers["audio_frame"]
+        if handler != nil { _binaryFramesReceived &+= 1 }
+        // THE AFFIRMATIVE ACK, armed here and only here: a packet that parsed
+        // is a binary WebSocket frame that survived the whole path, which is
+        // exactly and only what the ack claims. Armed BEFORE the handler test
+        // below on purpose — a missing local audio handler is our own wiring,
+        // not the network's, and it does not make the traversal less true.
+        //
+        // Deliberately NOT armed on a malformed packet (that path returns
+        // above): a frame the parser rejects proves nothing about the framing
+        // contract, and the ack is the one input the server will trust in place
+        // of seeing binary itself.
+        //
+        // Inside the lock this method already takes, so the steady state costs
+        // three Bool reads per inbound frame and no extra acquisition.
+        armBinRelayAckLocked()
+        lock.unlock()
+
+        guard let handler else {
+            noteBinaryDrop(.noAudioHandler)
+            return
+        }
+
+        // Inbound audio ACTUALLY ARRIVED. This is the observation the liveness
+        // fallback is waiting for.
+        noteInboundAudioForLiveness()
+
+        // Hand the existing `audio_frame` handlers exactly the payload shape
+        // the text path gives them — `frame` as base64, `call_id` as the
+        // canonical lowercase UUID — so every registration site
+        // (CallService.attachIncomingAudioHandler / wireTransport / the W522
+        // lazy fallback, and BCryptoWebSocketTransport) works unchanged and
+        // this stays a per-hop ENCODING rather than a second internal
+        // representation. `sender_id` is absent by design: the binary header
+        // carries strictly less than the JSON did, and no iOS `audio_frame`
+        // consumer reads it.
+        handler("audio_frame", [
+            "call_id": parsed.callId,
+            "frame": parsed.frame.base64EncodedString()
+        ])
+    }
+
+    /// Hold one inbound binary packet across the `authenticated` echo race.
+    /// Returns `true` if the packet was held (caller must not also drop it).
+    ///
+    /// Only ever engages when this build ASKED for binary and this socket has
+    /// not yet reached `.authenticated`. Bounded by count and by age, so a path
+    /// that delivers binary to a socket that will never be granted it queues at
+    /// most ``binRelayPendingMaxFrames`` packets and then drops as before.
+    private func holdPendingBinaryIfRacingTheEcho(_ data: Data) -> Bool {
+        guard CallCapabilities.binRelayReceiveEnabled,
+              data.first == BinaryRelayFraming.magic else { return false }
+        let now = Date().timeIntervalSinceReferenceDate
+        lock.lock()
+        defer { lock.unlock() }
+        guard _state != .authenticated, !_binRelayFallbackTripped else { return false }
+        if _pendingBinaryFrames.isEmpty {
+            _pendingBinaryFirstHeldAt = now
+        } else if (now - _pendingBinaryFirstHeldAt) * 1000 > Double(Self.binRelayPendingHoldMs) {
+            // Older than the playout buffer would ever tolerate: this is not a
+            // channel race any more. Give up holding.
+            _pendingBinaryFrames.removeAll(keepingCapacity: false)
+            _pendingBinaryFirstHeldAt = 0
+            return false
+        }
+        guard _pendingBinaryFrames.count < Self.binRelayPendingMaxFrames else { return false }
+        _pendingBinaryFrames.append(data)
+        return true
+    }
+
+    /// Reason an inbound (or outbound) binary frame was dropped. An enum with a
+    /// numeric code rather than a free string: the iOS→Loki redactor is a
+    /// fail-closed allow-list that blobs hyphenated words and unknown enum
+    /// tokens, so `not-negotiated` never survived the trip — verified against
+    /// `scripts/ship-ios-logs.py`'s own `redact_body`, which drops the whole
+    /// line. Integer `k=v` pairs survive intact.
+    private enum BinaryDropReason: Int {
+        case notNegotiated = 1
+        case malformed = 2
+        case noAudioHandler = 3
+        case staleGeneration = 4
+        case sendNotNegotiated = 5
+        case encodeRefused = 6
+    }
+
+    /// Count a dropped binary frame and log it SAMPLED (first three, then every
+    /// 500th). Frames, never bytes; the reason code describes the framing
+    /// decision and never the payload.
+    private func noteBinaryDrop(_ reason: BinaryDropReason) {
+        lock.lock()
+        _binaryFramesDropped &+= 1
+        let n = _binaryFramesDropped
+        lock.unlock()
+        if n <= 3 || n % 500 == 0 {
+            // Concatenated, not multi-segment interpolated: CLAUDE.md §13
+            // (Xcode 26.4 type-checker traps).
+            let line: String = "[BCryptoWS] binrelay frame drop rsn=" +
+                String(reason.rawValue) + " drop=" + String(n)
+            print(line)
+        }
+    }
+
+    private func handleMessage(_ text: String, generation: Int) {
         // Any inbound frame, including pong/heartbeat_ack, keeps the connection
         // fresh for the staleness detector.
         lock.lock()
@@ -932,9 +1842,67 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else { return }
 
+        // THE SERVER'S VETO, checked before any per-type handling and on EVERY
+        // message type — because it rides whatever message the server is
+        // already sending this client, not a message type of its own. The
+        // `authenticated` branch below is left to do its own grant logic
+        // unchanged; an `authenticated` carrying an explicit 0 lands here first,
+        // latches the socket to text, and that branch's
+        // `binRelayGranted && !_binRelayFallbackTripped` then evaluates false —
+        // so the same frame can never veto and re-grant.
+        //
+        // Compile-time-guarded first, so a build that never asks for binary
+        // does not read this key on any inbound frame and its receive path
+        // stays byte-identical to the one that shipped before this feature.
+        if CallCapabilities.binRelayReceiveEnabled,
+           let payload = json["data"] as? [String: Any],
+           Self.isBinRelayVeto(payload["bin_relay"]) {
+            honourServerBinRelayVeto(generation: generation)
+        }
+
         if type == "authenticated" {
+            // Per-socket binary-relay grant. Read from THIS payload only, and
+            // ANDed with our own compile-time ask: a server that echoes the
+            // field at a build which never asked for it still gets text, so a
+            // shipped build with the switch off can never be talked into
+            // binary by anything on the network.
+            let authPayload = json["data"] as? [String: Any] ?? [:]
+            let binRelayGranted = CallCapabilities.binRelayReceiveEnabled &&
+                Self.isBinRelayGrant(authPayload["bin_relay"])
             lock.lock()
             _state = .authenticated
+            // GENERATION GUARD, scoped as narrowly as it can be. Only the
+            // binary-relay state is gated on the generation; everything else in
+            // this branch keeps behaving exactly as it does today, because a
+            // client that never negotiates binary must not see any change at
+            // all (invariant 1).
+            //
+            // Why it matters: a zombie task from a replaced socket can deliver
+            // a buffered `authenticated` frame after `connect()` has installed
+            // a new one. Without this test that stale echo sets
+            // `_binRelayNegotiated` for the CURRENT socket — a socket that
+            // never sent `bin_relay` and was never granted it — and the send
+            // path then writes binary to it. The server drops those frames
+            // (cmd/bcrypto-lite/main.go:5851-5877) with a sampled warn and no
+            // error frame, `task.send` reports success, and the call goes
+            // one-way silent with nothing to see anywhere. That is invariant 2.
+            var drainPending: [Data] = []
+            if generation == connectionGeneration {
+                // Assignment, not OR: a re-authentication whose payload omits
+                // the key takes this socket back to text. AND-ed with the
+                // fallback latch: once the liveness watch has fired on this
+                // socket, no later echo can put it back on binary.
+                _binRelayNegotiated = binRelayGranted && !_binRelayFallbackTripped
+                if _binRelayNegotiated {
+                    drainPending = _pendingBinaryFrames
+                }
+                _pendingBinaryFrames.removeAll(keepingCapacity: false)
+                _pendingBinaryFirstHeldAt = 0
+                _binLivenessArmedAt = 0
+                _binLivenessOutboundFrames = 0
+            }
+            // else: a stale generation's echo leaves the live socket's
+            // negotiated state untouched — it may neither grant nor revoke.
             reconnectAttempt = 0
             // Clear the debounce flag set by forceReconnect() — the recovery
             // is complete; a future suspension can trigger another reconnect.
@@ -945,6 +1913,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             authPermanentlyRejected = false
             let listeners = stateListeners
             lock.unlock()
+            // Deliver anything held across the echo race, in arrival order,
+            // through the same code a live frame takes. Empty on every build
+            // that did not ask for binary, so this is a no-op array walk on the
+            // default path.
+            for held in drainPending { dispatchBinaryAudio(held) }
             listeners.forEach { $0(.authenticated) }
             startPingTimer()
             return
@@ -994,6 +1967,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         lock.lock()
         let handler = messageHandlers[type]
         lock.unlock()
+        // Inbound audio in the TEXT form counts for the liveness watch too.
+        // The watch asks "is peer audio reaching us at all", not "is it
+        // reaching us in the form we negotiated" — a server that answers our
+        // binary socket with text is working correctly (contract §3: text in /
+        // binary out and every other combination are supported forever), and
+        // tearing that down would be the fallback firing on a healthy call.
+        if type == "audio_frame", CallCapabilities.binRelayReceiveEnabled {
+            noteInboundAudioForLiveness()
+        }
         let messageData = json["data"] as? [String: Any] ?? [:]
         handler?(type, messageData)
     }
@@ -1294,6 +2276,14 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
         _state = .disconnected
         _lastDisconnectReason = reason ?? "unknown"
+        // The socket that negotiated binary is dead. Clearing here (and not
+        // only in the connect() that follows) closes the window between the
+        // drop and the reconnect, in which an in-flight relay frame would
+        // otherwise still resolve to binary against a socket that no longer
+        // exists. The per-call latch reads this flag, sees false, and
+        // downgrades that call to text for good.
+        _binRelayNegotiated = false
+        resetBinLivenessStateLocked()
         reconnectAttempt += 1
         let attempt = reconnectAttempt
         // FAILOVER trigger: after enough consecutive reconnects the node is likely

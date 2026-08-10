@@ -20,8 +20,10 @@ import QAudionEngine
 ///      negotiating, warning → degraded) wrapping a 120pt avatar with
 ///      the per-name gradient.
 ///   2. **Peer name** + presence subtitle.
-///   3. **Stats band** — 3 columns: DURATA, CONFIDENCE, RE-KEY progress
-///      (Android's stats Row; absorbs what SessionStatusStrip showed).
+///   3. **Stats band** — one outlined box, two rows: DURATA / CODEC /
+///      FLUSSO kbps / RITARDO on the first, CONFIDENCE / RE-KEY progress
+///      on the second (Android's W-NETVIS stats box; absorbs what
+///      SessionStatusStrip showed).
 ///   4. **Trust bar** — SAS ✓ / PQC / transport chips + shield-to-expand.
 ///   5. **Guardian ribbon** — real-FFT MiniSpectrum + cipher-seal chip +
 ///      3 gauges (STRESS / BREATH·HNR / PITCH) + ENGINE CipherFlowTube.
@@ -157,6 +159,42 @@ struct InCallScreen: View {
     let confidence: Double
     let rekeyInSeconds: Int
     let rekeyTotalSeconds: Int
+    /// W-NETVIS (Android→iOS parity, 2026-08-10) — the Opus bitrate ACTUALLY
+    /// applied to this call in kbps, i.e. the value that reached the encoder
+    /// after the active profile's block clamp, NOT the stored preference.
+    /// `0` ⇒ not known yet (no frame has been encoded) ⇒ the column renders
+    /// "—". Mirrors Android `CallUiState.codecKbps`.
+    let codecKbps: Int
+    /// W-NETVIS — live WIRE throughput in kbps, tx and rx, from a real
+    /// byte-counter delta on whichever path is active. `nil` ⇒ no such
+    /// counter exists on this platform / no sample yet ⇒ "—".
+    ///
+    /// iOS measures this since 2026-08-10: `CallService.wireTxBytes` /
+    /// `wireRxBytes` count the audio send and receive paths at the SAME layer
+    /// Android's relay counter does — the SEALED frame, excluding the
+    /// envelope, base64, binary header, WS frame and TLS record
+    /// (`BcryptoWsFrameRelayTransport.kt:275` and `:195-197` / `:223-225`).
+    /// The rate is an elapsed-normalised delta between consecutive 1 Hz
+    /// samples, Android's formula verbatim (`CallViewModel.kt:1966-1977`).
+    /// It is therefore comparable with Android during one call, and — like
+    /// Android — it understates the true wire cost on the relay path.
+    let txKbps: Double?
+    let rxKbps: Double?
+    /// W-NETVIS — measured round-trip time in ms on the ACTIVE MEDIA path.
+    /// `nil` ⇒ "—", never a stale or invented number: on the WS-relay path
+    /// there are no WebRTC statistics to read, and a delay the user cannot
+    /// tell apart from a real one is worse than no delay at all.
+    ///
+    /// iOS measures this since 2026-08-10 — the selected ICE candidate pair's
+    /// `currentRoundTripTime`, the identical statistic Android reads
+    /// (`PeerConnectionHolder.kt:3914-3922`) — but publishes it ONLY while
+    /// the sealed-audio DataChannel is open, i.e. only while that pair is the
+    /// leg carrying the voice. Android does not make that distinction and so
+    /// shows an ICE-pair RTT on relay calls that carry no voice over ICE.
+    /// The WS ping/pong RTT behind `AppState.latencyMs` is a REAL measurement
+    /// but of a DIFFERENT quantity — this device to the signalling server,
+    /// sampled every 30 s — so it is never shown under this label.
+    let rttMs: Double?
     let pqcActive: Bool
     let sasWords: [String]
     let sasVerified: Bool
@@ -346,6 +384,10 @@ struct InCallScreen: View {
          confidence: Double = 0.92,
          rekeyInSeconds: Int = 252,
          rekeyTotalSeconds: Int = 300,
+         codecKbps: Int = 0,
+         txKbps: Double? = nil,
+         rxKbps: Double? = nil,
+         rttMs: Double? = nil,
          pqcActive: Bool = true,
          sasWords: [String] = [],
          sasVerified: Bool = false,
@@ -393,6 +435,10 @@ struct InCallScreen: View {
         self.confidence = confidence
         self.rekeyInSeconds = rekeyInSeconds
         self.rekeyTotalSeconds = rekeyTotalSeconds
+        self.codecKbps = codecKbps
+        self.txKbps = txKbps
+        self.rxKbps = rxKbps
+        self.rttMs = rttMs
         self.pqcActive = pqcActive
         self.sasWords = sasWords
         self.sasVerified = sasVerified
@@ -857,30 +903,52 @@ struct InCallScreen: View {
     /// per SWIFT6_PATTERNS §1 / §6.
     private static let stubBadgeText: String = "DEMO"
 
-    // MARK: - Stats band (DURATA / CONFIDENCE / RE-KEY)
+    // MARK: - Stats band (DURATA / CODEC / FLUSSO / RITARDO · CONFIDENCE / RE-KEY)
 
     /// Unified stats band under the peer name — 1:1 port of Android
-    /// InCallScreen.kt's stats Row (DURATION / CONFIDENCE / REKEY): three
-    /// columns in one thin outlined card. This band absorbs everything the
-    /// deleted SessionStatusStrip call and the deleted old stats card
-    /// showed that was real (duration, confidence, rekey countdown). The
-    /// old synthetic "VOCE RICEVUTA"/"CIFRATURA" oscilloscopes are gone —
-    /// the Guardian ribbon below carries the one honest voice viz
-    /// (real-FFT MiniSpectrum) and crypto viz (real-ops/s CipherFlowTube).
+    /// InCallScreen.kt's W-NETVIS stats box (InCallScreen.kt:913-991): ONE
+    /// thin outlined card holding TWO rows, so the two platforms read the
+    /// same way during a cross-platform call.
+    ///
+    ///   row 1 — DURATA | CODEC | FLUSSO kbps | RITARDO
+    ///   row 2 — CONFIDENCE | RE-KEY dial
+    ///
+    /// The link readout follows the duration on the first line for the same
+    /// reason it does on Android: six columns overflow a phone, and this
+    /// keeps confidence adjacent to the re-key dial below.
+    ///
+    /// This band absorbs everything the deleted SessionStatusStrip call and
+    /// the deleted old stats card showed that was real (duration,
+    /// confidence, rekey countdown). The old synthetic "VOCE RICEVUTA"/
+    /// "CIFRATURA" oscilloscopes are gone — the Guardian ribbon below
+    /// carries the one honest voice viz (real-FFT MiniSpectrum) and crypto
+    /// viz (real-ops/s CipherFlowTube).
     private var statsBand: some View {
-        HStack(alignment: .center, spacing: 0) {
-            statColumn("DURATA", formatMmSs(durationSeconds), extras.success)
-            Spacer(minLength: 8)
-            statColumn("CONFIDENCE",
-                       String(format: "C=%.2f", min(1.0, max(0.0, confidence))),
-                       confidenceColor)
-            Spacer(minLength: 8)
-            VStack(spacing: 4) {
-                Text("RE-KEY")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(1.2)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                rekeyProgress
+        VStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 0) {
+                statColumn("DURATA", formatMmSs(durationSeconds), extras.success)
+                Spacer(minLength: 6)
+                // Coding level actually applied — 16k on a constrained link.
+                statColumn("CODEC", Self.codecText(codecKbps), codecColor)
+                Spacer(minLength: 6)
+                // Real wire cost right now (tx/rx), not a bandwidth estimate.
+                // The unit lives in the LABEL to keep the column narrow.
+                statColumn("FLUSSO kbps", Self.flowText(txKbps, rxKbps), scheme.onSurface)
+                Spacer(minLength: 6)
+                // Measured RTT on the active media path; "—" wherever no such
+                // measurement exists (never an invented or last-known number).
+                statColumn("RITARDO", Self.delayText(rttMs), delayColor)
+            }
+            HStack(alignment: .center, spacing: 0) {
+                statColumn("CONFIDENCE", Self.confidenceText(confidence), confidenceLabelColor)
+                Spacer(minLength: 8)
+                VStack(spacing: 4) {
+                    Text("RE-KEY")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.2)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    rekeyProgress
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -897,17 +965,98 @@ struct InCallScreen: View {
     }
 
     /// One label+value column of the stats band — mirrors Android's
-    /// `StatColumn(label, value, color)` (monospace label 8.5sp / value 14sp).
+    /// `StatColumn(label, value, color)` (InCallScreen.kt:1486) byte for
+    /// byte: monospace label 8.5 / letter-spacing 1.0, monospace semibold
+    /// value 14.
+    ///
+    /// The label size is Android's explicit 8.5 override rather than the
+    /// theme's 11pt `labelSmall` for the reason Android overrode it: four
+    /// columns of label ("DURATA | CODEC | FLUSSO kbps | RITARDO") do not
+    /// fit a phone at 11pt. `lineLimit(1)` + `minimumScaleFactor` are the
+    /// belt to that braces — a truncated "FLUSSO kb…" would be worse than
+    /// a slightly smaller one on the narrowest devices.
     private func statColumn(_ label: String, _ value: String, _ color: Color) -> some View {
         VStack(spacing: 2) {
             Text(label)
-                .qaudionStyle(type.labelSmall)
-                .tracking(1.2)
+                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .tracking(1.0)
                 .foregroundStyle(scheme.onSurfaceVariant)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
             Text(value)
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
+    }
+
+    // MARK: - Stats-band value formatting
+    //
+    // Static, so no String building happens inside a @ViewBuilder
+    // (SWIFT6_PATTERNS §1/§6/§13 — multi-segment interpolation and
+    // String(format:) inside the builder are what blow up the type-checker
+    // in this file). Every one of them has an explicit "no measurement"
+    // branch that returns the dash: an absent value is information, a stale
+    // or synthesised one is a lie the user has no way to detect.
+
+    /// The em dash used for every unmeasured value in the band.
+    private static let statDash = "—"
+
+    /// Applied coding level: "32 kbps", or "—" when it is not known.
+    private static func codecText(_ kbps: Int) -> String {
+        guard kbps > 0 else { return Self.statDash }
+        return kbps.description + " kbps"
+    }
+
+    /// Live wire rate as "tx/rx" whole kbps, e.g. "45/43". Either side may
+    /// be a dash on its own; both absent ⇒ a single dash for the column.
+    /// The unit is carried by the "FLUSSO kbps" LABEL, exactly as on
+    /// Android, so the column stays narrow enough for four-up.
+    private static func flowText(_ tx: Double?, _ rx: Double?) -> String {
+        guard tx != nil || rx != nil else { return Self.statDash }
+        let txText = tx.map { String(format: "%.0f", $0) } ?? Self.statDash
+        let rxText = rx.map { String(format: "%.0f", $0) } ?? Self.statDash
+        return txText + "/" + rxText
+    }
+
+    /// Measured round-trip time: "128ms", or "—".
+    private static func delayText(_ ms: Double?) -> String {
+        guard let ms else { return Self.statDash }
+        return String(format: "%.0fms", ms)
+    }
+
+    /// Guardian confidence: "C=0.87", or "C=—" when no real score exists
+    /// (Android's `confidence >= 0f` test — a negative value is that
+    /// platform's "no score yet" sentinel).
+    private static func confidenceText(_ confidence: Double) -> String {
+        guard confidence >= 0 else { return "C=" + Self.statDash }
+        return String(format: "C=%.2f", min(1.0, max(0.0, confidence)))
+    }
+
+    /// CODEC colour — warning for the 1…16 kbps constrained-link profile
+    /// (worth flagging: that is the coding level that costs intelligibility
+    /// to fit a bad link), success otherwise. Neutral for the dash: an
+    /// unknown rate is not a good rate, and painting "—" green would say it
+    /// was.
+    private var codecColor: Color {
+        guard codecKbps > 0 else { return scheme.onSurfaceVariant }
+        return (1...16).contains(codecKbps) ? extras.warning : extras.success
+    }
+
+    /// RITARDO colour — Android's exact thresholds: red above 400 ms,
+    /// warning above 200 ms, success below; neutral when unmeasured.
+    private var delayColor: Color {
+        guard let rttMs = self.rttMs else { return scheme.onSurfaceVariant }
+        if rttMs > 400 { return extras.riskHigh }
+        if rttMs > 200 { return extras.warning }
+        return extras.success
+    }
+
+    /// CONFIDENCE colour — the live risk colour when there is a real score,
+    /// neutral when the value is the "C=—" placeholder.
+    private var confidenceLabelColor: Color {
+        confidence >= 0 ? confidenceColor : scheme.onSurfaceVariant
     }
 
     /// Compact circular rekey countdown — port of Android core-ui

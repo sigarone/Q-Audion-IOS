@@ -176,6 +176,110 @@ final class CallService: @unchecked Sendable {
         (framesEncryptedTx, framesReceivedRx, framesDecryptedRx)
     }
 
+    // MARK: - W-NETVIS (Android→iOS parity, 2026-08-10) — audio wire bytes
+    //
+    // The FLUSSO column needs bytes, and it must count them at the SAME LAYER
+    // Android does or the two platforms disagree while looking comparable.
+    //
+    // Android's relay counter is `BcryptoWsFrameRelayTransport.txBytes
+    // .addAndGet(wirePayload.size)` (BcryptoWsFrameRelayTransport.kt:275) where
+    // `wirePayload = pqcSend?.seal(payload) ?: payload` (:243). That is the
+    // SEALED FRAME and nothing below it: the file says so itself at :242
+    // ("Everything below the `wirePayload` line is transport"). It therefore
+    // excludes the base64 expansion, the JSON `audio_frame` envelope, the
+    // 18-byte binary header, the WebSocket frame header and the TLS record —
+    // on the text wire form the real packet is roughly 2.5-3× this number.
+    // These counters deliberately reproduce that under-count rather than
+    // measure the true wire cost, because a column that means one thing on
+    // Android and another on iOS is worse than one that is uniformly
+    // approximate: the point of the band is the cross-platform comparison
+    // during a single call.
+    //
+    // So: TX counts `sealedFrame.count` at the send site (post-seal,
+    // pre-envelope) and RX counts the POST-UNSEAL length, mirroring Android's
+    // `rxBytes.addAndGet(bytes.size)` after `openInbound(...)`
+    // (BcryptoWsFrameRelayTransport.kt:195-197 text, :223-225 binary — both
+    // count what `openInbound` returned, and `unsealRelayFrame` here is the
+    // exact same operation, pass-through until the sealer is installed).
+    //
+    // ONE DIVERGENCE, and it is real: Android increments TX only when the send
+    // returned `ok` (:273). `BCryptoWebSocketClient.sendAudioFrame` returns
+    // Void (BCryptoWebSocketClient.swift:1058) and exposes no per-send result,
+    // so on the WS-relay path this counts frames HANDED to a bound socket, not
+    // frames the socket accepted. The DataChannel path has no such gap —
+    // `sendAudioFrameData` returns Bool and is counted only when true. The
+    // difference is visible only while the socket is dead, where Android would
+    // read 0 and this reads the offered rate. Closing it needs a return value
+    // from the WS client, which is not this change's file.
+    //
+    // Threading: `wireTxBytes` is touched only on `txAudioQueue` (the single
+    // serial encode queue), `wireRxBytes` only on main. Same lock-free
+    // discipline as `framesEncryptedTx` / `framesDecryptedRx` directly above,
+    // which are already public and read from views on every TimelineView tick.
+    private var wireTxBytes: Int64 = 0
+    private var wireRxBytes: Int64 = 0
+
+    /// Previous throughput sample: monotonic timestamp + the two byte totals
+    /// read at that instant. `nil` until the first sample of the call, which
+    /// is why the band shows "—" for the first tick after connect — exactly
+    /// like Android, where a rate needs two samples
+    /// (`CallViewModel.publishNetworkStats`, CallViewModel.kt:1963-1976).
+    private var lastThroughputSample: (atSec: Double, tx: Int64, rx: Int64)?
+
+    /// Live wire throughput in kbps, last computed by [sampleWireThroughput].
+    /// `nil` ⇒ "—". Written on the main actor by the sampler only.
+    public private(set) var wireTxKbps: Double?
+    public private(set) var wireRxKbps: Double?
+
+    /// Measured RTT on the leg that is ACTUALLY carrying the audio, in ms, or
+    /// `nil` when no such measurement exists (WS-relay path, or ICE not
+    /// converged). Written on the main actor by the sampler only.
+    public private(set) var mediaRttMs: Double?
+
+    /// Compute the tx/rx kbps for this tick and store the RTT the caller
+    /// resolved for the active media leg.
+    ///
+    /// The rate formula is Android's, verbatim
+    /// (`CallViewModel.publishNetworkStats`, CallViewModel.kt:1966-1977):
+    /// a delta between the last two polls divided by the ACTUALLY elapsed
+    /// time, guarded by `dtSec > 0.2` and by both deltas being non-negative
+    /// (a negative delta means the counter was reset, not negative traffic).
+    /// Not a fixed window, so the caller's cadence does not change the value —
+    /// this runs at Android's drawer-open cadence (1 Hz) rather than its
+    /// piggyback cadence (2 s) and reports the same number either way.
+    ///
+    /// ONE DELIBERATE DEPARTURE from Android: a skipped sample yields nil
+    /// here, where Android keeps the previous value
+    /// (`txKbps = txKbps ?: it.txKbps`, CallViewModel.kt:1984-1985). That
+    /// stickiness is why an Android readout FREEZES on a stale rate instead of
+    /// admitting it stopped measuring. A dash is the truthful state.
+    ///
+    /// - Parameter rttMs: RTT for the active media leg, or nil when the audio
+    ///   is not on a leg WebRTC can measure. Never substituted with the
+    ///   signalling ping (`AppState.latencyMs`): that is a real measurement of
+    ///   a different quantity (this device → signalling server, every 30 s) and
+    ///   under this label it would be undetectably wrong.
+    @MainActor
+    public func sampleWireThroughput(mediaRttMs rttMs: Double?) {
+        self.mediaRttMs = rttMs
+        // Monotonic: a wall-clock step (NTP, timezone) must not manufacture a
+        // spike or a negative dt.
+        let nowSec = ProcessInfo.processInfo.systemUptime
+        let tx = wireTxBytes
+        let rx = wireRxBytes
+        if let prev = lastThroughputSample {
+            let dtSec = nowSec - prev.atSec
+            if dtSec > 0.2, tx >= prev.tx, rx >= prev.rx {
+                wireTxKbps = Double(tx - prev.tx) * 8.0 / 1000.0 / dtSec
+                wireRxKbps = Double(rx - prev.rx) * 8.0 / 1000.0 / dtSec
+            } else {
+                wireTxKbps = nil
+                wireRxKbps = nil
+            }
+        }
+        lastThroughputSample = (nowSec, tx, rx)
+    }
+
     // MARK: - W466 — audio-pipeline diagnostics
     //
     // The user reported "call connects but no voice/video" and asked for
@@ -1373,6 +1477,12 @@ final class CallService: @unchecked Sendable {
                 rxDecryptErrorCount &+= 1
                 continue
             }
+            // W-NETVIS — same layer as the live RX path above. These bytes did
+            // arrive on the wire; they were merely held until `callIntegration`
+            // bound, so they belong in the rx total. Bounded by
+            // `rxPreBufferCap`, so the drain can inflate at most one sample at
+            // the very start of the call.
+            wireRxBytes &+= Int64(inner.count)
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 framesDecryptedRx &+= 1
@@ -1473,6 +1583,14 @@ final class CallService: @unchecked Sendable {
                 }
                 return
             }
+            // W-NETVIS — the FLUSSO rx counter, at Android's exact layer: the
+            // POST-UNSEAL length, counted the moment the open succeeds and
+            // before the Opus decode, mirroring `rxBytes.addAndGet(bytes.size)`
+            // after `openInbound(...)` on both of Android's wire forms
+            // (BcryptoWsFrameRelayTransport.kt:195-197 and :223-225).
+            // `unsealRelayFrame` is the same operation as `openInbound`,
+            // pass-through until the recv sealer is installed.
+            self.wireRxBytes &+= Int64(inner.count)
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 self.framesDecryptedRx &+= 1
@@ -1885,6 +2003,17 @@ final class CallService: @unchecked Sendable {
         audioPipeline = nil
         framesEncryptedTx = 0
         framesDecryptedRx = 0
+        // W-NETVIS — reset the wire-byte counters AND the derived readouts, so
+        // a second call never opens showing the previous call's rate. Android
+        // has exactly that bug: nothing clears `txKbps`/`rxKbps` on Ended
+        // (CallViewModel.kt), so a surviving ViewModel instance carries the old
+        // number into the next call until a fresh delta lands.
+        wireTxBytes = 0
+        wireRxBytes = 0
+        lastThroughputSample = nil
+        wireTxKbps = nil
+        wireRxKbps = nil
+        mediaRttMs = nil
         // W466 — reset the per-call diagnostic counters/markers so the
         // next call's telemetry starts from a clean slate.
         framesReceivedRx = 0
@@ -2240,6 +2369,16 @@ final class CallService: @unchecked Sendable {
                 if !sentOnDc {
                     ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
                 }
+                // W-NETVIS — the FLUSSO byte counter, at Android's exact layer:
+                // the SEALED frame, before base64 / JSON envelope / binary
+                // header / WS frame / TLS record, mirroring `txBytes.addAndGet(
+                // wirePayload.size)` (BcryptoWsFrameRelayTransport.kt:275).
+                // Counted on BOTH transports because both carry these identical
+                // bytes. On the DataChannel `sentOnDc` is a real send result, so
+                // this matches Android's "only when ok"; on the WS relay
+                // `sendAudioFrame` returns Void and no such result exists —
+                // see the counter's declaration for that divergence.
+                wireTxBytes &+= Int64(sealedFrame.count)
                 if !loggedFirstTxWire {
                     loggedFirstTxWire = true
                     let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"

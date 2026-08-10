@@ -57,22 +57,29 @@ struct SettingsToggleRow: View {
     }
 }
 
+// 2026-08-10 settings cleanup: this preview used to showcase "Deepfake Guard",
+// "Re-keying adattivo" and "Adaptive Padding CBR". None of the three is (or may
+// become) a user control: the first two are the Android toggles found to be
+// inert, and constant-size CBR padding is the traffic-analysis property the
+// design proves — it must never be user-disableable, not even in appearance.
+// The sample rows now mirror controls that really exist on iOS, so nobody
+// copy-pastes a promise the app cannot keep.
 private struct ToggleRowPreview: View {
-    @State var deepfake = true
-    @State var rekey = true
-    @State var padding = false
+    @State var readReceipts = true
+    @State var screenshotProtection = true
+    @State var appLock = false
 
     var body: some View {
         VStack(spacing: 8) {
-            SettingsToggleRow(title: "Deepfake Guard",
-                              subtitle: "Rifiuta automaticamente voci sintetizzate",
-                              isOn: $deepfake)
-            SettingsToggleRow(title: "Re-keying adattivo",
-                              subtitle: "Rinnova chiavi al variare della confidence",
-                              isOn: $rekey)
-            SettingsToggleRow(title: "Adaptive Padding CBR",
-                              subtitle: "Maschera i pattern di traffico",
-                              isOn: $padding)
+            SettingsToggleRow(title: "Conferme di lettura",
+                              subtitle: "Notifica al mittente quando hai letto",
+                              isOn: $readReceipts)
+            SettingsToggleRow(title: "Protezione screenshot",
+                              subtitle: "Oscura il contenuto nell'anteprima app",
+                              isOn: $screenshotProtection)
+            SettingsToggleRow(title: "Blocco app",
+                              subtitle: "Richiede Face ID / Touch ID al rientro",
+                              isOn: $appLock)
         }
         .padding()
         .background(Color.black)

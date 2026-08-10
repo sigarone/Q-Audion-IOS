@@ -12,16 +12,31 @@ final class PrivacySettingsContainer: ObservableObject {
         // first; the SettingsStore values become a legacy fallback only
         // if PrivacyGate has never been written. Defaults match prior
         // production behavior so users observe no change.
+        //
+        // 2026-08-10 settings cleanup — two controls were REMOVED from this
+        // screen because neither had a consumer anywhere in the app:
+        //   • "Instrada via Tor": PrivacyGate.torEnabled was read by this
+        //     container and by nothing else. No SOCKS / Tor path ever
+        //     consulted it, so the subtitle ("tutte le connessioni passano
+        //     per la rete Tor") was a false anonymisation claim on a privacy
+        //     screen. The honest, explicitly-disabled row on Impostazioni →
+        //     Trasporto (TransportSettingsScreen) is the surviving statement
+        //     about Tor on iOS.
+        //   • "Messaggi a scadenza / Scadenza": PrivacyGate.disappearingSeconds
+        //     was likewise read only here. The TTL that actually ships is the
+        //     per-conversation Conversation.ephemeralTimerSeconds
+        //     (ChatContainer / ChatDetailScreen), set from the chat itself.
+        // Both ViewModel fields are still hydrated from — and saved back to —
+        // the legacy SettingsStore blob, so no stored user value is migrated
+        // or deleted; they are simply no longer read by anything.
         let legacy = store.loadPrivacy()
         self.viewModel = PrivacySettingsViewModel(
             readReceiptsEnabled: PrivacyGate.readReceiptsEnabled,
             typingIndicatorEnabled: PrivacyGate.typingIndicatorEnabled,
             presenceVisibleToContacts: PrivacyGate.presenceVisibleToContacts,
-            disappearingMessagesDuration: PrivacyGate.disappearingSeconds == 0
-                ? legacy.disappearingMessagesDuration
-                : PrivacyGate.disappearingSeconds,
+            disappearingMessagesDuration: legacy.disappearingMessagesDuration,
             blockedUserIds: legacy.blockedUserIds,
-            torEnabled: PrivacyGate.torEnabled
+            torEnabled: legacy.torEnabled
         )
     }
 
@@ -43,32 +58,21 @@ final class PrivacySettingsContainer: ObservableObject {
         PrivacyGate.setPresenceVisibleToContacts(enabled)
     }
 
-    func setDisappearingDuration(_ seconds: TimeInterval) {
-        viewModel = makeUpdated(disappearing: seconds)
-        store.savePrivacy(viewModel)
-        PrivacyGate.setDisappearingSeconds(seconds)
-    }
-
-    func toggleTor(_ enabled: Bool) {
-        viewModel = makeUpdated(tor: enabled)
-        store.savePrivacy(viewModel)
-        PrivacyGate.setTorEnabled(enabled)
-    }
-
+    // 2026-08-10: setDisappearingDuration / toggleTor deleted together with
+    // their controls (see the note in init). The two fields below are carried
+    // through unchanged so savePrivacy round-trips the stored value.
     private func makeUpdated(
         readReceipts: Bool? = nil,
         typing: Bool? = nil,
-        presence: Bool? = nil,
-        disappearing: TimeInterval? = nil,
-        tor: Bool? = nil
+        presence: Bool? = nil
     ) -> PrivacySettingsViewModel {
         PrivacySettingsViewModel(
             readReceiptsEnabled: readReceipts ?? viewModel.readReceiptsEnabled,
             typingIndicatorEnabled: typing ?? viewModel.typingIndicatorEnabled,
             presenceVisibleToContacts: presence ?? viewModel.presenceVisibleToContacts,
-            disappearingMessagesDuration: disappearing ?? viewModel.disappearingMessagesDuration,
+            disappearingMessagesDuration: viewModel.disappearingMessagesDuration,
             blockedUserIds: viewModel.blockedUserIds,
-            torEnabled: tor ?? viewModel.torEnabled
+            torEnabled: viewModel.torEnabled
         )
     }
 }
@@ -85,14 +89,6 @@ struct PrivacySettingsScreen: View {
     init(state: AppState) {
         _container = StateObject(wrappedValue: PrivacySettingsContainer())
     }
-
-    private let durationOptions: [(label: String, value: TimeInterval)] = [
-        ("Off",       0),
-        ("1 minuto",  60),
-        ("1 ora",     3600),
-        ("1 giorno",  86400),
-        ("7 giorni",  604800)
-    ]
 
     /// W106: hide message content in lock-screen / banner notifications.
     /// When on, the banner body shows "Nuovo messaggio" instead of the
@@ -239,26 +235,11 @@ struct PrivacySettingsScreen: View {
                         )
                     }
 
-                    SettingsSectionHeader("MESSAGGI A SCADENZA")
-                    durationPickerRow
-
-                    SettingsSectionHeader("ANONIMIZZAZIONE RETE")
-                    VStack(spacing: 8) {
-                        SettingsToggleRow(
-                            title: "Instrada via Tor",
-                            subtitle: "Tutte le connessioni passano per la rete Tor",
-                            isOn: Binding(
-                                get: { container.viewModel.torEnabled },
-                                set: { container.toggleTor($0) }
-                            )
-                        )
-                        if container.viewModel.torEnabled {
-                            Text("Tutto il traffico è instradato via Tor. Le chiamate potrebbero avere latenza maggiore.")
-                                .qaudionStyle(type.labelSmall)
-                                .foregroundStyle(scheme.onSurfaceVariant)
-                                .padding(.horizontal, 14)
-                        }
-                    }
+                    // 2026-08-10: the "MESSAGGI A SCADENZA" picker and the
+                    // "ANONIMIZZAZIONE RETE" Tor toggle were removed here —
+                    // both wrote a preference no production path ever read.
+                    // Rationale and the surviving real mechanisms are
+                    // documented in PrivacySettingsContainer.init above.
 
                     // W441: Screenshot protection + App lock
                     SettingsSectionHeader("SICUREZZA DISPOSITIVO")
@@ -426,40 +407,6 @@ struct PrivacySettingsScreen: View {
             Picker("Blocca dopo", selection: appLockTimeoutMs) {
                 ForEach(appLockTimeoutOptions, id: \.ms) { option in
                     Text(option.label).tag(option.ms)
-                }
-            }
-            .pickerStyle(.menu)
-            .tint(scheme.primary)
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 56)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-    }
-
-    // MARK: - Duration picker
-
-    private var durationPickerRow: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "timer")
-                .font(.system(size: 17, weight: .regular))
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .frame(width: 22)
-
-            Text("Scadenza")
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-
-            Spacer(minLength: 6)
-
-            Picker("Scadenza", selection: Binding(
-                get: { container.viewModel.disappearingMessagesDuration },
-                set: { container.setDisappearingDuration($0) }
-            )) {
-                ForEach(durationOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
                 }
             }
             .pickerStyle(.menu)

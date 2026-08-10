@@ -148,6 +148,51 @@ public enum CallCapabilities {
     /// Desktop `CallCapabilities.ts`.
     public static let longAudioSendEnabled: Bool = false
 
+    // MARK: - Binary WS relay framing (hop-by-hop, NOT a peer capability)
+
+    /// Kill switch for ASKING the server to speak binary on our socket, i.e.
+    /// for putting `bin_relay: 1` in the `authenticate` frame.
+    ///
+    /// Deliberately NOT a capability tag, and deliberately not in ``local``:
+    /// the binary relay framing is a property of ONE WebSocket connection
+    /// between this device and one server node. It is hop-by-hop. The
+    /// capability array is end-to-end and the server's blindness to it is
+    /// pinned by a server-side test — putting framing in there would make the
+    /// server read an array it must not read, and would key the wire form by
+    /// user or by call instead of by socket, which is exactly how a second
+    /// device of the same user (a watch, with no binary receive arm at all)
+    /// goes mute with no error anywhere.
+    ///
+    /// Gating the ASK separately from the SEND is what makes the rollout
+    /// ordering enforceable in code rather than by memory: the receive-side
+    /// release turns this on alone, so the client can *receive* binary while
+    /// still *sending* text. That direction is asymmetric-safe — it costs
+    /// nothing and breaks nothing.
+    ///
+    /// Ships `false`. While it is `false` this build never sends the field, so
+    /// the server never echoes it, ``BCryptoWebSocketClient`` can never latch a
+    /// socket to binary, and every byte on the wire is identical to the build
+    /// before this feature existed.
+    public static let binRelayReceiveEnabled: Bool = false
+
+    /// Kill switch for SENDING `audio_frame` in the binary form.
+    ///
+    /// Compile-time by design, for the same reason as
+    /// ``longAudioSendEnabled``: there is no runtime toggle, no remote config
+    /// and no debug-menu entry that reaches a user build, because a wire form
+    /// that can change is a wire form that can change MID-CALL, and the
+    /// constant-rate property is only provable if it is latched once per call
+    /// and terminal.
+    ///
+    /// This flag being `true` is NEVER sufficient on its own. A frame goes out
+    /// binary only when the socket carrying it received `bin_relay: 1` in its
+    /// own `authenticated` payload — no build flag alone, no server version
+    /// sniff, no cached value from a previous socket, no inference from a peer.
+    ///
+    /// Mirrors `BIN_RELAY_SEND_ENABLED` in Android `CallCapabilities.kt` and
+    /// Desktop `CallCapabilities.ts`.
+    public static let binRelaySendEnabled: Bool = false
+
     /// Capabilities advertised by THIS build of the iOS client.
     ///
     /// NOTE: `vkeyV1` is advertised by default but may be stripped at
