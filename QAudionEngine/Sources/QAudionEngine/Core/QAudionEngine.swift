@@ -43,8 +43,13 @@ public final class QAudionEngine: @unchecked Sendable {
     private var useAdaptivePadding: Bool = false
     private var sessionKey: Data?          // raw 32-byte key for adaptive path
     private var txSeqAdaptive: UInt64 = 0  // monotonic TX counter for adaptive path
-    private static let adaptiveTarget = 120   // target padded plaintext size (bytes)
-    private static let adaptiveHeader = 2    // 2-byte big-endian length prefix
+    // W-BLOCKSIZE — the audio BLOCK: the total plaintext one frame occupies
+    // before encryption (2-byte true-length header + Opus frame + CSPRNG
+    // filler). Same numbers as before, now taken from the single fleet-wide
+    // source so the block and the bitrate ceiling derived from it in
+    // `AudioConstants` can never drift apart.
+    private static let adaptiveTarget = AudioConstants.blockBytesStandard
+    private static let adaptiveHeader = AudioConstants.lengthHeaderBytes
 
     public init(config: EngineConfig = .production()) { self.config = config }
 
@@ -109,20 +114,52 @@ public final class QAudionEngine: @unchecked Sendable {
                 throw QAudionEngineError.notInitialized
             }
             let opus = audioProcessor?.processOutgoing(pcmFrame: pcmFrame) ?? pcmFrame
-            // Build 2-byte-len-header + opus + random tail padded to targetLen bytes.
-            // targetLen = max(120, opus+2) so oversized frames still encode correctly
-            // (Android openAudio uses the 2-byte header to extract, any size decodes).
-            let targetLen = max(Self.adaptiveTarget, opus.count + Self.adaptiveHeader)
+            // W-PADOVERFLOW (2026-08-10) — an oversized frame must NOT change
+            // the size of the packet.
+            //
+            // This used to build `targetLen = max(120, opus + 2)`, i.e. it grew
+            // the block to fit whatever the encoder produced. Android's
+            // equivalent threw instead, and the throw was swallowed upstream so
+            // the frame never reached the wire. Both are the same class of
+            // defect seen from opposite sides: the observable property of the
+            // packet — its size here, its existence there — became a function
+            // of the audio.
+            //
+            // That is the worst possible failure for this design. The whole
+            // point of a fixed-size, fixed-rate train is that an observer
+            // learns nothing from sizes or timing; a packet that grows whenever
+            // the encoder overshoots is exactly the size channel the block
+            // exists to close, and it is silent — no log, no counter, nothing
+            // audible.
+            //
+            // The margin is not theoretical: under CBR the encoder emits
+            // `AudioConstants.opusCbrBytes` bytes deterministically, so an
+            // operating point chosen at the arithmetic ceiling leaves zero
+            // slack and any increase lands here.
+            //
+            // Failure now degrades to ONE frame of silence: the packet still
+            // goes out, at the same size, at the same instant, with a
+            // true-length header of ZERO and the normal CSPRNG filler. The
+            // receiver treats a zero-length body as a lost frame and conceals
+            // it (see processIncomingAudio), and the constant-rate, constant-
+            // size property holds. The counter still fires so the
+            // misconfiguration is visible in `EngineStats`.
+            let budget = Self.adaptiveTarget - Self.adaptiveHeader
+            let overflow = opus.count > budget
+            if overflow { stats.padOverflowFrames &+= 1 }
+            let bodyLen = overflow ? 0 : opus.count
+            // Build 2-byte-len-header + opus + CSPRNG filler, always exactly
+            // `adaptiveTarget` bytes of plaintext.
             var rng = SystemRandomNumberGenerator()
-            let hi = UInt8((opus.count >> 8) & 0xFF)
-            let lo = UInt8(opus.count & 0xFF)
-            let tailLen = targetLen - Self.adaptiveHeader - opus.count
+            let hi = UInt8((bodyLen >> 8) & 0xFF)
+            let lo = UInt8(bodyLen & 0xFF)
+            let tailLen = Self.adaptiveTarget - Self.adaptiveHeader - bodyLen
             let tail: [UInt8] = tailLen > 0
                 ? (0..<tailLen).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
                 : []
-            var padded = Data(capacity: targetLen)
+            var padded = Data(capacity: Self.adaptiveTarget)
             padded.append(hi); padded.append(lo)
-            padded.append(contentsOf: opus)
+            if bodyLen > 0 { padded.append(contentsOf: opus) }
             padded.append(contentsOf: tail)
             // AES-256-GCM with static session key and NO AAD (nil = no authenticating: param).
             let encrypted = try cipher.encrypt(plaintext: padded, key: key, associatedData: nil)
@@ -192,6 +229,27 @@ public final class QAudionEngine: @unchecked Sendable {
             let len = (Int(padded[0]) << 8) | Int(padded[1])
             guard len >= 0, Self.adaptiveHeader + len <= padded.count else {
                 throw QAudionEngineError.malformedFrame("adaptive length header invalid: len=\(len) padded=\(padded.count)")
+            }
+            // W-PADOVERFLOW (2026-08-10) — a true-length header of ZERO means
+            // the peer's encoder overshot its block and it sent this packet
+            // with no audio in it rather than sending a differently-sized one
+            // (see processOutgoingAudio). The packet arrived on time and at the
+            // right size, which is what preserves the constant-rate property;
+            // the audio for this one frame is simply absent.
+            //
+            // Treat it as a lost frame and let concealment fill it. It must NOT
+            // go through `processIncoming`: that pushes the empty body into the
+            // jitter buffer, where it later decodes to nil (OpusCodec.decode
+            // rejects an empty frame), and the `??` fallback below would then
+            // hand an EMPTY Data back to the caller as if it were PCM —
+            // straight into `AudioCapture.playFrame` and the playout buffer.
+            guard len > 0 else {
+                stats.framesRx += 1
+                // The `??` is unreachable in `.sessionActive` (initialize()
+                // always builds the processor); it returns one frame of silence
+                // rather than an empty buffer for exactly the reason above.
+                return audioProcessor?.codec.decodePLC()
+                    ?? Data(count: AudioConstants.bytesPerFrame)
             }
             let opusBytes = padded.subdata(in: Self.adaptiveHeader..<(Self.adaptiveHeader + len))
             let pcm = audioProcessor?.processIncoming(opusFrame: opusBytes) ?? opusBytes
@@ -301,14 +359,23 @@ public final class QAudionEngine: @unchecked Sendable {
 
     /// Reconfigure the Opus encoder with tuner-derived values.
     /// Thread-safe; no-op when called before initialize() (audioProcessor nil).
-    /// bitrateKbps: target bitrate in kbps (e.g. 32 = 32 000 bps). Hard cap: 40.
+    /// bitrateKbps: target bitrate in kbps (e.g. 32 = 32 000 bps). Hard cap: 40,
+    /// under the block-derived ceiling (see below).
     /// plp: expected packet-loss percentage hint for FEC budget (0–100).
     public func reconfigureAudioCodec(bitrateKbps: Int, plp: Int) {
         lock.lock()
         let proc = audioProcessor
         lock.unlock()
         guard let proc else { return }
-        let clampedBr = min(max(bitrateKbps, 8), 40)
+        // W-BLOCKSIZE — this is the mid-call bitrate change, and mid-call is
+        // the real hazard: the frame size is deterministic, but the bitrate is
+        // not constant for the life of a call. 40 kbps stays as the product cap
+        // (the Opus wideband speech plateau, see `AudioCodecPrefs`);
+        // `clampToBlock` is the wire gate underneath it, so raising that cap
+        // later can never silently push a frame past what the block holds.
+        // Today the derived ceiling is the looser of the two (41 kbps at 120 B
+        // / 20 ms), so nothing about the current operating point changes.
+        let clampedBr = AudioConstants.clampToBlock(min(max(bitrateKbps, 8), 40))
         proc.codec.reconfigure(OpusCodec.Config(
             bitrate: clampedBr * 1000, complexity: 10, enableHpf: true))
         proc.codec.setPacketLossPct(max(0, min(plp, 100)))

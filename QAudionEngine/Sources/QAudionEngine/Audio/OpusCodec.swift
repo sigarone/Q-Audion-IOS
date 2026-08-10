@@ -117,9 +117,18 @@ public final class OpusCodec {
         guard let dec = decoder else { return fallbackDecode(opusFrame) }
         guard !opusFrame.isEmpty else { return nil }
 
-        var pcm = Data(count: AudioConstants.bytesPerFrame)
+        // W-FRAMEAGNOSTIC (2026-08-10) — size the output for the LONGEST frame a
+        // peer may send, not for the one we encode. `frame_size` here is opus.h's
+        // "number of samples per channel of AVAILABLE SPACE in pcm", and the same
+        // header states that when it is less than the packet's duration the
+        // function "will not be capable of decoding some packets" — it returns
+        // OPUS_BUFFER_TOO_SMALL. With 960 that is every 40/60 ms packet, on every
+        // frame, for the whole call: `fallbackDecode` below then returns a
+        // zero-filled buffer, so a peer on another profile or mid-rollout would
+        // be rendered as perfect silence with nothing in any log.
+        var pcm = Data(count: AudioConstants.maxBytesPerFrame)
         // force-unwraps below are safe: opusFrame is checked non-empty above,
-        // pcm was just allocated with bytesPerFrame (fixed non-zero constant).
+        // pcm was just allocated with maxBytesPerFrame (fixed non-zero constant).
         let result = opusFrame.withUnsafeBytes { inBuf in
             pcm.withUnsafeMutableBytes { outBuf in
                 opus_decode(dec,
@@ -128,7 +137,7 @@ public final class OpusCodec {
                     Int32(opusFrame.count),
                     // swiftlint:disable:next force_unwrapping
                     outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
-                    Int32(AudioConstants.samplesPerFrame),
+                    Int32(AudioConstants.maxSamplesPerFrame),
                     // W-IOSFECFLAG (2026-07-25) — MUST be 0. This is libopus'
                     // `decode_fec`, and it does NOT mean "use FEC if the frame
                     // happens to carry it". Set to 1 it decodes the packet's LBRR
@@ -165,7 +174,14 @@ public final class OpusCodec {
 
         guard result > 0 else { return fallbackDecode(opusFrame) }
         framesDecoded += 1
-        return pcm
+        // W-FRAMEAGNOSTIC — `opus_decode` returns the number of decoded samples
+        // PER CHANNEL (opus.h: "@returns Number of decoded samples per
+        // channel"), not bytes, so the length has to be reconstructed rather
+        // than assumed. Returning the whole buffer unconditionally is invisible
+        // while every packet is 20 ms — the trim below is then a no-op, 960
+        // samples = 1920 bytes = the old constant — but the moment durations
+        // differ it would staple 3840 zero bytes onto every frame.
+        return pcm.prefix(Int(result) * AudioConstants.channels * (AudioConstants.bitsPerSample / 8))
     }
 
     /// Packet Loss Concealment — generate interpolated frame when packet lost.
@@ -175,6 +191,17 @@ public final class OpusCodec {
         pcm.withUnsafeMutableBytes { outBuf in
             // force-unwrap safe: pcm was just allocated with bytesPerFrame
             // (fixed non-zero constant) — baseAddress is only nil when empty.
+            //
+            // W-FRAMEAGNOSTIC does NOT apply here, deliberately: in the PLC case
+            // (data == NULL) `frame_size` is not "space available", it is the
+            // duration to conceal — opus.h: "In the case of PLC (data==NULL) ...
+            // frame_size needs to be exactly the duration of audio that is
+            // missing, otherwise the decoder will not be in the optimal state to
+            // decode the next incoming packet." Concealment fills OUR playout
+            // slot, which is one `frameDurationMs`, so widening this to the
+            // maximum receivable frame would emit 60 ms of audio where the
+            // playout buffer expects 20 and put the clock at a third of the
+            // media rate.
             _ = opus_decode(dec, nil, 0,
                 // swiftlint:disable:next force_unwrapping
                 outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),

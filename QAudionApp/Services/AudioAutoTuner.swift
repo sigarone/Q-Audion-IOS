@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// Post-call Opus quality tuner for iOS.
 ///
@@ -11,9 +12,12 @@ import Foundation
 /// the MIN_FRAMES gate (100 frames ≈ 2 s @ 50 fps) excludes calls too short
 /// for a reliable estimate.
 ///
-/// Bitrate hard cap: 40 kbps — same as Android. Sealed frame is
-/// [nonce(12)|ct(120)|tag(16)]; payload ≤ 119 B → ≤ 47.6 kbps @ 20 ms.
-/// 40 kbps leaves margin and is the Opus WB speech quality plateau.
+/// Bitrate cap: 40 kbps — same as Android, and the Opus WB speech quality
+/// plateau. The wire ceiling under it is the audio BLOCK: 120 bytes of
+/// plaintext per frame, of which 2 are the true-length header and 14 are the
+/// deliberate reserve, leaving 104 for the Opus frame ⇒ 41 kbps at 20 ms.
+/// That number is derived by `AudioConstants.clampToBlock`, never written out
+/// here, so the two cannot drift.
 ///
 /// FEC: always on (iOS parity with Android). Only bitrate and PLR are tuned.
 ///
@@ -24,7 +28,13 @@ public final class AudioAutoTuner {
     public static let shared = AudioAutoTuner()
     private init() {}
 
-    private static let opusMaxBitrateKbps = 40
+    // W-BLOCKSIZE — the tuner is the source that MOVES the bitrate between
+    // calls, so its ceiling is derived from the audio block rather than
+    // hand-picked next to it. `clampToBlock` returns the lower of the product
+    // cap (40, the Opus wideband speech plateau) and what the 120-byte block
+    // can actually hold at 20 ms (41 kbps), so the value is 40 today and can
+    // never silently exceed the block if that cap is raised later.
+    private static let opusMaxBitrateKbps = AudioConstants.clampToBlock(40)
     private static let minFramesForTune: Int64 = 100
 
     /// Snapshot from the last completed call. Nil when autoTune is disabled

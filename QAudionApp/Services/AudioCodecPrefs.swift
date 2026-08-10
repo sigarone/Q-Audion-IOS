@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// Persistent Opus codec preferences tuned by AudioAutoTuner after each call.
 ///
@@ -6,7 +7,9 @@ import Foundation
 /// is not needed (contrast with CallsGate security flags which use Keychain).
 ///
 /// Defaults match OpusCodec.Config.secure(): 32 kbps CBR, FEC on, PLR 30%.
-/// Wire-format hard cap: 40 kbps (sealed frame payload ≤ 119 B at 20 ms).
+/// Product cap: 40 kbps. The wire ceiling under it is derived, not written
+/// here — `AudioConstants.clampToBlock` (120-byte block − 2-byte length header
+/// − 14-byte reserve ⇒ 41 kbps at 20 ms).
 public enum AudioCodecPrefs {
 
     private static let keyBitrateKbps = "qaudion.audio.opus_bitrate_kbps"
@@ -24,7 +27,13 @@ public enum AudioCodecPrefs {
     }
 
     public static func setBitrateKbps(_ v: Int) {
-        UserDefaults.standard.set(min(max(v, 8), 40), forKey: keyBitrateKbps)
+        // W-BLOCKSIZE — the persisted preference is one of the sources of a
+        // bitrate, so it passes the block-derived ceiling like the others. 40
+        // stays as the product cap; `clampToBlock` is the wire gate underneath
+        // it (41 kbps at a 120-byte block / 20 ms today, so no change now) and
+        // keeps the two from drifting if the cap is ever raised here alone.
+        UserDefaults.standard.set(AudioConstants.clampToBlock(min(max(v, 8), 40)),
+                                  forKey: keyBitrateKbps)
     }
     public static func setPlp(_ v: Int) {
         UserDefaults.standard.set(min(max(v, 0), 100), forKey: keyPlp)

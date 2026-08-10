@@ -4,6 +4,16 @@ public struct EngineStats {
     public var sessionDurationMs: Int64 = 0
     public var framesTx: Int64 = 0
     public var framesRx: Int64 = 0
+    /// W-PADOVERFLOW — TX frames whose encoder output exceeded the audio block
+    /// and were therefore sent with a true-length header of zero (one frame of
+    /// silence for the peer) instead of being sent in a larger packet.
+    ///
+    /// This must stay at zero in a correctly configured build: a non-zero value
+    /// means the operating point (bitrate x frame duration) was chosen above
+    /// what `AudioConstants.blockBytesStandard` can hold, and the call is
+    /// silently losing audio. Reset per session with the rest of `EngineStats`;
+    /// read it at call teardown.
+    public var padOverflowFrames: Int64 = 0
     public var avgEncryptionMs: Double = 0
     public var avgDecryptionMs: Double = 0
     public var keyRatchetCount: Int64 = 0
