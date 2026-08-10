@@ -173,6 +173,16 @@ final class CallService: @unchecked Sendable {
     // didActivate). Emitted in the call.audio.counts summary on teardown.
     private var audioEnginesStarted = false
     private var didActivateFallbackFired = false
+    /// W-PADOVERFLOW — the engine that owns this call's audio, kept so the
+    /// teardown summary can read its counters. Weak because the engine's
+    /// lifetime belongs to AppState, not to this service: a strong reference
+    /// here would outlive the call and keep the whole audio stack alive.
+    ///
+    /// It exists because `padOverflowFrames` was being incremented and read by
+    /// nothing, which is the same as not counting it at all — the failure it
+    /// records is a frame replaced by silence, and silence is what nobody
+    /// notices. On iOS there is no adb, so telemetry is the only channel.
+    private weak var audioEngineRef: QAudionEngine?
     // Frames dropped because their call_id didn't match the active session.
     // Batched relay delivery from a previous/overlapping session causes x250+
     // AEAD failures (CryptoKitError 3) without this filter.
@@ -563,6 +573,9 @@ final class CallService: @unchecked Sendable {
     func startCall(engine: QAudionEngine, contactId: String) throws {
         // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
         teardownAudioStack()
+        // W-PADOVERFLOW — after the defensive teardown, so that teardown
+        // reports the PREVIOUS call rather than this one's empty counters.
+        audioEngineRef = engine
 
         // W65: PRIMA cosa — configura AVAudioSession in `.voiceChat` mode
         // per attivare lo stack HW DSP di Apple (Voice Processing I/O).
@@ -824,6 +837,10 @@ final class CallService: @unchecked Sendable {
             print("[CallService] activateIncomingCallAudio SKIPPED — group call active (VP-IO owned by LiveKit)")
             return
         }
+        // W-PADOVERFLOW — incoming-call counterpart of the assignment in
+        // startCall(engine:contactId:). Set after the group-call bail-out so a
+        // refused activation does not repoint the reference.
+        audioEngineRef = engine
         // W574i — preserve the M-15 relay sealers across the defensive
         // teardown. On the CALLEE the PQC handshake completes DURING ringing,
         // so onRelaySessionReady -> installRelaySealers has ALREADY run by the
@@ -1406,6 +1423,14 @@ final class CallService: @unchecked Sendable {
                 // existed (~0.8 s handshake window); NOT a fault. Kept separate
                 // so tx_enc_err stays a clean real-failure signal.
                 "tx_pre_hs":       txPreHandshakeDropped,
+                // W-PADOVERFLOW — TX frames whose Opus output did not fit the
+                // audio block and were therefore sent as a silent frame of the
+                // same size. MUST be 0: anything else means the operating
+                // point (bitrate x frame duration) was chosen above what the
+                // block holds, and the call lost audio without any other
+                // symptom. Numeric so the server-side redactor keeps it
+                // readable rather than blobbing it.
+                "pad_overflow":    audioEngineRef?.getStats().padOverflowFrames ?? -1,
                 "engines_started": audioEnginesStarted,
                 "fallback_fired":  didActivateFallbackFired,
                 "session_active":  audioSessionActive
