@@ -28,7 +28,12 @@ final class ChatContainer: ObservableObject {
     /// Reason codes 1:1 con Android `SendMessageUseCase.Outcome.Failed`
     /// (vedi `qaudion-android-new/feature/feature-chat/.../SendMessageUseCase.kt`).
     /// Mappato a stringhe Italian per UI feedback via QAudionSnackbar.
-    enum SendFailureReason: String, Equatable {
+    /// `Error`-conforming (branch claude/ble-mesh-cleanroom-spike added
+    /// this): `ChatMessageSendService.encryptForWire` returns
+    /// `Result<Data, SendFailureReason>`, and `Result`'s `Failure`
+    /// generic parameter requires `Failure: Error` — a plain
+    /// `Equatable`-only enum does not satisfy that on its own.
+    enum SendFailureReason: String, Equatable, Error {
         case pskMissing      = "psk_missing"
         case cryptoFailure   = "crypto_failure"
         case networkError    = "network_error"
