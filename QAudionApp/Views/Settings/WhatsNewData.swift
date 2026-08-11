@@ -4,13 +4,27 @@ extension ReleaseNote {
     /// User-facing changelog. Aggiornare a ogni release con funzionalità
     /// visibili all'utente. Niente codici interni, tool o dettagli di build.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.957+", date: "2026-08-11",
+              title: "Impostazioni più oneste, dati di chiamata reali",
+              bullets: [
+                "Rimossi i controlli che non facevano nulla: Deepfake Guard, Re-keying adattivo, Padding e Reperibilità. Le funzioni restano attive come sempre — erano gli interruttori a non essere collegati a niente",
+                "Durante la chiamata: codec, flusso e ritardo accanto a durata e confidenza. Dove il dato non è misurabile compare un trattino, mai un numero inventato",
+                "Il punteggio di affidabilità mostra un trattino finché non è stato davvero misurato, invece di partire da un valore prestampato",
+                "Elaborazione vocale (AEC/NS/AGC) attiva di default",
+              ]),
         .init(id: "v1.0.560+", date: "2026-05-31",
               title: "Profilo e impostazioni",
               bullets: [
                 "Esci direttamente dalla schermata Profilo",
                 "Caller ID: supporto prefisso internazionale (+39…)",
                 "Gestione chiavi: lista chiavi vault con fingerprint e scansione QR contatto",
-                "Toggle Deepfake Guard / Re-keying / Padding ora effettivi",
+                // Rimossa 2026-08-11: la riga diceva che i toggle Deepfake Guard,
+                // Re-keying e Padding erano "ora effettivi". Non lo furono mai —
+                // invertivano un valore nell'interfaccia e nessun'altra parte
+                // dell'app lo leggeva. Le funzioni giravano comunque, sempre.
+                // Non si corregge una nota di rilascio riscrivendoci sopra una
+                // versione più bella: la riga falsa esce, e la voce del
+                // 2026-08-11 racconta cosa è stato tolto e perché.
                 "Preset audio chiamate fisso a 32 kbps CBR per compatibilità cross-platform",
               ]),
         .init(id: "v1.0.550+", date: "2026-05-27",

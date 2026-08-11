@@ -194,6 +194,31 @@ struct LiveInCallScreen: View {
                 confidence: Double(appState.confidenceScore),
                 rekeyInSeconds: liveRekeyInSeconds,
                 rekeyTotalSeconds: Self.rekeyTotalSeconds,
+                // W-NETVIS (Android→iOS parity) — the three link numbers of
+                // the stats band, all three now measured. Sampled at 1 Hz by
+                // `AppState.sampleCallNetworkStats()` off the existing
+                // crypto-meter tick; read here on the TimelineView tick like
+                // the frame counters below.
+                codecKbps: liveCodecKbps,
+                // Real wire bytes, counted on the audio send/receive paths at
+                // the SAME layer Android counts them (the sealed frame, before
+                // envelope/base64/TLS — see the counter declarations in
+                // `CallService`). Live on both transports: the sealed-audio
+                // DataChannel and the WS relay carry identical bytes.
+                txKbps: appState.callService.wireTxKbps,
+                rxKbps: appState.callService.wireRxKbps,
+                // Measured RTT on the selected ICE candidate pair, published
+                // ONLY while the sealed-audio DataChannel is open — i.e. only
+                // while that pair is the leg actually carrying the voice. On
+                // the WS-relay path this is nil and the column shows "—",
+                // because no measurement of that path exists.
+                // `AppState.latencyMs` is deliberately NOT substituted: it is
+                // a real measurement of a DIFFERENT quantity (this device to
+                // the signalling server, one ping/pong per 30 s, see
+                // `BCryptoWebSocketClient.onLatencyMeasured`) and under the
+                // RITARDO label it would be undetectably wrong. It stays where
+                // it is honest — the diagnostics overlay's "LATENZA RELAY" row.
+                rttMs: appState.callService.mediaRttMs,
                 // W-TRUSTBAR-FIX: backendType is one of "p2p"/"turn"/"relay"
                 // (see AppState.swift ~line 267) — it is NEVER the literal
                 // "PQC". The PQC handshake is a SEPARATE layer from the
@@ -527,6 +552,39 @@ struct LiveInCallScreen: View {
     /// and no local `@State` copy has to be kept in step with it.
     private var liveMuted: Bool {
         appState.callMuted
+    }
+
+    /// W-NETVIS (Android→iOS parity) — the Opus bitrate ACTUALLY applied to
+    /// this call, in kbps. `0` ⇒ not known yet ⇒ the CODEC column shows "—".
+    ///
+    /// This is the APPLIED operating point, not the stored preference, and
+    /// the difference is not cosmetic: on a call that negotiated the long
+    /// 60 ms / 256-byte profile the ceiling is 32 kbps with zero headroom, so
+    /// a persisted 40 kbps preference is clamped down before it ever reaches
+    /// libopus (`QAudionEngine.reconfigureAudioCodec`, QAudionEngine.swift
+    /// L472). Showing the preference would over-report the rate on exactly
+    /// the calls where the number matters most.
+    ///
+    /// Reproduced here from the two live public inputs the engine itself
+    /// clamps — the same expression, the same order — because the engine
+    /// keeps the result privately inside `OpusCodec.config` and exposes no
+    /// read-back. Both inputs are stable for the life of a call: the profile
+    /// latch is terminal (`QAudionEngine.latchAudioProfile`) and the only
+    /// writer of the preference is `AudioAutoTuner.tunePostCall`, which runs
+    /// at teardown. If the engine ever publishes the applied bitrate
+    /// directly, read it from there and delete this derivation.
+    ///
+    /// Gated on a sealed TX frame having actually happened, because that is
+    /// the first instant the reconfigure is guaranteed to have run: TX
+    /// sealing is blocked until `txSessionReady`, which is set in the PQC
+    /// `.active` handler immediately before `reconfigureAudioCodec`
+    /// (CallService.swift L834-856). Before that the encoder is still on its
+    /// construction default and reporting the tuned rate would be a guess.
+    private var liveCodecKbps: Int {
+        guard appState.callService.framesEncryptedTx > 0,
+              let profile = appState.callService.callIntegration?.activeAudioProfile
+        else { return 0 }
+        return profile.clamp(kbps: min(max(AudioCodecPrefs.bitrateKbps, 8), 40))
     }
 
     /// W368: live SAS verification flag. Returns true iff the

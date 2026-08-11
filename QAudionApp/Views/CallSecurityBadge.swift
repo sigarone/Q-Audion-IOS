@@ -76,7 +76,13 @@ struct CallSecurityBadge: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundColor(dotColor)
                 Spacer()
-                Text("\(Int(appState.confidenceScore * 100))%")
+                // A negative score is the "no Guardian score yet" sentinel, not
+                // a percentage. It used to be impossible because the score was
+                // seeded with a hardcoded 0.97, which showed the user a
+                // confident-looking 97% before anything had been measured.
+                Text(appState.confidenceScore < 0
+                     ? "—"
+                     : "\(Int(appState.confidenceScore * 100))%")
                     .font(.system(size: 24, weight: .bold, design: .rounded))
                     .foregroundColor(dotColor)
             }

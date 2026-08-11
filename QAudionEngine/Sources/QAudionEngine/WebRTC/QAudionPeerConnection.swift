@@ -140,7 +140,14 @@ public final class QAudionPeerConnection: NSObject {
     /// Cross-platform sealed-audio DataChannel label. MUST match Android's
     /// `PeerConnectionHolder.DATA_CHANNEL_LABEL` and Desktop's `SEALED_DC_LABEL`
     /// ("qaudion-audio") so the channel is recognised on both ends.
-    private let audioDataChannelLabel = "qaudion-audio"
+    ///
+    /// W-DCMUX — the literal now lives in ``SealedAudioDataChannelWire`` (bottom
+    /// of this file, outside the `canImport(WebRTC)` block) so a regression test
+    /// can pin it without the WebRTC binary. Both ends compare the label with
+    /// plain string equality (`PeerConnectionHolder.kt:3865` on Android,
+    /// `didOpen` below on iOS), so a rename is an interop break that no test
+    /// would otherwise catch until a real cross-platform call went silent.
+    private let audioDataChannelLabel = SealedAudioDataChannelWire.label
     /// The sealed-audio DataChannel. Carries the SAME `WireRelayFrameCodec`
     /// envelope bytes as the WS relay, so it is byte-compatible with Android's
     /// DefaultFrameRelayTransport DC and Desktop's SealedAudioPipeline. It is the
@@ -165,6 +172,22 @@ public final class QAudionPeerConnection: NSObject {
     /// handler passes to `handleIncomingEncryptedFrame` after base64 decode — so
     /// the app routes it straight there.
     public var onAudioDataChannelFrame: ((Data) -> Void)?
+
+    /// W-DCMUX (2026-08-11) — sealed-audio DataChannel lifecycle, as the raw
+    /// `RTCDataChannelState` value (0 connecting, 1 open, 2 closing, 3 closed).
+    ///
+    /// Invoked on the WebRTC signalling thread at three moments: when the CALLER
+    /// creates the channel, when the CALLEE receives it via `didOpen`, and on
+    /// every subsequent `dataChannelDidChangeState`. The engine has no call id,
+    /// so the app layer owns the log line — this hook is what lets it carry one.
+    ///
+    /// Existence-only: it changes no wire byte and no transport decision. It
+    /// exists because the live Loki pull of call `0289b8d4` returned 14 iOS
+    /// lines for a 69-second call and NOT ONE of them was about the DataChannel,
+    /// which makes "the channel never opened" and "the channel opened and we
+    /// never wrote to it" indistinguishable from logs — the exact question
+    /// Phase 0 has to answer before the capability tag may be flipped.
+    public var onAudioDataChannelStateChange: ((Int) -> Void)?
 
     public init(factory: RTCPeerConnectionFactory,
                 iceServers: [RTCIceServer],
@@ -233,6 +256,10 @@ public final class QAudionPeerConnection: NSObject {
         dc.delegate = self
         audioDataChannel = dc
         print("[WebRTC] sealed-audio DataChannel created (label=\(audioDataChannelLabel))")
+        // W-DCMUX — same instant, but with a call id attached by the app layer.
+        // The print above survives for a console session; only the hooked line
+        // reaches the call-correlated timeline.
+        onAudioDataChannelStateChange?(dc.readyState.rawValue)
         return true
     }
 
@@ -274,6 +301,20 @@ public final class QAudionPeerConnection: NSObject {
     public func isAudioDataChannelOpen() -> Bool {
         guard let dc = audioDataChannel else { return false }
         return dc.readyState == .open
+    }
+
+    /// W-DCMUX (2026-08-11) — the sealed-audio DataChannel's raw
+    /// `RTCDataChannelState`, or `-1` when there is no channel object at all.
+    ///
+    /// Read-only diagnostic. ``isAudioDataChannelOpen()`` collapses "no channel
+    /// was ever created" and "a channel exists but is connecting / closing /
+    /// closed" into the same `false`, and those are three different bugs with
+    /// three different fixes. `sendAudioFrameData` returns `false` for all of
+    /// them alike, so without this the Phase 0 log line cannot say which one
+    /// happened.
+    public func audioDataChannelStateRaw() -> Int {
+        guard let dc = audioDataChannel else { return -1 }
+        return dc.readyState.rawValue
     }
 
     /// W386 — placeholder for the W382 PQC sealer install hook.
@@ -901,6 +942,8 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
         audioDataChannel = dataChannel
         let st = dataChannel.readyState.rawValue
         print("[WebRTC] sealed-audio DataChannel received (state=\(st))")
+        // W-DCMUX — CALLEE receipt, with the call id attached by the app layer.
+        onAudioDataChannelStateChange?(st)
     }
 
     // Unified-plan track callback.
@@ -1040,6 +1083,11 @@ extension QAudionPeerConnection: RTCDataChannelDelegate {
         guard dataChannel === audioDataChannel else { return }
         let st = dataChannel.readyState.rawValue
         print("[WebRTC] sealed-audio DataChannel state → \(st)")
+        // W-DCMUX — the transition the app has to see. A channel that leaves
+        // OPEN mid-call is dead air on the DC leg, and this is the only place
+        // iOS learns about it: `peer.events`-style ICE transitions say nothing
+        // about SCTP, and nothing else polls the readyState.
+        onAudioDataChannelStateChange?(st)
     }
     public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         guard dataChannel === audioDataChannel else { return }
@@ -1246,4 +1294,36 @@ enum AudioDcBackpressureGate {
     static func shouldDrop(bufferedAmount: UInt64, threshold: UInt64) -> Bool {
         bufferedAmount > threshold
     }
+}
+
+/// W-DCMUX (2026-08-11) — the two cross-platform string literals of the
+/// sealed-audio DataChannel, in one place, so they can be pinned by a test.
+///
+/// Namespaced outside the `canImport(WebRTC)` block (same shape as
+/// ``AudioDcBackpressureGate`` above) so the regression test runs on a CI
+/// machine without the WebRTC binary. Nothing here is a decision; it is two
+/// constants that three platforms have to agree on byte for byte.
+enum SealedAudioDataChannelWire {
+    /// The DataChannel label. LOAD-BEARING: both ends select the sealed-audio
+    /// channel by comparing this string for equality — Android at
+    /// `PeerConnectionHolder.kt:3865`, iOS in `didOpen` above, Desktop in
+    /// `MediaTransport.ts`. A rename on any one platform is a silent break that
+    /// only shows up as a call with no audio.
+    static let label = "qaudion-audio"
+
+    /// The DataChannel subprotocol Android sets (`DataChannel.Init.protocol`,
+    /// `PeerConnectionHolder.kt:1461`) and Desktop declares
+    /// (`MediaTransport.ts:56`, `DATA_CHANNEL_PROTOCOL`).
+    ///
+    /// iOS deliberately leaves the channel's subprotocol UNSET. Neither end
+    /// reads it — it is symmetry, not negotiation — and the property is spelled
+    /// `protocol` in the WebRTC ObjC header
+    /// (`sdk/objc/api/peerconnection/RTCDataChannelConfiguration.h`, verified
+    /// against upstream), which is a Swift keyword and therefore needs escaping
+    /// that could not be compiled or tested on the machine this change was
+    /// written on. Setting a field nobody reads is not worth a build risk on an
+    /// unverifiable spelling. The constant is kept so the agreed value is
+    /// written down once and pinned by a test, and so that whoever does set it
+    /// copies the string instead of retyping it.
+    static let subprotocol = "qaudion-sealed/1"
 }

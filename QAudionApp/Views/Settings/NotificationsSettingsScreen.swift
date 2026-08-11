@@ -27,11 +27,13 @@ final class NotificationsSettingsContainer: ObservableObject {
         )
     }
 
-    func setRingtone(_ id: String) {
-        viewModel = makeUpdated(ringtoneId: id)
-        store.saveNotifications(viewModel)
-    }
-
+    // 2026-08-10 settings cleanup: setRingtone() and the "Suoneria" picker it
+    // backed were REMOVED. `ringtoneId` had no consumer: the in-app ring is a
+    // hardcoded system sound (AppState.startRingtone → SystemSoundID 1005) and
+    // the CallKit ring is the fixed bundled "qaudion_ringtone.caf"
+    // (CallKitProvider.swift, cfg.ringtoneSound). The picker even offered
+    // "silent", which still rang. The field is still hydrated from and saved
+    // back to the legacy SettingsStore blob so the stored value is untouched.
     func toggleInAppSound(_ enabled: Bool) {
         viewModel = makeUpdated(inAppSound: enabled)
         store.saveNotifications(viewModel)
@@ -66,13 +68,12 @@ final class NotificationsSettingsContainer: ObservableObject {
     }
 
     private func makeUpdated(
-        ringtoneId: String? = nil,
         inAppSound: Bool? = nil,
         vibration: Bool? = nil,
         quietHours: NotificationsSettingsViewModel.QuietHours? = nil
     ) -> NotificationsSettingsViewModel {
         NotificationsSettingsViewModel(
-            ringtoneId: ringtoneId ?? viewModel.ringtoneId,
+            ringtoneId: viewModel.ringtoneId,
             inAppSoundEnabled: inAppSound ?? viewModel.inAppSoundEnabled,
             vibrationEnabled: vibration ?? viewModel.vibrationEnabled,
             quietHours: quietHours ?? viewModel.quietHours,
@@ -91,8 +92,6 @@ struct NotificationsSettingsScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
-
-    private let availableRingtones = ["qaudion-default", "classic", "pulse", "silent"]
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: NotificationsSettingsContainer())
@@ -149,7 +148,9 @@ struct NotificationsSettingsScreen: View {
                     }
                     SettingsSectionHeader("SUONI")
                     VStack(spacing: 8) {
-                        ringtonePickerRow
+                        // 2026-08-10: the "Suoneria" picker was removed — see
+                        // the note on NotificationsSettingsContainer. Neither
+                        // the in-app ring nor the CallKit ring is selectable.
                         SettingsToggleRow(
                             title: "Suoni in-app",
                             subtitle: "Effetti sonori dentro l'app",
@@ -527,40 +528,6 @@ struct NotificationsSettingsScreen: View {
         case .ephemeral:         return "Effimero"
         @unknown default:        return "Sconosciuto"
         }
-    }
-
-    // MARK: - Ringtone picker row
-
-    private var ringtonePickerRow: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 17, weight: .regular))
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .frame(width: 22)
-
-            Text("Suoneria")
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-
-            Spacer(minLength: 6)
-
-            Picker("Suoneria", selection: Binding(
-                get: { container.viewModel.ringtoneId },
-                set: { container.setRingtone($0) }
-            )) {
-                ForEach(availableRingtones, id: \.self) { tone in
-                    Text(tone.capitalized).tag(tone)
-                }
-            }
-            .pickerStyle(.menu)
-            .tint(scheme.primary)
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 56)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
     }
 
     // MARK: - kvRow helper

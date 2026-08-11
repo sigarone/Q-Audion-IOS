@@ -27,9 +27,16 @@ public enum PrivacyGate {
     public static let keyReadReceipts        = "qaudion.privacy.read_receipts_enabled"
     public static let keyTypingIndicator     = "qaudion.privacy.typing_indicator_enabled"
     public static let keyPresence            = "qaudion.privacy.presence_visible_to_contacts"
-    public static let keyDisappearingSeconds  = "qaudion.privacy.disappearing_seconds"
-    public static let keyTorEnabled           = "qaudion.privacy.tor_enabled"
     public static let keyMessagePreview       = "qaudion.privacy.message_preview_in_notifications"
+    // 2026-08-10 settings cleanup — two keys intentionally NOT declared here
+    // any more:
+    //   "qaudion.privacy.disappearing_seconds" and "qaudion.privacy.tor_enabled".
+    // Their UI controls were removed because nothing outside the settings
+    // screen itself ever read either value (the shipping TTL is
+    // Conversation.ephemeralTimerSeconds; iOS has no SOCKS/Tor route). Any
+    // value a user already stored under those UserDefaults keys is
+    // deliberately left in place — this change stops reading them, it does
+    // not migrate or delete user data.
     /// W441 — device security
     public static let keyScreenshotProtection = "qaudion.privacy.screenshot_protection"
     public static let keyAppLockEnabled       = "qaudion.privacy.app_lock_enabled"
@@ -56,21 +63,6 @@ public enum PrivacyGate {
     /// now centralise the reader here.)
     public static var presenceVisibleToContacts: Bool {
         return readBoolWithDefault(keyPresence, default: true)
-    }
-
-    /// Default 0 (= disabled). Other values: TTL seconds applied to
-    /// outbound message metadata. The receiver's UI auto-deletes the
-    /// row at `sentAt + disappearingSeconds`.
-    public static var disappearingSeconds: TimeInterval {
-        let v = UserDefaults.standard.double(forKey: keyDisappearingSeconds)
-        return max(0, v)
-    }
-
-    /// Default OFF. Tor is "preferred" hint — the network layer is
-    /// expected to use a SOCKS proxy when ON. iOS doesn't support
-    /// system-wide SOCKS; the flag currently surfaces as a UX warning.
-    public static var torEnabled: Bool {
-        return readBoolWithDefault(keyTorEnabled, default: false)
     }
 
     /// Default true — banner body shows full message preview.
@@ -133,13 +125,6 @@ public enum PrivacyGate {
         if value {
             NotificationCenter.default.post(name: .presenceVisibilityDidChange, object: nil)
         }
-    }
-    public static func setDisappearingSeconds(_ value: TimeInterval) {
-        UserDefaults.standard.set(value, forKey: keyDisappearingSeconds)
-    }
-    public static func setTorEnabled(_ value: Bool) {
-        UserDefaults.standard.set(value, forKey: keyTorEnabled)
-        RTLog.info("settings", "PrivacyGate.tor=\(value)")
     }
     public static func setMessagePreviewInNotifications(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: keyMessagePreview)

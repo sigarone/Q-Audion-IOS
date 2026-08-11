@@ -888,7 +888,15 @@ final class AppState: ObservableObject {
 
     // MARK: - Security badge state (updated during call)
     @Published var confidenceLevel: String = "green"  // "green", "yellow", "red"
-    @Published var confidenceScore: Float = 0.97
+    /// Guardian confidence, or a NEGATIVE sentinel meaning "no score yet".
+    ///
+    /// This was seeded with 0.97, so before the Guardian had measured anything
+    /// the UI showed a confident-looking 97% that came from nowhere. The two
+    /// display sites (the in-call stats band and the security badge) both render
+    /// a dash when this is negative, mirroring Android, where the same field
+    /// uses -1f for exactly this reason.
+    @Published var confidenceScore: Float = -1
+
     /// Actual media transport in use for the current call.
     /// "p2p"    — WebRTC ICE direct (host or srflx candidate pair)
     /// "turn"   — WebRTC ICE via TURN relay (TransportGate.forcesRelay or VPN-TURN)
@@ -3402,6 +3410,28 @@ final class AppState: ObservableObject {
                   let controller = self.webRtcController as? QAudionWebRtcCallController else { return false }
             return controller.sendAudioFrameData(data)
         }
+        // W-DCMUX (2026-08-11) — WHY the closure above returned false. It tests
+        // the SAME two conditions in the SAME order as the send closure, so the
+        // answer can never describe a different call than the one that fell
+        // back. Read only when CallService is about to print a fallback line
+        // (first occurrence, then every 250th), never per frame: it walks into
+        // the WebRTC object graph.
+        //
+        //   -3 pinned   audio deliberately kept on the WS relay for this call
+        //               shape (video-upgrade responder) — the DC is not
+        //               supposed to carry voice here and its silence is correct
+        //   -2 noctl    no QAudionWebRtcCallController at all
+        //   -4 nopc     controller present, but its PeerConnection is gone
+        //   -1 nochan   PeerConnection present, channel never created
+        //   0…3         raw RTCDataChannelState of a channel that is not open
+        //               (2/3 = a channel that WAS alive and died — the case the
+        //               Android WS-receive-fallback companion change exists for)
+        callService.audioDataChannelDiag = { [weak self] in
+            guard let self = self else { return -2 }
+            if self.audioPinnedToWsRelay { return -3 }
+            guard let controller = self.webRtcController as? QAudionWebRtcCallController else { return -2 }
+            return controller.audioDataChannelStateRaw
+        }
         #endif
         // W74: register inbound call handlers BEFORE the WS lands. The
         // server relays Android→iOS calls as `call_incoming`, NOT
@@ -5037,6 +5067,14 @@ final class AppState: ObservableObject {
         }
         controller.onAudioDataChannelFrame = { [weak self] data in
             self?.callService.handleIncomingDataChannelAudio(data)
+        }
+        // W-DCMUX (2026-08-11) — VIDEO-UPGRADE RESPONDER. Audio on this call
+        // shape is pinned to the WS relay a few lines below
+        // (`audioPinnedToWsRelay = true`) so the working relay leg is left
+        // alone; this hook is expected to stay quiet, and if it does not, that
+        // is worth seeing. Role is `callee`: this side answers the upgrade.
+        controller.onAudioDataChannelStateChange = { [weak self] raw in
+            self?.callService.noteAudioDataChannelState(raw: raw, role: "callee")
         }
         controller.shouldRejectIncomingVideo = { CallsGate.shouldRejectIncomingVideo }
         controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
@@ -10970,7 +11008,10 @@ final class AppState: ObservableObject {
             peerExtension: _outgoingPeerExt
         )
         confidenceLevel = "green"
-        confidenceScore = 0.97
+        // Reset to the "no score yet" sentinel, not to a flattering constant:
+        // this runs at the START of a call, when the Guardian has by definition
+        // measured nothing about this one.
+        confidenceScore = -1
         rekeyCount = 0
         txWaveformSamples = []
         rxWaveformSamples = []
@@ -11500,6 +11541,13 @@ final class AppState: ObservableObject {
                 controller.onAudioDataChannelFrame = { [weak self] data in
                     self?.callService.handleIncomingDataChannelAudio(data)
                 }
+                // W-DCMUX (2026-08-11) — OUTGOING call: this side CREATES the
+                // sealed-audio DataChannel, so the hook's first firing is the
+                // creation and the rest are real transitions. Logged in
+                // CallService, which owns the call id and the counters.
+                controller.onAudioDataChannelStateChange = { [weak self] raw in
+                    self?.callService.noteAudioDataChannelState(raw: raw, role: "caller")
+                }
                 // R-4 (sovereign-only): reject incoming video when the
                 // policy is on. Read live (not captured) so a mid-session
                 // toggle takes effect on the next inbound track.
@@ -11980,6 +12028,15 @@ final class AppState: ObservableObject {
                 let delta = total &- self.cryptoMeterLastTotal
                 self.cryptoMeterLastTotal = total
                 self.cryptoOpsPerSec = delta > 0 ? Int(delta) : 0
+                // W-NETVIS (Android→iOS parity, 2026-08-10) — the stats band's
+                // two missing numbers ride this same tick rather than a timer
+                // of their own: the lifecycle is already correct here (armed at
+                // both `isInCall = true` sites, invalidated in `endCall()`),
+                // and Android's rate is an elapsed-normalised delta, so the
+                // cadence does not change the value. 1 Hz is in fact Android's
+                // own cadence while its debug drawer is open
+                // (CallViewModel.kt:2012-2028).
+                self.sampleCallNetworkStats()
             }
         }
         // .common so the meter keeps ticking while a UITrackingRunLoopMode
@@ -11996,6 +12053,49 @@ final class AppState: ObservableObject {
         cryptoMeterTimer = nil
         cryptoMeterLastTotal = 0
         cryptoOpsPerSec = 0
+    }
+
+    /// W-NETVIS — one tick of the in-call link sampler: wire throughput and
+    /// media RTT, the two numbers the stats band showed as dashes.
+    ///
+    /// Throughput comes from `CallService`'s own byte counters, which sit on
+    /// the audio send/receive paths and therefore see BOTH transports (the
+    /// sealed-audio DataChannel and the WS relay carry identical bytes).
+    ///
+    /// RTT is read from the WebRTC leg and published ONLY while that leg is
+    /// the one carrying the audio, i.e. while the sealed-audio DataChannel is
+    /// open. This is where iOS deliberately does NOT copy Android: there the
+    /// relay downgrade leaves the PeerConnection alive and the stats read goes
+    /// to it regardless of transport, so a relay call shows a plausible RTT
+    /// measured on an ICE pair carrying no voice. Here the WS-relay path
+    /// reports nil and the band shows "—".
+    ///
+    /// `AppState.latencyMs` is never substituted: it is a real measurement of
+    /// a different quantity (this device → signalling server, one ping/pong
+    /// per 30 s) and under the RITARDO label it would be undetectably wrong.
+    @MainActor
+    private func sampleCallNetworkStats() {
+        var rtt: Double? = nil
+        #if canImport(WebRTC)
+        if let controller = webRtcController as? QAudionWebRtcCallController {
+            // Kick the next async sample, then read the one the previous tick
+            // resolved — `pc.statistics` answers on a WebRTC thread, so the
+            // readout trails the poll by at most one second.
+            controller.pollMediaRttOnce()
+            // Both conditions, for the same reason: the number is published
+            // only when this peer connection is the leg the voice is on.
+            // `audioPinnedToWsRelay` is set when the controller was built for
+            // VIDEO ONLY on a call whose audio is already established on the
+            // relay (see `makeUpgradeResponderController`) — its ICE converges
+            // and its candidate pair has a perfectly good RTT that has nothing
+            // to do with the voice the user is listening to. That is precisely
+            // the Android failure this must not reproduce.
+            if !audioPinnedToWsRelay, controller.isAudioDataChannelOpen {
+                rtt = controller.mediaRttMs
+            }
+        }
+        #endif
+        callService.sampleWireThroughput(mediaRttMs: rtt)
     }
 
     // MARK: - Item 5 (2026-07-31 InCallScreen Android→iOS port) — live
@@ -17031,6 +17131,13 @@ extension AppState {
         // decrypt + playback (same path as the WS "audio_frame" handler).
         controller.onAudioDataChannelFrame = { [weak self] data in
             self?.callService.handleIncomingDataChannelAudio(data)
+        }
+        // W-DCMUX (2026-08-11) — INCOMING call: this side RECEIVES the channel
+        // the caller created, so the hook's first firing is the `didOpen`
+        // receipt. Its ABSENCE on a call where the caller logged a creation is
+        // the signature of Phase 0 outcome (a): the channel never arrived.
+        controller.onAudioDataChannelStateChange = { [weak self] raw in
+            self?.callService.noteAudioDataChannelState(raw: raw, role: "callee")
         }
         // R-4 (sovereign-only): reject incoming video when the policy is
         // on (responder side). Mirror of the caller-side wiring.

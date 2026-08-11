@@ -91,12 +91,34 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `QAudionPeerConnection.onAudioDataChannelFrame` when the PC is created.
     public var onAudioDataChannelFrame: ((Data) -> Void)?
 
+    /// W-DCMUX (2026-08-11) — sealed-audio DataChannel lifecycle as the raw
+    /// `RTCDataChannelState` (0 connecting, 1 open, 2 closing, 3 closed). Set by
+    /// the app layer, forwarded to the live `QAudionPeerConnection
+    /// .onAudioDataChannelStateChange` at every PC construction site, exactly
+    /// like `onAudioDataChannelFrame` beside it. Fires on the WebRTC signalling
+    /// thread; the consumer hops to the main actor itself if it needs to.
+    public var onAudioDataChannelStateChange: ((Int) -> Void)?
+
     /// W-DCAUDIO — send a sealed audio frame over the DataChannel if it is open.
     /// Returns `true` if queued on the DC; `false` if the DC is not open, in which
     /// case the caller (CallService) falls back to the WS relay.
     @discardableResult
     public func sendAudioFrameData(_ data: Data) -> Bool {
         return peerConnection?.sendAudioFrameData(data) ?? false
+    }
+
+    /// W-DCMUX (2026-08-11) — the DataChannel's raw `RTCDataChannelState`, or
+    /// `-1` when this controller has a PeerConnection but no channel object, or
+    /// `-4` when it has no PeerConnection at all.
+    ///
+    /// Read-only diagnostic. `-4` is deliberately not `-2`: the app layer uses
+    /// `-2` for "no controller", and "no controller" and "a controller whose PC
+    /// is gone" are different failures — the first means this call never built a
+    /// WebRTC leg, the second means it built one and lost it.
+    /// ``sendAudioFrameData`` returns the same `false` for both.
+    public var audioDataChannelStateRaw: Int {
+        guard let pc = peerConnection else { return -4 }
+        return pc.audioDataChannelStateRaw()
     }
 
     /// Diagnostic telemetry sink for the video pipeline (kind, attrs).
@@ -109,6 +131,102 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Repeating timer that polls outbound/inbound video RTP stats while a
     /// call is connected. Created on ICE-connected, invalidated on close.
     private var videoStatsTimer: Timer?
+
+    // ── W-NETVIS (Android→iOS parity, 2026-08-10) — media-path RTT ───────────
+    //
+    // Android reads RTT from the SELECTED ICE candidate pair
+    // (`PeerConnectionHolder.collectDiagnostics`, PeerConnectionHolder.kt:3914
+    // -3922: first a `candidate-pair` with state=="succeeded" AND
+    // (nominated||selected), else any succeeded pair; `currentRoundTripTime`
+    // × 1000). This is the identical statistic, read the identical way, so the
+    // two platforms' RITARDO columns describe the same quantity during one
+    // call.
+    //
+    // What is NOT copied from Android is WHEN the number is shown. On Android
+    // the WS-relay downgrade never closes the PeerConnection
+    // (`CallTransportFactory.downgradeToWsRelay`, CallTransportFactory.kt:944
+    // -973) and the stats call is wired straight to it regardless of transport
+    // mode (CallModule.kt:293-294), so a relay call — every Android↔iOS call —
+    // still shows a plausible RTT measured on an ICE pair that carries no
+    // voice at all. Here the reading is published only while the sealed-audio
+    // DataChannel is open, i.e. only while this pair IS the leg carrying the
+    // audio (`isAudioDataChannelOpen`, checked by the caller). On the WS-relay
+    // path the value stays nil and the band renders "—", which is the honest
+    // answer: no measurement of the media path exists there.
+    private var _mediaRttMs: Double?
+    /// NSLock-protected for the same reason as [answerLock]: `pc.statistics`
+    /// delivers its report on a WebRTC-internal thread while the sampler that
+    /// reads this runs on the main actor.
+    private let mediaRttLock = NSLock()
+
+    /// Last RTT measured on the selected ICE candidate pair, in milliseconds.
+    /// `nil` when no succeeded pair exists yet (ICE still converging, ICE
+    /// failed, or the peer connection is gone) — never a stale or invented
+    /// number. Refreshed by [pollMediaRttOnce].
+    public var mediaRttMs: Double? {
+        mediaRttLock.lock()
+        defer { mediaRttLock.unlock() }
+        return _mediaRttMs
+    }
+
+    /// True while the sealed-audio DataChannel ("qaudion-audio") is open, i.e.
+    /// while voice is riding the P2P WebRTC leg rather than the WS relay. Same
+    /// predicate `sendAudioFrameData` itself tests (`QAudionPeerConnection
+    /// .isAudioDataChannelOpen`, QAudionPeerConnection.swift:274-277), so
+    /// "is RTT meaningful" and "where does audio actually go" can never
+    /// disagree.
+    public var isAudioDataChannelOpen: Bool {
+        peerConnection?.isAudioDataChannelOpen() ?? false
+    }
+
+    private func setMediaRttMs(_ value: Double?) {
+        mediaRttLock.lock()
+        _mediaRttMs = value
+        mediaRttLock.unlock()
+    }
+
+    /// Sample the selected candidate pair's `currentRoundTripTime` once.
+    /// Async (libwebrtc delivers the stats report on its own thread); the
+    /// result lands in [mediaRttMs] for the next read. Cheap enough for the
+    /// 1 Hz call sampler — one `getStats` per second is well under the video
+    /// telemetry poll this file already runs at 3 s.
+    public func pollMediaRttOnce() {
+        guard let pc = peerConnection?.peerConnection else {
+            setMediaRttMs(nil)
+            return
+        }
+        pc.statistics { [weak self] report in
+            guard let self else { return }
+            // Android's pair choice, verbatim: a succeeded pair that is
+            // nominated or selected; failing that, the first succeeded pair.
+            // The RTT is carried out of the loop rather than the stats object
+            // itself so this reads no SDK type name beyond what
+            // `pollVideoStatsOnce` above already relies on.
+            var havePreferred = false
+            var haveFallback = false
+            var preferredRttSec: Double?
+            var fallbackRttSec: Double?
+            for (_, s) in report.statistics {
+                guard s.type == "candidate-pair",
+                      (s.values["state"] as? String) == "succeeded" else { continue }
+                let rttSec = (s.values["currentRoundTripTime"] as? NSNumber)?.doubleValue
+                if !haveFallback {
+                    haveFallback = true
+                    fallbackRttSec = rttSec
+                }
+                let nominated = (s.values["nominated"] as? NSNumber)?.boolValue ?? false
+                let selected = (s.values["selected"] as? NSNumber)?.boolValue ?? false
+                if (nominated || selected), !havePreferred {
+                    havePreferred = true
+                    preferredRttSec = rttSec
+                }
+            }
+            // No succeeded pair ⇒ ICE never converged (or has failed) ⇒ there
+            // is nothing to report. nil, not a carried-over previous value.
+            let seconds = havePreferred ? preferredRttSec : fallbackRttSec
+            self.setMediaRttMs(seconds.map { $0 * 1000.0 })
+        }
+    }
 
     // WIRE_SPEC §8.7 (INT-4a) — receiver-side decode-stall detector state,
     // driven off the 3s `pollVideoStatsOnce` cadence. `framesDecoded` is
@@ -402,6 +520,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // the SDP carries the m=application audio section). Voice rides this DC
         // (P2P) with the WS relay as fallback; there is no m=audio SRTP track.
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // W-DCMUX — wire the state hook BEFORE createAudioDataChannel(), which
+        // fires it synchronously on success. Wiring it after would drop the
+        // creation event, which is the one that proves the caller even got as
+        // far as putting an m=application section in the offer.
+        pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -531,6 +654,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // caller created the sealed-audio DataChannel; we receive it via the PC's
         // `didOpen` delegate. No m=audio SRTP track is added.
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // W-DCMUX — on this side the hook's first firing IS the `didOpen`
+        // receipt: it is how the callee proves the channel arrived at all.
+        pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -634,6 +760,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection = pc
         pc.addLocalAudioTrack()
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // W-DCMUX — video-upgrade responder PC. Audio on this call shape is
+        // pinned to the WS relay by AppState (`audioPinnedToWsRelay`), so this
+        // hook is expected to stay quiet; that silence is itself the evidence
+        // that distinguishes Phase 0 outcome (c) from (a).
+        pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {
@@ -1166,6 +1297,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         stopCameraCapture()
         stopVideoStatsTelemetry()
+        // W-NETVIS — the pair this was measured on is gone; the band must show
+        // "—" for the next call rather than the previous call's last RTT.
+        setMediaRttMs(nil)
         wssTurnBridge?.stop()
         wssTurnBridge = nil
         peerConnection?.close()

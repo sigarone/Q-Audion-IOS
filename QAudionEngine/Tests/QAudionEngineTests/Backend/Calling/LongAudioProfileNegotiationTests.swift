@@ -36,21 +36,34 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
         XCTAssertEqual(CallCapabilities.aprof60x256V1, "aprof-60x256-v1")
     }
 
-    /// Both switches ship OFF. If this test fails, a build is about to advertise
-    /// something it has not earned.
-    func test_killSwitches_shipOff() {
-        XCTAssertFalse(CallCapabilities.longAudioSendEnabled,
-                       "the send kill switch must ship false on every platform")
-        XCTAssertFalse(CallCapabilities.longAudioRecvAdvertiseEnabled,
-                       "receive support must be confirmed on device before it is advertised")
+    /// Both switches ship ON as of 2026-08-11, and they ship TOGETHER.
+    ///
+    /// They were `false` until then. The staged order the flags' own kdoc
+    /// prescribed — receive first, alone, until a 60 ms frame is seen on iOS
+    /// hardware — turned out to be unfollowable: Android sends a 60 ms frame
+    /// only when the SEND tag is in the intersection, so a recv-only iOS build
+    /// receives nothing to learn from. The pairing is asserted here rather than
+    /// left to a comment, because a build that advertised receive without send
+    /// would be inert and look deployed.
+    func test_killSwitches_shipOnTogether() {
+        XCTAssertTrue(CallCapabilities.longAudioSendEnabled,
+                      "send is on since 2026-08-11 — see the flag's kdoc for the evidence")
+        XCTAssertTrue(CallCapabilities.longAudioRecvAdvertiseEnabled,
+                      "receive must be on whenever send is: the peer's resolver reads BOTH")
+        XCTAssertEqual(CallCapabilities.longAudioSendEnabled,
+                       CallCapabilities.longAudioRecvAdvertiseEnabled,
+                       "the two switches are one decision on this platform; a build with send " +
+                       "on and receive off advertises a profile it never invites, and one with " +
+                       "receive on and send off changes nothing at all")
     }
 
-    /// And therefore the shipped advertisement carries neither tag: the default
-    /// build is byte-identical on the wire to every build before this feature.
-    func test_shippedAdvertisement_carriesNeitherTag() {
+    /// And therefore the shipped advertisement carries BOTH tags. A peer reads
+    /// them separately — the send tag through the intersection, the receive tag
+    /// out of our raw list — so neither may go missing.
+    func test_shippedAdvertisement_carriesBothTags() {
         let caps = CallCapabilities.localCaps()
-        XCTAssertFalse(caps.contains(recv))
-        XCTAssertFalse(caps.contains(send))
+        XCTAssertTrue(caps.contains(recv))
+        XCTAssertTrue(caps.contains(send))
         // ...and nothing else moved.
         XCTAssertTrue(caps.contains(CallCapabilities.sframeV1))
         XCTAssertTrue(caps.contains(CallCapabilities.ratchetV3))
@@ -149,11 +162,38 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
 
     /// Row 9 — kill switch off locally. The tag is never advertised, so the
     /// intersection cannot contain it however generous the peer is.
+    ///
+    /// Until 2026-08-11 this row read the switch-off case straight off
+    /// ``CallCapabilities/localCaps()``, because that WAS the switch-off case.
+    /// Both switches ship on now, so the list has to be built explicitly — the
+    /// rule still needs testing even though this build can no longer produce
+    /// the state it describes. A peer platform that has not flipped yet
+    /// (Desktop today) is exactly this shape on the wire.
     func test_row9_killSwitchOff_neverAdvertises() {
-        // Simulate the shipped local list rather than an explicit one.
-        let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv, send])
+        let switchOffLocal = CallCapabilities.localCaps().filter { $0 != send }
+        let n = negotiated(local: switchOffLocal, peer: base + [recv, send])
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
         XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+    }
+
+    /// The mirror of row 9 that only became reachable once the switches went
+    /// on: OUR build advertises both tags, and the PEER is a platform that has
+    /// not flipped yet. That is every iOS↔Desktop call today, so it is worth a
+    /// row of its own rather than being implied by row 9.
+    func test_row9b_peerHasNotFlipped_staysStandard() {
+        let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv])
+        XCTAssertFalse(n.bothAdvertiseLongAudioSend)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+    }
+
+    /// And the case this build DOES produce against another flipped peer
+    /// (Android since d3175700): both tags on both sides, so both send long.
+    func test_row9c_bothFlipped_negotiatesLong() {
+        let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv, send])
+        XCTAssertTrue(n.bothAdvertiseLongAudioSend)
+        XCTAssertTrue(n.peerAcceptsLongAudio)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false),
+                       .long60x256)
     }
 
     /// Row 10 — a sovereign earbud is in the call. BOTH tags are withheld,

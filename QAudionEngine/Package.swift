@@ -183,11 +183,17 @@ let package = Package(
     ],
     targets: [
         // ─────────────────────────────────────────────────────────────────────────────────────
-        //  PHASE-1 INTEGRATION — v4 PQ ratchet C ABI (default-OFF; see RatchetNative)
+        //  v4 PQ ratchet C ABI — LIVE (see RatchetNative)
         //
         //  Real XCFramework published to sigarone/qaudion-crypto-core v0.1.0 (2026-06-19).
         //  `RatchetNative.available` returns true when this binary is linked on arm64.
-        //  `V4_NATIVE_RATCHET_ENABLED = false` — the path remains inert until Pavel sign-off.
+        //
+        //  Corrected 2026-08-11. This block said "default-OFF" and
+        //  "`V4_NATIVE_RATCHET_ENABLED = false` — the path remains inert until
+        //  Pavel sign-off". Both were stale: sign-off happened 2026-06-27 and
+        //  MessageRatchet.swift:82 has read `v4NativeRatchetEnabled = true` since
+        //  go-live a3f00d6. A comment that describes a shipped feature as inert
+        //  is how a live path gets "cleaned up" by someone who trusted it.
         // ─────────────────────────────────────────────────────────────────────────────────────
         .binaryTarget(
             name: "CQaudionCryptoCore",
