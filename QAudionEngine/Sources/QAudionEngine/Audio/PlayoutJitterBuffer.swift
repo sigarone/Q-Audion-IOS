@@ -175,20 +175,76 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard ms != frameMs else { return }
         frameMs = ms
-        capFrames = AudioConstants.framesForMs(Self.capacityMs, frameDurationMs: ms)
+        // 2026-08-11 — the conversion now follows the constant's ROLE, because
+        // rounding to nearest is right for a boundary and wrong for a ceiling.
+        // A budget that says "never excise more than 60 ms" rounded UP to
+        // 2 frames at 40 ms authorises excising 80 ms; truncation cannot, and
+        // at 20 ms the two agree exactly, so nothing already in the field moves.
+        // Capacity is a ceiling too — it is what `push` enforces by dropping the
+        // oldest frame, and a queue that may hold MORE than its stated ms is a
+        // latency sink by the same argument.
+        capFrames = AudioConstants.boundedFramesForMs(Self.capacityMs, frameDurationMs: ms)
+        // The ladder is forced monotonic AFTER conversion, because quantisation
+        // can tie two boundaries that are distinct in milliseconds and a tied
+        // boundary is a tier with an empty band — it can never fire, and nothing
+        // fails to say so.
+        //
+        // 2026-08-11: at 40 ms `trimWatermarkMs` (140) and `highWatermarkMs`
+        // (160) BOTH resolve to 4, which is verbatim the collision the rounding
+        // rule was chosen to prevent — it prevents it at 60 ms and not at 40,
+        // and 40 ms is reachable on this receiver without any new profile. No
+        // millisecond value could fix that without moving the 20 ms numbers
+        // that are already in the field, so the structural property is enforced
+        // structurally instead: each rung is at least one frame above the one
+        // below it. At 20 ms every `max` below picks the converted value
+        // unchanged, so this is inert on the shipping cadence.
         nominal = AudioConstants.framesForMs(Self.nominalWatermarkMs, frameDurationMs: ms)
-        trim = AudioConstants.framesForMs(Self.trimWatermarkMs, frameDurationMs: ms)
-        high = AudioConstants.framesForMs(Self.highWatermarkMs, frameDurationMs: ms)
-        emergency = AudioConstants.framesForMs(Self.emergencyWatermarkMs, frameDurationMs: ms)
+        trim = max(nominal + 1, AudioConstants.framesForMs(Self.trimWatermarkMs, frameDurationMs: ms))
+        high = max(trim + 1, AudioConstants.framesForMs(Self.highWatermarkMs, frameDurationMs: ms))
+        emergency = max(high + 1, AudioConstants.framesForMs(Self.emergencyWatermarkMs, frameDurationMs: ms))
+        capFrames = max(emergency + 1, capFrames)
         drainTarget = AudioConstants.framesForMs(Self.emergencyDrainTargetMs, frameDurationMs: ms)
-        maxDropsPerPop = AudioConstants.framesForMs(Self.emergencyMaxDropsPerPopMs, frameDurationMs: ms)
-        silenceScan = AudioConstants.framesForMs(Self.silenceScanLimitMs, frameDurationMs: ms)
-        highScan = AudioConstants.framesForMs(Self.highTierScanLimitMs, frameDurationMs: ms)
-        highDropBudget = AudioConstants.framesForMs(Self.highTierDropBudgetMs, frameDurationMs: ms)
+        maxDropsPerPop = AudioConstants.boundedFramesForMs(Self.emergencyMaxDropsPerPopMs, frameDurationMs: ms)
+        silenceScan = AudioConstants.boundedFramesForMs(Self.silenceScanLimitMs, frameDurationMs: ms)
+        highScan = AudioConstants.boundedFramesForMs(Self.highTierScanLimitMs, frameDurationMs: ms)
+        highDropBudget = AudioConstants.boundedFramesForMs(Self.highTierDropBudgetMs, frameDurationMs: ms)
     }
 
     /// The inbound frame duration the tiers are currently sized for, in ms.
     public var inboundFrameDurationMs: Int { lock.lock(); defer { lock.unlock() }; return frameMs }
+
+    /// The resolved tier geometry, for asserting the invariants that hold
+    /// BETWEEN these numbers rather than the numbers themselves.
+    ///
+    /// Internal rather than private, and read-only. It exists because the
+    /// interesting properties here are relational — tiers must stay ordered and
+    /// distinct, a full firing must not breach the floor it protects — and none
+    /// of them can be checked from outside while every field is private. Two
+    /// defects reached a user's device through exactly that gap: they were
+    /// visible in these numbers at 60 ms and nothing could look at them.
+    /// See `FrameQuantisationInvariantsTests`.
+    struct TierGeometry {
+        let frameMs: Int
+        let capacity: Int
+        let nominal: Int
+        let trim: Int
+        let high: Int
+        let emergency: Int
+        let drainTarget: Int
+        let maxDropsPerPop: Int
+        let silenceScan: Int
+        let highScan: Int
+        let highDropBudget: Int
+    }
+
+    var tierGeometryForTesting: TierGeometry {
+        lock.lock(); defer { lock.unlock() }
+        return TierGeometry(frameMs: frameMs, capacity: capFrames, nominal: nominal,
+                            trim: trim, high: high, emergency: emergency,
+                            drainTarget: drainTarget, maxDropsPerPop: maxDropsPerPop,
+                            silenceScan: silenceScan, highScan: highScan,
+                            highDropBudget: highDropBudget)
+    }
 
     // MARK: - Counters (the Android field names, so the two legs compare)
 
@@ -263,9 +319,21 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
                 dropped += 1
             }
             if dropped > 0 { _hardDrops += Int64(dropped) }
-            // Latch OFF only once the target is genuinely reached.
+            // Latch OFF only once the target is genuinely reached — measured
+            // AFTER the delivery below, not before it.
+            //
+            // 2026-08-11: this read `emergencyDraining = queue.count > drainTarget`
+            // and then delivered a frame, so the depth the latch cleared on was
+            // one frame more than what the queue was actually left holding. The
+            // residual was `drainTarget - 1`: tolerable at 20 ms (2 - 1 = 1
+            // frame), and ZERO at 40 and 60 ms, where drainTarget is 1. A tier
+            // whose stated purpose is to stop at 40 ms of buffered audio was
+            // finishing with an empty queue on the long profile, so the very
+            // next pop underran and concealed — the drain fed the starvation it
+            // was draining for.
+            let delivered = popLocked()
             emergencyDraining = queue.count > drainTarget
-            return popLocked()
+            return delivered
         }
 
         // Tiers 1/2 — walk the queue discarding only INAUDIBLE frames.
@@ -284,7 +352,18 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
             // exactly what the queue is left holding if we discard this head and
             // deliver the next frame. The entry threshold alone cannot hold the floor
             // once a firing removes more than one frame, which is the whole defect.
-            if dropsRemaining > 0, queue.count >= nominal, Self.isSilent(head) {
+            //
+            // 2026-08-11 — strictly greater, not `>=`, and the difference is a
+            // whole frame of floor. `queue.count` is post-removal but PRE-delivery:
+            // the loop goes on to `return head` for the next frame, so what the
+            // queue is actually left holding is `queue.count - 1`. With `>=` the
+            // guaranteed residual was `nominal - 1`, which is 3 frames at 20 ms
+            // and ZERO at 60 ms, where nominal is 1. The tier could therefore
+            // empty the queue by itself and hand the next pop an underrun — the
+            // self-powered trim/starve treadmill this floor exists to stop.
+            // At 20 ms this is one frame more conservative than before, in the
+            // direction the comment above always claimed.
+            if dropsRemaining > 0, queue.count > nominal, Self.isSilent(head) {
                 _silenceDrops += 1
                 dropsRemaining -= 1
                 anyDropped = true

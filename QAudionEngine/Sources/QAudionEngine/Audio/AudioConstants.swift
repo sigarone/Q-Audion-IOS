@@ -176,6 +176,28 @@ public enum AudioConstants {
         return max(1, (ms + frameDurationMs / 2) / frameDurationMs)
     }
 
+    /// Frames for a budget that is a CEILING — "never exceed `ms`".
+    ///
+    /// 2026-08-11. [framesForMs] rounds to nearest, which is right for a tier
+    /// boundary and wrong for a bound: at 40 ms a 60 ms ceiling rounds UP to 2
+    /// frames and authorises excising 80 ms, breaking the very guarantee the
+    /// constant states. Truncation cannot do that — the frame count it yields
+    /// always covers no more than `ms`.
+    ///
+    /// The floor of 1 is not a contradiction of that: a bound of zero frames
+    /// would disable the operation the bound exists to LIMIT, which is a
+    /// different and worse failure than overshooting by less than one frame.
+    /// A caller whose budget is genuinely smaller than one frame is asking for
+    /// something the frame cadence cannot express, and one frame is the
+    /// smallest honest answer.
+    ///
+    /// Unchanged at 20 ms for every constant in this file, because 20 divides
+    /// all of them exactly and truncation and rounding agree there.
+    public static func boundedFramesForMs(_ ms: Int, frameDurationMs: Int = AudioConstants.frameDurationMs) -> Int {
+        guard frameDurationMs > 0 else { return 1 }
+        return max(1, ms / frameDurationMs)
+    }
+
     /// 3 at 20 ms — unchanged.
     public static var jitterBufferFramesP2P: Int { framesForMs(jitterBufferMsP2P) }
     /// 8 at 20 ms — unchanged.
