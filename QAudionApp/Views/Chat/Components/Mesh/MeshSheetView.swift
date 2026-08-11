@@ -1,4 +1,5 @@
 import SwiftUI
+import QAudionEngine
 
 /// In-chat BLE-mesh sheet: antenna on/off toggle, the proximity radar, the
 /// reachable-peer list, and a selected-peer detail card offering "transmit
@@ -89,40 +90,68 @@ struct MeshSheetView: View {
     // MARK: - Antenna
 
     private var antennaSubtitle: String {
-        switch runtime.radioState {
-        case .idle: return "Spenta"
-        case .error: return "Bluetooth non disponibile"
-        case .scanningOnly: return "Scansione in corso…"
-        default: return "Attiva · \(runtime.peers.count) dispositivi raggiungibili"
+        switch runtime.antennaMode {
+        case nil:
+            if case .error = runtime.radioState { return "Bluetooth non disponibile" }
+            return "Spenta"
+        case .visibleOnly:
+            return "Visibile · raggiungibile dai vicini"
+        case .fullMesh:
+            if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
+            return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
         }
     }
 
+    /// Three explicit intents rather than an on/off toggle-of-a-toggle: off,
+    /// `.visibleOnly` (reachable — advertise + accept incoming connections,
+    /// no scan/connect-out, no relay for others), and `.fullMesh` (the
+    /// original behaviour). 1:1 port of the Android sibling's `AntennaRow`.
     private var antennaRow: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-                .foregroundStyle(runtime.antennaOn ? scheme.primary : scheme.onSurfaceVariant)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Antenna").qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
-                Text(antennaSubtitle).qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .foregroundStyle(runtime.antennaMode != nil ? scheme.primary : scheme.onSurfaceVariant)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Antenna").qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
+                    Text(antennaSubtitle).qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
+                }
+                Spacer()
             }
-            Spacer()
-            Toggle("", isOn: Binding(
-                get: { runtime.antennaOn },
-                set: { handleAntennaToggle($0) }
-            ))
-            .labelsHidden()
+            HStack(spacing: 8) {
+                antennaModeChip(label: "Spenta", selected: runtime.antennaMode == nil) {
+                    handleAntennaSelect(nil)
+                }
+                antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
+                    handleAntennaSelect(.visibleOnly)
+                }
+                antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
+                    handleAntennaSelect(.fullMesh)
+                }
+            }
         }
         .padding(12)
         .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private func handleAntennaToggle(_ wantOn: Bool) {
+    private func antennaModeChip(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(selected ? scheme.onPrimary : scheme.onSurfaceVariant)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(selected ? scheme.primary : scheme.surface, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func handleAntennaSelect(_ mode: MeshAntennaMode?) {
         guard MeshFeature.enabled else {
             onToast("La mesh Bluetooth non è disponibile al momento.")
             return
         }
-        runtime.setAntenna(on: wantOn)
-        if !wantOn {
+        runtime.setAntenna(mode: mode)
+        if mode == nil {
             viewModel.selectedNodeHex = nil
         }
     }
@@ -153,6 +182,8 @@ struct MeshSheetView: View {
     private var peerListSection: some View {
         if !runtime.antennaOn {
             hintText("Accendi l'antenna per cercare dispositivi Q-Audion nel raggio del Bluetooth.")
+        } else if runtime.antennaMode == .visibleOnly {
+            hintText("Sei visibile — chi ti cerca può raggiungerti. Passa a \"Mesh completa\" per vedere anche tu i dispositivi vicini.")
         } else if runtime.peers.isEmpty {
             hintText("Nessun dispositivo raggiungibile al momento.")
         } else {

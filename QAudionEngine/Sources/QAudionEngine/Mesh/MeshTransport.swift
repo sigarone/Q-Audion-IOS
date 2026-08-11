@@ -20,11 +20,25 @@ import Foundation
 public enum MeshRadioState: Equatable {
     case idle
     case scanningOnly
+    /// Peripheral role only (`MeshAntennaMode.visibleOnly`) — advertising +
+    /// GATT server, not scanning.
     case advertisingOnly
-    /// Both central + peripheral roles active simultaneously — the normal
-    /// steady state.
+    /// Both central + peripheral roles active simultaneously
+    /// (`MeshAntennaMode.fullMesh`) — the normal steady state.
     case scanningAndAdvertising
     case error(String)
+}
+
+/// Which radio role(s) `MeshTransport.start(schedule:mode:)` activates.
+///
+/// `.visibleOnly` is for a user who wants to be reachable — advertise +
+/// accept incoming GATT connections — without paying the scan/connect-out
+/// battery cost or volunteering as a flood-relay hop for other people's
+/// packets. `.fullMesh` is the original behaviour: both roles, plus
+/// relaying. Mirrors the Android sibling's `MeshAntennaMode` one-for-one.
+public enum MeshAntennaMode: Equatable {
+    case visibleOnly
+    case fullMesh
 }
 
 public struct MeshPeerInfo: Equatable, Hashable {
@@ -87,10 +101,11 @@ public protocol MeshTransport: AnyObject {
 
     var delegate: MeshTransportDelegate? { get set }
 
-    /// (Re)configure BLE scan/advertise cadence + TX power per `schedule`.
-    /// A real implementation is expected to run BOTH scanning and
-    /// advertising concurrently once started.
-    func start(schedule: MeshRadioSchedule.Profile)
+    /// (Re)configure BLE scan/advertise cadence + TX power per `schedule`,
+    /// in the given `mode`. `.fullMesh` is expected to run BOTH scanning and
+    /// advertising concurrently once started; `.visibleOnly` only advertises
+    /// + runs the GATT server.
+    func start(schedule: MeshRadioSchedule.Profile, mode: MeshAntennaMode)
 
     func stop()
 

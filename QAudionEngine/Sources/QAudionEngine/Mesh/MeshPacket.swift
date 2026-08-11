@@ -9,7 +9,10 @@ public enum MeshPacketType: UInt8, Equatable, Sendable {
     /// Periodic self-announce: identity + optionally the peers this node is
     /// directly connected to right now. Unlike every other packet type, an
     /// `.announce` packet's payload is NOT `MessageCrypto` ciphertext — it
-    /// is this transport's own control data (``MeshAnnounce``).
+    /// is this transport's own control data (``MeshAnnounce``), wrapped
+    /// instead with ``MeshDiscoveryCipher`` so it isn't plaintext on the
+    /// wire to a generic BLE observer. See that type's header for the exact
+    /// (and limited) privacy property this provides.
     case announce = 0x03
     /// Optional transport-level delivery ack to the immediate next hop —
     /// NOT an app-level read receipt.

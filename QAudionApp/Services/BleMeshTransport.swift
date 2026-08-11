@@ -60,6 +60,17 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private static let announceIntervalMs: Int = 15_000
     private static let maxOutgoingLinks = 6
 
+    // --- Abuse mitigation tuning — mirrors the Android sibling's
+    // BleMeshTransportImpl constants of the same purpose; see the
+    // "Abuse mitigation" section below for why each exists. ---
+    private static let maxServerConnections = 8
+    private static let maxPendingReassemblyPerDevice = 4
+    private static let reassemblyTTLMs: Int64 = 30_000
+    private static let maxMalformedStreak = 10
+    private static let blockDurationMs: Int64 = 60_000
+    private static let maxRelaysPerWindow = 20
+    private static let relayWindowMs: Int64 = 10_000
+
     let localNodeId: MeshNodeId
     weak var delegate: MeshTransportDelegate?
 
@@ -70,6 +81,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     private var active = false
     private var announceScheduled = false
+    /// Set on every `start` call; read by `handlePacket`'s relay gate and by `maybeStartScanning`'s gate.
+    private var mode: MeshAntennaMode = .fullMesh
 
     // --- central-role link tracking (we connected OUT) ---
     private var outgoingPeripherals: [UUID: CBPeripheral] = [:]
@@ -84,10 +97,28 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private var announcedNeighborsByNode: [String: Set<String>] = [:]
     private var reassembly: [String: FrameBuffer] = [:] // key "identifier:setId"
 
+    // --- abuse mitigation state, see the "Abuse mitigation" section below ---
+    private var malformedStreak: [UUID: Int] = [:]
+    private var blockedUntilMs: [UUID: Int64] = [:]
+    private var relayWindows: [UUID: RelayWindow] = [:]
+
     private final class FrameBuffer {
         let total: Int
+        let createdAtMs: Int64
         var chunks: [Int: Data] = [:]
-        init(total: Int) { self.total = total }
+        init(total: Int, createdAtMs: Int64) {
+            self.total = total
+            self.createdAtMs = createdAtMs
+        }
+    }
+
+    private final class RelayWindow {
+        var windowStartMs: Int64
+        var count: Int
+        init(windowStartMs: Int64, count: Int) {
+            self.windowStartMs = windowStartMs
+            self.count = count
+        }
     }
 
     init(localNodeId: MeshNodeId) {
@@ -103,15 +134,16 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     // MARK: - MeshTransport
 
-    func start(schedule: MeshRadioSchedule.Profile) {
+    func start(schedule: MeshRadioSchedule.Profile, mode: MeshAntennaMode) {
         bleQueue.async { [weak self] in
-            self?.startLocked()
+            self?.startLocked(mode: mode)
         }
     }
 
-    private func startLocked() {
+    private func startLocked(mode: MeshAntennaMode) {
         guard !active else { return }
         active = true
+        self.mode = mode
         if central == nil {
             central = CBCentralManager(delegate: self, queue: bleQueue, options: nil)
         }
@@ -149,6 +181,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
         deviceRSSI.removeAll()
         announcedNeighborsByNode.removeAll()
         reassembly.removeAll()
+        malformedStreak.removeAll()
+        relayWindows.removeAll()
+        // blockedUntilMs intentionally survives stop()/start() — cycling the
+        // antenna is not a reason to forgive a recent abuser (mirrors the
+        // Android sibling's identical stop() comment).
         notifyDelegateRadioState(.idle)
         notifyDelegatePeers([])
     }
@@ -191,7 +228,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     // MARK: - Central role (scan + connect out)
 
     private func maybeStartScanning() {
-        guard active, let central, central.state == .poweredOn else { return }
+        guard active, mode == .fullMesh, let central, central.state == .poweredOn else { return }
         central.scanForPeripherals(
             withServices: [Self.serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
@@ -255,14 +292,22 @@ final class BleMeshTransport: NSObject, MeshTransport {
             identityFingerprintHex: localNodeId.hex,
             neighborNodeIdsHex: Array(neighbors)
         )
+        // Wrapped with MeshDiscoveryCipher, not sent as plain JSON — see
+        // that type's header for exactly what this does and doesn't hide.
+        // Force-unwrapped: AES.GCM.seal with a fixed, well-formed 32-byte
+        // key only fails for pathological inputs this call never produces
+        // — same "cannot actually fail" reasoning as the MeshPacket
+        // construction below.
+        let encryptedPayload = MeshDiscoveryCipher.encrypt(announce.encode())!
         // Constructing this packet can only fail if the announce payload
         // somehow exceeded MeshPacket.maxPayloadBytes (16KB) — an ANNOUNCE
-        // body capped at MeshAnnounce.maxNeighbors short hex strings never
-        // gets remotely close, so a forced unwrap here mirrors the same
-        // "this cannot actually fail" reasoning as MeshPacket.withTTL(_:).
+        // body capped at MeshAnnounce.maxNeighbors short hex strings plus
+        // AES-GCM's fixed 28-byte overhead never gets remotely close, so a
+        // forced unwrap here mirrors the same reasoning as
+        // MeshPacket.withTTL(_:).
         return try! MeshPacket(
             type: .announce, senderId: localNodeId, recipientId: .broadcast,
-            timestampMs: Int64(Date().timeIntervalSince1970 * 1000), payload: announce.encode()
+            timestampMs: Int64(Date().timeIntervalSince1970 * 1000), payload: encryptedPayload
         )
     }
 
@@ -328,19 +373,35 @@ final class BleMeshTransport: NSObject, MeshTransport {
     // MARK: - Receive + reassembly + relay (shared by both roles)
 
     private func onFrameReceived(from identifier: UUID, frame: Data) {
-        guard frame.count >= Self.frameHeaderSize else { return }
+        guard !isBlocked(identifier) else { return }
+        guard frame.count >= Self.frameHeaderSize else {
+            registerMalformed(identifier)
+            return
+        }
         let setId = (UInt16(frame[frame.startIndex]) << 8) | UInt16(frame[frame.startIndex + 1])
         let index = Int(frame[frame.startIndex + 2])
         let total = Int(frame[frame.startIndex + 3])
         let chunk = frame[(frame.startIndex + Self.frameHeaderSize)...]
-        guard total > 0, index < total else { return }
+        guard total > 0, index < total else {
+            registerMalformed(identifier)
+            return
+        }
 
+        sweepStaleReassembly()
         let key = "\(identifier.uuidString):\(setId)"
         let assembled: Data?
         if total == 1 {
             assembled = Data(chunk)
         } else {
-            let buffer = reassembly[key] ?? FrameBuffer(total: total)
+            if reassembly[key] == nil {
+                let prefix = "\(identifier.uuidString):"
+                let pendingForDevice = reassembly.keys.filter { $0.hasPrefix(prefix) }.count
+                guard pendingForDevice < Self.maxPendingReassemblyPerDevice else {
+                    return // over cap — drop silently, not itself malformed input
+                }
+            }
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let buffer = reassembly[key] ?? FrameBuffer(total: total, createdAtMs: now)
             buffer.chunks[index] = Data(chunk)
             reassembly[key] = buffer
             if buffer.chunks.count == total {
@@ -356,7 +417,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
                 assembled = nil
             }
         }
-        guard let payload = assembled, let packet = MeshPacket.decode(payload) else { return }
+        guard let payload = assembled else { return }
+        guard let packet = MeshPacket.decode(payload) else {
+            registerMalformed(identifier)
+            return
+        }
         handlePacket(from: identifier, packet: packet)
     }
 
@@ -364,13 +429,28 @@ final class BleMeshTransport: NSObject, MeshTransport {
         deviceToNodeHex[identifier] = packet.senderId.hex
 
         if packet.type == .announce {
-            guard let announce = MeshAnnounce.decode(packet.payload) else { return }
+            guard let decrypted = MeshDiscoveryCipher.decrypt(packet.payload) else {
+                registerMalformed(identifier)
+                return
+            }
+            guard let announce = MeshAnnounce.decode(decrypted) else {
+                registerMalformed(identifier)
+                return
+            }
+            // NOT at the top of this function: resetting the streak before a
+            // decode failure above re-bumps it would make the streak
+            // un-trippable for exactly that failure mode (reset to 0, then
+            // immediately re-incremented to 1, forever) — only a fully valid
+            // ANNOUNCE, or falling through to a non-ANNOUNCE type below,
+            // counts as "this identifier is behaving".
+            registerWellFormed(identifier)
             announcedNeighborsByNode[announce.nodeIdHex] = Set(announce.neighborNodeIdsHex)
             deviceToNodeHex[identifier] = announce.nodeIdHex
             recomputeAndNotifyPeers()
             return
         }
 
+        registerWellFormed(identifier)
         let forUs = packet.recipientId == localNodeId || packet.recipientId == .broadcast
         if forUs {
             let inbound = MeshInboundPacket(packet: packet, fromNodeId: packet.senderId, rssi: deviceRSSI[identifier])
@@ -378,7 +458,13 @@ final class BleMeshTransport: NSObject, MeshTransport {
         }
 
         // Flood relay: a packet not uniquely for us, still with hops left.
-        guard packet.recipientId != localNodeId else { return }
+        // .visibleOnly explicitly opts out of acting as a relay hop for
+        // other people's traffic — it's "reachable", not "participating in
+        // routing". allowRelay caps how much of THIS source's traffic gets
+        // relayed on, so one adjacent peer can't use this device to amplify
+        // spam to everyone else in range — neither gate applies to the
+        // forUs branch above.
+        guard packet.recipientId != localNodeId, mode == .fullMesh, allowRelay(from: identifier) else { return }
         let decision = MeshRelayPolicy.evaluate(
             packet: packet, localNodeId: localNodeId,
             visiblePeerCount: deviceToNodeHex.count, knownNextHop: nil
@@ -414,7 +500,91 @@ final class BleMeshTransport: NSObject, MeshTransport {
         for key in reassembly.keys where key.hasPrefix("\(identifier.uuidString):") {
             reassembly.removeValue(forKey: key)
         }
+        // NOT blockedUntilMs: an identifier that tripped the malformed-streak
+        // block must stay refused across its own disconnect/reconnect churn.
+        malformedStreak.removeValue(forKey: identifier)
+        relayWindows.removeValue(forKey: identifier)
         recomputeAndNotifyPeers()
+    }
+
+    // MARK: - Abuse mitigation
+    //
+    // The GATT server accepts a connection/write from any BLE device in
+    // range — that's inherent to the "always visible" discovery model, and
+    // message CONTENT stays safe (MessageCrypto ciphertext, produced
+    // upstream of this transport), but nothing here bounds the resource
+    // cost a misbehaving or hostile peer can impose. These mitigations
+    // mirror the Android sibling's `BleMeshTransportImpl` one-for-one in
+    // intent, with one real, honest platform difference: CoreBluetooth's
+    // peripheral role (`CBPeripheralManager`) has no public API to forcibly
+    // disconnect a specific connected central the way Android's
+    // `BluetoothGattServer.cancelConnection(device)` or this same file's own
+    // `central.cancelPeripheralConnection(peripheral)` (central role) do —
+    // the OS Bluetooth stack owns that link, not the app. For an abusive
+    // SUBSCRIBED CENTRAL, the mitigation below is therefore
+    // application-level refusal (never track it as a live peer, never
+    // relay/notify to it, ignore its frames) rather than a true disconnect;
+    // for an abusive OUTGOING PERIPHERAL (central role, where this device
+    // initiated the connection) a real `cancelPeripheralConnection` is used,
+    // same as Android.
+
+    private func isBlocked(_ identifier: UUID) -> Bool {
+        guard let until = blockedUntilMs[identifier] else { return false }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        if now >= until {
+            blockedUntilMs.removeValue(forKey: identifier)
+            return false
+        }
+        return true
+    }
+
+    /// Bumps `identifier`'s consecutive-malformed-input counter. Past
+    /// `maxMalformedStreak`, refuses it for `blockDurationMs` and — for the
+    /// central role only, see this section's header comment — actively
+    /// disconnects it. A deterrent against a naive repeat offender
+    /// (fuzzer, broken peer), not a strong identity block: a BLE identifier
+    /// can rotate, so a determined attacker can evade it by reconnecting;
+    /// what this DOES guarantee is that this device's own reassembly/peer
+    /// state never grows without bound from a single misbehaving link.
+    private func registerMalformed(_ identifier: UUID) {
+        let streak = (malformedStreak[identifier] ?? 0) + 1
+        malformedStreak[identifier] = streak
+        guard streak >= Self.maxMalformedStreak else { return }
+        malformedStreak.removeValue(forKey: identifier)
+        blockedUntilMs[identifier] = Int64(Date().timeIntervalSince1970 * 1000) + Self.blockDurationMs
+        if let peripheral = outgoingPeripherals[identifier] {
+            central?.cancelPeripheralConnection(peripheral)
+        }
+        // Subscribed-central case: no disconnect API — dropping it from
+        // subscribedCentrals (done by the isBlocked-gated call sites below)
+        // is the whole mitigation available on this side of the role.
+        subscribedCentrals.removeValue(forKey: identifier)
+    }
+
+    private func registerWellFormed(_ identifier: UUID) {
+        malformedStreak.removeValue(forKey: identifier)
+    }
+
+    /// Evicts reassembly buffers older than `reassemblyTTLMs` — a peer that
+    /// starts a frame set and never finishes it must not hold memory forever.
+    private func sweepStaleReassembly() {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        reassembly = reassembly.filter { now - $0.value.createdAtMs <= Self.reassemblyTTLMs }
+    }
+
+    /// Fixed-window flood-relay cap per immediate sender, so one adjacent
+    /// peer can't use this device to amplify spam across the rest of the
+    /// mesh. Never applied to packets addressed to this device — only to
+    /// relaying someone else's traffic on.
+    private func allowRelay(from identifier: UUID) -> Bool {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let window = relayWindows[identifier]
+        if window == nil || now - window!.windowStartMs > Self.relayWindowMs {
+            relayWindows[identifier] = RelayWindow(windowStartMs: now, count: 1)
+            return true
+        }
+        window!.count += 1
+        return window!.count <= Self.maxRelaysPerWindow
     }
 
     // MARK: - Delegate notification (see MeshTransportDelegate's own doc:
@@ -460,6 +630,7 @@ extension BleMeshTransport: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         deviceRSSI[peripheral.identifier] = RSSI.intValue
         guard active else { return }
+        guard !isBlocked(peripheral.identifier) else { return }
         guard outgoingPeripherals[peripheral.identifier] == nil else { return }
         guard outgoingPeripherals.count < Self.maxOutgoingLinks else { return }
         // Two phones may briefly form a link in each direction (a known
@@ -545,7 +716,15 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
-        subscribedCentrals[central.identifier] = central
+        let identifier = central.identifier
+        // CoreBluetooth's peripheral role has no API to refuse the
+        // underlying connection itself (see the "Abuse mitigation" header
+        // comment above) — the mitigation available here is refusing to
+        // track this central as a live peer at all once over cap, so it
+        // never receives a relay/notify and never shows up in the radar.
+        let overCap = subscribedCentrals.count >= Self.maxServerConnections && subscribedCentrals[identifier] == nil
+        guard !isBlocked(identifier), !overCap else { return }
+        subscribedCentrals[identifier] = central
         recomputeAndNotifyPeers()
     }
 
@@ -556,6 +735,10 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         for request in requests {
+            if isBlocked(request.central.identifier) {
+                peripheral.respond(to: request, withResult: .insufficientAuthorization)
+                continue
+            }
             if let value = request.value {
                 onFrameReceived(from: request.central.identifier, frame: value)
             }
