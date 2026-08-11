@@ -91,12 +91,34 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `QAudionPeerConnection.onAudioDataChannelFrame` when the PC is created.
     public var onAudioDataChannelFrame: ((Data) -> Void)?
 
+    /// W-DCMUX (2026-08-11) — sealed-audio DataChannel lifecycle as the raw
+    /// `RTCDataChannelState` (0 connecting, 1 open, 2 closing, 3 closed). Set by
+    /// the app layer, forwarded to the live `QAudionPeerConnection
+    /// .onAudioDataChannelStateChange` at every PC construction site, exactly
+    /// like `onAudioDataChannelFrame` beside it. Fires on the WebRTC signalling
+    /// thread; the consumer hops to the main actor itself if it needs to.
+    public var onAudioDataChannelStateChange: ((Int) -> Void)?
+
     /// W-DCAUDIO — send a sealed audio frame over the DataChannel if it is open.
     /// Returns `true` if queued on the DC; `false` if the DC is not open, in which
     /// case the caller (CallService) falls back to the WS relay.
     @discardableResult
     public func sendAudioFrameData(_ data: Data) -> Bool {
         return peerConnection?.sendAudioFrameData(data) ?? false
+    }
+
+    /// W-DCMUX (2026-08-11) — the DataChannel's raw `RTCDataChannelState`, or
+    /// `-1` when this controller has a PeerConnection but no channel object, or
+    /// `-4` when it has no PeerConnection at all.
+    ///
+    /// Read-only diagnostic. `-4` is deliberately not `-2`: the app layer uses
+    /// `-2` for "no controller", and "no controller" and "a controller whose PC
+    /// is gone" are different failures — the first means this call never built a
+    /// WebRTC leg, the second means it built one and lost it.
+    /// ``sendAudioFrameData`` returns the same `false` for both.
+    public var audioDataChannelStateRaw: Int {
+        guard let pc = peerConnection else { return -4 }
+        return pc.audioDataChannelStateRaw()
     }
 
     /// Diagnostic telemetry sink for the video pipeline (kind, attrs).
@@ -498,6 +520,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // the SDP carries the m=application audio section). Voice rides this DC
         // (P2P) with the WS relay as fallback; there is no m=audio SRTP track.
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // W-DCMUX — wire the state hook BEFORE createAudioDataChannel(), which
+        // fires it synchronously on success. Wiring it after would drop the
+        // creation event, which is the one that proves the caller even got as
+        // far as putting an m=application section in the offer.
+        pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -627,6 +654,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // caller created the sealed-audio DataChannel; we receive it via the PC's
         // `didOpen` delegate. No m=audio SRTP track is added.
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // W-DCMUX — on this side the hook's first firing IS the `didOpen`
+        // receipt: it is how the callee proves the channel arrived at all.
+        pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -730,6 +760,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection = pc
         pc.addLocalAudioTrack()
         pc.onAudioDataChannelFrame = { [weak self] data in self?.onAudioDataChannelFrame?(data) }
+        // W-DCMUX — video-upgrade responder PC. Audio on this call shape is
+        // pinned to the WS relay by AppState (`audioPinnedToWsRelay`), so this
+        // hook is expected to stay quiet; that silence is itself the evidence
+        // that distinguishes Phase 0 outcome (c) from (a).
+        pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {

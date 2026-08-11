@@ -176,6 +176,54 @@ final class CallService: @unchecked Sendable {
         (framesEncryptedTx, framesReceivedRx, framesDecryptedRx)
     }
 
+    // MARK: - W-DCMUX (2026-08-11) — which transport actually carried the audio
+    //
+    // Four counters, one per (direction × transport). They exist because the
+    // question "did this call run on the DataChannel or on the WS relay?" was
+    // not answerable from iOS logs at all: the live Loki pull of call
+    // `0289b8d4` returned 14 iOS lines for a 69-second call, none of them about
+    // the DataChannel, so "the channel never opened", "it opened and we never
+    // wrote to it" and "it opened and we wrote to it and the peer ignored it"
+    // were indistinguishable — and those are the three Phase 0 outcomes the
+    // rollout decision hangs on.
+    //
+    // They count FRAMES, not bytes, and they are diagnostics only: nothing
+    // reads them to make a routing decision. The routing decision stays exactly
+    // where it was, per frame, in the `sendAudioOverDataChannel` fork below.
+    //
+    // Threading: the two TX counters are touched only on `txAudioQueue` (the
+    // single serial encode queue) and the two RX counters only on main, the
+    // same lock-free discipline as `framesEncryptedTx` / `framesDecryptedRx`
+    // above. Reads from elsewhere are diagnostics and tolerate being one frame
+    // stale.
+    public private(set) var txFramesDc: Int64 = 0
+    public private(set) var txFramesWs: Int64 = 0
+    public private(set) var rxFramesDc: Int64 = 0
+    public private(set) var rxFramesWs: Int64 = 0
+
+    /// W-DCMUX — which transport an inbound sealed frame arrived on.
+    ///
+    /// The two receive paths converge on `handleIncomingEncryptedFrame` by
+    /// design (identical bytes, identical decrypt, identical playout) and that
+    /// must not change. This tags the ENTRY POINT only, so the split survives
+    /// the convergence.
+    /// `Sendable` and payload-free: the value is captured by the `@Sendable`
+    /// `DispatchQueue.main.async` closure that every inbound frame already hops
+    /// through, alongside the `callId` that is captured there today.
+    public enum AudioRxTransport: Sendable {
+        case dataChannel
+        case wsRelay
+    }
+
+    /// W-DCMUX — first-frame markers, so the "it started working" instant is in
+    /// the log exactly once per call instead of 50 times a second.
+    private var loggedFirstTxOnDc = false
+    private var loggedFirstRxOnDc = false
+    /// Rate limiter for the TX-fallback line: first occurrence, then every
+    /// 250th. At 50 fps an unrate-limited line would be 50 lines/second of the
+    /// same fact, which is how a useful log becomes an unreadable one.
+    private var txFallbackCount: Int64 = 0
+
     // MARK: - W-NETVIS (Android→iOS parity, 2026-08-10) — audio wire bytes
     //
     // The FLUSSO column needs bytes, and it must count them at the SAME LAYER
@@ -467,6 +515,26 @@ final class CallService: @unchecked Sendable {
     /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
     /// payload is the raw WireRelayFrameCodec envelope (same bytes as the WS path).
     public var sendAudioOverDataChannel: ((Data) -> Bool)?
+    /// W-DCMUX (2026-08-11) — why the closure above returned `false`, as a
+    /// single Int. Wired by AppState; read ONLY when a fallback line is about to
+    /// be printed (first occurrence, then every 250th), never per frame.
+    ///
+    ///   `-3` audio is pinned to the WS relay for this call shape
+    ///        (`AppState.audioPinnedToWsRelay`, set on the video-upgrade
+    ///        responder path so the proven relay audio leg is left alone);
+    ///   `-2` there is no `QAudionWebRtcCallController` for this call at all;
+    ///   `-4` a controller exists but its `PeerConnection` is gone;
+    ///   `-1` a PeerConnection exists but no DataChannel was ever created;
+    ///   `0…3` the raw `RTCDataChannelState` (0 connecting, 1 open, 2 closing,
+    ///        3 closed) of a channel that exists but is not open.
+    ///
+    /// `sendAudioFrameData` collapses every one of these into the same `false`,
+    /// and they are different bugs: the capability tag is irrelevant for
+    /// `-3`/`-2`/`-4`, ICE is the suspect for `-1`/`0`, and `2`/`3` mean a
+    /// channel that was alive and died — the case the Android WS-receive
+    /// companion change exists for. `1` (OPEN) must be unreachable here and
+    /// prints as `openbug` if it ever is.
+    public var audioDataChannelDiag: (() -> Int)?
     /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — live-getter for the
     /// active call's key-confirmation telemetry snapshot, same pattern as
     /// `getCallId` above. Wired by AppState to read its own per-call
@@ -1512,11 +1580,53 @@ final class CallService: @unchecked Sendable {
     /// per-call (one PC per call), so the active call_id applies. Wired by AppState
     /// to `QAudionWebRtcCallController.onAudioDataChannelFrame`.
     public func handleIncomingDataChannelAudio(_ data: Data) {
-        handleIncomingEncryptedFrame(data, callId: getCallId?())
+        handleIncomingEncryptedFrame(data, callId: getCallId?(), rxTransport: .dataChannel)
+    }
+
+    /// W-DCMUX (2026-08-11) — call-id prefix for a log line, or `"none"`.
+    ///
+    /// Eight characters, lowercased: byte-identical to the `qa.call.short8`
+    /// join key that `ship-ios-logs.py` extracts (`call_short8`, which requires
+    /// >= 8 characters and yields nothing shorter) and that `correlate-call.py`
+    /// matches on. A shorter prefix would produce a line the correlator cannot
+    /// join, which is worse than no line at all because it looks like evidence.
+    ///
+    /// The shipper redacts the printed value itself to `[REDACTED:callid]` —
+    /// that is expected and correct. The join happens on the extracted
+    /// attribute, not on the visible text; the id has to be IN the line for the
+    /// attribute to exist at all.
+    static func short8(_ callId: String?) -> String {
+        guard let raw = callId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              raw.count >= 8
+        else { return "none" }
+        return String(raw.prefix(8))
+    }
+
+    /// W-DCMUX (2026-08-11) — the sealed-audio DataChannel changed state.
+    ///
+    /// Called by AppState from `QAudionWebRtcCallController
+    /// .onAudioDataChannelStateChange`, which fires on the WebRTC signalling
+    /// thread at creation (caller), receipt (callee) and every subsequent
+    /// transition. Logging lives here, not in AppState, because this is where
+    /// the call id and the two frame counters already are.
+    ///
+    /// - Parameters:
+    ///   - raw: the `RTCDataChannelState` raw value (0 connecting, 1 open,
+    ///     2 closing, 3 closed).
+    ///   - role: `caller` or `callee` — the shipper lifts it into the `qa.role`
+    ///     attribute, and on the caller side the first event is the CREATION of
+    ///     the channel while on the callee side it is its RECEIPT.
+    func noteAudioDataChannelState(raw: Int, role: String) {
+        print("[CallService] dcmux: dc st=" + raw.description
+              + " role=" + role
+              + " callId=" + Self.short8(getCallId?())
+              + " tx=" + txFramesDc.description
+              + " rx=" + rxFramesDc.description)
     }
 
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data,
-                                             callId: String? = nil) {
+                                             callId: String? = nil,
+                                             rxTransport: AudioRxTransport = .wsRelay) {
         // W69: dev network simulator hook RX. Stessa semantica del TX —
         // simula packet loss inbound. Branch-predicted off-path in Off.
         if !NetworkConditionSimulator.shared.isPassthrough() {
@@ -1551,6 +1661,23 @@ final class CallService: @unchecked Sendable {
             // so the telemetry distinguishes "peer never sent" from
             // "received but decrypt failed".
             self.framesReceivedRx &+= 1
+            // W-DCMUX — split the SAME count by arrival transport. Counted here,
+            // after the stale-call filter and before decrypt, so it means
+            // exactly what `framesReceivedRx` means and the two can be compared
+            // directly. Both branches then fall through to one decrypt path —
+            // that convergence is the design and stays untouched.
+            switch rxTransport {
+            case .dataChannel:
+                self.rxFramesDc &+= 1
+                if !self.loggedFirstRxOnDc {
+                    self.loggedFirstRxOnDc = true
+                    print("[CallService] dcmux: first=rxdc callId="
+                          + Self.short8(self.getCallId?())
+                          + " n=" + self.rxFramesDc.description)
+                }
+            case .wsRelay:
+                self.rxFramesWs &+= 1
+            }
             if !self.loggedFirstRxReceive {
                 self.loggedFirstRxReceive = true
                 let bytes: String = serializedFrame.count.description
@@ -2035,6 +2162,17 @@ final class CallService: @unchecked Sendable {
         loggedRxNoPlayback = false
         loggedFirstStaleDrop = false
         rxStaleDropCount = 0
+        // W-DCMUX — per-call, like every counter above. A second call must not
+        // open showing the previous call's transport split: "rx dc=812" carried
+        // over from a call that DID use the DataChannel would be read as proof
+        // about a call that never touched it.
+        txFramesDc = 0
+        txFramesWs = 0
+        rxFramesDc = 0
+        rxFramesWs = 0
+        txFallbackCount = 0
+        loggedFirstTxOnDc = false
+        loggedFirstRxOnDc = false
         rxPreBuffer.removeAll()  // W481
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
@@ -2369,6 +2507,61 @@ final class CallService: @unchecked Sendable {
                 if !sentOnDc {
                     ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
                 }
+                // W-DCMUX — record WHICH transport carried this frame, and log
+                // the two moments that matter: the first frame on the
+                // DataChannel, and the reason we could not use it. The routing
+                // decision itself is untouched above; nothing below can change
+                // where a frame went.
+                // `short8` is computed INSIDE the log branches, never per frame:
+                // this runs 50 times a second on the audio encode queue and a
+                // trim+lowercase+prefix on every frame is pure allocation
+                // churn on a real-time path for a string almost nobody reads.
+                if sentOnDc {
+                    txFramesDc &+= 1
+                    if !loggedFirstTxOnDc {
+                        loggedFirstTxOnDc = true
+                        print("[CallService] dcmux: first=txdc callId=" + Self.short8(cid)
+                              + " n=" + txFramesDc.description)
+                    }
+                } else {
+                    txFramesWs &+= 1
+                    txFallbackCount &+= 1
+                    // First, then every 250th (~5 s at 50 fps). Reading the diag
+                    // closure is deliberately inside this gate: it hops into the
+                    // WebRTC object graph and must not run per frame.
+                    if txFallbackCount == 1 || txFallbackCount % 250 == 0 {
+                        let raw: Int = audioDataChannelDiag?() ?? -2
+                        let why: String
+                        switch raw {
+                        case -4: why = "nopc"
+                        case -3: why = "pinned"
+                        case -2: why = "noctl"
+                        case -1: why = "nochan"
+                        case 0:  why = "conn"
+                        case 2:  why = "closing"
+                        case 3:  why = "closed"
+                        // `1` is OPEN and must be unreachable here: an open
+                        // channel returns true from sendAudioFrameData, including
+                        // for a backpressure drop. If this ever prints, the
+                        // send-side predicate and the diagnostic disagree and
+                        // THAT is the bug, so it gets its own word rather than
+                        // being folded into a plausible-looking one.
+                        case 1:  why = "openbug"
+                        default: why = "unknown"
+                        }
+                        // Every token here is deliberately short: the log
+                        // shipper replaces the whole body with an attribute-only
+                        // summary if ANY run of 12+ [A-Za-z0-9+/=_-] characters
+                        // survives its scrub (ship-ios-logs.py, RE_RESIDUAL_B64
+                        // -> _attribute_summary). `why=connecting` would be 14
+                        // and would silently delete this line's content. Verified
+                        // against that module's own redact_body.
+                        print("[CallService] dcmux: txfall why=" + why
+                              + " st=" + raw.description
+                              + " callId=" + Self.short8(cid)
+                              + " n=" + txFallbackCount.description)
+                    }
+                }
                 // W-NETVIS — the FLUSSO byte counter, at Android's exact layer:
                 // the SEALED frame, before base64 / JSON envelope / binary
                 // header / WS frame / TLS record, mirroring `txBytes.addAndGet(
@@ -2400,6 +2593,18 @@ final class CallService: @unchecked Sendable {
                     let n: String = framesEncryptedTx.description
                     let line: String = "[CallService] TX heartbeat: " + n + " frames encrypted+sent"
                     print(line)
+                    // W-DCMUX — the transport split, on the SAME 250-frame beat
+                    // (~5 s at 50 fps). This is the line §8 acceptance reads:
+                    // on a DataChannel-borne call `dc` climbs on both rows while
+                    // `ws` stays flat, and vice versa. Deliberately beside the
+                    // existing heartbeat rather than on its own timer, so the
+                    // two can never disagree about which frame count they mean.
+                    print("[CallService] dcmux: tx dc=" + txFramesDc.description
+                          + " ws=" + txFramesWs.description
+                          + " rx dc=" + rxFramesDc.description
+                          + " ws=" + rxFramesWs.description
+                          + " callId=" + Self.short8(cid)
+                          + " n=" + n)
                 }
             } else if !loggedTxNoTransport {
                 loggedTxNoTransport = true

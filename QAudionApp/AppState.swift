@@ -3410,6 +3410,28 @@ final class AppState: ObservableObject {
                   let controller = self.webRtcController as? QAudionWebRtcCallController else { return false }
             return controller.sendAudioFrameData(data)
         }
+        // W-DCMUX (2026-08-11) — WHY the closure above returned false. It tests
+        // the SAME two conditions in the SAME order as the send closure, so the
+        // answer can never describe a different call than the one that fell
+        // back. Read only when CallService is about to print a fallback line
+        // (first occurrence, then every 250th), never per frame: it walks into
+        // the WebRTC object graph.
+        //
+        //   -3 pinned   audio deliberately kept on the WS relay for this call
+        //               shape (video-upgrade responder) — the DC is not
+        //               supposed to carry voice here and its silence is correct
+        //   -2 noctl    no QAudionWebRtcCallController at all
+        //   -4 nopc     controller present, but its PeerConnection is gone
+        //   -1 nochan   PeerConnection present, channel never created
+        //   0…3         raw RTCDataChannelState of a channel that is not open
+        //               (2/3 = a channel that WAS alive and died — the case the
+        //               Android WS-receive-fallback companion change exists for)
+        callService.audioDataChannelDiag = { [weak self] in
+            guard let self = self else { return -2 }
+            if self.audioPinnedToWsRelay { return -3 }
+            guard let controller = self.webRtcController as? QAudionWebRtcCallController else { return -2 }
+            return controller.audioDataChannelStateRaw
+        }
         #endif
         // W74: register inbound call handlers BEFORE the WS lands. The
         // server relays Android→iOS calls as `call_incoming`, NOT
@@ -5045,6 +5067,14 @@ final class AppState: ObservableObject {
         }
         controller.onAudioDataChannelFrame = { [weak self] data in
             self?.callService.handleIncomingDataChannelAudio(data)
+        }
+        // W-DCMUX (2026-08-11) — VIDEO-UPGRADE RESPONDER. Audio on this call
+        // shape is pinned to the WS relay a few lines below
+        // (`audioPinnedToWsRelay = true`) so the working relay leg is left
+        // alone; this hook is expected to stay quiet, and if it does not, that
+        // is worth seeing. Role is `callee`: this side answers the upgrade.
+        controller.onAudioDataChannelStateChange = { [weak self] raw in
+            self?.callService.noteAudioDataChannelState(raw: raw, role: "callee")
         }
         controller.shouldRejectIncomingVideo = { CallsGate.shouldRejectIncomingVideo }
         controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
@@ -11511,6 +11541,13 @@ final class AppState: ObservableObject {
                 controller.onAudioDataChannelFrame = { [weak self] data in
                     self?.callService.handleIncomingDataChannelAudio(data)
                 }
+                // W-DCMUX (2026-08-11) — OUTGOING call: this side CREATES the
+                // sealed-audio DataChannel, so the hook's first firing is the
+                // creation and the rest are real transitions. Logged in
+                // CallService, which owns the call id and the counters.
+                controller.onAudioDataChannelStateChange = { [weak self] raw in
+                    self?.callService.noteAudioDataChannelState(raw: raw, role: "caller")
+                }
                 // R-4 (sovereign-only): reject incoming video when the
                 // policy is on. Read live (not captured) so a mid-session
                 // toggle takes effect on the next inbound track.
@@ -17094,6 +17131,13 @@ extension AppState {
         // decrypt + playback (same path as the WS "audio_frame" handler).
         controller.onAudioDataChannelFrame = { [weak self] data in
             self?.callService.handleIncomingDataChannelAudio(data)
+        }
+        // W-DCMUX (2026-08-11) — INCOMING call: this side RECEIVES the channel
+        // the caller created, so the hook's first firing is the `didOpen`
+        // receipt. Its ABSENCE on a call where the caller logged a creation is
+        // the signature of Phase 0 outcome (a): the channel never arrived.
+        controller.onAudioDataChannelStateChange = { [weak self] raw in
+            self?.callService.noteAudioDataChannelState(raw: raw, role: "callee")
         }
         // R-4 (sovereign-only): reject incoming video when the policy is
         // on (responder side). Mirror of the caller-side wiring.

@@ -79,6 +79,50 @@ public enum CallCapabilities {
     /// Cross-platform: ALL three platforms must use the same setting simultaneously.
     public static let v4SFrameAes256Enabled: Bool = true
 
+    // ── W-DCMUX (2026-08-11): sealed-audio DataChannel mux v1 ────────────────
+
+    /// Sealed-audio DataChannel mux v1. Mirrors Android `DC_MUX_V1`
+    /// (`CallCapabilities.kt:128`) and Desktop `CAP_DC_MUX_V1`
+    /// (`src/main/calling/CallCapabilities.ts:85`). Byte-exact string, plain
+    /// ASCII — every platform compares it with string equality, so a rename, a
+    /// re-case or a platform prefix is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can SEND AND RECEIVE the sealed audio
+    /// frames on the WebRTC DataChannel labelled `qaudion-audio`. The bytes on
+    /// that channel are the SAME sealed `WireRelayFrameCodec` envelope the WS
+    /// relay carries — same block, same padding, same sequence numbering, same
+    /// sealer pair. It says nothing about crypto; it is a statement about
+    /// TRANSPORT and nothing else.
+    public static let dcMuxV1: String = "dc-mux-v1"
+
+    /// Kill switch for ADVERTISING ``dcMuxV1``. Ships `false`.
+    ///
+    /// Advertising this tag makes Android STOP routing audio through the WS
+    /// relay and expect a DataChannel: on a fast ICE convergence it skips the
+    /// eager-WS leg entirely (`CallTransportFactory.kt:722-735`) and on an
+    /// upgrade it destroys the relay leg outright (`:824-828`, `wsRelay = null`
+    /// + `previousWs?.close()`, which also tears down the ONLY WS audio receive
+    /// pump — that pump is launched exclusively inside `downgradeToWsRelay`,
+    /// `:955-962`). Advertising a path that is not there does not degrade the
+    /// call, it silences it. Desktop learned this the expensive way and wrote it
+    /// down in `CallCapabilities.ts:76-83`: it advertised the tag while its
+    /// renderer still lost a race onto the WS relay, the Android peer committed
+    /// to the DataChannel, the two ends sat on opposite transports and the call
+    /// was silent.
+    ///
+    /// Flip only after §9 Phase 0 has shown, from logs, that the channel opens
+    /// and carries frames on a real Android↔iOS call, AND after the Android
+    /// WS-receive-fallback companion change has landed (see the transport
+    /// contract §3 — today, once Android is on the DC leg it has no WS audio
+    /// receive path at all, so iOS's own per-frame fallback would be sending to
+    /// a peer that is not listening).
+    ///
+    /// Compile-time, like ``longAudioSendEnabled``: no runtime toggle, no remote
+    /// config, no debug-menu entry. Rollback is this flag going back to `false`
+    /// — the tag leaves the next call's advertisement, the peer's intersection
+    /// empties at the same instant, calls in progress are untouched.
+    public static let dcMuxAdvertiseEnabled: Bool = false
+
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
     /// / Desktop `CAP_UPGRADE_INTENT_RECV_V1`. iOS handles incoming
@@ -128,7 +172,27 @@ public enum CallCapabilities {
     /// exercised on a device or against another platform, so it ships `false`.
     /// Flip it — alone, with the send switch still `false` — once a 60 ms frame
     /// has been decoded end to end on iOS hardware.
-    public static let longAudioRecvAdvertiseEnabled: Bool = false
+    ///
+    /// 2026-08-11 — that instruction is unfollowable and is superseded here.
+    /// Flipping this alone is INERT: Android emits a 60 ms frame only when
+    /// `aprof-60x256-v1` (the SEND tag) is in the INTERSECTION
+    /// (`CallCapabilities.kt` `useLongAudioProfile`), which requires iOS to
+    /// advertise SEND too. So iOS can never earn "a 60 ms frame decoded on iOS
+    /// hardware" by advertising receive first — the evidence the rule demands
+    /// is unreachable by the route the rule prescribes. Both switches therefore
+    /// flip together, and the evidence comes from a TestFlight build on a real
+    /// iPhone against a real Android peer, which is the only place it exists.
+    ///
+    /// What makes that defensible rather than reckless: the receive path is
+    /// covered by 61 cases across LongAudioReceiveTests / LongAudioWireTests /
+    /// LongAudioProfileNegotiationTests, and those RAN and passed on the macOS
+    /// simulator in CI (run 31412677473, 1595 tests, 0 failures). What remains
+    /// unproven is hardware, and specifically the playout junction — see
+    /// `AudioCapture.playoutInFlightTarget`, which yields ONE in-flight buffer
+    /// at 60 ms where W-IOSAUDIOSTARVE needed four at 20 ms. If this profile
+    /// sounds ragged on device, that is the first place to look, and the
+    /// rollback is these two lines going back to `false`.
+    public static let longAudioRecvAdvertiseEnabled: Bool = true
 
     /// Kill switch for SENDING the long profile, and for advertising
     /// ``aprof60x256V1``. Ships `false` on every platform.
@@ -146,7 +210,14 @@ public enum CallCapabilities {
     ///
     /// Mirrors `LONG_AUDIO_SEND_ENABLED` in Android `CallCapabilities.kt` and
     /// Desktop `CallCapabilities.ts`.
-    public static let longAudioSendEnabled: Bool = false
+    ///
+    /// 2026-08-11 — flipped together with ``longAudioRecvAdvertiseEnabled``;
+    /// see that flag for why the two cannot be staged apart on this platform.
+    /// Android flipped first and is verified on hardware (3x fewer packets
+    /// measured server-side, zero decode failures over two real calls); Desktop
+    /// stays `false`, so an iOS↔Desktop call keeps today's 20 ms wire until
+    /// that platform flips too. Rollback is this line.
+    public static let longAudioSendEnabled: Bool = true
 
     // MARK: - Binary WS relay framing (hop-by-hop, NOT a peer capability)
 
@@ -214,6 +285,12 @@ public enum CallCapabilities {
         // is gated too, which is an iOS-local addition to the contract.
         if longAudioRecvAdvertiseEnabled { caps.append(aprof60x256RecvV1) }
         if longAudioSendEnabled { caps.append(aprof60x256V1) }
+        // W-DCMUX — the transport tag. Gated, ships absent. Deliberately NOT
+        // filtered in `applyAdvertisementGates`: an earbud call relays these
+        // same sealed frames opaquely and the transport is orthogonal to who
+        // holds the key, so the sovereign/earbud gates must not strip it. This
+        // matches Android, which never strips it either.
+        if dcMuxAdvertiseEnabled { caps.append(dcMuxV1) }
         return caps
     }()
 
