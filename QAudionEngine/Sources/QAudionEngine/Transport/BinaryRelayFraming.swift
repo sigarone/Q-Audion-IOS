@@ -239,6 +239,14 @@ public final class BinaryRelayWireFormLatch: @unchecked Sendable {
     private var entries: [String: WireForm] = [:]
     /// Insertion order, oldest first — used only for eviction.
     private var order: [String] = []
+    /// Keys whose `.text` is TERMINAL because they were downgraded from
+    /// `.binary` by rule 2, as opposed to keys that simply never became binary.
+    ///
+    /// The distinction exists only for eviction and it is the whole point of
+    /// it: evicting a downgraded key lets the next frame re-resolve that call
+    /// to `.binary`, which is the text→binary mid-call flip rule 3 forbids.
+    /// `entries` alone cannot tell the two apart — both read `.text`.
+    private var downgraded: Set<String> = []
 
     public init() {}
 
@@ -269,6 +277,10 @@ public final class BinaryRelayWireFormLatch: @unchecked Sendable {
                 // Rule 2 — the socket was replaced and the new one did not get
                 // the echo. Downgrade, terminally.
                 entries[key] = .text
+                // Remember WHY this key is on text, so eviction can protect it.
+                // Without this the entry is indistinguishable from one that was
+                // never binary, and the fallback victim search can drop it.
+                downgraded.insert(key)
                 return .text
             }
             // Rule 3 — a call that is on text stays on text, whatever the
@@ -302,6 +314,7 @@ public final class BinaryRelayWireFormLatch: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         entries.removeValue(forKey: key)
         order.removeAll { $0 == key }
+        downgraded.remove(key)
     }
 
     /// Drop every latch. Test-only: calling this during a live call would allow
@@ -310,6 +323,7 @@ public final class BinaryRelayWireFormLatch: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         entries.removeAll()
         order.removeAll()
+        downgraded.removeAll()
     }
 
     public var trackedCallCount: Int {
@@ -330,18 +344,41 @@ public final class BinaryRelayWireFormLatch: @unchecked Sendable {
     ///
     /// Eviction runs BEFORE the insert, so the victim search can never see —
     /// and therefore never pick — the key being inserted. The previous order
-    /// (append, then search) had two failure modes on a saturated map: when the
+    /// (append, then search) had a failure mode on a saturated map: when the
     /// incoming entry was the only `.binary` one it evicted ITSELF, so that
-    /// call was never latched and re-resolved on every single frame; and the
-    /// `?? order.first` fallback could evict a downgraded `.text` entry, which
-    /// then re-resolves to `.binary` on a re-granted socket — the text→binary
-    /// mid-call flip rule 3 forbids.
+    /// call was never latched and re-resolved on every single frame.
+    ///
+    /// 2026-08-11 — the second failure mode that paragraph claimed to have
+    /// closed was still open, and `testLatchEvictionKeepsDowngradedEntries` was
+    /// failing on main because of it. `?? order.first` is reached whenever NO
+    /// tracked entry is `.binary`, and it then evicts the oldest entry
+    /// unconditionally — a downgraded one included. That is not a corner: this
+    /// platform mints uppercase call ids (`UUID().uuidString`), those are not
+    /// server-canonical, and [resolve] latches them to `.text` (see its own
+    /// comment), so an all-text map is the ORDINARY state here rather than an
+    /// exotic one. The map would saturate with text, the fallback would fire,
+    /// and the one entry that must never be lost is the oldest — which a
+    /// downgraded call, having been latched before the flood, tends to be.
+    ///
+    /// The victim search is therefore three-tiered, safest sacrifice first:
+    ///   1. oldest `.binary` — free to lose; the next frame re-resolves to
+    ///      `.binary` on the same socket or downgrades, and both are allowed;
+    ///   2. oldest `.text` that was NEVER downgraded — re-resolving it cannot
+    ///      manufacture a forbidden upgrade, because it never held the binary
+    ///      state that rule 2 makes terminal;
+    ///   3. only if every tracked call is a downgraded one, the oldest overall.
+    /// Tier 3 is unreachable while [maxTrackedCalls] exceeds the number of
+    /// concurrent calls this app can have (64 against 1), and is kept solely so
+    /// this function is total rather than able to grow the map past its bound.
     private func insert(key: String, form: WireForm) {
         if entries[key] == nil, entries.count >= Self.maxTrackedCalls {
-            let victim = order.first(where: { entries[$0] == .binary }) ?? order.first
+            let victim = order.first(where: { entries[$0] == .binary })
+                ?? order.first(where: { !downgraded.contains($0) })
+                ?? order.first
             if let victim {
                 entries.removeValue(forKey: victim)
                 order.removeAll { $0 == victim }
+                downgraded.remove(victim)
             }
         }
         entries[key] = form
