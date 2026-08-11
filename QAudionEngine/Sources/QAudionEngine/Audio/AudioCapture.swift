@@ -1564,10 +1564,51 @@ public final class AudioCapture {
     /// avoid paying.
     private static let playoutInFlightTargetMs = 80
 
-    /// 4 at 20 ms — unchanged.
+    /// Floor on ``playoutInFlightTarget``, in BUFFERS rather than milliseconds.
+    ///
+    /// 2026-08-11, from the first long-profile call on a real iPhone (build
+    /// 1.0.958, iOS↔Android): the caller reported interruptions and a metallic
+    /// timbre. Both are this line. `framesForMs(80, 60)` is
+    /// `max(1, (80 + 30) / 60)` = 1, so the long profile ran with exactly ONE
+    /// buffer on the player node — none queued behind the one being rendered.
+    /// The next buffer is only scheduled after the completion handler hops back
+    /// to main (see `pumpPlayout`'s call site), so any delay at all leaves the
+    /// node with nothing to play.
+    ///
+    /// Both reported symptoms follow from that. The node running dry renders
+    /// literal silence, which W-IOSAUDIOSTARVE above records as audible
+    /// "seghettato" on device and which is not even counted as a jitter-buffer
+    /// underrun because `pop()` is never reached — the interruptions. And when
+    /// `pumpPlayout` does conceal, it repeats the last delivered frame at −6 dB;
+    /// a repeated 60 ms frame is three times the artefact a repeated 20 ms one
+    /// is, and a repeated waveform is what "metallic" sounds like.
+    ///
+    /// Two is not a tuning choice, it is the pipelining minimum: one buffer
+    /// rendering, one already queued. The duration budget above answers "how
+    /// much hitch do we absorb" and is still the binding constraint at 20 ms
+    /// (4 buffers), where this floor changes nothing. At 60 ms it costs 120 ms
+    /// of standing latency instead of 60 — half of the 240 ms the count-based
+    /// version would have cost, and the price of the node having anything to
+    /// play at all.
+    static let playoutInFlightFloorBuffers = 2
+
+    /// The target as a pure function of the inbound frame duration.
+    ///
+    /// Deliberately not `private`, and deliberately static: the instance
+    /// property below needs a live [AudioCapture], which needs an audio session,
+    /// so nothing could assert this arithmetic before now — and the defect it
+    /// encodes shipped to a device precisely because this junction had no test
+    /// at any duration. `@testable import` reaches this; see
+    /// `PlayoutInFlightTargetTests`.
+    static func playoutInFlightTarget(forFrameDurationMs ms: Int) -> Int {
+        max(playoutInFlightFloorBuffers,
+            AudioConstants.framesForMs(playoutInFlightTargetMs, frameDurationMs: ms))
+    }
+
+    /// 4 at 20 ms — unchanged. 2 at 60 ms, by the floor rather than by the
+    /// duration, which alone would say 1.
     private var playoutInFlightTarget: Int {
-        AudioConstants.framesForMs(Self.playoutInFlightTargetMs,
-                                   frameDurationMs: inboundFrameDurationMs)
+        Self.playoutInFlightTarget(forFrameDurationMs: inboundFrameDurationMs)
     }
 
     /// Drain the jitter buffer onto the player node up to the in-flight target.
