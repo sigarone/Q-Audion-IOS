@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.960",
+              date: "2026-08-12",
+              title: "v1.0.960",
+              bullets: [
+                "feat(audio): Opus 1.6.1 on iOS, with deep PLC — re-vendored from upstream",
+                "feat(audio): deep PLC on iOS — conceal a lost packet the way Android does",
+                "fix(audio): quantise ms budgets by their role, and hold the ladder structurally",
+              ]),
         .init(id: "v1.0.959",
               date: "2026-08-11",
               title: "v1.0.959",
               bullets: [
+                "chore: regenerate changelog for v1.0.959",
                 "fix(audio): one in-flight buffer cannot be pipelined — floor the playout depth",
               ]),
         .init(id: "v1.0.958",
@@ -170,14 +179,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.941",
                 "fix(contacts): log the before/after at both contact-name write sites",
-              ]),
-        .init(id: "v1.0.940",
-              date: "2026-08-04",
-              title: "v1.0.940",
-              bullets: [
-                "chore: regenerate changelog for v1.0.940",
-                "fix(auth): predictively refresh the token on a PushKit call wake, not just app foreground",
-                "feat(call): redesign trust-bar shield badges with real artwork",
               ]),
     ]
 }
