@@ -162,11 +162,38 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
 
     /// Row 9 — kill switch off locally. The tag is never advertised, so the
     /// intersection cannot contain it however generous the peer is.
+    ///
+    /// Until 2026-08-11 this row read the switch-off case straight off
+    /// ``CallCapabilities/localCaps()``, because that WAS the switch-off case.
+    /// Both switches ship on now, so the list has to be built explicitly — the
+    /// rule still needs testing even though this build can no longer produce
+    /// the state it describes. A peer platform that has not flipped yet
+    /// (Desktop today) is exactly this shape on the wire.
     func test_row9_killSwitchOff_neverAdvertises() {
-        // Simulate the shipped local list rather than an explicit one.
-        let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv, send])
+        let switchOffLocal = CallCapabilities.localCaps().filter { $0 != send }
+        let n = negotiated(local: switchOffLocal, peer: base + [recv, send])
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
         XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+    }
+
+    /// The mirror of row 9 that only became reachable once the switches went
+    /// on: OUR build advertises both tags, and the PEER is a platform that has
+    /// not flipped yet. That is every iOS↔Desktop call today, so it is worth a
+    /// row of its own rather than being implied by row 9.
+    func test_row9b_peerHasNotFlipped_staysStandard() {
+        let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv])
+        XCTAssertFalse(n.bothAdvertiseLongAudioSend)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+    }
+
+    /// And the case this build DOES produce against another flipped peer
+    /// (Android since d3175700): both tags on both sides, so both send long.
+    func test_row9c_bothFlipped_negotiatesLong() {
+        let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv, send])
+        XCTAssertTrue(n.bothAdvertiseLongAudioSend)
+        XCTAssertTrue(n.peerAcceptsLongAudio)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false),
+                       .long60x256)
     }
 
     /// Row 10 — a sovereign earbud is in the call. BOTH tags are withheld,
