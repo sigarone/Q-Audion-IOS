@@ -22,6 +22,27 @@ public final class GuardianMode: @unchecked Sendable {
     private var enabled = true
     private var frameCount: Int64 = 0
     private var analysisRate: Int = 5  // analyze every Nth frame
+
+    /// How often the analyser should actually run, in MILLISECONDS.
+    ///
+    /// 2026-08-12 — `analysisRate` counts FRAMES, and a frame stopped being a
+    /// fixed amount of time when the 60 ms profile shipped. Every 5th frame is
+    /// every 100 ms at 20 ms and every 300 ms at 60 ms, so the confidence
+    /// history advanced at a third of its rate while `AppState`'s sampler kept
+    /// reading it at 5 Hz. On a device that reads as a meter that has stopped —
+    /// reported as "il confidence meter sembra fermo o non funzionare", on a
+    /// call that was otherwise fine.
+    ///
+    /// 100 ms is not a new number: it is what `analysisRate = 5` has always
+    /// meant at the shipping cadence. Stating it as a duration keeps that
+    /// behaviour identical at 20 ms and restores it at every other frame size.
+    private static let analysisIntervalMs: Int = 100
+
+    /// Milliseconds of audio seen since the last analysis. Accumulated from the
+    /// FRAMES THEMSELVES rather than from a clock: this runs on the receive
+    /// path, where the meaningful rate is audio time, and a wall clock would
+    /// keep advancing through a gap in which no audio arrived at all.
+    private var pendingMs: Int = 0
     private var redThreshold: Float = ConfidenceIndex.redThreshold
     private var sustainedRedStartMs: Int64?
     // 5 s of sustained red required before alarm — effectively impossible for genuine voice.
@@ -36,7 +57,21 @@ public final class GuardianMode: @unchecked Sendable {
         lock.lock()
         guard enabled else { lock.unlock(); return }
         frameCount += 1
-        guard frameCount % Int64(analysisRate) == 0 else { lock.unlock(); return }
+        // Frame duration derived from the buffer in hand — 48 kHz mono Int16 is
+        // 96 bytes per millisecond — so this holds for any cadence a peer sends,
+        // negotiated or not, without the receive path having to be told.
+        // Falls back to the counter when the length is not a whole number of
+        // milliseconds, which means it is not the PCM this expects.
+        let frameMs = pcmFrame.count / 96
+        let due: Bool
+        if frameMs > 0 {
+            pendingMs += frameMs
+            due = pendingMs >= Self.analysisIntervalMs
+            if due { pendingMs = 0 }
+        } else {
+            due = frameCount % Int64(analysisRate) == 0
+        }
+        guard due else { lock.unlock(); return }
         lock.unlock()
 
         let score = analyzer.analyze(pcmFrame: pcmFrame)
