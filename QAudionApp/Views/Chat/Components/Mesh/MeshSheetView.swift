@@ -282,9 +282,15 @@ struct MeshSheetView: View {
 
     @ViewBuilder
     private func relaySection(for peer: MeshRuntimePeer) -> some View {
+        // Section header text pre-built as a plain `let` (not inline string
+        // interpolation inside the ViewBuilder) — CLAUDE.md §13: keep
+        // multi-segment formatting out of deeply-nested closure/builder
+        // scopes.
+        let viaName = viewModel.label(forNodeHex: peer.nodeHex).name
+        let headerText = "Raggiungibili tramite " + viaName
         Button { viewModel.relaysExpanded.toggle() } label: {
             HStack {
-                Text("Raggiungibili tramite \(viewModel.label(forNodeHex: peer.nodeHex).name.split(separator: " ").first.map(String.init) ?? "")")
+                Text(headerText)
                     .qaudionStyle(type.bodySmall)
                     .foregroundStyle(scheme.onSurface)
                 Spacer()
