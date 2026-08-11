@@ -97,4 +97,24 @@ static inline int opus_helper_get_last_packet_duration(OpusDecoder *dec,
     return opus_decoder_ctl(dec, OPUS_GET_LAST_PACKET_DURATION(samples));
 }
 
+/* Turn on deep PLC (FARGAN), the neural concealment from Opus 1.5.
+ *
+ * This is a DECODER complexity, which reads like a performance knob and is not
+ * one: at 5 the SILK decoder sets `DecControl.enable_deep_plc`, and below it the
+ * FARGAN model is linked into the binary and never runs. That silent-no-op shape
+ * is the one this codebase has been bitten by repeatedly — deep PLC itself
+ * shipped inert on Android once — so the call belongs next to decoder creation
+ * rather than in a caller's memory.
+ *
+ * 5 and not higher: 6 and 7 additionally request OSCE (LACE / NoLACE), which is
+ * not compiled in this build. Mirrors Android `opus_jni.c:333` exactly, so the
+ * two platforms conceal a lost packet the same way.
+ *
+ * Decoder-side only — nothing changes on the wire, and a peer without it is
+ * unaffected. Returns OPUS_OK (0) on success; a failure is worth logging and not
+ * worth failing a call over, since the classic concealment still works. */
+static inline int opus_helper_enable_deep_plc(OpusDecoder *dec) {
+    return opus_decoder_ctl(dec, OPUS_SET_COMPLEXITY(5));
+}
+
 #endif /* OPUS_HELPERS_H */

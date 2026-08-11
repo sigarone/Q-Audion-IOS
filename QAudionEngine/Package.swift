@@ -247,6 +247,10 @@ let package = Package(
                 .headerSearchPath("src/silk"),
                 .headerSearchPath("src/silk/fixed"),
                 .headerSearchPath("src/silk/float"),
+                // Deep PLC (FARGAN). The C-only subset — no dnn/arm, because
+                // this build defines no OPUS_HAVE_RTCD and there is nothing to
+                // dispatch to. See src/config.h's ENABLE_DEEP_PLC block.
+                .headerSearchPath("src/dnn"),
                 .define("HAVE_CONFIG_H"),
                 .define("OPUS_BUILD"),
             ]

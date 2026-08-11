@@ -159,6 +159,27 @@ public final class OpusCodec {
 
         decoder = opus_decoder_create(Int32(AudioConstants.sampleRate),
             Int32(AudioConstants.channels), &error)
+
+        // Deep PLC (FARGAN), Opus 1.5's neural concealment — 2026-08-11.
+        //
+        // Set HERE, at creation, because the model links into the binary and
+        // never runs without it. Android has had this since `2312fa00`; iOS did
+        // not, and the gap was audible rather than theoretical: a lost packet
+        // was concealed by classic libopus decay, which the playout code's own
+        // comment describes as ringing and which a user on a real device called
+        // "metallico". The long profile made it worse in the obvious way — each
+        // concealment event lasts 60 ms instead of 20.
+        //
+        // Failure is logged and ignored on purpose. The classic concealment
+        // still works, and concealment quality is not worth failing a call over.
+        if let dec = decoder {
+            let plcErr = opus_helper_enable_deep_plc(dec)
+            if plcErr == OPUS_OK {
+                print("[OpusCodec] deep PLC enabled (decoder complexity 5)")
+            } else {
+                print("[OpusCodec] deep PLC unavailable (code \(plcErr)) — classic concealment")
+            }
+        }
     }
 
     deinit {
