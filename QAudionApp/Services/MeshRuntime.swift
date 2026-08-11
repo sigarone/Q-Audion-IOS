@@ -53,6 +53,19 @@ final class MeshRuntime: ObservableObject {
         }
     }
 
+    /// Which of the two radio roles is active — nil when the antenna is
+    /// off. Derived from `radioState` (itself computed live off
+    /// `CBCentralManager.isScanning`/`CBPeripheralManager.isAdvertising` by
+    /// `BleMeshTransport.currentRadioState()`), so this never drifts out of
+    /// sync with what the radio is actually doing.
+    var antennaMode: MeshAntennaMode? {
+        switch radioState {
+        case .scanningAndAdvertising: return .fullMesh
+        case .advertisingOnly: return .visibleOnly
+        default: return nil
+        }
+    }
+
     /// Fired for every `.data` packet addressed to us, once per inbound
     /// message. `fromNodeHex` is the ORIGINATING sender's node id (not
     /// necessarily the immediate radio hop, if the packet was relayed).
@@ -84,22 +97,29 @@ final class MeshRuntime: ObservableObject {
         localNodeIdHex = MeshFeature.localNodeId(identityKeyRaw: identityKeyRaw).hex
     }
 
-    /// Turns the BLE radio on/off. This is the ONLY call site that ever
-    /// touches CoreBluetooth — the antenna toggle in `MeshSheetView`. Silently
-    /// refuses when the feature flag is off, so a stray call (e.g. a race
-    /// with a flag flip) can never bypass the gate.
-    func setAntenna(on: Bool) {
+    /// Turns the BLE radio off, or on in `mode`. This is the ONLY call site
+    /// that ever touches CoreBluetooth — the antenna selector in
+    /// `MeshSheetView`. Silently refuses when the feature flag is off, so a
+    /// stray call (e.g. a race with a flag flip) can never bypass the gate.
+    func setAntenna(mode: MeshAntennaMode?) {
         guard MeshFeature.enabled else { return }
-        if on {
-            let localId = (try? MeshNodeId(hex: localNodeIdHex)) ?? MeshNodeId.random()
-            let t = transport ?? BleMeshTransport(localNodeId: localId)
-            t.delegate = self
-            transport = t
-            t.start(schedule: MeshRadioSchedule.backgroundIdle)
-        } else {
+        guard let mode else {
             transport?.stop()
             activeTargets.removeAll()
+            return
         }
+        // Switching .fullMesh <-> .visibleOnly mid-session: BleMeshTransport
+        // .start() is a no-op while already active (it can't reconcile
+        // "already active, but in the other mode" mid-call), so stop first —
+        // the cost (re-advertise/re-discover) is small.
+        if let current = antennaMode, current != mode {
+            transport?.stop()
+        }
+        let localId = (try? MeshNodeId(hex: localNodeIdHex)) ?? MeshNodeId.random()
+        let t = transport ?? BleMeshTransport(localNodeId: localId)
+        t.delegate = self
+        transport = t
+        t.start(schedule: MeshRadioSchedule.backgroundIdle, mode: mode)
     }
 
     func selectTarget(conversationId: String, nodeHex: String, displayName: String) {

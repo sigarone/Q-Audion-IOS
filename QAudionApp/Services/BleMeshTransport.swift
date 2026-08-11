@@ -81,6 +81,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     private var active = false
     private var announceScheduled = false
+    /// Set on every `start` call; read by `handlePacket`'s relay gate and by `maybeStartScanning`'s gate.
+    private var mode: MeshAntennaMode = .fullMesh
 
     // --- central-role link tracking (we connected OUT) ---
     private var outgoingPeripherals: [UUID: CBPeripheral] = [:]
@@ -132,15 +134,16 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     // MARK: - MeshTransport
 
-    func start(schedule: MeshRadioSchedule.Profile) {
+    func start(schedule: MeshRadioSchedule.Profile, mode: MeshAntennaMode) {
         bleQueue.async { [weak self] in
-            self?.startLocked()
+            self?.startLocked(mode: mode)
         }
     }
 
-    private func startLocked() {
+    private func startLocked(mode: MeshAntennaMode) {
         guard !active else { return }
         active = true
+        self.mode = mode
         if central == nil {
             central = CBCentralManager(delegate: self, queue: bleQueue, options: nil)
         }
@@ -225,7 +228,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     // MARK: - Central role (scan + connect out)
 
     private func maybeStartScanning() {
-        guard active, let central, central.state == .poweredOn else { return }
+        guard active, mode == .fullMesh, let central, central.state == .poweredOn else { return }
         central.scanForPeripherals(
             withServices: [Self.serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
@@ -289,14 +292,22 @@ final class BleMeshTransport: NSObject, MeshTransport {
             identityFingerprintHex: localNodeId.hex,
             neighborNodeIdsHex: Array(neighbors)
         )
+        // Wrapped with MeshDiscoveryCipher, not sent as plain JSON — see
+        // that type's header for exactly what this does and doesn't hide.
+        // Force-unwrapped: AES.GCM.seal with a fixed, well-formed 32-byte
+        // key only fails for pathological inputs this call never produces
+        // — same "cannot actually fail" reasoning as the MeshPacket
+        // construction below.
+        let encryptedPayload = MeshDiscoveryCipher.encrypt(announce.encode())!
         // Constructing this packet can only fail if the announce payload
         // somehow exceeded MeshPacket.maxPayloadBytes (16KB) — an ANNOUNCE
-        // body capped at MeshAnnounce.maxNeighbors short hex strings never
-        // gets remotely close, so a forced unwrap here mirrors the same
-        // "this cannot actually fail" reasoning as MeshPacket.withTTL(_:).
+        // body capped at MeshAnnounce.maxNeighbors short hex strings plus
+        // AES-GCM's fixed 28-byte overhead never gets remotely close, so a
+        // forced unwrap here mirrors the same reasoning as
+        // MeshPacket.withTTL(_:).
         return try! MeshPacket(
             type: .announce, senderId: localNodeId, recipientId: .broadcast,
-            timestampMs: Int64(Date().timeIntervalSince1970 * 1000), payload: announce.encode()
+            timestampMs: Int64(Date().timeIntervalSince1970 * 1000), payload: encryptedPayload
         )
     }
 
@@ -418,7 +429,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
         deviceToNodeHex[identifier] = packet.senderId.hex
 
         if packet.type == .announce {
-            guard let announce = MeshAnnounce.decode(packet.payload) else {
+            guard let decrypted = MeshDiscoveryCipher.decrypt(packet.payload) else {
+                registerMalformed(identifier)
+                return
+            }
+            guard let announce = MeshAnnounce.decode(decrypted) else {
                 registerMalformed(identifier)
                 return
             }
@@ -443,10 +458,13 @@ final class BleMeshTransport: NSObject, MeshTransport {
         }
 
         // Flood relay: a packet not uniquely for us, still with hops left.
-        // allowRelay caps how much of THIS source's traffic gets relayed on,
-        // so one adjacent peer can't use this device to amplify spam to
-        // everyone else in range — never applied to the forUs branch above.
-        guard packet.recipientId != localNodeId, allowRelay(from: identifier) else { return }
+        // .visibleOnly explicitly opts out of acting as a relay hop for
+        // other people's traffic — it's "reachable", not "participating in
+        // routing". allowRelay caps how much of THIS source's traffic gets
+        // relayed on, so one adjacent peer can't use this device to amplify
+        // spam to everyone else in range — neither gate applies to the
+        // forUs branch above.
+        guard packet.recipientId != localNodeId, mode == .fullMesh, allowRelay(from: identifier) else { return }
         let decision = MeshRelayPolicy.evaluate(
             packet: packet, localNodeId: localNodeId,
             visiblePeerCount: deviceToNodeHex.count, knownNextHop: nil
