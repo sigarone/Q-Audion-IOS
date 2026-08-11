@@ -91,6 +91,14 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// signal only — see ``AttachAnnounceMeta/xp`` doc for the same
     /// no-server-enforcement caveat that already applies to view-once.
     public let exportBlocked: Bool?
+    /// True when this message was delivered over the offline BLE-mesh
+    /// fallback transport (branch `claude/ble-mesh-cleanroom-spike`)
+    /// instead of the normal WebSocket path. Drives the small "via mesh"
+    /// indicator in the chat bubble, mirroring the Android sibling's
+    /// antenna badge (`securityMetaJson: {"transport":"mesh"}`). `nil`/
+    /// `false` = normal transport (today's behavior, unchanged and the
+    /// default for every pre-existing stored row).
+    public let viaMesh: Bool?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -106,7 +114,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 expiresAt: Date? = nil,
                 isViewOnce: Bool? = nil,
                 viewOnceOpened: Bool? = nil,
-                exportBlocked: Bool? = nil) {
+                exportBlocked: Bool? = nil,
+                viaMesh: Bool? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -128,5 +137,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.isViewOnce = isViewOnce
         self.viewOnceOpened = viewOnceOpened
         self.exportBlocked = exportBlocked
+        self.viaMesh = viaMesh
     }
 }

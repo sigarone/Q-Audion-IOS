@@ -28,7 +28,12 @@ final class ChatContainer: ObservableObject {
     /// Reason codes 1:1 con Android `SendMessageUseCase.Outcome.Failed`
     /// (vedi `qaudion-android-new/feature/feature-chat/.../SendMessageUseCase.kt`).
     /// Mappato a stringhe Italian per UI feedback via QAudionSnackbar.
-    enum SendFailureReason: String, Equatable {
+    /// `Error`-conforming (branch claude/ble-mesh-cleanroom-spike added
+    /// this): `ChatMessageSendService.encryptForWire` returns
+    /// `Result<Data, SendFailureReason>`, and `Result`'s `Failure`
+    /// generic parameter requires `Failure: Error` — a plain
+    /// `Equatable`-only enum does not satisfy that on its own.
+    enum SendFailureReason: String, Equatable, Error {
         case pskMissing      = "psk_missing"
         case cryptoFailure   = "crypto_failure"
         case networkError    = "network_error"
@@ -277,6 +282,21 @@ final class ChatContainer: ObservableObject {
         draftSaveWorkItem?.cancel()
         refreshFromStore()
 
+        // BLE-mesh offline chat fallback (branch claude/ble-mesh-cleanroom-spike):
+        // when this conversation has an active mesh send target selected
+        // (set from `MeshSheetView`'s "Invia messaggio via mesh" button),
+        // route THIS message over the mesh transport instead of the normal
+        // WS pipeline below. Mirrors the Android sibling's
+        // `SendMessageUseCase` mesh pre-flight branch.
+        if let sender = sendService,
+           let target = MeshRuntime.shared.activeTarget(for: conversationId.uuidString) {
+            sendViaMesh(
+                sender: sender, target: target,
+                messageId: msg.id, wireText: wireText
+            )
+            return
+        }
+
         // W71: real WS send pipeline. The MessageCrypto wire format
         // (salt||nonce||ciphertext||tag with HKDF-SHA256-derived key and
         // AES-256-GCM AAD = "msg:{sender}:{peer}:{msgId}") is parity with
@@ -337,6 +357,78 @@ final class ChatContainer: ObservableObject {
                 }
             }
         }
+    }
+
+    /// BLE-mesh send path (branch claude/ble-mesh-cleanroom-spike). Reuses
+    /// `ChatMessageSendService.encryptForWire` — the SAME crypto dispatch
+    /// the normal WS path uses — then wraps the opaque ciphertext in a
+    /// `MeshChatMessage` envelope and hands it to `MeshRuntime`. Mirrors
+    /// the Android sibling's `MeshSendCoordinator.sendMeshMessage` shape.
+    /// Body kept shallow (single `Task`, helper methods do the real work)
+    /// per CLAUDE.md §13 — a deeper inline closure here has repeatedly
+    /// timed out the Swift 6 type-checker elsewhere in this app.
+    private func sendViaMesh(
+        sender: ChatMessageSendService,
+        target: MeshTargetSelection,
+        messageId: UUID,
+        wireText: String
+    ) {
+        Task { [weak self, conversationId, peerUserId, target, messageId, wireText] in
+            guard let self else { return }
+            let outcome = await sender.encryptForWire(
+                messageId: messageId, peerUserId: peerUserId, plaintext: wireText
+            )
+            await MainActor.run {
+                self.completeMeshSend(
+                    outcome: outcome, conversationId: conversationId,
+                    peerUserId: peerUserId, target: target, messageId: messageId
+                )
+            }
+        }
+    }
+
+    /// MainActor tail of `sendViaMesh` — separated so the `Task` body above
+    /// stays a single, trivial call (CLAUDE.md §13/§14: the deeper the
+    /// inline closure, the more likely a type-checker timeout).
+    private func completeMeshSend(
+        outcome: Result<Data, ChatContainer.SendFailureReason>,
+        conversationId: UUID,
+        peerUserId: String,
+        target: MeshTargetSelection,
+        messageId: UUID
+    ) {
+        guard let selfUserId = appState?.currentUserId else {
+            markFailed(messageId: messageId, reason: .notAuthenticated)
+            return
+        }
+        switch outcome {
+        case .failure(let reason):
+            markFailed(messageId: messageId, reason: reason)
+        case .success(let ciphertext):
+            let envelope = MeshChatMessage(
+                senderUserId: selfUserId,
+                recipientUserId: peerUserId,
+                clientMsgId: messageId.uuidString,
+                conversationId: conversationId.uuidString,
+                ciphertextB64: ciphertext.base64EncodedString(),
+                sentAtMs: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: envelope.encode()) { [weak self] delivered in
+                self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId)
+            }
+        }
+    }
+
+    private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID) {
+        if delivered {
+            store.updateMessageStatus(
+                id: messageId, conversationId: conversationId,
+                newStatus: .delivered, deliveredAt: Date()
+            )
+        } else {
+            markFailed(messageId: messageId, reason: .networkError)
+        }
+        refreshFromStore()
     }
 
     /// W101: emit typing-start envelope when the user starts typing,

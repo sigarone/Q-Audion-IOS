@@ -93,6 +93,11 @@ struct MessageBubble<Body: View>: View {
     /// the chips non-interactive (e.g. previews) without changing their
     /// appearance.
     let onReact: ((String) -> Void)?
+    /// True when this message was delivered over the offline BLE-mesh
+    /// fallback transport (branch `claude/ble-mesh-cleanroom-spike`)
+    /// instead of the normal WebSocket path — mirrors `Message.viaMesh`.
+    /// Renders a small antenna glyph in the footer next to the timestamp.
+    let viaMesh: Bool
     /// Stored as `content` (NOT `body`) to avoid colliding with the
     /// `View` protocol's required `var body: some View`. Both members
     /// would otherwise share the same name in the same type, which the
@@ -105,6 +110,7 @@ struct MessageBubble<Body: View>: View {
          replyQuote: MessageReplyQuote? = nil,
          reactions: [MessageReaction] = [],
          onReact: ((String) -> Void)? = nil,
+         viaMesh: Bool = false,
          @ViewBuilder content: @escaping () -> Body) {
         self.variant = variant
         self.timeLabel = timeLabel
@@ -112,6 +118,7 @@ struct MessageBubble<Body: View>: View {
         self.replyQuote = replyQuote
         self.reactions = reactions
         self.onReact = onReact
+        self.viaMesh = viaMesh
         self.content = content
     }
 
@@ -200,6 +207,12 @@ struct MessageBubble<Body: View>: View {
         HStack(spacing: 4) {
             if variant == .sent {
                 Spacer(minLength: 0)
+            }
+            if viaMesh {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .accessibilityLabel("Inviato via mesh Bluetooth")
             }
             Text(timeLabel)
                 .qaudionStyle(type.labelSmall)

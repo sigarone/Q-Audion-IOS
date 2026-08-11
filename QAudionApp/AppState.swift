@@ -2285,6 +2285,16 @@ final class AppState: ObservableObject {
             getUserId: { [weak self] in self?.currentUserId }
         )
 
+        // BLE mesh (branch claude/ble-mesh-cleanroom-spike) — MeshRuntime
+        // is a primitive-only API surface (CLAUDE.md §16, never imports
+        // AppState); this closure is the one place that bridges its
+        // inbound-data callback back into the real receive/persist path.
+        // Harmless when the feature flag is off: MeshRuntime.setAntenna
+        // refuses to start the radio, so this callback simply never fires.
+        MeshRuntime.shared.onInboundData = { [weak self] fromNodeHex, payload in
+            self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload)
+        }
+
         // CarPlay — wire the call bridge so the in-car CarPlay scene (a separate
         // UIScene that must NOT import AppState, CLAUDE.md §16) can place
         // outgoing PQC calls. Pure closure injection, same primitives-only
@@ -7615,6 +7625,153 @@ final class AppState: ObservableObject {
             object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
         )
+    }
+
+    // MARK: - BLE mesh receive (branch claude/ble-mesh-cleanroom-spike)
+    //
+    // `MeshRuntime` (QAudionApp/Services/MeshRuntime.swift) is a primitive-
+    // only API surface (CLAUDE.md §16) — it never imports AppState. This is
+    // the one place that bridges its inbound-data callback back into the
+    // app's real state, wired from `initialize()` via
+    // `MeshRuntime.shared.onInboundData = { ... }`.
+
+    /// Persists a chat message that arrived over the BLE mesh transport,
+    /// mirroring `handleIncomingMessage`'s WS-side decrypt+persist shape.
+    /// Deliberately scoped to the CORE text-message case only — control
+    /// envelopes (delete/edit/reaction), avatar transport, and group-chat
+    /// routing stay WS-only for this increment; a mesh-delivered qa_ctl/
+    /// qa_grp envelope renders as plain (decrypted) text rather than being
+    /// silently dropped, which is an honest if unpolished fallback until
+    /// that parity work happens. `MeshChatMessage.senderUserId`/
+    /// `recipientUserId` are the SAME cleartext routing metadata the WS
+    /// transport already sends — not secret, and needed to rebuild the
+    /// Associated Data the sender bound the ciphertext to.
+    private func handleIncomingMeshMessage(fromNodeHex: String, payload: Data) {
+        guard let envelope = MeshChatMessage.decode(payload) else { return }
+        guard let selfId = currentUserId, envelope.recipientUserId == selfId else { return }
+        let store = ConversationStore()
+        // Duplicate delivery — a flood-relay mesh can legitimately deliver
+        // the same packet more than once.
+        guard store.findByClientMsgId(envelope.clientMsgId) == nil else { return }
+        guard let ciphertext = Data(base64Encoded: envelope.ciphertextB64) else { return }
+
+        let senderId = envelope.senderUserId
+        let plaintext: String
+        if let decrypted = attemptDecryptMeshWireBlob(cipher: ciphertext, senderId: senderId, clientMsgId: envelope.clientMsgId) {
+            plaintext = String(data: decrypted, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+        } else {
+            let tag = "mesh"
+            let senderPrefix = String(senderId.prefix(8))
+            let line: String = "msg_receive undec=1 from=\(senderPrefix)"
+            RTLog.warn(tag, line)
+            plaintext = "[messaggio cifrato non leggibile]"
+        }
+
+        let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
+        let conv: Conversation
+        if let e = existing {
+            conv = e
+        } else {
+            let resolvedName = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            conv = Conversation(
+                id: UUID(), peerUserId: senderId, peerDisplayName: resolvedName,
+                lastMessagePreview: plaintext, lastActivity: Date(), unreadCount: 1,
+                pinned: false, kind: .oneToOne
+            )
+            store.upsertConversation(conv)
+        }
+
+        let msg = Message(
+            id: UUID(), conversationId: conv.id, direction: .incoming,
+            plaintext: plaintext, sentAt: Date(), deliveredAt: Date(), readAt: nil,
+            status: .delivered, senderUserId: senderId, clientMsgId: envelope.clientMsgId,
+            viaMesh: true
+        )
+        store.appendMessage(msg)
+        store.recordNewMessage(
+            conversationId: conv.id, lastMessagePreview: plaintext,
+            lastActivity: Date(), incrementUnread: !conv.muted
+        )
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification, object: nil,
+            userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+        )
+    }
+
+    /// Near-duplicate, BY DESIGN, of `handleIncomingMessage`'s `attemptDecrypt`
+    /// dispatch (v4 -> v3 -> v2 -> v1 by wire-format magic byte, PSK-candidate
+    /// fallback walk). This environment has no Xcode toolchain to verify a
+    /// refactor that collapses the two into one shared helper inside a
+    /// 7000-line file with no compiler feedback available, so this mirrors
+    /// the already-shipped logic verbatim instead of risking a blind edit
+    /// to it. A follow-up with real CI/compiler feedback should extract a
+    /// single shared `decryptInboundWire(cipher:senderId:clientMsgId:)` both
+    /// call — tracked in `docs/ble-mesh/`.
+    private func attemptDecryptMeshWireBlob(cipher: Data, senderId: String, clientMsgId: String) -> Data? {
+        let crypto = MessageCrypto()
+        let vault = SovereignKeyVault()
+        let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
+        let autoName = "auto:\(prefix):\(senderId)"
+        let pskCandidates: [Data] = PairwiseChainKeyResolver.orderedPskCandidates(peerId: senderId, vault: vault)
+        let firstPsk: Data
+        if let newest = pskCandidates.first {
+            firstPsk = newest
+        } else if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
+            firstPsk = stored
+        } else if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
+            firstPsk = stored
+        } else {
+            let pair = [senderId, currentUserId ?? ""].sorted().joined(separator: ":")
+            let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
+            firstPsk = Data(digest)
+        }
+        PeerCapabilityRegistry.shared.probeInbound(cipher, from: senderId)
+
+        func attempt(withPsk psk: Data) -> Data? {
+            switch MessageWireFormat.detect(cipher) {
+            case .v4:
+                return ratchetDecryptV4(wire: cipher, senderId: senderId)
+            case .v3:
+                return try? ratchetDecryptV3(wire: cipher, psk: psk, senderId: senderId, msgId: clientMsgId)
+            case .v2:
+                let recipient = currentUserId ?? ""
+                let aad = Data("msg:\(senderId):\(recipient):\(clientMsgId)".utf8)
+                if let plain = MessageCryptoV2.decrypt(wire: cipher, psk: psk, aad: aad) {
+                    return plain
+                }
+                return try? crypto.decrypt(wireBlob: cipher, psk: psk, senderId: senderId, recipientId: recipient, msgId: clientMsgId)
+            case .v1:
+                let recipient = currentUserId ?? ""
+                return try? crypto.decrypt(wireBlob: cipher, psk: psk, senderId: senderId, recipientId: recipient, msgId: clientMsgId)
+            }
+        }
+
+        if let pt = attempt(withPsk: firstPsk) { return pt }
+        for alt in pskCandidates.dropFirst() {
+            if let pt = attempt(withPsk: alt) { return pt }
+        }
+        return nil
+    }
+
+    /// Find-or-create the 1:1 conversation for `userId`, mirroring the same
+    /// inline block `handleIncomingMessage` uses. Exposed so the mesh
+    /// sheet's "tap a different known contact's device" flow (see
+    /// `MeshSheetView.handlePeerTap`) can resolve a real `conversationId`
+    /// for `pendingDeepLinkConversationId` without duplicating the
+    /// find-or-create logic a third time.
+    func resolveOrCreateConversationId(forPeerUserId userId: String) -> UUID {
+        let store = ConversationStore()
+        if let existing = store.loadConversations().first(where: { $0.peerUserId == userId }) {
+            return existing.id
+        }
+        let resolvedName = DisplayName.forUser(userId, contacts: self.cachedContacts)
+        let conv = Conversation(
+            id: UUID(), peerUserId: userId, peerDisplayName: resolvedName,
+            lastMessagePreview: "", lastActivity: Date(), unreadCount: 0,
+            pinned: false, kind: .oneToOne
+        )
+        store.upsertConversation(conv)
+        return conv.id
     }
 
     /// W86: route a `qa_ctl:1` control envelope (delete / edit) to the
