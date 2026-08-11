@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.959",
+              date: "2026-08-11",
+              title: "v1.0.959",
+              bullets: [
+                "fix(audio): one in-flight buffer cannot be pipelined — floor the playout depth",
+              ]),
         .init(id: "v1.0.958",
               date: "2026-08-11",
               title: "v1.0.958",
               bullets: [
+                "chore: regenerate changelog for v1.0.958",
                 "test(audio): row 9 read the switch-off case off the shipped list",
                 "feat(audio): iOS sends the 60 ms profile — both switches, together",
                 "fix(relay): stop eviction from dropping a downgraded call back into binary",
@@ -171,13 +178,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.940",
                 "fix(auth): predictively refresh the token on a PushKit call wake, not just app foreground",
                 "feat(call): redesign trust-bar shield badges with real artwork",
-              ]),
-        .init(id: "v1.0.939",
-              date: "2026-08-04",
-              title: "v1.0.939",
-              bullets: [
-                "chore: regenerate changelog for v1.0.939",
-                "fix(call): retry group_call_join, the prior fix closed a real race but not the root cause",
               ]),
     ]
 }
