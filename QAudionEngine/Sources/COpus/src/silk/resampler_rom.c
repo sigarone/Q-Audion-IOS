@@ -29,8 +29,17 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "config.h"
 #endif
 
+/* Filter coefficients for IIR/FIR polyphase resampling     *
+ * Total size: 179 Words (358 Bytes)                        */
+
 #include "resampler_private.h"
 
+/* Matlab code for the notch filter coefficients: */
+/* B = [1, 0.147, 1];  A = [1, 0.107, 0.89]; G = 0.93; freqz(G * B, A, 2^14, 16e3); axis([0, 8000, -10, 1]) */
+/* fprintf('\t%6d, %6d, %6d, %6d\n', round(B(2)*2^16), round(-A(2)*2^16), round((1-A(3))*2^16), round(G*2^15)) */
+/* const opus_int16 silk_resampler_up2_hq_notch[ 4 ] = { 9634,  -7012,   7209,  30474 }; */
+
+/* Tables with IIR and FIR coefficients for fractional downsamplers (123 Words) */
 silk_DWORD_ALIGN const opus_int16 silk_Resampler_3_4_COEFS[ 2 + 3 * RESAMPLER_DOWN_ORDER_FIR0 / 2 ] = {
     -20694, -13867,
        -49,     64,     17,   -157,    353,   -496,    163,  11047,  22205,
@@ -70,6 +79,7 @@ silk_DWORD_ALIGN const opus_int16 silk_Resampler_2_3_COEFS_LQ[ 2 + 2 * 2 ] = {
       1567,   8276,
 };
 
+/* Table with interplation fractions of 1/24, 3/24, 5/24, ... , 23/24 : 23/24 (46 Words) */
 silk_DWORD_ALIGN const opus_int16 silk_resampler_frac_FIR_12[ 12 ][ RESAMPLER_ORDER_FIR_12 / 2 ] = {
     {  189,  -600,   617, 30567 },
     {  117,  -159, -1070, 29704 },

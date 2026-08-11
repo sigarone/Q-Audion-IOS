@@ -33,9 +33,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 /* Set decoder sampling rate */
 opus_int silk_decoder_set_fs(
-    silk_decoder_state          *psDec,
-    opus_int                    fs_kHz,
-    opus_int32                  fs_API_Hz
+    silk_decoder_state          *psDec,                         /* I/O  Decoder state pointer                       */
+    opus_int                    fs_kHz,                         /* I    Sampling frequency (kHz)                    */
+    opus_int32                  fs_API_Hz                       /* I    API Sampling frequency (Hz)                 */
 )
 {
     opus_int frame_length, ret = 0;
@@ -43,11 +43,15 @@ opus_int silk_decoder_set_fs(
     celt_assert( fs_kHz == 8 || fs_kHz == 12 || fs_kHz == 16 );
     celt_assert( psDec->nb_subfr == MAX_NB_SUBFR || psDec->nb_subfr == MAX_NB_SUBFR/2 );
 
+    /* New (sub)frame length */
     psDec->subfr_length = silk_SMULBB( SUB_FRAME_LENGTH_MS, fs_kHz );
     frame_length = silk_SMULBB( psDec->nb_subfr, psDec->subfr_length );
 
+    /* Initialize resampler when switching internal or external sampling frequency */
     if( psDec->fs_kHz != fs_kHz || psDec->fs_API_hz != fs_API_Hz ) {
+        /* Initialize the resampler for dec_API.c preparing resampling from fs_kHz to API_fs_Hz */
         ret += silk_resampler_init( &psDec->resampler_state, silk_SMULBB( fs_kHz, 1000 ), fs_API_Hz, 0 );
+
         psDec->fs_API_hz = fs_API_Hz;
     }
 
@@ -81,6 +85,7 @@ opus_int silk_decoder_set_fs(
             } else if( fs_kHz == 8 ) {
                 psDec->pitch_lag_low_bits_iCDF = silk_uniform4_iCDF;
             } else {
+                /* unsupported sampling rate */
                 celt_assert( 0 );
             }
             psDec->first_frame_after_reset = 1;
@@ -95,6 +100,7 @@ opus_int silk_decoder_set_fs(
         psDec->frame_length = frame_length;
     }
 
+    /* Check that settings are valid */
     celt_assert( psDec->frame_length > 0 && psDec->frame_length <= MAX_FRAME_LENGTH );
 
     return ret;

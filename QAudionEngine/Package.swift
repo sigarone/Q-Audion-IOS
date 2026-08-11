@@ -247,9 +247,12 @@ let package = Package(
                 .headerSearchPath("src/silk"),
                 .headerSearchPath("src/silk/fixed"),
                 .headerSearchPath("src/silk/float"),
-                // Deep PLC (FARGAN). The C-only subset — no dnn/arm, because
-                // this build defines no OPUS_HAVE_RTCD and there is nothing to
-                // dispatch to. See src/config.h's ENABLE_DEEP_PLC block.
+                // Deep PLC (FARGAN). The DNN kernels dispatch to plain C here —
+                // this build defines no OPUS_HAVE_RTCD — but the arch header
+                // directories still have to be reachable, because `dnn/vec.h`
+                // and several celt headers include `x86/...` and `arm/...`
+                // paths UNCONDITIONALLY, outside any architecture guard. Only
+                // the headers are vendored; none of the SIMD .c files are.
                 .headerSearchPath("src/dnn"),
                 .define("HAVE_CONFIG_H"),
                 .define("OPUS_BUILD"),

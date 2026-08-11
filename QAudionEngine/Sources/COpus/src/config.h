@@ -11,7 +11,7 @@
 #define FLOATING_POINT 1
 
 // Package info
-#define PACKAGE_VERSION "1.5.2-qaudion"
+#define PACKAGE_VERSION "1.6.1-qaudion"
 
 // Standard features available on Apple platforms
 #define HAVE_STDINT_H 1
