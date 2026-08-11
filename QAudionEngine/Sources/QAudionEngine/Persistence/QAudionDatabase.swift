@@ -127,6 +127,17 @@ public final class QAudionDatabase {
             }
         }
 
+        // BLE-mesh "via mesh" transport tag (`Message.viaMesh`, branch
+        // claude/ble-mesh-cleanroom-spike). Mirrors the v4/v5 migrations
+        // above exactly: a single nullable column, no data rewrite — every
+        // pre-existing row decodes with `viaMesh == nil` (= normal
+        // transport, today's behavior unchanged).
+        migrator.registerMigration("v6-mesh-transport-tag") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "viaMesh", .boolean)
+            }
+        }
+
         return migrator
     }
 

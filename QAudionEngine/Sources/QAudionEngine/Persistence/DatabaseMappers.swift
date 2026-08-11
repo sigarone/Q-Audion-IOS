@@ -92,6 +92,7 @@ extension Message: FetchableRecord, PersistableRecord {
         container["isViewOnce"] = isViewOnce
         container["viewOnceOpened"] = viewOnceOpened
         container["exportBlocked"] = exportBlocked
+        container["viaMesh"] = viaMesh
 
         if let reactions = reactions,
            let data = try? JSONEncoder().encode(reactions),
@@ -143,7 +144,8 @@ extension Message: FetchableRecord, PersistableRecord {
             expiresAt: row["expiresAt"],
             isViewOnce: row["isViewOnce"],
             viewOnceOpened: row["viewOnceOpened"],
-            exportBlocked: row["exportBlocked"]
+            exportBlocked: row["exportBlocked"],
+            viaMesh: row["viaMesh"]
         )
     }
 }

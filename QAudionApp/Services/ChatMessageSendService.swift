@@ -64,8 +64,69 @@ final class ChatMessageSendService {
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             return .failed(reason: .notAuthenticated)
         }
+        let wireBlob: Data
+        switch await encryptForWire(messageId: messageId, peerUserId: peerUserId, plaintext: plaintext) {
+        case .success(let blob):
+            wireBlob = blob
+        case .failure(let reason):
+            return .failed(reason: reason)
+        }
+
+        // Ship via the shared, already-authenticated persistent WS
+        // (appState.liveProvider). Building a fresh BCryptoBackendProvider
+        // per send opened a SECOND WebSocket authenticating with the same
+        // JWT → same server deviceID; the server then "replaced" the
+        // persistent socket ("replacing stale ws device"), driving a
+        // reconnect storm that left the device intermittently unreachable.
+        // Only fall back to a transient provider if the shared one isn't up.
+        do {
+            // FIX: pass messageId.uuidString as clientMsgId so the server
+            // echoes the exact same UUID the recipient uses to reconstruct
+            // the AAD for AEAD verification. Previously BCryptoMessageApiImpl
+            // generated a NEW UUID here → AAD mismatch → every decrypt failed.
+            // W-ONESOCKET: always send over the persistent WS. The old
+            // fallback opened a throwaway `BCryptoBackendProvider` +
+            // `initialize()` for this one message — a second `/ws` with the
+            // same JWT/deviceID, which made the server replace the live socket
+            // ("replacing stale ws device") → reconnect storm + a re-POSTed
+            // apns-voip-token. `ensurePersistentProviderConnected()` brings up
+            // (or reuses) the single long-lived provider instead.
+            guard let live = await appState.ensurePersistentProviderConnected() else {
+                print("[ChatSend] no persistent WS available — deferring send")
+                return .failed(reason: .networkError)
+            }
+            let serverMsgId = try await live.messageApi.sendMessage(
+                recipientId: peerUserId,
+                content: wireBlob,
+                clientMsgId: messageId.uuidString
+            )
+            return .delivered(serverMessageId: serverMsgId)
+        } catch {
+            // Most likely: WS not connected, 401 token expired, or
+            // server-side validation rejected the wire. Map to network.
+            print("[ChatSend] WS send failed: \(error.localizedDescription)")
+            return .failed(reason: .networkError)
+        }
+    }
+
+    /// Encrypts `plaintext` the SAME way `sendEncrypted` does (v4 native
+    /// ratchet -> v3.1 forward-secrecy ratchet -> legacy PSK-AEAD, chosen by
+    /// per-peer capability) but stops short of the WebSocket network send.
+    ///
+    /// This is the ONE crypto entry point the BLE-mesh send path
+    /// (`ChatContainer.sendViaMesh`) is allowed to call — the mesh transport
+    /// never invents its own encryption; it wraps whatever opaque `Data`
+    /// this method returns in a `MeshChatMessage` envelope and hands it to
+    /// `MeshRuntime`. Extracted from `sendEncrypted` (which now calls this
+    /// internally too) so both callers share one crypto-dispatch
+    /// implementation instead of two copies that could drift.
+    func encryptForWire(
+        messageId: UUID,
+        peerUserId: String,
+        plaintext: String
+    ) async -> Result<Data, ChatContainer.SendFailureReason> {
         guard let senderId = appState.currentUserId else {
-            return .failed(reason: .notAuthenticated)
+            return .failure(.notAuthenticated)
         }
         let plaintextData = Data(plaintext.utf8)
 
@@ -93,7 +154,7 @@ final class ChatMessageSendService {
                 peerId: peerUserId, plaintext: plaintextData
             ), let first = frame.first, first == MessageRatchet.magicV4 else {
                 print("[ChatSend] v4 selected but encrypt failed/unroutable — failing closed (no downgrade)")
-                return .failed(reason: .cryptoFailure)
+                return .failure(.cryptoFailure)
             }
             wireBlob = frame
         } else {
@@ -145,12 +206,12 @@ final class ChatMessageSendService {
                     // Retry succeeds against the real PSK (resolved above).
                     print("[ChatSend] PSK not found for \(peerUserId) — refusing to send, triggering key exchange")
                     appState.triggerKeyExchange(with: peerUserId)
-                    return .failed(reason: .pskMissing)
+                    return .failure(.pskMissing)
                 }
             } catch {
                 // Vault failure is hard — keychain refusing access.
                 print("[ChatSend] PSK vault load failed: \(error.localizedDescription)")
-                return .failed(reason: .cryptoFailure)
+                return .failure(.cryptoFailure)
             }
 
             // W365: per-peer v3 capability gate. The global UserDefaults
@@ -180,45 +241,11 @@ final class ChatMessageSendService {
                 }
             } catch {
                 print("[ChatSend] encrypt failed: \(error.localizedDescription)")
-                return .failed(reason: .cryptoFailure)
+                return .failure(.cryptoFailure)
             }
         }
 
-        // Ship via the shared, already-authenticated persistent WS
-        // (appState.liveProvider). Building a fresh BCryptoBackendProvider
-        // per send opened a SECOND WebSocket authenticating with the same
-        // JWT → same server deviceID; the server then "replaced" the
-        // persistent socket ("replacing stale ws device"), driving a
-        // reconnect storm that left the device intermittently unreachable.
-        // Only fall back to a transient provider if the shared one isn't up.
-        do {
-            // FIX: pass messageId.uuidString as clientMsgId so the server
-            // echoes the exact same UUID the recipient uses to reconstruct
-            // the AAD for AEAD verification. Previously BCryptoMessageApiImpl
-            // generated a NEW UUID here → AAD mismatch → every decrypt failed.
-            // W-ONESOCKET: always send over the persistent WS. The old
-            // fallback opened a throwaway `BCryptoBackendProvider` +
-            // `initialize()` for this one message — a second `/ws` with the
-            // same JWT/deviceID, which made the server replace the live socket
-            // ("replacing stale ws device") → reconnect storm + a re-POSTed
-            // apns-voip-token. `ensurePersistentProviderConnected()` brings up
-            // (or reuses) the single long-lived provider instead.
-            guard let live = await appState.ensurePersistentProviderConnected() else {
-                print("[ChatSend] no persistent WS available — deferring send")
-                return .failed(reason: .networkError)
-            }
-            let serverMsgId = try await live.messageApi.sendMessage(
-                recipientId: peerUserId,
-                content: wireBlob,
-                clientMsgId: messageId.uuidString
-            )
-            return .delivered(serverMessageId: serverMsgId)
-        } catch {
-            // Most likely: WS not connected, 401 token expired, or
-            // server-side validation rejected the wire. Map to network.
-            print("[ChatSend] WS send failed: \(error.localizedDescription)")
-            return .failed(reason: .networkError)
-        }
+        return .success(wireBlob)
     }
 
     // MARK: - Internals

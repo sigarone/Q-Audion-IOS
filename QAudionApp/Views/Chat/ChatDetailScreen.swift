@@ -124,6 +124,11 @@ struct ChatDetailScreen: View {
     @AppStorage("qaudion.chat.screenshot_lock_enabled") private var screenshotLockEnabled: Bool = true
     /// W445: Ephemeral timer picker.
     @State private var showingEphemeralPicker: Bool = false
+    /// BLE-mesh offline chat fallback (branch claude/ble-mesh-cleanroom-spike).
+    /// `meshRuntime` is `@ObservedObject` (not `@StateObject`) since it's a
+    /// shared singleton, not owned by this screen — see `MeshRuntime.swift`.
+    @State private var showingMeshSheet: Bool = false
+    @ObservedObject private var meshRuntime = MeshRuntime.shared
     /// W445: Forward message state.
     @State private var showingForwardPicker: Bool = false
     @State private var forwardingMessage: Message? = nil
@@ -492,6 +497,35 @@ struct ChatDetailScreen: View {
                 showingDocPicker = false
             }
         }
+        // BLE-mesh offline chat sheet (branch claude/ble-mesh-cleanroom-spike).
+        .sheet(isPresented: $showingMeshSheet) {
+            MeshSheetView(
+                runtime: meshRuntime,
+                conversationId: container.viewModel.conversation.id.uuidString,
+                chatPeerUserId: container.viewModel.conversation.peerUserId,
+                onToast: handleMeshToast,
+                onOpenConversation: handleMeshOpenConversation
+            )
+        }
+    }
+
+    // MARK: - BLE mesh sheet callbacks (branch claude/ble-mesh-cleanroom-spike)
+
+    private func handleMeshToast(_ text: String) {
+        snackbar?.show(.init(text: text, severity: .info))
+    }
+
+    /// Tapping a mesh peer that resolves to a DIFFERENT known contact than
+    /// this chat's own navigates to that contact's chat instead — see
+    /// `MeshSheetView.handlePeerTap`'s doc. Uses the SAME deep-link
+    /// mechanism a notification tap uses (`pendingDeepLinkConversationId`,
+    /// consumed by `ChatListScreen`'s `navigationDestination`), so this
+    /// screen just resolves/creates the conversation and pops back to the
+    /// list, where the existing deep-link plumbing takes over.
+    private func handleMeshOpenConversation(peerUserId: String) {
+        let conversationId = appState.resolveOrCreateConversationId(forPeerUserId: peerUserId)
+        appState.pendingDeepLinkConversationId = conversationId
+        dismiss()
     }
 
     // MARK: - Top bar
@@ -566,6 +600,25 @@ struct ChatDetailScreen: View {
             }
             .disabled(container.viewModel.conversation.kind == .group)
             .accessibilityLabel("Chiamata video")
+
+            // BLE-mesh offline chat entry point (branch
+            // claude/ble-mesh-cleanroom-spike) — gated on the same server
+            // flag (`mesh_ble.enabled`) that hides it entirely when off,
+            // same discipline as every other flag-gated affordance in this
+            // app. A lit accent color signals an active mesh send target
+            // for THIS conversation.
+            if MeshFeature.enabled {
+                Button { showingMeshSheet = true } label: {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(
+                            meshRuntime.activeTarget(for: container.viewModel.conversation.id.uuidString) != nil
+                                ? extras.pqcAccent : scheme.onSurface
+                        )
+                        .frame(width: 30, height: 36)
+                }
+                .accessibilityLabel("Mesh Bluetooth")
+            }
 
             // W93: overflow menu — clear chat history + block / unblock
             // contact. The local-store wipe is immediate; block / unblock
@@ -858,7 +911,8 @@ struct ChatDetailScreen: View {
                 // + emits the qa_ctl:1 envelope). A second tap on a chip
                 // the local user already reacted with removes it.
                 container.toggleReaction(msg, emoji: emoji)
-            }
+            },
+            viaMesh: msg.viaMesh == true
         ) {
             if isVO && !voOpened {
                 // View-once: hidden until tapped. Show eye-slash pill.
@@ -1189,6 +1243,14 @@ struct ChatDetailScreen: View {
     @ViewBuilder
     private var composerView: some View {
         VStack(spacing: 0) {
+            // BLE-mesh transport chip (branch claude/ble-mesh-cleanroom-spike)
+            // — shown while a mesh peer is the active send target for this
+            // conversation. Clearing it returns to the normal transport.
+            if let target = meshRuntime.activeTarget(for: container.viewModel.conversation.id.uuidString) {
+                MeshTransportChip(peerName: target.displayName) {
+                    meshRuntime.clearTarget(conversationId: container.viewModel.conversation.id.uuidString)
+                }
+            }
             // View-once indicator — shown when conversation timer is set to -1.
             // User disables it via the ⏱ timer button → set to "Spento".
             let convTimer = container.viewModel.conversation.ephemeralTimerSeconds ?? 0
