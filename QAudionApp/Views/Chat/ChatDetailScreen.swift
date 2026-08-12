@@ -1247,7 +1247,11 @@ struct ChatDetailScreen: View {
             // — shown while a mesh peer is the active send target for this
             // conversation. Clearing it returns to the normal transport.
             if let target = meshRuntime.activeTarget(for: container.viewModel.conversation.id.uuidString) {
-                MeshTransportChip(peerName: target.displayName) {
+                MeshTransportChip(
+                    peerName: target.displayName,
+                    reachable: meshRuntime.antennaMode != nil
+                        && meshRuntime.peers.contains { $0.nodeHex == target.nodeHex }
+                ) {
                     meshRuntime.clearTarget(conversationId: container.viewModel.conversation.id.uuidString)
                 }
             }

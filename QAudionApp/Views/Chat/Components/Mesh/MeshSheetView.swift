@@ -409,27 +409,40 @@ struct MeshTransportChip: View {
     @Environment(\.qaudionType) private var type
 
     let peerName: String
+    /// Whether that peer is reachable RIGHT NOW — antenna on and the device in
+    /// range. Distinct from "a target is armed", which survives the antenna
+    /// being switched off and the peer walking away. The chip used to claim
+    /// "invio via mesh" in both states, which is a promise the transport cannot
+    /// keep: a message sent then is queued for store-and-forward, not
+    /// delivered, and that is worth seeing before pressing send.
+    let reachable: Bool
     let onClear: () -> Void
+
+    /// Unreachable is not an error — the message will be held and sent when the
+    /// peer reappears — so it warns rather than alarms.
+    private var tint: Color { reachable ? extras.pqcAccent : extras.trustUnverified }
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "dot.radiowaves.left.and.right")
                 .font(.system(size: 13))
-                .foregroundStyle(extras.pqcAccent)
-            Text("Invio via mesh Bluetooth — \(peerName)")
+                .foregroundStyle(tint)
+            Text(reachable
+                 ? "Invio via mesh Bluetooth — \(peerName)"
+                 : "Mesh Bluetooth — \(peerName) non raggiungibile: il messaggio resta in attesa")
                 .qaudionStyle(type.labelMedium)
-                .foregroundStyle(extras.pqcAccent)
+                .foregroundStyle(tint)
             Spacer(minLength: 4)
             Button(action: onClear) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 15))
-                    .foregroundStyle(extras.pqcAccent)
+                    .foregroundStyle(tint)
             }
             .accessibilityLabel("Torna al trasporto normale")
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(extras.pqcAccent.opacity(0.16), in: Capsule())
-        .overlay(Capsule().stroke(extras.pqcAccent.opacity(0.45), lineWidth: 1))
+        .background(tint.opacity(0.16), in: Capsule())
+        .overlay(Capsule().stroke(tint.opacity(0.45), lineWidth: 1))
         .padding(.horizontal, 12)
         .padding(.top, 8)
     }
