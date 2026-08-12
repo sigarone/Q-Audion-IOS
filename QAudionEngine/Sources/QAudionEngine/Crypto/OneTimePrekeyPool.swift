@@ -63,7 +63,7 @@ public struct OneTimePrekeyPool {
             out.append(StoredPrekey(
                 prekeyId: id,
                 pqPub: pq.publicKey,
-                pqPriv: pq.secretKey,
+                pqPriv: pq.privateKey,
                 x25519Pub: xPub,
                 x25519Priv: x.rawRepresentation,
                 createdAtMs: nowMs,
