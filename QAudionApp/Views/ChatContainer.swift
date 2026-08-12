@@ -803,7 +803,7 @@ final class ChatContainer: ObservableObject {
     private func emitMeshReadReceipts() {
         guard let appState = self.appState else { return }
         let meshInbound = store.loadMessages(conversationId: conversationId)
-            .filter { $0.direction == .incoming && $0.viaMesh && $0.readAt == nil }
+            .filter { $0.direction == .incoming && ($0.viaMesh ?? false) && $0.readAt == nil }
         guard !meshInbound.isEmpty else { return }
         let peerId = peerUserId
         guard let contact = appState.cachedContacts.first(where: { $0.userId == peerId }),
