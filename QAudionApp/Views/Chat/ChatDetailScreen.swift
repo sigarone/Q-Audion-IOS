@@ -128,6 +128,23 @@ struct ChatDetailScreen: View {
     /// `meshRuntime` is `@ObservedObject` (not `@StateObject`) since it's a
     /// shared singleton, not owned by this screen — see `MeshRuntime.swift`.
     @State private var showingMeshSheet: Bool = false
+
+    /// Whether THIS conversation's contact is on the mesh radar right now.
+    ///
+    /// Derived, never stored: their device is among the peers in range and the
+    /// antenna is up. Resolving a peer to a contact goes through the same
+    /// identity key the radar uses, so a contact with no authenticated key —
+    /// never called, never synced — correctly reads as not-nearby rather than
+    /// being guessed at.
+    private var meshChatPeerIsNearby: Bool {
+        guard meshRuntime.antennaMode != nil else { return false }
+        let peerUserId = container.viewModel.conversation.peerUserId
+        guard !peerUserId.isEmpty,
+              let pubkey = ContactsStore().findPubkey(userId: peerUserId),
+              let nodeHex = MeshFeature.nodeId(forContactPubkey: pubkey)?.hex
+        else { return false }
+        return meshRuntime.peers.contains { $0.nodeHex == nodeHex }
+    }
     @ObservedObject private var meshRuntime = MeshRuntime.shared
     /// W445: Forward message state.
     @State private var showingForwardPicker: Bool = false
@@ -605,19 +622,30 @@ struct ChatDetailScreen: View {
             // claude/ble-mesh-cleanroom-spike) — gated on the same server
             // flag (`mesh_ble.enabled`) that hides it entirely when off,
             // same discipline as every other flag-gated affordance in this
-            // app. A lit accent color signals an active mesh send target
-            // for THIS conversation.
+            // app.
+            //
+            // It is lit in two cases now, not one: a mesh target is armed for
+            // this conversation, OR this conversation's contact is simply on
+            // the radar. The app already knew the second and said so nowhere
+            // outside the sheet, so reaching someone over Bluetooth began by
+            // opening a sheet to find out whether you could. The
+            // accessibility label distinguishes them rather than naming an
+            // icon. Matches the Android sibling.
             if MeshFeature.enabled {
+                let conversationKey = container.viewModel.conversation.id.uuidString
+                let armed = meshRuntime.activeTarget(for: conversationKey) != nil
+                let peerNearby = meshChatPeerIsNearby
                 Button { showingMeshSheet = true } label: {
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .font(.system(size: 18, weight: .regular))
-                        .foregroundStyle(
-                            meshRuntime.activeTarget(for: container.viewModel.conversation.id.uuidString) != nil
-                                ? extras.pqcAccent : scheme.onSurface
-                        )
+                        .foregroundStyle(armed || peerNearby ? extras.pqcAccent : scheme.onSurface)
                         .frame(width: 30, height: 36)
                 }
-                .accessibilityLabel("Mesh Bluetooth")
+                .accessibilityLabel(
+                    armed ? "Mesh Bluetooth, invio via mesh attivo"
+                          : (peerNearby ? "Mesh Bluetooth, questo contatto è raggiungibile qui vicino"
+                                        : "Mesh Bluetooth")
+                )
             }
 
             // W93: overflow menu — clear chat history + block / unblock
