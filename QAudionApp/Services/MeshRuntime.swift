@@ -88,6 +88,12 @@ final class MeshRuntime: ObservableObject {
     /// touches `@MainActor` state directly, no extra `Task` hop needed.
     var onInboundData: (@MainActor (_ fromNodeHex: String, _ payload: Data) -> Void)?
 
+    /// Same shape as ``onInboundData`` but for `.receipt` packets — a delivery
+    /// or read acknowledgement of a message this device sent. Kept as its own
+    /// callback rather than a type flag on the one above so a caller that only
+    /// handles messages cannot mistake a receipt for one.
+    var onInboundReceipt: (@MainActor (_ fromNodeHex: String, _ payload: Data) -> Void)?
+
     private(set) var localNodeIdHex: String
     private var transport: BleMeshTransport?
     /// Rebuilt from every `knownPeers` update (each `MeshPeerInfo` already
@@ -162,7 +168,12 @@ final class MeshRuntime: ObservableObject {
     /// `MeshPacket`, resolves a known multi-hop next-hop when one exists
     /// (preferring a direct send over a flood, same as the relay policy's
     /// own rule), and hands it to the transport.
-    func sendData(toNodeHex: String, payload: Data, completion: @escaping (Bool) -> Void) {
+    func sendData(
+        toNodeHex: String,
+        payload: Data,
+        type: MeshPacketType = .data,
+        completion: @escaping (Bool) -> Void
+    ) {
         guard let transport else {
             completion(false)
             return
@@ -172,7 +183,7 @@ final class MeshRuntime: ObservableObject {
             return
         }
         guard let packet = try? MeshPacket(
-            type: .data, senderId: transport.localNodeId, recipientId: recipient,
+            type: type, senderId: transport.localNodeId, recipientId: recipient,
             ttl: MeshPacket.defaultTTL, timestampMs: Int64(Date().timeIntervalSince1970 * 1000),
             payload: payload
         ) else {
@@ -255,11 +266,16 @@ extension MeshRuntime: MeshTransportDelegate {
     }
 
     nonisolated func meshTransport(_ transport: MeshTransport, didReceive packet: MeshInboundPacket) {
-        guard packet.packet.type == .data else { return }
+        let type = packet.packet.type
+        guard type == .data || type == .receipt else { return }
         let fromHex = packet.fromNodeId.hex
         let payload = packet.packet.payload
         Task { @MainActor in
-            self.onInboundData?(fromHex, payload)
+            if type == .receipt {
+                self.onInboundReceipt?(fromHex, payload)
+            } else {
+                self.onInboundData?(fromHex, payload)
+            }
         }
     }
 }

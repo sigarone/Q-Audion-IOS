@@ -2312,6 +2312,9 @@ final class AppState: ObservableObject {
         MeshRuntime.shared.onInboundData = { [weak self] fromNodeHex, payload in
             self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload)
         }
+        MeshRuntime.shared.onInboundReceipt = { [weak self] fromNodeHex, payload in
+            self?.handleIncomingMeshReceipt(fromNodeHex: fromNodeHex, payload: payload)
+        }
 
         // Derive this device's own mesh node id from its long-term Ed25519
         // identity key, which is what every other device derives it from when
@@ -7767,6 +7770,109 @@ final class AppState: ObservableObject {
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification, object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+        )
+        // Second tick, sent back over the same radio. Emitted from here rather
+        // than from the UI because this is where the fact is: the message is in
+        // the store, which is all "delivered" has ever claimed.
+        sendMeshReceipt(
+            toNodeHex: fromNodeHex, peerUserId: senderId,
+            messageClientMsgId: envelope.clientMsgId, kind: MeshReceipt.kindDelivered
+        )
+    }
+
+    /// Seal an acknowledgement and put it on the mesh. Best-effort: a receipt
+    /// that cannot be sealed or sent is dropped rather than failing anything —
+    /// the message it acknowledges has already arrived.
+    func sendMeshReceipt(toNodeHex: String, peerUserId: String, messageClientMsgId: String, kind: String) {
+        guard let selfId = currentUserId else { return }
+        // The receipt's OWN id is what travels outside the seal. Reusing the
+        // acknowledged message's id there would publish, in the clear, that
+        // this exact message had just been read.
+        let receiptId = UUID()
+        let receipt = MeshReceipt(
+            senderUserId: selfId,
+            recipientUserId: peerUserId,
+            receiptId: receiptId.uuidString,
+            messageClientMsgId: messageClientMsgId,
+            kind: kind,
+            atMs: Int64(Date().timeIntervalSince1970 * 1000),
+            senderNodeHex: MeshRuntime.shared.localNodeIdHex,
+            recipientNodeHex: toNodeHex
+        )
+        let receiptText = String(data: receipt.encode(), encoding: .utf8) ?? ""
+        guard !receiptText.isEmpty else { return }
+        let sender = ChatMessageSendService(appState: self)
+        Task {
+            let outcome = await sender.encryptForWire(
+                messageId: receiptId, peerUserId: peerUserId, plaintext: receiptText
+            )
+            guard case .success(let sealed) = outcome else {
+                RTLog.warn("mesh", "receipt_send undec=0 sealfail=1")
+                return
+            }
+            let shell = MeshSealedShell(
+                clientMsgId: receiptId.uuidString,
+                sealedB64: sealed.base64EncodedString()
+            )
+            await MainActor.run {
+                MeshRuntime.shared.sendData(
+                    toNodeHex: toNodeHex, payload: shell.encode(), type: .receipt
+                ) { ok in
+                    RTLog.info("mesh", "receipt_send kind=\(kind == MeshReceipt.kindRead ? 1 : 0) ok=\(ok ? 1 : 0)")
+                }
+            }
+        }
+    }
+
+    /// Apply a peer's acknowledgement to the message this device sent them.
+    ///
+    /// Every check the message path performs is performed again: the node
+    /// resolves to a known contact, the seal opens, the sealed addressing
+    /// matches the header, the sealed id matches the shell, and the message
+    /// being acknowledged is one we sent to that contact. A receipt is small
+    /// and boring, which is exactly why it would be the cheap way to make
+    /// someone's chat claim a message was read when it never was.
+    private func handleIncomingMeshReceipt(fromNodeHex: String, payload: Data) {
+        guard let shell = MeshSealedShell.decode(payload) else { return }
+        guard let selfId = currentUserId else { return }
+        guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
+        guard let senderContact = cachedContacts.first(where: {
+            MeshFeature.nodeId(forContactPubkey: $0.pubkey)?.hex == fromNodeHex
+        }) else {
+            RTLog.warn("mesh", "receipt_receive unknownsender=1")
+            return
+        }
+        let senderId = senderContact.userId
+        guard let decrypted = attemptDecryptMeshWireBlob(
+            cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId
+        ) else {
+            RTLog.warn("mesh", "receipt_receive undec=1")
+            return
+        }
+        guard let receipt = MeshReceipt.decode(decrypted) else {
+            RTLog.warn("mesh", "receipt_receive badenvelope=1")
+            return
+        }
+        guard receipt.recipientUserId == selfId, receipt.senderUserId == senderId,
+              receipt.senderNodeHex == fromNodeHex,
+              receipt.recipientNodeHex == MeshRuntime.shared.localNodeIdHex,
+              receipt.receiptId == shell.clientMsgId else {
+            RTLog.warn("mesh", "receipt_receive readdressed=1")
+            return
+        }
+        let store = ConversationStore()
+        guard let found = store.findByClientMsgId(receipt.messageClientMsgId) else { return }
+        guard found.message.direction == .outgoing else { return }
+        guard let next = meshReceiptStatusUpdate(current: found.message.status, kind: receipt.kind) else { return }
+        store.updateMessageStatus(
+            id: found.message.id, conversationId: found.conversationId, newStatus: next,
+            deliveredAt: found.message.deliveredAt ?? Date(),
+            readAt: next == .read ? Date() : found.message.readAt
+        )
+        RTLog.info("mesh", "receipt_receive applied=\(next == .read ? 1 : 0)")
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification, object: nil,
+            userInfo: ["peerUserId": senderId, "conversationId": found.conversationId]
         )
     }
 

@@ -208,12 +208,7 @@ struct MessageBubble<Body: View>: View {
             if variant == .sent {
                 Spacer(minLength: 0)
             }
-            if viaMesh {
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .accessibilityLabel("Inviato via mesh Bluetooth")
-            }
+            transportChip
             Text(timeLabel)
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -222,6 +217,29 @@ struct MessageBubble<Body: View>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: variant == .sent ? .trailing : .leading)
+    }
+
+    /// Which network this message took, in words and on EVERY message.
+    ///
+    /// A badge that appears only for mesh answers the question half the time:
+    /// seeing nothing is not an answer, it is an absence the reader has to know
+    /// how to read. So the public network says so too, and "no badge" stops
+    /// being a state.
+    private var transportChip: some View {
+        let tint = viaMesh ? scheme.primary : scheme.onSurfaceVariant
+        return HStack(spacing: 3) {
+            Image(systemName: viaMesh ? "dot.radiowaves.left.and.right" : "globe")
+                .font(.system(size: 9, weight: .semibold))
+            Text(viaMesh ? "Bluetooth" : "Rete")
+                .qaudionStyle(type.labelSmall)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1)
+        .background(tint.opacity(0.12), in: Capsule())
+        .accessibilityLabel(viaMesh
+            ? "Trasmesso via mesh Bluetooth, senza passare dalla rete pubblica"
+            : "Trasmesso tramite la rete pubblica")
     }
 
     @ViewBuilder

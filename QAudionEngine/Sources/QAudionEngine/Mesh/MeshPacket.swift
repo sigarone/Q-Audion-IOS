@@ -17,6 +17,11 @@ public enum MeshPacketType: UInt8, Equatable, Sendable {
     /// Optional transport-level delivery ack to the immediate next hop —
     /// NOT an app-level read receipt.
     case ack = 0x04
+    /// App-level delivery / read acknowledgement (``MeshReceipt``), end to
+    /// end. Distinct from ``ack``, which is a hop-to-hop transport detail and
+    /// says nothing about whether the destination stored the message. Sealed
+    /// with the peer's message key exactly like ``data``.
+    case receipt = 0x05
 }
 
 /// The mesh wire envelope: version, type, sender, recipient (with

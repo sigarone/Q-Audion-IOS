@@ -773,6 +773,11 @@ final class ChatContainer: ObservableObject {
         // grey instead of ✓✓ blue. Bookkeeping in `markRead()` runs
         // unconditionally — the gate is purely on the wire envelope.
         guard PrivacyGate.readReceiptsEnabled else { return }
+        // Mesh-delivered messages have no server id, so the call below skips
+        // them entirely and the blue ticks never arrived for exactly the
+        // transport that has no server to ask. They are acknowledged back over
+        // the same radio instead, under this same privacy gate.
+        emitMeshReadReceipts()
         guard let provider = self.appState?.liveProvider else { return }
         let peerId = peerUserId
         let inboundServerIds = store.loadMessages(conversationId: conversationId)
@@ -788,6 +793,27 @@ final class ChatContainer: ObservableObject {
             } catch {
                 print("[ChatContainer] sendReadReceipts failed: \(error)")
             }
+        }
+    }
+
+    /// Acknowledge, over Bluetooth, the messages that arrived over Bluetooth.
+    ///
+    /// The node id is the peer's own, derived from their identity key the same
+    /// way the radar derives it — not whatever a nearby advert claimed.
+    private func emitMeshReadReceipts() {
+        guard let appState = self.appState else { return }
+        let meshInbound = store.loadMessages(conversationId: conversationId)
+            .filter { $0.direction == .incoming && $0.viaMesh && $0.readAt == nil }
+        guard !meshInbound.isEmpty else { return }
+        let peerId = peerUserId
+        guard let contact = appState.cachedContacts.first(where: { $0.userId == peerId }),
+              let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return }
+        for msg in meshInbound {
+            guard let cid = msg.clientMsgId else { continue }
+            appState.sendMeshReceipt(
+                toNodeHex: nodeHex, peerUserId: peerId,
+                messageClientMsgId: cid, kind: MeshReceipt.kindRead
+            )
         }
     }
 
