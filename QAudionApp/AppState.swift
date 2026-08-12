@@ -7863,6 +7863,19 @@ final class AppState: ObservableObject {
         let store = ConversationStore()
         guard let found = store.findByClientMsgId(receipt.messageClientMsgId) else { return }
         guard found.message.direction == .outgoing else { return }
+        // …and sent to THIS contact. findByClientMsgId is a global lookup on a
+        // field the wire publishes in the clear (WIRE_SPEC §9.1: the shell's
+        // `c` is visible to every listener and every relay hop), so without
+        // this a contact could acknowledge a message addressed to somebody
+        // else and write blue ticks onto a conversation they were never part
+        // of. Android drops the same packet; this half of the check was
+        // missing here. iOS's Message has no recipient field, so the peer
+        // comes from the conversation the message belongs to.
+        guard let conversation = store.loadConversations().first(where: { $0.id == found.conversationId }),
+              conversation.peerUserId == senderId else {
+            RTLog.warn("mesh", "receipt_receive foreignmsg=1")
+            return
+        }
         guard let next = meshReceiptStatusUpdate(current: found.message.status, kind: receipt.kind) else { return }
         store.updateMessageStatus(
             id: found.message.id, conversationId: found.conversationId, newStatus: next,

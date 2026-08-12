@@ -814,6 +814,14 @@ final class ChatContainer: ObservableObject {
                 toNodeHex: nodeHex, peerUserId: peerId,
                 messageClientMsgId: cid, kind: MeshReceipt.kindRead
             )
+            // Stamp readAt locally, or the filter above matches the same
+            // messages again on the next chat open and the peer receives a
+            // fresh read receipt for their whole mesh history every time the
+            // screen appears.
+            store.updateMessageStatus(
+                id: msg.id, conversationId: conversationId, newStatus: msg.status,
+                deliveredAt: msg.deliveredAt, readAt: Date()
+            )
         }
     }
 
