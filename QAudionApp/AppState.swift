@@ -2313,6 +2313,34 @@ final class AppState: ObservableObject {
             self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload)
         }
 
+        // Derive this device's own mesh node id from its long-term Ed25519
+        // identity key, which is what every other device derives it from when
+        // resolving a contact to a device.
+        //
+        // MeshRuntime.configureLocalIdentity existed and had no caller, so
+        // localNodeIdHex kept the `MeshNodeId.random()` value its init assigns.
+        // This phone therefore advertised a random id — a different one after
+        // every launch — while a peer looking for it computes
+        // SHA-256(identity key)[0..8]. The two can never meet: the id an
+        // Android device expects for this contact is not the id this device
+        // broadcasts, so it renders as an unidentified stranger no matter how
+        // many calls the two have had. That is the cross-platform half of R1,
+        // and no amount of fixing the contact-side lookup would have touched it.
+        //
+        // Same key the KMS bundle publishes as `ed25519Pub`, so the id a peer
+        // derives from the directory matches the id this device advertises.
+        if let signingPublic = SovereignIdentityManager().loadIdentity()?.signingPublic,
+           signingPublic.count == 32 {
+            MeshRuntime.shared.configureLocalIdentity(identityKeyRaw: signingPublic)
+            RTLog.info("mesh", "localNodeId derived=1")
+        } else {
+            // Identity bootstrap has not produced a key yet — a fresh install
+            // before registration completes. The random id stays until the next
+            // launch, which is correct: advertising a stable id derived from a
+            // key this device does not have would be a lie.
+            RTLog.info("mesh", "localNodeId derived=0")
+        }
+
         // CarPlay — wire the call bridge so the in-car CarPlay scene (a separate
         // UIScene that must NOT import AppState, CLAUDE.md §16) can place
         // outgoing PQC calls. Pure closure injection, same primitives-only
@@ -16968,6 +16996,32 @@ extension AppState {
         guard verifyPeerBundleSelfSig(bundle) else {
             print("[AppState] KmsPreBootstrap encode: peer bundle self-sig FAILED peer=\(peer.prefix(8))…")
             return nil
+        }
+
+        // R1 — remember this peer's identity key, so the mesh radar can name
+        // the device afterwards instead of showing "Dispositivo non
+        // identificato" for someone the user talks to regularly. Until now the
+        // only writer of `pubkey` was the in-person QR pairing flow, so having
+        // CALLED a contact taught the radar nothing.
+        //
+        // Deliberately placed AFTER the self-sig guard: the key is written only
+        // once this device has verified the bundle it came in, never from an
+        // unauthenticated source. The store call is fill-if-absent and answers
+        // .mismatch rather than overwriting a different key — accepting a
+        // rotation is the identity-change flow's job, not a side effect of
+        // placing a call.
+        // Numeric-tailed log lines on purpose: the remote shipper's redactor
+        // drops a line whose payload carries a free-form run, so a peer id in
+        // here would cost the whole line rather than scrub one token.
+        if bundle.ed25519Pub.count == 32 {
+            switch ContactsStore().setIdentityPubkeyIfAbsent(userId: peer, pubkey: bundle.ed25519Pub) {
+            case .filled:
+                RTLog.info("call", "meshIdentity learned=1")
+            case .mismatch:
+                RTLog.warn("call", "meshIdentity mismatch=1")
+            case .alreadyPresent, .unknownContact:
+                break
+            }
         }
 
         let otp = await fetchAndVerifyPrekey(peer: peer, peerEdPub: bundle.ed25519Pub, kmsClient: kmsClient)

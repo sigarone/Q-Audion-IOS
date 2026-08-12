@@ -54,10 +54,40 @@ final class ContactsRefreshService {
         let entries = try await client.discover(alg: pepper.alg, hashes: validHashes)
         // Map back to StoredContact (display name comes from local phonebook;
         // the discover-v2 response only confirms userId existence).
-        // E2EE avatar transport (2026-07-30) — this is a full-row
-        // upsert refresh; preserve any already-cached avatar pair so a
-        // routine refresh doesn't wipe a peer's avatar back to nil,
-        // forcing a needless re-download.
+        //
+        // This is a FULL-ROW upsert, and every field it does not carry forward
+        // is destroyed. discover-v2 knows two things about a contact — that the
+        // userId exists and which phoneHash resolved to it — while the row also
+        // holds a pile of facts this device learned locally and the directory
+        // has no opinion about. Each of those has to be preserved explicitly.
+        //
+        // It was already found the hard way once: the avatar pair was added
+        // here (2026-07-30, E2EE avatar transport) after a routine refresh kept
+        // wiping cached avatars back to nil and forcing re-downloads. Nobody
+        // generalised the lesson, so everything else stayed erasable, and the
+        // bug resurfaced with worse consequences than a re-download:
+        //
+        //   • `pubkey` is the ONLY field the mesh radar can identify a device
+        //     by (MeshFeature.nodeId(forContactPubkey:)). Erasing it turns a
+        //     recognised contact back into "Dispositivo non identificato" on
+        //     the next background refresh — R1, reported from the field.
+        //   • `verifiedFingerprintHex` / `verifiedAtMs` / `verificationMethod`
+        //     are the verification PIN. Dropping them does not merely dim a
+        //     checkmark: ContactDetailScreen compares the freshly computed
+        //     fingerprint against the pin to detect an identity change, and a
+        //     nil pin cannot detect anything.
+        //   • `presenceAuth` / `presenceFloor` are a historical in-person
+        //     authentication record with its own sanctioned write path
+        //     (applyAssuranceOutcome) and its own deliberate clearing points.
+        //     A directory refresh is not one of them.
+        //   • `phoneNumber` / `extension` are learned only from a genuine call
+        //     or a user-picked import row, never bulk-synced — so once erased
+        //     here they do not come back on the next refresh.
+        //   • `voiceVerifiedAt` records a completed voice-learning session.
+        //
+        // `isVerified` stays as the directory found it ONLY when the row is
+        // new; for an existing contact it is a local trust decision and is
+        // carried forward like the rest.
         let existingByUserId = Dictionary(
             uniqueKeysWithValues: store.load().map { ($0.userId, $0) }
         )
@@ -68,9 +98,18 @@ final class ContactsRefreshService {
                 displayName: "Contact \(entry.userId.suffix(6))",  // replaced by phonebook name in caller
                 phoneHash: entry.phoneHash ?? "",
                 avatarUrl: existing?.avatarUrl,
-                lastSeen: nil,
-                isVerified: false,
-                avatarVersion: existing?.avatarVersion
+                lastSeen: existing?.lastSeen,
+                isVerified: existing?.isVerified ?? false,
+                pubkey: existing?.pubkey,
+                verifiedFingerprintHex: existing?.verifiedFingerprintHex,
+                verifiedAtMs: existing?.verifiedAtMs,
+                verificationMethod: existing?.verificationMethod,
+                presenceAuth: existing?.presenceAuth,
+                presenceFloor: existing?.presenceFloor,
+                phoneNumber: existing?.phoneNumber,
+                extension: existing?.`extension`,
+                avatarVersion: existing?.avatarVersion,
+                voiceVerifiedAt: existing?.voiceVerifiedAt
             )
         }
         for c in resolved { store.upsert(c) }

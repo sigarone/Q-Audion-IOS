@@ -732,6 +732,67 @@ public final class ContactsStore {
         load().first(where: { $0.userId == userId })?.pubkey
     }
 
+    /// Outcome of [setIdentityPubkeyIfAbsent].
+    public enum IdentityPubkeyWrite: Equatable {
+        /// The contact had no key and now has this one.
+        case filled
+        /// The contact already held exactly this key; nothing changed.
+        case alreadyPresent
+        /// The contact holds a DIFFERENT key. Nothing was written.
+        case mismatch
+        /// No such contact.
+        case unknownContact
+    }
+
+    /// Record a peer's long-term Ed25519 identity public key, learned from a
+    /// call whose key bundle this device verified.
+    ///
+    /// Exists because `pubkey` is the only field the mesh radar can identify a
+    /// device by, and until now the sole writer was the in-person QR pairing
+    /// flow. Having CALLED someone left no trace, so a peer the user talks to
+    /// regularly still rendered as "Dispositivo non identificato" — the R1
+    /// field report. The call path already holds the answer: it fetches the
+    /// peer's published key bundle and refuses it unless
+    /// `verifyPeerBundleSelfSig` passes, so `bundle.ed25519Pub` is an
+    /// authenticated value, not a claim a nearby radio made about itself.
+    ///
+    /// FILL-IF-ABSENT, deliberately. A differing key is an identity CHANGE and
+    /// this is not the surface that gets to accept one: silently overwriting
+    /// would launder a rotation past `verifiedFingerprintHex`, whose entire job
+    /// is to notice that the peer's key stopped matching what the user verified
+    /// and downgrade to `.identityChanged`. The caller gets `.mismatch` and can
+    /// log it; the stored key is left exactly as it was.
+    @discardableResult
+    public func setIdentityPubkeyIfAbsent(userId: String, pubkey: Data) -> IdentityPubkeyWrite {
+        guard !pubkey.isEmpty else { return .mismatch }
+        var current = load()
+        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return .unknownContact }
+        let existing = current[idx]
+        if let held = existing.pubkey, !held.isEmpty {
+            return held == pubkey ? .alreadyPresent : .mismatch
+        }
+        current[idx] = StoredContact(
+            userId: existing.userId,
+            displayName: existing.displayName,
+            phoneHash: existing.phoneHash,
+            avatarUrl: existing.avatarUrl,
+            lastSeen: existing.lastSeen,
+            isVerified: existing.isVerified,
+            pubkey: pubkey,
+            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+            verifiedAtMs: existing.verifiedAtMs,
+            verificationMethod: existing.verificationMethod,
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor,
+            phoneNumber: existing.phoneNumber,
+            extension: existing.`extension`,
+            avatarVersion: existing.avatarVersion,
+            voiceVerifiedAt: existing.voiceVerifiedAt
+        )
+        save(current)
+        return .filled
+    }
+
     // MARK: - W-ASSURANCE/W-FLOOR (ship steps 6/8) — the ONLY sanctioned
     // presenceAuth/presenceFloor write path
 
