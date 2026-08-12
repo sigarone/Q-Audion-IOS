@@ -2279,6 +2279,37 @@ final class CallService: @unchecked Sendable {
                 // playback instead. Was previously unlogged entirely
                 // (silence on success gave no positive confirmation).
                 RTLog.info("call", "audioIO started=1")
+                // W-VPIODIAG (2026-08-12): whether Apple's Voice Processing I/O
+                // — AEC, NS and AGC behind one hardware switch — is actually
+                // engaged for this call.
+                //
+                // Added because the question "was echo cancellation off on that
+                // call?" could not be answered from telemetry at all. Android
+                // ships it per call ("Audio capture started: ... ns=true,
+                // aec=true"); iOS emitted the equivalent only through
+                // AudioProcessingPipeline.emitSessionDiagnostics, which is a
+                // plain print() carrying `vpio=true` — a non-numeric run, which
+                // is exactly what the redactor drops. Zero such lines exist in
+                // Loki, so the state was invisible remotely no matter how many
+                // calls were made.
+                //
+                // Every field is therefore numeric, per the same rule the
+                // capfail branch below documents. `vpio` is what the engine
+                // ended up with, `want` is what the user's toggles asked for,
+                // and they differ exactly when a fallback fired: the W-AEC-FIX
+                // starve watchdog or the setVoiceProcessingEnabled NSException
+                // degrade, both of which trade echo for a working mic and
+                // count in `byp`.
+                let vpActive = audioPipeline?.voiceProcessingIsActive == true
+                RTLog.info(
+                    "call",
+                    "audioVp vpio=\(vpActive ? 1 : 0)"
+                        + " want=\(CallsGate.anyVoiceProcessingEnabled ? 1 : 0)"
+                        + " byp=\(audioPipeline?.voiceProcessingBypassCount ?? -1)"
+                        + " aec=\(CallsGate.aecEnabled ? 1 : 0)"
+                        + " ns=\(CallsGate.nsEnabled ? 1 : 0)"
+                        + " agc=\(CallsGate.agcEnabled ? 1 : 0)"
+                )
             } catch {
                 // Was print()-only — invisible in every remote log pull.
                 // The error description is deliberately NOT included: it's
