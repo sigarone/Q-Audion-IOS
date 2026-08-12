@@ -9,10 +9,29 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.962",
+              date: "2026-08-12",
+              title: "v1.0.962",
+              bullets: [
+                "docs(wire): document the mesh receipt packet, and re-lock the spec hash",
+                "feat(mesh): acknowledge mesh messages over the mesh, on iOS too",
+                "feat(mesh): say when this chat's contact is reachable over Bluetooth, on iOS too",
+                "fix(mesh): the pre-send indicator now says whether the route actually exists",
+                "fix(chat): the comma landed inside a comment",
+                "docs(wire): document the BLE mesh chat transport, wire v2",
+                "feat(mesh): bring iOS to wire v2, so metadata stops travelling in the clear here too",
+                "feat(mesh): mark outbound mesh messages, warn about visible-only, and stop losing mode switches",
+                "fix(chat): stop every message mutation from erasing view-once and export-blocked",
+                "feat(mesh): select the chat's own contact on the radar, matching Android",
+                "feat(mesh): let a call teach the radar who a device is, and stop erasing the answer",
+                "feat(ios): ship the voice-processing state per call, so \"was AEC off?\" is answerable",
+                "feat(call): promote a 1:1 call to group from the in-call \"+\" button",
+              ]),
         .init(id: "v1.0.961",
               date: "2026-08-12",
               title: "v1.0.961",
               bullets: [
+                "chore: regenerate changelog for v1.0.961",
                 "fix(mesh): GATT hardening + visible-only mode + encrypted ANNOUNCE (#48)",
                 "fix(guardian): analyse on a millisecond budget, not every Nth frame",
               ]),
@@ -174,13 +193,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.943",
                 "fix(call): serialize wake-time socket reconnect to close group_call_update loss",
-              ]),
-        .init(id: "v1.0.942",
-              date: "2026-08-04",
-              title: "v1.0.942",
-              bullets: [
-                "chore: regenerate changelog for v1.0.942",
-                "fix(call): trust-bar shields back to plain Material silhouette + gold medal finish",
               ]),
     ]
 }
