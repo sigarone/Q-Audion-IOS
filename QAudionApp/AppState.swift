@@ -2303,6 +2303,16 @@ final class AppState: ObservableObject {
             getUserId: { [weak self] in self?.currentUserId }
         )
 
+        // Per-user / per-group feature flags. The public flags.json the app
+        // polls at launch is the same document for everyone by construction,
+        // so anything targeted at one user or one team was invisible here
+        // while Android had been reading the authenticated projection all
+        // along. Same primitive+closure shape as the streamer above.
+        FeatureFlags.shared.startAuthenticated(
+            apiBaseUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() }
+        )
+
         // BLE mesh (branch claude/ble-mesh-cleanroom-spike) — MeshRuntime
         // is a primitive-only API surface (CLAUDE.md §16, never imports
         // AppState); this closure is the one place that bridges its
@@ -10934,6 +10944,10 @@ final class AppState: ObservableObject {
 
     func logout() {
         authService.clearToken()
+        // The per-user flag overlay belongs to the account that just left. Not
+        // clearing it hands the next account on this device whatever was
+        // enabled for the previous one.
+        FeatureFlags.shared.clearOverlay()
         // P0-5 (2026-08-05, coordinated fix plan cluster 5, user decision:
         // "logout wipes crypto keys same as remote-wipe" — same policy
         // already shipped on Android's LogoutViewModel/RemoteWipeHandler).

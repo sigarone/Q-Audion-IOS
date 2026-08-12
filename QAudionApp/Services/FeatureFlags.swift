@@ -57,14 +57,24 @@ public final class FeatureFlags {
     /// a session, long enough to be effectively free (one tiny GET).
     private static let refreshIntervalSeconds: TimeInterval = 15.0 * 60.0
 
+    /// UserDefaults key for the per-user overlay (see `startAuthenticated`).
+    private static let overlayCacheKey: String = "qaudion.featureflags.overlay.v1"
+
     private var flagsUrl: String?
     private var cache: [String: Any] = [:]
+    /// Per-user / per-group flags from the AUTHENTICATED endpoint, layered
+    /// over `cache`. Empty until a signed-in refresh succeeds.
+    private var overlay: [String: Any] = [:]
+    private var apiBaseUrl: String?
+    private var tokenProvider: (@MainActor () -> String?)?
+    private var overlayInflight: Bool = false
     private var timer: Timer?
     private var isStarted: Bool = false
     private var inflight: Bool = false
 
     private init() {
         self.cache = FeatureFlags.loadCache()
+        self.overlay = FeatureFlags.loadOverlay()
     }
 
     // MARK: - Lifecycle (CLAUDE.md section 16 -- primitive-only signature)
@@ -83,6 +93,89 @@ public final class FeatureFlags {
         scheduleTimer()
     }
 
+    /// Start the AUTHENTICATED overlay poll.
+    ///
+    /// The public file this class was built around is served un-authed from a
+    /// static route, so it is by construction the same for everybody. Fine for
+    /// a global default, useless for anything targeted: a flag turned on for
+    /// one user, or for a team, cannot appear in a document anyone can read.
+    /// Android has read the authenticated /api/v1/flags — which applies
+    /// per-user and per-group overrides — since it existed, so an operator
+    /// enabling a feature for one person watched it work on Android and do
+    /// nothing on every iPhone.
+    ///
+    /// Layered, not replaced: the public file stays the base (it works before
+    /// login and on a cold start with no token) and this overlays whatever the
+    /// server resolves for THIS user on top. A key absent from the overlay
+    /// falls through to the public value, then to the compiled default.
+    ///
+    /// Primitive + closure signature, matching
+    /// LiveLogStreamer.start(serverUrl:getToken:getUserId:) — never AppState.
+    public func startAuthenticated(apiBaseUrl: String, getToken: @escaping @MainActor () -> String?) {
+        self.apiBaseUrl = apiBaseUrl
+        self.tokenProvider = getToken
+        let line: String = "FeatureFlags authenticated overlay armed base=" + apiBaseUrl
+        RTLog.info("featureflags", line)
+        refreshOverlay()
+    }
+
+    /// Fire-and-forget refresh of the per-user overlay. No token, no call.
+    public func refreshOverlay() {
+        if overlayInflight { return }
+        guard let base = apiBaseUrl, let token = tokenProvider?(), !token.isEmpty else { return }
+        var urlString: String = base
+        if urlString.hasSuffix("/") { urlString.removeLast() }
+        urlString += "/api/v1/flags"
+        guard let url = URL(string: urlString) else { return }
+        overlayInflight = true
+        Task {
+            await self.fetchOverlay(url: url, token: token)
+        }
+    }
+
+    private func fetchOverlay(url: URL, token: String) async {
+        let session: URLSession = URLSession(configuration: URLSessionConfiguration.default)
+        var request: URLRequest = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.cachePolicy = URLRequest.CachePolicy.reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15.0
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        do {
+            let pair = try await session.data(for: request)
+            let data: Data = pair.0
+            let response: URLResponse = pair.1
+            if !FeatureFlags.isHttpOk(response) {
+                self.overlayInflight = false
+                let code: String = FeatureFlags.httpStatusString(response)
+                let line: String = "overlay non-200 status=" + code
+                RTLog.warn("featureflags", line)
+                return
+            }
+            let parsed: [String: Any] = FeatureFlags.parse(data)
+            // An empty overlay is a legitimate answer — this user has no
+            // override — so it is applied rather than treated as a failure.
+            // Only a transport or parse error keeps the previous one.
+            self.overlay = parsed
+            FeatureFlags.saveOverlay(parsed)
+            self.overlayInflight = false
+            let summary: String = FeatureFlags.summarize(parsed)
+            let line: String = "overlay fetched: " + summary
+            RTLog.info("featureflags", line)
+        } catch {
+            self.overlayInflight = false
+            let reason: String = FeatureFlags.errorString(error)
+            let line: String = "overlay failed -- keeping last reason=" + reason
+            RTLog.warn("featureflags", line)
+        }
+    }
+
+    /// Drop the per-user overlay — call on sign-out, or the next account on
+    /// this device inherits the previous one's flags.
+    public func clearOverlay() {
+        overlay = [:]
+        UserDefaults.standard.removeObject(forKey: FeatureFlags.overlayCacheKey)
+    }
+
     /// Fully tear down the periodic refresh. Safe to call when not started.
     public func stop() {
         timer?.invalidate()
@@ -96,6 +189,7 @@ public final class FeatureFlags {
         let t: Timer = Timer(timeInterval: interval, repeats: true) { _ in
             Task { @MainActor in
                 FeatureFlags.shared.refresh()
+                FeatureFlags.shared.refreshOverlay()
             }
         }
         RunLoop.main.add(t, forMode: RunLoop.Mode.common)
@@ -163,6 +257,9 @@ public final class FeatureFlags {
     /// Resolve a Bool flag. Returns `def` when the key is absent or the
     /// stored value is not a Bool. The compiled default is the fail-safe.
     public static func bool(_ key: String, _ def: Bool) -> Bool {
+        // Overlay first: it is what the server resolved for THIS user, with
+        // per-group and per-user overrides already applied.
+        if let b = FeatureFlags.shared.overlay[key] as? Bool { return b }
         let value = FeatureFlags.shared.cache[key]
         guard let b = value as? Bool else { return def }
         return b
@@ -171,6 +268,7 @@ public final class FeatureFlags {
     /// Resolve a String flag. Returns `def` when the key is absent or the
     /// stored value is not a String. The compiled default is the fail-safe.
     public static func string(_ key: String, _ def: String) -> String {
+        if let s = FeatureFlags.shared.overlay[key] as? String { return s }
         let value = FeatureFlags.shared.cache[key]
         guard let s = value as? String else { return def }
         return s
@@ -181,6 +279,19 @@ public final class FeatureFlags {
     private static func loadCache() -> [String: Any] {
         guard let raw = UserDefaults.standard.data(forKey: cacheKey) else { return [:] }
         return parse(raw)
+    }
+
+    private static func loadOverlay() -> [String: Any] {
+        guard let raw = UserDefaults.standard.data(forKey: overlayCacheKey) else { return [:] }
+        return parse(raw)
+    }
+
+    private static func saveOverlay(_ dict: [String: Any]) {
+        let normalized: [String: Any] = filterScalar(dict)
+        guard JSONSerialization.isValidJSONObject(normalized) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: normalized,
+                                                     options: []) else { return }
+        UserDefaults.standard.set(data, forKey: overlayCacheKey)
     }
 
     private static func saveCache(_ dict: [String: Any]) {
