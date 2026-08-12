@@ -241,8 +241,12 @@ public final class ConversationStore {
         }
     }
 
+    /// `viaMesh: true` marks the row as having travelled over the BLE mesh
+    /// rather than the public network. Only the mesh send path passes it; every
+    /// other caller leaves it nil and the stored value is carried forward.
     public func updateMessageStatus(id: UUID, conversationId: UUID, newStatus: Message.Status,
-                                    deliveredAt: Date? = nil, readAt: Date? = nil) {
+                                    deliveredAt: Date? = nil, readAt: Date? = nil,
+                                    viaMesh: Bool? = nil) {
         do {
             try db.writer.write { db in
                 if var msg = try Message.fetchOne(db, key: id) {
@@ -261,7 +265,11 @@ public final class ConversationStore {
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
                         reactions: msg.reactions,
-                        expiresAt: msg.expiresAt
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: viaMesh ?? msg.viaMesh
                     )
                     try msg.save(db)
                 }
@@ -292,7 +300,11 @@ public final class ConversationStore {
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
                         reactions: msg.reactions,
-                        expiresAt: msg.expiresAt
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh
                     )
                     try msg.save(db)
                 }
@@ -319,7 +331,11 @@ public final class ConversationStore {
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
                         reactions: msg.reactions,
-                        expiresAt: msg.expiresAt
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh
                     )
                     try msg.save(db)
                 }
@@ -351,7 +367,11 @@ public final class ConversationStore {
                         edited: msg.edited,
                         deletedAt: msg.deletedAt,
                         reactions: msg.reactions,
-                        expiresAt: msg.expiresAt
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh
                     )
                     try msg.save(db)
                 }
@@ -425,7 +445,8 @@ public final class ConversationStore {
                     expiresAt: msg.expiresAt,
                     isViewOnce: msg.isViewOnce,
                     viewOnceOpened: msg.viewOnceOpened,
-                    exportBlocked: msg.exportBlocked
+                    exportBlocked: msg.exportBlocked,
+                    viaMesh: msg.viaMesh
                 )
                 try msg.save(db)
                 return true
@@ -469,7 +490,11 @@ public final class ConversationStore {
                         edited: true,
                         deletedAt: msg.deletedAt,
                         reactions: msg.reactions,
-                        expiresAt: msg.expiresAt
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh
                     )
                     try msg.save(db)
                     return true
@@ -518,7 +543,11 @@ public final class ConversationStore {
                         edited: msg.edited,
                         deletedAt: deletedAt,
                         reactions: nil,
-                        expiresAt: nil  // tombstone has no expiry
+                        expiresAt: nil  // tombstone has no expiry,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh
                     )
                     try msg.save(db)
                     return true
@@ -580,7 +609,11 @@ public final class ConversationStore {
                     edited: msg.edited,
                     deletedAt: msg.deletedAt,
                     reactions: dict.isEmpty ? nil : dict,
-                    expiresAt: msg.expiresAt
+                    expiresAt: msg.expiresAt,
+                    isViewOnce: msg.isViewOnce,
+                    viewOnceOpened: msg.viewOnceOpened,
+                    exportBlocked: msg.exportBlocked,
+                    viaMesh: msg.viaMesh
                 )
                 try msg.save(db)
                 return added
@@ -697,7 +730,8 @@ public final class ConversationStore {
                         expiresAt: deadline,
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: true,
-                        exportBlocked: msg.exportBlocked
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh
                     )
                     try msg.save(db)
                 }
