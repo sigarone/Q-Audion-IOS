@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.968",
+              date: "2026-08-13",
+              title: "v1.0.968",
+              bullets: [
+                "fix(call): the engine cannot reach RTLog — log through a hook instead",
+                "fix(call): a CallKit call must never outlive the call it was reporting",
+              ]),
         .init(id: "v1.0.967",
               date: "2026-08-12",
               title: "v1.0.967",
               bullets: [
+                "chore: regenerate changelog for v1.0.967",
                 "feat(mesh): bring iOS level with Android — antenna default, per-contact network, Bluetooth blue",
                 "fix(crypto): the ML-KEM keypair field is privateKey, not secretKey",
                 "feat(crypto): iOS keeps its own one-time-prekey pool",
@@ -187,13 +195,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.949",
                 "fix(security): retry all bound PSK candidates on attachment decrypt",
                 "fix(security): retry all bound PSK candidates on avatar decrypt",
-              ]),
-        .init(id: "v1.0.948",
-              date: "2026-08-05",
-              title: "v1.0.948",
-              bullets: [
-                "chore: regenerate changelog for v1.0.948",
-                "feat(security): publish full v2 identity bundle on iOS (parity with Android/Desktop) (#45)",
               ]),
     ]
 }
