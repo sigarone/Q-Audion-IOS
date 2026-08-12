@@ -1069,6 +1069,96 @@ gate" in the server copy and "base WebRTC SDP exchange" in the Desktop copy,
 while EVERY code reference to §3.5 in all four repos means the acceptance
 gate. The SDP-exchange section keeps its content under §3.6, which nothing
 cited. All four copies are now byte-identical and CI-enforced.)
+## 9. BLE mesh chat transport — wire v2 (2026-08-12)
+
+The mesh carries chat messages between two phones directly over Bluetooth Low
+Energy, with no server in the path and, in full-mesh mode, with other phones
+relaying traffic they cannot read. That last property is what shapes this
+format: a hop is a participant, not a trusted intermediary.
+
+### 9.1 What travels, and what is visible
+
+A `.data` packet's payload is a `MeshSealedShell`:
+
+```json
+{ "c": "<clientMsgId>", "e": "<base64 sealed envelope>" }
+```
+
+`e` is the AEAD output over a serialised `MeshChatMessage`:
+
+```json
+{ "v": 2, "s": "<senderUserId>", "r": "<recipientUserId>",
+  "c": "<clientMsgId>", "conv": "<conversationId>", "b": "<body>",
+  "ts": <sentAtMs>, "sn": "<senderNodeHex>", "rn": "<recipientNodeHex>" }
+```
+
+Everything that identifies the parties — both user ids, the conversation, the
+timestamp and the body — is inside the ciphertext. Only two things are visible
+to a listener: the `MeshPacket` header a relay must read to forward at all
+(version, type, the 8-byte sender and recipient node ids, ttl, source route,
+length) and the shell's `c`.
+
+Wire v1 did the opposite: it encrypted the body and shipped the user ids, the
+conversation id and the timestamp in cleartext around it, on the reasoning that
+these are the same fields the WebSocket transport already sends in the clear.
+That holds inside a TLS tunnel to a server that already knows them. It does not
+hold on a broadcast medium, where those real user UUIDs were readable by anyone
+in range without breaking a cipher. v1 is rejected on version, not accepted for
+compatibility: it never worked end to end, so there is no deployed traffic to
+preserve, and accepting it would only keep a downgrade path to the leak open.
+
+### 9.2 Why `clientMsgId` stays outside
+
+For a v3.1 or v4 peer the message ratchet rebuilds its own associated data over
+`{m, r, s}` — message id, recipient, sender — and the receiver must therefore
+know the message id before it can decrypt anything. Sealing it makes it
+unreachable at exactly the moment it is needed and every message from a modern
+peer fails to open.
+
+It is a random UUID minted per message: it identifies a message, not a person,
+and says nothing about who is talking to whom or about what. The recipient and
+sender user ids the ratchet also needs have another source — the receiver knows
+its own, and derives the sender from the header's node id through the contact
+directory — so only the message id has to be public.
+
+### 9.3 Header authentication
+
+`sn` and `rn` are a sealed copy of the header's two addressing fields. The
+receiver compares them with the header the packet actually arrived in and drops
+a mismatch. A relay that re-addresses a packet it forwards cannot repair the
+copy without the message key.
+
+Associated data is deliberately NOT the mechanism, although it is the obvious
+one. `meshPacketAad(version, type, senderNode, recipientNode)` exists and is
+honoured by the v2 ratchet path, but for v3.1 and v4 peers the ratchet discards
+the caller's AAD and rebuilds the canonical one, so an AAD-based header binding
+would look correct and protect nothing for every modern peer. TTL and source
+route are excluded from any binding regardless: a relay is supposed to change
+them, and a hop that wants a packet to stop propagating can simply not forward
+it.
+
+`meshPacketAad` is byte-pinned by a test on both platforms. The packet type is
+rendered UNSIGNED, because Kotlin's `Byte` is signed and Swift's `UInt8` is not:
+a type of 0x80 or above would otherwise render as `-128` on one platform and
+`128` on the other, and nothing would decrypt between them.
+
+### 9.4 Receive obligations
+
+In order: parse the shell; reject a `c` already seen (a flood-relay legitimately
+delivers the same packet more than once, and this happens before any decryption
+is attempted); resolve the sender from the header's node id through the contact
+directory and drop an unknown device without attempting to decrypt; decrypt with
+that contact's key and the shell's `c`; parse the envelope and reject anything
+that is not `v: 2`; then reject unless `r` is this user, `s` is the resolved
+sender, `sn`/`rn` match the arriving header, and `c` matches the shell.
+
+### 9.5 What this does not hide
+
+Node ids are `SHA-256(Ed25519 identity key)` truncated to 8 bytes: stable
+pseudonyms, not names. A listener can still tell that two devices are exchanging
+traffic and can follow a device between places. That is inherent to routing
+without a server and is not addressed here.
+
 Previous: 2026-07-13 (§8.8 documented `audio_relay_degraded`).
 Previous: 2026-07-03 (added §8 mid-call upgrade state machine, glare,
 DTLS/mid invariants, media-readiness + keyframe wire, rail/key-custody
