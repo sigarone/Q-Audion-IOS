@@ -1050,6 +1050,24 @@ final class AppState: ObservableObject {
         /// Empty for an ad-hoc group call started from the contact picker.
         let groupId: String
         let groupName: String
+        /// W-CALLPROMOTE — see `BCryptoGroupCallManager.createGroupCall`'s
+        /// `promotedFromCallId` kdoc. Empty on the push/notification
+        /// reconstruction paths (not carried on that payload — promotion
+        /// only ever matters while the OTHER peer's own client is still
+        /// foregrounded on the live 1:1 call being promoted, so the WS
+        /// invite is the only path that needs it).
+        let promotedFromCallId: String
+
+        init(callId: String, creatorId: String, creatorName: String, callType: String,
+             groupId: String, groupName: String, promotedFromCallId: String = "") {
+            self.callId = callId
+            self.creatorId = creatorId
+            self.creatorName = creatorName
+            self.callType = callType
+            self.groupId = groupId
+            self.groupName = groupName
+            self.promotedFromCallId = promotedFromCallId
+        }
 
         var hasVideo: Bool { callType == "video" }
         /// What the ring screen shows: the group when the call was started
@@ -3712,7 +3730,8 @@ final class AppState: ObservableObject {
                             creatorName: invite.creatorName,
                             callType: invite.callType,
                             groupId: invite.groupId,
-                            groupName: invite.groupName),
+                            groupName: invite.groupName,
+                            promotedFromCallId: invite.promotedFromCallId),
                         source: .webSocket)
                 }
             }
@@ -12762,6 +12781,51 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// W-CALLPROMOTE — promotes this live 1:1 call to a group call, inviting
+    /// [newPeerIds] alongside the peer already on the call. Wires the
+    /// InCallScreen "+" button (`LiveInCallScreen`'s
+    /// `GroupCallContactPickerSheet` presentation) to
+    /// `GroupCallController.createCall`, which already existed — this is
+    /// orchestration, not new call infrastructure. Port of Android
+    /// `CallViewModel.promoteToGroupCall` / Desktop `Call.svelte
+    /// .promoteToGroup` (same cross-platform commit series).
+    ///
+    /// `createCall`'s state-setting is synchronous (no server ack needed —
+    /// see its own kdoc), so by the time this returns, `groupCallControllerState`
+    /// is already `.connecting`, which alone drives `ContentView`'s
+    /// `.fullScreenCover` up over the still-visible 1:1 screen — `endCall()`
+    /// tearing down `isInCall` right after does not disturb it, same as the
+    /// existing "answer a group invite mid-something-else" case this app
+    /// already handles.
+    ///
+    /// `promotedFromCallId` is informational only (see
+    /// `BCryptoGroupCallManager.createGroupCall`'s kdoc): it lets the OTHER
+    /// 1:1 peer's client recognize the resulting `group_call_invite` as a
+    /// continuation of the call they're already on so THEY are not silently
+    /// busy-dropped by `presentIncomingGroupCall`'s guard (see that
+    /// function's `isSelfPromotion` carve-out) — it never skips their own
+    /// Accept/Decline ring, matching Android/Desktop's identical posture
+    /// (an earlier Android draft of this feature tried an auto-accept
+    /// shortcut on this same field; a security review found it let any
+    /// current 1:1 peer force a silent call-hijack with zero consent, so
+    /// every platform's port keeps the ring mandatory).
+    ///
+    /// The 1:1 leg is torn down only AFTER `createCall` confirms success
+    /// (non-nil), so a refusal (`GroupCallController` already mid-call)
+    /// leaves the original call untouched.
+    @MainActor
+    func promoteToGroupCall(newPeerIds: [String]) {
+        guard let peer = callContactId, let controller = groupCallController else { return }
+        let callType = isVideoCall ? "video" : "audio"
+        let activeOneToOneId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+        guard controller.createCall(
+            invitees: [peer] + newPeerIds,
+            callType: callType,
+            promotedFromCallId: activeOneToOneId
+        ) != nil else { return }
+        endCall()
+    }
+
     /// W369: transitional SAS key derivation. Loads the per-pair PSK
     /// from the SovereignKeyVault using the same ladder
     /// ChatMessageSendService uses (auto:<prefix>:<peer> → bare
@@ -15996,7 +16060,27 @@ extension AppState {
         // Busy: in a 1:1 call, ringing for one, or already in a group call.
         // We simply do not join — there is no `group_call_decline` wire type
         // and the room stays open for the other invitees.
-        if isInCall || callState != .idle || groupCallControllerState != .idle {
+        //
+        // W-CALLPROMOTE carve-out: an invite that continues the SAME 1:1
+        // call we're on RIGHT NOW, from the SAME peer, must not be
+        // silently dropped by this guard — it's the one busy state this
+        // exact invite is meant to interrupt (see
+        // `BCryptoGroupCallManager.createGroupCall`'s `promotedFromCallId`
+        // kdoc: the other peer tapped "+" on the call we're both already
+        // on). Matched on BOTH `promotedFromCallId` == our active 1:1
+        // callId AND `creatorId` == our active 1:1 peer, so a stale or
+        // forged value only ever falls through to the normal drop below —
+        // this NEVER skips the ring/ Accept-Decline screen further down,
+        // it only stops the invite from being thrown away before the user
+        // ever sees it. Every other busy case (a DIFFERENT 1:1 call,
+        // another ringing call, already in a group call) still drops
+        // exactly as before.
+        let isSelfPromotion: Bool = {
+            guard !invite.promotedFromCallId.isEmpty else { return false }
+            let activeOneToOneId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+            return invite.promotedFromCallId == activeOneToOneId && invite.creatorId == callContactId
+        }()
+        if (isInCall || callState != .idle || groupCallControllerState != .idle) && !isSelfPromotion {
             let shortId: String = String(invite.callId.prefix(8))
             let busyMsg: String = "[AppState] W-GRPRING busy — ignoring group call " + shortId
             print(busyMsg)

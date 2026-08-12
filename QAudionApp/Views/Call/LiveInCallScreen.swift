@@ -62,6 +62,10 @@ struct LiveInCallScreen: View {
     /// W502: whether the network diagnostics overlay is visible.
     @State private var showDiagnostics: Bool = false
 
+    /// W-CALLPROMOTE — the "+" button's contact picker sheet, same pattern
+    /// as `showDiagnostics`.
+    @State private var showAddParticipant: Bool = false
+
     /// Cached peer display name. Resolved once on appear / on
     /// callContactId change so the contacts-store lookup doesn't run
     /// on every TimelineView tick (OpenRouter review on v1.0.75 flagged
@@ -168,6 +172,43 @@ struct LiveInCallScreen: View {
         } message: {
             Text("\(cachedPeerDisplayName) vuole attivare il video. Se accetti, si attiva anche la tua fotocamera.")
         }
+        // W-CALLPROMOTE — the "+" button. Reuses the SAME contact-picker
+        // ContactsListView already uses for "start a new group call"
+        // (GroupCallContactPickerSheet), with the video toggle locked to
+        // this call's own type instead of user-choosable — see that
+        // sheet's `lockedVideo` kdoc.
+        .sheet(isPresented: $showAddParticipant) {
+            GroupCallContactPickerSheet(
+                contacts: addParticipantCandidates,
+                onStart: { selectedIds, _ in
+                    showAddParticipant = false
+                    appState.promoteToGroupCall(newPeerIds: selectedIds)
+                },
+                lockedVideo: appState.isVideoCall
+            )
+        }
+    }
+
+    /// W-CALLPROMOTE — contacts selectable from the "+" sheet: every stored
+    /// contact except ourselves and the peer already on this call (they're
+    /// implicitly included by `AppState.promoteToGroupCall`). `isOnline`/
+    /// `unreadMessageCount` are not rendered by `GroupCallContactPickerSheet`'s
+    /// row — defaulted, not looked up, to keep this a cheap synchronous read
+    /// off the same `ContactsStore` this file already holds.
+    private var addParticipantCandidates: [ContactsListViewModel.Item] {
+        contactsStore.load()
+            .filter { $0.userId != appState.callContactId }
+            .map { contact in
+                ContactsListViewModel.Item(
+                    userId: contact.userId,
+                    displayName: contact.displayName,
+                    phoneHash: contact.phoneHash,
+                    avatarUrl: contact.avatarUrl,
+                    isOnline: false,
+                    unreadMessageCount: 0,
+                    isVerified: contact.isVerified
+                )
+            }
     }
 
     /// Bridge AppState.pendingIncomingUpgrade ↔ the SwiftUI alert. Setting
@@ -320,7 +361,7 @@ struct LiveInCallScreen: View {
                 // over the opaque_message VOICE_KEY piggy-back (see
                 // AppState.callPeerVoiceKeyEnrolled's doc).
                 peerVoiceKeyEnrolled: appState.callPeerVoiceKeyEnrolled,
-                onAddParticipant: {},
+                onAddParticipant: { showAddParticipant = true },
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.

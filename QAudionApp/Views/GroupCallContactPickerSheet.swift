@@ -10,22 +10,36 @@ import QAudionEngine
 /// than navigating with a pre-known callId.
 struct GroupCallContactPickerSheet: View {
     let contacts: [ContactsListViewModel.Item]
-    /// W-GRPVIDEO: `video` reflects the toggle below — threaded down to
-    /// `GroupCallController.createCall(callType:)` so an ad-hoc group call
-    /// can start as video, not just audio.
+    /// W-GRPVIDEO: `video` reflects the toggle below (or `lockedVideo`, when
+    /// set) — threaded down to `GroupCallController.createCall(callType:)`
+    /// so an ad-hoc group call can start as video, not just audio.
     let onStart: (_ selectedUserIds: [String], _ video: Bool) -> Void
+    /// W-CALLPROMOTE — set only when this sheet is promoting an EXISTING
+    /// 1:1 call (the in-call "+" button) rather than starting a fresh
+    /// group call: the call type is fixed to that call's, since you can't
+    /// retroactively add video to an already-live audio call by ticking a
+    /// box here. Hides the video toggle and swaps the title/copy for
+    /// "add participant" instead of "new group call". `nil` (the default)
+    /// preserves this sheet's original behavior exactly — every existing
+    /// caller (ContactsListView) is unaffected.
+    var lockedVideo: Bool? = nil
 
     @State private var selected: Set<String> = []
     /// W-GRPVIDEO: audio/video choice for the call about to be created.
+    /// Unused when `lockedVideo` is set.
     @State private var wantsVideo = false
     @Environment(\.dismiss) private var dismiss
+
+    private var effectiveVideo: Bool { lockedVideo ?? wantsVideo }
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Toggle(isOn: $wantsVideo) {
-                        Label("Videochiamata", systemImage: wantsVideo ? "video.fill" : "video.slash")
+                if lockedVideo == nil {
+                    Section {
+                        Toggle(isOn: $wantsVideo) {
+                            Label("Videochiamata", systemImage: wantsVideo ? "video.fill" : "video.slash")
+                        }
                     }
                 }
                 Section {
@@ -59,15 +73,15 @@ struct GroupCallContactPickerSheet: View {
                     }
                 }
             }
-            .navigationTitle("Chiamata di gruppo")
+            .navigationTitle(lockedVideo == nil ? "Chiamata di gruppo" : "Aggiungi partecipante")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Annulla") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Avvia (\(selected.count))") {
-                        onStart(Array(selected), wantsVideo)
+                    Button(lockedVideo == nil ? "Avvia (\(selected.count))" : "Aggiungi (\(selected.count))") {
+                        onStart(Array(selected), effectiveVideo)
                     }
                     .disabled(selected.isEmpty)
                 }

@@ -467,14 +467,17 @@ public final class GroupCallController: @unchecked Sendable {
         title: String = "",
         callType: String = "audio",
         groupId: String = "",
-        groupName: String = ""
+        groupName: String = "",
+        /// See `BCryptoGroupCallManager.createGroupCall`'s `promotedFromCallId` kdoc.
+        promotedFromCallId: String = ""
     ) -> String? {
         guard let callId = manager.createGroupCall(
             recipients: invitees,
             title: title,
             callType: callType,
             groupId: groupId,
-            groupName: groupName
+            groupName: groupName,
+            promotedFromCallId: promotedFromCallId
         ) else {
             return nil
         }

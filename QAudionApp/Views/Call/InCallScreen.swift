@@ -2783,12 +2783,10 @@ struct InCallScreen: View {
     // rectangle card so 4-5 buttons per row always fit on a 375pt screen
     // (the previous single-HStack-of-7 design overflowed iPhone SE).
     //
-    // Add-participant: per spec, no API exists yet — CircularAction's
-    // existing `isDisabled` (already supported, see Components/
-    // CircularAction.swift) renders it visibly dimmed + non-interactive,
-    // matching Android's current no-op state for this button. This is
-    // NOT a new capability — onAddParticipant is still wired verbatim,
-    // it simply never fires because CircularAction gates the tap.
+    // W-CALLPROMOTE — add-participant is now live (was disabled/no-op
+    // pending an API that now exists: GroupCallController.createCall).
+    // onAddParticipant is still the same 0-arg trigger it always was;
+    // LiveInCallScreen owns the actual sheet + peer-id submit handler.
 
     private var bottomActionRow: some View {
         VStack(spacing: 10) {
@@ -2886,19 +2884,18 @@ struct InCallScreen: View {
             )
             .accessibilityLabel(voiceEnhancement ? "Disattiva miglioramento voce" : "Attiva miglioramento voce")
             Spacer(minLength: 0)
-            // No add-participant API exists yet (spec: render present but
-            // disabled/no-op, matching Android's current state — do not
-            // build 1:1→group escalation now). CircularAction's isDisabled
-            // dims the icon and blocks the tap at the button level.
+            // W-CALLPROMOTE — was disabled/no-op (no API existed). Now opens
+            // the add-participant sheet (LiveInCallScreen owns the sheet
+            // state + submit handler that calls GroupCallController
+            // .createCall, mirroring Android/Desktop's identical port).
             CircularAction(
                 icon: "person.badge.plus",
                 action: onAddParticipant,
                 diameter: 48,
                 background: scheme.surfaceVariant,
-                iconColor: scheme.onSurface,
-                isDisabled: true
+                iconColor: scheme.onSurface
             )
-            .accessibilityLabel("Aggiungi partecipante, non disponibile")
+            .accessibilityLabel("Aggiungi partecipante")
             Spacer(minLength: 0)
             // Hangup — prominent, larger than secondary buttons, anchors
             // the end of the dock (matches the reference's "End" slot).

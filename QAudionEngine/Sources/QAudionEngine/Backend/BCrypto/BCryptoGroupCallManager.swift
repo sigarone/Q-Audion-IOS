@@ -51,15 +51,23 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         /// (no persisted group behind it).
         public let groupId: String
         public let groupName: String
+        /// W-CALLPROMOTE — set when this invite continues a 1:1 call the
+        /// creator was already on (the in-call "+" button). Informational
+        /// only, no auth weight — see `createGroupCall`'s `promotedFromCallId`
+        /// kdoc for the full cross-platform rationale. Empty for an ordinary
+        /// group call or an old server that doesn't know the field.
+        public let promotedFromCallId: String
 
         public init(callId: String, creatorId: String, creatorName: String,
-                    callType: String, groupId: String, groupName: String) {
+                    callType: String, groupId: String, groupName: String,
+                    promotedFromCallId: String = "") {
             self.callId = callId
             self.creatorId = creatorId
             self.creatorName = creatorName
             self.callType = callType
             self.groupId = groupId
             self.groupName = groupName
+            self.promotedFromCallId = promotedFromCallId
         }
     }
 
@@ -290,7 +298,16 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         title: String = "",
         callType: String = "audio",
         groupId: String = "",
-        groupName: String = ""
+        groupName: String = "",
+        /// W-CALLPROMOTE — set when this call is a live promotion of a 1:1
+        /// call this client was already on. Relayed verbatim by the server
+        /// onto `group_call_invite` so THAT SAME peer's client can
+        /// recognize the invite as a continuation of the call they're
+        /// already on — purely informational, never used for join
+        /// authorization (unchanged: still the server's Invited/Participants
+        /// membership gate). Additive/optional on the wire, same posture as
+        /// `groupId`/`groupName` above.
+        promotedFromCallId: String = ""
     ) -> String? {
         guard state == .idle else { return nil }
         let newCallId = UUID().uuidString
@@ -318,7 +335,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             "supports_raw_key_aes256": true,
             "call_type": callType,
             "group_id": groupId,
-            "group_name": groupName
+            "group_name": groupName,
+            "promoted_from_call_id": promotedFromCallId
         ])
         return newCallId
     }
@@ -476,7 +494,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
                 creatorName: self.nameResolver(creatorId),
                 callType: (data["call_type"] as? String) ?? "audio",
                 groupId: (data["group_id"] as? String) ?? "",
-                groupName: (data["group_name"] as? String) ?? ""
+                groupName: (data["group_name"] as? String) ?? "",
+                promotedFromCallId: (data["promoted_from_call_id"] as? String) ?? ""
             ))
         }
 
