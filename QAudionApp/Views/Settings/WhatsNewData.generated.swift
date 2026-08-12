@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.964",
+              date: "2026-08-12",
+              title: "v1.0.964",
+              bullets: [
+                "fix(mesh): a receipt may only touch a message sent to the contact who signed it",
+              ]),
         .init(id: "v1.0.963",
               date: "2026-08-12",
               title: "v1.0.963",
               bullets: [
+                "chore: regenerate changelog for v1.0.963",
                 "fix(mesh): viaMesh is optional, so the read-receipt filter must say so",
               ]),
         .init(id: "v1.0.962",
@@ -185,14 +192,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.945",
                 "fix(security): P0-5 wipe/logout doesn't clear crypto keys (iOS)",
                 "fix(call): P0-3/P0-4 coordinated security fixes (iOS)",
-              ]),
-        .init(id: "v1.0.944",
-              date: "2026-08-05",
-              title: "v1.0.944",
-              bullets: [
-                "chore: regenerate changelog for v1.0.944",
-                "fix(groups): verify Ed25519 signature on group_membership_changed for known groups",
-                "fix(groups): distribute post-removal rekey seed via locally-known roster",
               ]),
     ]
 }
