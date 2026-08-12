@@ -1152,7 +1152,44 @@ that contact's key and the shell's `c`; parse the envelope and reject anything
 that is not `v: 2`; then reject unless `r` is this user, `s` is the resolved
 sender, `sn`/`rn` match the arriving header, and `c` matches the shell.
 
-### 9.5 What this does not hide
+### 9.5 Delivery and read receipts
+
+A message that goes over the mesh is acknowledged over the mesh. Nothing else
+can acknowledge it: delivery normally comes from the server's ack and the read
+receipt is a WebSocket `MsgRead` frame keyed by `serverMessageId`, and a mesh
+message has no server and no server id. Without this, a message sent with no
+network in reach stopped at one tick permanently.
+
+Packet type `0x05` (`RECEIPT`), payload a `MeshSealedShell` exactly like a
+message, `e` sealing:
+
+```json
+{ "v": 2, "s": "<acknowledgerUserId>", "r": "<messageAuthorUserId>",
+  "c": "<receiptId>", "m": "<acknowledged clientMsgId>", "k": "d" | "r",
+  "ts": <atMs>, "sn": "<senderNodeHex>", "rn": "<recipientNodeHex>" }
+```
+
+`k` is `d` for delivered (the message reached the peer's device and was stored)
+or `r` for read. The receipt's own random `c` — not the acknowledged message's
+id — is what rides outside the seal, for the reason in §9.2; publishing the
+acknowledged id there would announce in the clear that this exact message had
+just been read. Everything else, `m` included, is inside the ciphertext: a
+receipt is metadata about a conversation, which is what §9.1 exists to hide.
+
+The type is part of the associated data, so a receipt cannot be replayed as a
+message or the reverse, and a queued receipt must be retransmitted as `0x05`.
+
+Receive obligations are the message's, plus: the acknowledged message must be
+one this user sent to that contact, and status only ever moves forward
+(`PENDING` < `SENT` < `DELIVERED` < `READ`; `FAILED` is below all of them,
+since a signed receipt is proof of arrival). A flood mesh re-delivers packets
+out of order, so a late `d` must not take the blue ticks off a message already
+`r`.
+
+Read receipts follow the user's existing read-receipt privacy setting; delivery
+receipts do not, matching the WebSocket transport.
+
+### 9.6 What this does not hide
 
 Node ids are `SHA-256(Ed25519 identity key)` truncated to 8 bytes: stable
 pseudonyms, not names. A listener can still tell that two devices are exchanging
