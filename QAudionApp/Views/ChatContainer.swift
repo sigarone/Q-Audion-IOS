@@ -375,8 +375,26 @@ final class ChatContainer: ObservableObject {
     ) {
         Task { [weak self, conversationId, peerUserId, target, messageId, wireText] in
             guard let self else { return }
+            guard let selfId = await self.appState?.currentUserId else {
+                await MainActor.run { self.markFailed(messageId: messageId, reason: .notAuthenticated) }
+                return
+            }
+            // v2 seals the ENVELOPE, so what goes into the cipher is the
+            // serialised envelope rather than the bare body. Everything that
+            // identifies the parties travels inside it; see MeshChatMessage.
+            let envelope = MeshChatMessage(
+                senderUserId: selfId,
+                recipientUserId: peerUserId,
+                clientMsgId: messageId.uuidString,
+                conversationId: conversationId.uuidString,
+                body: wireText,
+                sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
+                senderNodeHex: await MeshRuntime.shared.localNodeIdHex,
+                recipientNodeHex: target.nodeHex
+            )
+            let envelopeText = String(data: envelope.encode(), encoding: .utf8) ?? ""
             let outcome = await sender.encryptForWire(
-                messageId: messageId, peerUserId: peerUserId, plaintext: wireText
+                messageId: messageId, peerUserId: peerUserId, plaintext: envelopeText
             )
             await MainActor.run {
                 self.completeMeshSend(
@@ -404,16 +422,17 @@ final class ChatContainer: ObservableObject {
         switch outcome {
         case .failure(let reason):
             markFailed(messageId: messageId, reason: reason)
-        case .success(let ciphertext):
-            let envelope = MeshChatMessage(
-                senderUserId: selfUserId,
-                recipientUserId: peerUserId,
+        case .success(let sealed):
+            // Wire v2: `sealed` is the encrypted ENVELOPE, not an encrypted
+            // body — sendViaMesh hands the whole serialised envelope to
+            // encryptForWire as its plaintext. Only the message id rides
+            // outside, in the shell, because the ratchet needs it to rebuild
+            // its own associated data before it can decrypt anything.
+            let shell = MeshSealedShell(
                 clientMsgId: messageId.uuidString,
-                conversationId: conversationId.uuidString,
-                ciphertextB64: ciphertext.base64EncodedString(),
-                sentAtMs: Int64(Date().timeIntervalSince1970 * 1000)
+                sealedB64: sealed.base64EncodedString()
             )
-            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: envelope.encode()) { [weak self] delivered in
+            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: shell.encode()) { [weak self] delivered in
                 self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId)
             }
         }

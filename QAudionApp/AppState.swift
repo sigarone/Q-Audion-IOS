@@ -7694,25 +7694,50 @@ final class AppState: ObservableObject {
     /// transport already sends — not secret, and needed to rebuild the
     /// Associated Data the sender bound the ciphertext to.
     private func handleIncomingMeshMessage(fromNodeHex: String, payload: Data) {
-        guard let envelope = MeshChatMessage.decode(payload) else { return }
-        guard let selfId = currentUserId, envelope.recipientUserId == selfId else { return }
+        // Wire v2 — the payload is a thin shell around ONE sealed blob. Nothing
+        // about the parties is readable until it is opened, which is the point:
+        // v1 shipped real user UUIDs in the clear over the air.
+        guard let shell = MeshSealedShell.decode(payload) else { return }
+        guard let selfId = currentUserId else { return }
         let store = ConversationStore()
-        // Duplicate delivery — a flood-relay mesh can legitimately deliver
-        // the same packet more than once.
-        guard store.findByClientMsgId(envelope.clientMsgId) == nil else { return }
-        guard let ciphertext = Data(base64Encoded: envelope.ciphertextB64) else { return }
+        // Duplicate delivery — a flood-relay mesh can legitimately deliver the
+        // same packet more than once. Checked on the public message id, before
+        // spending a decryption on it.
+        guard store.findByClientMsgId(shell.clientMsgId) == nil else { return }
+        guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
 
-        let senderId = envelope.senderUserId
-        let plaintext: String
-        if let decrypted = attemptDecryptMeshWireBlob(cipher: ciphertext, senderId: senderId, clientMsgId: envelope.clientMsgId) {
-            plaintext = String(data: decrypted, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
-        } else {
-            let tag = "mesh"
-            let senderPrefix = String(senderId.prefix(8))
-            let line: String = "msg_receive undec=1 from=\(senderPrefix)"
-            RTLog.warn(tag, line)
-            plaintext = "[messaggio cifrato non leggibile]"
+        // The key is chosen from the only identifier the public header carries:
+        // the sender's node id. Resolving it through the contact list also means
+        // an unknown device's traffic is dropped without a decryption attempt.
+        guard let senderContact = cachedContacts.first(where: {
+            MeshFeature.nodeId(forContactPubkey: $0.pubkey)?.hex == fromNodeHex
+        }) else {
+            RTLog.warn("mesh", "msg_receive unknownsender=1")
+            return
         }
+        let senderId = senderContact.userId
+
+        guard let decrypted = attemptDecryptMeshWireBlob(
+            cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId
+        ) else {
+            RTLog.warn("mesh", "msg_receive undec=1")
+            return
+        }
+        guard let envelope = MeshChatMessage.decode(decrypted) else {
+            RTLog.warn("mesh", "msg_receive badenvelope=1")
+            return
+        }
+        guard envelope.recipientUserId == selfId, envelope.senderUserId == senderId else { return }
+        // The sealed copies of the addressing fields against what actually
+        // arrived. A relay that re-addresses a packet it forwards cannot repair
+        // these without the message key.
+        guard envelope.senderNodeHex == fromNodeHex,
+              envelope.recipientNodeHex == MeshRuntime.shared.localNodeIdHex,
+              envelope.clientMsgId == shell.clientMsgId else {
+            RTLog.warn("mesh", "msg_receive readdressed=1")
+            return
+        }
+        let plaintext = envelope.body
 
         let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
         let conv: Conversation
