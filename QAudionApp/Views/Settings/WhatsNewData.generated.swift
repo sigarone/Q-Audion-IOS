@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.963",
+              date: "2026-08-12",
+              title: "v1.0.963",
+              bullets: [
+                "fix(mesh): viaMesh is optional, so the read-receipt filter must say so",
+              ]),
         .init(id: "v1.0.962",
               date: "2026-08-12",
               title: "v1.0.962",
               bullets: [
+                "chore: regenerate changelog for v1.0.962",
                 "docs(wire): document the mesh receipt packet, and re-lock the spec hash",
                 "feat(mesh): acknowledge mesh messages over the mesh, on iOS too",
                 "feat(mesh): say when this chat's contact is reachable over Bluetooth, on iOS too",
@@ -186,13 +193,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.944",
                 "fix(groups): verify Ed25519 signature on group_membership_changed for known groups",
                 "fix(groups): distribute post-removal rekey seed via locally-known roster",
-              ]),
-        .init(id: "v1.0.943",
-              date: "2026-08-04",
-              title: "v1.0.943",
-              bullets: [
-                "chore: regenerate changelog for v1.0.943",
-                "fix(call): serialize wake-time socket reconnect to close group_call_update loss",
               ]),
     ]
 }
