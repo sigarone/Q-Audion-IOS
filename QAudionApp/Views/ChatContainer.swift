@@ -421,9 +421,17 @@ final class ChatContainer: ObservableObject {
 
     private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID) {
         if delivered {
+            // R4 — mark the row as having gone over the mesh, so the sender's
+            // own transcript distinguishes it from a normal network message.
+            // The flag, its column and its rendering all existed; nothing on
+            // the SEND side ever set it, so the glyph only ever appeared on
+            // received messages — while MessageBubble's accessibility label
+            // already read "Inviato via mesh Bluetooth", describing a case that
+            // could not occur.
             store.updateMessageStatus(
                 id: messageId, conversationId: conversationId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .delivered, deliveredAt: Date(),
+                viaMesh: true
             )
         } else {
             markFailed(messageId: messageId, reason: .networkError)

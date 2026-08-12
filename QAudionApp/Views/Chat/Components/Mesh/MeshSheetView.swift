@@ -321,7 +321,18 @@ struct MeshSheetView: View {
 
     private func selectTarget(nodeHex: String, displayName: String) {
         runtime.selectTarget(conversationId: viewModel.conversationId, nodeHex: nodeHex, displayName: displayName)
-        onToast("Invio via mesh attivato — \(displayName)")
+        // R5 — in .visibleOnly this device advertises but never scans, so it
+        // cannot open a link itself; it can only answer a device that connects
+        // in. Announcing "invio attivato" and nothing else is how a message
+        // ended up reported as sent while the peer never received it.
+        if runtime.antennaMode == .visibleOnly {
+            onToast(
+                "Invio via mesh attivato — \(displayName). In modalità Visibile questo telefono non avvia "
+                    + "il collegamento: la consegna dipende dall'altro dispositivo. Passa a Mesh completa per inviare subito."
+            )
+        } else {
+            onToast("Invio via mesh attivato — \(displayName)")
+        }
         dismiss()
     }
 

@@ -66,6 +66,16 @@ final class MeshRuntime: ObservableObject {
         }
     }
 
+    /// The mode last ASKED for, as opposed to [antennaMode], which reports what
+    /// the radio is doing at this instant.
+    ///
+    /// They differ during every transitional window — powering on, an advert
+    /// not yet accepted, a scan between duty cycles — and [setAntenna] needs
+    /// the intent, not the instantaneous truth, to decide whether a restart is
+    /// required. Reading the derived value there made mode switches vanish
+    /// silently; see the comment at that call site.
+    private var requestedMode: MeshAntennaMode?
+
     /// Fired for every `.data` packet addressed to us, once per inbound
     /// message. `fromNodeHex` is the ORIGINATING sender's node id (not
     /// necessarily the immediate radio hop, if the packet was relayed).
@@ -105,6 +115,7 @@ final class MeshRuntime: ObservableObject {
         guard MeshFeature.enabled else { return }
         guard let mode else {
             transport?.stop()
+            requestedMode = nil
             activeTargets.removeAll()
             return
         }
@@ -112,13 +123,25 @@ final class MeshRuntime: ObservableObject {
         // .start() is a no-op while already active (it can't reconcile
         // "already active, but in the other mode" mid-call), so stop first —
         // the cost (re-advertise/re-discover) is small.
-        if let current = antennaMode, current != mode {
+        //
+        // The guard is on `requestedMode`, NOT on `antennaMode`. antennaMode is
+        // derived live from isScanning/isAdvertising, so it reads nil during
+        // every window where the radio is up but a role has not settled yet —
+        // powering on, an advert not yet accepted, a scan between duty cycles.
+        // The old `if let current = antennaMode` skipped the stop in exactly
+        // those windows, start() then no-op'd on the active transport, and the
+        // mode change was dropped on the floor with no error anywhere: the
+        // selector showed the new mode while the radio kept the old behaviour,
+        // including relaying other people's traffic, which BleMeshTransport
+        // gates on .fullMesh.
+        if transport != nil, requestedMode != mode {
             transport?.stop()
         }
         let localId = (try? MeshNodeId(hex: localNodeIdHex)) ?? MeshNodeId.random()
         let t = transport ?? BleMeshTransport(localNodeId: localId)
         t.delegate = self
         transport = t
+        requestedMode = mode
         t.start(schedule: MeshRadioSchedule.backgroundIdle, mode: mode)
     }
 
