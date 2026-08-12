@@ -68,6 +68,20 @@ public enum KmsPreBootstrap {
     public struct EncodeResult {
         public let envelopeBytes: Data
         public let rk0: Data
+        /// `sha256(transcript)` — the same 32 bytes the Ed25519 signature is
+        /// computed over. Surfaced because the v4 ratchet binds its root to a
+        /// handshake transcript, and for a pair who have never called each
+        /// other this envelope IS the handshake. Both ends derive it
+        /// identically, which is what lets them converge on one session.
+        public let transcriptHash: Data
+    }
+
+    /// What `decodeDetailed` returns. `decode` keeps the old pair for callers
+    /// that only need the payload and RK_0.
+    public struct DecodeResult {
+        public let payload: Data
+        public let rk0: Data
+        public let transcriptHash: Data
     }
 
     /// In-memory view of a Q-Audion identity tuple, mirroring Android's
@@ -319,7 +333,7 @@ public enum KmsPreBootstrap {
         if var x = ssX25519 { zero(&x) }
         zero(&payloadKey)
 
-        return EncodeResult(envelopeBytes: frame, rk0: rk0)
+        return EncodeResult(envelopeBytes: frame, rk0: rk0, transcriptHash: digest)
     }
 
     // MARK: - decode
@@ -340,6 +354,22 @@ public enum KmsPreBootstrap {
         replayCache: KmsPreBootstrapReplayCache,
         nowMs: Int64
     ) throws -> (payload: Data, rk0: Data) {
+        let r = try decodeDetailed(
+            envelopeBytes: envelopeBytes, receiver: receiver,
+            oneTimePrekeyLookup: oneTimePrekeyLookup, senderIkEdPub: senderIkEdPub,
+            replayCache: replayCache, nowMs: nowMs
+        )
+        return (r.payload, r.rk0)
+    }
+
+    public static func decodeDetailed(
+        envelopeBytes: Data,
+        receiver: IdentityKeys,
+        oneTimePrekeyLookup: (UInt32) -> OneTimePrekey?,
+        senderIkEdPub: Data,
+        replayCache: KmsPreBootstrapReplayCache,
+        nowMs: Int64
+    ) throws -> DecodeResult {
         guard senderIkEdPub.count == 32 else {
             throw KmsPreBootstrapError(failureMode: .malformed, message: "senderIkEdPub must be 32B")
         }
@@ -465,7 +495,7 @@ public enum KmsPreBootstrap {
             throw KmsPreBootstrapError(failureMode: .aead, message: "AEAD decrypt failed: \(error)")
         }
 
-        return (plaintext, rk0)
+        return DecodeResult(payload: plaintext, rk0: rk0, transcriptHash: digest)
     }
 
     // MARK: - ad_bytes / transcript (exposed for KAT structural verification)

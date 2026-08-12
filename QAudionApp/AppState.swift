@@ -8849,6 +8849,15 @@ final class AppState: ObservableObject {
                     print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) reason=kms_prebootstrap_consume_failed")
                     return
                 }
+                // Route by content. A 1:1 v4-bootstrap envelope carries a
+                // marker whose only purpose was to make the exchange happen —
+                // the session it establishes is already installed by the
+                // decode above, and handing this to the group-call controller
+                // gives it something it has no idea what to do with.
+                if decoded.contains("\"qa_v4_bootstrap\"") {
+                    print("[AppState] KmsPreBootstrap: 1:1 v4 bootstrap consumed sender=\(senderId.prefix(8))…")
+                    return
+                }
                 print("[GroupCallController][telemetry] ctrl envelope RECEIVED+decrypted(prebootstrap) sender=\(senderId.prefix(8)), forwarding to GroupCallController")
                 self.groupCallController?.onGroupCallControlEnvelope(json: decoded, fromUserId: senderId)
             }
@@ -17241,7 +17250,11 @@ extension AppState {
         // Phase 14a Day 4c parity — install our own outgoing PSK seeded by
         // the SAME RK_0 the receiver will derive, so the peer's first reply
         // (which will use this now-shared PSK) is decryptable on our side.
-        installKmsPreBootstrapPsk(rk0: result.rk0, peer: peer)
+        installKmsPreBootstrapPsk(
+            rk0: result.rk0, peer: peer,
+            peerIdentityEdPub: receiverView.ikEdPub,
+            transcriptHash: result.transcriptHash
+        )
 
         let wrapper: [String: Any] = [
             "qa_kms": 1,
@@ -17294,7 +17307,9 @@ extension AppState {
         )
 
         do {
-            let (payload, rk0) = try KmsPreBootstrap.decode(
+            // decodeDetailed, not decode: the transcript digest it returns is
+            // what seeds the v4 ratchet, and the pair form cannot carry it.
+            let decoded = try KmsPreBootstrap.decodeDetailed(
                 envelopeBytes: envelopeBytes,
                 receiver: receiverIdentity,
                 // iOS has no local one-time-prekey pool yet (see the "known
@@ -17306,8 +17321,11 @@ extension AppState {
                 replayCache: Self.kmsPreBootstrapReplayCache,
                 nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
             )
-            installKmsPreBootstrapPsk(rk0: rk0, peer: senderId)
-            return String(data: payload, encoding: .utf8)
+            installKmsPreBootstrapPsk(
+                rk0: decoded.rk0, peer: senderId,
+                peerIdentityEdPub: senderEdPub, transcriptHash: decoded.transcriptHash
+            )
+            return String(data: decoded.payload, encoding: .utf8)
         } catch {
             print("[AppState] KmsPreBootstrap.decode failed sender=\(senderId.prefix(8))…: \(error)")
             return nil
@@ -17375,7 +17393,22 @@ extension AppState {
     /// iOS's `SovereignKeyVault` has no ratchet-version field to set
     /// (confirmed this session — unlike Android's `setRatchetVersion`),
     /// so storing the raw 32-byte key is the whole job here.
-    private static func installKmsPreBootstrapPsk(rk0: Data, peer: String) {
+    /// - Parameters:
+    ///   - peerIdentityEdPub: the peer's raw 32-byte Ed25519 identity key.
+    ///   - transcriptHash: `sha256(transcript)` from this envelope.
+    ///
+    /// Both are needed to seed the v4 ratchet. Until now this function stored
+    /// the PSK and stopped there, and the v4 session on this platform could
+    /// only ever be born from a completed PQC call — so a pair who had only
+    /// messaged each other stayed on the legacy path forever, and an Android
+    /// peer that HAD upgraded would send 0xE5 frames this device could not
+    /// open at all.
+    private static func installKmsPreBootstrapPsk(
+        rk0: Data,
+        peer: String,
+        peerIdentityEdPub: Data? = nil,
+        transcriptHash: Data? = nil
+    ) {
         let vault = SovereignKeyVault()
         let prefix = peer.count > 8 ? String(peer.prefix(8)) : peer
         let name = "auto:\(prefix):\(peer)"
@@ -17386,6 +17419,45 @@ extension AppState {
         } catch {
             print("[AppState] KmsPreBootstrap: installRatchetSeed failed peer=\(peer.prefix(8))…: \(error)")
         }
+        bootstrapV4FromPreBootstrap(
+            peer: peer, rk0: rk0,
+            peerIdentityEdPub: peerIdentityEdPub, transcriptHash: transcriptHash
+        )
+    }
+
+    /// Seed the v4 ratchet from a prebootstrap envelope.
+    ///
+    /// Both ends derive the same RK_0 and the same transcript digest from the
+    /// same envelope, and the engine picks each side's chain direction from
+    /// the lexicographic order of the two identity keys, so the two devices
+    /// converge with no extra negotiation. Mirrors Android's
+    /// `bootstrapV4FromEnvelope`.
+    private static func bootstrapV4FromPreBootstrap(
+        peer: String,
+        rk0: Data,
+        peerIdentityEdPub: Data?,
+        transcriptHash: Data?
+    ) {
+        guard let peerIdentityEdPub, peerIdentityEdPub.count == 32,
+              let transcriptHash, transcriptHash.count == 32 else { return }
+        guard let selfIdentity = SovereignIdentityManager().loadIdentity() else { return }
+        let selfPub = selfIdentity.signingPublic
+        guard selfPub.count == 32 else { return }
+        let ratchet = AppState.sharedV4Ratchet
+        guard ratchet.isV4Enabled() else { return }
+        if ratchet.hasV4Session(peer) { return }
+        let zeroEpoch = Data(count: 16)
+        let ok = ratchet.bootstrapV4AndPersist(
+            peerId: peer,
+            effectiveSecret: rk0,
+            selfEpochId: zeroEpoch,
+            peerEpochId: zeroEpoch,
+            selfIdentityPub: selfPub,
+            peerIdentityPub: peerIdentityEdPub,
+            transcriptHash: transcriptHash
+        )
+        RTLog.info("crypto", "v4 prebootstrap ok=\(ok ? 1 : 0)")
+        print("[AppState] KmsPreBootstrap: v4 session bootstrapped=\(ok) peer=\(peer.prefix(8))…")
     }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call
