@@ -8445,6 +8445,58 @@ final class AppState: ObservableObject {
     ///      SAME sweep instead of silently deferring to whichever sweep
     ///      trigger fires next.
     @MainActor
+    /// Top the device's one-time-prekey pool back up, if it has run low.
+    ///
+    /// Without a pool, a sender falls back to our long-term bundle keys: the
+    /// prebootstrap still works and only the one-time forward secrecy is lost.
+    /// With one, the shared secret for a first message depends on a keypair
+    /// that exists exactly once and is deleted on use, so an identity key
+    /// compromised later cannot reconstruct it.
+    ///
+    /// Generation runs off the main actor — a hundred ML-KEM-1024 keypairs is
+    /// not something to do on the thread drawing the UI.
+    private func refillOneTimePrekeysIfNeeded(kmsClient: BCryptoKmsClient) async {
+        let store = OneTimePrekeyStore()
+        let have = store.count()
+        guard have < OneTimePrekeyPool.poolLowWater else { return }
+        guard let identity = sovereignIdentity.loadIdentity() else { return }
+        let priv = identity.signingPrivate
+        let want = min(OneTimePrekeyPool.poolTarget - have, OneTimePrekeyPool.maxBatch)
+        guard want > 0 else { return }
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+
+        let generated: [OneTimePrekeyPool.StoredPrekey]
+        do {
+            generated = try await Task.detached(priority: .utility) {
+                try OneTimePrekeyPool().generate(count: want, identityEd25519Priv: priv, nowMs: nowMs)
+            }.value
+        } catch {
+            print("[AppState] prekeys: generation failed: \(error)")
+            return
+        }
+        guard !generated.isEmpty else { return }
+
+        // Persist the private halves BEFORE the upload. The other order loses
+        // a race with the first sender to fetch one: an envelope naming a
+        // prekey this device cannot find fails closed, and the message with it.
+        for pk in generated {
+            do { try store.save(pk) } catch {
+                print("[AppState] prekeys: keychain save failed id=\(pk.prekeyId): \(error)")
+                return
+            }
+        }
+        do {
+            let body = try OneTimePrekeyPool.uploadBody(generated)
+            let accepted = try await kmsClient.uploadOneTimePrekeys(body: body)
+            RTLog.info("crypto", "prekeys uploaded accepted=\(accepted) had=\(have)")
+            print("[AppState] prekeys: uploaded \(accepted)/\(generated.count), pool was \(have)")
+        } catch {
+            // The private halves stay on disk. They are only unusable, not
+            // dangerous, and the next sweep re-counts and tries again.
+            print("[AppState] prekeys: upload failed: \(error)")
+        }
+    }
+
     private func publishIdentityKeyWithRetry(
         provider: BCryptoBackendProvider, deviceKeyManager: DeviceKeyManager,
         signingPub: Data, deviceId: String
@@ -8542,6 +8594,12 @@ final class AppState: ObservableObject {
                 await publishIdentityKeyWithRetry(
                     provider: provider, deviceKeyManager: manager, signingPub: signingPub, deviceId: deviceId
                 )
+                // Strictly after the bundle: a v2 publish deletes the user's
+                // entire server-side prekey pool, across devices, with no
+                // "did anything change?" check and nothing in the 200 to say
+                // so. Refilling first would just be donating prekeys to that
+                // delete.
+                await refillOneTimePrekeysIfNeeded(kmsClient: provider.kmsClient)
             }
             // CL-5.4 — wire the earbud relay so hw_only/earbud_pair keys are
             // forwarded to the SE via GATT rather than attempting SW decryption.
@@ -17312,11 +17370,17 @@ extension AppState {
             let decoded = try KmsPreBootstrap.decodeDetailed(
                 envelopeBytes: envelopeBytes,
                 receiver: receiverIdentity,
-                // iOS has no local one-time-prekey pool yet (see the "known
-                // gap" note above) — always miss, which correctly fails
-                // closed if a sender ever did reference an OTP id we can't
-                // possibly have.
-                oneTimePrekeyLookup: { _ in nil },
+                // Real lookup now that this device keeps a pool. A miss still
+                // fails closed, which is right: an envelope naming a prekey we
+                // do not hold cannot be opened by guessing.
+                oneTimePrekeyLookup: { id in
+                    guard let stored = OneTimePrekeyStore().load(prekeyId: id) else { return nil }
+                    return KmsPreBootstrap.OneTimePrekey(
+                        prekeyId: stored.prekeyId,
+                        pqPub: stored.pqPub, pqPriv: stored.pqPriv,
+                        x25519Pub: stored.x25519Pub, x25519Priv: stored.x25519Priv
+                    )
+                },
                 senderIkEdPub: senderEdPub,
                 replayCache: Self.kmsPreBootstrapReplayCache,
                 nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())
@@ -17325,6 +17389,14 @@ extension AppState {
                 rk0: decoded.rk0, peer: senderId,
                 peerIdentityEdPub: senderEdPub, transcriptHash: decoded.transcriptHash
             )
+            // Burn the prekey the sender used, after a successful decode — a
+            // one-time key that survives its own message is just a short-lived
+            // long-term key. Deleted only on success, so a bug in our crypto
+            // does not spend it for nothing.
+            let parsedForOtp = try? KmsPreBootstrapCbor.decodeEnvelope(envelopeBytes)
+            if let usedId = parsedForOtp?.oneTimePrekeyId {
+                OneTimePrekeyStore().delete(prekeyId: usedId)
+            }
             return String(data: decoded.payload, encoding: .utf8)
         } catch {
             print("[AppState] KmsPreBootstrap.decode failed sender=\(senderId.prefix(8))…: \(error)")

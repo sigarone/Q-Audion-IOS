@@ -157,6 +157,22 @@ public final class BCryptoKmsClient {
     /// preimage must already have been built with that same uuid (see
     /// `AppState.publishIdentityKeyWithRetry`) or the self-sig verify (server-
     /// side, over the server's OWN uuid) will fail with 400 `self_sig invalid`.
+    /// Upload one-time prekeys. Returns how many the server accepted.
+    ///
+    /// All-or-nothing server-side: one malformed or badly-signed item rejects
+    /// the whole batch with a 400, and a batch over 200, or a pool already at
+    /// 1000, is refused outright. The identity bundle must already be
+    /// published or every batch is refused with "publish identity key first".
+    ///
+    /// Ordering matters more than it looks: publishing a v2 bundle DELETES the
+    /// user's entire server-side prekey pool, per-user and across devices, so
+    /// prekeys always go up after the bundle, never before.
+    public func uploadOneTimePrekeys(body: Data) async throws -> Int {
+        let data = try await rest.post("/api/v1/identity/me/prekeys", body: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        return (obj["accepted"] as? Int) ?? 0
+    }
+
     public func publishUserIdentityBundleV2(
         ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data, selfSig: Data, createdAtMs: Int64
     ) async throws {
