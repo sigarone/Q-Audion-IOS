@@ -393,8 +393,22 @@ final class ChatContainer: ObservableObject {
                 recipientNodeHex: target.nodeHex
             )
             let envelopeText = String(data: envelope.encode(), encoding: .utf8) ?? ""
+            // Seal against the public header this packet will travel in, so a
+            // relay that re-addresses it produces something undecryptable
+            // rather than something misattributed. Android has always sealed
+            // mesh traffic this way; on the legacy v2 path this side rebuilt
+            // its own AAD instead, and the two could not open each other.
+            let aad = await MainActor.run { () -> Data in
+                meshPacketAad(
+                    version: MeshPacket.wireVersion,
+                    typeWireCode: MeshPacketType.data.rawValue,
+                    senderId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast,
+                    recipientId: (try? MeshNodeId(hex: target.nodeHex)) ?? MeshNodeId.broadcast
+                )
+            }
             let outcome = await sender.encryptForWire(
-                messageId: messageId, peerUserId: peerUserId, plaintext: envelopeText
+                messageId: messageId, peerUserId: peerUserId, plaintext: envelopeText,
+                aadOverride: aad
             )
             await MainActor.run {
                 self.completeMeshSend(

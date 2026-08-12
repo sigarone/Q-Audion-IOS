@@ -120,10 +120,15 @@ final class ChatMessageSendService {
     /// `MeshRuntime`. Extracted from `sendEncrypted` (which now calls this
     /// internally too) so both callers share one crypto-dispatch
     /// implementation instead of two copies that could drift.
+    /// - Parameter aadOverride: associated data for the LEGACY v2 path only.
+    ///   The mesh passes the public packet header here so a relay cannot
+    ///   re-address a packet it forwards; v3.1 and v4 rebuild their own AAD
+    ///   internally and ignore it, exactly as on Android.
     func encryptForWire(
         messageId: UUID,
         peerUserId: String,
-        plaintext: String
+        plaintext: String,
+        aadOverride: Data? = nil
     ) async -> Result<Data, ChatContainer.SendFailureReason> {
         guard let senderId = appState.currentUserId else {
             return .failure(.notAuthenticated)
@@ -236,7 +241,8 @@ final class ChatMessageSendService {
                         psk: psk,
                         senderId: senderId,
                         recipientId: peerUserId,
-                        msgId: messageId.uuidString
+                        msgId: messageId.uuidString,
+                        aadOverride: aadOverride
                     )
                 }
             } catch {

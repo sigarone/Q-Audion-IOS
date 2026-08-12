@@ -7731,7 +7731,13 @@ final class AppState: ObservableObject {
         let senderId = senderContact.userId
 
         guard let decrypted = attemptDecryptMeshWireBlob(
-            cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId
+            cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId,
+            aad: meshPacketAad(
+                version: MeshPacket.wireVersion,
+                typeWireCode: MeshPacketType.data.rawValue,
+                senderId: (try? MeshNodeId(hex: fromNodeHex)) ?? MeshNodeId.broadcast,
+                recipientId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast
+            )
         ) else {
             RTLog.warn("mesh", "msg_receive undec=1")
             return
@@ -7811,10 +7817,18 @@ final class AppState: ObservableObject {
         )
         let receiptText = String(data: receipt.encode(), encoding: .utf8) ?? ""
         guard !receiptText.isEmpty else { return }
+        // Bind the public header the packet will travel in, matching Android.
+        let aad = meshPacketAad(
+            version: MeshPacket.wireVersion,
+            typeWireCode: MeshPacketType.receipt.rawValue,
+            senderId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast,
+            recipientId: (try? MeshNodeId(hex: toNodeHex)) ?? MeshNodeId.broadcast
+        )
         let sender = ChatMessageSendService(appState: self)
         Task {
             let outcome = await sender.encryptForWire(
-                messageId: receiptId, peerUserId: peerUserId, plaintext: receiptText
+                messageId: receiptId, peerUserId: peerUserId, plaintext: receiptText,
+                aadOverride: aad
             )
             guard case .success(let sealed) = outcome else {
                 RTLog.warn("mesh", "receipt_send undec=0 sealfail=1")
@@ -7854,7 +7868,13 @@ final class AppState: ObservableObject {
         }
         let senderId = senderContact.userId
         guard let decrypted = attemptDecryptMeshWireBlob(
-            cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId
+            cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId,
+            aad: meshPacketAad(
+                version: MeshPacket.wireVersion,
+                typeWireCode: MeshPacketType.receipt.rawValue,
+                senderId: (try? MeshNodeId(hex: fromNodeHex)) ?? MeshNodeId.broadcast,
+                recipientId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast
+            )
         ) else {
             RTLog.warn("mesh", "receipt_receive undec=1")
             return
@@ -7908,7 +7928,14 @@ final class AppState: ObservableObject {
     /// to it. A follow-up with real CI/compiler feedback should extract a
     /// single shared `decryptInboundWire(cipher:senderId:clientMsgId:)` both
     /// call — tracked in `docs/ble-mesh/`.
-    private func attemptDecryptMeshWireBlob(cipher: Data, senderId: String, clientMsgId: String) -> Data? {
+    /// - Parameter aad: the public packet header this payload was sealed with,
+    ///   for the LEGACY v2 path. Android seals mesh traffic with exactly these
+    ///   bytes (`meshPacketAad`) and uses the caller's associated data verbatim
+    ///   on v2, while this side used to rebuild `msg:<s>:<r>:<m>` internally —
+    ///   so an Android mesh packet on the v2 path could never authenticate
+    ///   here. v3.1 and v4 rebuild their own AAD and ignore this, on both
+    ///   platforms.
+    private func attemptDecryptMeshWireBlob(cipher: Data, senderId: String, clientMsgId: String, aad meshAad: Data? = nil) -> Data? {
         let crypto = MessageCrypto()
         let vault = SovereignKeyVault()
         let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
@@ -7936,11 +7963,14 @@ final class AppState: ObservableObject {
                 return try? ratchetDecryptV3(wire: cipher, psk: psk, senderId: senderId, msgId: clientMsgId)
             case .v2:
                 let recipient = currentUserId ?? ""
-                let aad = Data("msg:\(senderId):\(recipient):\(clientMsgId)".utf8)
+                let aad = meshAad ?? Data("msg:\(senderId):\(recipient):\(clientMsgId)".utf8)
                 if let plain = MessageCryptoV2.decrypt(wire: cipher, psk: psk, aad: aad) {
                     return plain
                 }
-                return try? crypto.decrypt(wireBlob: cipher, psk: psk, senderId: senderId, recipientId: recipient, msgId: clientMsgId)
+                return try? crypto.decrypt(
+                    wireBlob: cipher, psk: psk, senderId: senderId,
+                    recipientId: recipient, msgId: clientMsgId, aadOverride: meshAad
+                )
             case .v1:
                 let recipient = currentUserId ?? ""
                 return try? crypto.decrypt(wireBlob: cipher, psk: psk, senderId: senderId, recipientId: recipient, msgId: clientMsgId)

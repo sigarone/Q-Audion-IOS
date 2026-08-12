@@ -35,18 +35,27 @@ public final class MessageCrypto {
     ///   - recipientId: recipient identifier used in AAD.
     ///   - msgId: per-message identifier used in AAD.
     /// - Returns: wire blob `salt(32) || nonce(12) || ciphertext || tag(16)`.
+    /// - Parameter aadOverride: replaces the default `msg:<s>:<r>:<m>`
+    ///   associated data. Exists for the BLE mesh, where the bytes that must be
+    ///   authenticated are the public packet header a relay could rewrite, not
+    ///   the message triple. Android's v2 path uses the caller's associated
+    ///   data verbatim, so a mesh packet sealed there and opened here could
+    ///   never authenticate while this was fixed internally — the two platforms
+    ///   were computing different AAD for the same bytes. Nil keeps the old
+    ///   behaviour exactly.
     public func encrypt(
         plaintext: Data,
         psk: Data,
         senderId: String,
         recipientId: String,
-        msgId: String
+        msgId: String,
+        aadOverride: Data? = nil
     ) throws -> Data {
         let salt = Self.randomBytes(32)
         let key = try Self.deriveKey(psk: psk, salt: salt, info: CryptoConstants.HKDF_INFO_MSG_KEY)
         let nonceBytes = Self.randomBytes(12)
         let nonce = try AES.GCM.Nonce(data: nonceBytes)
-        let aad = Self.buildAAD(senderId: senderId, recipientId: recipientId, msgId: msgId)
+        let aad = aadOverride ?? Self.buildAAD(senderId: senderId, recipientId: recipientId, msgId: msgId)
 
         let sealedBox = try AES.GCM.seal(
             plaintext,
@@ -67,12 +76,14 @@ public final class MessageCrypto {
     /// Decrypt a Desktop-format wire blob and return the plaintext.
     ///
     /// Throws on malformed input or authentication failure.
+    /// - Parameter aadOverride: see `encrypt(plaintext:psk:senderId:recipientId:msgId:aadOverride:)`.
     public func decrypt(
         wireBlob: Data,
         psk: Data,
         senderId: String,
         recipientId: String,
-        msgId: String
+        msgId: String,
+        aadOverride: Data? = nil
     ) throws -> Data {
         // salt(32) + nonce(12) + at least tag(16) = 60 minimum
         guard wireBlob.count >= 32 + 12 + 16 else {
@@ -93,7 +104,7 @@ public final class MessageCrypto {
 
         let key = try Self.deriveKey(psk: psk, salt: Data(salt), info: CryptoConstants.HKDF_INFO_MSG_KEY)
         let nonce = try AES.GCM.Nonce(data: Data(nonceBytes))
-        let aad = Self.buildAAD(senderId: senderId, recipientId: recipientId, msgId: msgId)
+        let aad = aadOverride ?? Self.buildAAD(senderId: senderId, recipientId: recipientId, msgId: msgId)
 
         let sealedBox = try AES.GCM.SealedBox(
             nonce: nonce,
