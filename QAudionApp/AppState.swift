@@ -1736,7 +1736,15 @@ final class AppState: ObservableObject {
 
     #if canImport(CallKit) && os(iOS)
     /// CallKit adapter. Nil only when CallKit is unavailable (macOS Catalyst, Simulator quirks).
-    private(set) var callKit: CallKitManaging? = CallKitProvider()
+    private(set) var callKit: CallKitManaging? = {
+        let provider = CallKitProvider()
+        // Forward the provider's diagnostics into the remote log. The engine
+        // cannot reach RTLog itself, and the existing W-CALLDIAG line is a
+        // print() — which never leaves the device, so every CallKit rejection
+        // that cost the user an incoming call looked exactly like silence.
+        provider.log = { line in RTLog.info("call", line) }
+        return provider
+    }()
     #else
     private(set) var callKit: CallKitManaging? = nil
     #endif

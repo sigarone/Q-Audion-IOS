@@ -31,6 +31,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// report can be refused — the user simply stops being reachable and
     /// nothing on screen says why.
     private var outstandingUUIDs: Set<UUID> = []
+
+    /// Where this type's diagnostics go. Set by the app to forward into the
+    /// remote log; nil in tests and in any target that has no log sink.
+    ///
+    /// A closure rather than a direct call, because the engine does not — and
+    /// should not — know about the app's logging stack. Same primitive-only
+    /// boundary the mesh runtime keeps.
+    public var log: ((String) -> Void)?
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
@@ -100,7 +108,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             try await provider.reportNewIncomingCall(with: uuid, update: update)
             nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY
             outstandingUUIDs.insert(uuid)
-            RTLog.info("call", "callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstandingUUIDs.count)")
+            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstandingUUIDs.count)")
         } catch {
             // W478 — log instead of silently dropping. CallKit rejects with:
             //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
@@ -116,7 +124,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // Numeric tail so this survives the remote-log redactor: without it
             // the whole CallKit path is invisible off-device, and a rejection
             // that costs the user an incoming call looks exactly like silence.
-            RTLog.warn("call", "callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
+            log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
             callKitRejectedUUIDs.insert(uuid)
         }
     }
@@ -165,7 +173,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             callKitRejectedUUIDs.remove(uuid)
         }
         outstandingUUIDs.removeAll()
-        RTLog.warn("call", "callkit reconcile closed=\(stale.count)")
+        log?("callkit reconcile closed=\(stale.count)")
         return stale.count
     }
 
