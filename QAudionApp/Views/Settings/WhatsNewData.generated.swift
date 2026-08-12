@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.961",
+              date: "2026-08-12",
+              title: "v1.0.961",
+              bullets: [
+                "fix(mesh): GATT hardening + visible-only mode + encrypted ANNOUNCE (#48)",
+                "fix(guardian): analyse on a millisecond budget, not every Nth frame",
+              ]),
         .init(id: "v1.0.960",
               date: "2026-08-12",
               title: "v1.0.960",
               bullets: [
+                "chore: regenerate changelog for v1.0.960",
+                "feat(mesh): BLE-mesh offline text-chat fallback transport (iOS port)",
                 "feat(audio): Opus 1.6.1 on iOS, with deep PLC — re-vendored from upstream",
                 "feat(audio): deep PLC on iOS — conceal a lost packet the way Android does",
                 "fix(audio): quantise ms budgets by their role, and hold the ladder structurally",
@@ -172,13 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.942",
                 "fix(call): trust-bar shields back to plain Material silhouette + gold medal finish",
-              ]),
-        .init(id: "v1.0.941",
-              date: "2026-08-04",
-              title: "v1.0.941",
-              bullets: [
-                "chore: regenerate changelog for v1.0.941",
-                "fix(contacts): log the before/after at both contact-name write sites",
               ]),
     ]
 }
