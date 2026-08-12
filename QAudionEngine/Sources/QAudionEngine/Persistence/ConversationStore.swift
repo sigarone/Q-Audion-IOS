@@ -543,7 +543,7 @@ public final class ConversationStore {
                         edited: msg.edited,
                         deletedAt: deletedAt,
                         reactions: nil,
-                        expiresAt: nil  // tombstone has no expiry,
+                        expiresAt: nil,  // tombstone has no expiry
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
