@@ -24,9 +24,42 @@ final class MeshSheetViewModel: ObservableObject {
 
     private let contactsStore = ContactsStore()
 
+    /// True once the user has made their own selection decision in this sheet
+    /// (tapped a device, or dismissed the detail card). [autoSelectChatPeer]
+    /// never fights that — an auto-select that keeps overriding a person is
+    /// worse than none at all.
+    private var selectionTouchedByUser = false
+
     init(conversationId: String, chatPeerUserId: String?) {
         self.conversationId = conversationId
         self.chatPeerUserId = chatPeerUserId
+    }
+
+    /// Record that the selection changed because the user said so.
+    func markSelectionTouched() {
+        selectionTouchedByUser = true
+    }
+
+    /// R2 — select this chat's own contact once their device is on the radar.
+    ///
+    /// The sheet already knew which contact the chat belonged to and already
+    /// drew a halo for it; nothing ever assigned the selection, so reaching
+    /// that person still meant finding their row and tapping it.
+    ///
+    /// Three guards, matching the Android sibling's `autoSelectTarget` so the
+    /// two platforms behave the same: never override a user decision, never
+    /// yank the sheet off a current selection, and never select a device that
+    /// is not actually in range — the last one matters because selecting an
+    /// absent node would arm a target that cannot be reached and make the
+    /// pre-send indicator promise a route that does not exist.
+    ///
+    /// Selection only: it does not arm mesh routing for the conversation. That
+    /// stays explicit, so opening the radar to look around can never silently
+    /// move a chat off the public network.
+    func autoSelectChatPeer(visibleNodeHexes: [String]) {
+        guard !selectionTouchedByUser, selectedNodeHex == nil else { return }
+        guard let target = currentChatPeerNodeHex, visibleNodeHexes.contains(target) else { return }
+        selectedNodeHex = target
     }
 
     /// The node id this chat's own contact would advertise, resolved from

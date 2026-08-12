@@ -68,6 +68,19 @@ struct MeshSheetView: View {
         }
         .background(scheme.background)
         .presentationDetents([.medium, .large])
+        // R2 — select this chat's own contact as soon as their device is on
+        // the radar. Both hooks are needed: onAppear covers the sheet opening
+        // while the peer is already discovered, onChange covers it arriving a
+        // moment later, which is the common case since discovery takes a scan
+        // cycle. The view model's own guards make repeat calls harmless.
+        .onAppear {
+            viewModel.autoSelectChatPeer(visibleNodeHexes: runtime.peers.map { $0.nodeHex })
+        }
+        // Single-parameter onChange on purpose: every other call site in this
+        // app uses it, and the two-parameter form is iOS 17+.
+        .onChange(of: runtime.peers.map { $0.nodeHex }) { hexes in
+            viewModel.autoSelectChatPeer(visibleNodeHexes: hexes)
+        }
     }
 
     private var header: some View {
@@ -248,6 +261,7 @@ struct MeshSheetView: View {
             return
         }
         viewModel.relaysExpanded = false
+        viewModel.markSelectionTouched()
         viewModel.selectedNodeHex = peer.nodeHex
     }
 
