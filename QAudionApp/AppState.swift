@@ -2325,6 +2325,10 @@ final class AppState: ObservableObject {
         MeshRuntime.shared.onInboundReceipt = { [weak self] fromNodeHex, payload in
             self?.handleIncomingMeshReceipt(fromNodeHex: fromNodeHex, payload: payload)
         }
+        // Bring the radio up with the app, in full mesh, so a contact standing
+        // nearby is reachable without both people having opened the radar
+        // first. Honours an explicit "Spenta" and the server flag.
+        MeshRuntime.shared.autoStartIfEnabled()
 
         // Derive this device's own mesh node id from its long-term Ed25519
         // identity key, which is what every other device derives it from when

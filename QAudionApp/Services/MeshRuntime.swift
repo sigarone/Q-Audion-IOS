@@ -113,6 +113,41 @@ final class MeshRuntime: ObservableObject {
         localNodeIdHex = MeshFeature.localNodeId(identityKeyRaw: identityKeyRaw).hex
     }
 
+    /// UserDefaults key recording that the user turned the antenna OFF.
+    ///
+    /// Absent means "never decided", which is not the same as off — see
+    /// `autoStartIfEnabled`.
+    private static let autoStartKey = "qaudion.mesh.autostart"
+
+    /// Bring the antenna up at app start, in full mesh, unless the user
+    /// switched it off.
+    ///
+    /// A mesh only exists while devices are advertising, so an antenna that
+    /// comes up only when somebody opens the radar is a mesh nobody can be
+    /// reached on: both phones had to be looking at the same screen at the same
+    /// moment for a link to exist at all. Starting it with the app is what
+    /// makes "this contact is reachable over Bluetooth" a fact the app knows
+    /// rather than one the user has to go and check.
+    ///
+    /// Full mesh, not visible-only: visible advertises but never scans or
+    /// connects out, so two visible-only phones sit next to each other seeing
+    /// nothing. Default has to be the mode that can actually form a link.
+    func autoStartIfEnabled() {
+        guard MeshFeature.enabled else { return }
+        if UserDefaults.standard.object(forKey: Self.autoStartKey) != nil,
+           UserDefaults.standard.bool(forKey: Self.autoStartKey) == false {
+            return
+        }
+        guard requestedMode == nil else { return }
+        setAntenna(mode: .fullMesh)
+    }
+
+    /// Remember the user's own on/off decision, so `autoStartIfEnabled`
+    /// honours it. "Spenta" is a decision, not a session state.
+    func setAutoStart(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: Self.autoStartKey)
+    }
+
     /// Turns the BLE radio off, or on in `mode`. This is the ONLY call site
     /// that ever touches CoreBluetooth — the antenna selector in
     /// `MeshSheetView`. Silently refuses when the feature flag is off, so a

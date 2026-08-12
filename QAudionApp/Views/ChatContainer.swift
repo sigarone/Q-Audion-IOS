@@ -289,7 +289,7 @@ final class ChatContainer: ObservableObject {
         // WS pipeline below. Mirrors the Android sibling's
         // `SendMessageUseCase` mesh pre-flight branch.
         if let sender = sendService,
-           let target = MeshRuntime.shared.activeTarget(for: conversationId.uuidString) {
+           let target = resolveMeshRoute() {
             sendViaMesh(
                 sender: sender, target: target,
                 messageId: msg.id, wireText: wireText
@@ -367,6 +367,40 @@ final class ChatContainer: ObservableObject {
     /// Body kept shallow (single `Task`, helper methods do the real work)
     /// per CLAUDE.md §13 — a deeper inline closure here has repeatedly
     /// timed out the Swift 6 type-checker elsewhere in this app.
+    /// Decide whether this message takes the mesh, and to which device.
+    ///
+    /// A target armed on the radar still wins outright — picking a device by
+    /// hand is a deliberate act and outranks a stored preference in both
+    /// directions. Otherwise the contact's own preference decides, which is
+    /// what makes "Preferisci Bluetooth" mean anything: before this, a message
+    /// went over the mesh only if the user had gone into the sheet and armed a
+    /// device, so the default preference could never route a single message.
+    ///
+    /// Reachable means a live link, not a device a scan happened to see: the
+    /// transport writes over links that already exist and never dials one on
+    /// demand.
+    private func resolveMeshRoute() -> MeshTargetSelection? {
+        if let armed = MeshRuntime.shared.activeTarget(for: conversationId.uuidString) {
+            return armed
+        }
+        guard MeshFeature.enabled else { return nil }
+        guard let contact = appState?.cachedContacts.first(where: { $0.userId == peerUserId }),
+              let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return nil }
+        let preference = MeshRoutingPreferenceStore().preference(for: peerUserId)
+        let reachable = MeshRuntime.shared.peers.contains { $0.nodeHex == nodeHex && $0.connected }
+        switch meshRoutingDecision(
+            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachable
+        ) {
+        case .sendOverMesh, .queueForMesh:
+            // queueForMesh only arises from "solo Bluetooth": the send path
+            // seals the message and the outbox holds it until the peer is back
+            // in range, which is exactly what that choice asked for.
+            return MeshTargetSelection(nodeHex: nodeHex, displayName: contact.displayName)
+        case .sendOverNetwork:
+            return nil
+        }
+    }
+
     private func sendViaMesh(
         sender: ChatMessageSendService,
         target: MeshTargetSelection,

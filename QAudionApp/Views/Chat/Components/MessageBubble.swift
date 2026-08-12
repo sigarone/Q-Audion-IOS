@@ -79,6 +79,7 @@ struct MessageReaction: Identifiable {
 
 struct MessageBubble<Body: View>: View {
     @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
     let variant: MessageBubbleVariant
@@ -226,7 +227,7 @@ struct MessageBubble<Body: View>: View {
     /// how to read. So the public network says so too, and "no badge" stops
     /// being a state.
     private var transportChip: some View {
-        let tint = viaMesh ? scheme.primary : scheme.onSurfaceVariant
+        let tint = viaMesh ? extras.bluetoothAccent : scheme.onSurfaceVariant
         return HStack(spacing: 3) {
             Image(systemName: viaMesh ? "dot.radiowaves.left.and.right" : "globe")
                 .font(.system(size: 9, weight: .semibold))

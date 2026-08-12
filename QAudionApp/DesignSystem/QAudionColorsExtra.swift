@@ -18,6 +18,10 @@ public struct QAudionColorsExtra: Equatable {
     public let riskHigh: Color
 
     public let pqcAccent: Color
+    /// Bluetooth. Its own colour, not ``pqcAccent``: that purple means
+    /// post-quantum crypto everywhere else in this app, and reusing it for the
+    /// radio made "reachable over Bluetooth" read as a crypto state.
+    public let bluetoothAccent: Color
     public let trustUnverified: Color
     public let trustSas: Color
     public let trustVoice: Color
@@ -32,6 +36,7 @@ public struct QAudionColorsExtra: Equatable {
         riskMedium:        Color(hex: 0xF2B73A),
         riskHigh:          Color(hex: 0xEB4D5D),
         pqcAccent:         Color(hex: 0xB388FF),
+        bluetoothAccent:   Color(hex: 0x2F9BFF),
         trustUnverified:   Color(hex: 0x8892A6),
         trustSas:          Color(hex: 0x6EE7C5),
         trustVoice:        Color(hex: 0x3DD598),
@@ -47,6 +52,7 @@ public struct QAudionColorsExtra: Equatable {
         riskMedium:        Color(hex: 0xB07A00),
         riskHigh:          Color(hex: 0xEB4D5D),
         pqcAccent:         Color(hex: 0x6A3DDB),
+        bluetoothAccent:   Color(hex: 0x0A6ED1),
         trustUnverified:   Color(hex: 0x5E6677),
         trustSas:          Color(hex: 0x00A381),
         trustVoice:        Color(hex: 0x00A381),

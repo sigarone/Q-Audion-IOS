@@ -25,6 +25,7 @@ struct MeshSheetView: View {
 
     @ObservedObject var runtime: MeshRuntime
     @StateObject private var viewModel: MeshSheetViewModel
+    @State private var routingPreference: MeshRoutingPreference = .default
 
     let onToast: (String) -> Void
     let onOpenConversation: (String) -> Void
@@ -54,6 +55,8 @@ struct MeshSheetView: View {
                 header
                 antennaRow
                     .padding(.top, 8)
+                routingRow
+                    .padding(.top, 10)
                 radarSection
                     .padding(.top, 12)
                 peerListSection
@@ -75,6 +78,9 @@ struct MeshSheetView: View {
         // cycle. The view model's own guards make repeat calls harmless.
         .onAppear {
             viewModel.autoSelectChatPeer(visibleNodeHexes: runtime.peers.map { $0.nodeHex })
+            if let peer = viewModel.chatPeerUserId {
+                routingPreference = MeshRoutingPreferenceStore().preference(for: peer)
+            }
         }
         // Single-parameter onChange on purpose: every other call site in this
         // app uses it, and the two-parameter form is iOS 17+.
@@ -164,9 +170,78 @@ struct MeshSheetView: View {
             return
         }
         runtime.setAntenna(mode: mode)
+        // "Spenta" is a decision, not a session state: it has to survive the
+        // next launch or the auto-start would undo it. Turning it back on by
+        // hand re-arms auto-start, because the user just said they want to be
+        // reachable and should not have to say it again tomorrow.
+        runtime.setAutoStart(mode != nil)
         if mode == nil {
             viewModel.selectedNodeHex = nil
         }
+    }
+
+    // MARK: - Network for this contact
+
+    /// Which network this contact's messages take, remembered per contact.
+    ///
+    /// Separate from the antenna row above even though both are three chips,
+    /// because they answer different questions: the antenna is this device's
+    /// radio right now, this is one conversation and it outlives the sheet.
+    /// Mixing them would make turning the radio off look like it changed a
+    /// preference. 1:1 with Android's `RoutingPreferenceRow`.
+    @ViewBuilder
+    private var routingRow: some View {
+        if let peer = viewModel.chatPeerUserId {
+            let reachable = viewModel.currentChatPeerNodeHex.map { hex in
+                runtime.peers.contains { $0.nodeHex == hex && $0.connected }
+            } ?? false
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .foregroundStyle(extras.bluetoothAccent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Rete per questo contatto")
+                            .qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
+                        Text(routingSubtitle(reachable: reachable))
+                            .qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
+                    }
+                    Spacer()
+                }
+                HStack(spacing: 8) {
+                    antennaModeChip(label: "Preferisci BT", selected: routingPreference == .preferMesh) {
+                        setRouting(.preferMesh, for: peer)
+                    }
+                    antennaModeChip(label: "Solo rete", selected: routingPreference == .networkOnly) {
+                        setRouting(.networkOnly, for: peer)
+                    }
+                    antennaModeChip(label: "Solo BT", selected: routingPreference == .meshOnly) {
+                        setRouting(.meshOnly, for: peer)
+                    }
+                }
+            }
+            .padding(12)
+            .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    private func routingSubtitle(reachable: Bool) -> String {
+        switch routingPreference {
+        case .preferMesh:
+            return reachable
+                ? "Bluetooth quando il contatto è vicino · ora è raggiungibile"
+                : "Bluetooth quando il contatto è vicino · ora passa dalla rete"
+        case .networkOnly:
+            return "Sempre dalla rete pubblica"
+        case .meshOnly:
+            return reachable
+                ? "Solo Bluetooth · il contatto è raggiungibile"
+                : "Solo Bluetooth · in attesa che il contatto sia vicino"
+        }
+    }
+
+    private func setRouting(_ preference: MeshRoutingPreference, for peer: String) {
+        MeshRoutingPreferenceStore().setPreference(preference, for: peer)
+        routingPreference = preference
     }
 
     // MARK: - Radar
@@ -228,7 +303,7 @@ struct MeshSheetView: View {
                     Text(label.name).qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
                     Text(isChatPeer ? "Il contatto di questa chat" : (label.known ? "Contatto noto" : "Non verificato"))
                         .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(isChatPeer ? extras.pqcAccent : scheme.onSurfaceVariant)
+                        .foregroundStyle(isChatPeer ? extras.bluetoothAccent : scheme.onSurfaceVariant)
                 }
                 Spacer()
                 if !peer.relayNodeHexes.isEmpty {
@@ -243,7 +318,7 @@ struct MeshSheetView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(isChatPeer ? extras.pqcAccent.opacity(0.6) : .clear, lineWidth: 1)
+                    .stroke(isChatPeer ? extras.bluetoothAccent.opacity(0.6) : .clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -420,7 +495,7 @@ struct MeshTransportChip: View {
 
     /// Unreachable is not an error — the message will be held and sent when the
     /// peer reappears — so it warns rather than alarms.
-    private var tint: Color { reachable ? extras.pqcAccent : extras.trustUnverified }
+    private var tint: Color { reachable ? extras.bluetoothAccent : extras.trustUnverified }
 
     var body: some View {
         HStack(spacing: 8) {
