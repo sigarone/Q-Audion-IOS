@@ -447,9 +447,14 @@ final class ChatContainer: ObservableObject {
             // received messages — while MessageBubble's accessibility label
             // already read "Inviato via mesh Bluetooth", describing a case that
             // could not occur.
+            // .sent, not .delivered: the radio accepted the write, which says
+            // the bytes left this phone and nothing about whether the other one
+            // stored them. The second tick now has its own evidence — the
+            // peer's MeshReceipt — and claiming it here would make that receipt
+            // decorative.
             store.updateMessageStatus(
                 id: messageId, conversationId: conversationId,
-                newStatus: .delivered, deliveredAt: Date(),
+                newStatus: .sent, deliveredAt: nil,
                 viaMesh: true
             )
         } else {
