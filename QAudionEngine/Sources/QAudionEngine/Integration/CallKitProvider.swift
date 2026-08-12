@@ -19,6 +19,18 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// from the system UI after answer (the foreground-suppressed path never
     /// showed a native UI, so there is nothing to dismiss).
     private var nativelyReportedUUIDs: Set<UUID> = []
+
+    /// Every call UUID this process has ever reported to CallKit and not yet
+    /// ended. Distinct from `nativelyReportedUUIDs`, which is cleared the
+    /// moment the system UI is dismissed while the call is still live.
+    ///
+    /// This one exists so a call can always be ended, from any path, without
+    /// the caller having to remember whether it was reported and by which
+    /// route. A CallKit call that outlives the app's own call is not a
+    /// cosmetic problem: iOS believes the phone is busy, and the next incoming
+    /// report can be refused — the user simply stops being reachable and
+    /// nothing on screen says why.
+    private var outstandingUUIDs: Set<UUID> = []
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
@@ -86,7 +98,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid) hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
-            nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY — native UI is up
+            nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY
+            outstandingUUIDs.insert(uuid)
+            RTLog.info("call", "callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstandingUUIDs.count)")
         } catch {
             // W478 — log instead of silently dropping. CallKit rejects with:
             //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
@@ -99,6 +113,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // answer from the custom banner.
             let nsErr = error as NSError
             print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) — arming in-app manual answer path for \(uuid)")
+            // Numeric tail so this survives the remote-log redactor: without it
+            // the whole CallKit path is invisible off-device, and a rejection
+            // that costs the user an incoming call looks exactly like silence.
+            RTLog.warn("call", "callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
             callKitRejectedUUIDs.insert(uuid)
         }
     }
@@ -107,6 +125,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // W495 — clean up rejected-UUID tracking on call end.
         callKitRejectedUUIDs.remove(uuid)
         nativelyReportedUUIDs.remove(uuid)  // W-WAKEONLY
+        outstandingUUIDs.remove(uuid)
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded
@@ -118,12 +137,48 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         provider.reportCall(with: uuid, endedAt: Date(), reason: cxReason)
     }
 
+    /// End every CallKit call this process still has open.
+    ///
+    /// The safety net for the failure that actually hurts: a call the app has
+    /// finished with, still open as far as iOS is concerned. The system then
+    /// treats the phone as busy and can refuse the next incoming report, so the
+    /// user stops being reachable with nothing on screen to explain it. Called
+    /// when the app settles into idle and when it comes back to the foreground,
+    /// so the two states cannot drift for longer than that.
+    ///
+    /// Returns how many it had to close, which is the number worth logging: it
+    /// should be zero, and a non-zero one is a path that forgot to end its call.
+    @discardableResult
+    public func endAllOutstanding(reason: CallEndReason = .remoteEnded) -> Int {
+        let stale = outstandingUUIDs
+        guard !stale.isEmpty else { return 0 }
+        let cxReason: CXCallEndedReason
+        switch reason {
+        case .userEnded, .remoteEnded: cxReason = .remoteEnded
+        case .unanswered: cxReason = .unanswered
+        case .declined: cxReason = .declinedElsewhere
+        case .failed: cxReason = .failed
+        }
+        for uuid in stale {
+            provider.reportCall(with: uuid, endedAt: Date(), reason: cxReason)
+            nativelyReportedUUIDs.remove(uuid)
+            callKitRejectedUUIDs.remove(uuid)
+        }
+        outstandingUUIDs.removeAll()
+        RTLog.warn("call", "callkit reconcile closed=\(stale.count)")
+        return stale.count
+    }
+
+    /// How many calls this process believes are still open with CallKit.
+    public var outstandingCallCount: Int { outstandingUUIDs.count }
+
     public func startOutgoingCall(handle: String, hasVideo: Bool) async throws -> UUID {
         let uuid = UUID()
         let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .generic, value: handle))
         action.isVideo = hasVideo
         let txn = CXTransaction(action: action)
         try await controller.request(txn)
+        outstandingUUIDs.insert(uuid)
         return uuid
     }
 

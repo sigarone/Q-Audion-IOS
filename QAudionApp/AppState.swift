@@ -2561,6 +2561,14 @@ final class AppState: ObservableObject {
             // when the outer closure binds `[weak self]` and forwards.
             Task { @MainActor [weak self] in
                 guard let self = self, self.isAuthenticated else { return }
+                // A CallKit call left open while the app was away is what
+                // silently costs the NEXT incoming call: iOS believes the phone
+                // is busy and can refuse the report outright, so the user stops
+                // being reachable with nothing on screen to explain it. Closing
+                // it on the way back in bounds that to one background stretch.
+                if self.callState == .idle, let provider = self.callKit as? CallKitProvider {
+                    _ = provider.endAllOutstanding()
+                }
                 // W-PUSHHEAL: re-assert the VoIP token on every foreground so a token
                 // the server cleared on a dead push (410) is re-registered the moment
                 // the user opens the app — the natural recovery action, no re-login
@@ -12801,6 +12809,16 @@ final class AppState: ObservableObject {
         if let uuid = activeCallKitId, !CallsGate.callKitFreeMode {
             Task { [weak self] in
                 await self?.callKit?.reportCallEnded(uuid: uuid, reason: .userEnded)
+                // Then close anything else this process still has open with
+                // CallKit. Ending only the id this teardown happens to know
+                // about is how a call outlives the app's own: the id it did not
+                // know about keeps iOS believing the phone is busy, and the
+                // next incoming report can be refused outright — the user just
+                // stops being reachable, with nothing on screen to say why.
+                // Normally closes zero; the log says so when it does not.
+                if let provider = self?.callKit as? CallKitProvider {
+                    _ = provider.endAllOutstanding()
+                }
             }
         }
         // NIM-fix1: log the call-session UUID, not the raw peer userId, to
