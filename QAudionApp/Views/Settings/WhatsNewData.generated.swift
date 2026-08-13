@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.974",
+              date: "2026-08-13",
+              title: "v1.0.974",
+              bullets: [
+                "fix(profile): self-avatar picker and the rest of the app read two unwired states",
+              ]),
         .init(id: "v1.0.973",
               date: "2026-08-13",
               title: "v1.0.973",
               bullets: [
+                "chore: regenerate changelog for v1.0.973",
                 "fix(call): stop stacking a dead in-app ringing banner on a working CallKit UI",
               ]),
         .init(id: "v1.0.972",
@@ -171,13 +178,6 @@ extension ReleaseNote {
                 "fix(telemetry): report padOverflowFrames on the iOS call teardown summary",
                 "refactor(transport): remove the MASQUE/QUIC stack from iOS",
                 "fix(audio): port the block/ceiling contract and pad-overflow guard to iOS",
-              ]),
-        .init(id: "v1.0.954",
-              date: "2026-08-09",
-              title: "v1.0.954",
-              bullets: [
-                "chore: regenerate changelog for v1.0.954",
-                "fix(call): defer real camera capture until call_answer on direct video calls",
               ]),
     ]
 }
