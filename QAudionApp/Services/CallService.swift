@@ -1617,11 +1617,21 @@ final class CallService: @unchecked Sendable {
     ///     attribute, and on the caller side the first event is the CREATION of
     ///     the channel while on the callee side it is its RECEIPT.
     func noteAudioDataChannelState(raw: Int, role: String) {
-        print("[CallService] dcmux: dc st=" + raw.description
+        let line: String = "dcmux st=" + raw.description
               + " role=" + role
               + " callId=" + Self.short8(getCallId?())
               + " tx=" + txFramesDc.description
-              + " rx=" + rxFramesDc.description)
+              + " rx=" + rxFramesDc.description
+        print("[CallService] " + line)
+        // This whole diagnostic family used to be print()-only. print() never
+        // leaves the device — RTLog is the only bridge — so a "audio non
+        // buono" report on an Android<->iOS call had no way to show whether
+        // this side ever opened the DataChannel, whether it fell back to the
+        // WS relay and why, or whether either leg carried zero frames.
+        // Verified redactor-safe: short8 caller ids, single-word `why=`
+        // tokens, decimal counters — no run of 12+ base64-alphabet
+        // characters for RE_RESIDUAL_B64 to catch.
+        RTLog.info("call", line)
     }
 
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data,
@@ -1671,9 +1681,11 @@ final class CallService: @unchecked Sendable {
                 self.rxFramesDc &+= 1
                 if !self.loggedFirstRxOnDc {
                     self.loggedFirstRxOnDc = true
-                    print("[CallService] dcmux: first=rxdc callId="
+                    let line: String = "dcmux first=rxdc callId="
                           + Self.short8(self.getCallId?())
-                          + " n=" + self.rxFramesDc.description)
+                          + " n=" + self.rxFramesDc.description
+                    print("[CallService] " + line)
+                    RTLog.info("call", line)
                 }
             case .wsRelay:
                 self.rxFramesWs &+= 1
@@ -2551,8 +2563,10 @@ final class CallService: @unchecked Sendable {
                     txFramesDc &+= 1
                     if !loggedFirstTxOnDc {
                         loggedFirstTxOnDc = true
-                        print("[CallService] dcmux: first=txdc callId=" + Self.short8(cid)
-                              + " n=" + txFramesDc.description)
+                        let line: String = "dcmux first=txdc callId=" + Self.short8(cid)
+                              + " n=" + txFramesDc.description
+                        print("[CallService] " + line)
+                        RTLog.info("call", line)
                     }
                 } else {
                     txFramesWs &+= 1
@@ -2587,10 +2601,12 @@ final class CallService: @unchecked Sendable {
                         // -> _attribute_summary). `why=connecting` would be 14
                         // and would silently delete this line's content. Verified
                         // against that module's own redact_body.
-                        print("[CallService] dcmux: txfall why=" + why
+                        let line: String = "dcmux txfall why=" + why
                               + " st=" + raw.description
                               + " callId=" + Self.short8(cid)
-                              + " n=" + txFallbackCount.description)
+                              + " n=" + txFallbackCount.description
+                        print("[CallService] " + line)
+                        RTLog.warn("call", line)
                     }
                 }
                 // W-NETVIS — the FLUSSO byte counter, at Android's exact layer:
@@ -2630,12 +2646,23 @@ final class CallService: @unchecked Sendable {
                     // `ws` stays flat, and vice versa. Deliberately beside the
                     // existing heartbeat rather than on its own timer, so the
                     // two can never disagree about which frame count they mean.
-                    print("[CallService] dcmux: tx dc=" + txFramesDc.description
+                    let dcmuxLine: String = "dcmux tx dc=" + txFramesDc.description
                           + " ws=" + txFramesWs.description
                           + " rx dc=" + rxFramesDc.description
                           + " ws=" + rxFramesWs.description
                           + " callId=" + Self.short8(cid)
-                          + " n=" + n)
+                          + " n=" + n
+                    print("[CallService] " + dcmuxLine)
+                    // The one line that actually answers "what carried this
+                    // call's audio, on iOS's own side" — every ~5s for the
+                    // call's duration. `rx dc=0 rx ws=0` with a live call
+                    // means this device received nothing at all; `tx`/`rx`
+                    // disagreeing on which leg is climbing means the two
+                    // ends are on different transports and, per the W-DCMUX
+                    // design note this mirrors, headed for one-way silence.
+                    // None of that was visible off-device before this line
+                    // reached RTLog — only the Xcode console saw it.
+                    RTLog.info("call", dcmuxLine)
                 }
             } else if !loggedTxNoTransport {
                 loggedTxNoTransport = true
