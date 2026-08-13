@@ -18039,14 +18039,27 @@ extension AppState {
                 }
                 #endif
             } catch {
-                print("[AppState] WebRTC acceptIncomingCall failed: \(error)")
+                // W-DCSTUCK-DIAG (2026-08-13): was print()-only, sitting one
+                // line away from the ICE-candidate-queue RTLog calls below
+                // (18078/18094 — same "call" tag, same shipper path,
+                // confirmed shipping) — the exact silent-failure shape this
+                // project keeps re-discovering. Two real calls today
+                // (e14eed99, 0375af1e) stayed on the WS-relay fallback for
+                // their entire duration, iceConnectionState apparently never
+                // leaving .new (zero "ice state=" lines despite that path
+                // ALSO being unconditionally RTLog'd) — this catch is the
+                // prime suspect: if setRemoteOffer/answer throws here, ICE
+                // never gets the SDP it needs to start checking at all.
+                // ok=0 is the numeric-safe fact; the description is
+                // best-effort (may partially redact).
+                RTLog.warn("call", "webrtc accept_offer ok=0 err=\(error)")
             }
         }
     }
 
     func handleIncomingWebRtcAnswer(sdp: String, peerCapabilities: [String]? = nil) {
         guard let controller = webRtcController as? QAudionWebRtcCallController else {
-            print("[AppState] WebRTC: ignoring call_answer (no active controller)")
+            RTLog.warn("call", "webrtc answer ok=0 reason=nocontroller")
             return
         }
         // Commit 540b79c0 parity — caller side learns the peer's caps
@@ -18058,9 +18071,15 @@ extension AppState {
         Task {
             do {
                 try await controller.handleRemoteAnswer(sdp: sdp)
-                print("[AppState] WebRTC: applied remote answer SDP (\(sdp.count) chars, peerCaps=\(peerCapabilities ?? []))")
+                // W-DCSTUCK-DIAG (2026-08-13): see the matching catch below —
+                // this success line is equally diagnostic. If it fires but
+                // ICE still never leaves .new, the SDP applied cleanly and
+                // the bug is deeper (libwebrtc-level), not an application
+                // failure — narrows the next investigation instead of
+                // guessing at a fix blind.
+                RTLog.info("call", "webrtc answer ok=1 sdp_len=\(sdp.count)")
             } catch {
-                print("[AppState] WebRTC handleRemoteAnswer failed: \(error)")
+                RTLog.warn("call", "webrtc answer ok=0 err=\(error)")
             }
         }
     }
