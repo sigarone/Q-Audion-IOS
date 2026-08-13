@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.980",
+              date: "2026-08-13",
+              title: "v1.0.980",
+              bullets: [
+                "fix(call): surface the live deepfake confidence score instead of only the rare alarm",
+                "fix(audio): stop the per-device bitrate ratchet from drifting the CBR wire size",
+                "fix(call): W-STALEPIPE is a known-benign guard, not an error",
+              ]),
         .init(id: "v1.0.979",
               date: "2026-08-13",
               title: "v1.0.979",
               bullets: [
+                "chore: regenerate changelog for v1.0.979",
                 "fix(contacts): refresh a chat-only peer's server display name, not just on placeholder",
               ]),
         .init(id: "v1.0.978",
@@ -167,16 +176,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.961",
                 "fix(mesh): GATT hardening + visible-only mode + encrypted ANNOUNCE (#48)",
                 "fix(guardian): analyse on a millisecond budget, not every Nth frame",
-              ]),
-        .init(id: "v1.0.960",
-              date: "2026-08-12",
-              title: "v1.0.960",
-              bullets: [
-                "chore: regenerate changelog for v1.0.960",
-                "feat(mesh): BLE-mesh offline text-chat fallback transport (iOS port)",
-                "feat(audio): Opus 1.6.1 on iOS, with deep PLC — re-vendored from upstream",
-                "feat(audio): deep PLC on iOS — conceal a lost packet the way Android does",
-                "fix(audio): quantise ms budgets by their role, and hold the ladder structurally",
               ]),
     ]
 }
