@@ -8206,9 +8206,24 @@ final class AppState: ObservableObject {
     /// Bumps and persists the self-avatar version. `AvatarUploader`
     /// calls this once, right after writing the new plaintext bytes to
     /// the local self-avatar cache file, before broadcasting.
+    ///
+    /// W-SELFAVATARSTALE (2026-08-13) — neither this UserDefaults-backed
+    /// counter nor `AvatarUploader.selfAvatarCacheURL` (a live filesystem
+    /// check) is `@Published`, so SwiftUI had no signal that either had
+    /// changed: a view that read `AvatarUploader.selfAvatarCacheURL`
+    /// directly in its `body` (e.g. Settings' `ProfileHeroCard`) kept
+    /// showing whatever it last rendered — the picker screen showed the
+    /// freshly-picked photo (it reads the `UIImage` the user just chose,
+    /// not this cache) while every other screen stayed on the old
+    /// placeholder until something UNRELATED forced a re-render. Explicit
+    /// `objectWillChange` is the fix already used elsewhere in this file
+    /// (see the presence-forwarding observer) for exactly this class of
+    /// gap: a plain stored/computed property with no Combine publisher of
+    /// its own, read directly by SwiftUI view bodies.
     func bumpSelfAvatarVersion() -> Int {
         let next = selfAvatarVersion + 1
         UserDefaults.standard.set(next, forKey: Self.selfAvatarVersionKey)
+        objectWillChange.send()
         return next
     }
 
