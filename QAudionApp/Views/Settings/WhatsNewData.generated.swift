@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.975",
+              date: "2026-08-13",
+              title: "v1.0.975",
+              bullets: [
+                "fix(profile): replace the invented icon set with Android's actual characters",
+                "fix(profile): Settings never rendered an icon-chosen self-avatar at all",
+                "fix(video): the inbound HEVC decode path is print()-only too",
+              ]),
         .init(id: "v1.0.974",
               date: "2026-08-13",
               title: "v1.0.974",
               bullets: [
+                "chore: regenerate changelog for v1.0.974",
                 "fix(profile): self-avatar picker and the rest of the app read two unwired states",
               ]),
         .init(id: "v1.0.973",
@@ -169,15 +178,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.956",
                 "feat(audio): negotiated 60 ms / 256-byte long audio profile — receive side",
-              ]),
-        .init(id: "v1.0.955",
-              date: "2026-08-10",
-              title: "v1.0.955",
-              bullets: [
-                "chore: regenerate changelog for v1.0.955",
-                "fix(telemetry): report padOverflowFrames on the iOS call teardown summary",
-                "refactor(transport): remove the MASQUE/QUIC stack from iOS",
-                "fix(audio): port the block/ceiling contract and pad-overflow guard to iOS",
               ]),
     ]
 }
