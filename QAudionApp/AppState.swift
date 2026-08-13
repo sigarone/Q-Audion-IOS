@@ -2620,8 +2620,35 @@ final class AppState: ObservableObject {
                 // is busy and can refuse the report outright, so the user stops
                 // being reachable with nothing on screen to explain it. Closing
                 // it on the way back in bounds that to one background stretch.
-                if self.callState == .idle, let provider = self.callKit as? CallKitProvider {
-                    _ = provider.endAllOutstanding()
+                //
+                // W-FGREAP (2026-08-13) — `callState == .idle` is NOT "there is
+                // no call". It is also the state of a call that is RINGING right
+                // now: `call_incoming` deliberately leaves callState at .idle
+                // whenever CallKit owns the ring (`!alreadyRegisteredByPushKit
+                // && appForeground` gate, ~line 4596) — "callState advances to
+                // .active in CallKitProvider.onAnswerCall when the user
+                // accepts", says that site itself. And answering from the lock
+                // screen is precisely what fires willEnterForeground: iOS
+                // foregrounds the app to run the answer action. So this reaper,
+                // as written, raced the very call the user had just tapped
+                // Accept on and reported it ENDED to CallKit — the native UI
+                // vanishes, no `call_accepted` ever leaves, and the caller sits
+                // in .ringing until the 7 s W-ACCEPTGATE net fires and
+                // "connects" a call with no callee on it.
+                //
+                // The reaper is still right, it just needed to ask the question
+                // it meant to ask: is there a call this app KNOWS about? Three
+                // pieces of state answer that between them, and all three are
+                // set before the CallKit hand-off, not after it —
+                // `activeCallKitId` by the call_incoming/dial path,
+                // `incomingCallRingVisible` unconditionally by W-1TO1RING, and
+                // `isInCall` by the active call. Only when all three say "no
+                // call here" is an outstanding CallKit UUID genuinely orphaned.
+                if self.noCallInFlight(), let provider = self.callKit as? CallKitProvider {
+                    let closed: Int = provider.endAllOutstanding()
+                    if closed > 0 {
+                        RTLog.warn("call", "callkit fg-reap closed=\(closed)")
+                    }
                 }
                 // W-PUSHHEAL: re-assert the VoIP token on every foreground so a token
                 // the server cleared on a dead push (410) is re-registered the moment
@@ -12463,6 +12490,29 @@ final class AppState: ObservableObject {
         self.finalizeCallActive()
     }
 
+    /// W-FGREAP (2026-08-13) — true when this app has no call of its own, in
+    /// any stage, so an outstanding CallKit UUID can only be an orphan.
+    ///
+    /// Exists as a named method rather than an inline condition for two
+    /// reasons. It is asked from two places that must not drift apart (the
+    /// foreground reaper and the teardown reaper), and — per CLAUDE.md §16 —
+    /// a four-term boolean inside `Task { … }` inside a closure is exactly the
+    /// shape that trips the Swift 6 type-checker in this target.
+    ///
+    /// `callState` alone is NOT sufficient and testing it alone is the bug this
+    /// replaces: a call ringing under CallKit sits at `.idle` by design (see
+    /// the `!alreadyRegisteredByPushKit && appForeground` gate on the
+    /// call_incoming path). The other three are all set BEFORE the CallKit
+    /// hand-off, so together they cover the whole window.
+    @MainActor
+    private func noCallInFlight() -> Bool {
+        if callState != .idle { return false }
+        if activeCallKitId != nil { return false }
+        if incomingCallRingVisible { return false }
+        if isInCall { return false }
+        return true
+    }
+
     /// call_accepted rollout-safety net (WIRE_SPEC §3.5) — bounded fallback
     /// so a caller talking to a not-yet-upgraded peer doesn't wait forever.
     /// No-ops if `call_accepted` already finalized the call (or the call
@@ -12974,7 +13024,17 @@ final class AppState: ObservableObject {
                 // next incoming report can be refused outright — the user just
                 // stops being reachable, with nothing on screen to say why.
                 // Normally closes zero; the log says so when it does not.
-                if let provider = self?.callKit as? CallKitProvider {
+                //
+                // W-FGREAP (2026-08-13) — but this runs AFTER an `await`, so it
+                // is not the same instant the teardown started. The window it
+                // spans is exactly the one this reaper was written for: "the
+                // second call of the evening arriving while the first was still
+                // up". A call reported to CallKit inside that window is in
+                // `outstandingUUIDs` and is NOT stale — reaping it kills the
+                // incoming call the user is being shown. Re-read the app's own
+                // call state on the way out and stand down if a call appeared.
+                let stillIdle: Bool = await self?.noCallInFlight() ?? false
+                if stillIdle, let provider = self?.callKit as? CallKitProvider {
                     _ = provider.endAllOutstanding()
                 }
             }
