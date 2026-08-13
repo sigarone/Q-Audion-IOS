@@ -80,7 +80,28 @@ struct QAudionAvatar: View {
 
     @ViewBuilder
     private var avatarBody: some View {
-        if let url = imageURL, url.isFileURL {
+        // W-AVATARICONSHARED (2026-08-13) — `sficon://<SF-Symbol-name>` is
+        // AccountSettingsScreen's pseudo-URL for an icon-chosen avatar (no
+        // file, no network resource), and this shared component is what
+        // every OTHER screen renders that same `imageURL` through — the
+        // self-profile row in Settings, contact rows, chat headers, call
+        // screens. Before this branch existed, the `isFileURL` check below
+        // is false for `sficon:`, so it fell into `AsyncImage`, which has no
+        // protocol handler for that scheme and no `.failure` path to
+        // recover from — exactly the "spinner spins forever" bug already
+        // fixed once, locally, inside AccountSettingsScreen's own custom
+        // avatar view (see its kdoc) — but that fix never reached anywhere
+        // else that renders an icon-avatar URL through THIS component,
+        // which is everywhere else. Reported live: picked an icon avatar,
+        // the edit screen showed it correctly (its own local rendering),
+        // Settings' profile row kept showing the plain initials/number
+        // bubble — because `AvatarUploader.selfAvatarCacheURL` (what
+        // Settings reads) is nil for an icon choice: no photo was ever
+        // written, there's nothing to be stale or unreactive about, this
+        // component simply had no rendering path for the URL it was given.
+        if let url = imageURL, url.scheme == "sficon", let iconName = url.host {
+            sfIconAvatar(iconName)
+        } else if let url = imageURL, url.isFileURL {
             localFileAvatar(url)
         } else if let url = imageURL {
             AsyncImage(url: url) { phase in
@@ -132,6 +153,22 @@ struct QAudionAvatar: View {
                 localImage = loaded
             }
         }
+    }
+
+    /// W-AVATARICONSHARED — renders an icon-chosen avatar (`sficon://<name>`).
+    /// Same gradient-circle language as `placeholderCircle` (not a plain
+    /// system-background circle) so an icon avatar reads as a deliberate
+    /// choice, not a fallback state.
+    @ViewBuilder
+    private func sfIconAvatar(_ iconName: String) -> some View {
+        Circle()
+            .fill(presenceGradient(for: displayName))
+            .frame(width: size, height: size)
+            .overlay(
+                Image(systemName: iconName)
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+            )
     }
 
     /// W-AVATARSTALEPATH (2026-08-03): `avatarUrl` is persisted (`ContactsStore`

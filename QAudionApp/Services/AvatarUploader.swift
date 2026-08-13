@@ -51,6 +51,45 @@ final class AvatarUploader {
         return FileManager.default.fileExists(atPath: path.path) ? path : nil
     }
 
+    // MARK: - W-AVATARICONSHARED (2026-08-13)
+
+    /// Same UserDefaults keys `AccountSettingsContainer` uses for the
+    /// icon/photo choice — moved here (the natural single home for
+    /// "what is the current self-avatar") so every OTHER screen that
+    /// shows the self-avatar can resolve it identically instead of each
+    /// re-deriving its own partial version. Byte-for-byte the same
+    /// strings; renaming either breaks a live user's saved choice.
+    static let avatarKindKey = "qaudion.profile.avatarKind"
+    static let iconAvatarKey = "qaudion.profile.iconAvatar"
+
+    /// The self-avatar URL to actually render, accounting for BOTH gaps
+    /// `AccountSettingsContainer.resolveAvatarURL` already closed for its
+    /// own screen and nothing else read:
+    ///   1. An icon-chosen avatar (`setIconAvatar`) never writes a photo
+    ///      file — `selfAvatarCacheURL` is correctly `nil` for it, and a
+    ///      caller that reads that property directly (bypassing this
+    ///      function) has no way to know an icon was chosen at all.
+    ///   2. A re-uploaded PHOTO overwrites `self.jpg` IN PLACE — the URL
+    ///      *string* never changes, so a SwiftUI `.task(id: url)` (what
+    ///      `QAudionAvatar`'s local-file loader keys its reload on) will
+    ///      not re-fire just because the view re-rendered; it needs the
+    ///      URL *value* to actually change. The `#v<version>` fragment is
+    ///      not part of what `FileManager` resolves for a `file://` URL,
+    ///      only part of the SwiftUI-visible identity, so this forces a
+    ///      fresh load on every version bump without touching the bytes
+    ///      read.
+    /// - Parameter version: `appState.selfAvatarVersion` — pass the CURRENT
+    ///   value, not a cached one, or gap 2 above reopens.
+    static func resolveSelfAvatarURL(version: Int) -> URL? {
+        if UserDefaults.standard.string(forKey: avatarKindKey) == "icon",
+           let iconString = UserDefaults.standard.string(forKey: iconAvatarKey),
+           let iconURL = URL(string: iconString) {
+            return iconURL
+        }
+        guard let base = selfAvatarCacheURL else { return nil }
+        return URL(string: base.absoluteString + "#v\(version)")
+    }
+
     private let appState: AppState
 
     init(appState: AppState) {

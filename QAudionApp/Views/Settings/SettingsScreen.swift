@@ -156,7 +156,13 @@ struct SettingsScreen: View {
                             displayName: profileDisplayName,
                             handle: profileHandle,
                             statusMessage: appState.currentUserStatusMessage ?? "Disponibile per chiamate sicure.",
-                            avatarUrl: AvatarUploader.selfAvatarCacheURL,
+                            // W-AVATARICONSHARED (2026-08-13) — was the raw
+                            // photo-cache URL: nil (and permanently stuck on
+                            // the initials bubble) for an icon-chosen avatar,
+                            // and not guaranteed to refresh after a
+                            // re-uploaded photo since the file path itself
+                            // never changes. See AvatarUploader.resolveSelfAvatarURL.
+                            avatarUrl: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
                             shortNumber: appState.currentUserDialExtension,
                             onEditTap: { showAccountFromEdit = true }
                         )
