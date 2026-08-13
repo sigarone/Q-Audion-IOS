@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.976",
+              date: "2026-08-13",
+              title: "v1.0.976",
+              bullets: [
+                "fix(mesh): can't prove why Visibile/Mesh completa never select",
+              ]),
         .init(id: "v1.0.975",
               date: "2026-08-13",
               title: "v1.0.975",
               bullets: [
+                "chore: regenerate changelog for v1.0.975",
                 "fix(profile): replace the invented icon set with Android's actual characters",
                 "fix(profile): Settings never rendered an icon-chosen self-avatar at all",
                 "fix(video): the inbound HEVC decode path is print()-only too",
@@ -171,13 +178,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.957",
                 "feat(relay): binary framing, in-call stats parity, and three numbers that stopped lying",
-              ]),
-        .init(id: "v1.0.956",
-              date: "2026-08-10",
-              title: "v1.0.956",
-              bullets: [
-                "chore: regenerate changelog for v1.0.956",
-                "feat(audio): negotiated 60 ms / 256-byte long audio profile — receive side",
               ]),
     ]
 }
