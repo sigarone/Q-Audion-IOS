@@ -158,6 +158,16 @@ public final class VideoCallPipeline: NSObject {
     /// captured/sent" looked identical from here — `vcap` alone only
     /// proves OUR OWN camera is alive.
     private nonisolated(unsafe) var decodeDiagFrameCount: Int = 0
+    /// W-VIDPIPEVIS follow-up (2026-08-13) — sits BETWEEN capture/send and
+    /// decode: counts fragments that decrypted successfully, regardless of
+    /// whether `defragment()` completed a frame from them. Found needed
+    /// live: a call with ~900 vcap frames captured per side and ZERO
+    /// `decode frame=` lines on either leg — captured and sent, but the
+    /// existing counters could not tell "nothing ever arrived" from
+    /// "fragments arrive constantly but almost never reassemble into a
+    /// complete frame", and the second is what intermittent/choppy video
+    /// (reported live, same call) actually looks like from in here.
+    private nonisolated(unsafe) var fragmentDiagCount: Int = 0
     /// media-consent v1 — while a screen share is feeding the encoder via
     /// [submitExternalFrame], camera frames from the capture session are
     /// dropped (one producer at a time; interleaving two sources corrupts
@@ -340,6 +350,10 @@ public final class VideoCallPipeline: NSObject {
         #else
         unwrapped = payload
         #endif
+        self.fragmentDiagCount += 1
+        if self.fragmentDiagCount == 1 || self.fragmentDiagCount % 30 == 0 {
+            RTLog.info("call", "vcap frag frame=\(self.fragmentDiagCount)")
+        }
         if let frame = inboundFragmenter.defragment(unwrapped) {
             do {
                 try decoder.decode(frame.nalUnit)
