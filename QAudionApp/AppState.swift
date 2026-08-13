@@ -5127,6 +5127,10 @@ final class AppState: ObservableObject {
             callingApi: provider.callingApi,
             relayProvider: ensureRelayProvider())
         controller.accessToken = currentAccessToken
+        // W419/W-ICEVIS — engine target can't reach RTLog; bridge its
+        // print()-only ICE/DTLS diagnostics the same way CallKitProvider's
+        // were bridged earlier.
+        controller.log = { line in RTLog.info("call", line) }
         if let customUrl = TransportGate.preferredTurnUrl {
             controller.iceServerOverride = [RTCIceServer(urlStrings: [customUrl.absoluteString])]
         }
@@ -11952,6 +11956,8 @@ final class AppState: ObservableObject {
                 // WSS-TURN bridge JWT auth — forwarded to the WS handshake
                 // on /api/v1/turn-ws (server requires Bearer token since W559).
                 controller.accessToken = currentAccessToken
+                // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
+                controller.log = { line in RTLog.info("call", line) }
                 // W411: apply user-configured Transport overrides.
                 #if canImport(WebRTC)
                 if let customUrl = TransportGate.preferredTurnUrl {
@@ -17726,6 +17732,8 @@ extension AppState {
         )
         // WSS-TURN bridge JWT auth (responder side mirrors caller).
         controller.accessToken = currentAccessToken
+        // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
+        controller.log = { line in RTLog.info("call", line) }
         // W411: apply Transport overrides on the responder side too.
         if let customUrl = TransportGate.preferredTurnUrl {
             controller.iceServerOverride = [

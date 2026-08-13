@@ -46,6 +46,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
     public var onStateChange: ((State) -> Void)?
     public var onIceConnectionState: ((RTCIceConnectionState) -> Void)?
+
+    /// W419/W-ICEVIS — this engine target cannot reach `RTLog` (app-target
+    /// only, same constraint `CallKitProvider.log` was added for earlier).
+    /// Every `print("[WebRTC] ...")` in this file was therefore invisible
+    /// in every remote log pull no matter how many calls were made — the
+    /// ICE/DTLS state comments below say "crucial for diagnosing" while
+    /// shipping nothing. Set from the app target alongside construction.
+    public var log: ((String) -> Void)?
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
@@ -1880,6 +1888,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         @unknown default:   stateName = "unknown(\(s.rawValue))"
         }
         print("[WebRTC] ICE state → \(stateName)")
+        // Numeric, not `stateName`: the redactor drops any line carrying a
+        // run of 12+ base64-alphabet characters, and "disconnected" alone
+        // is exactly 12 lowercase letters — the same trap the dcmux "why="
+        // codes were already shortened to dodge. `s.rawValue` is what
+        // survives to Loki; decode it against RTCIceConnectionState.
+        log?("ice state=\(s.rawValue)")
         switch s {
         case .connected, .completed:
             state = .connected
@@ -1916,6 +1930,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         @unknown default:   stateName = "unknown(\(s.rawValue))"
         }
         print("[WebRTC] PeerConnection (ICE+DTLS) state → \(stateName)")
+        // Numeric for the same redactor reason as the ICE branch above.
+        log?("dtls state=\(s.rawValue)")
         if s == .failed {
             state = .failed("DTLS/connection failed")
         }
