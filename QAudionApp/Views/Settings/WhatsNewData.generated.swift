@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.973",
+              date: "2026-08-13",
+              title: "v1.0.973",
+              bullets: [
+                "fix(call): stop stacking a dead in-app ringing banner on a working CallKit UI",
+              ]),
         .init(id: "v1.0.972",
               date: "2026-08-13",
               title: "v1.0.972",
               bullets: [
+                "chore: regenerate changelog for v1.0.972",
                 "fix(video): the WS-HEVC video pipeline is print()-only, same gap as everything else",
               ]),
         .init(id: "v1.0.971",
@@ -171,15 +178,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.954",
                 "fix(call): defer real camera capture until call_answer on direct video calls",
-              ]),
-        .init(id: "v1.0.953",
-              date: "2026-08-08",
-              title: "v1.0.953",
-              bullets: [
-                "chore: regenerate changelog for v1.0.953",
-                "fix(call): apply the same WS-readiness gate to call_processing/call_ready",
-                "fix(call): gate call_answer/call_accepted on WS reconnect, not best-effort",
-                "fix(chat): arm refresh legs on the legacy voice-note download path",
               ]),
     ]
 }
