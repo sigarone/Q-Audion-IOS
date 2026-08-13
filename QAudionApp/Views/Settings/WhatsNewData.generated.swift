@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.981",
+              date: "2026-08-13",
+              title: "v1.0.981",
+              bullets: [
+                "fix(call): make the negotiated audio-profile line reach Loki, unconditionally",
+              ]),
         .init(id: "v1.0.980",
               date: "2026-08-13",
               title: "v1.0.980",
               bullets: [
+                "chore: regenerate changelog for v1.0.980",
                 "fix(call): surface the live deepfake confidence score instead of only the rare alarm",
                 "fix(audio): stop the per-device bitrate ratchet from drifting the CBR wire size",
                 "fix(call): W-STALEPIPE is a known-benign guard, not an error",
@@ -168,14 +175,6 @@ extension ReleaseNote {
                 "feat(mesh): let a call teach the radar who a device is, and stop erasing the answer",
                 "feat(ios): ship the voice-processing state per call, so \"was AEC off?\" is answerable",
                 "feat(call): promote a 1:1 call to group from the in-call \"+\" button",
-              ]),
-        .init(id: "v1.0.961",
-              date: "2026-08-12",
-              title: "v1.0.961",
-              bullets: [
-                "chore: regenerate changelog for v1.0.961",
-                "fix(mesh): GATT hardening + visible-only mode + encrypted ANNOUNCE (#48)",
-                "fix(guardian): analyse on a millisecond budget, not every Nth frame",
               ]),
     ]
 }
