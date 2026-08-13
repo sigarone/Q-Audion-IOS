@@ -165,6 +165,19 @@ struct MeshSheetView: View {
     }
 
     private func handleAntennaSelect(_ mode: MeshAntennaMode?) {
+        // W-MESHFLAGVIS (2026-08-13) — reported live: "Visibile"/"Mesh
+        // completa" never become selectable. The server-side flag
+        // (mesh_ble.enabled) is confirmed `true` globally with no negative
+        // per-user override, but this device's LOCAL resolution of it could
+        // not be proven from the existing telemetry: FeatureFlags'
+        // fetch-summary log line carries the full flag-key dump, which is
+        // long enough (`LOG_OTLP_EXPORT_ENABLED` alone is a 23-char run of
+        // letters) to trip the shipper's redactor and vanish whole — the
+        // fetch could be succeeding or silently failing and both look
+        // identical off-device. Numeric-only tail so this ONE line survives
+        // regardless of what the general fetch summary does.
+        let flagOn: Int = MeshFeature.enabled ? 1 : 0
+        RTLog.info("call", "mesh antenna_tap flag=\(flagOn)")
         guard MeshFeature.enabled else {
             onToast("La mesh Bluetooth non è disponibile al momento.")
             return

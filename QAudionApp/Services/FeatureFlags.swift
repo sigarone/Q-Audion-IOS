@@ -244,6 +244,14 @@ public final class FeatureFlags {
             let summary: String = FeatureFlags.summarize(parsed)
             let line: String = "fetched: " + summary
             RTLog.info("featureflags", line)
+            // W-MESHFLAGVIS (2026-08-13) — the line above carries real flag
+            // KEY NAMES (`LOG_OTLP_EXPORT_ENABLED` alone is a 23-char run of
+            // letters), long enough to trip the shipper's fail-closed
+            // redactor and vanish whole — "the public fetch succeeded" and
+            // "it silently failed" then look identical off-device. This one
+            // is numeric-only on purpose so it survives regardless.
+            let countLine: String = "flags cache_set n=" + String(describing: parsed.count)
+            RTLog.info("featureflags", countLine)
         } catch {
             self.inflight = false
             let reason: String = FeatureFlags.errorString(error)
