@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.969",
+              date: "2026-08-13",
+              title: "v1.0.969",
+              bullets: [
+                "fix(call): the dc-mux transport diagnostics never left the device",
+                "⚡ Bolt: Optimize DateFormatter allocations in ChatList and CallHistory (#50)",
+              ]),
         .init(id: "v1.0.968",
               date: "2026-08-13",
               title: "v1.0.968",
               bullets: [
+                "chore: regenerate changelog for v1.0.968",
                 "fix(call): the engine cannot reach RTLog — log through a hook instead",
                 "fix(call): a CallKit call must never outlive the call it was reporting",
               ]),
@@ -187,14 +195,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.950",
                 "fix(security): bound and dedupe group-call sender_key_nack per track kind",
-              ]),
-        .init(id: "v1.0.949",
-              date: "2026-08-05",
-              title: "v1.0.949",
-              bullets: [
-                "chore: regenerate changelog for v1.0.949",
-                "fix(security): retry all bound PSK candidates on attachment decrypt",
-                "fix(security): retry all bound PSK candidates on avatar decrypt",
               ]),
     ]
 }
