@@ -151,6 +151,13 @@ public final class VideoCallPipeline: NSObject {
     /// blind at Swift code that can't be run locally (no Mac toolchain
     /// on the box making this fix).
     private nonisolated(unsafe) var captureDiagFrameCount: Int = 0
+    /// W-VIDPIPEVIS (2026-08-13) — mirrors `captureDiagFrameCount` for the
+    /// RECEIVE side: single-writer (the transport layer's inbound-fragment
+    /// callback), same `nonisolated(unsafe)` pattern already used above.
+    /// Without this, "peer's video froze" and "peer's video was never
+    /// captured/sent" looked identical from here — `vcap` alone only
+    /// proves OUR OWN camera is alive.
+    private nonisolated(unsafe) var decodeDiagFrameCount: Int = 0
     /// media-consent v1 — while a screen share is feeding the encoder via
     /// [submitExternalFrame], camera frames from the capture session are
     /// dropped (one producer at a time; interleaving two sources corrupts
@@ -336,8 +343,13 @@ public final class VideoCallPipeline: NSObject {
         if let frame = inboundFragmenter.defragment(unwrapped) {
             do {
                 try decoder.decode(frame.nalUnit)
+                self.decodeDiagFrameCount += 1
+                if self.decodeDiagFrameCount == 1 || self.decodeDiagFrameCount % 30 == 0 {
+                    RTLog.info("call", "vcap decode frame=\(self.decodeDiagFrameCount)")
+                }
             } catch {
                 print("[VideoCallPipeline] inbound decode failed: \(error)")
+                warnInboundDropRateLimited("decode failed")
             }
         }
     }
@@ -382,7 +394,13 @@ public final class VideoCallPipeline: NSObject {
         let shouldLog = now - lastOutboundDropWarnAtMs > 2000
         if shouldLog { lastOutboundDropWarnAtMs = now }
         dropWarnLock.unlock()
-        if shouldLog { print("[VideoCallPipeline] \(message)") }
+        if shouldLog {
+            print("[VideoCallPipeline] \(message)")
+            // W-VIDPIPEVIS — was print()-only; already rate-limited above so
+            // no separate counter needed here, unlike the AppState-side
+            // seal-drop gate this mirrors.
+            RTLog.warn("call", "vcap out_drop")
+        }
     }
 
     private nonisolated func warnInboundDropRateLimited(_ message: String) {
@@ -391,7 +409,10 @@ public final class VideoCallPipeline: NSObject {
         let shouldLog = now - lastInboundDropWarnAtMs > 2000
         if shouldLog { lastInboundDropWarnAtMs = now }
         dropWarnLock.unlock()
-        if shouldLog { print("[VideoCallPipeline] \(message)") }
+        if shouldLog {
+            print("[VideoCallPipeline] \(message)")
+            RTLog.warn("call", "vcap in_drop")
+        }
     }
     #endif
 
