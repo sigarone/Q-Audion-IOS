@@ -2435,7 +2435,7 @@ final class CallService: @unchecked Sendable {
     private func processAndSendEncryptedFrame(pcmFrame: Data,
                                                integration: QAudionCallIntegration) {
         guard callIntegration === integration else {
-            RTLog.error("call", "W-STALEPIPE processAndSendEncryptedFrame called with an integration that is no longer self.callIntegration — dropping frame (would have been rejected server-side anyway)")
+            RTLog.warn("call", "W-STALEPIPE processAndSendEncryptedFrame called with an integration that is no longer self.callIntegration — dropping frame (would have been rejected server-side anyway)")
             return
         }
         // W517 — honour mute / hold flags.

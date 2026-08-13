@@ -17071,7 +17071,7 @@ extension AppState {
             // log proves/refutes the theory on the next occurrence instead
             // of guessing further.
             guard let activePipeline = self?.videoPipeline, activePipeline === pipeline else {
-                RTLog.error("call", "W-STALEPIPE onOutboundFragment fired for a pipeline that is no longer self.videoPipeline — dropping frame (would have been rejected server-side anyway)")
+                RTLog.warn("call", "W-STALEPIPE onOutboundFragment fired for a pipeline that is no longer self.videoPipeline — dropping frame (would have been rejected server-side anyway)")
                 return
             }
             let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
