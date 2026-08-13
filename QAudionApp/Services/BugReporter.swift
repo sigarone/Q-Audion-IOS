@@ -416,9 +416,24 @@ public final class BugReporter: ObservableObject {
         guard let window = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first?.windows.first(where: { $0.isKeyWindow }) else { return nil }
+        // W-BLANKCAPTURE (2026-08-13): `window.layer.render(in:)` is the
+        // legacy Core Animation offscreen path — it composites the layer
+        // tree's raw bitmap, which does NOT reliably include SwiftUI's own
+        // rendering backend. Confirmed live via two decrypted reports on
+        // 1.0.981: the chat list and the profile/settings screen (both
+        // SwiftUI-heavy — List/Form, system materials, environment colors)
+        // came back nearly blank/white, structure barely visible, while an
+        // earlier UIKit-heavier in-call screen had captured fine — the
+        // classic symptom of this exact API gap (extensively documented:
+        // layer.render(in:) skips SwiftUI content that isn't backed by a
+        // traditional CALayer bitmap). `drawHierarchy(in:afterScreenUpdates:)`
+        // drives a real render pass instead, the standard fix, and still
+        // respects a ScreenshotLockService secure field the same way the
+        // system screenshot gesture does (consistent with the temporary
+        // unlock/relock this function's caller already does around it).
         let renderer = UIGraphicsImageRenderer(size: window.bounds.size)
         return renderer.image { _ in
-            window.layer.render(in: UIGraphicsGetCurrentContext()!)
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
     }
 

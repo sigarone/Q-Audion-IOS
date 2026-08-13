@@ -12426,6 +12426,15 @@ final class AppState: ObservableObject {
         let selfFile: Int = AvatarUploader.selfAvatarCacheURL != nil ? 1 : 0
         let line: String = "callconnect ready=\(keyReady) selfver=\(selfVer) selffile=\(selfFile)"
         RTLog.info("avatar", line)
+        // W-NAMEREFRESH-CALL (2026-08-13): the chat-decrypt trigger added
+        // earlier today never fires for a peer relationship that is
+        // call-only — exactly the two accounts this project has been
+        // testing with all session. Avatar already has this SAME call-connect
+        // hook as a second trigger alongside chat-decrypt (see this
+        // function's own kdoc); name resolution only had the one. Add the
+        // matching second trigger so a peer's rename reaches this device
+        // even when the two of you never exchange a text message.
+        NameResolutionService.shared.maybeRefreshFromChatActivity(userId: peerId)
         if hasPsk {
             maybeAnnounceAvatarTo(peerId, trigger: .callConnect)
         } else {
