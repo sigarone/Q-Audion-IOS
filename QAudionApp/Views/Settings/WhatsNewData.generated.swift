@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.983",
+              date: "2026-08-13",
+              title: "v1.0.983",
+              bullets: [
+                "fix(call): make WebRTC SDP-application failures reach Loki",
+              ]),
         .init(id: "v1.0.982",
               date: "2026-08-13",
               title: "v1.0.982",
               bullets: [
+                "chore: regenerate changelog for v1.0.982",
                 "fix(contacts): persist name-refresh provenance so it survives a relaunch",
                 "fix(diag): stop diagnostic screenshots coming back blank for SwiftUI screens",
               ]),
@@ -157,13 +164,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.964",
                 "fix(mesh): a receipt may only touch a message sent to the contact who signed it",
-              ]),
-        .init(id: "v1.0.963",
-              date: "2026-08-12",
-              title: "v1.0.963",
-              bullets: [
-                "chore: regenerate changelog for v1.0.963",
-                "fix(mesh): viaMesh is optional, so the read-receipt filter must say so",
               ]),
     ]
 }
