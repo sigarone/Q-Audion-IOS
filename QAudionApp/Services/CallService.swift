@@ -2313,6 +2313,11 @@ final class CallService: @unchecked Sendable {
                 // degrade, both of which trade echo for a working mic and
                 // count in `byp`.
                 let vpActive = audioPipeline?.voiceProcessingIsActive == true
+                // W574c only force-enables AEC on the built-in loudspeaker route —
+                // "was echo cancellation off" is unanswerable without knowing
+                // whether that route was even the one active, so it rides along
+                // on the same numeric-only line for the same redactor reason.
+                let onSpeaker = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
                 RTLog.info(
                     "call",
                     "audioVp vpio=\(vpActive ? 1 : 0)"
@@ -2321,6 +2326,7 @@ final class CallService: @unchecked Sendable {
                         + " aec=\(CallsGate.aecEnabled ? 1 : 0)"
                         + " ns=\(CallsGate.nsEnabled ? 1 : 0)"
                         + " agc=\(CallsGate.agcEnabled ? 1 : 0)"
+                        + " spk=\(onSpeaker ? 1 : 0)"
                 )
             } catch {
                 // Was print()-only — invisible in every remote log pull.
