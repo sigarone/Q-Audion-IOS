@@ -956,6 +956,31 @@ struct ChatListScreen: View {
         return collapsed
     }
 
+    private static let timeFormatterHHmm: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static let timeFormatterEEE: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "EEE"
+        return f
+    }()
+
+    private static let timeFormatterDDMM: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM"
+        return f
+    }()
+
+    private static let timeFormatterDDMMYY: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM/yy"
+        return f
+    }()
+
     private func formatTime(_ date: Date) -> String {
         // W121: more granular relative time. Order:
         //   1. < 1 min: "ora"
@@ -971,24 +996,19 @@ struct ChatListScreen: View {
             return "ora"
         }
         if cal.isDateInToday(date) {
-            let f = DateFormatter()
-            f.dateFormat = "HH:mm"
-            return f.string(from: date)
+            return Self.timeFormatterHHmm.string(from: date)
         }
         if cal.isDateInYesterday(date) {
             return "ieri"
         }
         if let days = cal.dateComponents([.day], from: date, to: now).day,
            days < 7 {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "it_IT")
-            f.dateFormat = "EEE"
-            return f.string(from: date).capitalized
+            return Self.timeFormatterEEE.string(from: date).capitalized
         }
         let nowYear = cal.component(.year, from: now)
         let dateYear = cal.component(.year, from: date)
-        let f = DateFormatter()
-        f.dateFormat = (nowYear == dateYear) ? "dd/MM" : "dd/MM/yy"
+
+        let f = (nowYear == dateYear) ? Self.timeFormatterDDMM : Self.timeFormatterDDMMYY
         return f.string(from: date)
     }
 
