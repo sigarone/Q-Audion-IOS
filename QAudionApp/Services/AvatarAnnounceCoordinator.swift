@@ -207,7 +207,18 @@ final class AvatarAnnounceCoordinator {
             switch outcome {
             case .delivered, .sent:
                 Self.markSent(version: version, toPeer: peerId)
-                RTLog.info("avatar", "send ok=1 to=\(peer8) version=\(version) trig=\(trigCode)")
+                // W-AVATARDELIVERY (2026-08-13) — `.delivered` (peer
+                // confirmed) and `.sent` (queued/left the device, no
+                // delivery confirmation) used to collapse into the same
+                // `ok=1` — indistinguishable from here whether the peer's
+                // device ever actually got this. Reported live:
+                // `AvatarAnnounceCoordinator` shows a clean `send ok=1` for
+                // a peer that ALSO never shows a single `recv applied=`
+                // line at that version, hours later. `del` separates
+                // "confirmed reaching them" from "left here, unconfirmed"
+                // without a new log line.
+                let delivered: Int = { if case .delivered = outcome { return 1 }; return 0 }()
+                RTLog.info("avatar", "send ok=1 del=\(delivered) to=\(peer8) version=\(version) trig=\(trigCode)")
             case .failed(let reason):
                 RTLog.warn("avatar", "send ok=0 code=1 to=\(peer8) version=\(version) trig=\(trigCode) reason=\(reason)")
             }
