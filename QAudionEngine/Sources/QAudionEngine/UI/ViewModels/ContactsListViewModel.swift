@@ -34,18 +34,20 @@ public struct ContactsListViewModel: ViewModelProtocol {
 
     public let items: [Item]
     public let searchQuery: String
+    /// Items filtered by `searchQuery` (case-insensitive substring match
+    /// on displayName).
+    public let filteredItems: [Item]
 
     public init(items: [Item], searchQuery: String = "") {
         self.items = items
         self.searchQuery = searchQuery
-    }
 
-    /// Items filtered by `searchQuery` (case-insensitive substring match
-    /// on displayName).
-    public var filteredItems: [Item] {
-        guard !searchQuery.isEmpty else { return items }
-        let q = searchQuery.lowercased()
-        return items.filter { $0.displayName.lowercased().contains(q) }
+        if searchQuery.isEmpty {
+            self.filteredItems = items
+        } else {
+            let q = searchQuery.lowercased()
+            self.filteredItems = items.filter { $0.displayName.lowercased().contains(q) }
+        }
     }
 
     public static let mock = ContactsListViewModel(items: [
