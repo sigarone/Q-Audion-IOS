@@ -167,7 +167,26 @@ public final class BugReporter: ObservableObject {
     public func triggerManualPublic() { triggerManual() }
 
     private func triggerManual() {
+        // W-DIAGOVERRIDE (2026-08-13, user's explicit call): diagnostic
+        // capture must work in EVERY situation, even while
+        // ScreenshotLockService's secure UITextField sentinel is installed
+        // on the key window. That sentinel is the standard iOS "FLAG_SECURE
+        // equivalent" trick (see ScreenshotLockService's own kdoc) — it
+        // doesn't just block the OS screenshot gesture, it blanks ANY
+        // in-process render of that window, including this class's own
+        // `captureScreen()` → `window.layer.render(in:)`. That's why the
+        // shake/volume debug capture stopped producing a usable screenshot
+        // on screens reached from a screenshot-locked chat (e.g. the mesh
+        // sheet): the lock silently blanked the diagnostic image too.
+        // Bypass it for the duration of this ONE capture, then restore
+        // immediately — this does not weaken the protection outside the
+        // capture instant. Debug-only escape hatch; will be revisited
+        // before production per the user's own note that this won't stay
+        // permanent.
+        let wasLocked = ScreenshotLockService.isLocked
+        if wasLocked { ScreenshotLockService.unlock() }
         let screenshot = captureScreen()
+        if wasLocked { ScreenshotLockService.lock() }
         let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: 2.0)
         pendingReport = PendingReport(
             screenshot: screenshot,

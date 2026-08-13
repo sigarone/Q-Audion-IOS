@@ -67,6 +67,10 @@ final class ChatContainer: ObservableObject {
     /// When true, the NEXT message sent will be flagged as view-once.
     /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
     @Published private(set) var screenshotGrantedByPeer: Bool? = nil
+    /// True while the peer's ss_req is awaiting a live approve/deny answer.
+    /// Transient, in-memory only — matches Android's incomingScreenshotRequest
+    /// StateFlow (never DB-persisted, never a chat message).
+    @Published private(set) var incomingScreenshotRequest: Bool = false
     /// W446: local-only attachment upload progress, keyed by the
     /// outgoing message's local id. `0.0...1.0`, updated as TUS chunks
     /// complete. Purely in-memory UI state — never persisted to
@@ -199,6 +203,15 @@ final class ChatContainer: ObservableObject {
                 // navigates away.
                 self.store.markConversationRead(id: self.conversationId)
                 self.refreshFromStore()
+            }
+        }
+        center.addObserver(forName: AppState.screenshotRequestNotification,
+                           object: nil, queue: .main) { note in
+            guard let info = note.userInfo as? [String: Any],
+                  let from = info["peerUserId"] as? String,
+                  from == peerId else { return }
+            Task { @MainActor [weak self] in
+                self?.incomingScreenshotRequest = true
             }
         }
         center.addObserver(forName: AppState.chatTypingNotification,
@@ -2069,17 +2082,30 @@ final class ChatContainer: ObservableObject {
     /// Android: ChatControlEnvelope TYPE_SCREENSHOT_REQUEST = "ss_req"
     func requestScreenshotPermission() {
         sendControlEnvelope(
-            payload: "{\"qa_ctl\":1,\"t\":\"ss_req\",\"ts\":\(Int64(Date().timeIntervalSince1970))}",
-            preview: "📸 Richiesta autorizzazione screenshot"
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_req\",\"ts\":\(Int64(Date().timeIntervalSince1970))}"
         )
     }
 
-    /// Approve an incoming screenshot-request from the peer.
-    /// Android: ChatControlEnvelope TYPE_SCREENSHOT_RESPONSE = "ss_resp" + approved:true
+    /// Approve an incoming screenshot-request from the peer. Mutual
+    /// unlock (Android: "Request peer to mutually unlock screenshots for
+    /// this session") — approving lifts the lock on THIS device too, not
+    /// just the requester's, matching ChatDetailViewModel.onApproveScreenshotRequest
+    /// (`screenshotBlocked = false` set locally, in addition to the wire ss_resp).
     func grantScreenshotPermission() {
+        store.setScreenshotGranted(conversationId: conversationId, granted: true)
+        incomingScreenshotRequest = false
         sendControlEnvelope(
-            payload: "{\"qa_ctl\":1,\"t\":\"ss_resp\",\"approved\":true,\"ts\":\(Int64(Date().timeIntervalSince1970))}",
-            preview: "📸 Screenshot autorizzati"
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_resp\",\"approved\":true,\"ts\":\(Int64(Date().timeIntervalSince1970))}"
+        )
+        refreshFromStore()
+    }
+
+    /// Deny an incoming screenshot-request from the peer.
+    /// Android: ChatDetailViewModel.onDenyScreenshotRequest.
+    func denyScreenshotRequest() {
+        incomingScreenshotRequest = false
+        sendControlEnvelope(
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_resp\",\"approved\":false,\"ts\":\(Int64(Date().timeIntervalSince1970))}"
         )
     }
 
@@ -2088,8 +2114,7 @@ final class ChatContainer: ObservableObject {
     func revokeScreenshotPermission() {
         store.setScreenshotGranted(conversationId: conversationId, granted: false)
         sendControlEnvelope(
-            payload: "{\"qa_ctl\":1,\"t\":\"ss_lock\",\"ts\":\(Int64(Date().timeIntervalSince1970))}",
-            preview: "📸 Screenshot nuovamente bloccati"
+            payload: "{\"qa_ctl\":1,\"t\":\"ss_lock\",\"ts\":\(Int64(Date().timeIntervalSince1970))}"
         )
     }
 
@@ -2117,33 +2142,29 @@ final class ChatContainer: ObservableObject {
     func syncEphemeralTimerToPeer(seconds: Int?) {
         let timerSec = seconds ?? 0
         let payload: String = "{\"qa_ctl\":1,\"t\":\"ephemeral_timer\",\"timer_sec\":\(timerSec),\"ts\":\(Int64(Date().timeIntervalSince1970))}"
-        let preview: String = timerSec == -1 ? "⏱ Messaggi: visualizza una volta"
-            : timerSec == 0 ? "⏱ Messaggi a scomparsa: disattivati"
-            : "⏱ Messaggi a scomparsa: \(timerSec)s"
-        sendControlEnvelope(payload: payload, preview: preview)
+        sendControlEnvelope(payload: payload)
     }
 
     // MARK: - Private helper
 
-    private func sendControlEnvelope(payload: String, preview: String) {
-        let reqId = UUID()
-        let msg = Message(
-            id: reqId, conversationId: conversationId,
-            direction: .outgoing, plaintext: payload,
-            sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
-            clientMsgId: reqId.uuidString
-        )
-        store.appendMessage(msg)
-        store.recordNewMessage(conversationId: conversationId,
-                               lastMessagePreview: preview,
-                               lastActivity: Date(), incrementUnread: false)
-        refreshFromStore()
-        if let sender = sendService {
-            Task { [peerUserId = peerUserId, msgId = reqId, payload] in
-                _ = await sender.sendEncrypted(messageId: msgId,
-                                               peerUserId: peerUserId,
-                                               plaintext: payload)
-            }
+    /// Ship a `qa_ctl:1` conversation-level control envelope (ss_req /
+    /// ss_resp / ss_lock / ephemeral_timer) over the wire only.
+    /// Android parity fix (2026-08-13): `SendMessageUseCase.sendScreenshotRequest`
+    /// /`sendScreenshotResponse`/`sendEphemeralTimerControl` call `shipControl`
+    /// directly — never `messageDao` — so nothing is persisted locally and no
+    /// row ever appears in the sender's own chat history. This used to
+    /// `store.appendMessage` the RAW JSON payload as an outgoing message row,
+    /// which the bubble list rendered verbatim (no qa_ctl filtering on the
+    /// outgoing path) — a garbled "{"qa_ctl":1,...}" bubble that persisted
+    /// forever in the sender's own chat, exactly the "manda un messaggio
+    /// cifrato sulla chat e rimane lì" the user reported.
+    private func sendControlEnvelope(payload: String) {
+        guard let sender = sendService else { return }
+        let msgId = UUID()
+        Task { [peerUserId = peerUserId] in
+            _ = await sender.sendEncrypted(messageId: msgId,
+                                           peerUserId: peerUserId,
+                                           plaintext: payload)
         }
     }
 }

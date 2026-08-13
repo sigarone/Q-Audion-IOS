@@ -61,6 +61,11 @@ public enum ScreenshotLockService {
         secureField = nil
     }
 
+    /// True while the secure sentinel is installed. Lets callers that need
+    /// a one-off capture (BugReporter's diagnostic screenshot) know whether
+    /// to bypass-and-restore around their capture instead of guessing.
+    public static var isLocked: Bool { secureField != nil }
+
     // MARK: - Private helpers
 
     private static func keyWindow() -> UIWindow? {

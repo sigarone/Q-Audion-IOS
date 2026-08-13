@@ -222,6 +222,25 @@ struct ChatDetailScreen: View {
         .onChange(of: container.screenshotGrantedByPeer) { _ in
             handleScreenAppear()
         }
+        // W-SSREQ: live approve/deny dialog for an incoming ss_req, mirroring
+        // Android's AlertDialog gated on state.incomingScreenshotRequest
+        // (non-dismissable — the user must explicitly answer). Replaces the
+        // old persisted "📸 Il contatto chiede..." chat bubble, which had no
+        // interactive element at all (grantScreenshotPermission() had zero
+        // UI callers) — the peer's request could never actually be granted.
+        .alert("Richiesta screenshot", isPresented: Binding(
+            get: { container.incomingScreenshotRequest },
+            // No-op: SwiftUI calls this on every dismissal, including right
+            // after a button action already flipped the flag via the
+            // container. A deny-on-dismiss here would double-fire alongside
+            // "Approva" (send approved:true, then immediately approved:false).
+            set: { _ in }
+        )) {
+            Button("Rifiuta", role: .cancel) { container.denyScreenshotRequest() }
+            Button("Approva") { container.grantScreenshotPermission() }
+        } message: {
+            Text("L'altro utente vuole abilitare gli screenshot in questa chat. Approvi?")
+        }
         // W38: send-failure feedback. Quando il container marca un
         // messaggio fallito (engine pipeline wires `markFailed` su
         // crypto/network error), pushiamo una snackbar error con bottone

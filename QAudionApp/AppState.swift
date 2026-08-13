@@ -7296,9 +7296,10 @@ final class AppState: ObservableObject {
             //
             // Screenshot-lock family (ss_req / ss_resp / ss_lock) now ALSO
             // parses into a typed case, but it is CONVERSATION-level (no target
-            // row to mutate) and is applied — together with its system bubble +
-            // `setScreenshotGranted` state — by the conversation-level ad-hoc
-            // JSON handler further down this function. So we deliberately let it
+            // row to mutate) and is applied — as a transient dialog signal
+            // (ss_req) or `setScreenshotGranted` state (ss_resp/ss_lock), never
+            // a chat row — by the conversation-level ad-hoc JSON handler
+            // further down this function. So we deliberately let it
             // FALL THROUGH here (do not route to `handleControlEnvelope`, which
             // treats it as a no-op) to keep that ad-hoc handler as the single
             // source of truth and avoid a parse-then-drop regression.
@@ -7463,26 +7464,38 @@ final class AppState: ObservableObject {
             let isScreenshotCtl = ctlType == "ss_req" || ctlType == "ss_resp" || ctlType == "ss_lock"
             let isTimerCtl = ctlType == "ephemeral_timer"
             if isScreenshotCtl || isTimerCtl {
-                let label: String
+                // Android parity fix (2026-08-13): ReceiveMessageUseCase.kt's
+                // ss_req/ss_resp/ss_lock branches never touch the message
+                // store — they only emit to ScreenshotConsentRepository (a
+                // transient SharedFlow) or flip the persisted grant column.
+                // iOS used to ALSO drop a "📸 ..." system bubble into the
+                // conversation for all three, which is what the user flagged
+                // as a stray message that "stays in the chat" — worse, ss_req
+                // had NO approve/deny UI wired to it at all (grantScreenshotPermission()
+                // had zero callers), so the bubble was purely decorative and
+                // the request could never actually be granted from the UI.
+                // Fixed: ss_req now posts a transient notification consumed by
+                // the live ChatContainer/ChatDetailScreen as an approve/deny
+                // dialog (mirrors Android's incomingScreenshotRequest dialog);
+                // ss_resp/ss_lock keep their state mutation but no longer
+                // persist a chat row, matching Android exactly.
                 if ctlType == "ss_req" {
-                    label = "📸 Il contatto chiede autorizzazione per gli screenshot"
-                } else if ctlType == "ss_resp" {
+                    NotificationCenter.default.post(name: AppState.screenshotRequestNotification,
+                                                    object: nil,
+                                                    userInfo: ["peerUserId": senderId])
+                    return
+                }
+                if ctlType == "ss_resp" {
                     let approved = json["approved"] as? Bool ?? false
-                    label = approved ? "📸 Screenshot autorizzati" : "📸 Richiesta screenshot negata"
                     store.setScreenshotGranted(conversationId: conv.id, granted: approved)
                 } else if ctlType == "ss_lock" {
-                    label = "📸 Screenshot nuovamente bloccati"
                     store.setScreenshotGranted(conversationId: conv.id, granted: false)
                 } else if ctlType == "ephemeral_timer" {
                     let sec = json["timer_sec"] as? Int ?? 0
                     store.setEphemeralTimer(conversationId: conv.id, seconds: sec == 0 ? nil : sec)
-                    label = sec == -1 ? "⏱ Messaggi: visualizza una volta"
+                    let label = sec == -1 ? "⏱ Messaggi: visualizza una volta"
                          : sec == 0 ? "⏱ Messaggi a scomparsa: disattivati"
                          : "⏱ Messaggi a scomparsa: \(sec)s"
-                } else {
-                    label = ""
-                }
-                if !label.isEmpty {
                     let sysMsg = Message(
                         id: UUID(), conversationId: conv.id,
                         direction: .incoming, plaintext: label,
@@ -8418,6 +8431,13 @@ final class AppState: ObservableObject {
     /// subscribes in `attach(appState:)` and unsubscribes on dealloc.
     static let chatRefreshNotification = Notification.Name("qaudion.chat.refresh")
     static let chatTypingNotification = Notification.Name("qaudion.chat.typing")
+    /// Transient screenshot-permission request from the peer (ss_req).
+    /// Android wire parity: ScreenshotConsentRepository.Event.RequestReceived
+    /// is a SharedFlow event, never persisted — no DB row, no chat message.
+    /// `ChatContainer` subscribes and shows a live approve/deny dialog while
+    /// the conversation is open; if it isn't open the request is simply lost,
+    /// same as Android (the peer must re-send).
+    static let screenshotRequestNotification = Notification.Name("qaudion.chat.screenshotRequest")
     /// W-GRPMSG: single-frame group TEXT send request from
     /// GroupChatScreen.sendGroupOverWire. userInfo:
     ///   - "groupId": String (dashed lowercase UUID — the server wire id)
