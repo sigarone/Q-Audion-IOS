@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.982",
+              date: "2026-08-13",
+              title: "v1.0.982",
+              bullets: [
+                "fix(contacts): persist name-refresh provenance so it survives a relaunch",
+                "fix(diag): stop diagnostic screenshots coming back blank for SwiftUI screens",
+              ]),
         .init(id: "v1.0.981",
               date: "2026-08-13",
               title: "v1.0.981",
               bullets: [
+                "chore: regenerate changelog for v1.0.981",
                 "fix(call): make the negotiated audio-profile line reach Loki, unconditionally",
               ]),
         .init(id: "v1.0.980",
@@ -156,25 +164,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.963",
                 "fix(mesh): viaMesh is optional, so the read-receipt filter must say so",
-              ]),
-        .init(id: "v1.0.962",
-              date: "2026-08-12",
-              title: "v1.0.962",
-              bullets: [
-                "chore: regenerate changelog for v1.0.962",
-                "docs(wire): document the mesh receipt packet, and re-lock the spec hash",
-                "feat(mesh): acknowledge mesh messages over the mesh, on iOS too",
-                "feat(mesh): say when this chat's contact is reachable over Bluetooth, on iOS too",
-                "fix(mesh): the pre-send indicator now says whether the route actually exists",
-                "fix(chat): the comma landed inside a comment",
-                "docs(wire): document the BLE mesh chat transport, wire v2",
-                "feat(mesh): bring iOS to wire v2, so metadata stops travelling in the clear here too",
-                "feat(mesh): mark outbound mesh messages, warn about visible-only, and stop losing mode switches",
-                "fix(chat): stop every message mutation from erasing view-once and export-blocked",
-                "feat(mesh): select the chat's own contact on the radar, matching Android",
-                "feat(mesh): let a call teach the radar who a device is, and stop erasing the answer",
-                "feat(ios): ship the voice-processing state per call, so \"was AEC off?\" is answerable",
-                "feat(call): promote a 1:1 call to group from the in-call \"+\" button",
               ]),
     ]
 }
