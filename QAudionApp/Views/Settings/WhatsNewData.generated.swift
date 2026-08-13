@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.977",
+              date: "2026-08-13",
+              title: "v1.0.977",
+              bullets: [
+                "fix(avatar): can't tell \"left the device\" from \"peer actually got it\"",
+              ]),
         .init(id: "v1.0.976",
               date: "2026-08-13",
               title: "v1.0.976",
               bullets: [
+                "chore: regenerate changelog for v1.0.976",
                 "fix(mesh): can't prove why Visibile/Mesh completa never select",
               ]),
         .init(id: "v1.0.975",
@@ -171,13 +178,6 @@ extension ReleaseNote {
                 "test(audio): row 9 read the switch-off case off the shipped list",
                 "feat(audio): iOS sends the 60 ms profile — both switches, together",
                 "fix(relay): stop eviction from dropping a downgraded call back into binary",
-              ]),
-        .init(id: "v1.0.957",
-              date: "2026-08-11",
-              title: "v1.0.957",
-              bullets: [
-                "chore: regenerate changelog for v1.0.957",
-                "feat(relay): binary framing, in-call stats parity, and three numbers that stopped lying",
               ]),
     ]
 }
