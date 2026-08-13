@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.971",
+              date: "2026-08-13",
+              title: "v1.0.971",
+              bullets: [
+                "fix(call): queue inbound ICE candidates that arrive before the controller exists",
+              ]),
         .init(id: "v1.0.970",
               date: "2026-08-13",
               title: "v1.0.970",
               bullets: [
+                "chore: regenerate changelog for v1.0.970",
                 "fix(call): close two silent-fail gaps found investigating the 4s accept timeout",
                 "fix(call): ICE and DTLS state transitions never left the device either",
                 "fix(call): the echo report has no way to see if speaker route was on",
@@ -173,33 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.952",
                 "fix(auth): persist refresh-token rotation from every BCryptoBackendProvider",
-              ]),
-        .init(id: "v1.0.951",
-              date: "2026-08-06",
-              title: "v1.0.951",
-              bullets: [
-                "chore: regenerate changelog for v1.0.951",
-                "fix(build): avoid AppState-as-parameter-type pattern in DeviceManagementScreen",
-                "fix(settings): resolve placeholder App Apple ID for TestFlight feedback links",
-                "fix(contacts): wire chat icon to real ChatDetailScreen navigation",
-                "fix(settings): remove dead Vibrazione toggle from Notifications screen",
-                "fix(call+settings): move trust-chain diagram to tap sheet, prune dead toggles",
-                "fix(settings): kill fake identity/device data, dead toggles, missing confirms",
-                "fix(ios): App Store audit batch 2 — no more fabricated security data",
-                "fix(ios): App Store audit batch 1 — accessibility, real bugs, honest UI",
-                "diag: log raw response body on registerExtensionOnly decode failure",
-                "diag(ci): compare HTTP/2 vs HTTP/3 raw response for register endpoint",
-                "fix(ci): diag-register.yaml used invalid assertVisible timeout property",
-                "fix(ci): simctl launch has no -e flag, use SIMCTL_CHILD_ env prefix",
-                "diag(ci): verbose CFNetwork logging + no-launchApp diag flow for register hang",
-                "diag(ci): raw curl to register endpoint before Maestro run",
-                "feat(ci): reusable auth flow + Home tab screen coverage for Maestro",
-                "fix(ios): App Store review compliance — account deletion, dev-tools gate, locale",
-                "docs: mark ios-ui-smoke.yml as green after first successful run",
-                "fix(ci): drop QAudionPacketTunnel from the Simulator UI-smoke build too",
-                "fix(ci): drop quiche.xcframework from the Simulator UI-smoke build",
-                "fix(ci): install xcodegen before generating QAudionApp project in ios-ui-smoke",
-                "ci(ios): add manual UI-smoke (Maestro/Simulator) and WDA real-device provisioning workflows",
               ]),
     ]
 }
