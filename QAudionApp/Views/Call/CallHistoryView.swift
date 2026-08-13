@@ -635,21 +635,39 @@ private struct CallHistoryRow: View {
         return parts.joined(separator: " · ")
     }
 
-    private var timestampLabel: String {
-        let cal = Calendar.current
+    private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static let timeFormatterEEEHHmm: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "EEE HH:mm"
+        return f
+    }()
+
+    private static let timeFormatterDDMMHHmm: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "dd/MM HH:mm"
+        return f
+    }()
+
+    private var timestampLabel: String {
+        let cal = Calendar.current
         if cal.isDateInToday(entry.startedAt) {
-            f.dateFormat = "HH:mm"
+            return Self.timeFormatterHHmm.string(from: entry.startedAt)
         } else if cal.isDateInYesterday(entry.startedAt) {
             return "Ieri"
         } else if let days = cal.dateComponents([.day], from: entry.startedAt, to: Date()).day,
                   days < 7 {
-            f.dateFormat = "EEE HH:mm"
+            return Self.timeFormatterEEEHHmm.string(from: entry.startedAt)
         } else {
-            f.dateFormat = "dd/MM HH:mm"
+            return Self.timeFormatterDDMMHHmm.string(from: entry.startedAt)
         }
-        return f.string(from: entry.startedAt)
     }
 }
 
