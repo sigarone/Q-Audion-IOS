@@ -1,39 +1,42 @@
 import Foundation
 import QAudionEngine
 
-/// Persistent Opus codec preferences tuned by AudioAutoTuner after each call.
+/// Persistent Opus codec preferences. Bitrate is FIXED, not tuned — see
+/// `bitrateKbps` below. FEC/PLP are still adjusted post-call by AudioAutoTuner.
 ///
 /// Plain UserDefaults — these are quality knobs, not security flags, so Keychain
 /// is not needed (contrast with CallsGate security flags which use Keychain).
 ///
-/// Defaults match OpusCodec.Config.secure(): 32 kbps CBR, FEC on, PLR 30%.
-/// Product cap: 40 kbps. The wire ceiling under it is derived, not written
-/// here — `AudioConstants.clampToBlock` (120-byte block − 2-byte length header
-/// − 14-byte reserve ⇒ 41 kbps at 20 ms).
+/// W523 (2026-08-13) — `bitrateKbps` used to be a persisted preference AudioAutoTuner
+/// moved between 24 and 40 kbps per call based on measured loss. That is exactly the
+/// bug Android's AudioCodecPreferences.kt already fixed once (see its kdoc): a
+/// per-device drifting network bitrate produces a per-device varying packet size,
+/// which defeats the entire point of a constant-size CBR wire format
+/// (`AudioConstants.opusBitrate` — "the whole ecosystem ships frames of the same
+/// on-wire size for traffic-analysis resistance... bumping iOS to 64 kbps would have
+/// broken that property, different frame sizes ⇒ device fingerprintable"). Android
+/// keeps its network encoder's `opusBitrateKbps` fixed at 32 and only lets its
+/// auto-tuner move a SEPARATE, BLE-earbud-hop-only field. iOS has no such second
+/// hop for this value to legitimately target, so it stays fixed, full stop — see
+/// `AudioAutoTuner.tunePostCall`, which still computes and reports what the old
+/// loss-driven bitrate would have been (for visibility) but no longer persists it.
 public enum AudioCodecPrefs {
 
-    private static let keyBitrateKbps = "qaudion.audio.opus_bitrate_kbps"
     private static let keyPlp         = "qaudion.audio.opus_plp"
     private static let keyAutoTune    = "qaudion.audio.auto_tune_enabled"
 
+    /// Always the fixed CBR bitrate from the wire spec. Never persisted, never
+    /// tuned — see the type doc above for why a per-device drifting value here
+    /// broke the traffic-analysis-resistance property the constant block size
+    /// exists for.
     public static var bitrateKbps: Int {
-        UserDefaults.standard.object(forKey: keyBitrateKbps) as? Int ?? 32
+        AudioConstants.opusBitrate / 1000
     }
     public static var plp: Int {
         UserDefaults.standard.object(forKey: keyPlp) as? Int ?? 30
     }
     public static var autoTuneEnabled: Bool {
         UserDefaults.standard.object(forKey: keyAutoTune) as? Bool ?? true
-    }
-
-    public static func setBitrateKbps(_ v: Int) {
-        // W-BLOCKSIZE — the persisted preference is one of the sources of a
-        // bitrate, so it passes the block-derived ceiling like the others. 40
-        // stays as the product cap; `clampToBlock` is the wire gate underneath
-        // it (41 kbps at a 120-byte block / 20 ms today, so no change now) and
-        // keeps the two from drifting if the cap is ever raised here alone.
-        UserDefaults.standard.set(AudioConstants.clampToBlock(min(max(v, 8), 40)),
-                                  forKey: keyBitrateKbps)
     }
     public static func setPlp(_ v: Int) {
         UserDefaults.standard.set(min(max(v, 0), 100), forKey: keyPlp)
