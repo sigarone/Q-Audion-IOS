@@ -9,10 +9,22 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.970",
+              date: "2026-08-13",
+              title: "v1.0.970",
+              bullets: [
+                "fix(call): close two silent-fail gaps found investigating the 4s accept timeout",
+                "fix(call): ICE and DTLS state transitions never left the device either",
+                "fix(call): the echo report has no way to see if speaker route was on",
+                "chore(deps): bump github.com/pion/stun/v3 in /RealityCore (#38)",
+                "chore(deps): bump github.com/pion/dtls/v3 in /RealityCore (#39)",
+                "Memoize filteredItems in ListViewModels to prevent O(N log N) re-computation on every render (#49)",
+              ]),
         .init(id: "v1.0.969",
               date: "2026-08-13",
               title: "v1.0.969",
               bullets: [
+                "chore: regenerate changelog for v1.0.969",
                 "fix(call): the dc-mux transport diagnostics never left the device",
                 "⚡ Bolt: Optimize DateFormatter allocations in ChatList and CallHistory (#50)",
               ]),
@@ -188,13 +200,6 @@ extension ReleaseNote {
                 "fix(ci): drop quiche.xcframework from the Simulator UI-smoke build",
                 "fix(ci): install xcodegen before generating QAudionApp project in ios-ui-smoke",
                 "ci(ios): add manual UI-smoke (Maestro/Simulator) and WDA real-device provisioning workflows",
-              ]),
-        .init(id: "v1.0.950",
-              date: "2026-08-06",
-              title: "v1.0.950",
-              bullets: [
-                "chore: regenerate changelog for v1.0.950",
-                "fix(security): bound and dedupe group-call sender_key_nack per track kind",
               ]),
     ]
 }
