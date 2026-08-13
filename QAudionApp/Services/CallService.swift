@@ -704,11 +704,19 @@ final class CallService: @unchecked Sendable {
             // Unreachable under the ordering above (the engine only ever holds a
             // long profile that capture already accepted). Logged rather than
             // assumed away, because the symptom would be a silent call.
-            print("[CallService] W-LONGAUDIO: profile mismatch — engine \(effective.frameDurationMs) ms vs capture \(capture?.captureProfile.frameDurationMs ?? -1) ms")
+            RTLog.warn("call", "aprof mismatch engine_ms=\(effective.frameDurationMs) capture_ms=\(capture?.captureProfile.frameDurationMs ?? -1)")
         }
-        if effective != .standard || profile != effective {
-            print("[CallService] W-LONGAUDIO: audio profile \(effective.frameDurationMs) ms / \(effective.blockBytes) B (resolved \(profile.frameDurationMs) ms)")
-        }
+        // W-LONGAUDIO-DIAG (2026-08-13): was print()-only (never reaches the
+        // remote log pipeline, same gap that's bitten several other features
+        // this project shipped silent) AND gated to skip logging entirely
+        // whenever the call resolved to plain .standard 20ms — so "nothing
+        // logged" could mean either "confirmed 20ms" or "the line never
+        // shipped," indistinguishable after the fact. A real report of bad
+        // audio on a call whose negotiated profile could not be verified
+        // either way is exactly the case this must not repeat. Now
+        // unconditional and RTLog'd — every call states its resolved
+        // profile once, numeric-tail-safe for the redactor.
+        RTLog.info("call", "aprof resolved_ms=\(effective.frameDurationMs) block_b=\(effective.blockBytes) requested_ms=\(profile.frameDurationMs)")
     }
 
     /// One-way 8-hex fingerprint of a key — safe to log (does NOT reveal key
