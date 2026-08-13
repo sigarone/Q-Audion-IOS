@@ -1522,6 +1522,16 @@ final class CallService: @unchecked Sendable {
     /// is the whole diagnostic question, and two counters answer it.
     private func recordVoiceAnalysisSample(_ result: VoiceAnalysisResult) {
         vaResultCount &+= 1
+        // W-VASILENT (2026-08-13): this counter existed but was never
+        // logged — a call with a totally silent REMOTE VOICE ribbon
+        // (STRESS/BREATH/PITCH stuck at 0) was indistinguishable from
+        // "the analysis pipeline never ran at all" vs "it ran and
+        // genuinely measured zero". First sample + every 30th (≈3s at the
+        // ~100ms/sample sample rate) is enough to answer that on the next
+        // real call without flooding the log.
+        if vaResultCount == 1 || vaResultCount % 30 == 0 {
+            RTLog.info("call", "va_sample n=\(vaResultCount) voiced=\(vaVoicedCount)")
+        }
         guard result.pitch.voiced else { return }
         vaVoicedCount &+= 1
     }

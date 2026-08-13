@@ -1650,6 +1650,9 @@ final class AppState: ObservableObject {
     /// `cryptoMeterTimer` immediately below, just a faster tick (5 Hz) so
     /// the wave reads as genuinely live rather than stepping once a second.
     private var voiceWaveTimer: Timer?
+    /// W-VASILENT diagnostic tick counter for the confidence poll below —
+    /// throttles its RTLog line to roughly once per 5s of a 5 Hz timer.
+    private var confidenceWaveTickCount: Int = 0
 
     /// "Voce come chiave" (item 2, 2026-07-31 InCallScreen Android→iOS
     /// port) — in-flight fast-burst + persistent re-announce loop for our
@@ -12704,7 +12707,34 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let integration = self.callService.callIntegration ?? self.responderCallIntegration
-                self.voiceConfidenceHistory = integration?.getGuardianMode().getConfidenceIndex().scoreHistory ?? []
+                let index = integration?.getGuardianMode().getConfidenceIndex()
+                self.voiceConfidenceHistory = index?.scoreHistory ?? []
+                // W-CONFIDENCELIVE (2026-08-13) — the CONFIDENCE stat used to
+                // stay on its "C=—" sentinel for the ENTIRE call: it was fed
+                // exclusively by onDeepfakeAlert/onDeepfakeScore, which only
+                // fires on a sustained-red alarm (redThreshold=0.25 held for
+                // 5s) — per ConfidenceIndex's own calibration, "essentially
+                // impossible for live human voice", so on any real call it
+                // never fires even once. `index` here is the SAME live
+                // ConfidenceIndex the alarm reads from — it already computes
+                // currentScore/currentLevel continuously (after ~4s of
+                // audio); this sampler is the fix, riding the same tick that
+                // already reads scoreHistory from it.
+                if let index {
+                    self.confidenceScore = index.currentScore
+                    self.confidenceLevel = index.currentLevel.rawValue
+                }
+                // W-VASILENT (2026-08-13): same "can't tell ran-silently from
+                // never-ran" gap as the voice-analysis gauges — throttled to
+                // ~once per 5s so a real call's log shows whether this tick
+                // (and the `integration`/`index` it depends on) is alive at
+                // all, independent of whether the score itself ever moves.
+                self.confidenceWaveTickCount &+= 1
+                if self.confidenceWaveTickCount == 1 || self.confidenceWaveTickCount % 25 == 0 {
+                    let hasIndex: Int = index != nil ? 1 : 0
+                    let scorex100: Int = Int((index?.currentScore ?? -1) * 100)
+                    RTLog.info("call", "conf_poll n=\(self.confidenceWaveTickCount) idx=\(hasIndex) scorex100=\(scorex100)")
+                }
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -12718,6 +12748,7 @@ final class AppState: ObservableObject {
         voiceWaveTimer?.invalidate()
         voiceWaveTimer = nil
         voiceConfidenceHistory = []
+        confidenceWaveTickCount = 0
     }
 
     // MARK: - Items 2 + 5 (2026-07-31 InCallScreen Android→iOS port) —
