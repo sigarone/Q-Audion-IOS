@@ -1476,6 +1476,26 @@ final class AppState: ObservableObject {
     /// header compile even on hosts where the WebRTC XCFramework
     /// hasn't been resolved yet.
     var webRtcController: Any?
+    /// W-ICEQUEUE (2026-08-13) — `call_ice` candidates that arrived before
+    /// `webRtcController` was set. `handleIncomingWebRtcIce` used to drop
+    /// these silently (`guard let controller = webRtcController as? ...
+    /// else { return }`, no log, no retry) — found while root-causing an
+    /// iOS↔iOS pair where the WebRTC PeerConnection's ICE state stayed at
+    /// `.new`/never-checking for the whole call (visible now only because
+    /// today's ICE/DTLS RTLog bridge exists). The offering side starts
+    /// gathering and sending its own trickle candidates the instant its
+    /// controller exists and `createOffer` fires; the answering side does
+    /// not assign `webRtcController` until AFTER it has parsed the offer,
+    /// built its own controller and started `acceptIncomingCall` — a real,
+    /// non-zero window in which an early peer candidate has nowhere to go.
+    /// Once ICE starves like this it does not self-heal: a candidate that
+    /// never arrives is a connectivity path that is never tried. Bounded
+    /// (25) so a runaway sender (or a candidate for a call that never gets
+    /// a controller at all) cannot grow this forever; flushed the instant
+    /// `webRtcController` is assigned, cleared on every teardown so a next
+    /// call never inherits a previous one's stale candidates.
+    private var pendingRemoteIceCandidates: [(candidate: String, sdpMid: String?, sdpMLineIndex: Int32)] = []
+    private static let pendingRemoteIceCandidatesCap = 25
     /// Remote video track delivered by the WebRTC stack when the peer
     /// sends video via RTP (Android interop path). Typed as Any? so the
     /// header compiles without a WebRTC import at top level. At runtime
@@ -5114,6 +5134,7 @@ final class AppState: ObservableObject {
             c.closeSynchronously()
         }
         self.webRtcController = nil
+        self.pendingRemoteIceCandidates.removeAll()
         self.remoteWebRtcVideoTrack = nil
         // WIRE_SPEC §8.7 — the video leg is gone: drop any parked track +
         // failsafe so a rebuilt upgrade PC starts with a fresh RX gate.
@@ -5223,6 +5244,7 @@ final class AppState: ObservableObject {
         controller.videoContactPsk = self.callVideoPsk
         if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
         self.webRtcController = controller
+        self.flushPendingIceCandidates(to: controller)
         // Keep the proven WS-relay audio leg untouched — this controller exists
         // ONLY for video. Outbound voice stays on the relay (see
         // sendAudioOverDataChannel pin); video rides this WebRTC PC.
@@ -12000,6 +12022,7 @@ final class AppState: ObservableObject {
                 // exists so Android negotiates video correctly.
                 if video { controller.useExternalVideoSource = true }
                 webRtcController = controller
+                flushPendingIceCandidates(to: controller)
                 // Android↔iOS remote video: Android sends video via WebRTC
                 // RTP (not WS video_frame envelopes). Wire the track callback
                 // so VideoCallView can render it via WebRTCRemoteVideoView.
@@ -12145,6 +12168,7 @@ final class AppState: ObservableObject {
                         print("[AppState] WebRTC startOutgoingCall failed: \(error)")
                         await MainActor.run {
                             self?.webRtcController = nil
+                            self?.pendingRemoteIceCandidates.removeAll()
                         }
                     }
                 }
@@ -13076,6 +13100,7 @@ final class AppState: ObservableObject {
         }
         #endif
         webRtcController = nil
+        pendingRemoteIceCandidates.removeAll()
         remoteWebRtcVideoTrack = nil
         // W-LONGAUDIO (2026-08-10) — drop the peer-capability BINDING for the
         // call that just ended. Belt and braces: the reader already refuses a
@@ -17788,6 +17813,7 @@ extension AppState {
         let caps = peerCapabilities ?? pendingPeerCapabilities
         let audioOnly = !hasVideo
         webRtcController = controller
+        flushPendingIceCandidates(to: controller)
         // Mirror of the caller-side wiring: Android sends remote video via
         // WebRTC RTP so the callee also needs this callback.
         // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
@@ -17935,10 +17961,35 @@ extension AppState {
     }
 
     func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
-        guard let controller = webRtcController as? QAudionWebRtcCallController else { return }
+        guard let controller = webRtcController as? QAudionWebRtcCallController else {
+            // W-ICEQUEUE — was a silent `return`. The controller isn't up yet
+            // (this side hasn't finished processing the offer/answer that
+            // must precede any real candidate); queue it instead of losing
+            // it forever. See `pendingRemoteIceCandidates`'s kdoc.
+            if pendingRemoteIceCandidates.count >= Self.pendingRemoteIceCandidatesCap {
+                pendingRemoteIceCandidates.removeFirst()
+            }
+            pendingRemoteIceCandidates.append((candidate, sdpMid, sdpMLineIndex))
+            RTLog.warn("call", "ice candidate queued — no controller yet n=\(pendingRemoteIceCandidates.count)")
+            return
+        }
         controller.handleRemoteIce(candidate: candidate,
                                      sdpMid: sdpMid,
                                      sdpMLineIndex: sdpMLineIndex)
+    }
+
+    /// W-ICEQUEUE — apply every candidate that arrived before `controller`
+    /// existed. Call once, right after `webRtcController` is assigned, at
+    /// every construction site (outgoing / incoming / video-upgrade
+    /// responder). A no-op empty queue costs one array check.
+    private func flushPendingIceCandidates(to controller: QAudionWebRtcCallController) {
+        guard !pendingRemoteIceCandidates.isEmpty else { return }
+        let queued = pendingRemoteIceCandidates
+        pendingRemoteIceCandidates.removeAll()
+        RTLog.info("call", "ice candidate flush n=\(queued.count)")
+        for c in queued {
+            controller.handleRemoteIce(candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex)
+        }
     }
 }
 #else
