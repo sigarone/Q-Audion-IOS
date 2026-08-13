@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.972",
+              date: "2026-08-13",
+              title: "v1.0.972",
+              bullets: [
+                "fix(video): the WS-HEVC video pipeline is print()-only, same gap as everything else",
+              ]),
         .init(id: "v1.0.971",
               date: "2026-08-13",
               title: "v1.0.971",
               bullets: [
+                "chore: regenerate changelog for v1.0.971",
                 "fix(call): queue inbound ICE candidates that arrive before the controller exists",
               ]),
         .init(id: "v1.0.970",
@@ -173,13 +180,6 @@ extension ReleaseNote {
                 "fix(call): apply the same WS-readiness gate to call_processing/call_ready",
                 "fix(call): gate call_answer/call_accepted on WS reconnect, not best-effort",
                 "fix(chat): arm refresh legs on the legacy voice-note download path",
-              ]),
-        .init(id: "v1.0.952",
-              date: "2026-08-07",
-              title: "v1.0.952",
-              bullets: [
-                "chore: regenerate changelog for v1.0.952",
-                "fix(auth): persist refresh-token rotation from every BCryptoBackendProvider",
               ]),
     ]
 }
