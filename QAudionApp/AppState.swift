@@ -146,13 +146,27 @@ final class AppState: ObservableObject {
                     return
                 }
                 guard newState == .active || newState == .encrypted else { return }
-                guard let peerId = self.callContactId, !peerId.isEmpty else { return }
+                // W-AVATARSILENT (2026-08-13) — `maybeExchangeAvatarOnCallConnect()`
+                // logs every branch of ITS OWN body (W-AVATARCALLEE), but this sink
+                // is what decides whether that function is ever reached at all, and
+                // its two guards below used to return with zero trace. Days of "why
+                // does the call-connect trigger never show up in Loki" would have
+                // looked identical whether callContactId was nil, the dedupe latch
+                // ate it, or the hook genuinely never ran — same blind spot the
+                // callee-side fix already closed one layer down, missed here.
+                guard let peerId = self.callContactId, !peerId.isEmpty else {
+                    RTLog.warn("avatar", "callconnect sink skipped — callContactId nil/empty")
+                    return
+                }
                 // Dedupe per call, mirroring Android's `previousCallId`
                 // check — the state can bounce .active → .encrypted (and a
                 // rekey can bounce it again) within one call.
                 let callKey = ((self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?
                     .getActiveCallId()) ?? peerId
-                guard self.avatarExchangeFiredForCall != callKey else { return }
+                guard self.avatarExchangeFiredForCall != callKey else {
+                    RTLog.info("avatar", "callconnect sink dedup — already fired for this call")
+                    return
+                }
                 self.avatarExchangeFiredForCall = callKey
                 self.maybeExchangeAvatarOnCallConnect()
             }
@@ -12358,13 +12372,24 @@ final class AppState: ObservableObject {
         self.finalizeCallActive()
     }
 
-    /// call_accepted rollout-safety net (WIRE_SPEC §3.5) — bounded 4s
-    /// fallback so a caller talking to a not-yet-upgraded peer doesn't
-    /// wait forever. No-ops if `call_accepted` already finalized the call
-    /// (or the call moved on) by the time it fires.
+    /// call_accepted rollout-safety net (WIRE_SPEC §3.5) — bounded fallback
+    /// so a caller talking to a not-yet-upgraded peer doesn't wait forever.
+    /// No-ops if `call_accepted` already finalized the call (or the call
+    /// moved on) by the time it fires.
+    ///
+    /// W-ACCEPTGATE (2026-08-13) — was 4.0s, shorter than the callee's own
+    /// worst-case send latency: `sendCallAccepted` blocks on
+    /// `ws.ensureAuthenticated(timeoutSec: 5)` before it puts anything on
+    /// the wire, and answering from a CallKit cold-start (lock screen,
+    /// backgrounded app) is exactly when that auth is not yet ready — the
+    /// single most common way a real human answers a call. 4s < 5s made
+    /// this net catch on nearly every real answer instead of only
+    /// not-yet-upgraded peers, silently skipping the two-flag latch
+    /// WIRE_SPEC §3.5 exists for. 7s clears the callee's 5s ceiling with
+    /// margin for the WS round trip on top.
     @MainActor
     private func armAcceptGateTimeout(callId: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7.0) { [weak self] in
             guard let self, self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
             RTLog.warn("call", "call_accepted not received within timeout, proceeding anyway callId=\(callId)")
             self.finalizeCallActive()
