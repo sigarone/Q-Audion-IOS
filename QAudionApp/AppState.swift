@@ -1293,6 +1293,15 @@ final class AppState: ObservableObject {
     let videoDiag = VideoPathDiag()
     /// The ONE per-call 1s-tick watchdog task. nil = not running.
     private var videoDiagWatchdogTask: Task<Void, Never>?
+    /// W-VIDPIPEVIS (2026-08-13) — `sealOutboundFragment` returning nil (no
+    /// encryptor installed, or seal failed) drops an outbound WS-HEVC video
+    /// fragment with zero trace: the capture→encode→fragment chain can be
+    /// confirmed alive (see VideoCallPipeline's `vcap` line) while every
+    /// single fragment still dies right here, silently, for the whole call.
+    /// Rate-limited like the dcmux/backpressure lines elsewhere in this file
+    /// — this can fire ~30x/s and a log line per frame is not a diagnostic,
+    /// it is a denial-of-service against the log pipeline.
+    private var videoSealDropCount: Int64 = 0
     /// Escalation ladder state (pure engine, KAT-gated) the tick delegates to.
     private let videoStallLadder = VideoStallEscalationEngine()
     /// Tick memos: last observed counter values + the monotonic ms of
@@ -5817,6 +5826,7 @@ final class AppState: ObservableObject {
         videoDiag.reset()
         peerKeyframeRequestTimesMs.removeAll()
         lastInboundVideoMid = nil
+        videoSealDropCount = 0
     }
 
     /// One 1s tick: sample the lock-free counters, evaluate the §8.7
@@ -16986,7 +16996,17 @@ extension AppState {
             // to shipping the raw fragment unsealed. `pipeline == nil` (the
             // pipeline itself deallocated) is treated the same way: no
             // sealed bytes, no send — never fall back to `fragment`.
-            guard let pipeline, let sealed = pipeline.sealOutboundFragment(fragment) else { return }
+            guard let pipeline else { return }
+            guard let sealed = pipeline.sealOutboundFragment(fragment) else {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.videoSealDropCount &+= 1
+                    if self.videoSealDropCount == 1 || self.videoSealDropCount % 30 == 0 {
+                        RTLog.warn("call", "vcap seal_drop n=\(self.videoSealDropCount)")
+                    }
+                }
+                return
+            }
             // W-STALEPIPE (2026-07-13) — confirmed server-side (call
             // a92d7e90-b4a9-469c-8cc8-2665428e3607, 2026-07-10): a real call's
             // sender kept shipping video_frame WS messages for 19+ seconds

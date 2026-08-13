@@ -686,6 +686,7 @@ public final class VideoCallPipeline: NSObject {
                 }
             } catch {
                 print("[VideoCallPipeline] outbound fragment rejected, dropping frame: \(error)")
+                RTLog.warn("call", "vcap fragment_reject")
             }
         }
         decoder.onPixelBuffer = { [weak self] pb, _ in
@@ -740,6 +741,20 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         self.captureDiagFrameCount += 1
         if self.captureDiagFrameCount == 1 || self.captureDiagFrameCount % 30 == 0 {
             print("[VideoCallPipeline] W-CAPTUREDIAG frame=\(self.captureDiagFrameCount) paused=\(self.paused) externalFeedActive=\(self.externalFeedActive) bridgeSet=\(self.onCapturedPixelBuffer != nil)")
+            // W-VIDPIPEVIS (2026-08-13) — this whole file was print()-only, so
+            // there was no way to tell "camera captured N frames but nothing
+            // ever left the device" from "camera never captured anything" in
+            // a remote log pull. Short numeric keys survive the shipper's
+            // redactor (a bare word like `externalFeedActive` is itself a
+            // 19-char run of base64-alphabet letters and gets blobbed whole —
+            // the same trap the dcmux `why=` codes were shortened to avoid).
+            RTLog.info(
+                "call",
+                "vcap frame=\(self.captureDiagFrameCount)"
+                    + " paused=\(self.paused ? 1 : 0)"
+                    + " feed=\(self.externalFeedActive ? 1 : 0)"
+                    + " bridge=\(self.onCapturedPixelBuffer != nil ? 1 : 0)"
+            )
         }
         // W524: ABR layer 4 — video paused under extreme network
         // conditions. Skip BOTH the WebRTC bridge and the HEVC
