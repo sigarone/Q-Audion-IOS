@@ -34,28 +34,31 @@ public struct ConversationListViewModel: ViewModelProtocol {
 
     public let items: [Item]
     public let searchQuery: String
+    public let filteredItems: [Item]
 
     public init(items: [Item], searchQuery: String = "") {
         self.items = items
         self.searchQuery = searchQuery
-    }
 
-    public var filteredItems: [Item] {
         let pinnedFirst = items.sorted { lhs, rhs in
             if lhs.pinned != rhs.pinned { return lhs.pinned }
             return lhs.lastActivity > rhs.lastActivity
         }
-        guard !searchQuery.isEmpty else { return pinnedFirst }
-        let q = searchQuery.lowercased()
-        // W104: extend search to also match the last-message preview.
-        // Useful when the user remembers a phrase but not who said it
-        // (e.g. searching "pizza" surfaces every conv mentioning food).
-        return pinnedFirst.filter { item in
-            if item.peerDisplayName.lowercased().contains(q) { return true }
-            if let preview = item.lastMessagePreview?.lowercased(), preview.contains(q) {
-                return true
+
+        if searchQuery.isEmpty {
+            self.filteredItems = pinnedFirst
+        } else {
+            let q = searchQuery.lowercased()
+            // W104: extend search to also match the last-message preview.
+            // Useful when the user remembers a phrase but not who said it
+            // (e.g. searching "pizza" surfaces every conv mentioning food).
+            self.filteredItems = pinnedFirst.filter { item in
+                if item.peerDisplayName.lowercased().contains(q) { return true }
+                if let preview = item.lastMessagePreview?.lowercased(), preview.contains(q) {
+                    return true
+                }
+                return false
             }
-            return false
         }
     }
 
