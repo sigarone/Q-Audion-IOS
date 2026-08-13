@@ -52,12 +52,41 @@ final class NameResolutionService: @unchecked Sendable {
     /// what we set — the peer may have renamed on the server, safe to
     /// re-check" apart from "changed since — a human touched this, never
     /// clobber it" (the exact guarantee `mayOverwrite` gives the placeholder
-    /// path, W-NAMEOVERWRITE-DIAG 2026-08-04). In-memory only — resets on
-    /// relaunch, which just costs one extra fetch cycle, not a safety hole
-    /// (`retryCooldown` still throttles the network call either way).
-    private var lastAutoResolvedName: [String: String] = [:]
-    private var lastAutoResolvedAt: [String: Date] = [:]
-    private let refreshTtl: TimeInterval = 3600
+    /// path, W-NAMEOVERWRITE-DIAG 2026-08-04).
+    ///
+    /// UserDefaults-backed (NOT in-memory) — the first cut of this kept it
+    /// in-memory on the theory that a relaunch just costs one extra fetch
+    /// cycle. Wrong in practice: Pavel called then chatted (the trigger DID
+    /// fire), but a fresh TestFlight build — installed multiple times an
+    /// hour during active testing — wipes in-memory state on every relaunch,
+    /// so the "still matches what we last wrote" check never found a prior
+    /// value to compare against and the refresh silently never proceeded,
+    /// for the entire session. Persisting survives the relaunch.
+    private static let provenanceDefaultsKey = "qaudion.nameresolve.lastAutoResolved.v1"
+    /// Was 3600s (Android's own figure) — cut to 120s for the same reason:
+    /// a hardcoded hour makes the fix functionally invisible during a
+    /// testing session shorter than an hour, which this project's sessions
+    /// routinely are. `retryCooldown` above already rate-limits the actual
+    /// network call per id to once/30s regardless of this value.
+    private let refreshTtl: TimeInterval = 120
+
+    private func readProvenance(_ id: String) -> (name: String, at: Date)? {
+        lock.lock()
+        let all = UserDefaults.standard.dictionary(forKey: Self.provenanceDefaultsKey) as? [String: [String: Any]]
+        lock.unlock()
+        guard let entry = all?[id],
+              let name = entry["name"] as? String,
+              let atEpoch = entry["at"] as? Double else { return nil }
+        return (name, Date(timeIntervalSince1970: atEpoch))
+    }
+
+    private func writeProvenance(_ id: String, name: String) {
+        lock.lock()
+        var all = UserDefaults.standard.dictionary(forKey: Self.provenanceDefaultsKey) as? [String: [String: Any]] ?? [:]
+        all[id] = ["name": name, "at": Date().timeIntervalSince1970]
+        UserDefaults.standard.set(all, forKey: Self.provenanceDefaultsKey)
+        lock.unlock()
+    }
 
     private let contactsStore = ContactsStore()
 
@@ -184,11 +213,8 @@ final class NameResolutionService: @unchecked Sendable {
                 // caller (never refreshes a real name) or a human edit
                 // (never refreshed, at any age).
                 guard allowRefreshOfRealName else { return }
-                let (lastAuto, lastAt) = self.lock.withLock {
-                    (self.lastAutoResolvedName[id], self.lastAutoResolvedAt[id])
-                }
-                guard let lastAuto, stored.displayName == lastAuto,
-                      let lastAt, Date().timeIntervalSince(lastAt) >= self.refreshTtl else { return }
+                guard let provenance = self.readProvenance(id), stored.displayName == provenance.name,
+                      Date().timeIntervalSince(provenance.at) >= self.refreshTtl else { return }
             }
             guard let api = await src() else {
                 RTLog.warn("NameResolve", "no live provider for \(id.prefix(8))… — will retry")
@@ -447,11 +473,8 @@ final class NameResolutionService: @unchecked Sendable {
             let placeholderOk = Self.mayOverwrite(s.displayName, with: resolved)
             let refreshOk: Bool = {
                 guard allowRefreshOfRealName, !placeholderOk else { return false }
-                let (lastAuto, lastAt) = self.lock.withLock {
-                    (self.lastAutoResolvedName[id], self.lastAutoResolvedAt[id])
-                }
-                guard let lastAuto, s.displayName == lastAuto,
-                      let lastAt, Date().timeIntervalSince(lastAt) >= self.refreshTtl else { return false }
+                guard let provenance = self.readProvenance(id), s.displayName == provenance.name,
+                      Date().timeIntervalSince(provenance.at) >= self.refreshTtl else { return false }
                 return true
             }()
             guard (placeholderOk || refreshOk), s.displayName != resolved else { return }
@@ -509,10 +532,7 @@ final class NameResolutionService: @unchecked Sendable {
         // chat-activity refresh can tell this value apart from a human
         // edit (see the guard above and `maybeRefreshFromChatActivity`'s
         // kdoc).
-        lock.lock()
-        lastAutoResolvedName[id] = resolved
-        lastAutoResolvedAt[id] = Date()
-        lock.unlock()
+        writeProvenance(id, name: resolved)
         // ContactsStore.save() posts .contactsDidChange — every observer
         // (AppState.cachedContacts, HomeView cache, group-call manager
         // re-resolve hook) refreshes from there; nothing else to do.
