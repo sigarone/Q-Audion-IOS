@@ -114,18 +114,27 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
             //   Code=3 filteredByDoNotDisturb (Focus / DnD active on device),
             //   Code=4 filteredByBlockList.
-            // In ALL these cases the system call UI won't appear, so we arm the
-            // in-app ringing banner's manual answer path via callKitRejectedUUIDs.
-            // The in-app `callState = .ringing` is set by the caller AFTER this
-            // returns, regardless of success/failure, so the user can still
-            // answer from the custom banner.
+            // Only Code=3/4 (and any first-attempt Code=2 we didn't cause
+            // ourselves) mean the system call UI genuinely never appeared —
+            // that is the ONLY case where arming the in-app manual-answer
+            // fallback is correct. When `alreadyUp` is true this rejection is
+            // OUR OWN second call (PushKit+WS both reported the same uuid):
+            // the FIRST call already succeeded, a real native CallKit UI is
+            // live and answerable right now. Arming the fallback here used to
+            // stack the in-app ringing banner on top of that working native
+            // UI — the "seconda chiamata in chiaro" the user sees, and
+            // answering FROM the fallback banner did nothing because the
+            // call CallKit actually knows about was reported by the other
+            // branch, never latched to this banner's answer path.
             let nsErr = error as NSError
-            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) — arming in-app manual answer path for \(uuid)")
+            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid)")
             // Numeric tail so this survives the remote-log redactor: without it
             // the whole CallKit path is invisible off-device, and a rejection
             // that costs the user an incoming call looks exactly like silence.
             log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
-            callKitRejectedUUIDs.insert(uuid)
+            if !alreadyUp {
+                callKitRejectedUUIDs.insert(uuid)
+            }
         }
     }
 
