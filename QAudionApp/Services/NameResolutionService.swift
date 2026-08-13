@@ -46,6 +46,19 @@ final class NameResolutionService: @unchecked Sendable {
     private var lastAttempt: [String: Date] = [:]
     private let retryCooldown: TimeInterval = 30
 
+    /// W-NAMEREFRESH (2026-08-13) — provenance for the chat-activity refresh
+    /// path (`maybeRefreshFromChatActivity`). Remembers the value/time WE
+    /// last auto-wrote for an id, so a later refresh can tell "still exactly
+    /// what we set — the peer may have renamed on the server, safe to
+    /// re-check" apart from "changed since — a human touched this, never
+    /// clobber it" (the exact guarantee `mayOverwrite` gives the placeholder
+    /// path, W-NAMEOVERWRITE-DIAG 2026-08-04). In-memory only — resets on
+    /// relaunch, which just costs one extra fetch cycle, not a safety hole
+    /// (`retryCooldown` still throttles the network call either way).
+    private var lastAutoResolvedName: [String: String] = [:]
+    private var lastAutoResolvedAt: [String: Date] = [:]
+    private let refreshTtl: TimeInterval = 3600
+
     private let contactsStore = ContactsStore()
 
     /// Inject the live-provider API source. Called once from
@@ -84,6 +97,33 @@ final class NameResolutionService: @unchecked Sendable {
     /// down) and upsert a resolved display name into the rubrica. Safe to
     /// call from any thread, returns immediately.
     func ensureResolved(userId: String) {
+        ensureResolvedInternal(userId: userId, allowRefreshOfRealName: false)
+    }
+
+    /// W-NAMEREFRESH (2026-08-13) — Android-parity chat-activity refresh
+    /// (mirrors `ReceiveMessageUseCase.ensureContactResolved`, called on
+    /// every inbound chat message there). Call this from the same
+    /// chat-decrypt point that already fires `maybeAnnounceAvatarTo`.
+    ///
+    /// Root cause this closes: `ensureResolved` above only ever fetches
+    /// while the rubrica still shows a placeholder/bare-extension — once
+    /// ANY real name is cached, `DisplayName.forUser` never calls it again,
+    /// so a chat-only peer's later server-side rename was invisible
+    /// forever (confirmed 2026-08-13: iOS has no push/announce for name
+    /// changes, unlike avatar's `avatar_announce`). This method MAY
+    /// refresh an already-real name, but only when it is STILL exactly the
+    /// value we ourselves last auto-wrote and `refreshTtl` has elapsed —
+    /// anything that doesn't match what we last wrote is a human edit
+    /// (manual rubrica rename, or a device-contact match) and is left
+    /// alone, same guarantee `mayOverwrite` gives the placeholder path.
+    /// Without that check this would resurrect the exact bug
+    /// W-NAMEOVERWRITE-DIAG (2026-08-04) hardened against — a rename
+    /// silently reverting.
+    func maybeRefreshFromChatActivity(userId: String) {
+        ensureResolvedInternal(userId: userId, allowRefreshOfRealName: true)
+    }
+
+    private func ensureResolvedInternal(userId: String, allowRefreshOfRealName: Bool) {
         let id = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         // Short human-scale ids (extensions typed on the dialpad etc.)
         // render as-is in DisplayName.forUser — nothing to resolve.
@@ -137,7 +177,18 @@ final class NameResolutionService: @unchecked Sendable {
             if let stored = self.contactsStore.load().first(where: { $0.userId == id }),
                !DisplayName.isPlaceholderName(stored.displayName),
                !DisplayName.isBareExtension(stored.displayName) {
-                return
+                // W-NAMEREFRESH: a real name is cached — only worth a fresh
+                // fetch if the caller allows refreshing real names AND it
+                // is still exactly what WE last wrote AND enough time has
+                // passed. Otherwise this is either the placeholder-only
+                // caller (never refreshes a real name) or a human edit
+                // (never refreshed, at any age).
+                guard allowRefreshOfRealName else { return }
+                let (lastAuto, lastAt) = self.lock.withLock {
+                    (self.lastAutoResolvedName[id], self.lastAutoResolvedAt[id])
+                }
+                guard let lastAuto, stored.displayName == lastAuto,
+                      let lastAt, Date().timeIntervalSince(lastAt) >= self.refreshTtl else { return }
             }
             guard let api = await src() else {
                 RTLog.warn("NameResolve", "no live provider for \(id.prefix(8))… — will retry")
@@ -159,7 +210,7 @@ final class NameResolutionService: @unchecked Sendable {
                     // placeholder-detection then correctly refuses to
                     // downgrade it to the synthetic "Int. NNN" fallback.
                     self.enrichFromCallProfile(pub, for: id)
-                    self.apply(pub, for: id)
+                    self.apply(pub, for: id, allowRefreshOfRealName: allowRefreshOfRealName)
                 } else {
                     // Not an error: the server answered, clearly, that this
                     // account is gone. Logging it as a failure is what sent
@@ -362,7 +413,7 @@ final class NameResolutionService: @unchecked Sendable {
 
     // MARK: - Internals
 
-    private func apply(_ pub: PublicUser, for id: String) {
+    private func apply(_ pub: PublicUser, for id: String, allowRefreshOfRealName: Bool) {
         let serverName = StringSanitiser.displayName(pub.displayName ?? "", fallback: "")
         let ext = pub.extensionNumber ?? 0
 
@@ -387,16 +438,31 @@ final class NameResolutionService: @unchecked Sendable {
         if let s = stored {
             // NEVER overwrite a real user-given rubrica name; only fill
             // empty/UUID-shaped/placeholder rows (and upgrade our own
-            // synthetic bare-extension name to a real server name).
-            guard Self.mayOverwrite(s.displayName, with: resolved),
-                  s.displayName != resolved else { return }
+            // synthetic bare-extension name to a real server name) — UNLESS
+            // this is the W-NAMEREFRESH chat-activity path AND the stored
+            // value is still exactly what WE last auto-wrote (re-checked
+            // here, not just at the call site above, to close the race
+            // between that check and this actual write — a manual edit
+            // landing in between must still win).
+            let placeholderOk = Self.mayOverwrite(s.displayName, with: resolved)
+            let refreshOk: Bool = {
+                guard allowRefreshOfRealName, !placeholderOk else { return false }
+                let (lastAuto, lastAt) = self.lock.withLock {
+                    (self.lastAutoResolvedName[id], self.lastAutoResolvedAt[id])
+                }
+                guard let lastAuto, s.displayName == lastAuto,
+                      let lastAt, Date().timeIntervalSince(lastAt) >= self.refreshTtl else { return false }
+                return true
+            }()
+            guard (placeholderOk || refreshOk), s.displayName != resolved else { return }
             // W-NAMEOVERWRITE-DIAG (2026-08-04): same incident as Phase 1's
             // twin log above — see enrichFromCallProfile. mayOverwrite
             // SHOULD block this once a real rename is stored; log the
-            // before/after + WHY it was allowed (placeholder vs. bare
-            // extension) so the next occurrence proves whether this is the
-            // actual culprit instead of guessing.
-            let why = DisplayName.isPlaceholderName(s.displayName) ? "placeholder" : "bare-extension"
+            // before/after + WHY it was allowed (placeholder / bare
+            // extension / chat-activity refresh) so the next occurrence
+            // proves whether this is the actual culprit instead of guessing.
+            let why = refreshOk ? "chat-activity-refresh"
+                : DisplayName.isPlaceholderName(s.displayName) ? "placeholder" : "bare-extension"
             RTLog.warn("NameResolve", "apply() upsert id=\(id.prefix(8)) before=\"\(s.displayName)\" after=\"\(resolved)\" reason=\(why)")
             contactsStore.upsert(ContactsStore.StoredContact(
                 userId: id,
@@ -439,6 +505,14 @@ final class NameResolutionService: @unchecked Sendable {
                 isVerified: false
             ))
         }
+        // W-NAMEREFRESH: record what WE just wrote + when, so a later
+        // chat-activity refresh can tell this value apart from a human
+        // edit (see the guard above and `maybeRefreshFromChatActivity`'s
+        // kdoc).
+        lock.lock()
+        lastAutoResolvedName[id] = resolved
+        lastAutoResolvedAt[id] = Date()
+        lock.unlock()
         // ContactsStore.save() posts .contactsDidChange — every observer
         // (AppState.cachedContacts, HomeView cache, group-call manager
         // re-resolve hook) refreshes from there; nothing else to do.

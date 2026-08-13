@@ -7277,6 +7277,16 @@ final class AppState: ObservableObject {
             // callback directly. Fire-and-forget; never blocks/affects
             // this message's own processing.
             maybeAnnounceAvatarTo(senderId, trigger: .chatDecrypt)
+            // W-NAMEREFRESH (2026-08-13): a chat-only peer's server-side
+            // display-name change was invisible forever — `ensureResolved`
+            // (called from DisplayName.forUser) only ever fetches while a
+            // placeholder is showing, never once a real name is cached, and
+            // there is no push/announce for name changes (unlike avatar's
+            // avatar_announce). Mirrors Android's ReceiveMessageUseCase.
+            // ensureContactResolved, which runs on every inbound message.
+            // Safe against clobbering a manual rubrica rename — see
+            // NameResolutionService.maybeRefreshFromChatActivity's kdoc.
+            NameResolutionService.shared.maybeRefreshFromChatActivity(userId: senderId)
             // W78: cross-platform attachment placeholder. Desktop and
             // Android send voice notes / files via the qa_ctl:1
             // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
