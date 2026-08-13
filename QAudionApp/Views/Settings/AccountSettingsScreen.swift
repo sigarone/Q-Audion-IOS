@@ -118,20 +118,15 @@ final class AccountSettingsContainer: ObservableObject {
     }
 
     // MARK: - W445: Icon avatar
-
-    func setIconAvatar(_ iconName: String) {
-        let url: String = "sficon://" + iconName
-        UserDefaults.standard.set(url, forKey: Self.iconAvatarKey)
-        UserDefaults.standard.set("icon", forKey: Self.avatarKindKey)
-        viewModel = AccountSettingsViewModel(
-            userId: viewModel.userId,
-            phoneHash: viewModel.phoneHash,
-            displayName: viewModel.displayName,
-            statusMessage: viewModel.statusMessage,
-            avatarUrl: URL(string: url),
-            dialExtension: viewModel.dialExtension
-        )
-    }
+    //
+    // W-AVATARCHARALIGN (2026-08-13) — the WRITE side (`setIconAvatar`,
+    // an `sficon://<SF-Symbol>` pseudo-URL) is gone: character selection
+    // now uploads real PNG bytes through `uploadAvatar`, same as Android.
+    // `iconAvatarKey`/`avatarKindKey` and `resolveAvatarURL`'s READ-side
+    // check below stay — anyone who already picked an SF Symbol under the
+    // old picker keeps seeing it rendered (QAudionAvatar still knows how
+    // to draw `sficon://`) until they pick a character here, which
+    // overwrites it with a real photo the normal way.
 
     func logout() {
         guard let appState else { return }
@@ -525,7 +520,10 @@ struct AccountSettingsScreen: View {
             container.refreshPublicPhones()
         }
         .sheet(isPresented: $showingIconPicker) {
-            AvatarIconPicker { icon in container.setIconAvatar(icon) }
+            // W-AVATARCHARALIGN — a picked character now goes through the
+            // exact same upload path as a real photo (matches Android:
+            // "Scegli un personaggio" just uploads the drawable's bytes).
+            AvatarIconPicker { image in container.uploadAvatar(image: image) }
         }
         .fullScreenCover(isPresented: $showingCamera) {
             CameraCapturePicker { image in
