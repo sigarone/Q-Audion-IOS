@@ -244,6 +244,7 @@ struct InCallView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .accessibilityLabel("Termina chiamata")
         }
         .padding(.horizontal, 8)
     }
@@ -271,5 +272,7 @@ private struct InCallControlButton: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
         }
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }

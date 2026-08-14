@@ -94,6 +94,9 @@ struct SettingsScreen: View {
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .monospacedDigit()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Tocca due volte per copiare versione e build negli appunti")
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
