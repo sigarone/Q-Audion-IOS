@@ -254,19 +254,18 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     private var _silenceDrops: Int64 = 0
     private var _pushed: Int64 = 0
 
-    /// W-ALL60 (2026-08-14) — start the ladder at the fleet profile's frame
-    /// duration instead of at the 20 ms statics.
-    ///
-    /// The statics above are still computed at 20 ms on purpose: they are the
-    /// historical series the tests and the shipped telemetry compare against.
-    /// What changes here is only the STARTING point of a live buffer, which used
-    /// to spend its first frames holding a 20 ms ladder while 60 ms audio
-    /// arrived — `setInboundFrameDurationMs` fixed it, but only from the first
-    /// successfully decoded frame onward, i.e. after the window where a call is
-    /// most likely to be starved.
-    public init() {
-        setInboundFrameDurationMs(AudioProfile.defaultProfile.frameDurationMs)
-    }
+    // W-ALL60 (2026-08-14) — deliberately NOT seeded from the send profile.
+    //
+    // Seeding the ladder at `AudioProfile.defaultProfile` was tried and reverted
+    // the same day: it presumes the PEER sends 60 ms, and this class exists
+    // precisely because that presumption is not ours to make. The receive path
+    // holds no negotiation state and follows the OBSERVED inbound duration
+    // (`setInboundFrameDurationMs`, driven from the decoded frame's own length),
+    // so a peer still on 20 ms — a client mid-rollout, or the asymmetric-strip
+    // row — would have been met with a 60 ms ladder instead. Deriving receive
+    // geometry from what WE transmit is the exact bug the send/receive split in
+    // `AudioCapture` was introduced to remove.
+    public init() {}
 
     /// Frames the consumer asked for and the queue could not supply.
     public var underruns: Int64 { lock.lock(); defer { lock.unlock() }; return _underruns }
