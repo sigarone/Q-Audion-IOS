@@ -5,3 +5,7 @@
 ## 2026-08-13 - DateFormatter inline instantiation in SwiftUI lists
 **Learning:** Instantiating `DateFormatter` inline in SwiftUI list render methods (`ChatListScreen`, `CallHistoryView`) is a known Swift performance bottleneck and causes severe stuttering during scrolling because formatters are repeatedly allocated.
 **Action:** Always extract `DateFormatter` instantiations to `private static let` properties in SwiftUI views, preserving formatting logic. Added static formatters for all timestamp formatting to improve scroll performance.
+
+## 2024-06-25 - Extracted DateFormatter Instantiations in more List Views
+**Learning:** `DateFormatter` was still being instantiated inline in methods invoked heavily during list rendering (`GroupChatScreen`, `GroupCallChatPanel`, `DayHeader`, `ContactDetailScreen`). Given Swift's known performance bottleneck around `DateFormatter` allocations, this was triggering unnecessary layout pauses during rapid data changes in group chats.
+**Action:** Always extract `DateFormatter` instantiations to `private static let` properties in SwiftUI views, preserving formatting logic.

@@ -324,16 +324,20 @@ struct GroupCallChatPanel: View {
 
     // MARK: - Load / render helpers (mirrors GroupChatScreen's identical methods)
 
-    private func reloadMessages() {
-        let stored = GroupMessageStore.shared.messages(forGroupHex: groupHex)
+    private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private func reloadMessages() {
+        let stored = GroupMessageStore.shared.messages(forGroupHex: groupHex)
         messages = stored.map { m in
             GroupMessageRowUi(
                 id: m.id,
                 text: m.text,
                 senderLabel: m.mine ? "Tu" : resolveMemberName(m.senderId),
-                timestamp: f.string(from: m.ts),
+                timestamp: Self.timeFormatterHHmm.string(from: m.ts),
                 mine: m.mine,
                 attachmentKind: m.attachmentKind,
                 mediaMime: m.mediaMime,

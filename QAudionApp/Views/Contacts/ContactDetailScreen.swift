@@ -718,14 +718,19 @@ struct ContactDetailScreen: View {
         }
     }
 
+    private static let mediumDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateStyle = .medium
+        return f
+    }()
+
     /// `firstConfirmedCallId` is DELIBERATELY never rendered here (standing
     /// project rule: no raw UUIDs in any user-facing UI) — only the
     /// human-relevant date/count.
     private func presenceAuthSummary(_ auth: ContactsStore.PresenceAuth) -> String {
         let date = Date(timeIntervalSince1970: Double(auth.firstConfirmedAt) / 1000)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        let dateStr = formatter.string(from: date)
+        let dateStr = Self.mediumDateFormatter.string(from: date)
         let times = auth.confirmedCallCount == 1 ? "1 volta" : "\(auth.confirmedCallCount) volte"
         switch auth.status {
         case .active:
@@ -795,10 +800,7 @@ struct ContactDetailScreen: View {
         switch eval.state {
         case .userVerified:
             guard let date = eval.verifiedAt else { return "Verificato" }
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "it_IT")
-            f.dateStyle = .medium
-            return f.string(from: date)
+            return Self.mediumDateFormatter.string(from: date)
         case .identityChanged: return "🚨 Identità cambiata"
         case .identityPinnedTofu: return "Mai (pinned TOFU)"
         case .unverified: return "Mai"
@@ -865,13 +867,17 @@ struct ContactDetailScreen: View {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(scheme.outline.opacity(0.5), lineWidth: 1))
     }
 
-    private static func formatEventDate(_ epochMs: Int64) -> String {
-        let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
+    private static let eventDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
         f.dateStyle = .medium
         f.timeStyle = .short
-        return f.string(from: date)
+        return f
+    }()
+
+    private static func formatEventDate(_ epochMs: Int64) -> String {
+        let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
+        return Self.eventDateFormatter.string(from: date)
     }
 
     private func eventRow(severity: Color, when: String, summary: String) -> some View {
