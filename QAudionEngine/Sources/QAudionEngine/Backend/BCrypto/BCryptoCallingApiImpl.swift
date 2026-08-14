@@ -179,7 +179,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // Can occur if the WebRTC onAnswerCreated callback fires twice or
         // if AppState logic races after receiving call_incoming twice.
         guard !checkAndMarkAnswerSent() else { return }
-        let cid = currentCallId()
+        // W-PHANTOMCALLID — no bound call means there is no call to answer.
+        // Answering with a fabricated id only produced frames the server
+        // refused; failing loudly is what lets the caller retry or tear down.
+        guard let cid = activeCallIdOrNil() else {
+            print("[BCryptoCalling] sendCallAnswer DROPPED — no active call_id bound")
+            throw BCryptoCallingError.wsUnavailable
+        }
         var data: [String: Any] = [
             "recipient_id": recipientId,
             "call_id": cid,
@@ -208,7 +214,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         sdpMid: String?,
         sdpMLineIndex: Int32
     ) async throws {
-        let cid = currentCallId()
+        // W-PHANTOMCALLID — ICE trickles for the life of a call, so THIS is the
+        // path that used to mint the phantom id after any clear. A candidate
+        // with no call to belong to is dropped, not invented into one.
+        guard let cid = activeCallIdOrNil() else {
+            print("[BCryptoCalling] sendIceCandidate DROPPED — no active call_id bound")
+            return
+        }
         var data: [String: Any] = [
             "call_id": cid,
             "candidate": candidate,
@@ -220,14 +232,17 @@ public final class BCryptoCallingApiImpl: CallingApi {
 
     /// Tier-1 (2026-07-16 wire contract) — 1:1 call TARGETED reaction.
     /// Mirrors `sendIceCandidate`'s send path: rides the internally-tracked
-    /// `currentCallId()` rather than an externally-passed callId (the call
+    /// the bound active call id rather than an externally-passed callId (the call
     /// is already established by the time a reaction can be sent).
     /// `targetId` is the peer's userId; the server validates both sender
     /// and target are the two call parties (mirrors bcrypto-server's
     /// `group_call_signal` case) before relaying as `call_reaction_recv`.
     /// Wire: {call_id, target_id, emoji}.
     public func sendCallReaction(targetId: String, emoji: String) async throws {
-        let cid = currentCallId()
+        guard let cid = activeCallIdOrNil() else {
+            print("[BCryptoCalling] sendCallReaction DROPPED — no active call_id bound")
+            return
+        }
         ws.send(type: "call_reaction", data: [
             "call_id": cid,
             "target_id": targetId,
@@ -236,7 +251,14 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     public func sendHangup(recipientId: String) async throws {
-        let cid = currentCallId()
+        // W-PHANTOMCALLID — hanging up a call that was never bound is a no-op,
+        // not a reason to mint an id. `sendCallHangupForId` remains the way to
+        // hang up an explicitly-known call (originator cleanup path).
+        guard let cid = activeCallIdOrNil() else {
+            print("[BCryptoCalling] sendHangup skipped — no active call_id bound")
+            clearActiveCallId()
+            return
+        }
         // W419 — log so we can correlate with bcrypto.service journalctl.
         // The previous version had no log here, so when the Android peer
         // got "ghost call" the maintainer had no signal that iOS even
@@ -331,7 +353,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     /// Send a call_hangup explicitly bound to a specific callId,
-    /// bypassing the lazy `currentCallId()` fallback. Used by the
+    /// bypassing the bound active call id entirely. Used by the
     /// Android-originator cleanup path: when the opaque OFFER fails
     /// after the call_offer has already woken the peer, we must
     /// hangup against the SAME callId we just minted (not whatever
@@ -529,15 +551,33 @@ public final class BCryptoCallingApiImpl: CallingApi {
         return try JSONDecoder().decode(RelayResponse.self, from: data)
     }
 
-    /// Returns the active call id, falling back to a fresh UUID if none
-    /// has been set (e.g. a stray `sendCallAnswer` arrived before any
-    /// matching offer — pathological but should not crash).
-    private func currentCallId() -> String {
+    /// W-PHANTOMCALLID (2026-08-14) — the id of the call that is actually
+    /// running, or `nil`. It NEVER invents one.
+    ///
+    /// This used to fall back to a fresh `UUID().uuidString` AND latch it into
+    /// `activeCallId`, so a moment of `nil` did not degrade one frame — it
+    /// permanently redirected the whole call onto an id the server had never
+    /// heard of. Everything sent afterwards was refused, silently from the
+    /// device's point of view:
+    ///
+    ///   WARN "F4: call_video_state for foreign call_id rejected" user=9a2aa555
+    ///   WARN "audio relay rejected: not an established call party" ...
+    ///
+    /// Live on call `7fbb9921` (2026-08-14, both legs 1.0.986): audio flowed
+    /// normally, then ~30 s in the callee's frames started being rejected and
+    /// that direction went silent for the remaining 8 s until the user hung up.
+    /// `sendHangup` clears `activeCallId` by design, and ICE candidates keep
+    /// trickling during a call — so one late `sendIceCandidate` after any clear
+    /// was enough to mint a phantom id and poison every later frame.
+    ///
+    /// The original intent was only "do not crash on a stray `sendCallAnswer`
+    /// that has no matching offer". Answering with a fabricated id never
+    /// achieved anything anyway — the server rejects it — so not sending, and
+    /// saying so, is strictly better than sending into a call that does not
+    /// exist.
+    private func activeCallIdOrNil() -> String? {
         callIdLock.lock(); defer { callIdLock.unlock() }
-        if let cid = activeCallId { return cid }
-        let cid = UUID().uuidString
-        activeCallId = cid
-        return cid
+        return activeCallId
     }
 
     /// Public hook for the responder side: when `call_incoming` arrives,
