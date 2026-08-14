@@ -6549,8 +6549,18 @@ final class AppState: ObservableObject {
                 // the "local handshake done" flag. If the callee's real-user
                 // accept already landed, finalize now; otherwise stash and
                 // arm the 4s rollout-safety timeout.
+                // W-ACCEPTGATE-ID (2026-08-14) — this used to read
+                // `activeCallKitId`, which on an OUTGOING call is a LOCALLY
+                // minted UUID (CallKit's, or `UUID()` under callKitFreeMode) and
+                // never the server's call_id. `handleCallAccepted` latches the
+                // WIRE id, so on every outgoing call the two flags compared two
+                // different identifiers and the latch could not close — the 7s
+                // net was the only thing finalizing the caller, and removing it
+                // for the SDP case left the caller stuck on "not started" with
+                // audio already flowing (live, 2026-08-14, call d8afbd8d).
+                // Both flags now speak the canonical wire id.
                 guard self.callState == .ringing,
-                      let callId = self.activeCallKitId?.uuidString.lowercased() else { return }
+                      let callId = self.canonicalActiveCallId() else { return }
                 // W-ACCEPTGATE-SDP (2026-08-14) — an SDP-bearing `call_answer`
                 // is a WebRTC handshake artifact, NOT a human accepting: since
                 // W-DCSTUCK the callee builds its controller at RING time and
@@ -6558,18 +6568,20 @@ final class AppState: ObservableObject {
                 // screen. Arming the 7s net on that made the CALLER declare
                 // itself connected against a phone that was still ringing.
                 // Only a BARE answer still arms it. See `AcceptGateDecisions`.
-                switch AcceptGateDecisions.resolve(
+                let action = AcceptGateDecisions.resolve(
                     peerAlreadyAccepted: self.callAcceptedCallId == callId,
                     answerCarriedSdp: answerCarriedSdp
-                ) {
-                case .finalizeNow:
+                )
+                if action == .finalizeNow {
                     self.finalizeCallActive()
-                case .waitForAcceptWithFallback:
+                } else {
                     self.localHandshakeReadyCallId = callId
-                    self.armAcceptGateTimeout(callId: callId)
-                case .waitForAcceptOnly:
-                    self.localHandshakeReadyCallId = callId
-                    RTLog.info("call", "accept gate armed=0 sdp=1")
+                    if let secs = AcceptGateDecisions.fallbackSeconds(for: action) {
+                        self.armAcceptGateTimeout(callId: callId, after: secs)
+                    }
+                    let sdpFlag: String = answerCarriedSdp ? "1" : "0"
+                    let gateLine: String = "accept gate sdp=" + sdpFlag + " id=" + String(callId.prefix(8))
+                    RTLog.info("call", gateLine)
                 }
             }
         }
@@ -12525,10 +12537,31 @@ final class AppState: ObservableObject {
     /// accept arriving BEFORE the local handshake finishes isn't lost),
     /// then finalizes immediately if the local handshake already stashed
     /// the same callId.
+    /// W-ACCEPTGATE-ID (2026-08-14) — the call id BOTH accept-gate flags must
+    /// use: the one the server and the peer name this call by.
+    ///
+    /// `activeCallKitId` is not it. On an INCOMING call it happens to match
+    /// (it is built from `call_incoming`'s own `call_id`), which is why the
+    /// mismatch stayed invisible; on an OUTGOING call it is a locally minted
+    /// UUID with no relationship to the wire at all.
+    @MainActor
+    private func canonicalActiveCallId() -> String? {
+        if let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+           let bound = impl.getActiveCallId(), !bound.isEmpty {
+            return bound.lowercased()
+        }
+        return activeCallKitId?.uuidString.lowercased()
+    }
+
     @MainActor
     private func handleCallAccepted(callId: String) {
-        self.callAcceptedCallId = callId
-        guard self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
+        // W-ACCEPTGATE-ID — lowercase BOTH sides: the wire id's case has drifted
+        // before (iOS shipped an un-lowercased call_id for months, W-ENDCALLID),
+        // and a latch that depends on case is a latch that silently stops
+        // closing the next time it drifts.
+        let wireId = callId.lowercased()
+        self.callAcceptedCallId = wireId
+        guard self.callState == .ringing, self.localHandshakeReadyCallId == wireId else { return }
         self.finalizeCallActive()
     }
 
@@ -12547,9 +12580,13 @@ final class AppState: ObservableObject {
     /// not-yet-upgraded peers, silently skipping the two-flag latch
     /// WIRE_SPEC §3.5 exists for. 7s clears the callee's 5s ceiling with
     /// margin for the WS round trip on top.
+    ///
+    /// W-ACCEPTGATE-ID (2026-08-14) — the delay is now the caller's, because a
+    /// bare answer and an SDP answer mean different things about how soon a
+    /// human could have accepted. See `AcceptGateDecisions`.
     @MainActor
-    private func armAcceptGateTimeout(callId: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 7.0) { [weak self] in
+    private func armAcceptGateTimeout(callId: String, after seconds: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
             guard let self, self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
             RTLog.warn("call", "call_accepted not received within timeout, proceeding anyway callId=\(callId)")
             self.finalizeCallActive()

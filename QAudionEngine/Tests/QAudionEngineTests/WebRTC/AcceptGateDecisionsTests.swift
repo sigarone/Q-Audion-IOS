@@ -17,10 +17,10 @@ final class AcceptGateDecisionsTests: XCTestCase {
 
     /// THE REGRESSION. SDP answer at ring time must NOT start a countdown that
     /// can declare the call connected without the peer's `call_accepted`.
-    func testSdpBearingAnswerDoesNotArmTheFallback() {
+    func testSdpBearingAnswerGetsTheRingSafetyNetNotTheShortOne() {
         XCTAssertEqual(
             Sut.resolve(peerAlreadyAccepted: false, answerCarriedSdp: true),
-            .waitForAcceptOnly)
+            .waitForAcceptWithRingSafety)
     }
 
     /// A bare answer IS the peer saying a human accepted — the pre-W-DCSTUCK
@@ -52,7 +52,30 @@ final class AcceptGateDecisionsTests: XCTestCase {
                 XCTAssertTrue(
                     action == .finalizeNow
                         || action == .waitForAcceptWithFallback
-                        || action == .waitForAcceptOnly)
+                        || action == .waitForAcceptWithRingSafety)
+            }
+        }
+    }
+
+    /// W-ACCEPTGATE-ID — the SDP net must be longer than any human answer, and
+    /// the bare net must stay at the value tuned against the callee's own 5s
+    /// auth ceiling. Shipping the SDP case with NO net at all is what stranded
+    /// a live caller on "not started" while audio already flowed.
+    func testEachOutcomeCarriesItsOwnFallbackDelay() {
+        XCTAssertNil(Sut.fallbackSeconds(for: .finalizeNow))
+        XCTAssertEqual(Sut.fallbackSeconds(for: .waitForAcceptWithFallback), 7.0)
+        XCTAssertEqual(Sut.fallbackSeconds(for: .waitForAcceptWithRingSafety), 45.0)
+        XCTAssertTrue(Sut.ringSafetyFallbackSeconds > Sut.bareAnswerFallbackSeconds)
+    }
+
+    /// No outcome may leave the caller without a way out.
+    func testNoOutcomeStrandsTheCaller() {
+        for accepted in [true, false] {
+            for sdp in [true, false] {
+                let action = Sut.resolve(peerAlreadyAccepted: accepted, answerCarriedSdp: sdp)
+                XCTAssertTrue(
+                    action == .finalizeNow || Sut.fallbackSeconds(for: action) != nil,
+                    "accepted=\(accepted) sdp=\(sdp) has neither an immediate finalize nor a net")
             }
         }
     }

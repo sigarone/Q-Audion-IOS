@@ -50,10 +50,31 @@ public enum AcceptGateDecisions {
         /// before this helper existed.
         case waitForAcceptWithFallback
         /// SDP-bearing answer: a handshake artifact that can legitimately arrive
-        /// while the callee is still ringing. Stash the local flag, but do NOT
-        /// start a countdown that would declare the call connected on its own.
-        case waitForAcceptOnly
+        /// while the callee is still ringing. Stash the local flag and arm the
+        /// net at [ringSafetyFallbackSeconds] instead of the bare answer's 7 s,
+        /// so it cannot fire while the phone is plausibly still ringing — but
+        /// still cannot leave the caller stuck forever.
+        case waitForAcceptWithRingSafety
     }
+
+    /// The bare-answer net, unchanged: a peer that reports acceptance and then
+    /// never sends `call_accepted` is a legacy peer, and 7 s clears the callee's
+    /// own 5 s `ensureAuthenticated` ceiling with margin.
+    public static let bareAnswerFallbackSeconds: Double = 7.0
+
+    /// The SDP-answer net. Longer than any human takes to answer, so it cannot
+    /// manufacture a "connected" against a ringing phone, and short enough that
+    /// a caller is never stranded if the accept genuinely never arrives.
+    ///
+    /// It exists at all because of what shipping the first version of this
+    /// helper cost: with the countdown removed entirely for the SDP case, the
+    /// caller waited on `call_accepted` alone — and a SECOND, older defect (the
+    /// caller comparing its LOCAL CallKit UUID against the wire `call_id`, which
+    /// can never match on an outgoing call) meant that accept never finalized
+    /// anything. The 7 s net had been masking that mismatch for as long as it
+    /// existed. The mismatch is fixed at the call site; this stays as the net
+    /// that would have made the mistake survivable.
+    public static let ringSafetyFallbackSeconds: Double = 45.0
 
     /// - Parameters:
     ///   - peerAlreadyAccepted: `call_accepted` for THIS call id already landed.
@@ -63,6 +84,16 @@ public enum AcceptGateDecisions {
         answerCarriedSdp: Bool
     ) -> Action {
         if peerAlreadyAccepted { return .finalizeNow }
-        return answerCarriedSdp ? .waitForAcceptOnly : .waitForAcceptWithFallback
+        return answerCarriedSdp ? .waitForAcceptWithRingSafety : .waitForAcceptWithFallback
+    }
+
+    /// How long the caller may wait before the net fires, for each outcome.
+    /// `nil` where no countdown applies.
+    public static func fallbackSeconds(for action: Action) -> Double? {
+        switch action {
+        case .finalizeNow: return nil
+        case .waitForAcceptWithFallback: return bareAnswerFallbackSeconds
+        case .waitForAcceptWithRingSafety: return ringSafetyFallbackSeconds
+        }
     }
 }
