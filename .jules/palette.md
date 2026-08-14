@@ -1,0 +1,3 @@
+## 2026-10-13 - [SwiftUI custom controls a11y traits]
+**Learning:** VoiceOver does not automatically announce state or interactive roles when standard elements are not used natively. `onTapGesture` requires `.accessibilityAddTraits(.isButton)` so users know they can interact with the element. Toggle-style buttons built from scratch require `.accessibilityAddTraits(isActive ? .isSelected : [])` to communicate their active vs inactive state.
+**Action:** When evaluating or creating custom controls in SwiftUI that deviate from standard `Button()` or `Toggle()`, actively audit that correct interaction traits are supplied manually.
