@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.985",
+              date: "2026-08-14",
+              title: "v1.0.985",
+              bullets: [
+                "fix(call): an SDP-bearing call_answer must not arm the accept-gate countdown",
+              ]),
         .init(id: "v1.0.984",
               date: "2026-08-14",
               title: "v1.0.984",
               bullets: [
+                "chore: regenerate changelog for v1.0.984",
                 "fix(audio): do not seed the playout ladder from the SEND profile",
                 "fix(chat): hoist DateFormatters out of hot render paths, without the locale bug",
                 "fix(engine): move QAudionAppState token storage to Keychain, isolated from TokenVault",
@@ -161,14 +168,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.966",
                 "feat(crypto): iOS creates a v4 session from a prebootstrap envelope too",
                 "fix(mesh): bind the packet header into the AAD here too, so the legacy path can interoperate",
-              ]),
-        .init(id: "v1.0.965",
-              date: "2026-08-12",
-              title: "v1.0.965",
-              bullets: [
-                "chore: regenerate changelog for v1.0.965",
-                "feat(flags): iOS reads the authenticated flag projection, so targeting works here too",
-                "fix(mesh): a radio write is one tick, not two",
               ]),
     ]
 }
