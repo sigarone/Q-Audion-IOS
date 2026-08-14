@@ -6492,6 +6492,10 @@ final class AppState: ObservableObject {
                 // the W528 state-advance below render the SAS on the caller.
                 print("[AppState] call_answer: no/empty sdp — bare answer, advancing state only")
             }
+            // W-ACCEPTGATE-SDP (2026-08-14) — read on THIS thread, from the same
+            // envelope the branch above read, so the decision below can never
+            // describe a different answer than the one that just arrived.
+            let answerCarriedSdp: Bool = !(((data["sdp"] as? String) ?? "").isEmpty)
             // W528-fix: caller-side .ringing → .active on answer.
             // wireSasReadyToController no longer transitions from .ringing
             // so we must advance the state here when the callee answers.
@@ -6547,11 +6551,25 @@ final class AppState: ObservableObject {
                 // arm the 4s rollout-safety timeout.
                 guard self.callState == .ringing,
                       let callId = self.activeCallKitId?.uuidString.lowercased() else { return }
-                if self.callAcceptedCallId == callId {
+                // W-ACCEPTGATE-SDP (2026-08-14) — an SDP-bearing `call_answer`
+                // is a WebRTC handshake artifact, NOT a human accepting: since
+                // W-DCSTUCK the callee builds its controller at RING time and
+                // answers with SDP right there, before anyone touches the
+                // screen. Arming the 7s net on that made the CALLER declare
+                // itself connected against a phone that was still ringing.
+                // Only a BARE answer still arms it. See `AcceptGateDecisions`.
+                switch AcceptGateDecisions.resolve(
+                    peerAlreadyAccepted: self.callAcceptedCallId == callId,
+                    answerCarriedSdp: answerCarriedSdp
+                ) {
+                case .finalizeNow:
                     self.finalizeCallActive()
-                } else {
+                case .waitForAcceptWithFallback:
                     self.localHandshakeReadyCallId = callId
                     self.armAcceptGateTimeout(callId: callId)
+                case .waitForAcceptOnly:
+                    self.localHandshakeReadyCallId = callId
+                    RTLog.info("call", "accept gate armed=0 sdp=1")
                 }
             }
         }
