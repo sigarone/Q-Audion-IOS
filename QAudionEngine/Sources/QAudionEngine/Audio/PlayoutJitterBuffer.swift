@@ -254,7 +254,19 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     private var _silenceDrops: Int64 = 0
     private var _pushed: Int64 = 0
 
-    public init() {}
+    /// W-ALL60 (2026-08-14) — start the ladder at the fleet profile's frame
+    /// duration instead of at the 20 ms statics.
+    ///
+    /// The statics above are still computed at 20 ms on purpose: they are the
+    /// historical series the tests and the shipped telemetry compare against.
+    /// What changes here is only the STARTING point of a live buffer, which used
+    /// to spend its first frames holding a 20 ms ladder while 60 ms audio
+    /// arrived — `setInboundFrameDurationMs` fixed it, but only from the first
+    /// successfully decoded frame onward, i.e. after the window where a call is
+    /// most likely to be starved.
+    public init() {
+        setInboundFrameDurationMs(AudioProfile.defaultProfile.frameDurationMs)
+    }
 
     /// Frames the consumer asked for and the queue could not supply.
     public var underruns: Int64 { lock.lock(); defer { lock.unlock() }; return _underruns }

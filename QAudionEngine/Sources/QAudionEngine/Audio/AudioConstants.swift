@@ -218,13 +218,19 @@ public enum AudioConstants {
 /// fits today's 120-byte block, so neither number may ever be inferred from
 /// the other.
 ///
-/// `standard` is what every build ships and what every un-negotiated call
-/// uses. `long60x256` is reached ONLY through capability negotiation with a
-/// peer that advertised it (see `CallCapabilities.resolveAudioProfile`), and
-/// only in a build whose send kill switch is on. There is no third profile and
-/// no way to construct an arbitrary one from outside this file: the memberwise
-/// initialiser is private so a stray `AudioProfile(frameDurationMs: 33, ...)`
-/// cannot appear in a call path.
+/// W-ALL60 (2026-08-14) — `long60x256` is now the fleet profile: every
+/// phone↔phone call runs 60 ms / 256 bytes, negotiated or not. `standard`
+/// survives for exactly one reason, and it is a hardware one: sovereign-earbud
+/// firmware decodes into a 960-sample buffer and cannot accept a 60 ms frame.
+/// It is no longer a fallback for a lost race, a missing capability list or an
+/// un-negotiated call — those all run 60 ms too, because a call whose profile
+/// depends on which envelope won a race is a call whose audio quality is
+/// unpredictable, which is what this change exists to end. See
+/// `CallCapabilities.resolveAudioProfile` and ``defaultProfile``.
+///
+/// There is no third profile and no way to construct an arbitrary one from
+/// outside this file: the memberwise initialiser is private so a stray
+/// `AudioProfile(frameDurationMs: 33, ...)` cannot appear in a call path.
 ///
 /// Mirrors Kotlin `com.bcrypto.qaudion.audio.AudioProfile` and the Desktop
 /// `AudioProfile` object. All arithmetic below is `AudioConstants`', so the
@@ -241,14 +247,28 @@ public struct AudioProfile: Equatable, Sendable {
         self.blockBytes = blockBytes
     }
 
-    /// Today's profile, and the only one a build sends without negotiating:
     /// 20 ms frames in a 120-byte block at 32 kbps CBR.
+    ///
+    /// W-ALL60 — no longer a default or a fallback anywhere in the call path.
+    /// Reachable only when a sovereign earbud is party to the call, whose
+    /// firmware cannot decode a 60 ms frame.
     public static let standard = AudioProfile(frameDurationMs: 20, blockBytes: AudioConstants.blockBytesStandard)
 
     /// `aprof-60x256-v1`: 60 ms frames in a 256-byte block at 32 kbps CBR.
     /// Same audio quality as `standard`; a third of the packets, and therefore
     /// a third of the fixed 67 bytes of seal and envelope per packet.
     public static let long60x256 = AudioProfile(frameDurationMs: 60, blockBytes: AudioConstants.blockBytesLong)
+
+    /// W-ALL60 (2026-08-14) — the profile every call path starts from.
+    ///
+    /// One symbol, so "what does an un-latched call encode at" has exactly one
+    /// answer and moving it is one edit rather than a hunt through defaults in
+    /// the engine, the capture graph, the codec and the jitter buffer — which is
+    /// how the two ends of a call came to run different profiles in the first
+    /// place (caller latched before the peer's capability list had landed and
+    /// stayed 20 ms for the whole call; callee had the list and ran 60 ms; live
+    /// telemetry showed a stable 3.00:1 tx-frame ratio across four calls).
+    public static let defaultProfile = long60x256
 
     /// PCM samples in one frame of this profile. 960 / 2880.
     public var samplesPerFrame: Int { AudioConstants.sampleRate / 1000 * frameDurationMs }

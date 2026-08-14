@@ -39,10 +39,14 @@ public final class AudioCapture {
     // split exists to prevent — and it was the shipped behaviour, because
     // `AudioPlayback` took its frame size from the encode constant.
 
-    /// The profile this call CAPTURES and ENCODES at. `.standard` unless a call
-    /// negotiated otherwise and the send kill switch is on. Set once per call,
-    /// before `start()`; never changes mid-call.
-    public private(set) var captureProfile: AudioProfile = .standard
+    /// The profile this call CAPTURES and ENCODES at. Set once per call, before
+    /// `start()`; never changes mid-call.
+    ///
+    /// W-ALL60 (2026-08-14) — defaults to the 60 ms profile. It used to default
+    /// to `.standard`, so a call whose latch arrived after `start()` captured
+    /// 20 ms chunks while the engine encoded for whatever it had latched. The
+    /// re-chunker (`rechunkAndEmit`) reads THIS, so the two must not disagree.
+    public private(set) var captureProfile: AudioProfile = AudioProfile.defaultProfile
 
     /// Duration of the frames currently ARRIVING, in ms, observed from their PCM
     /// length. 20 until something longer shows up.
@@ -67,7 +71,12 @@ public final class AudioCapture {
 
     /// Last frame actually delivered, for repeat-based concealment on underrun.
     private var lastDeliveredPlayoutFrame: Data?
-    private var playoutConcealBudget = AudioConstants.framesForMs(120)
+    // W-ALL60 — 120 ms expressed at the default profile's frame duration (2 at
+    // 60 ms), not at the module's 20 ms analysis constant, which would have
+    // allowed 6 x 60 ms = 360 ms of repeated-frame buzz before the first real
+    // frame re-armed the budget.
+    private var playoutConcealBudget = AudioConstants.framesForMs(
+        120, frameDurationMs: AudioProfile.defaultProfile.frameDurationMs)
     /// Concealed frames this call — the number that makes an underrun visible.
     private var playoutConcealed = 0
 

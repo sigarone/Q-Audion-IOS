@@ -690,15 +690,24 @@ final class CallService: @unchecked Sendable {
         // 60 ms behind a re-chunker still emitting 1920-byte frames rejects
         // every single `encode`, and the call connects, holds a perfectly
         // constant packet rate, and transmits nothing at all.
+        // W-ALL60 (2026-08-14) — a refusal no longer means "drop to 20 ms". It
+        // means capture is ALREADY RUNNING, and since it now starts at the
+        // 60 ms default the running geometry is almost always the one we were
+        // about to ask for. Adopting capture's actual profile keeps the encoder
+        // and the re-chunker in agreement, which is the invariant that matters;
+        // the old `agreed = .standard` broke exactly that whenever capture was
+        // already up at 60 ms — engine at 20 ms, re-chunker at 60 ms, every
+        // `encode` rejected, call silent at a perfectly constant rate.
         let capture = audioCapture
         var agreed = profile
-        if profile != .standard, capture?.setCaptureProfile(profile) != true {
-            agreed = .standard
+        if capture?.setCaptureProfile(profile) != true,
+           let running = capture?.captureProfile {
+            agreed = running
         }
         callIntegration?.latchAudioProfile(agreed)
         // Read back what the engine actually holds: an earlier visit may have
         // latched it, and the latch is terminal.
-        let effective = callIntegration?.activeAudioProfile ?? .standard
+        let effective = callIntegration?.activeAudioProfile ?? AudioProfile.defaultProfile
         if effective != agreed, capture?.setCaptureProfile(effective) != true,
            capture?.captureProfile != effective {
             // Unreachable under the ordering above (the engine only ever holds a

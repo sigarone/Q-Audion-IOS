@@ -18,6 +18,21 @@ final class LongAudioWireTests: XCTestCase {
         return e
     }
 
+    /// W-ALL60 (2026-08-14) — an engine explicitly pinned to the 20 ms profile.
+    ///
+    /// `engine()` used to BE this, because `.standard` was the default. It is
+    /// not any more, so every test that is genuinely about the standard wire
+    /// (the sovereign-earbud path, and the "both profiles still round-trip"
+    /// property) has to say so rather than rely on a default that moved.
+    private func standardEngine(adaptive: Bool = true) throws -> QAudionEngine {
+        let e = try engine(adaptive: adaptive)
+        XCTAssertTrue(e.latchAudioProfile(.standard))
+        return e
+    }
+
+    /// One frame of PCM at whatever profile the call path defaults to.
+    private var defaultFrame: Data { Data(count: AudioProfile.defaultProfile.bytesPerFrame) }
+
     private func pcm(ms: Int, amplitude: Int16 = 4000) -> Data {
         let samples = AudioConstants.sampleRate / 1000 * ms
         var d = Data(count: samples * 2)
@@ -28,15 +43,21 @@ final class LongAudioWireTests: XCTestCase {
         return d
     }
 
-    // MARK: - I1: default OFF
+    // MARK: - I1: default is the 60 ms profile (W-ALL60, 2026-08-14)
 
-    /// A build that has not negotiated anything seals into a 120-byte block and
-    /// stays there. This is the invariant the whole feature is allowed to exist
-    /// under, so it is asserted directly rather than inferred.
-    func test_anUnlatchedCall_usesTheStandardBlock() throws {
+    /// A build that has not negotiated anything seals into a 256-byte block.
+    ///
+    /// This assertion is INVERTED from what it said until 2026-08-14, and the
+    /// inversion is the change: the old default made "never latched" a
+    /// different wire from "latched", so the caller (which latches before the
+    /// peer's capability list arrives) and the callee ran different profiles on
+    /// the same call. What still matters, and is still asserted, is that the
+    /// block is CONSTANT — see the frame-size tests below.
+    func test_anUnlatchedCall_usesTheLongBlock() throws {
         let e = try engine()
-        XCTAssertEqual(e.activeAudioProfile, .standard)
-        XCTAssertEqual(e.activeAudioProfile.blockBytes, 120)
+        XCTAssertEqual(e.activeAudioProfile, AudioProfile.defaultProfile)
+        XCTAssertEqual(e.activeAudioProfile, .long60x256)
+        XCTAssertEqual(e.activeAudioProfile.blockBytes, 256)
     }
 
     /// The size of every outgoing frame is identical, whatever the audio.
@@ -48,9 +69,10 @@ final class LongAudioWireTests: XCTestCase {
     func test_frameSizeIsConstantAcrossWildlyDifferentAudio() throws {
         let e = try engine()
         var sizes = Set<Int>()
-        let silence = Data(count: AudioConstants.bytesPerFrame)
-        let loud = pcm(ms: 20, amplitude: 30000)
-        var noise = Data(count: AudioConstants.bytesPerFrame)
+        let frameMs = AudioProfile.defaultProfile.frameDurationMs
+        let silence = defaultFrame
+        let loud = pcm(ms: frameMs, amplitude: 30000)
+        var noise = defaultFrame
         for i in 0..<noise.count { noise[i] = UInt8.random(in: .min ... .max) }
         for frame in [silence, loud, noise, silence, loud] {
             sizes.insert(try e.processOutgoingAudio(pcmFrame: frame).count)
@@ -65,7 +87,7 @@ final class LongAudioWireTests: XCTestCase {
     func test_everyFrameProducesExactlyOnePacket() throws {
         let e = try engine()
         for _ in 0..<10 {
-            let out = try e.processOutgoingAudio(pcmFrame: Data(count: AudioConstants.bytesPerFrame))
+            let out = try e.processOutgoingAudio(pcmFrame: defaultFrame)
             XCTAssertFalse(out.isEmpty)
         }
         XCTAssertEqual(e.getStats().framesTx, 10)
@@ -76,7 +98,7 @@ final class LongAudioWireTests: XCTestCase {
     /// Latching the long profile changes the block, and the packet grows by
     /// exactly the block difference — nothing else on the wire moves.
     func test_latchingTheLongProfileChangesOnlyTheBlock() throws {
-        let std = try engine()
+        let std = try standardEngine()
         let long = try engine()
         XCTAssertTrue(long.latchAudioProfile(.long60x256))
         XCTAssertEqual(long.activeAudioProfile, .long60x256)
@@ -119,12 +141,13 @@ final class LongAudioWireTests: XCTestCase {
     /// deliberately: `initialize()` is the start of a call's life, and a latch
     /// cleared at teardown would leave a window where a late-firing handshake
     /// callback could re-latch an engine that is no longer on a call.
-    func test_aFreshEngineIsUnlatchedAtStandard() throws {
+    func test_aFreshEngineIsUnlatchedAtTheDefaultProfile() throws {
         let fresh = QAudionEngine(config: .development())
         try fresh.initialize()
+        XCTAssertEqual(fresh.activeAudioProfile, AudioProfile.defaultProfile)
+        XCTAssertTrue(fresh.latchAudioProfile(.standard),
+                      "the latch is available on a fresh engine (earbud calls still use it)")
         XCTAssertEqual(fresh.activeAudioProfile, .standard)
-        XCTAssertTrue(fresh.latchAudioProfile(.long60x256), "the latch is available on a fresh engine")
-        XCTAssertEqual(fresh.activeAudioProfile, .long60x256)
     }
 
     /// Latching before a session exists is allowed (the engine is `.initialized`),
@@ -156,7 +179,7 @@ final class LongAudioWireTests: XCTestCase {
 
     /// ...and a standard frame still round-trips on the same pair of builds.
     func test_standardRoundTripStillWorks() throws {
-        let tx = try engine()
+        let tx = try standardEngine()
         let rx = try engine()
         let sealed = try tx.processOutgoingAudio(pcmFrame: pcm(ms: 20))
         XCTAssertEqual(try rx.processIncomingAudio(serializedFrame: sealed).count, 1920)
@@ -219,7 +242,7 @@ final class LongAudioWireTests: XCTestCase {
     /// The same call on a standard-profile engine is unaffected: 44 clamps to
     /// 41, which fits the 118-byte budget, exactly as it did before.
     func test_midCallRetuneOnStandardIsUnchanged() throws {
-        let e = try engine()
+        let e = try standardEngine()
         e.reconfigureAudioCodec(bitrateKbps: 44, plp: 10)
         for _ in 0..<20 {
             _ = try e.processOutgoingAudio(pcmFrame: pcm(ms: 20))

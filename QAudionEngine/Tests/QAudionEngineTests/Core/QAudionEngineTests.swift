@@ -31,7 +31,7 @@ final class QAudionEngineTests: XCTestCase {
         try rxEngine.initialize()
         try rxEngine.initSession(sharedSecret: Data(repeating: 0xBE, count: 32))
 
-        let pcm = Data(repeating: 0xAA, count: AudioConstants.bytesPerFrame)
+        let pcm = Data(repeating: 0xAA, count: AudioProfile.defaultProfile.bytesPerFrame)
         let encrypted = try txEngine.processOutgoingAudio(pcmFrame: pcm)
         let decrypted = try rxEngine.processIncomingAudio(serializedFrame: encrypted)
 
@@ -54,7 +54,7 @@ final class QAudionEngineTests: XCTestCase {
         try rxEngine.initialize()
         try rxEngine.initSession(sharedSecret: Data(repeating: 0xBE, count: 32))
 
-        let pcm = Data(repeating: 0xAA, count: AudioConstants.bytesPerFrame)
+        let pcm = Data(repeating: 0xAA, count: AudioProfile.defaultProfile.bytesPerFrame)
         let frame1 = try txEngine.processOutgoingAudio(pcmFrame: pcm)
         _ = try txEngine.processOutgoingAudio(pcmFrame: pcm) // frame 2 — "lost in transit"
         let frame3 = try txEngine.processOutgoingAudio(pcmFrame: pcm)
@@ -82,7 +82,7 @@ final class QAudionEngineTests: XCTestCase {
         try rxEngine.initialize()
         try rxEngine.initSession(sharedSecret: Data(repeating: 0xBE, count: 32))
 
-        let pcm = Data(repeating: 0xAA, count: AudioConstants.bytesPerFrame)
+        let pcm = Data(repeating: 0xAA, count: AudioProfile.defaultProfile.bytesPerFrame)
         let frame1 = try txEngine.processOutgoingAudio(pcmFrame: pcm)
         let frame2 = try txEngine.processOutgoingAudio(pcmFrame: pcm)
 

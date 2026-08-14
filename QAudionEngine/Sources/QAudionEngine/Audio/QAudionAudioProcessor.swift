@@ -11,7 +11,12 @@ public final class QAudionAudioProcessor {
     /// count. `jitterBufferMsWsRelay` is 160 ms, which is 8 frames at 20 ms
     /// (unchanged) and 3 at 60 ms. Sized in frames it would have been 480 ms of
     /// standing latency on a long-profile call.
-    public init(codec: OpusCodec = OpusCodec(),
+    /// W-ALL60 (2026-08-14) — the default codec is built FOR the default
+    /// profile, not from `OpusCodec`'s bare 20 ms defaults. A processor whose
+    /// encoder disagreed with the call's profile rejects every `encode` and the
+    /// call goes out silent at a perfectly constant rate, which is the failure
+    /// this default exists to make unconstructible.
+    public init(codec: OpusCodec = OpusCodec(config: OpusCodec.Config(profile: AudioProfile.defaultProfile)),
                 jitterBufferMs: Int = AudioConstants.jitterBufferMsWsRelay) {
         self.codec = codec
         self.jitterBuffer = JitterBuffer(

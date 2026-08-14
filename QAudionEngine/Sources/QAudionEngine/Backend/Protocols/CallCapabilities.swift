@@ -451,16 +451,33 @@ public enum CallCapabilities {
     ///     own gate already withholds both tags, so clause 3 would fail anyway —
     ///     this is the second, independent check, and it can only ever push the
     ///     answer toward STANDARD.
+    /// W-ALL60 (2026-08-14) — clauses 1–4 above are RETIRED. The profile is
+    /// `long60x256` for every phone↔phone call, negotiated or not.
+    ///
+    /// What forced this: the negotiation-dependent version made the profile a
+    /// function of envelope arrival order, not of the call. The CALLER latches
+    /// at the PQC `.active` transition, which routinely beats the `call_answer`
+    /// that carries the peer's capability list — so the caller resolved
+    /// STANDARD and the callee, which had the list from `call_incoming`,
+    /// resolved LONG. Both ends then held a perfectly constant rate, at
+    /// different rates. Measured live on four consecutive iOS↔iOS calls: a
+    /// stable 3.00:1 tx-frame ratio between the two legs (1215/411, 1515/513,
+    /// 2640/893, 5000/1665).
+    ///
+    /// The capability tags stay on the wire — they still describe this build
+    /// truthfully and other platforms still read them — but nothing in the
+    /// SEND decision consults them any more, because a decision that can
+    /// resolve two ways is the defect.
+    ///
+    /// The earbud clause survives, and only it: sovereign-earbud firmware
+    /// decodes into a 960-sample buffer and physically cannot accept a 60 ms
+    /// frame. That is hardware, not policy.
     public static func resolveAudioProfile(
         negotiated: Negotiated?,
         earbudInCall: Bool
     ) -> AudioProfile {
-        guard longAudioSendEnabled else { return .standard }
         guard !earbudInCall else { return .standard }
-        guard let negotiated else { return .standard }
-        guard negotiated.bothAdvertiseLongAudioSend else { return .standard }
-        guard negotiated.peerAcceptsLongAudio else { return .standard }
-        return .long60x256
+        return AudioProfile.defaultProfile
     }
 
     /// W-LONGAUDIO (2026-08-10) — §1.6 clause 2, "a negotiation result exists
