@@ -61,11 +61,17 @@ public final class QAudionEngine: @unchecked Sendable {
     // function of something other than the profile, and the constant-size
     // property stops being provable.
     //
-    // Defaults to `.standard` and stays there unless `latchAudioProfile` is
-    // called with something else, which requires a peer that negotiated it and a
-    // build with the send kill switch on. A call that never latches sends
-    // byte-identical wire to every build that shipped before this one.
-    private var audioProfile: AudioProfile = .standard
+    // W-ALL60 (2026-08-14) — defaults to `AudioProfile.defaultProfile` (60 ms /
+    // 256 bytes) and stays there unless `latchAudioProfile` is called with
+    // something else, which now happens only for a sovereign-earbud call. A call
+    // that never latches sends the same wire as every other call, which is the
+    // whole point: the previous default made "never latched" audibly different
+    // from "latched", on the same build, in the same call.
+    // W-ALL60 (2026-08-14) — the default is the 60 ms profile, not 20 ms. A call
+    // that never latches (handshake beat the capability list, an unparsed
+    // envelope, a lost race) now runs 60 ms like every other call instead of
+    // silently dropping to a different wire from its peer.
+    private var audioProfile: AudioProfile = AudioProfile.defaultProfile
     private var audioProfileLatched = false
 
     /// The block this call seals into. 120 unless the long profile was latched.
@@ -86,10 +92,15 @@ public final class QAudionEngine: @unchecked Sendable {
         // new call can never inherit the previous one's block. `initialize()` is
         // the start of a call's life; the latch happens later, after the
         // handshake, and only if the peer agreed.
-        audioProfile = .standard
+        audioProfile = AudioProfile.defaultProfile
         audioProfileLatched = false
+        // W-ALL60 — build the codec FOR the profile rather than from `.secure()`'s
+        // bare defaults. `.secure()` alone yields a 20 ms / 120-byte encoder, so
+        // an un-latched call used to encode 20 ms frames while `audioProfile`
+        // claimed otherwise; `Config(profile:)` keeps the two in agreement by
+        // construction and clamps the bitrate to what the block can carry.
         audioProcessor = QAudionAudioProcessor(
-            codec: OpusCodec(config: .secure()),
+            codec: OpusCodec(config: OpusCodec.Config(profile: audioProfile)),
             jitterBufferMs: AudioConstants.jitterBufferMsWsRelay
         )
         // W479 — reset adaptive-padding state so each call starts clean.

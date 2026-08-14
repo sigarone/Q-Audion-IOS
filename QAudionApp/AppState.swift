@@ -4485,13 +4485,64 @@ final class AppState: ObservableObject {
                 //       "callIntegration nil" and the answer path failing with
                 //       "audio not started". In this case we MUST proceed
                 //       (the duplicate `reportIncomingCall` is skipped below).
+                //   (C) W-DCSTUCK (2026-08-13) — the duplicate is the iOS
+                //       caller's SECOND call_offer, the one carrying the REAL
+                //       WebRTC SDP. `beginAndroidOutgoing` ships a vestigial
+                //       `sdp:""` offer first (to create the call session and
+                //       ring us), then `startOutgoingCall` ships the SDP-bearing
+                //       one under the SAME call_id; the server relays both as
+                //       `call_incoming`. Case (A) dropped the second one whole,
+                //       SDP included — so this side never built a controller,
+                //       never answered with SDP, and the CALLER's PeerConnection
+                //       stayed in HAVE_LOCAL_OFFER for the entire call. That is
+                //       the root cause of the `dcmux tx dc=0 … st=0` signature
+                //       seen on every iOS↔iOS call (0375af1e, e14eed99,
+                //       7622b045): sealed-audio DataChannel stuck `.connecting`,
+                //       100% of the voice on the WS relay via the VPS.
+                //       Consume the SDP, then stop — no second CallKit report.
+                //       See `IncomingCallEnvelopeDecisions`.
                 let sameCallProvisioned = (self.activeCallKitId == callUUID)
                     && (self.responderCallIntegration != nil)
                     && (self.callState != .idle)
                 let differentCallActive = (self.activeCallKitId != nil)
                     && (self.activeCallKitId != callUUID)
-                guard !sameCallProvisioned, !differentCallActive else {
+                let dupSdp = (data["sdp"] as? String) ?? ""
+                switch IncomingCallEnvelopeDecisions.resolveDuplicateCallIncoming(
+                    sameCallProvisioned: sameCallProvisioned,
+                    differentCallActive: differentCallActive,
+                    sdpLength: dupSdp.count,
+                    hasWebRtcController: self.webRtcController != nil
+                ) {
+                case .provisionNormally:
+                    break
+                case .dropDuplicate:
                     print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState) sameProvisioned=\(sameCallProvisioned) otherActive=\(differentCallActive)")
+                    return
+                case .rescueWebRtcOffer:
+                    // Numeric-safe (ship-ios-logs.py's redactor is a positive
+                    // allow-list on structured shape; keys stay under the
+                    // 12-character token budget) so the rescue is provable from
+                    // Loki alone, on a build nobody has to attach a Mac to.
+                    let dupSdpLen: String = dupSdp.count.description
+                    let dupLine: String = "webrtc dupoffer ok=1 sdp_len=" + dupSdpLen
+                    RTLog.info("call", dupLine)
+                    let dupCaps: [String]? = data["capabilities"] as? [String]
+                    let dupHasVideo: Bool = (callType == "video")
+                    self.handleIncomingWebRtcOffer(
+                        callerId: senderId,
+                        sdp: dupSdp,
+                        peerCapabilities: dupCaps,
+                        hasVideo: dupHasVideo
+                    )
+                    // Same tail the normal provisioning path runs (:4693).
+                    // Idempotent (`incomingAudioStarted`); needed because the
+                    // user can answer in the gap between the two envelopes, and
+                    // this envelope's early `return` would otherwise skip the
+                    // cold-start answer consumption entirely. Running it AFTER
+                    // the controller exists is also what suppresses the blank
+                    // `sdp:""` call_answer — the controller now ships a real
+                    // SDP-bearing one, which is the whole point of the rescue.
+                    self.consumeDeferredAnswerIfReady("ws-dupoffer")
                     return
                 }
                 // W-NOCALLKIT cold-start DECLINE: the user already tapped "Rifiuta"

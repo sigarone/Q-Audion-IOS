@@ -72,68 +72,96 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
     }
 
     // MARK: - The twelve rows
+    //
+    // W-ALL60 (2026-08-14) — the ROWS still describe the wire truthfully, and
+    // the negotiation-level assertions in each are unchanged. What changed is
+    // the RESOLVER: it no longer consults any of them. Every row that used to
+    // expect a 20 ms fallback now expects 60 ms, because a profile that depends
+    // on which signalling envelope won a race is a profile that differs between
+    // the two ends of the same call — measured live, four consecutive iOS↔iOS
+    // calls, a stable 3.00:1 tx-frame ratio between the legs.
+    //
+    // The rows are kept rather than deleted: `bothAdvertiseLongAudioSend` /
+    // `peerAcceptsLongAudio` are still read by other platforms and still have
+    // to be computed correctly, and a row that silently stopped being exercised
+    // is how a capability quietly rots.
 
-    /// Row 1 — neither side advertises anything. Both send standard.
+    /// Row 1 — neither side advertises anything. Both send 60 ms anyway.
     func test_row1_neitherAdvertises() {
         let n = negotiated(local: base, peer: base)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
     /// Row 2 — we advertise recv, peer advertises nothing.
     func test_row2_localRecvOnly_peerSilent() {
         let n = negotiated(local: base + [recv], peer: base)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
-    /// Row 3 — we advertise nothing, peer advertises both. Our intersection is
-    /// empty, and so is theirs, so neither side sends long.
+    /// Row 3 — we advertise nothing, peer advertises both. The intersection is
+    /// empty on both sides and the resolver does not care.
     func test_row3_localSilent_peerFull() {
         let n = negotiated(local: base, peer: base + [recv, send])
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
-    /// Row 4 — both advertise recv only. Everyone can receive; nobody sends.
+    /// Row 4 — both advertise recv only.
     func test_row4_bothRecvOnly() {
         let n = negotiated(local: base + [recv], peer: base + [recv])
         XCTAssertTrue(n.peerAcceptsLongAudio)
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
-    /// Row 5 — we advertise both, peer only recv. Peer never said it would send,
-    /// so there is no agreement to send.
+    /// Row 5 — we advertise both, peer only recv.
     func test_row5_localFull_peerRecvOnly() {
         let n = negotiated(local: base + [recv, send], peer: base + [recv])
         XCTAssertTrue(n.peerAcceptsLongAudio)
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
     /// Row 6 — the mirror of row 5.
     func test_row6_localRecvOnly_peerFull() {
         let n = negotiated(local: base + [recv], peer: base + [recv, send])
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
-    /// Row 7 — THE row. Both advertise both. This is the only combination that
-    /// activates, and it activates on both ends by construction: each computes
-    /// the same intersection from the same two lists.
-    ///
-    /// Gated on the send kill switch, exactly as production is. With the switch
-    /// off this asserts the resolver refuses; flipping the switch turns it into
-    /// the positive assertion without editing the test.
-    func test_row7_bothFull_isTheOnlyActivatingCombination() {
+    /// Row 7 — both advertise both. Still 60 ms; it is simply no longer the
+    /// ONLY combination that gets there.
+    func test_row7_bothFull_negotiatesLong() {
         let n = negotiated(local: base + [recv, send], peer: base + [recv, send])
         XCTAssertTrue(n.bothAdvertiseLongAudioSend, "the intersection must contain the send tag")
         XCTAssertTrue(n.peerAcceptsLongAudio, "the peer's raw list must contain the recv tag")
-        let resolved = CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false)
-        if CallCapabilities.longAudioSendEnabled {
-            XCTAssertEqual(resolved, .long60x256)
-        } else {
-            XCTAssertEqual(resolved, .standard, "kill switch off must beat a perfect negotiation")
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false),
+                       .long60x256)
+    }
+
+    /// W-ALL60 — the property the whole change exists for, stated directly:
+    /// nothing a peer says, or fails to say, can make THIS side send 20 ms.
+    /// Only an earbud can, and that is tested separately (row 10).
+    func test_all60_noPeerListCanProduceStandard() {
+        let peerLists: [[String]?] = [
+            nil, [], base, base + [recv], base + [send], base + [recv, send],
+            ["garbage-tag-v1"],
+        ]
+        for peer in peerLists {
+            let n = negotiated(local: CallCapabilities.localCaps(), peer: peer)
+            XCTAssertEqual(
+                CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false),
+                .long60x256,
+                "peer list \(String(describing: peer)) must not downgrade the send profile")
         }
+    }
+
+    /// And the default the whole call path starts from is that same profile —
+    /// so an un-latched call and a latched one encode identically.
+    func test_all60_defaultProfileIsTheLongOne() {
+        XCTAssertEqual(AudioProfile.defaultProfile, .long60x256)
+        XCTAssertEqual(AudioProfile.defaultProfile.frameDurationMs, 60)
+        XCTAssertEqual(AudioProfile.defaultProfile.blockBytes, 256)
     }
 
     /// Row 8 — the asymmetric strip. A relay removes our send tag from what the
@@ -155,9 +183,13 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
         // The peer's view: our send tag was stripped in flight.
         let peerView = negotiated(local: base + [recv, send], peer: base + [recv])
         XCTAssertFalse(peerView.bothAdvertiseLongAudioSend)
+        // W-ALL60 — the strip no longer produces an asymmetry at all: the
+        // stripped side sends 60 ms too, because the resolver stopped reading
+        // the intersection. The row survives as the proof of that, which is a
+        // stronger property than the fallback it replaced.
         XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: peerView, earbudInCall: false),
-                       .standard,
-                       "the stripped side must fall back, not fail")
+                       .long60x256,
+                       "a stripped tag must not be able to split the two legs")
     }
 
     /// Row 9 — kill switch off locally. The tag is never advertised, so the
@@ -173,17 +205,17 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
         let switchOffLocal = CallCapabilities.localCaps().filter { $0 != send }
         let n = negotiated(local: switchOffLocal, peer: base + [recv, send])
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
     /// The mirror of row 9 that only became reachable once the switches went
     /// on: OUR build advertises both tags, and the PEER is a platform that has
     /// not flipped yet. That is every iOS↔Desktop call today, so it is worth a
     /// row of its own rather than being implied by row 9.
-    func test_row9b_peerHasNotFlipped_staysStandard() {
+    func test_row9b_peerHasNotFlipped_stillSendsLong() {
         let n = negotiated(local: CallCapabilities.localCaps(), peer: base + [recv])
         XCTAssertFalse(n.bothAdvertiseLongAudioSend)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
     /// And the case this build DOES produce against another flipped peer
@@ -264,15 +296,19 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
         let n = negotiated(local: base + [recv, send], peer: decoded)
         XCTAssertTrue(n.agreedTags.isEmpty)
         XCTAssertTrue(n.peerRawTags.isEmpty)
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
-    /// Row 12 — the negotiation result never arrives. The call runs standard for
-    /// its whole life, which is the correct outcome and not a state to retry
-    /// out of: a retry would be a mid-call switch wearing a different name.
-    func test_row12_nilNegotiation_fallsBack() {
+    /// Row 12 — the negotiation result never arrives.
+    ///
+    /// W-ALL60 — this is the row that used to bite. The CALLER latches at the
+    /// PQC `.active` transition, which routinely beats the `call_answer`
+    /// carrying the peer's capability list, so `negotiated` was `nil` and the
+    /// caller ran 20 ms for the whole call while the callee ran 60 ms. Now the
+    /// missing result changes nothing.
+    func test_row12_nilNegotiation_stillSendsLong() {
         XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: nil, earbudInCall: false),
-                       .standard)
+                       .long60x256)
     }
 
     // MARK: - peerRawTags
@@ -293,14 +329,14 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
         XCTAssertFalse(negotiated(local: base, peer: nil).peerAcceptsLongAudio)
     }
 
-    /// A peer that advertises SEND but not RECEIVE is not a peer we send to.
-    /// The two tags mean different things and one does not imply the other;
-    /// clause 4 of the activation rule exists for exactly this shape.
-    func test_peerAdvertisingSendWithoutRecv_doesNotActivate() {
+    /// A peer that advertises SEND but not RECEIVE. The two tags still mean
+    /// different things and the negotiation still computes both correctly —
+    /// W-ALL60 only stops the SEND decision from reading them.
+    func test_peerAdvertisingSendWithoutRecv_stillComputesBothFlags() {
         let n = negotiated(local: base + [recv, send], peer: base + [send])
         XCTAssertTrue(n.bothAdvertiseLongAudioSend, "the intersection does contain the send tag")
         XCTAssertFalse(n.peerAcceptsLongAudio, "but the peer never claimed it can receive")
-        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .standard)
+        XCTAssertEqual(CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false), .long60x256)
     }
 
     // MARK: - I5: the audio profile must not be able to move the video key
@@ -430,7 +466,13 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
     /// blocker's failure sentence turned into an assertion — and it holds
     /// independently of the kill switch, which is what makes it meaningful
     /// before the switch is ever flipped.
-    func test_staleCapabilities_resolveToStandard() {
+    ///
+    /// W-ALL60 — the call-binding rule itself is unchanged and still asserted
+    /// (a list captured for another call must not be visible to this one). What
+    /// no longer follows from it is a 20 ms downgrade: the send profile is the
+    /// same either way, so a stale list can no longer make one leg of a call
+    /// sound different from the other.
+    func test_staleCapabilities_areNotVisible_andDoNotChangeTheProfile() {
         let stalePeer = base + [recv, send]
         let visible = CallCapabilities.peerCapabilities(
             forCallId: "22222222-2222-2222-2222-222222222222",
@@ -442,7 +484,7 @@ final class LongAudioProfileNegotiationTests: XCTestCase {
         XCTAssertFalse(n.peerAcceptsLongAudio)
         XCTAssertEqual(
             CallCapabilities.resolveAudioProfile(negotiated: n, earbudInCall: false),
-            .standard
+            .long60x256
         )
     }
 }

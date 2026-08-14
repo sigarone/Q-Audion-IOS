@@ -254,6 +254,17 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     private var _silenceDrops: Int64 = 0
     private var _pushed: Int64 = 0
 
+    // W-ALL60 (2026-08-14) — deliberately NOT seeded from the send profile.
+    //
+    // Seeding the ladder at `AudioProfile.defaultProfile` was tried and reverted
+    // the same day: it presumes the PEER sends 60 ms, and this class exists
+    // precisely because that presumption is not ours to make. The receive path
+    // holds no negotiation state and follows the OBSERVED inbound duration
+    // (`setInboundFrameDurationMs`, driven from the decoded frame's own length),
+    // so a peer still on 20 ms — a client mid-rollout, or the asymmetric-strip
+    // row — would have been met with a 60 ms ladder instead. Deriving receive
+    // geometry from what WE transmit is the exact bug the send/receive split in
+    // `AudioCapture` was introduced to remove.
     public init() {}
 
     /// Frames the consumer asked for and the queue could not supply.
