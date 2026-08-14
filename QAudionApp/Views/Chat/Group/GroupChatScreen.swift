@@ -570,14 +570,18 @@ struct GroupChatScreen: View {
         }
     }
 
+    private static let timeFormatterHHmm: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
     /// W-GRPMSG — reload the visible bubbles from the persistent
     /// GroupMessageStore. The store holds BOTH the sender's optimistic
     /// rows and decrypted inbound text, so this is the single source of
     /// truth (no more ephemeral @State appends).
     private func reloadMessagesFromStore() {
         let stored = GroupMessageStore.shared.messages(forGroupHex: groupHex)
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
         state.messages = stored.map { m in
             GroupMessageRowUi(
                 id: m.id,
@@ -586,7 +590,7 @@ struct GroupChatScreen: View {
                 // group bubbles never label a peer with a bare UUID (mirrors
                 // the 1:1 inbound path, AppState.persistIncomingPeerMessage).
                 senderLabel: m.mine ? "Tu" : resolveMemberName(m.senderId),
-                timestamp: f.string(from: m.ts),
+                timestamp: Self.timeFormatterHHmm.string(from: m.ts),
                 mine: m.mine,
                 // Fase 1B — attachment fields (nil for a plain text row).
                 attachmentKind: m.attachmentKind,

@@ -718,14 +718,24 @@ struct ContactDetailScreen: View {
         }
     }
 
+    // Device-locale, no override — matches presenceAuthSummary's original
+    // behavior exactly. Kept separate from lastVerificationDateFormatter
+    // below (it_IT forced) — an earlier extraction merged the two into one
+    // formatter and silently switched this call site to it_IT regardless of
+    // device locale; two distinct call sites with two distinct locale
+    // requirements need two distinct static formatters, not one shared.
+    private static let presenceAuthDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        return f
+    }()
+
     /// `firstConfirmedCallId` is DELIBERATELY never rendered here (standing
     /// project rule: no raw UUIDs in any user-facing UI) — only the
     /// human-relevant date/count.
     private func presenceAuthSummary(_ auth: ContactsStore.PresenceAuth) -> String {
         let date = Date(timeIntervalSince1970: Double(auth.firstConfirmedAt) / 1000)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        let dateStr = formatter.string(from: date)
+        let dateStr = Self.presenceAuthDateFormatter.string(from: date)
         let times = auth.confirmedCallCount == 1 ? "1 volta" : "\(auth.confirmedCallCount) volte"
         switch auth.status {
         case .active:
@@ -790,15 +800,22 @@ struct ContactDetailScreen: View {
         }
     }
 
+    // it_IT forced — matches lastVerificationLabel's original behavior
+    // exactly. See presenceAuthDateFormatter above for why this stays a
+    // separate formatter instead of a shared one.
+    private static let lastVerificationDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateStyle = .medium
+        return f
+    }()
+
     private var lastVerificationLabel: String {
         guard let eval = trustEval else { return "…" }
         switch eval.state {
         case .userVerified:
             guard let date = eval.verifiedAt else { return "Verificato" }
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "it_IT")
-            f.dateStyle = .medium
-            return f.string(from: date)
+            return Self.lastVerificationDateFormatter.string(from: date)
         case .identityChanged: return "🚨 Identità cambiata"
         case .identityPinnedTofu: return "Mai (pinned TOFU)"
         case .unverified: return "Mai"

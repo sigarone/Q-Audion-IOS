@@ -38,21 +38,32 @@ struct DayHeader: View {
         .padding(.vertical, 4)
     }
 
+    private static let thisWeekFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "EEE d MMM"
+        return f
+    }()
+
+    private static let oldDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
     private var label: String {
         let cal = Calendar.current
         if cal.isDateInToday(date) { return "Oggi" }
         if cal.isDateInYesterday(date) { return "Ieri" }
 
         let now = Date()
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
         if let days = cal.dateComponents([.day], from: date, to: now).day,
            days < 7 {
-            f.dateFormat = "EEE d MMM"
+            return Self.thisWeekFormatter.string(from: date)
         } else {
-            f.dateFormat = "d MMM yyyy"
+            return Self.oldDateFormatter.string(from: date)
         }
-        return f.string(from: date)
     }
 }
 
