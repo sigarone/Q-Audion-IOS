@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+#if canImport(Security)
+import Security
+#endif
 
 /// Central app state coordinator matching Android's ViewModel pattern.
 /// Manages auth flow, backend connection, and UI state.
@@ -164,32 +167,126 @@ public final class QAudionAppState: ObservableObject {
         } catch { /* silently fail */ }
     }
 
-    // MARK: - Token Persistence (UserDefaults, non-sensitive)
+    // MARK: - Token Persistence (Keychain, sensitive)
+    //
+    // SEC-ENGINE-2 (2026-08-14) — this was UserDefaults (plaintext .plist,
+    // readable from an unencrypted backup/jailbreak/file-system access).
+    // QAudionEngine is a Swift Package the QAudionApp target depends on, not
+    // the other way around, so this cannot import/call QAudionApp's own
+    // TokenVault (the real app's single source of truth for auth tokens) —
+    // that would be a backwards package dependency. This is therefore a
+    // deliberately SEPARATE Keychain store, under its own service string
+    // (never TokenVault's "com.qaudion.auth"), specifically so that if this
+    // view-model is ever wired up again, `clearCredentials()`/
+    // `loadStoredToken()` here can never read, overwrite, or delete
+    // TokenVault's real session tokens by account-name collision.
+    //
+    // QAudionRootView, the only place that constructs this class, has zero
+    // instantiations anywhere in the shipped app today (QAudionApp.swift's
+    // real @main uses a different AppState + ContentView) — so this closes
+    // a real defense-in-depth gap without being on any live user's path.
+
+    private let authKeychainService = "com.qaudion.engine.qaudionappstate.auth"
+    private let accessAccount = "access_token"
+    private let refreshAccount = "refresh_token"
+    private let userIdAccount = "user_id"
+    private let deviceIdAccount = "device_id"
 
     private func saveCredentials(_ creds: AuthCredentials) {
-        UserDefaults.standard.set(creds.accessToken, forKey: "qaudion_access_token")
-        UserDefaults.standard.set(creds.refreshToken, forKey: "qaudion_refresh_token")
-        UserDefaults.standard.set(creds.userId, forKey: "qaudion_user_id")
-        UserDefaults.standard.set(creds.deviceId, forKey: "qaudion_device_id")
+        saveToKeychain(account: accessAccount, value: creds.accessToken)
+        if let refresh = creds.refreshToken {
+            saveToKeychain(account: refreshAccount, value: refresh)
+        } else {
+            // Preserve the original UserDefaults.set(nil, ...) behavior: no
+            // refresh token means any previously-stored one is stale and
+            // must be cleared, not silently left in place.
+            deleteFromKeychain(account: refreshAccount)
+        }
+        saveToKeychain(account: userIdAccount, value: creds.userId)
+        saveToKeychain(account: deviceIdAccount, value: creds.deviceId)
     }
 
     private func loadStoredToken() -> AuthCredentials? {
-        guard let token = UserDefaults.standard.string(forKey: "qaudion_access_token"),
-              let userId = UserDefaults.standard.string(forKey: "qaudion_user_id") else { return nil }
+        guard let token = loadFromKeychain(account: accessAccount),
+              let userId = loadFromKeychain(account: userIdAccount) else { return nil }
         return AuthCredentials(
             userId: userId,
-            deviceId: UserDefaults.standard.string(forKey: "qaudion_device_id") ?? "",
+            deviceId: loadFromKeychain(account: deviceIdAccount) ?? "",
             accessToken: token,
-            refreshToken: UserDefaults.standard.string(forKey: "qaudion_refresh_token"),
+            refreshToken: loadFromKeychain(account: refreshAccount),
             expiresIn: nil
         )
     }
 
     private func clearCredentials() {
-        UserDefaults.standard.removeObject(forKey: "qaudion_access_token")
-        UserDefaults.standard.removeObject(forKey: "qaudion_refresh_token")
-        UserDefaults.standard.removeObject(forKey: "qaudion_user_id")
-        UserDefaults.standard.removeObject(forKey: "qaudion_device_id")
+        deleteFromKeychain(account: accessAccount)
+        deleteFromKeychain(account: refreshAccount)
+        deleteFromKeychain(account: userIdAccount)
+        deleteFromKeychain(account: deviceIdAccount)
+    }
+
+    // MARK: - Keychain primitives
+
+    private func baseQuery(account: String) -> [String: Any] {
+        #if canImport(Security)
+        return [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: authKeychainService,
+            kSecAttrAccount as String: account
+        ]
+        #else
+        return [:]
+        #endif
+    }
+
+    private func saveToKeychain(account: String, value: String) {
+        #if canImport(Security)
+        guard let data = value.data(using: .utf8) else { return }
+        var query = baseQuery(account: account)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return
+        }
+        if updateStatus == errSecItemNotFound {
+            for (k, v) in attributes { query[k] = v }
+            SecItemAdd(query as CFDictionary, nil)
+            return
+        }
+        // Any other status (e.g. duplicate after a race): hard-reset the
+        // item so the value is never left stale.
+        SecItemDelete(baseQuery(account: account) as CFDictionary)
+        var addQuery = baseQuery(account: account)
+        for (k, v) in attributes { addQuery[k] = v }
+        SecItemAdd(addQuery as CFDictionary, nil)
+        #endif
+    }
+
+    private func loadFromKeychain(account: String) -> String? {
+        #if canImport(Security)
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+        #else
+        return nil
+        #endif
+    }
+
+    private func deleteFromKeychain(account: String) {
+        #if canImport(Security)
+        SecItemDelete(baseQuery(account: account) as CFDictionary)
+        #endif
     }
 
     private func deviceName() -> String {
