@@ -9,10 +9,22 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.984",
+              date: "2026-08-14",
+              title: "v1.0.984",
+              bullets: [
+                "fix(audio): do not seed the playout ladder from the SEND profile",
+                "fix(chat): hoist DateFormatters out of hot render paths, without the locale bug",
+                "fix(engine): move QAudionAppState token storage to Keychain, isolated from TokenVault",
+                "feat(audio): make 60 ms / 256 B the unconditional call profile (W-ALL60)",
+                "fix(call): stop the duplicate call_incoming from binning the WebRTC SDP offer",
+                "🎨 Palette: Improve VoiceOver accessibility for in-call controls and settings footer (#54)",
+              ]),
         .init(id: "v1.0.983",
               date: "2026-08-13",
               title: "v1.0.983",
               bullets: [
+                "chore: regenerate changelog for v1.0.983",
                 "fix(call): make WebRTC SDP-application failures reach Loki",
               ]),
         .init(id: "v1.0.982",
@@ -157,13 +169,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.965",
                 "feat(flags): iOS reads the authenticated flag projection, so targeting works here too",
                 "fix(mesh): a radio write is one tick, not two",
-              ]),
-        .init(id: "v1.0.964",
-              date: "2026-08-12",
-              title: "v1.0.964",
-              bullets: [
-                "chore: regenerate changelog for v1.0.964",
-                "fix(mesh): a receipt may only touch a message sent to the contact who signed it",
               ]),
     ]
 }
