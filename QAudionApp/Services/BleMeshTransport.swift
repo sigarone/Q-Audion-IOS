@@ -216,13 +216,28 @@ final class BleMeshTransport: NSObject, MeshTransport {
         let bytes = packet.encode()
         let targetHex = (preferredNextHop ?? packet.recipientId).hex
         let isBroadcast = targetHex == MeshNodeId.broadcast.hex
-        if !isBroadcast, let identifier = deviceToNodeHex.first(where: { $0.value == targetHex })?.key {
-            let delivered = sendFrames(bytes, onlyTo: identifier)
-            completion(delivered ? .sentDirect : .queued("write_failed"))
+        if isBroadcast {
+            let anyDelivered = sendFrames(bytes, onlyTo: nil)
+            completion(anyDelivered ? .sentViaRelay : .queued("no_links"))
             return
         }
-        let anyDelivered = sendFrames(bytes, onlyTo: nil)
-        completion(anyDelivered ? .sentViaRelay : .queued("no_links"))
+        guard let identifier = deviceToNodeHex.first(where: { $0.value == targetHex })?.key else {
+            // The intended next hop (a direct peer, or a bridge MeshTopology.nextHop
+            // picked) is not among the devices actually connected right now. This
+            // used to fall through to "write to whatever's connected" and report
+            // that as .sentViaRelay regardless of whether the recipient had
+            // anything to do with the real target — MeshTopology's graph is never
+            // pruned in production, so a stale ANNOUNCE from a bridge that has
+            // long since walked out of range could still be picked as nextHop, and
+            // the resulting write would land on some unrelated nearby peer while
+            // the app marked the message .sent. Fail closed instead: a targeted
+            // send only counts as delivered if it actually reached the node it was
+            // addressed to.
+            completion(.queued("next_hop_unavailable"))
+            return
+        }
+        let delivered = sendFrames(bytes, onlyTo: identifier)
+        completion(delivered ? .sentDirect : .queued("write_failed"))
     }
 
     // MARK: - Central role (scan + connect out)
