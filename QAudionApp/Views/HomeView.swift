@@ -208,7 +208,10 @@ struct HomeView: View {
     /// iPad is the shell's own chrome and the one legitimate place for it.
     @ViewBuilder
     private var iPadSidebarHeader: some View {
-        let labels = AccountIdentityLabels.make(appState)
+        let labels = AccountIdentityLabels.make(
+            dialExtension: appState.currentUserDialExtension,
+            avatarName: appState.accountAvatarName
+        )
         HStack(spacing: 10) {
             QAudionAvatar(
                 // Name alone, never `labels.primary`: the avatar turns what

@@ -32,15 +32,20 @@ enum AccountIdentityLabels {
         let nameLabel: String?
     }
 
+    /// Takes primitives, never `AppState` itself, as a direct parameter type
+    /// — see CLAUDE.md sec 16 (a new file with `appState: AppState` in a
+    /// signature silently breaks the Xcode Cloud build, exit 65, no
+    /// actionable diagnostic). Callers pass `appState.currentUserDialExtension`
+    /// / `appState.accountAvatarName` at the call site instead.
     @MainActor
-    static func make(_ appState: AppState) -> Labels {
+    static func make(dialExtension: String?, avatarName: String?) -> Labels {
         let extLabel: String? = {
-            guard let raw = appState.currentUserDialExtension, !raw.isEmpty else { return nil }
+            guard let raw = dialExtension, !raw.isEmpty else { return nil }
             let formatted = DisplayName.formatExtension(raw)
             return formatted.isEmpty ? nil : "#" + formatted
         }()
         let phoneLabel = AppState.locallyConfiguredPhone()
-        let nameLabel = appState.accountAvatarName
+        let nameLabel = avatarName
 
         let primary = nameLabel ?? extLabel ?? phoneLabel ?? "Profilo da completare"
         let secondary = [extLabel, phoneLabel]

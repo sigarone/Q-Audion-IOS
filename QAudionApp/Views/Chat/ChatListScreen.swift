@@ -132,7 +132,10 @@ struct ChatListScreen: View {
     /// Metrics match the strips ContactsScreen and CallHistoryView already
     /// use, so the four tabs line up.
     private var accountTopBar: some View {
-        let labels = AccountIdentityLabels.make(appState)
+        let labels = AccountIdentityLabels.make(
+            dialExtension: appState.currentUserDialExtension,
+            avatarName: appState.accountAvatarName
+        )
         return HStack(spacing: 12) {
             QAudionAvatar(
                 // Name only, never `labels.primary`: the avatar turns what

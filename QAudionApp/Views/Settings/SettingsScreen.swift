@@ -1161,7 +1161,10 @@ struct SettingsScreen: View {
     /// Both userId branches are deleted; nothing derived from the id
     /// reaches this surface at any position.
     private var profileDisplayName: String {
-        AccountIdentityLabels.make(appState).primary
+        AccountIdentityLabels.make(
+            dialExtension: appState.currentUserDialExtension,
+            avatarName: appState.accountAvatarName
+        ).primary
     }
 
     /// The identity line under the name: "#170 · +39333…". It used to be
@@ -1174,7 +1177,10 @@ struct SettingsScreen: View {
     /// The phone is whatever this device has configured, since the profile
     /// the server returns carries no phone field of its own.
     private var profileHandle: String? {
-        let labels = AccountIdentityLabels.make(appState)
+        let labels = AccountIdentityLabels.make(
+            dialExtension: appState.currentUserDialExtension,
+            avatarName: appState.accountAvatarName
+        )
         // Whatever the name line already took is not repeated here.
         return labels.secondary.isEmpty ? nil : labels.secondary
     }
