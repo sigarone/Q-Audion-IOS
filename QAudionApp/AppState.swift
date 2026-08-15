@@ -6646,7 +6646,23 @@ final class AppState: ObservableObject {
                 // for the SDP case left the caller stuck on "not started" with
                 // audio already flowing (live, 2026-08-14, call d8afbd8d).
                 // Both flags now speak the canonical wire id.
-                guard self.callState == .ringing,
+                // W-ACCEPTGATE-RACE (2026-08-15): was `callState == .ringing`
+                // only. call_answer's mic-unblock above was already made
+                // unconditional (W574b) because callState can legitimately be
+                // something other than .ringing when this handler fires — the
+                // local offer/PQC round-trip hadn't reached .ringing yet. This
+                // guard stayed narrow, so on that exact timing the finalize
+                // (and the fallback timeout below, armed inside the SAME
+                // guarded scope) were silently skipped: callState never
+                // advances past its pre-.ringing value, the UI stays on
+                // OutgoingCallScreen's negotiating state forever, while audio
+                // (unblocked above) is already flowing both ways. Reported
+                // live 2026-08-15, same symptom shape as the d8afbd8d
+                // incident W-ACCEPTGATE-ID/SDP fixed the ID-mismatch half of.
+                // Only exclude states where finalizing would be wrong (already
+                // connected, or over) rather than requiring one exact state.
+                guard self.callState != .active, self.callState != .encrypted,
+                      self.callState != .ended,
                       let callId = self.canonicalActiveCallId() else { return }
                 // W-ACCEPTGATE-SDP (2026-08-14) — an SDP-bearing `call_answer`
                 // is a WebRTC handshake artifact, NOT a human accepting: since
@@ -12656,7 +12672,11 @@ final class AppState: ObservableObject {
         // closing the next time it drifts.
         let wireId = callId.lowercased()
         self.callAcceptedCallId = wireId
-        guard self.callState == .ringing, self.localHandshakeReadyCallId == wireId else { return }
+        // W-ACCEPTGATE-RACE: see the call_answer handler's kdoc above for why
+        // this can't be `callState == .ringing` only.
+        guard self.callState != .active, self.callState != .encrypted,
+              self.callState != .ended,
+              self.localHandshakeReadyCallId == wireId else { return }
         self.finalizeCallActive()
     }
 
@@ -12682,7 +12702,10 @@ final class AppState: ObservableObject {
     @MainActor
     private func armAcceptGateTimeout(callId: String, after seconds: Double) {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-            guard let self, self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
+            // W-ACCEPTGATE-RACE: see the call_answer handler's kdoc above.
+            guard let self, self.callState != .active, self.callState != .encrypted,
+                  self.callState != .ended,
+                  self.localHandshakeReadyCallId == callId else { return }
             RTLog.warn("call", "call_accepted not received within timeout, proceeding anyway callId=\(callId)")
             self.finalizeCallActive()
         }
