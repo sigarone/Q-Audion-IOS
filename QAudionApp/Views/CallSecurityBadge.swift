@@ -65,6 +65,10 @@ struct CallSecurityBadge: View {
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
         .cornerRadius(20)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Sicurezza chiamata: \(statusLabel)")
+        .accessibilityHint(isExpanded ? "Tocca per nascondere i dettagli" : "Tocca per mostrare i dettagli")
     }
 
     // MARK: - Expanded Details Panel
