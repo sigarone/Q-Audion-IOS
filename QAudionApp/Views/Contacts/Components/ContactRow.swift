@@ -7,10 +7,14 @@ struct ContactRow: View {
     @Environment(\.qaudionType) private var type
 
     let item: ContactsListViewModel.Item
-    /// Sub-label under the name, when set — currently unwired by any live
-    /// caller (only exercised in the `#Preview` below). If ever wired up,
-    /// pass bare digits ONLY (e.g. `item.\`extension\``), no "Int."/"Phone"/etc.
-    /// prefix (Pavel rule, 2026-07-29) — see `DisplayName.formatExtension`.
+    /// Sub-label under the name: the peer's PBX short number. Wired by
+    /// ContactsScreen through `DisplayName.formatExtension`, the one
+    /// canonical formatter.
+    ///
+    /// Must stay BARE DIGITS — no "Int."/"Phone"/etc. prefix (Pavel rule,
+    /// 2026-07-29) — because the same value is also handed to
+    /// `QAudionAvatar.shortNumber`, which paints it inside the placeholder
+    /// circle.
     let extensionLabel: String?
     let presence: PresenceDot?
     let onChatTap: () -> Void
@@ -45,7 +49,12 @@ struct ContactRow: View {
                     displayName: item.displayName,
                     imageURL: item.avatarUrl,
                     size: 44,
-                    presenceDot: resolvedPresence
+                    presenceDot: resolvedPresence,
+                    // Already formatted by the caller — no second
+                    // formatting path. Only reaches the placeholder circle:
+                    // a contact with a real photo or an sficon avatar keeps
+                    // it, so this does not clobber pictures.
+                    shortNumber: extensionLabel
                 )
                 // Pulse ring sui contatti online
                 if resolvedPresence == .online {
@@ -81,9 +90,14 @@ struct ContactRow: View {
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
-                if let ext = extensionLabel {
+                // Suppressed when it would merely repeat the name: a peer
+                // with no name is already DISPLAYED by extension, via
+                // DisplayName's last fallback tier, so without this guard
+                // the row would read "103" twice.
+                if let ext = extensionLabel, ext != item.displayName {
                     Text(ext)
                         .qaudionStyle(type.labelSmall)
+                        .monospacedDigit()
                         .foregroundStyle(scheme.onSurfaceVariant)
                 }
                 trustPills

@@ -206,7 +206,12 @@ struct LiveInCallScreen: View {
                     avatarUrl: contact.avatarUrl,
                     isOnline: false,
                     unreadMessageCount: 0,
-                    isVerified: contact.isVerified
+                    isVerified: contact.isVerified,
+                    // Required now that the picker's secondary line is the
+                    // short number instead of a truncated userId: left at
+                    // its nil default, every row in the add-participant
+                    // sheet would render with no secondary line at all.
+                    extension: contact.`extension`
                 )
             }
     }

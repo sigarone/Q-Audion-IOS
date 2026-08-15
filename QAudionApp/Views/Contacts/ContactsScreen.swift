@@ -380,6 +380,13 @@ struct ContactsScreen: View {
                             // service hasn't received a `presence_update`
                             // for this user yet (status .unknown).
                             ContactRow(item: item,
+                                       // The model has carried the extension
+                                       // all along; this call site simply
+                                       // never passed it, so ContactRow's
+                                       // `extensionLabel` branch had no live
+                                       // caller and the short number was
+                                       // invisible on every row.
+                                       extensionLabel: item.`extension`.map(DisplayName.formatExtension),
                                        presence: appState.presenceService.isOnline(item.userId) ? .online :
                                                  (appState.presenceService.status(for: item.userId) == .offline ? .offline : nil),
                                        onChatTap: { openChat(item) },

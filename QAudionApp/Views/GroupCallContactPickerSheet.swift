@@ -54,9 +54,21 @@ struct GroupCallContactPickerSheet: View {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(contact.displayName).font(.body)
-                                        Text(contact.userId.prefix(8) + "…")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
+                                        // This line used to be
+                                        // `contact.userId.prefix(8) + "…"` —
+                                        // a redacted backend UUID on a
+                                        // user-facing row. The short number
+                                        // is the humane way to tell two
+                                        // people with the same name apart,
+                                        // and it is suppressed when the name
+                                        // IS that same bare extension so the
+                                        // row does not print it twice.
+                                        if let ext = contact.`extension`.map(DisplayName.formatExtension),
+                                           !ext.isEmpty, ext != contact.displayName {
+                                            Text(ext)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                     Spacer()
                                     if selected.contains(contact.userId) {

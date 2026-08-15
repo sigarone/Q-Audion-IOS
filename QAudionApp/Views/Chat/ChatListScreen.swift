@@ -833,6 +833,53 @@ struct ChatListScreen: View {
         return appState.cachedContacts.first(where: { $0.userId == item.peerUserId })?.avatarUrl
     }
 
+    /// The peer's short number for the row preview line.
+    ///
+    /// Suppressed for groups, which have no single peer, and suppressed
+    /// when it would merely repeat the row title: `DisplayName.forUser`'s
+    /// last fallback tier returns the bare extension verbatim, so a peer
+    /// with no name is ALREADY displayed by extension.
+    ///
+    /// `contacts:` is passed explicitly on purpose. The default is
+    /// `contacts ?? ContactsStore().load()`, and that load is a UserDefaults
+    /// read plus a decrypt and decode — one disk hit per row per render
+    /// while the user is scrolling.
+    private func resolvedRowExtension(_ item: ConversationListViewModel.Item,
+                                      title: String) -> String? {
+        guard item.kind != .group else { return nil }
+        guard let ext = DisplayName.resolvedExtension(
+            for: item.peerUserId,
+            serverDisplay: item.peerDisplayName,
+            contacts: appState.cachedContacts) else { return nil }
+        let formatted = DisplayName.formatExtension(ext)
+        return formatted == title ? nil : formatted
+    }
+
+    /// The "<ext> · " run in front of the preview snippet, as ONE builder
+    /// shared by both preview branches — applied to only one, the extension
+    /// would blink away whenever the user left a draft.
+    @ViewBuilder
+    private func rowExtensionPrefix(_ item: ConversationListViewModel.Item,
+                                    title: String) -> some View {
+        if let ext = resolvedRowExtension(item, title: title) {
+            // spacing 0: the separator carries its own padding and the
+            // enclosing HStack must not add gaps around it.
+            HStack(spacing: 0) {
+                Text(ext)
+                    .qaudionStyle(type.labelSmall)
+                    .monospaced()
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .lineLimit(1)
+                Text(" · ")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .accessibilityHidden(true)
+            }
+            // Unweighted and never shrinking, so only the snippet truncates.
+            .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
         let rowTitle = resolvedRowTitle(item)
         return NavigationLink(destination: chatDestination(for: item)) {
@@ -879,7 +926,8 @@ struct ChatListScreen: View {
                     // without making them open every chat.
                     if let draftPreview = draftPreviewSnippet(for: item.conversationId) {
                         HStack {
-                            HStack(spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                rowExtensionPrefix(item, title: rowTitle)
                                 Text("Bozza:")
                                     .qaudionStyle(type.labelSmall)
                                     .foregroundStyle(extras.warning)
@@ -899,7 +947,13 @@ struct ChatListScreen: View {
                             }
                         }
                     } else if let preview = item.lastMessagePreview {
-                        HStack {
+                        // spacing 4 rather than the default ~8 so the run
+                        // reads "100 · preview". The outer HStack stays
+                        // centre-aligned: on a two-line row a first-baseline
+                        // alignment would make the unread capsule ride the
+                        // first line.
+                        HStack(spacing: 4) {
+                            rowExtensionPrefix(item, title: rowTitle)
                             Text(preview)
                                 .qaudionStyle(type.bodySmall)
                                 .foregroundStyle(scheme.onSurfaceVariant)
