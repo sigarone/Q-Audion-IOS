@@ -99,6 +99,13 @@ struct HomeView: View {
         TabView(selection: $selectedTab) {
             chatsTab
                 .tabItem { Label(Tab.chats.label, systemImage: Tab.chats.systemImage) }
+                // W146's "Chat (3)" navigation title is gone — that bar now
+                // carries the account identity instead of the tab's own
+                // word. The count moves to the badge, which is where the
+                // iPad sidebar has always shown it and where iOS users
+                // expect it. Without this the total would have vanished
+                // from the phone entirely.
+                .badge(totalUnreadCount)
                 .tag(Tab.chats)
 
             contactsTab
@@ -221,18 +228,16 @@ struct HomeView: View {
 
     // MARK: - VPN chip helper
 
-    /// Trailing toolbar item for the two hosts that still HAVE a navigation
-    /// bar: the Chats tab and, on iPad, the sidebar.
+    /// Trailing toolbar item for the one host that still HAS a navigation
+    /// bar: the iPad sidebar.
     ///
     /// It used to be attached to all four tabs, and the comment here used to
-    /// claim it "appears in each tab's root navigation bar" — but Contacts,
-    /// Calls and Settings all end their own body with
+    /// claim it "appears in each tab's root navigation bar" — but every tab
+    /// screen ends its own body with
     /// `.toolbar(.hidden, for: .navigationBar)` (the W460 iOS 26
     /// crash-on-tap fix), and an item placed in a hidden bar is simply not
-    /// drawn. The VPN control was therefore reachable on one tab out of
-    /// four, while the source read as though it were everywhere. Those three
-    /// screens now render the chip inline in their own header strip; the
-    /// three dead attachments are gone.
+    /// drawn. All four screens now render the chip inline in their own
+    /// header strip; the four dead attachments are gone.
     ///
     /// The `currentAccessToken ?? ""` fallback means the chip renders but
     /// any tap while unauthenticated will fail fast inside VpnApiService.
@@ -258,7 +263,6 @@ struct HomeView: View {
         // pin / delete / new-conversation flows keep working.
         NavigationStack {
             ChatListScreen()
-                .toolbar { vpnToolbarItem() }
         }
     }
 

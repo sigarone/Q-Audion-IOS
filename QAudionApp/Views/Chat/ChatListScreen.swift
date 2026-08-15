@@ -21,9 +21,12 @@ import QAudionEngine
 ///   - secondary FAB (small, surface bg) → "Nuovo gruppo"
 ///   - primary FAB (large, primary bg)   → "Nuova chat"
 ///
-/// Search field uses `.searchable` (system standard) so iOS keyboard +
-/// "Cancel" affordance Just Work; Compose's TopBar TextField is the
-/// equivalent UX on Android.
+/// Above the sections sit the account header (`accountTopBar`) and an
+/// in-body search field. Both used to be navigation-bar chrome —
+/// `.navigationTitle` and `.searchable` — but that bar printed the tab's
+/// own label and is now hidden, so the search field is a plain TextField
+/// styled like the one on ContactsScreen. Same shape as Compose's TopBar
+/// TextField on Android.
 ///
 /// This screen is back-compatible with the existing `ConversationListContainer`
 /// — the data layer is unchanged. Only the presentation layer is new.
@@ -35,6 +38,10 @@ struct ChatListScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
@@ -93,6 +100,114 @@ struct ChatListScreen: View {
     private struct ExportTarget: Identifiable {
         let id: URL
         var url: URL { id }
+    }
+
+    // MARK: - Account header
+
+    /// The header of the Chats tab shows the one thing only it can show:
+    /// whose account this device is logged into. It used to print "Chat",
+    /// character-for-character the tab-bar label drawn directly below it,
+    /// while the logged-in identity appeared on no home surface at all on
+    /// iPhone.
+    ///
+    /// Metrics match the strips ContactsScreen and CallHistoryView already
+    /// use, so the four tabs line up.
+    private var accountTopBar: some View {
+        let labels = AccountIdentityLabels.make(appState)
+        return HStack(spacing: 12) {
+            QAudionAvatar(
+                // Name only, never `labels.primary`: the avatar turns what
+                // it is handed into initials, and `primary` can be an
+                // extension or the complete-your-profile prompt. The digits
+                // arrive through `shortNumber` instead — and are dropped
+                // once there is a real name to draw initials from.
+                displayName: labels.nameLabel ?? "Q",
+                imageURL: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
+                size: 36,
+                shortNumber: labels.nameLabel == nil ? appState.currentUserDialExtension : nil
+            )
+            VStack(alignment: .leading, spacing: 1) {
+                Text(labels.primary)
+                    .qaudionStyle(type.titleSmall)
+                    .foregroundStyle(scheme.onSurface)
+                    .lineLimit(1)
+                if !labels.secondary.isEmpty {
+                    Text(labels.secondary)
+                        .qaudionStyle(type.labelSmall)
+                        .monospaced()
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+            }
+            // One VoiceOver element, not three fragments read in sequence.
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 8)
+            markAllMenu
+            // Compact only — on iPad the sidebar draws one chip for the
+            // whole shell, same gate the other three tabs use.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 56)
+    }
+
+    /// W50: overflow menu — "Segna tutti come letti", gated on the total
+    /// unread count. Lived in the navigation bar until that bar was hidden;
+    /// it had to move in the same edit or it would have gone with it.
+    private var markAllMenu: some View {
+        Menu {
+            Button {
+                let n = container.totalUnread
+                container.markAllAsRead()
+                // W70: replay server-side bulk read-all (best-effort).
+                if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
+                    Task { await sync.markAllConversationsRead() }
+                }
+                snackbar?.show(.init(
+                    text: n > 0
+                        ? "Segnate \(n) conversazioni come lette."
+                        : "Nessuna conversazione non letta.",
+                    severity: .info))
+            } label: {
+                Label("Segna tutti come letti",
+                      systemImage: "checkmark.circle")
+            }
+            .disabled(container.totalUnread == 0)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(scheme.onSurface)
+                .frame(width: 36, height: 36)
+        }
+        .accessibilityLabel("Altro")
+    }
+
+    /// In-body replacement for `.searchable`, which lived in the navigation
+    /// bar this screen now hides. Same shape as ContactsScreen's field so
+    /// the two search surfaces match.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            TextField("", text: $searchText,
+                      prompt: Text("Cerca conversazioni")
+                          .foregroundColor(scheme.onSurfaceVariant))
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+                .tint(scheme.primary)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(
+            RoundedRectangle(cornerRadius: 22)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
     }
 
     /// W57 (Track B engine wire #3): admin banner content. Priorità
@@ -173,6 +288,10 @@ struct ChatListScreen: View {
             scheme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                accountTopBar
+                searchField
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 List {
                     if let banner = adminBanner {
                         Section {
@@ -231,45 +350,13 @@ struct ChatListScreen: View {
                 .padding(.trailing, 16)
                 .padding(.bottom, 16)
         }
-        // W146: surface total unread inside the nav title — "Chat (3)"
-        // when there's something to read, plain "Chat" otherwise.
-        // iOS Mail / Messages idiom that keeps the count visible even
-        // when individual rows are scrolled off-screen.
-        .navigationTitle(container.totalUnread > 0
-                         ? "Chat (\(container.totalUnread))"
-                         : "Chat")
-        .navigationBarTitleDisplayMode(.inline)
-        // W50: overflow menu — "Segna tutti come letti" gated dal
-        // count totale di unread. Disabilitato quando la lista è
-        // tutta letta. Snackbar feedback con il count azzerato.
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        let n = container.totalUnread
-                        container.markAllAsRead()
-                        // W70: replay server-side bulk read-all (best-effort).
-                        if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
-                            Task { await sync.markAllConversationsRead() }
-                        }
-                        snackbar?.show(.init(
-                            text: n > 0
-                                ? "Segnate \(n) conversazioni come lette."
-                                : "Nessuna conversazione non letta.",
-                            severity: .info))
-                    } label: {
-                        Label("Segna tutti come letti",
-                              systemImage: "checkmark.circle")
-                    }
-                    .disabled(container.totalUnread == 0)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(scheme.onSurface)
-                }
-                .accessibilityLabel("Altro")
-            }
-        }
-        .searchable(text: $searchText, prompt: "Cerca conversazioni")
+        // The navigation bar printed the word "Chat" directly above a tab
+        // item labelled "Chat", and identified the account nowhere. It is
+        // hidden now and `accountTopBar` takes its place; the two controls
+        // that lived in it (the overflow menu and the search field) moved
+        // into the body in the same edit so nothing was lost with the bar.
+        // W146's unread total moved to the tab-bar badge in HomeView.
+        .toolbar(.hidden, for: .navigationBar)
         .onChange(of: searchText) { newValue in
             // iOS 16 single-param form (the iOS 17 onChange takes
             // (oldValue, newValue) — Codemagic's xcode 26 still has to
