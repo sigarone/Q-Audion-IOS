@@ -192,34 +192,49 @@ struct HomeView: View {
         appState.conversations.reduce(0) { $0 + $1.unreadCount }
     }
 
-    /// Header compatto con avatar + numero corto in cima alla sidebar iPad.
+    /// Account header at the top of the iPad sidebar.
+    ///
+    /// It used to state two facts in five renderings. The primary line and
+    /// the avatar bubble both showed the extension, because the label the
+    /// primary line read resolves to the extension when no name exists; and
+    /// the secondary line printed the literal "Q-Audion" under a list whose
+    /// `.navigationTitle` is already "Q-Audion". The account's phone number
+    /// appeared nowhere.
+    ///
+    /// Now: name as primary, "#<ext> · <phone>" as secondary, with whatever
+    /// was promoted never repeated below — the same two lines the Chats-tab
+    /// header and the Settings hero draw, from the same helper, so the three
+    /// cannot disagree. The brand stays on the navigation title, which on
+    /// iPad is the shell's own chrome and the one legitimate place for it.
     @ViewBuilder
     private var iPadSidebarHeader: some View {
-        // W466 — show the SHORT account label ("Interno 234") instead of
-        // the raw 36-char UUID. The user reported the long UID as
-        // unreadable in the main-screen top-left.
-        let displayName = appState.displayAccountLabel
+        let labels = AccountIdentityLabels.make(appState)
         HStack(spacing: 10) {
             QAudionAvatar(
-                // `displayAccountLabel` is a LABEL, not a name — it can be an
-                // extension or the "complete your profile" prompt, and the
-                // avatar turns whatever it gets into initials. Hand it the
-                // name alone and let `shortNumber` carry the digits.
-                displayName: appState.accountAvatarName ?? "Q",
+                // Name alone, never `labels.primary`: the avatar turns what
+                // it is handed into initials, and `primary` can be an
+                // extension or the complete-your-profile prompt. The digits
+                // arrive through `shortNumber`, and stop once there is a
+                // real name to draw initials from.
+                displayName: labels.nameLabel ?? "Q",
                 imageURL: nil,
                 size: 36,
                 presenceDot: .online,
-                shortNumber: appState.currentUserDialExtension
+                shortNumber: labels.nameLabel == nil ? appState.currentUserDialExtension : nil
             )
             VStack(alignment: .leading, spacing: 1) {
-                Text(displayName)
+                Text(labels.primary)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(scheme.onSurface)
                     .lineLimit(1)
-                Text("Q-Audion")
-                    .font(.system(size: 11))
-                    .foregroundStyle(scheme.onSurfaceVariant)
+                if !labels.secondary.isEmpty {
+                    Text(labels.secondary)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .lineLimit(1)
+                }
             }
+            .accessibilityElement(children: .combine)
             Spacer()
         }
         .padding(.vertical, 8)
