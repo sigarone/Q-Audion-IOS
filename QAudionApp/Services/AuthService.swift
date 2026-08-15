@@ -44,6 +44,10 @@ final class AuthService {
            let legacyDeviceId = ud.string(forKey: deviceIdKey), !legacyDeviceId.isEmpty {
             TokenVault.saveDeviceId(legacyDeviceId)
         }
+        if TokenVault.loadUserId() == nil,
+           let legacyUserId = ud.string(forKey: userIdKey), !legacyUserId.isEmpty {
+            TokenVault.saveUserId(legacyUserId)
+        }
         // Remove the plaintext copies regardless — the Keychain is now
         // authoritative for both tokens. deviceId's UserDefaults copy is
         // intentionally kept (see doc above).
@@ -105,7 +109,7 @@ final class AuthService {
             TokenVault.saveRefreshToken(refresh)
         }
         TokenVault.saveDeviceId(creds.deviceId)
-        UserDefaults.standard.set(creds.userId, forKey: userIdKey)
+        TokenVault.saveUserId(creds.userId)
         UserDefaults.standard.set(creds.deviceId, forKey: deviceIdKey)
     }
 
@@ -132,7 +136,11 @@ final class AuthService {
     }
 
     func loadUserId() -> String? {
-        UserDefaults.standard.string(forKey: userIdKey)
+        migrateTokensToKeychainIfNeeded()
+        if let fromKeychain = TokenVault.loadUserId(), !fromKeychain.isEmpty {
+            return fromKeychain
+        }
+        return UserDefaults.standard.string(forKey: userIdKey)
     }
 
     /// SEC-DEVICEID-REINSTALL (2026-08-03) — authoritative deviceId read.

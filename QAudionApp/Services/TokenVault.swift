@@ -29,6 +29,7 @@ enum TokenVault {
     private static let refreshAccount = "refresh_token"
     /// SEC-DEVICEID-REINSTALL (2026-08-03) — see `saveDeviceId` doc.
     private static let deviceIdAccount = "device_id"
+    private static let userIdAccount = "user_id"
 
     // MARK: - Public API
 
@@ -70,11 +71,20 @@ enum TokenVault {
         load(account: deviceIdAccount)
     }
 
+    static func saveUserId(_ userId: String) {
+        save(account: userIdAccount, value: userId)
+    }
+
+    static func loadUserId() -> String? {
+        load(account: userIdAccount)
+    }
+
     /// Remove every credential item in the `com.qaudion.auth` scope.
     static func clear() {
         delete(account: accessAccount)
         delete(account: refreshAccount)
         delete(account: deviceIdAccount)
+        delete(account: userIdAccount)
     }
 
     // MARK: - Keychain primitives
