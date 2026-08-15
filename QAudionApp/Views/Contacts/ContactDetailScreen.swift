@@ -360,33 +360,31 @@ struct ContactDetailScreen: View {
 
     // MARK: - Trust badges row
 
+    /// One statement per fact.
+    ///
+    /// This row used to render FOUR widgets off the single `isVerified`
+    /// boolean — VOICE, the SAS chip, a RiskPill and a VoiceTrustIndicator —
+    /// plus the unconditional PQC literal. So VOICE and SAS always appeared
+    /// together and always said the same thing, and the meter showed 0.92 for
+    /// any contact that had merely had a SAS ceremony: a voice-match strength
+    /// nobody measured.
+    ///
+    /// VOICE now reads `voiceVerifiedAt`, the same independent signal the
+    /// trustVerificationCard below was already fixed to use. The two can
+    /// legitimately disagree: a contact can be SAS-verified without ever
+    /// being voice-learned, and the chip will correctly be absent for them.
+    /// The risk pill and the meter are gone rather than re-sourced — neither
+    /// had a number behind it.
     private var trustBadgesRow: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                // PQC pill removed: it was an unconditional literal,
-                // identical on every contact. The row now opens on the
-                // chips that actually differ between contacts.
-                if item.isVerified {
-                    TrustChip("VOICE", accent: extras.success)
-                }
-                if item.isVerified {
-                    TrustChip("SAS VERIFICATO", accent: extras.success)
-                } else {
-                    TrustChip("SAS DA VERIFICARE", accent: extras.warning)
-                }
-                // W35: il livello di rischio del contatto è derivato
-                // dallo stato di verifica engine-side. Senza un campo
-                // engine reale (deepfake history / blocked / SAS-fail
-                // rate) approssimiamo: verified == low, !verified ==
-                // medium. Il campo engine arriverà con lo stesso
-                // surface usato dalla TrustVerificationCard (W36).
-                RiskPill(item.isVerified ? .low : .medium)
+        HStack(spacing: 8) {
+            if voiceVerifiedAt != nil {
+                TrustChip("VOICE", accent: extras.success)
             }
-            // W35: VoiceTrustIndicator inline. Per ora il confidence
-            // è un proxy di isVerified (1.0 / 0.55). Quando l'engine
-            // espone il voice-match score storico, sostituisco il
-            // proxy con il valore reale.
-            VoiceTrustIndicator(index: item.isVerified ? 0.92 : 0.55)
+            if item.isVerified {
+                TrustChip("SAS VERIFICATO", accent: extras.success)
+            } else {
+                TrustChip("SAS DA VERIFICARE", accent: extras.warning)
+            }
         }
     }
 
@@ -647,8 +645,11 @@ struct ContactDetailScreen: View {
     /// pattern as `presenceAuth` above, no network), the persisted
     /// "a `VoiceLearningSession` for this contact reached `.completed`"
     /// timestamp. nil until the user has run the in-call voice-learning
-    /// flow at least once for this contact — see `trustVerificationCard`'s
-    /// "Voce verificata" row above, the only consumer.
+    /// flow at least once for this contact.
+    ///
+    /// Three consumers now, not the one this comment used to claim:
+    /// `trustVerificationCard`'s "Voce verificata" row, the security log
+    /// card, and the VOICE chip in `trustBadgesRow`.
     private var voiceVerifiedAt: Date? {
         guard let ms = ContactsStore().load().first(where: { $0.userId == item.userId })?.voiceVerifiedAt else {
             return nil
