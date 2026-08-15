@@ -882,13 +882,17 @@ struct ContactDetailScreen: View {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(scheme.outline.opacity(0.5), lineWidth: 1))
     }
 
-    private static func formatEventDate(_ epochMs: Int64) -> String {
-        let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
+    private static let eventDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
         f.dateStyle = .medium
         f.timeStyle = .short
-        return f.string(from: date)
+        return f
+    }()
+
+    private static func formatEventDate(_ epochMs: Int64) -> String {
+        let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
+        return eventDateFormatter.string(from: date)
     }
 
     private func eventRow(severity: Color, when: String, summary: String) -> some View {

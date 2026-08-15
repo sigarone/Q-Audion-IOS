@@ -367,13 +367,17 @@ public struct TrustVerificationCard: View {
 
     // MARK: - Helpers
 
-    private var dateLabel: String? {
-        guard let verifiedAt else { return nil }
+    private static let verificationDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
         f.dateStyle = .medium
         f.timeStyle = .short
-        return f.string(from: verifiedAt)
+        return f
+    }()
+
+    private var dateLabel: String? {
+        guard let verifiedAt else { return nil }
+        return Self.verificationDateFormatter.string(from: verifiedAt)
     }
 
     private var methodLabel: String? {
