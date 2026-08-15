@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.989",
+              date: "2026-08-15",
+              title: "v1.0.989",
+              bullets: [
+                "fix(mesh): antenna row couldn't tell \"Bluetooth is off\" from \"flag not on yet\"",
+                "fix(call): accept-gate guard silently dropped call_answer/call_accepted outside .ringing",
+              ]),
         .init(id: "v1.0.988",
               date: "2026-08-15",
               title: "v1.0.988",
               bullets: [
+                "chore: regenerate changelog for v1.0.988",
                 "feat(brand): splash screen uses the real shield+Q-AUDION wordmark, not text",
               ]),
         .init(id: "v1.0.987",
@@ -178,14 +186,6 @@ extension ReleaseNote {
                 "chore(deps): bump github.com/pion/stun/v3 in /RealityCore (#38)",
                 "chore(deps): bump github.com/pion/dtls/v3 in /RealityCore (#39)",
                 "Memoize filteredItems in ListViewModels to prevent O(N log N) re-computation on every render (#49)",
-              ]),
-        .init(id: "v1.0.969",
-              date: "2026-08-13",
-              title: "v1.0.969",
-              bullets: [
-                "chore: regenerate changelog for v1.0.969",
-                "fix(call): the dc-mux transport diagnostics never left the device",
-                "⚡ Bolt: Optimize DateFormatter allocations in ChatList and CallHistory (#50)",
               ]),
     ]
 }
