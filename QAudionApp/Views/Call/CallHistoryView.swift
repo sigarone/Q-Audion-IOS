@@ -323,11 +323,12 @@ struct CallHistoryView: View {
 
     // MARK: - Top bar
 
+    /// Action strip, not a header: the screen deliberately states no title.
+    /// "Chiamate" was printed here and again by the tab bar ~600pt below.
+    /// The bar itself stays — with the navigation bar hidden (see :240) this
+    /// is the only route to "Cancella storico".
     private var topBar: some View {
         HStack(spacing: 8) {
-            Text("Chiamate")
-                .qaudionStyle(type.titleLarge)
-                .foregroundStyle(scheme.onSurface)
             Spacer()
             // W47: overflow menu — "Cancella tutto" sullo storico.
             // Disabled quando la lista è già vuota.

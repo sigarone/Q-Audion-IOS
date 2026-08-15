@@ -198,11 +198,13 @@ struct ContactsScreen: View {
 
     // MARK: - Top bar
 
+    /// Action strip, not a header: the screen deliberately states no title.
+    /// It used to print "Contatti" directly above a tab bar whose label is
+    /// the same word, in every locale — the shell already owns that word, so
+    /// the only thing the duplicate bought was vertical space. The search
+    /// field is now the first labelled thing under the shell chrome.
     private var topBar: some View {
         HStack {
-            Text("Contatti")
-                .qaudionStyle(type.titleLarge)
-                .foregroundStyle(scheme.onSurface)
             Spacer()
             // W58: sort menu — Nome / Online / Verificati. La scelta
             // viene persistita in UserDefaults così sopravvive a riavvi.
