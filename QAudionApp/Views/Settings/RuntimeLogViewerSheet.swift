@@ -51,9 +51,14 @@ struct RuntimeLogViewerSheet: View {
         }
     }
 
-    private func formatTime(_ d: Date) -> String {
+    // ⚡ Bolt: Cache DateFormatter to avoid expensive allocations during scroll/render.
+    private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
-        return f.string(from: d)
+        return f
+    }()
+
+    private func formatTime(_ d: Date) -> String {
+        return Self.timeFormatter.string(from: d)
     }
 }
