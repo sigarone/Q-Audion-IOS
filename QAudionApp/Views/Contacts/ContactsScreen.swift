@@ -103,6 +103,7 @@ struct ContactsScreen: View {
             scheme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                QAudionBrandBanner()
                 topBar
                 searchField.padding(.horizontal, 16).padding(.bottom, 12)
                 tabRow.padding(.horizontal, 16).padding(.bottom, 8)

@@ -235,6 +235,7 @@ struct CallHistoryView: View {
         ZStack(alignment: .bottomTrailing) {
             scheme.background.ignoresSafeArea()
             VStack(spacing: 0) {
+                QAudionBrandBanner()
                 topBar
                 content
             }
