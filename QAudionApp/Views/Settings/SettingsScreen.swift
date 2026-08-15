@@ -163,7 +163,7 @@ struct SettingsScreen: View {
                         ProfileHeroCard(
                             displayName: profileDisplayName,
                             handle: profileHandle,
-                            statusMessage: appState.currentUserStatusMessage ?? "Disponibile per chiamate sicure.",
+                            statusMessage: profileStatus,
                             // W-AVATARICONSHARED (2026-08-13) — was the raw
                             // photo-cache URL: nil (and permanently stuck on
                             // the initials bubble) for an icon-chosen avatar,
@@ -171,7 +171,13 @@ struct SettingsScreen: View {
                             // re-uploaded photo since the file path itself
                             // never changes. See AvatarUploader.resolveSelfAvatarURL.
                             avatarUrl: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
-                            shortNumber: appState.currentUserDialExtension,
+                            // Digits only while there is no name to draw
+                            // initials from — same rule the chat header and
+                            // the iPad sidebar use, so the three "this is
+                            // you" avatars cannot disagree.
+                            shortNumber: appState.accountAvatarName == nil
+                                ? appState.currentUserDialExtension
+                                : nil,
                             onEditTap: { showAccountFromEdit = true }
                         )
                         // 2026-08-06 fix: hidden NavigationLink driving the
@@ -978,38 +984,45 @@ struct SettingsScreen: View {
 
     // MARK: - Helpers
 
+    /// The card's largest line. It is the user's NAME now — it used to be
+    /// the extension, so the biggest text on the screen read "170", and
+    /// when there was no extension it read a truncated raw userId.
+    /// Both userId branches are deleted; nothing derived from the id
+    /// reaches this surface at any position.
     private var profileDisplayName: String {
-        // W459: prefer the server-assigned PBX extension over the UUID
-        // fragment. getProfile() populates currentUserDialExtension on
-        // every launch; UUID fallback applies only on first-frame before
-        // the profile round-trip completes (or if server returns
-        // dialExtension == 0). Pavel, 2026-07-29: bare digits, no "Interno"
-        // prefix — the local user's own extension follows the same
-        // no-prefix rule as every peer-facing display.
-        if let ext = appState.currentUserDialExtension, !ext.isEmpty {
-            return DisplayName.formatExtension(ext)
-        }
-        if let userId = appState.currentUserId, !userId.isEmpty {
-            if userId.hasPrefix("user-") {
-                return String(userId.dropFirst(5)).capitalized
-            }
-            // W461: always truncate — never show the full UUID regardless of length.
-            return String(userId.prefix(8)) + (userId.count > 8 ? "…" : "")
-        }
-        return "Q-Audion User"
+        AccountIdentityLabels.make(appState).primary
     }
 
+    /// The identity line under the name: "#170 · +39333…". It used to be
+    /// the extension joined to the last four characters of the userId, and
+    /// with no extension it degraded to an em-dash and a UUID fragment.
+    /// Returns nil when neither value exists, so the card omits the line
+    /// rather than printing a placeholder — which is why the "— · " branch
+    /// has no replacement.
+    ///
+    /// The phone is whatever this device has configured, since the profile
+    /// the server returns carries no phone field of its own.
     private var profileHandle: String? {
-        guard let userId = appState.currentUserId else { return nil }
-        // W444: prefer the real server-assigned PBX extension (e.g. "103 · …d2e9")
-        // over the hardcoded dash. Falls back to the UUID fragment when extension
-        // is not yet loaded (first launch before getProfile() returns).
-        // Pavel, 2026-07-29: bare digits, no "Int." prefix.
-        let tail = userId.count > 4 ? "…" + String(userId.suffix(4)) : userId
-        if let ext = appState.currentUserDialExtension, !ext.isEmpty {
-            return DisplayName.formatExtension(ext) + " · " + tail
-        }
-        return "— · " + tail
+        let labels = AccountIdentityLabels.make(appState)
+        // Whatever the name line already took is not repeated here.
+        return labels.secondary.isEmpty ? nil : labels.secondary
+    }
+
+    /// The status line, shown only when the user actually wrote one.
+    ///
+    /// The call site used to pass `?? "Disponibile per chiamate sicure."`,
+    /// so the parameter was never nil and every account that had not
+    /// written a status advertised the same italic sentence — a line that
+    /// distinguished nothing, on a card whose whole job is to say who this
+    /// account is. The trim is load-bearing rather than cosmetic: the
+    /// account editor mirrors `profile.statusMessage` unconditionally, so a
+    /// server-returned "" arrives as a non-nil empty string and would
+    /// otherwise render an empty italic line plus its spacing.
+    private var profileStatus: String? {
+        guard let s = appState.currentUserStatusMessage?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !s.isEmpty else { return nil }
+        return s
     }
 }
 
