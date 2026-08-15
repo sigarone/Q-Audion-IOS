@@ -44,7 +44,7 @@ enum PendingAttachmentSend {
 ///
 /// Layout (top → bottom):
 ///   1. **Top bar** — back chevron + 36pt avatar + display name + presence
-///                    label + `PqcBadge` + audio call + video call + ⋯
+///                    label + ephemeral timer + audio call + video call + ⋯
 ///   2. **SessionStatusStrip** — confidence dot, presence label, C=0.NN,
 ///                                MiniSpark, RE-KEY countdown.
 ///   3. **Message list** — `LazyVStack` with day headers, `MessageBubble`
@@ -163,7 +163,6 @@ struct ChatDetailScreen: View {
     private let stubConfidence: Double = 0.92
     private let stubPresenceLabel: String = "VOCE VERIFICATA"
     private let stubRekeyInSeconds: Int? = 252
-    private let stubPqcActive: Bool = true
     private let stubSamples: [Float] = [0.84, 0.86, 0.89, 0.91, 0.92, 0.92, 0.93, 0.92]
 
     // MARK: - Init
@@ -603,7 +602,12 @@ struct ChatDetailScreen: View {
 
             Spacer(minLength: 6)
 
-            PqcBadge(active: stubPqcActive)
+            // The PQC badge that sat here was `PqcBadge(active: true)` off a
+            // compile-time constant — lit in every chat on every device
+            // regardless of what key agreement actually happened. Deleted
+            // rather than wired to a real source, because post-quantum key
+            // agreement is unconditional in this app, so even a truthful
+            // indicator would restate nothing.
 
             // W445: ephemeral timer button. Tap opens the timer chooser.
             // Accent color signals when a timer is active so the user knows

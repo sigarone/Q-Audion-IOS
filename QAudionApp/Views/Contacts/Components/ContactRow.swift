@@ -122,8 +122,19 @@ struct ContactRow: View {
 
     @ViewBuilder
     private var trustPills: some View {
+        // The PQC chip that used to open this row is gone. It read no field
+        // of `item` at all — a bare string literal, so not merely true in
+        // practice but structurally unconditional, identical on every
+        // contact forever. Post-quantum key agreement is unchanged; only the
+        // per-contact badge claiming it is gone, because a chip that is true
+        // for everyone teaches the user to stop reading chips.
+        //
+        // VOICE stays: `isVerified` is a real per-contact field, written
+        // only by actual verification paths, so it is genuinely false for
+        // most contacts. An unverified contact now renders an empty HStack
+        // that collapses to zero height, which is what Android does too —
+        // do not add a spacer or a minHeight to even the rows out.
         HStack(spacing: 6) {
-            TrustChip("PQC", accent: extras.pqcAccent)
             if item.isVerified {
                 TrustChip("VOICE", accent: extras.success)
             }

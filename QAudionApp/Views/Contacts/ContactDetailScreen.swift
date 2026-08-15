@@ -363,7 +363,9 @@ struct ContactDetailScreen: View {
     private var trustBadgesRow: some View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
-                TrustChip("PQC", accent: extras.pqcAccent)
+                // PQC pill removed: it was an unconditional literal,
+                // identical on every contact. The row now opens on the
+                // chips that actually differ between contacts.
                 if item.isVerified {
                     TrustChip("VOICE", accent: extras.success)
                 }

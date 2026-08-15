@@ -15,7 +15,7 @@ import QAudionEngine
 /// Layout (top → bottom):
 ///   1. Top bar — "Impostazioni" title + ⋯ menu (placeholder)
 ///   2. ProfileHeroCard — avatar + display name + handle + status + EDIT
-///   3. SecurityChipsRow — PSK / PQC / VOICE / OTA badges
+///   3. SecurityChipsRow — PSK HW-BOUND / VOICE n/n / OTA <version> badges
 ///   4. ACCOUNT — Profilo / Numero di telefono / Dispositivi / Esci
 ///   5. SICUREZZA — Security / Voice-as-Key / Gestione chiavi /
 ///                  Trasporto / Scambio NFC
@@ -67,7 +67,8 @@ struct SettingsScreen: View {
     /// when SettingsScreen first appears (StaticUptimeAnchor).
     private var versionFooter: some View {
         let info = Bundle.main.infoDictionary
-        let v = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+        // Shared with the OTA chip above so the two cannot drift.
+        let v = SecurityChipsRow.buildString
         let b = (info?["CFBundleVersion"] as? String) ?? "?"
         let uptime = ProcessInfo.processInfo.systemUptime
             - StaticUptimeAnchor.processStartedAt
