@@ -2511,6 +2511,15 @@ final class AppState: ObservableObject {
             getToken: { [weak self] in self?.authService.loadToken() }
         )
 
+        // Service-notice inbox. Same wiring shape as FeedbackService just
+        // above — the server side and Android's reader both already exist
+        // (see NoticeService.swift's header), this is only the boot call
+        // that was missing.
+        NoticeService.shared.start(
+            serverUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() }
+        )
+
         // W559/W561 — cross-platform bug report service. Volume-gesture
         // trigger + auto-detection hook. Primitives-only API per CLAUDE.md
         // rule #16 — `getActiveCallId`/`getDiagSnapshot` do all the

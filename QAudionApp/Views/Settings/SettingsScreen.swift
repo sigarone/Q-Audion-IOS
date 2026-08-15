@@ -42,6 +42,10 @@ struct SettingsScreen: View {
     /// NavigationSplitView detail pane, which already has a shell-level VPN
     /// chip in its sidebar.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// Drives the unread-dot badge on the "Messaggi di servizio" row —
+    /// same observed-singleton pattern `FeedbackSettingsLink` already uses
+    /// for `FeedbackService.shared`.
+    @ObservedObject private var noticeService = NoticeService.shared
     /// W102: cache-clear feedback alert state.
     @State private var cacheClearedAlertVisible: Bool = false
     @State private var cacheClearedMessage: String = ""
@@ -641,6 +645,30 @@ struct SettingsScreen: View {
     private var infoSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
+
+            // Server-pushed service notices. The server side of this
+            // channel (encrypted per-device fan-out, ack endpoint) has
+            // existed the whole time and Android already polls it —
+            // NoticeService.swift ports that reader rather than inventing
+            // a subsystem. First row in INFO, ahead of Feedback, matching
+            // Android's ordering (SettingsScreen.kt).
+            NavigationLink {
+                LazyView { NoticeInboxScreen() }
+            } label: {
+                HStack(spacing: 0) {
+                    SettingsRow(icon: "megaphone",
+                                iconColor: scheme.primary,
+                                title: "Messaggi di servizio",
+                                subtitle: "Avvisi e comunicazioni dal server")
+                    if noticeService.unreadCount > 0 {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10, height: 10)
+                            .padding(.trailing, 12)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
 
             // W546+W547 — in-app feedback inbox + compose. Subtitle
             // dynamically reports the unread maintainer-reply count so the
