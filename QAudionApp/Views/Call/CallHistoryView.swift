@@ -588,7 +588,7 @@ private struct CallHistoryRow: View {
                     if entry.isVideo {
                         Image(systemName: "video.fill")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(extras.pqcAccent)
+                            .foregroundStyle(scheme.onSurfaceVariant)
                     }
                 }
             }
@@ -611,10 +611,16 @@ private struct CallHistoryRow: View {
             }
             .accessibilityLabel("Chiama \(entry.peerDisplay)")
 
+            // Neutral, not the PQC purple it used to wear. That token is
+            // the app's post-quantum accent and its own doc says so, but
+            // CallHistoryEntry carries no security field at all — placing a
+            // video call is not a crypto statement. The green on the audio
+            // button stays: that is the universal place-a-call affordance,
+            // not a trust signal.
             Button(action: { onVideoCall(entry.peerUserId) }) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 18))
-                    .foregroundStyle(extras.pqcAccent)
+                    .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
             .accessibilityLabel("Videochiama \(entry.peerDisplay)")

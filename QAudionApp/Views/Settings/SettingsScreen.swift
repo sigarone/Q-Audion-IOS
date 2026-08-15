@@ -381,6 +381,12 @@ struct SettingsScreen: View {
             NavigationLink {
                 LazyView { KeyManagementScreen(state: appState) }
             } label: {
+                // The one row that keeps the PQC purple, deliberately: its
+                // subtitle IS "PSK · PQC · rotazione". Three neighbours
+                // wore the same tint and had nothing to do with
+                // post-quantum crypto — a voiceprint, a 12-word BIP-39
+                // mnemonic, an Ed25519-signed update catalogue — so the
+                // colour meant nothing wherever it appeared.
                 SettingsRow(icon: "key.fill",
                             iconColor: extras.pqcAccent,
                             title: "Gestione chiavi",
@@ -392,7 +398,7 @@ struct SettingsScreen: View {
                 LazyView { VoiceEnrollmentScreen() }
             } label: {
                 SettingsRow(icon: "waveform.badge.mic",
-                            iconColor: extras.pqcAccent,
+                            iconColor: scheme.primary,
                             title: "Voice-as-Key",
                             subtitle: "Registra voiceprint · 5 campioni")
             }
@@ -420,7 +426,7 @@ struct SettingsScreen: View {
                 }
             } label: {
                 SettingsRow(icon: "arrow.counterclockwise.icloud",
-                            iconColor: extras.pqcAccent,
+                            iconColor: scheme.primary,
                             title: "Seed di recupero",
                             subtitle: "Mnemonica 12 parole · ripristino account")
             }
@@ -524,7 +530,7 @@ struct SettingsScreen: View {
                 LazyView { OtaUpdateScreen() }
             } label: {
                 SettingsRow(icon: "arrow.triangle.2.circlepath.icloud",
-                            iconColor: extras.pqcAccent,
+                            iconColor: scheme.primary,
                             title: "Aggiornamento OTA",
                             subtitle: "Catalogo firmato · Ed25519 · canali")
             }
