@@ -62,6 +62,11 @@ struct ChatListScreen: View {
     @State private var deepLinkItem: ConversationListViewModel.Item? = nil
     @State private var deepLinkActive: Bool = false
     @State private var adminBannerDismissed = false
+    /// Latch: true once the WebSocket has reached a connected state at
+    /// least once this session. Gates the transport-down banner so it never
+    /// shows before the socket has had a chance to attach — `.disconnected`
+    /// is the initial value, not evidence of a fault.
+    @State private var wsEverConnected = false
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
     /// W139: pending conversation export — non-nil triggers the share
@@ -286,6 +291,25 @@ struct ChatListScreen: View {
         )
     }
 
+    /// Whether to warn that the socket is down.
+    ///
+    /// When the transport drops, typed messages queue locally and this list
+    /// looks exactly like a healthy one — the user has no way to tell that
+    /// nothing is being delivered.
+    ///
+    /// The `wsEverConnected` latch matters: `wsConnectionState` starts at
+    /// `.disconnected`, so without it a cold launch would flash a red strip
+    /// before the socket has had any chance to attach, and so would every
+    /// return from the background. Once the socket has been up once, any
+    /// subsequent drop is real and worth saying.
+    private var wsBannerVisible: Bool {
+        guard wsEverConnected else { return false }
+        switch appState.wsConnectionState {
+        case .connected, .authenticated: return false
+        case .disconnected, .connecting:  return true
+        }
+    }
+
     /// Compact "X min/h fa" formatter — evita di trascinare in
     /// dependency aggiuntive solo per questa label.
     private func formatRelative(_ date: Date) -> String {
@@ -306,6 +330,36 @@ struct ChatListScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
                 List {
+                    // Its own Section, above and independent of the admin
+                    // banner — the two can legitimately be on screen at once
+                    // and say different things.
+                    if wsBannerVisible {
+                        Section {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(extras.riskHigh)
+                                    // The text says it; the glyph would only
+                                    // make VoiceOver say it twice.
+                                    .accessibilityHidden(true)
+                                Text("Connessione persa · riconnessione in corso. I messaggi verranno inviati automaticamente.")
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(extras.riskHigh)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(extras.riskHigh.opacity(0.12),
+                                        in: RoundedRectangle(cornerRadius: 8))
+                            .accessibilityElement(children: .combine)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 12,
+                                                      bottom: 8, trailing: 12))
+                        }
+                    }
+
                     if let banner = adminBanner {
                         Section {
                             adminBannerView(banner)
@@ -381,6 +435,14 @@ struct ChatListScreen: View {
             // (oldValue, newValue) — Codemagic's xcode 26 still has to
             // back-deploy to iOS 16 since CLAUDE.md pins target = 16.0).
             container.setSearchQuery(newValue)
+        }
+        // Latches once the socket has genuinely been up, which is what
+        // stops the cold-launch and background-return flash. Same iOS 16
+        // single-parameter form as above.
+        .onChange(of: appState.wsConnectionState) { state in
+            if state == .connected || state == .authenticated {
+                wsEverConnected = true
+            }
         }
         .refreshable { container.loadFromStore() }
         // GAP FIX — app-launch group reconciliation. The chat list is the

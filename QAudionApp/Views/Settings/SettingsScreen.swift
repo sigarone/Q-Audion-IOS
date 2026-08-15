@@ -584,6 +584,20 @@ struct SettingsScreen: View {
     private var infoSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
+
+            // W546+W547 — in-app feedback inbox + compose. Subtitle
+            // dynamically reports the unread maintainer-reply count so the
+            // user notices new messages without opening the screen.
+            //
+            // Moved here from SVILUPPATORE, which is wrapped in
+            // `#if QAUDION_DEV_TOOLS`. project.yml sets that flag today,
+            // with a comment saying it MUST be removed before a public App
+            // Store submission — and on that build the app would ship with
+            // no in-app support channel whatsoever, the one surface a user
+            // has for telling us something is broken. It belongs in INFO,
+            // unconditional in every build type.
+            FeedbackSettingsLink()
+
             NavigationLink {
                 LazyView { AboutSettingsScreen(state: appState) }
             } label: {
@@ -648,11 +662,6 @@ struct SettingsScreen: View {
                             subtitle: "BLE · CRACEN · heap · PDM/TDM · Axon")
             }
             .buttonStyle(.plain)
-
-            // W546+W547 — in-app feedback inbox + compose. Subtitle
-            // dynamically reports the unread maintainer-reply count so
-            // the user notices new messages without opening the screen.
-            FeedbackSettingsLink()
 
             NavigationLink {
                 LazyView { CallDesignShowcase() }
