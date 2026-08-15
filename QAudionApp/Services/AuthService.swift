@@ -44,11 +44,30 @@ final class AuthService {
            let legacyDeviceId = ud.string(forKey: deviceIdKey), !legacyDeviceId.isEmpty {
             TokenVault.saveDeviceId(legacyDeviceId)
         }
+        // W-USERID-PLAINTEXT (2026-08-15) — two independent legacy plaintext
+        // copies existed: this class's own `userIdKey` and AppState's
+        // `"currentUserId"` (AppState reads via `authService.loadToken()`
+        // at cold launch, which runs this sweep BEFORE AppState's own
+        // UserDefaults read, so by the time AppState looks the Keychain
+        // copy already exists). Unlike deviceId, nothing needs the
+        // UserDefaults copy to survive this sweep — every direct reader
+        // (AppState, LinkNewDeviceScreen, RecoverySeedContainer) was moved
+        // to `TokenVault.loadUserId()`/`saveUserId()` in the same change —
+        // so both plaintext copies are purged unconditionally below.
+        if TokenVault.loadUserId() == nil {
+            if let legacyUserId = ud.string(forKey: userIdKey), !legacyUserId.isEmpty {
+                TokenVault.saveUserId(legacyUserId)
+            } else if let legacyAppStateUserId = ud.string(forKey: "currentUserId"), !legacyAppStateUserId.isEmpty {
+                TokenVault.saveUserId(legacyAppStateUserId)
+            }
+        }
         // Remove the plaintext copies regardless — the Keychain is now
-        // authoritative for both tokens. deviceId's UserDefaults copy is
-        // intentionally kept (see doc above).
+        // authoritative for both tokens and the userId. deviceId's
+        // UserDefaults copy is intentionally kept (see doc above).
         ud.removeObject(forKey: tokenKey)
         ud.removeObject(forKey: refreshTokenKey)
+        ud.removeObject(forKey: userIdKey)
+        ud.removeObject(forKey: "currentUserId")
     }
 
     func login(phoneNumber: String, password: String, serverUrl: String) async throws -> AuthCredentials {
@@ -93,19 +112,21 @@ final class AuthService {
     }
 
     func saveCredentials(_ creds: AuthCredentials) {
-        // SECURITY C-5 — tokens → Keychain; userId stays in UserDefaults
-        // (not a credential). deviceId is written to BOTH: UserDefaults
-        // for the existing direct readers (AppState identity-key/group
-        // call sites), and the Keychain (SEC-DEVICEID-REINSTALL) so it
-        // survives an app delete+reinstall exactly like the refresh token
-        // it is paired with — see `TokenVault.saveDeviceId` doc for the
-        // live-device incident this closes.
+        // SECURITY C-5 + W-USERID-PLAINTEXT — tokens AND userId → Keychain
+        // (userId is PII tying local data to a real account, not "just an
+        // identifier"; see TokenVault.saveUserId doc). deviceId is written
+        // to BOTH: UserDefaults for the existing direct readers (AppState
+        // identity-key/group call sites), and the Keychain
+        // (SEC-DEVICEID-REINSTALL) so it survives an app delete+reinstall
+        // exactly like the refresh token it is paired with — see
+        // `TokenVault.saveDeviceId` doc for the live-device incident this
+        // closes.
         TokenVault.saveAccessToken(creds.accessToken)
         if let refresh = creds.refreshToken, !refresh.isEmpty {
             TokenVault.saveRefreshToken(refresh)
         }
         TokenVault.saveDeviceId(creds.deviceId)
-        UserDefaults.standard.set(creds.userId, forKey: userIdKey)
+        TokenVault.saveUserId(creds.userId)
         UserDefaults.standard.set(creds.deviceId, forKey: deviceIdKey)
     }
 
@@ -132,7 +153,8 @@ final class AuthService {
     }
 
     func loadUserId() -> String? {
-        UserDefaults.standard.string(forKey: userIdKey)
+        migrateTokensToKeychainIfNeeded()
+        return TokenVault.loadUserId()
     }
 
     /// SEC-DEVICEID-REINSTALL (2026-08-03) — authoritative deviceId read.

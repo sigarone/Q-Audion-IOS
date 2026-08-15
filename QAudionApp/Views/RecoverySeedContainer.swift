@@ -111,8 +111,7 @@ final class RecoverySeedContainer: ObservableObject {
                 // loginWithPhoneHash) so restoring from a mnemonic on a
                 // fresh install actually leaves the user signed in.
                 appState.authService.saveCredentials(creds)
-                appState.currentUserId = creds.userId
-                UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
+                appState.currentUserId = creds.userId  // saveCredentials already persisted it (TokenVault)
                 appState.activatePendingSession()
                 viewModel.transition(to: .complete)
             } catch {

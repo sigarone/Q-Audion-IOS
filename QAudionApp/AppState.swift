@@ -3075,13 +3075,17 @@ final class AppState: ObservableObject {
         #endif
 
         if let token = authService.loadToken() {
-            // Pre-fill userId from UserDefaults so the profile card renders before
+            // Pre-fill userId from the Keychain so the profile card renders before
             // getProfile() returns. dialExtension is intentionally NOT pre-filled:
             // it is account-specific and a stale cached value from a previous account
             // would show the wrong internal number until the server round-trip completes.
             // nil here means the hero card shows the dial extension only after the live
             // server response arrives — no stale artefact across account switches.
-            if let cached = UserDefaults.standard.string(forKey: "currentUserId") {
+            // W-USERID-PLAINTEXT: Keychain via TokenVault, not UserDefaults —
+            // authService.loadToken() just above already ran the one-time
+            // legacy-plaintext sweep, so this is populated on every launch
+            // that has ever had a userId, not just post-fix installs.
+            if let cached = TokenVault.loadUserId() {
                 self.currentUserId = cached
             }
             // Pre-fill extension from cache so SettingsScreen hero card shows
@@ -3114,11 +3118,13 @@ final class AppState: ObservableObject {
                 do {
                     let profile = try await provider.accountApi.getProfile()
                     self.currentUserId = profile.userId
-                    // W361: mirror to UserDefaults so engine-adjacent
-                    // services (LinkNewDeviceScreen QR, future
-                    // background tasks) can read the userId without
-                    // taking a reference to AppState.
-                    UserDefaults.standard.set(profile.userId, forKey: "currentUserId")
+                    // W361 / W-USERID-PLAINTEXT: mirror to the Keychain
+                    // (TokenVault) so engine-adjacent services
+                    // (LinkNewDeviceScreen QR, future background tasks)
+                    // can read the userId without taking a reference to
+                    // AppState — was a plaintext UserDefaults mirror
+                    // until 2026-08-15.
+                    TokenVault.saveUserId(profile.userId)
                     // W444: persist the short PBX extension so the SettingsScreen
                     // hero card shows "Int. 103" immediately on next launch.
                     // W461: log what the server actually returns so we can diagnose
@@ -3244,8 +3250,7 @@ final class AppState: ObservableObject {
             let creds = try await authService.login(
                 phoneNumber: userId, password: credential, serverUrl: defaultServerUrl
             )
-            currentUserId = creds.userId
-            UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
+            currentUserId = creds.userId  // authService already persisted it (TokenVault)
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
@@ -3305,8 +3310,7 @@ final class AppState: ObservableObject {
             let creds = try await authService.loginWithPhoneHash(
                 phoneHash: phoneHash, password: credential, serverUrl: defaultServerUrl
             )
-            currentUserId = creds.userId
-            UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
+            currentUserId = creds.userId  // authService already persisted it (TokenVault)
             isAuthenticated = true
             errorMessage = nil
             replayPendingTrackB()
@@ -3345,8 +3349,7 @@ final class AppState: ObservableObject {
     func completeOtpAuth(_ result: OtpAuthResult) {
         let creds = result.asAuthCredentials
         authService.saveCredentials(creds)
-        currentUserId = creds.userId
-        UserDefaults.standard.set(creds.userId, forKey: "currentUserId")
+        currentUserId = creds.userId  // saveCredentials already persisted it (TokenVault)
         if let ext = result.assignedExtension, ext > 0 {
             let extStr = String(ext)
             currentUserDialExtension = extStr
@@ -8545,10 +8548,10 @@ final class AppState: ObservableObject {
     /// W399 — non-isolated read of the persisted current userId.
     /// Used by SwiftUI Views (GroupChatScreen.makeInfoState) that
     /// need the userId without taking an EnvironmentObject ref.
-    /// Reads from UserDefaults (mirrored on every login by
-    /// AppState's auth flow).
+    /// Reads from the Keychain via TokenVault (was a plaintext
+    /// UserDefaults mirror until W-USERID-PLAINTEXT, 2026-08-15).
     public static var currentUserIdSnapshot: String? {
-        return UserDefaults.standard.string(forKey: "currentUserId")
+        return TokenVault.loadUserId()
     }
 
     /// W399 — surfaced to UI when an inbound group_invite arrives.

@@ -289,7 +289,7 @@ struct LinkNewDeviceScreen: View {
         let proto = DeviceLinkingProtocol()
         // Use the current authenticated user id; fall back to a synth
         // for unauthenticated previews so the QR still renders.
-        let userId = UserDefaults.standard.string(forKey: "currentUserId")
+        let userId = TokenVault.loadUserId()  // W-USERID-PLAINTEXT: was a plaintext UserDefaults read
             ?? UUID().uuidString
         let qr = proto.generateLinkQr(userId: userId, devicePubKey: pubkey)
         return proto.encodeLinkQr(qr)

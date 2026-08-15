@@ -29,6 +29,8 @@ enum TokenVault {
     private static let refreshAccount = "refresh_token"
     /// SEC-DEVICEID-REINSTALL (2026-08-03) — see `saveDeviceId` doc.
     private static let deviceIdAccount = "device_id"
+    /// W-USERID-PLAINTEXT (2026-08-15) — see `saveUserId` doc.
+    private static let userIdAccount = "user_id"
 
     // MARK: - Public API
 
@@ -70,11 +72,30 @@ enum TokenVault {
         load(account: deviceIdAccount)
     }
 
+    /// W-USERID-PLAINTEXT (2026-08-15) — the account UUID used to be kept
+    /// in TWO separate plaintext `UserDefaults` keys (`AppState`'s
+    /// `"currentUserId"` and `AuthService`'s own
+    /// `"com.qaudion.auth.user_id"`), each written on every login/profile
+    /// refresh. Both are `.plist` files inside the app container: readable
+    /// on a jailbroken device or extracted straight out of an unencrypted
+    /// iTunes/Finder backup — see `exploiting-insecure-data-storage-in-mobile`
+    /// (OWASP M9). The userId is what ties every locally-cached message,
+    /// call log and PSK derivation to a real account, so it's PII worth the
+    /// same protection as the tokens above, not "just an identifier".
+    static func saveUserId(_ userId: String) {
+        save(account: userIdAccount, value: userId)
+    }
+
+    static func loadUserId() -> String? {
+        load(account: userIdAccount)
+    }
+
     /// Remove every credential item in the `com.qaudion.auth` scope.
     static func clear() {
         delete(account: accessAccount)
         delete(account: refreshAccount)
         delete(account: deviceIdAccount)
+        delete(account: userIdAccount)
     }
 
     // MARK: - Keychain primitives
