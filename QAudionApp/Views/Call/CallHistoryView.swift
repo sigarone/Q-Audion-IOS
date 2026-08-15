@@ -207,6 +207,10 @@ struct CallHistoryView: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var showingDialPad = false
     @State private var showingGroupComposer = false
@@ -330,6 +334,14 @@ struct CallHistoryView: View {
     private var topBar: some View {
         HStack(spacing: 8) {
             Spacer()
+            // The VPN chip lives here, not in the navigation bar: this
+            // screen hides that bar (:240), so the toolbar item the shell
+            // used to attach was never drawn. Compact only — on iPad the
+            // sidebar draws one chip for the whole shell.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
             // W47: overflow menu — "Cancella tutto" sullo storico.
             // Disabled quando la lista è già vuota.
             Menu {

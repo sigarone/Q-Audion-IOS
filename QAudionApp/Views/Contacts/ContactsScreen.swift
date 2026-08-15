@@ -27,6 +27,10 @@ struct ContactsScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var searchText: String = ""
     @State private var selectedTab: Tab = .all
@@ -206,6 +210,14 @@ struct ContactsScreen: View {
     private var topBar: some View {
         HStack {
             Spacer()
+            // The VPN chip lives here, not in the navigation bar: this
+            // screen hides that bar (:117), so the toolbar item the shell
+            // used to attach was never drawn. Compact only — on iPad the
+            // sidebar draws one chip for the whole shell.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
             // W58: sort menu — Nome / Online / Verificati. La scelta
             // viene persistita in UserDefaults così sopravvive a riavvi.
             // Visibile solo sulla tab TUTTI (irrilevante su SCOPRI /
