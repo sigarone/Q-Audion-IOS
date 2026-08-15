@@ -303,6 +303,7 @@ struct ChatListScreen: View {
             scheme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                QAudionBrandBanner()
                 accountTopBar
                 searchField
                     .padding(.horizontal, 16)

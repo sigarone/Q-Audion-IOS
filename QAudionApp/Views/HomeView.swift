@@ -120,21 +120,26 @@ struct HomeView: View {
                 .tabItem { Label(Tab.settings.label, systemImage: Tab.settings.systemImage) }
                 .tag(Tab.settings)
         }
-        // W-BRAND (2026-08-15) — reported live: the shield+"Q-AUDION"
-        // wordmark only ever appeared on the splash screen; every one of
-        // the four main tabs was missing it entirely, unlike Android's
-        // HomeShell, which draws it once above ALL FOUR tabs (Scaffold's
-        // shared topBar, persists across tab switches). safeAreaInset, not
-        // .toolbar(...): each tab screen ends its own body with
-        // `.toolbar(.hidden, for: .navigationBar)` (W460 crash-on-tap fix),
-        // which would have hidden a toolbar item the exact same way it
-        // already hides the four dead VPN-chip toolbar attachments
-        // documented in vpnToolbarItem()'s kdoc below — safeAreaInset is a
-        // layout primitive, not a toolbar, so a child hiding ITS OWN
-        // navigation bar cannot hide a PARENT's safeAreaInset.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            qaudionBrandBanner
-        }
+        // W-BRAND (2026-08-15): the wordmark banner does NOT live here.
+        // First attempt used `.safeAreaInset(edge: .top)` on this TabView,
+        // reasoning that a layout primitive (unlike `.toolbar`) could not be
+        // suppressed by a child's `.toolbar(.hidden, for: .navigationBar)`.
+        // Reported live the same day, on the Chat tab specifically (the
+        // other three rendered fine — never fully root-caused, plausibly a
+        // TabView first-visible-tab timing quirk with safeAreaInset):
+        // ChatListScreen's `accountTopBar`, which draws the signed-in
+        // identity, rendered UNDER the inset instead of below it, an
+        // overlap indistinguishable from a hidden banner at a glance.
+        // Moved to inline placement on all four screens regardless of
+        // which one actually broke — it is the same fix already proven
+        // for the VPN chip (see `vpnToolbarItem()`'s kdoc), it does not
+        // depend on this fragile shell/inset timing at all, and leaving
+        // three screens on the old mechanism while one used the new one
+        // would be its own inconsistency. Stop
+        // trying to attach shared chrome from the shell and draw it INSIDE
+        // each screen's own already-correct top-of-body row instead — see
+        // `QAudionBrandBanner` (DesignSystem) and its call site at the top
+        // of ChatListScreen/ContactsScreen/CallHistoryView/SettingsScreen.
     }
 
     /// iPad / regular layout — sidebar list con la stessa enum `Tab` del
@@ -192,49 +197,22 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { vpnToolbarItem() }
         } detail: {
-            // W-BRAND (2026-08-15) — same shared banner as the compact
-            // TabView (see its kdoc), above the detail pane: on iPad this
-            // IS the "Chat/Contatti/Chiamate/Impostazioni screen" the user
-            // is looking at, so it gets the wordmark the same way. The
-            // sidebar keeps its own plain-text `.navigationTitle("Q-Audion")`
-            // (iPadSidebarHeader's kdoc explains why that stays text) — this
-            // is additive, not a replacement for it.
-            Group {
-                switch selectedTab {
-                case .chats:    chatsTab
-                case .contacts: contactsTab
-                case .calls:    callsTab
-                case .settings: settingsTab
-                }
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                qaudionBrandBanner
+            // W-BRAND (2026-08-15): no shared safeAreaInset here either —
+            // see the kdoc on `tabLayout`'s TabView for why that composes
+            // badly with a detail screen that hides its own nav bar. Each
+            // of chatsTab/contactsTab/callsTab/settingsTab draws
+            // `QAudionBrandBanner` itself, at the top of its own body, same
+            // as the compact layout. The sidebar keeps its own plain-text
+            // `.navigationTitle("Q-Audion")` (iPadSidebarHeader's kdoc
+            // explains why that stays text) — unaffected either way.
+            switch selectedTab {
+            case .chats:    chatsTab
+            case .contacts: contactsTab
+            case .calls:    callsTab
+            case .settings: settingsTab
             }
         }
         .navigationSplitViewStyle(.balanced)
-    }
-
-    /// Shield+"Q-AUDION" wordmark banner, shared across all four main
-    /// screens. 1:1 with Android's `HomeShell.kt` topBar row: same asset
-    /// (`QAudionWordmark`, byte-identical PNG — see SplashScreen.swift's own
-    /// W-BRAND parity note), same 32pt height / aspect-fit scale, same
-    /// left-aligned placement. Deliberately wordmark-only, no VPN chip here:
-    /// each of the four screens already renders its own correct VPN chip
-    /// inline (vpnToolbarItem()'s kdoc explains why that split happened),
-    /// and duplicating it in this banner too would show it twice.
-    private var qaudionBrandBanner: some View {
-        HStack {
-            Image("QAudionWordmark")
-                .resizable()
-                .scaledToFit()
-                .frame(height: 32)
-                .accessibilityLabel("Q-Audion")
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
-        .background(scheme.background)
     }
 
     /// Totale messaggi non letti da mostrare nel badge sidebar Chat.

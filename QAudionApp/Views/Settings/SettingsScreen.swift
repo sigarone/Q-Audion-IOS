@@ -158,6 +158,7 @@ struct SettingsScreen: View {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    QAudionBrandBanner()
                     topBar
                     ZStack {
                         ProfileHeroCard(
