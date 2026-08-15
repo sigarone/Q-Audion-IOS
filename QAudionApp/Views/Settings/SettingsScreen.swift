@@ -64,6 +64,12 @@ struct SettingsScreen: View {
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
+    /// Gate for the Voice-as-Key reset row. Read once in `.task` rather
+    /// than inline in the section body, because `hasTemplate` is a
+    /// synchronous Keychain query and this root re-renders often. The
+    /// reset itself flips it false, which is what makes the row vanish.
+    @State private var ownerVoiceEnrolled: Bool = false
+    @State private var showVoiceResetConfirm: Bool = false
 
     /// W118+W134: footer with version + build + uptime tagline.
     /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
@@ -262,6 +268,13 @@ struct SettingsScreen: View {
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
         }
+        // .task rather than inline in sicurezzaSection's body: hasTemplate
+        // is a synchronous SecItemCopyMatching and this root re-renders on
+        // every appState change. .task rather than .onAppear so re-entering
+        // after enrolling in VoiceEnrollmentScreen picks up the new state.
+        .task {
+            ownerVoiceEnrolled = VoiceprintStore().hasTemplate(contactId: VoiceprintStore.deviceOwnerId)
+        }
     }
 
     // MARK: - Top bar
@@ -404,6 +417,49 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // The only way to discard the device-owner voice key. Until now
+            // there was none: VoiceprintStore.delete has existed and been
+            // implemented down to the Keychain the whole time, with exactly
+            // zero callers, and the enrolment screen offers Inizia /
+            // Registra / Stop / Fatto / Riprova and no discard. A voiceprint
+            // learned from the wrong voice was permanent on this device —
+            // and it is announced to contacts as an identity claim.
+            //
+            // Shown only when a template exists; there is nothing to reset
+            // otherwise, and the row disappearing is what confirms the
+            // reset worked.
+            if ownerVoiceEnrolled {
+                Button {
+                    showVoiceResetConfirm = true
+                } label: {
+                    SettingsRow(icon: "arrow.counterclockwise",
+                                iconColor: .orange,
+                                title: "Reimposta Voice-as-Key",
+                                subtitle: "Cancella il modello vocale registrato su questo dispositivo")
+                }
+                .buttonStyle(.plain)
+                // Anchored to the Button, not the section, so the iPad
+                // popover points at the right row — same shape as the
+                // sign-out confirmation in this file.
+                .confirmationDialog(
+                    "Reimpostare Voice-as-Key?",
+                    isPresented: $showVoiceResetConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reimposta", role: .destructive) {
+                        VoiceprintStore().delete(contactId: VoiceprintStore.deviceOwnerId)
+                        ownerVoiceEnrolled = false
+                        snackbar?.show(.init(
+                            text: "Voice-as-Key reimpostato.",
+                            severity: .info,
+                            durationSeconds: 3))
+                    }
+                    Button("Annulla", role: .cancel) { }
+                } message: {
+                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. Lo sblocco vocale si disattiva e ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.")
+                }
+            }
+
             NavigationLink {
                 LazyView { TransportSettingsScreen(state: appState) }
             } label: {
@@ -411,6 +467,21 @@ struct SettingsScreen: View {
                             iconColor: scheme.primary,
                             title: "Protocollo di trasporto",
                             subtitle: "P2P · TURN · Relay")
+            }
+            .buttonStyle(.plain)
+
+            // The sovereign-only video policy had no entry point at all.
+            // Every piece of it — the Keychain flag, the capability filter
+            // that strips vkey-v1, the inbound-video rejection — was already
+            // implemented and consumed, and `setSovereignOnly` had zero
+            // callers, so the flag could never leave its default.
+            NavigationLink {
+                LazyView { SovereignOnlySettingsScreen(appState: appState) }
+            } label: {
+                SettingsRow(icon: "checkmark.shield",
+                            iconColor: scheme.primary,
+                            title: "Modalità Solo-sovrano",
+                            subtitle: "Disabilita il video cifrato sul telefono")
             }
             .buttonStyle(.plain)
 

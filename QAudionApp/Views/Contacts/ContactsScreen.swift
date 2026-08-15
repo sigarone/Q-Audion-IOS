@@ -336,6 +336,17 @@ struct ContactsScreen: View {
         // (@Published) also makes this re-render on its own as lookups resolve.
         let unsorted = container.viewModel.filteredItems
             .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+            // A blocked peer belongs in BLOCCATI and nowhere else. Until
+            // now blocking one from its detail screen left it sitting in
+            // TUTTI as well, rendered with live chat, call and video
+            // buttons — three working ways to reach someone the user just
+            // blocked — and counted in the "ONLINE · n/m" header.
+            //
+            // Read-time, for the same reason the orphan filter above is:
+            // ContactsListContainer builds its view model once and does not
+            // observe the change, so a filter baked in there would keep a
+            // freshly-blocked contact visible.
+            .filter { !blockedIds.contains($0.userId) }
         // W58: applica il sort prescelto. Locale-aware comparison sul
         // displayName — `localizedCaseInsensitiveCompare` rispetta
         // l'ordinamento italiano (es. é < f, à < b).
