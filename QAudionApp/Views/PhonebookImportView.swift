@@ -65,13 +65,16 @@ struct PhonebookImportView: View {
             Text("\(matched.count) utenti Q-Audion trovati").font(.title2.bold())
             Text("\(unmatched) dei tuoi contatti non sono ancora su Q-Audion.").font(.body).foregroundStyle(.secondary)
             List(matched, id: \.userId) { m in
-                VStack(alignment: .leading) {
-                    Text(m.localName).font(.body)
-                    // Technical id caption — short8, never the full UUID
-                    // (central rule, see DisplayName.swift).
-                    Text("ID: " + String(m.userId.prefix(8)) + "…")
-                        .font(.caption.monospaced()).foregroundStyle(.secondary)
-                }
+                // The "ID: 7f3b…" caption that used to sit under the name is
+                // gone. Truncating a UUID does not make it a thing to show a
+                // user — there is nothing they can do with eight characters
+                // of a server id, and no raw id belongs on a user-facing
+                // surface. The name here comes from their own phonebook,
+                // which is what they actually recognise. Unlike the
+                // group-call picker, this row has no short number to put in
+                // its place: PhonebookImportViewModel.Match carries only
+                // userId, localName and phoneHash.
+                Text(m.localName).font(.body)
             }
         }
     }
