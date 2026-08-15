@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.991",
+              date: "2026-08-15",
+              title: "v1.0.991",
+              bullets: [
+                "fix(ui): move Q-AUDION wordmark banner off shared safeAreaInset, inline per screen",
+              ]),
         .init(id: "v1.0.990",
               date: "2026-08-15",
               title: "v1.0.990",
               bullets: [
+                "chore: regenerate changelog for v1.0.990",
                 "fix(ui): shield+Q-AUDION wordmark banner now on all four main screens",
               ]),
         .init(id: "v1.0.989",
@@ -174,13 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.972",
                 "fix(video): the WS-HEVC video pipeline is print()-only, same gap as everything else",
-              ]),
-        .init(id: "v1.0.971",
-              date: "2026-08-13",
-              title: "v1.0.971",
-              bullets: [
-                "chore: regenerate changelog for v1.0.971",
-                "fix(call): queue inbound ICE candidates that arrive before the controller exists",
               ]),
     ]
 }
