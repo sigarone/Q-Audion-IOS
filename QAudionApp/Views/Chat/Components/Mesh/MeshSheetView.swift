@@ -1,5 +1,8 @@
 import SwiftUI
 import QAudionEngine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// In-chat BLE-mesh sheet: antenna on/off toggle, the proximity radar, the
 /// reachable-peer list, and a selected-peer detail card offering "transmit
@@ -25,6 +28,7 @@ struct MeshSheetView: View {
 
     @ObservedObject var runtime: MeshRuntime
     @StateObject private var viewModel: MeshSheetViewModel
+    @StateObject private var btProbe = MeshBluetoothCapabilityProbe()
     @State private var routingPreference: MeshRoutingPreference = .default
 
     let onToast: (String) -> Void
@@ -81,6 +85,9 @@ struct MeshSheetView: View {
             if let peer = viewModel.chatPeerUserId {
                 routingPreference = MeshRoutingPreferenceStore().preference(for: peer)
             }
+            // W-MESHDEAD — independent of MeshFeature.enabled on purpose,
+            // see MeshBluetoothCapabilityProbe's kdoc.
+            btProbe.start()
         }
         // Single-parameter onChange on purpose: every other call site in this
         // app uses it, and the two-parameter form is iOS 17+.
@@ -109,47 +116,112 @@ struct MeshSheetView: View {
     // MARK: - Antenna
 
     private var antennaSubtitle: String {
-        switch runtime.antennaMode {
-        case nil:
-            if case .error = runtime.radioState { return "Bluetooth non disponibile" }
-            return "Spenta"
-        case .visibleOnly:
-            return "Visibile · raggiungibile dai vicini"
-        case .fullMesh:
-            if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
-            return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
+        switch btProbe.status {
+        case .checking:
+            return "Verifica del Bluetooth in corso…"
+        case .unsupported:
+            return "Bluetooth non supportato su questo dispositivo"
+        case .authorizationDenied:
+            return "Permesso Bluetooth negato — tocca per aprire Impostazioni"
+        case .poweredOff:
+            return "Bluetooth spento — tocca per aprire Impostazioni"
+        case .ready:
+            switch runtime.antennaMode {
+            case nil:
+                if case .error = runtime.radioState { return "Bluetooth non disponibile" }
+                // W-MESHDEAD — distinguishes "radio is fine, you just haven't
+                // turned it on" from "this account can't use mesh yet at
+                // all", instead of both reading as the same flat "Spenta".
+                return MeshFeature.enabled ? "Spenta" : "Funzione mesh non ancora attiva per questo account"
+            case .visibleOnly:
+                return "Visibile · raggiungibile dai vicini"
+            case .fullMesh:
+                if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
+                return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
+            }
         }
+    }
+
+    /// Whether this row has an unmet BLUETOOTH-LEVEL blocker (denied
+    /// permission or the system radio off) — distinct from the antenna
+    /// simply being off by choice, or the server flag not being on yet.
+    /// Drives whether the row shows the three antenna chips or a single
+    /// "Apri Impostazioni" action.
+    private var hasBluetoothBlocker: Bool {
+        btProbe.status == .authorizationDenied || btProbe.status == .poweredOff
+    }
+
+    private var antennaIconTint: Color {
+        if hasBluetoothBlocker || btProbe.status == .unsupported { return extras.warning }
+        return runtime.antennaMode != nil ? scheme.primary : scheme.onSurfaceVariant
     }
 
     /// Three explicit intents rather than an on/off toggle-of-a-toggle: off,
     /// `.visibleOnly` (reachable — advertise + accept incoming connections,
     /// no scan/connect-out, no relay for others), and `.fullMesh` (the
     /// original behaviour). 1:1 port of the Android sibling's `AntennaRow`.
+    ///
+    /// W-MESHDEAD (2026-08-15) — reported live: tapping "Visibile"/"Mesh
+    /// completa" never selected them, the row always read "Spenta", and
+    /// there was nothing to tap that explained why or fixed it. Root cause:
+    /// this row's three chips were the ONLY thing gating whether
+    /// CoreBluetooth ever got asked its real state at all (`BleMeshTransport`
+    /// only constructs its `CBCentralManager`/`CBPeripheralManager` inside
+    /// `start()`, downstream of the `MeshFeature.enabled` guard in
+    /// `handleAntennaSelect`) — so a denied permission or a powered-off
+    /// radio looked IDENTICAL to a server flag that simply wasn't on yet.
+    /// [btProbe] now reads the real Bluetooth state unconditionally (see its
+    /// kdoc), and this row shows a genuine fix — Settings — for the two
+    /// cases that have one, instead of three dead chips.
     private var antennaRow: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
                 Image(systemName: "dot.radiowaves.left.and.right")
-                    .foregroundStyle(runtime.antennaMode != nil ? scheme.primary : scheme.onSurfaceVariant)
+                    .foregroundStyle(antennaIconTint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Antenna").qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
                     Text(antennaSubtitle).qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
                 }
                 Spacer()
             }
-            HStack(spacing: 8) {
-                antennaModeChip(label: "Spenta", selected: runtime.antennaMode == nil) {
-                    handleAntennaSelect(nil)
-                }
-                antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
-                    handleAntennaSelect(.visibleOnly)
-                }
-                antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
-                    handleAntennaSelect(.fullMesh)
+            if hasBluetoothBlocker {
+                openBluetoothSettingsButton
+            } else if btProbe.status == .unsupported {
+                EmptyView() // nothing tappable fixes this; the subtitle already says so
+            } else {
+                HStack(spacing: 8) {
+                    antennaModeChip(label: "Spenta", selected: runtime.antennaMode == nil) {
+                        handleAntennaSelect(nil)
+                    }
+                    antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
+                        handleAntennaSelect(.visibleOnly)
+                    }
+                    antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
+                        handleAntennaSelect(.fullMesh)
+                    }
                 }
             }
         }
         .padding(12)
         .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var openBluetoothSettingsButton: some View {
+        Button {
+            #if canImport(UIKit)
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+            #endif
+        } label: {
+            Text("Apri Impostazioni")
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(scheme.primary, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 
     private func antennaModeChip(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
