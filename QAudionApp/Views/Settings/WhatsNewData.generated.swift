@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.988",
+              date: "2026-08-15",
+              title: "v1.0.988",
+              bullets: [
+                "feat(brand): splash screen uses the real shield+Q-AUDION wordmark, not text",
+              ]),
         .init(id: "v1.0.987",
               date: "2026-08-15",
               title: "v1.0.987",
               bullets: [
+                "chore: regenerate changelog for v1.0.987",
                 "fix(build): AccountIdentityLabels.make must not take AppState as a param type",
                 "fix(mesh): a targeted send must fail, not flood, when its next hop is offline",
                 "fix(mesh): three call sites asked \"is this device connected\" instead of \"can I reach it\"",
@@ -179,14 +186,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.969",
                 "fix(call): the dc-mux transport diagnostics never left the device",
                 "⚡ Bolt: Optimize DateFormatter allocations in ChatList and CallHistory (#50)",
-              ]),
-        .init(id: "v1.0.968",
-              date: "2026-08-13",
-              title: "v1.0.968",
-              bullets: [
-                "chore: regenerate changelog for v1.0.968",
-                "fix(call): the engine cannot reach RTLog — log through a hook instead",
-                "fix(call): a CallKit call must never outlive the call it was reporting",
               ]),
     ]
 }
