@@ -213,7 +213,6 @@ struct CallHistoryView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var showingDialPad = false
-    @State private var showingGroupComposer = false
     @State private var showingClearAllConfirm = false
     /// 2026-07-29 fix (Pavel: dialed a real phone number, "nothing
     /// happened") — `DialPadSheet` dismisses synchronously the instant
@@ -233,11 +232,33 @@ struct CallHistoryView: View {
     @State private var missedOnly: Bool = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomTrailing) {
             scheme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 topBar
                 content
+            }
+
+            // One labelled primary action, replacing the bare dialpad glyph
+            // that used to sit in the header. Suppressed on the empty state,
+            // which already renders an identical "Componi numero" capsule as
+            // its first-launch CTA — two of them on one screen is the
+            // duplication this pass removes. Gated on `entries` rather than
+            // `visibleEntries` so a missed-only filter yielding nothing is
+            // treated as a filtered list, not an empty screen.
+            if !store.entries.isEmpty {
+                Button { showingDialPad = true } label: {
+                    Label("Componi numero", systemImage: "dial.fill")
+                        .qaudionStyle(type.labelMedium)
+                        .foregroundStyle(scheme.onPrimary)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(scheme.primary))
+                        .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
             }
         }
         // W460: same fix as SettingsScreen — replace deprecated API.
@@ -285,19 +306,6 @@ struct CallHistoryView: View {
             // invece di occupare quasi tutto lo schermo.
             .presentationDetents([.height(560)])
             .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showingGroupComposer) {
-            // W45: sostituito GroupComposerPlaceholderSheet (stale) con il
-            // vero CreateGroupScreen. W40 è già live in v1.0.86+, quindi
-            // il placeholder "in arrivo" era obsoleto. onGroupCreated
-            // chiude il sheet e mostra snackbar; in futuro, una volta
-            // wired startGroupCall, può anche aprire direttamente la
-            // chiamata di gruppo invece della chat.
-            NavigationStack {
-                CreateGroupScreen(onGroupCreated: { _ in
-                    showingGroupComposer = false
-                })
-            }
         }
         // W47: alert di conferma per clear-all dello storico.
         .alert("Cancella tutto lo storico?",
@@ -358,20 +366,17 @@ struct CallHistoryView: View {
                     .frame(width: 36, height: 36)
             }
             .accessibilityLabel("Altro")
-            Button(action: { showingGroupComposer = true }) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel("Nuova chiamata di gruppo")
-            Button(action: { showingDialPad = true }) {
-                Image(systemName: "dial.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel("Componi numero")
+            // The group control that used to sit here is gone. Its label
+            // said "Nuova chiamata di gruppo" but its action opened
+            // CreateGroupScreen, i.e. a group CHAT — it promised a call and
+            // delivered a chat, from the calls surface where a group chat
+            // does not belong. Group chats are created from the Chats tab,
+            // which has a labelled "Nuovo gruppo" action; group calls start
+            // from inside a group chat, which passes the real member ids.
+            //
+            // The dialpad glyph is gone too: "Componi numero" is now a
+            // labelled capsule floating over the list, so the word is
+            // visible instead of living only in an accessibilityLabel.
         }
         .padding(.horizontal, 16)
         .frame(height: 56)
@@ -477,6 +482,9 @@ struct CallHistoryView: View {
         .scrollContentBackground(.hidden)
         .background(scheme.background)
         .refreshable { store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls) }
+        // Clearance so the last row and its swipe-to-delete are reachable
+        // under the floating "Componi numero" capsule.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 96) }
     }
 
     /// Find existing or create new conversation for a peer, then trigger

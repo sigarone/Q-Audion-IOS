@@ -117,6 +117,25 @@ struct ContactsScreen: View {
                 .frame(maxHeight: .infinity)
             }
         }
+        // One labelled primary action, always present, instead of a bare
+        // glyph in the header whose only word lived in .accessibilityLabel.
+        // Placed on the ZStack rather than inside a tab branch so it sits
+        // over TUTTI, SCOPRI and BLOCCATI alike.
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                showingNewContact = true
+            } label: {
+                Label("Aggiungi contatto", systemImage: "person.badge.plus")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onPrimary)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .background(Capsule().fill(scheme.primary))
+                    .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+        }
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
@@ -241,13 +260,6 @@ struct ContactsScreen: View {
                     newValue.saveToDefaults()
                 }
             }
-            Button(action: { showingNewContact = true }) {
-                Image(systemName: "person.badge.plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel("Aggiungi contatto")
         }
         .padding(.horizontal, 16)
         .frame(height: 56)
@@ -394,6 +406,9 @@ struct ContactsScreen: View {
         .scrollContentBackground(.hidden)
         .background(scheme.background)
         .refreshable { container.refresh() }
+        // Clearance so the last row and its swipe actions are not sitting
+        // under the floating "Aggiungi contatto" capsule.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
     }
 
     // W442 — replaced static placeholder with real device-contacts import.
@@ -446,6 +461,9 @@ struct ContactsScreen: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(scheme.background)
+                // Same clearance as TUTTI — the capsule floats over this
+                // tab too.
+                .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
             }
         }
     }
@@ -475,22 +493,11 @@ struct ContactsScreen: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
 
-            // W61: CTA primario nello stato vuoto. Stesso flow del
-            // bottone "+" del topBar — qui rende esplicito il next
-            // step per first-launch users.
-            Button {
-                showingNewContact = true
-            } label: {
-                Label("Aggiungi contatto", systemImage: "person.badge.plus")
-                    .qaudionStyle(type.labelMedium)
-                    .foregroundStyle(scheme.onPrimary)
-                    .padding(.horizontal, 18).padding(.vertical, 10)
-                    .background(
-                        Capsule().fill(scheme.primary)
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
+            // W61's empty-state CTA is gone: the floating "Aggiungi
+            // contatto" capsule is visible over this state too, and two
+            // identical buttons setting the identical flag is the
+            // one-action-two-controls duplication being removed everywhere
+            // else in this pass.
 
             Spacer().frame(height: 8)
         }

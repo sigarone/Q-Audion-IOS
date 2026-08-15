@@ -236,6 +236,10 @@ struct PhoneContactImportView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(scheme.background)
+        // This list is the body of the Contacts tab's SCOPRI tab, so the
+        // floating "Aggiungi contatto" capsule ContactsScreen overlays sits
+        // above its last row.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
     }
 
     @ViewBuilder

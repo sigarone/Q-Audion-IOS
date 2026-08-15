@@ -17,9 +17,10 @@ import QAudionEngine
 ///   3. "Fissate"      — pinned 1-to-1 conversations (`pinned == true`).
 ///   4. "Conversazioni" — everything else, sorted by lastActivity desc.
 ///
-/// 2 FABs anchored bottom-trailing (matches Android `Box`+`Column`):
-///   - secondary FAB (small, surface bg) → "Nuovo gruppo"
-///   - primary FAB (large, primary bg)   → "Nuova chat"
+/// One labelled FAB anchored bottom-trailing: an extended capsule reading
+/// "Nuovo gruppo". Starting a 1:1 chat is a labelled icon in the header —
+/// it used to be a second bare circle stacked above this one, duplicating
+/// the empty-state CTA.
 ///
 /// Above the sections sit the account header (`accountTopBar`) and an
 /// in-body search field. Both used to be navigation-bar chrome —
@@ -142,6 +143,18 @@ struct ChatListScreen: View {
             // One VoiceOver element, not three fragments read in sequence.
             .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
+            // Replaces the unlabelled `square.and.pencil` circle that used
+            // to sit under the group FAB. Same sheet, same state — that
+            // sheet is also the app's only mount for the dial-by-number
+            // row, the contact picker, QR scan and NFC pairing, which is
+            // why the glyph stays a compose pencil rather than a dialpad.
+            Button { showingNewConversation = true } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(scheme.onSurface)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Nuova chat")
             markAllMenu
             // Compact only — on iPad the sidebar draws one chip for the
             // whole shell, same gate the other three tabs use.
@@ -344,6 +357,12 @@ struct ChatListScreen: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(scheme.background)
+                // Clearance for the floating capsule, which is wider and
+                // taller than the circle it replaced. safeAreaInset rather
+                // than bottom padding: padding would clip the scroll region
+                // instead of extending it, and .contentMargins is iOS 17+
+                // while this target is 16.
+                .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
             }
 
             fabStack
@@ -1267,29 +1286,36 @@ struct ChatListScreen: View {
 
     // MARK: - FABs
 
+    /// One primary action, carrying its own word.
+    ///
+    /// This used to be two stacked bare circles. The larger one
+    /// (`square.and.pencil`) opened `showingNewConversation` — the identical
+    /// statement to the empty-state CTA, so both were on screen at once
+    /// whenever the list was empty — and neither circle showed a word to a
+    /// sighted user; the only labels were `.accessibilityLabel`.
+    ///
+    /// "Nuovo gruppo" is what survives as the labelled capsule.
+    /// Start-a-chat-by-number moves to a labelled icon in the header, next
+    /// to the identity, so it is still reachable once the user has a
+    /// conversation and the empty state is gone.
     private var fabStack: some View {
-        VStack(spacing: 12) {
-            Button(action: { showingNewGroup = true }) {
+        Button(action: { showingNewGroup = true }) {
+            HStack(spacing: 8) {
                 Image(systemName: "person.3.fill")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(scheme.surface))
-                    .overlay(Circle().stroke(scheme.outline, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                    // The visible Text is the label now; without this the
+                    // symbol contributes a second phrase to VoiceOver.
+                    .accessibilityHidden(true)
+                Text("Nuovo gruppo")
+                    .qaudionStyle(type.labelLarge)
             }
-            .accessibilityLabel("Nuovo gruppo")
-
-            Button(action: { showingNewConversation = true }) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(scheme.onPrimary)
-                    .frame(width: 56, height: 56)
-                    .background(Circle().fill(scheme.primary))
-                    .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
-            }
-            .accessibilityLabel("Nuova chat")
+            .foregroundStyle(scheme.onPrimary)
+            .padding(.horizontal, 20)
+            .frame(height: 56)
+            .background(Capsule().fill(scheme.primary))
+            .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
         }
+        .buttonStyle(.plain)
     }
 
     /// W293: open the admin banner's CTA URL (if any). Static helper
