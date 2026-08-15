@@ -67,6 +67,19 @@ struct ChatListScreen: View {
     /// shows before the socket has had a chance to attach — `.disconnected`
     /// is the initial value, not evidence of a fault.
     @State private var wsEverConnected = false
+    /// nil = not checked yet. Read exactly once, the first time this
+    /// screen's `.onAppear` fires, and never again — this is the SwiftUI
+    /// approximation of "checked when the view model is constructed"
+    /// (`ConversationListContainer` has no `AppState` reference to do the
+    /// check itself). Deliberately NOT re-read on every reappearance:
+    /// Android's `ChatListViewModel` (ChatListViewModel.kt:163-178) checks
+    /// once at construction too, so re-checking here would make the banner
+    /// vanish the instant the user enrols from Settings and taps back —
+    /// behaviour shipped Android does not have.
+    @State private var recoveryEnrolledAtLoad: Bool?
+    @State private var recoveryBannerDismissedLocally = false
+    /// Drives the sheet the banner's own "Configura" button opens.
+    @State private var showingRecoveryFromBanner = false
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
     /// W139: pending conversation export — non-nil triggers the share
@@ -291,6 +304,14 @@ struct ChatListScreen: View {
         )
     }
 
+    /// Whether to show the "configura la frase di recupero" nudge. False
+    /// while `recoveryEnrolledAtLoad` is still nil (before the one-time
+    /// check has run) so the banner never flashes on the very first frame.
+    private var recoveryBannerVisible: Bool {
+        guard let enrolled = recoveryEnrolledAtLoad, !enrolled else { return false }
+        return !recoveryBannerDismissedLocally
+    }
+
     /// Whether to warn that the socket is down.
     ///
     /// When the transport drops, typed messages queue locally and this list
@@ -330,6 +351,57 @@ struct ChatListScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
                 List {
+                    // Reminder of the same fact the Settings banner states
+                    // non-dismissably — this one CAN be dismissed, because
+                    // Settings remains reachable as the non-dismissable
+                    // backstop. Primary-tinted, not the risk-red the
+                    // Settings version uses: this is a nudge on the app's
+                    // main surface, not a warning about something already
+                    // wrong.
+                    if recoveryBannerVisible {
+                        Section {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "lock.trianglebadge.exclamationmark")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(scheme.primary)
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Configura la frase di recupero")
+                                        .qaudionStyle(type.labelMedium)
+                                        .foregroundStyle(scheme.primary)
+                                    Text("12 parole · l'unica via per non perdere l'account.")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                    Button("Configura") {
+                                        showingRecoveryFromBanner = true
+                                    }
+                                    .qaudionStyle(type.labelSmall)
+                                    .foregroundStyle(scheme.primary)
+                                    .padding(.top, 2)
+                                }
+                                Spacer(minLength: 0)
+                                Button {
+                                    let uid = appState.currentUserId ?? ""
+                                    RecoveryEnrollmentStatus.dismissBanner(userId: uid)
+                                    recoveryBannerDismissedLocally = true
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
+                                .accessibilityLabel("Ignora promemoria frase di recupero")
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(scheme.primary.opacity(0.10),
+                                        in: RoundedRectangle(cornerRadius: 8))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 12,
+                                                      bottom: 8, trailing: 12))
+                        }
+                    }
+
                     // Its own Section, above and independent of the admin
                     // banner — the two can legitimately be on screen at once
                     // and say different things.
@@ -445,6 +517,16 @@ struct ChatListScreen: View {
             }
         }
         .refreshable { container.loadFromStore() }
+        // Recovery-nudge check — see the property doc on
+        // `recoveryEnrolledAtLoad` for why this is guarded to run only
+        // once per screen lifetime rather than every reappearance.
+        .onAppear {
+            if recoveryEnrolledAtLoad == nil {
+                let uid = appState.currentUserId ?? ""
+                recoveryEnrolledAtLoad = RecoveryEnrollmentStatus.isEnrolled(userId: uid)
+                recoveryBannerDismissedLocally = RecoveryEnrollmentStatus.isBannerDismissed(userId: uid)
+            }
+        }
         // GAP FIX — app-launch group reconciliation. The chat list is the
         // first screen shown after login/launch; on each appear, best-effort
         // GET /api/v1/groups (every group the server says this account
@@ -497,6 +579,26 @@ struct ChatListScreen: View {
             // Consume the deep link so a stale value doesn't re-fire
             // on the next view re-render.
             appState.pendingDeepLinkConversationId = nil
+        }
+        .sheet(isPresented: $showingRecoveryFromBanner) {
+            NavigationStack {
+                RecoverySeedContainerView(
+                    container: RecoverySeedContainer(
+                        mode: .setup,
+                        appState: appState,
+                        onDismiss: {
+                            showingRecoveryFromBanner = false
+                            recoveryEnrolledAtLoad = RecoveryEnrollmentStatus.isEnrolled(
+                                userId: appState.currentUserId ?? "")
+                        }
+                    )
+                )
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Annulla") { showingRecoveryFromBanner = false }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showingNewConversation) {
             NavigationStack {

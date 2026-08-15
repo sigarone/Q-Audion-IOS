@@ -70,6 +70,11 @@ struct SettingsScreen: View {
     /// reset itself flips it false, which is what makes the row vanish.
     @State private var ownerVoiceEnrolled: Bool = false
     @State private var showVoiceResetConfirm: Bool = false
+    /// Drives `recoveryBanner`. Re-read on every `.onAppear` (not just
+    /// once) because Settings is exactly where the user goes to run the
+    /// enrolment flow and come back — Android's `refreshRecoveryBanner()`
+    /// on route entry is the same idea.
+    @State private var recoveryEnrolled: Bool = true
 
     /// W118+W134: footer with version + build + uptime tagline.
     /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
@@ -204,6 +209,12 @@ struct SettingsScreen: View {
                     SecurityChipsRow()
                         .padding(.top, 8)
 
+                    if !recoveryEnrolled {
+                        recoveryBanner
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                    }
+
                     accountSection
                     sicurezzaSection
                     privacySection
@@ -267,6 +278,7 @@ struct SettingsScreen: View {
         // the culprit is that sub-screen's init.
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
+            recoveryEnrolled = RecoveryEnrollmentStatus.isEnrolled(userId: appState.currentUserId ?? "")
         }
         // .task rather than inline in sicurezzaSection's body: hasTemplate
         // is a synchronous SecItemCopyMatching and this root re-renders on
@@ -324,6 +336,51 @@ struct SettingsScreen: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 56)
+    }
+
+    // MARK: - Recovery banner
+
+    /// Non-dismissable nudge for an account that reached the app without a
+    /// recovery mnemonic on record. The onboarding reveal is mandatory, so
+    /// most accounts never see this — it exists for the path its own
+    /// `RecoverySeedContainer.confirmSetup` documents as deliberate:
+    /// `recoverySetup` can fail server-side while the account itself is
+    /// already created and usable, and the reveal lets the user in anyway
+    /// rather than stranding them. This is the second net for that account.
+    /// Not dismissable, on purpose: it stays until enrolment actually
+    /// completes, unlike the chat-list banner below it, which is a
+    /// reminder of the same fact and CAN be dismissed.
+    private var recoveryBanner: some View {
+        NavigationLink {
+            LazyView {
+                RecoverySeedContainerView(
+                    container: RecoverySeedContainer(mode: .setup, appState: appState)
+                )
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.trianglebadge.exclamationmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(extras.riskMedium)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Configura la frase di recupero")
+                        .qaudionStyle(type.labelMedium)
+                        .foregroundStyle(extras.riskMedium)
+                    Text("12 parole · l'unica via per non perdere l'account.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(extras.riskMedium.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Sections
