@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.990",
+              date: "2026-08-15",
+              title: "v1.0.990",
+              bullets: [
+                "fix(ui): shield+Q-AUDION wordmark banner now on all four main screens",
+              ]),
         .init(id: "v1.0.989",
               date: "2026-08-15",
               title: "v1.0.989",
               bullets: [
+                "chore: regenerate changelog for v1.0.989",
                 "fix(mesh): antenna row couldn't tell \"Bluetooth is off\" from \"flag not on yet\"",
                 "fix(call): accept-gate guard silently dropped call_answer/call_accepted outside .ringing",
               ]),
@@ -174,18 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.971",
                 "fix(call): queue inbound ICE candidates that arrive before the controller exists",
-              ]),
-        .init(id: "v1.0.970",
-              date: "2026-08-13",
-              title: "v1.0.970",
-              bullets: [
-                "chore: regenerate changelog for v1.0.970",
-                "fix(call): close two silent-fail gaps found investigating the 4s accept timeout",
-                "fix(call): ICE and DTLS state transitions never left the device either",
-                "fix(call): the echo report has no way to see if speaker route was on",
-                "chore(deps): bump github.com/pion/stun/v3 in /RealityCore (#38)",
-                "chore(deps): bump github.com/pion/dtls/v3 in /RealityCore (#39)",
-                "Memoize filteredItems in ListViewModels to prevent O(N log N) re-computation on every render (#49)",
               ]),
     ]
 }
