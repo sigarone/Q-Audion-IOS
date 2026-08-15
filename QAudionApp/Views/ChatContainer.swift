@@ -400,7 +400,14 @@ final class ChatContainer: ObservableObject {
         guard let contact = appState?.cachedContacts.first(where: { $0.userId == peerUserId }),
               let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return nil }
         let preference = MeshRoutingPreferenceStore().preference(for: peerUserId)
-        let reachable = MeshRuntime.shared.peers.contains { $0.nodeHex == nodeHex && $0.connected }
+        // Direct OR a single bridge hop — see `MeshRuntime.reach`'s doc for
+        // why this used to be direct-only. `sendData`'s own
+        // `topology.nextHop(for:)` already knows how to route to a bridged
+        // contact; the auto-routing decision below simply never asked, so a
+        // message under "Preferisci Bluetooth"/"Solo Bluetooth" fell
+        // through to the network (or queued forever, under mesh-only) for
+        // any contact that was one hop away rather than directly visible.
+        let reachable = MeshRuntime.shared.reach(toNodeHex: nodeHex).reachable
         switch meshRoutingDecision(
             preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachable
         ) {

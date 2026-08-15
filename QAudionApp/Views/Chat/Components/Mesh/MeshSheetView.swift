@@ -205,9 +205,11 @@ struct MeshSheetView: View {
     @ViewBuilder
     private var routingRow: some View {
         if let peer = viewModel.chatPeerUserId {
-            let reachable = viewModel.currentChatPeerNodeHex.map { hex in
-                runtime.peers.contains { $0.nodeHex == hex && $0.connected }
-            } ?? false
+            let reach: (reachable: Bool, viaBridgeNodeHex: String?) = {
+                guard let hex = viewModel.currentChatPeerNodeHex else { return (false, nil) }
+                return runtime.reach(toNodeHex: hex)
+            }()
+            let bridgeName: String? = reach.viaBridgeNodeHex.map { viewModel.label(forNodeHex: $0).name }
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.left.arrow.right")
@@ -215,7 +217,7 @@ struct MeshSheetView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Rete per questo contatto")
                             .qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
-                        Text(routingSubtitle(reachable: reachable))
+                        Text(routingSubtitle(reachable: reach.reachable, bridgeName: bridgeName))
                             .qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
                     }
                     Spacer()
@@ -237,15 +239,25 @@ struct MeshSheetView: View {
         }
     }
 
-    private func routingSubtitle(reachable: Bool) -> String {
+    /// `bridgeName` is non-nil only when the contact is reachable through a
+    /// device in range rather than directly — the case this used to read as
+    /// flatly unreachable, since the old boolean never consulted
+    /// `relayNodeHexes` at all.
+    private func routingSubtitle(reachable: Bool, bridgeName: String?) -> String {
         switch routingPreference {
         case .preferMesh:
+            if let bridgeName {
+                return "Bluetooth quando il contatto è vicino · ora raggiungibile tramite \(bridgeName)"
+            }
             return reachable
                 ? "Bluetooth quando il contatto è vicino · ora è raggiungibile"
                 : "Bluetooth quando il contatto è vicino · ora passa dalla rete"
         case .networkOnly:
             return "Sempre dalla rete pubblica"
         case .meshOnly:
+            if let bridgeName {
+                return "Solo Bluetooth · raggiungibile tramite \(bridgeName)"
+            }
             return reachable
                 ? "Solo Bluetooth · il contatto è raggiungibile"
                 : "Solo Bluetooth · in attesa che il contatto sia vicino"

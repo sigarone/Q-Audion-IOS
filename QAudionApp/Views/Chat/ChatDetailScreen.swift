@@ -1298,10 +1298,17 @@ struct ChatDetailScreen: View {
             // — shown while a mesh peer is the active send target for this
             // conversation. Clearing it returns to the normal transport.
             if let target = meshRuntime.activeTarget(for: container.viewModel.conversation.id.uuidString) {
+                // Used to check only whether `target.nodeHex` was itself a
+                // connected peer — never `.connected`-gated either, so a
+                // merely-seen device counted as reachable. A target armed on
+                // a contact who is only bridge-reachable (the sheet can arm
+                // exactly that — see `MeshSheetView.routingRow`) always read
+                // as unreachable here, promising a queue when the mesh could
+                // actually have delivered it via the bridge right now.
                 MeshTransportChip(
                     peerName: target.displayName,
                     reachable: meshRuntime.antennaMode != nil
-                        && meshRuntime.peers.contains { $0.nodeHex == target.nodeHex }
+                        && meshRuntime.reach(toNodeHex: target.nodeHex).reachable
                 ) {
                     meshRuntime.clearTarget(conversationId: container.viewModel.conversation.id.uuidString)
                 }

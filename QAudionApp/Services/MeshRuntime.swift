@@ -198,6 +198,45 @@ final class MeshRuntime: ObservableObject {
         activeTargets[conversationId]
     }
 
+    /// Whether `targetNodeHex` can be reached RIGHT NOW, and through whom.
+    ///
+    /// Three call sites — the routing-preference subtitle in
+    /// `MeshSheetView`, `ChatContainer.resolveMeshRoute`'s auto-routing
+    /// decision, and `MeshTransportChip`'s pre-send promise — each used to
+    /// ask a narrower question than this one: "is `targetNodeHex` itself a
+    /// connected peer", ignoring the bridge case entirely even though
+    /// `peers[].relayNodeHexes` (fed by every peer's own ANNOUNCE) has
+    /// carried that information the whole time. That collapsed "reachable
+    /// through a device in range" into "not reachable", which for
+    /// `resolveMeshRoute` was not just a wrong label: it meant a message
+    /// under "Preferisci Bluetooth" or "Solo Bluetooth" never even
+    /// attempted a bridged mesh send, even though `sendData`'s own
+    /// `topology.nextHop(for:)` is fully capable of routing it there once
+    /// armed.
+    ///
+    /// Deliberately ONE hop, not a deep topology walk: this reads only
+    /// currently-connected peers' self-reported neighbours, the same
+    /// "direct or single bridge hop, from what is live right now" scope
+    /// Android's `resolveMeshRoute` documents for its UI-facing decision
+    /// (`MeshRouteDecision.kt`) — a peer that merely appears in the
+    /// accumulated `topology` graph from a stale ANNOUNCE is not evidence
+    /// the bridge is still in range.
+    ///
+    /// No new engine state: this is a read over `peers`, which was already
+    /// published with everything it needs.
+    func reach(toNodeHex targetNodeHex: String) -> (reachable: Bool, viaBridgeNodeHex: String?) {
+        if peers.contains(where: { $0.nodeHex == targetNodeHex && $0.connected }) {
+            return (true, nil)
+        }
+        // Strongest signal first: `peers` is already RSSI-sorted (see
+        // `applyKnownPeers`), so the first connected peer that announces
+        // the target is the nearest usable bridge.
+        if let bridge = peers.first(where: { $0.connected && $0.relayNodeHexes.contains(targetNodeHex) }) {
+            return (true, bridge.nodeHex)
+        }
+        return (false, nil)
+    }
+
     /// Encrypts nothing, parses nothing — `payload` is already the final
     /// opaque envelope bytes the caller wants delivered. Wraps it in a
     /// `MeshPacket`, resolves a known multi-hop next-hop when one exists
