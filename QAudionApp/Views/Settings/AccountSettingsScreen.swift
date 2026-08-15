@@ -191,6 +191,23 @@ final class AccountSettingsContainer: ObservableObject {
                     } else {
                         UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
                     }
+                    // Same reason as the two mirrors above, applied to the
+                    // display name: this screen is the only place the user
+                    // can change it, and `saveProfile()` re-runs this loader,
+                    // so without the mirror the Settings hero and the chat
+                    // header keep showing the old name until the next cold
+                    // launch. Placeholder names are filtered out here too, so
+                    // the two write paths agree on what counts as "no name".
+                    if let name = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !name.isEmpty,
+                       !DisplayName.looksLikeUUID(name),
+                       !DisplayName.isPlaceholderName(name) {
+                        self.appState?.currentUserDisplayName = name
+                        UserDefaults.standard.set(name, forKey: "currentUserDisplayName")
+                    } else {
+                        self.appState?.currentUserDisplayName = nil
+                        UserDefaults.standard.removeObject(forKey: "currentUserDisplayName")
+                    }
                     self.isLoading = false
                 }
             } catch {

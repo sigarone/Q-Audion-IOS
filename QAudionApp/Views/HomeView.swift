@@ -194,7 +194,11 @@ struct HomeView: View {
         let displayName = appState.displayAccountLabel
         HStack(spacing: 10) {
             QAudionAvatar(
-                displayName: displayName,
+                // `displayAccountLabel` is a LABEL, not a name — it can be an
+                // extension or the "complete your profile" prompt, and the
+                // avatar turns whatever it gets into initials. Hand it the
+                // name alone and let `shortNumber` carry the digits.
+                displayName: appState.accountAvatarName ?? "Q",
                 imageURL: nil,
                 size: 36,
                 presenceDot: .online,

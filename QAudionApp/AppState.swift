@@ -66,24 +66,70 @@ final class AppState: ObservableObject {
     /// `currentUserDialExtension`'s cache pattern so the hero card shows
     /// the real status immediately, including right after an edit.
     @Published var currentUserStatusMessage: String?
+    /// The account's own display name, as returned by `getProfile()`.
+    /// Mirrors `currentUserDialExtension`'s cache pattern (UserDefaults key
+    /// "currentUserDisplayName") so every "this is you" surface — the chat
+    /// header, the iPad sidebar header, the Settings hero — can show the
+    /// real name on the first frame after a cold launch instead of
+    /// degrading to a number. `getProfile()` has always carried it
+    /// (`UserProfile.displayName`); it was simply dropped on the floor.
+    /// Placeholder server names ("New User", "Phone #100") are filtered out
+    /// at the write sites so they never get promoted over the extension.
+    @Published var currentUserDisplayName: String?
     @Published var errorMessage: String?
 
     /// W466 — short, human-readable label for the logged-in account,
     /// for the iPad sidebar header (and any other "this is you" chip).
-    /// Prefers the server-assigned PBX extension over the raw 36-char UUID,
-    /// which the user reported as unreadably long in the main-screen
-    /// top-left. Falls back to a truncated UUID, then a generic label,
-    /// mirroring `SettingsScreen.profileDisplayName`. Pavel, 2026-07-29:
-    /// bare digits, no "Interno" prefix.
+    /// Chain: display name → bare extension → locally-configured phone →
+    /// a prompt to complete the profile. Pavel, 2026-07-29: bare digits,
+    /// no "Interno" prefix.
+    ///
+    /// 2026-08-15: the `String(uid.prefix(8)) + "…"` branch that used to sit
+    /// between the extension and the generic label is GONE. It put a raw
+    /// userId fragment on a user-facing line, which is the one thing the
+    /// display chain must never do — and it was reachable in practice, since
+    /// accounts created before the extension rollout are not backfilled.
     var displayAccountLabel: String {
+        if let name = accountAvatarName {
+            return name
+        }
         if let ext = currentUserDialExtension, !ext.isEmpty {
             return DisplayName.formatExtension(ext)
         }
-        if let uid = currentUserId, !uid.isEmpty {
-            let head: String = String(uid.prefix(8))
-            return uid.count > 8 ? head + "…" : head
+        if let phone = Self.locallyConfiguredPhone() {
+            return phone
         }
-        return "Q-Audion User"
+        return "Profilo da completare"
+    }
+
+    /// The account's display name and nothing else — nil when the user has
+    /// not set one. Separate from `displayAccountLabel` because
+    /// `QAudionAvatar(displayName:)` derives its initials from whatever it
+    /// is handed: fed the full label it would draw a "P" for "Profilo da
+    /// completare" or a digit for an extension. Call sites pass
+    /// `accountAvatarName ?? "Q"` and let `shortNumber:` carry the digits,
+    /// which is what the Android avatar does.
+    var accountAvatarName: String? {
+        guard let raw = currentUserDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              !DisplayName.looksLikeUUID(raw),
+              !DisplayName.isPlaceholderName(raw) else { return nil }
+        return raw
+    }
+
+    /// The user's own phone number as configured on THIS device. There is no
+    /// server-side source: `UserProfile` (what `getProfile()` returns) has no
+    /// phone field at all — only the peer-facing `PublicUser` projection
+    /// carries `phone_number`, and that is about other people's opted-in
+    /// numbers, not one's own. So the value comes from the two local stores
+    /// that already hold it: the caller-id number the user dials out with,
+    /// then the first entry of the multi-phone list.
+    static func locallyConfiguredPhone(defaults: UserDefaults = .standard) -> String? {
+        if let local = LocalCallerIdSettings.phoneNumber(defaults: defaults) {
+            return local
+        }
+        let phones = defaults.array(forKey: "com.qaudion.profile.myPhones") as? [String] ?? []
+        return phones.first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     /// W72: presence service — bound to the engine `BCryptoPresenceManager`
@@ -3100,6 +3146,10 @@ final class AppState: ObservableObject {
                !cachedStatus.isEmpty {
                 self.currentUserStatusMessage = cachedStatus
             }
+            if let cachedName = UserDefaults.standard.string(forKey: "currentUserDisplayName"),
+               !cachedName.isEmpty {
+                self.currentUserDisplayName = cachedName
+            }
             // FORCED-QR FIX (2026-06-24): build the config WITH the stored
             // refresh token so the auto-wired primary refresher (POST
             // /auth/refresh) can actually fire on the launch getProfile()'s
@@ -3149,6 +3199,21 @@ final class AppState: ObservableObject {
                     } else {
                         self.currentUserStatusMessage = nil
                         UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
+                    }
+                    // Same set-or-clear shape as the two above, and for the
+                    // same reason: an account migrated to a blank name must
+                    // stop showing the stale one. Placeholder names the
+                    // server hands out are treated as "no name" so they never
+                    // outrank the extension in `displayAccountLabel`.
+                    if let name = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !name.isEmpty,
+                       !DisplayName.looksLikeUUID(name),
+                       !DisplayName.isPlaceholderName(name) {
+                        self.currentUserDisplayName = name
+                        UserDefaults.standard.set(name, forKey: "currentUserDisplayName")
+                    } else {
+                        self.currentUserDisplayName = nil
+                        UserDefaults.standard.removeObject(forKey: "currentUserDisplayName")
                     }
                     self.isAuthenticated = true
                     // FORCED-QR FIX (2026-06-24): the cascade inside getProfile()
@@ -3293,6 +3358,16 @@ final class AppState: ObservableObject {
             if let status = profile.statusMessage, !status.isEmpty {
                 self.currentUserStatusMessage = status
                 UserDefaults.standard.set(status, forKey: "currentUserStatusMessage")
+            }
+            // Set-only, matching the two branches above: this is the
+            // best-effort post-login top-up, not the authoritative launch
+            // fetch, so it must never clear a value the launch path wrote.
+            if let name = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !name.isEmpty,
+               !DisplayName.looksLikeUUID(name),
+               !DisplayName.isPlaceholderName(name) {
+                self.currentUserDisplayName = name
+                UserDefaults.standard.set(name, forKey: "currentUserDisplayName")
             }
         }
     }
@@ -11284,6 +11359,14 @@ final class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "currentUserId")
         currentUserDialExtension = nil
         UserDefaults.standard.removeObject(forKey: "currentUserDialExtension")
+        // Without these two the previous account's real name and status
+        // survive into the next login's hero card until its first
+        // getProfile() lands. The status leak predates the name; both are
+        // cleared here because they are cached the same way.
+        currentUserDisplayName = nil
+        UserDefaults.standard.removeObject(forKey: "currentUserDisplayName")
+        currentUserStatusMessage = nil
+        UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
         isAuthenticated = false
         callState = .idle
         isInCall = false
