@@ -9,6 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.994",
+              date: "2026-08-16",
+              title: "v1.0.994",
+              bullets: [
+                "fix(call): make the outgoing-screen 3rd handshake checkmark reachable",
+              ]),
+        .init(id: "v1.0.993",
+              date: "2026-08-16",
+              title: "v1.0.993",
+              bullets: [
+                "chore: regenerate changelog for v1.0.993",
+                "feat(mesh): close the two real iOS/Android parity gaps",
+                "fix(mesh): stop claiming an outbox iOS mesh sends don't have",
+                "fix(mesh): antenna toggle silently never reports on-state on iOS (#64)",
+              ]),
         .init(id: "v1.0.992",
               date: "2026-08-16",
               title: "v1.0.992",
@@ -170,20 +185,6 @@ extension ReleaseNote {
                 "fix(profile): replace the invented icon set with Android's actual characters",
                 "fix(profile): Settings never rendered an icon-chosen self-avatar at all",
                 "fix(video): the inbound HEVC decode path is print()-only too",
-              ]),
-        .init(id: "v1.0.974",
-              date: "2026-08-13",
-              title: "v1.0.974",
-              bullets: [
-                "chore: regenerate changelog for v1.0.974",
-                "fix(profile): self-avatar picker and the rest of the app read two unwired states",
-              ]),
-        .init(id: "v1.0.973",
-              date: "2026-08-13",
-              title: "v1.0.973",
-              bullets: [
-                "chore: regenerate changelog for v1.0.973",
-                "fix(call): stop stacking a dead in-app ringing banner on a working CallKit UI",
               ]),
     ]
 }
