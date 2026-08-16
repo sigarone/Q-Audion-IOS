@@ -501,13 +501,15 @@ struct MeshTransportChip: View {
     /// range. Distinct from "a target is armed", which survives the antenna
     /// being switched off and the peer walking away. The chip used to claim
     /// "invio via mesh" in both states, which is a promise the transport cannot
-    /// keep: a message sent then is queued for store-and-forward, not
-    /// delivered, and that is worth seeing before pressing send.
+    /// keep: there is no store-and-forward outbox (see IOS_BLE_MESH_DESIGN.md
+    /// §6) — a message sent while unreachable fails immediately instead of
+    /// being held, and that is worth seeing before pressing send.
     let reachable: Bool
     let onClear: () -> Void
 
-    /// Unreachable is not an error — the message will be held and sent when the
-    /// peer reappears — so it warns rather than alarms.
+    /// Unreachable is still shown as a warning rather than an outright block —
+    /// the user can still try — but the send will fail right away if no link
+    /// exists; it is not held for later delivery.
     private var tint: Color { reachable ? extras.bluetoothAccent : extras.trustUnverified }
 
     var body: some View {
@@ -517,7 +519,7 @@ struct MeshTransportChip: View {
                 .foregroundStyle(tint)
             Text(reachable
                  ? "Invio via mesh Bluetooth — \(peerName)"
-                 : "Mesh Bluetooth — \(peerName) non raggiungibile: il messaggio resta in attesa")
+                 : "Mesh Bluetooth — \(peerName) non raggiungibile: l'invio potrebbe fallire")
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(tint)
             Spacer(minLength: 4)

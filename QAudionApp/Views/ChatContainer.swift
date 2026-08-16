@@ -405,9 +405,14 @@ final class ChatContainer: ObservableObject {
             preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachable
         ) {
         case .sendOverMesh, .queueForMesh:
-            // queueForMesh only arises from "solo Bluetooth": the send path
-            // seals the message and the outbox holds it until the peer is back
-            // in range, which is exactly what that choice asked for.
+            // queueForMesh only arises from "solo Bluetooth": that choice asks
+            // for the message to go out over mesh even when the peer isn't
+            // reachable right now. There is no outbox yet to honour that once
+            // the peer is out of range — sendViaMesh below still attempts an
+            // immediate write and fails the message on the spot if it can't
+            // land (see finishMeshSend). Tracked as the largest gap versus
+            // Android's store-and-forward design; see
+            // docs/ble-mesh/IOS_BLE_MESH_DESIGN.md §6.
             return MeshTargetSelection(nodeHex: nodeHex, displayName: contact.displayName)
         case .sendOverNetwork:
             return nil
