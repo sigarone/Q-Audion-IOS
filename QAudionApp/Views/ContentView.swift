@@ -69,6 +69,29 @@ struct ContentView: View {
     @State private var outgoingAvatarUrl: URL? = nil
     private let contactsStore = ContactsStore()
 
+    /// W-OUTGOINGDOT3 (2026-08-16) — `inCallStack` used to branch straight
+    /// on `appState.callState` in the SAME body evaluation that state
+    /// change triggers, so the instant `callState` reached `.active` /
+    /// `.encrypted` the view swapped synchronously to `LiveInCallScreen`/
+    /// `VideoCallView`. `makeOutgoingScreen()` was therefore NEVER called
+    /// with a state that could map to `OutgoingCallScreen.State.connected`
+    /// — the third handshake-log checkmark ("HKDF session key derived")
+    /// was unreachable dead code on every call, successful or not (a user
+    /// watching a real call always saw it stuck at 2/3, independent of
+    /// whether the PQC handshake had actually completed).
+    ///
+    /// Android's `OutgoingCallRoute` doesn't have this problem: it routes
+    /// to InCall via a `LaunchedEffect(state) { if (state == "connected")
+    /// onConnected(...) }` side effect, which runs AFTER the composable
+    /// has already rendered once with the new state — so the third
+    /// checkmark genuinely appears for a frame before the screen swaps.
+    /// This flag reproduces that same one-frame-then-navigate timing on
+    /// iOS: `inCallStack` gates on IT (not on `callState` directly), and
+    /// only `.onChange` below — which fires after the body has already
+    /// re-rendered with the new `callState` — flips it, mirroring
+    /// Android's async LaunchedEffect instead of a synchronous branch.
+    @State private var showLiveCallScreen: Bool = false
+
     var body: some View {
         ZStack(alignment: .top) {
             mainStack
@@ -210,6 +233,13 @@ struct ContentView: View {
         .animation(.easeInOut, value: appState.remoteVideoPaused)
         .onChange(of: appState.callContactId) { id in
             resolveOutgoingName(id)
+        }
+        // W-OUTGOINGDOT3 — see showLiveCallScreen's doc above. Async on
+        // purpose: this must fire AFTER inCallStack already rendered once
+        // with the new callState (so makeOutgoingScreen() gets a chance to
+        // show the third checkmark), not synchronously with it.
+        .onChange(of: appState.callState) { newState in
+            showLiveCallScreen = (newState == .active || newState == .encrypted)
         }
         .onAppear {
             resolveOutgoingName(appState.callContactId)
@@ -377,8 +407,9 @@ struct ContentView: View {
     /// wiring), so this is a safe surface to fall back to.
     @ViewBuilder
     private var inCallStack: some View {
-        let cs = appState.callState
-        if cs == .active || cs == .encrypted {
+        // W-OUTGOINGDOT3 — gates on the async-flipped flag, not on
+        // appState.callState directly. See showLiveCallScreen's doc.
+        if showLiveCallScreen {
             let bothCamerasPaused = appState.localVideoPaused && appState.remoteVideoPaused
             if (appState.isVideoCall || appState.peerScreenShareActive) && !bothCamerasPaused {
                 VideoCallView()
@@ -392,7 +423,20 @@ struct ContentView: View {
 
     private func makeOutgoingScreen() -> OutgoingCallScreen {
         let cs = appState.callState
-        let outState: OutgoingCallScreen.State = (cs == .connecting) ? .dialing : .handshaking
+        // W-OUTGOINGDOT3 — cs can now legitimately be .active/.encrypted
+        // here: showLiveCallScreen hasn't flipped yet for this render pass
+        // (its .onChange fires after), so this frame is exactly the one
+        // that must show the third checkmark. Previously this branch could
+        // never see those two values in practice (inCallStack swapped
+        // away synchronously the same instant), so the ternary only ever
+        // needed to distinguish .connecting from everything else — that
+        // silently made OutgoingCallScreen.State.connected dead code.
+        let outState: OutgoingCallScreen.State
+        switch cs {
+        case .connecting: outState = .dialing
+        case .active, .encrypted: outState = .connected
+        default: outState = .handshaking
+        }
         let name: String = outgoingDisplayName.isEmpty
             ? (appState.callContactId ?? "…")
             : outgoingDisplayName
