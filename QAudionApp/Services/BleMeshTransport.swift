@@ -101,6 +101,14 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private var malformedStreak: [UUID: Int] = [:]
     private var blockedUntilMs: [UUID: Int64] = [:]
     private var relayWindows: [UUID: RelayWindow] = [:]
+    /// Bounded, oldest-evicted-first identities of packets this device has
+    /// already flood-relayed — see `alreadyRelayed(_:)`. Plain arrays/sets,
+    /// not a synchronized structure: unlike the Android sibling (concurrent
+    /// GATT callback threads), every call into this type is confined to
+    /// `bleQueue`, so no extra locking is needed here either.
+    private var relayedPacketKeys: [String] = []
+    private var relayedPacketKeySet: Set<String> = []
+    private static let relayedPacketCacheSize = 256
 
     private final class FrameBuffer {
         let total: Int
@@ -472,7 +480,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         // relayed on, so one adjacent peer can't use this device to amplify
         // spam to everyone else in range — neither gate applies to the
         // forUs branch above.
-        guard packet.recipientId != localNodeId, mode == .fullMesh, allowRelay(from: identifier) else { return }
+        guard packet.recipientId != localNodeId, mode == .fullMesh,
+              allowRelay(from: identifier), !alreadyRelayed(packet) else { return }
         let decision = MeshRelayPolicy.evaluate(
             packet: packet, localNodeId: localNodeId,
             visiblePeerCount: deviceToNodeHex.count, knownNextHop: nil
@@ -593,6 +602,34 @@ final class BleMeshTransport: NSObject, MeshTransport {
         }
         window!.count += 1
         return window!.count <= Self.maxRelaysPerWindow
+    }
+
+    /// True if this device has already flood-relayed this exact packet
+    /// (test-and-set: a fresh identity is also recorded as a side effect).
+    ///
+    /// A flood-relayed packet can arrive here more than once, via different
+    /// neighbors, before its TTL runs out — `MeshRelayPolicy.evaluate` has
+    /// no memory of what this device already forwarded, so without this
+    /// check every redundant arrival got its own independent relay
+    /// decision, wasting airtime on a packet already on its way. Mirrors
+    /// the Android sibling's `alreadyRelayed` one-for-one.
+    ///
+    /// The identity key deliberately excludes `ttl` — the one field a relay
+    /// hop changes (`packet.withTTL(decision.nextTTL)` below) — so two
+    /// arrivals of "the same" flooded packet via paths of different length
+    /// still match. Soft/best-effort: end-user delivery correctness comes
+    /// from `clientMsgId` dedup on receive, which this does not replace.
+    private func alreadyRelayed(_ packet: MeshPacket) -> Bool {
+        let key = "\(packet.senderId.hex):\(packet.recipientId.hex):\(packet.type.rawValue):" +
+            "\(packet.timestampMs):\(packet.payload.hashValue)"
+        if relayedPacketKeySet.contains(key) { return true }
+        relayedPacketKeySet.insert(key)
+        relayedPacketKeys.append(key)
+        if relayedPacketKeys.count > Self.relayedPacketCacheSize {
+            let evicted = relayedPacketKeys.removeFirst()
+            relayedPacketKeySet.remove(evicted)
+        }
+        return false
     }
 
     // MARK: - Delegate notification (see MeshTransportDelegate's own doc:

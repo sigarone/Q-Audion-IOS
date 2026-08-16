@@ -405,9 +405,14 @@ final class ChatContainer: ObservableObject {
             preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachable
         ) {
         case .sendOverMesh, .queueForMesh:
-            // queueForMesh only arises from "solo Bluetooth": the send path
-            // seals the message and the outbox holds it until the peer is back
-            // in range, which is exactly what that choice asked for.
+            // queueForMesh only arises from "solo Bluetooth": that choice asks
+            // for the message to go out over mesh even when the peer isn't
+            // reachable right now. sendViaMesh below still attempts an
+            // immediate write, but a failed one no longer ends the story —
+            // finishMeshSend hands it to MeshOutboxStore, which
+            // MeshOutboxDrain retries once the peer is back in range (or
+            // gives up past MeshOutboxStore.maxAgeMs). See
+            // docs/ble-mesh/IOS_BLE_MESH_DESIGN.md §6.
             return MeshTargetSelection(nodeHex: nodeHex, displayName: contact.displayName)
         case .sendOverNetwork:
             return nil
@@ -493,13 +498,27 @@ final class ChatContainer: ObservableObject {
                 clientMsgId: messageId.uuidString,
                 sealedB64: sealed.base64EncodedString()
             )
-            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: shell.encode()) { [weak self] delivered in
-                self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId)
+            let shellBytes = shell.encode()
+            // Built up front, not just on failure: if the immediate write
+            // fails, this is exactly the entry MeshOutboxStore needs to
+            // retry later — no re-deriving it from a failure callback that
+            // only has `delivered: Bool` to work with.
+            let pending = MeshPendingSend(
+                messageId: messageId.uuidString,
+                conversationId: conversationId.uuidString,
+                peerUserId: peerUserId,
+                targetNodeHex: target.nodeHex,
+                sealedShellB64: shellBytes.base64EncodedString(),
+                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000),
+                attempts: 0
+            )
+            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: shellBytes) { [weak self] delivered in
+                self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId, pending: pending)
             }
         }
     }
 
-    private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID) {
+    private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID, pending: MeshPendingSend) {
         if delivered {
             // R4 — mark the row as having gone over the mesh, so the sender's
             // own transcript distinguishes it from a normal network message.
@@ -519,7 +538,12 @@ final class ChatContainer: ObservableObject {
                 viaMesh: true
             )
         } else {
-            markFailed(messageId: messageId, reason: .networkError)
+            // Not a terminal failure: an unreachable/busy target is exactly
+            // what MeshOutboxStore exists for. The message stays `.sending`
+            // (its status at creation) until MeshOutboxDrain either lands it
+            // (`.sent`) or gives up past MeshOutboxStore.maxAgeMs (`.failed`)
+            // — see IOS_BLE_MESH_DESIGN.md §6 for the gap this closes.
+            MeshOutboxStore.shared.enqueue(pending)
         }
         refreshFromStore()
     }
