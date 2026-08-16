@@ -13,6 +13,7 @@ extension ReleaseNote {
               date: "2026-08-16",
               title: "v1.0.992",
               bullets: [
+                "chore: regenerate changelog for v1.0.992",
                 "fix(identity): stop passing AppState directly into AccountIdentityLabels.make",
                 "feat(call): port fragment-level NACK/retransmission (W-VNACK) from Android",
                 "fix(settings): resolve Toggle/onTapGesture conflict in PR #63, close it",
