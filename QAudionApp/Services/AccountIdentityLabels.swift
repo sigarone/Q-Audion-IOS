@@ -32,15 +32,19 @@ enum AccountIdentityLabels {
         let nameLabel: String?
     }
 
+    // CLAUDE.md sec 16 — never take `AppState` as a direct parameter type:
+    // Swift 6's Sendable inference over AppState's ~17000-line surface can
+    // silently break "Build IPA" with no actionable diagnostic. Two
+    // primitive values in, no AppState reference in the signature at all.
     @MainActor
-    static func make(_ appState: AppState) -> Labels {
+    static func make(currentUserDialExtension: String?, accountAvatarName: String?) -> Labels {
         let extLabel: String? = {
-            guard let raw = appState.currentUserDialExtension, !raw.isEmpty else { return nil }
+            guard let raw = currentUserDialExtension, !raw.isEmpty else { return nil }
             let formatted = DisplayName.formatExtension(raw)
             return formatted.isEmpty ? nil : "#" + formatted
         }()
         let phoneLabel = AppState.locallyConfiguredPhone()
-        let nameLabel = appState.accountAvatarName
+        let nameLabel = accountAvatarName
 
         let primary = nameLabel ?? extLabel ?? phoneLabel ?? "Profilo da completare"
         let secondary = [extLabel, phoneLabel]
