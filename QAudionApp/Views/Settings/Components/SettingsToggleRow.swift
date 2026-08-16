@@ -54,6 +54,13 @@ struct SettingsToggleRow: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isOn.toggle()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(isOn ? "On" : "Off")
     }
 }
 
