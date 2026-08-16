@@ -158,6 +158,14 @@ final class BleMeshTransport: NSObject, MeshTransport {
         maybeStartScanning()
         maybeStartAdvertisingAndServer()
         scheduleAnnounceLoop()
+        // Publish current state right away. This matters most on a RESTART
+        // (antenna off then on again while Bluetooth was already powered
+        // on): *DidUpdateState only fires on an actual power-state change,
+        // so without this explicit publish here `radioState` would never
+        // move off whatever it was left at by stopLocked() (.idle) — the
+        // antenna row would keep showing "Spenta" forever even though
+        // scanning/advertising just restarted successfully underneath.
+        notifyDelegateRadioState(currentRadioState())
     }
 
     func stop() {
@@ -711,8 +719,27 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard error == nil else { return }
+        guard error == nil else {
+            // Without this, a GATT-add failure leaves the antenna silently
+            // stuck at "Spenta" forever — nothing else would ever publish a
+            // state change for this device, since startAdvertisingNow() is
+            // never reached on this path.
+            notifyDelegateRadioState(.error("gatt_add_failed"))
+            return
+        }
         startAdvertisingNow()
+    }
+
+    /// `startAdvertisingNow()` (called from `didAdd` above, or again on a
+    /// same-session restart once `notifyCharacteristic` already exists) is
+    /// itself async — `peripheralManager.isAdvertising` only flips true once
+    /// this fires. Without republishing here, `radioState`/`antennaMode`
+    /// stay wrong (stuck at `.idle`/`.scanningOnly`, antenna shown "Spenta")
+    /// even though advertising — and therefore the whole "Visibile" mode —
+    /// is actually live. This was the real root cause of the antenna
+    /// appearing to do nothing when tapped.
+    func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        notifyDelegateRadioState(currentRadioState())
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
