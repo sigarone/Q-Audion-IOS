@@ -46,6 +46,18 @@ struct SettingsToggleRow: View {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .tint(scheme.primary)
+                // W-TOGGLEROW-TAP: the row below carries its own
+                // .onTapGesture so the WHOLE row is a single hit target,
+                // not just this small control. A native Toggle has its
+                // own tap/drag recognizer that does not reliably cede to
+                // an ancestor .onTapGesture (unlike Button, which does) —
+                // without this, tapping exactly on the switch thumb could
+                // fire both the Toggle's own flip AND the row's, toggling
+                // isOn twice (a no-op flicker). Disabling hit-testing here
+                // makes the row's tap the single source of truth; the
+                // Toggle still renders its live isOn state correctly, it
+                // just never receives touches directly.
+                .allowsHitTesting(false)
         }
         .padding(.horizontal, 14)
         .frame(minHeight: 56)
@@ -54,6 +66,13 @@ struct SettingsToggleRow: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isOn.toggle()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(isOn ? "Attivo" : "Disattivo")
     }
 }
 
