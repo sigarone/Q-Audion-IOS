@@ -118,6 +118,20 @@ final class DisplayNameTests: XCTestCase {
         XCTAssertTrue(DisplayName.isPlaceholderName("Gruppo a1b2c3d4…"))
     }
 
+    // W-DEVICEPLACEHOLDER — ported from Android's DEVICE_PLACEHOLDER_REGEX
+    // (^Device-[0-9a-fA-F]{6,}$, PeerDisplayResolver.kt, 2026-08-07).
+    func test_isPlaceholderName_recognisesDevicePlaceholder() {
+        XCTAssertTrue(DisplayName.isPlaceholderName("Device-1a2b3c"))
+        XCTAssertTrue(DisplayName.isPlaceholderName("Device-ABCDEF12"))
+        XCTAssertTrue(DisplayName.isPlaceholderName("Device-000000"))
+        // Fewer than 6 hex chars, a non-hex char, or a different prefix case
+        // are NOT the shape Android's regex matches — must not over-trigger.
+        XCTAssertFalse(DisplayName.isPlaceholderName("Device-abc"))
+        XCTAssertFalse(DisplayName.isPlaceholderName("Device-1a2b3g"))
+        XCTAssertFalse(DisplayName.isPlaceholderName("device-1a2b3c"))
+        XCTAssertFalse(DisplayName.isPlaceholderName("Device-1a2b3c-extra"))
+    }
+
     func test_isPlaceholderName_doesNotFlagARealName() {
         XCTAssertFalse(DisplayName.isPlaceholderName("Mario Rossi"))
         XCTAssertFalse(DisplayName.isPlaceholderName("Marta"))
