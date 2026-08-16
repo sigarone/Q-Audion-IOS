@@ -358,6 +358,32 @@ public final class VideoFrameFragmenter: @unchecked Sendable {
         return pendingFrame == nil ? 0 : 1
     }
 
+    // MARK: - W-VNACK (2026-08-16) — NACK/retransmission support
+
+    /// frameId of the currently in-flight pending frame, or -1 if none.
+    /// Direct port of Android's `VideoFrameReassembler.currentFrameId`.
+    /// A stall watchdog polls this (mirroring the pending-frame identity
+    /// the way `defragment`'s own single-slot semantics already do) to
+    /// detect the SAME frame stalled across successive polls before
+    /// asking the peer to retransmit its missing fragments.
+    public var currentFrameId: Int {
+        lock.lock(); defer { lock.unlock() }
+        return pendingFrame?.frameId ?? -1
+    }
+
+    /// Indices of fragments not yet received for the currently pending
+    /// frame. Empty if there is no pending frame or it just completed.
+    /// Direct port of Android's `VideoFrameReassembler.missingFragmentIndices`.
+    public func missingFragmentIndices() -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        guard let pending = pendingFrame else { return [] }
+        var missing: [Int] = []
+        for (idx, fragment) in pending.fragments.enumerated() where fragment == nil {
+            missing.append(idx)
+        }
+        return missing
+    }
+
     public func reset() {
         lock.lock()
         pendingFrame = nil

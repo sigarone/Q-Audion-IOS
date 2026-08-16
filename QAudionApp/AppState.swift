@@ -1214,6 +1214,11 @@ final class AppState: ObservableObject {
     /// W398: ABR controller bound to the active video pipeline.
     /// Co-lifecycled with videoPipeline.
     private var abrController: AbrController?
+    /// W-VNACK: sent-fragment cache for the active video pipeline, so an
+    /// inbound VNACK piggy-back can resend the exact sealed bytes without
+    /// re-fragmenting/re-sealing. Co-lifecycled with videoPipeline — a
+    /// fresh instance per call, same as `abrController`.
+    private var videoNackCache: VideoNackFragmentCache?
     // W533 — screen-share state. Mirrors the desktop client's
     // PeerConnectionManager.isScreenSharing flag and toggles a stub
     // `cameraFrameClosureSnapshot` so the camera-to-WebRTC pipe can
@@ -2940,6 +2945,7 @@ final class AppState: ObservableObject {
                     RTLog.warn("call", "providerDidReset — tearing down call resources")
                     self.videoPipeline?.stop()
                     self.videoPipeline = nil
+                    self.videoNackCache = nil
                     self.abrController?.stop()
                     self.abrController = nil
                     self.callService.handleAudioSessionDeactivated()
@@ -9792,6 +9798,28 @@ final class AppState: ObservableObject {
             }
             peerOwnerContinuityLevel = mapped
             print("[AppState] OWNER_CONT received callId=\(callId.prefix(8))… level=\(level) from=\(senderId.prefix(8))…")
+        case .vnack(let callId, let frameId, let missing):
+            // W-VNACK — peer is missing fragments of a frame WE sent;
+            // resend the exact cached sealed bytes for every cache hit. A
+            // miss (aged out of `videoNackCache`, or a frameId this
+            // instance never sent — e.g. a stale/duplicate NACK) is
+            // silently skipped, same best-effort contract every other
+            // opaque-message control send on this channel has.
+            guard callContactId == senderId, let cache = videoNackCache else {
+                print("[AppState] VNACK dropped — sender \(senderId.prefix(8))… is not the call peer, or no active cache")
+                return
+            }
+            let ws = liveProvider?.getWebSocketClient()
+            var hits = 0
+            for fragIdx in missing {
+                guard let entry = cache.lookup(frameId: frameId, fragIdx: fragIdx) else { continue }
+                ws?.sendVideoFrame(
+                    recipientId: senderId, frame: entry.wire, callId: callId,
+                    fragIdx: UInt16(fragIdx), totalFrags: UInt16(entry.totalFrags),
+                    isKeyFrame: entry.isKeyFrame)
+                hits += 1
+            }
+            print("[AppState] VNACK resent \(hits)/\(missing.count) fragments callId=\(callId.prefix(8))… frameId=\(frameId)")
         }
     }
 
@@ -13237,6 +13265,7 @@ final class AppState: ObservableObject {
         #endif
         videoPipeline?.stop()
         videoPipeline = nil
+        videoNackCache = nil
         // W396: tear down the responder integration so a subsequent
         // call from the same peer starts with a clean state machine.
         responderCallIntegration?.onCallEnded()
@@ -17266,6 +17295,10 @@ extension AppState {
         // `parseIosFragment` is still used here — purely to read the
         // fragIdx/totalFrags/isKeyFrame metadata for the WS envelope's
         // top-level fields; it does not wrap or alter the sealed bytes.
+        // W-VNACK — fresh cache per call, same lifecycle as abrController.
+        let nackCache = VideoNackFragmentCache()
+        self.videoNackCache = nackCache
+
         pipeline.onOutboundFragment = { [weak self, weak ws, weak pipeline, callingImpl] fragment in
             // Task 10 holistic-review fix — sealOutboundFragment now
             // returns nil (drop) when no encryptor is installed or seal
@@ -17309,11 +17342,45 @@ extension AppState {
             let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
             let cid = callingImpl?.getActiveCallId()
             let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
+            // W-VNACK — cache the SEALED bytes BEFORE sending, same reason
+            // as Android's sendFrame: a VNACK for this exact fragment,
+            // even one racing in immediately after, always finds it.
+            // Skipped when `parsed` is nil (malformed sub-header) since
+            // there is no reliable (frameId, fragIdx) key to cache under —
+            // that fragment just isn't resendable on a future NACK, same
+            // degraded-but-not-broken outcome as the `?? 0`/`?? 1`
+            // fallback already accepts below for the WS envelope fields.
+            if let parsed {
+                nackCache.store(
+                    frameId: Int(parsed.frameId), fragIdx: Int(parsed.fragIdx),
+                    wire: sealed, totalFrags: Int(parsed.totalFrags), isKeyFrame: parsed.isKeyFrame,
+                    nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            }
             effectiveWs?.sendVideoFrame(
                 recipientId: peerId, frame: sealed, callId: cid,
                 fragIdx: parsed?.fragIdx ?? 0,
                 totalFrags: parsed?.totalFrags ?? 1,
                 isKeyFrame: parsed?.isKeyFrame ?? false)
+        }
+
+        // W-VNACK — the stall watchdog (VideoCallPipeline, receive side)
+        // asks us to request retransmission of specific missing fragments
+        // for a stalled inbound frame. Best-effort like every other
+        // opaque-message control send here: a dropped VNACK just means
+        // this particular retransmit attempt is a no-op, the existing
+        // purge-timer abandon behaviour still applies exactly as before
+        // this feature existed.
+        pipeline.onNackNeeded = { [weak self, callingImpl] frameId, missing in
+            Task { @MainActor [weak self] in
+                guard let self, let cid = callingImpl?.getActiveCallId() else { return }
+                let payload = CallPiggyBack.serializeVnack(callId: cid, frameId: frameId, missing: missing)
+                do {
+                    try await self.liveProvider?.callingApi.sendOpaqueMessageString(
+                        recipientId: peerId, payload: payload)
+                } catch {
+                    print("[AppState] sendVideoNack failed callId=\(cid.prefix(8))… frameId=\(frameId): \(error)")
+                }
+            }
         }
 
         // Inbound — register the WS handler. Feeds the base64-decoded

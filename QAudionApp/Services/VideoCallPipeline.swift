@@ -69,6 +69,15 @@ public final class VideoCallPipeline: NSObject {
     /// UI bridge must hop to MainActor before touching SwiftUI state.
     public nonisolated(unsafe) var onDecodedFrame: FrameCallback?
 
+    /// W-VNACK (2026-08-16) — fired when the stall watchdog judges the
+    /// in-flight inbound frame stalled long enough to be worth a
+    /// retransmission request. `(frameId, missingFragmentIndices)`. The
+    /// caller (AppState, which owns the WS client this pipeline
+    /// intentionally doesn't depend on) is responsible for getting the
+    /// VNACK piggy-back to the peer — see `CallPiggyBack.serializeVnack`.
+    /// Mirrors Android's `BcryptoWsVideoRelayTransport.onNackNeeded`.
+    public nonisolated(unsafe) var onNackNeeded: ((Int, [Int]) -> Void)?
+
     /// Camera position. Default front-facing for video calls.
     public var cameraPosition: AVCaptureDevice.Position = .front
 
@@ -200,6 +209,17 @@ public final class VideoCallPipeline: NSObject {
     private var isRunning: Bool = false
     /// Periodic purge timer for stale incomplete inbound frames.
     private var purgeTimer: DispatchSourceTimer?
+    /// W-VNACK — stall watchdog, separate from and faster than
+    /// `purgeTimer`: polls every 25ms against the SAME 150ms
+    /// (`VideoConstants.fragmentReassemblyTimeoutMs`) threshold the purge
+    /// timer uses, so a NACK round-trip has a real window to land before
+    /// the purge timer gives up on the frame entirely. Mirrors Android's
+    /// `BcryptoWsVideoRelayTransport` stall watchdog exactly (25ms poll,
+    /// 150ms threshold, "up to 6 chances to catch the stall").
+    private var nackWatchdogTimer: DispatchSourceTimer?
+    private nonisolated(unsafe) var stallTrackedFrameId: Int = -1
+    private nonisolated(unsafe) var stallTrackedSinceMs: Int64 = 0
+    private nonisolated(unsafe) var stallNackedFrameId: Int = -1
 
     // MARK: - Lifecycle
 
@@ -223,6 +243,7 @@ public final class VideoCallPipeline: NSObject {
             try encoder.start()
             encoder.requestForcedKeyFrame()
             startPurgeTimer()
+            startNackWatchdog()
             isRunning = true
             return
         }
@@ -251,6 +272,7 @@ public final class VideoCallPipeline: NSObject {
         // decoder can bootstrap immediately.
         encoder.requestForcedKeyFrame()
         startPurgeTimer()
+        startNackWatchdog()
         isRunning = true
     }
 
@@ -274,6 +296,10 @@ public final class VideoCallPipeline: NSObject {
         inboundFragmenter.reset()
         purgeTimer?.cancel()
         purgeTimer = nil
+        nackWatchdogTimer?.cancel()
+        nackWatchdogTimer = nil
+        stallTrackedFrameId = -1
+        stallNackedFrameId = -1
         isRunning = false
     }
 
@@ -744,6 +770,40 @@ public final class VideoCallPipeline: NSObject {
         }
         timer.resume()
         purgeTimer = timer
+    }
+
+    /// W-VNACK — stall watchdog. See `onNackNeeded`'s kdoc and the
+    /// `nackWatchdogTimer` field comment for the rationale (25ms poll vs
+    /// the purge timer's 200ms, same 150ms stall threshold, so a
+    /// retransmit request has a real chance to land before the purge
+    /// timer evicts the frame). Direct port of Android's
+    /// `BcryptoWsVideoRelayTransport.start()`'s stall watchdog loop.
+    private func startNackWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: captureQueue)
+        timer.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let frameId = self.inboundFragmenter.currentFrameId
+            if frameId == -1 {
+                self.stallTrackedFrameId = -1
+                return
+            }
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            if frameId != self.stallTrackedFrameId {
+                self.stallTrackedFrameId = frameId
+                self.stallTrackedSinceMs = now
+                return
+            }
+            if frameId == self.stallNackedFrameId { return } // already asked once for this frame
+            if now - self.stallTrackedSinceMs < VideoConstants.fragmentReassemblyTimeoutMs { return }
+            let missing = self.inboundFragmenter.missingFragmentIndices()
+            if missing.isEmpty { return } // completed between the currentFrameId read above and here
+            self.stallNackedFrameId = frameId
+            RTLog.info("call", "vcap nack frame=\(frameId) missing=\(missing.count)")
+            self.onNackNeeded?(frameId, missing)
+        }
+        timer.resume()
+        nackWatchdogTimer = timer
     }
 
     // MARK: - Errors

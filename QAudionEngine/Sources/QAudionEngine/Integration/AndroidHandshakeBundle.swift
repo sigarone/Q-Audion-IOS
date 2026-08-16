@@ -388,6 +388,17 @@ public enum CallPiggyBack: Equatable {
     /// and-drop; `raw` is the undecoded payload after the tag.
     case kcmac(callId: String, raw: String)
 
+    /// `<callId>|VNACK:<frameId>:<idx1>,<idx2>,...` — W-VNACK (2026-08-16)
+    /// fragment-level NACK/retransmission for the WS-relay video fallback.
+    /// The receiver's reassembler asks the sender to resend specific
+    /// missing fragments of a stalled in-flight frame BEFORE giving up on
+    /// it — recovers real data, unlike PLC which only conceals damage
+    /// after the fact. Mirrors Android's `WsCallSignaller
+    /// .VIDEO_NACK_PAYLOAD_PREFIX` / `VideoNack` byte for byte:
+    /// `frameId` is the fragmenter's 16-bit frame counter, `missing` the
+    /// list of 0-based fragment indices not yet received.
+    case vnack(callId: String, frameId: Int, missing: [Int])
+
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
     /// Returns `nil` for shapes that are NOT a `<callId>|<TAG>:...`
@@ -456,6 +467,19 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "KCMAC:") {
             return .kcmac(callId: callId, raw: v)
         }
+        // VNACK:<frameId>:<idx1>,<idx2>,... — malformed (non-numeric
+        // frameId, missing colon, non-numeric index) drops the whole
+        // envelope fail-closed: a NACK is a best-effort optimisation, a
+        // half-parsed one that resent the wrong fragments would be worse
+        // than dropping it. Mirrors Android's receive-side parse, which
+        // has the same "if any piece fails, ignore the whole frame" shape.
+        if let v = stripPrefix(payload, "VNACK:") {
+            let parts = v.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2, let frameId = Int(parts[0]) else { return nil }
+            let missing = parts[1].split(separator: ",").compactMap { Int($0) }
+            guard !missing.isEmpty else { return nil }
+            return .vnack(callId: callId, frameId: frameId, missing: missing)
+        }
         return nil
     }
 
@@ -476,6 +500,14 @@ public enum CallPiggyBack: Equatable {
     /// `WsCallSignaller.sendVoiceKeyAnnounce`.
     public static func serializeVoiceKey(callId: String, enrolled: Bool) -> String {
         return "\(callId)|VOICE_KEY:\(enrolled ? "1" : "0")"
+    }
+
+    /// Build a wire string for a VNACK request — the inverse of the
+    /// `.vnack` parse branch. Byte-for-byte matches Android's
+    /// `WsCallSignaller.sendVideoNack` payload shape.
+    public static func serializeVnack(callId: String, frameId: Int, missing: [Int]) -> String {
+        let missingCsv = missing.map(String.init).joined(separator: ",")
+        return "\(callId)|VNACK:\(frameId):\(missingCsv)"
     }
 
     /// Build a wire string for an OWNER_CONT announce — the inverse of the
