@@ -295,7 +295,15 @@ let package = Package(
                 // verification) — SAME asset Android already ships
                 // (qaudion-engine/src/main/assets/models/campplus_sv_voxceleb_16k.onnx),
                 // SHA-256 pinned in CamPlusSpeakerEmbedder.swift.
-                .copy("Resources/campplus_sv_voxceleb_16k.onnx")
+                .copy("Resources/campplus_sv_voxceleb_16k.onnx"),
+                // Entitlement (EGT) signing pubkey pinned as a build asset,
+                // design doc §3.5 — SAME bytes Android ships at
+                // app/src/main/assets/bcrypto_entitlement_pubkey.pem.
+                // ⚠️ PLACEHOLDER: a throwaway test keypair, not the real
+                // server ent-v1 key (not issued yet). Loaded by
+                // EntitlementPublicKey.swift; the ship-guard for swapping it
+                // is EntitlementPublicKeyTests, currently skipped on purpose.
+                .copy("Resources/bcrypto_entitlement_pubkey.pem")
             ]
         ),
         .testTarget(

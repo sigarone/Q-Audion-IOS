@@ -31,6 +31,13 @@ import CryptoKit
 /// today is informational only), matching Android's `EgtVerifier.kt`
 /// exactly (design doc §13 cross-platform parity).
 ///
+/// Note that `BCryptoOtaModelClient`, cited below as the CryptoKit
+/// precedent, resolves its key the OPPOSITE way: it holds a
+/// `[String: Curve25519.Signing.PublicKey]` map and looks the anchor up by
+/// id. That is the right shape for its problem and the wrong one for this
+/// one — follow the pointer below for the `isValidSignature` usage, not for
+/// the key model. Single-pinned-key is canonical here, deliberately.
+///
 /// ## Where does the actual Ed25519 verify come from?
 /// `CryptoKit.Curve25519.Signing.PublicKey.isValidSignature(_:for:)` —
 /// Ed25519 verification, built into the platform since iOS 13, no new
@@ -46,7 +53,24 @@ import CryptoKit
 /// Ed25519 primitive (its obvious candidate, `RatchetNative`'s JNI
 /// binding, exposes no raw signature-verify primitive at all), iOS has
 /// this natively and needs no equivalent detour.
-public final class EgtVerifier {
+///
+/// ## Getting one of these
+/// `EntitlementPublicKey.makeVerifier()` builds the production instance
+/// from the pinned build asset. The initializers here take raw key bytes so
+/// this type stays a pure primitive with no bundle/IO dependency — which is
+/// also what lets the whole test suite run against throwaway keypairs.
+///
+/// `@unchecked Sendable` rather than checked: the only stored property is
+/// an immutable `let` closure bound once at init, so the type genuinely is
+/// safe to share across concurrency domains (CryptoKit's verify is pure).
+/// The `@unchecked` is the same escape hatch every other crypto class in
+/// this module uses (`ForwardSecrecy`, `SessionManager`, `ContactKeyExchange`,
+/// ...), kept here because the closure captures a
+/// `Curve25519.Signing.PublicKey` and this change was authored without a
+/// Swift toolchain available to confirm that type's own `Sendable`
+/// conformance — `@unchecked` compiles correctly either way, where a
+/// checked conformance would depend on it.
+public final class EgtVerifier: @unchecked Sendable {
     /// The Ed25519 signature-verify primitive, bound to the pinned key.
     /// Kept as an injectable closure (rather than calling
     /// `pinnedPublicKey.isValidSignature` inline) purely so tests can prove
@@ -54,13 +78,14 @@ public final class EgtVerifier {
     /// spying on invocation count — see the internal test initializer
     /// below. Production code only ever goes through the public
     /// initializer, which always binds this to the real CryptoKit call.
-    private let verifySignature: (_ signature: Data, _ signedBytes: Data) -> Bool
+    private let verifySignature: @Sendable (_ signature: Data, _ signedBytes: Data) -> Bool
 
     /// - Parameter pinnedPublicKeyRaw: the 32-byte raw Ed25519 public key
-    ///   (not SPKI-wrapped — see `EgtVerifierTests` for how to extract the
-    ///   raw key from an SPKI PEM). Returns `nil` if the bytes are not a
-    ///   valid Curve25519 signing key (e.g. wrong length), matching this
-    ///   class's fail-closed contract even at construction time.
+    ///   (not SPKI-wrapped — `EntitlementPublicKey.rawKey(fromSpkiPem:)`
+    ///   does that extraction for the pinned build asset). Returns `nil` if
+    ///   the bytes are not a valid Curve25519 signing key (e.g. wrong
+    ///   length), matching this class's fail-closed contract even at
+    ///   construction time.
     public init?(pinnedPublicKeyRaw: Data) {
         guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: pinnedPublicKeyRaw) else {
             return nil
@@ -76,7 +101,7 @@ public final class EgtVerifier {
     /// types are concrete, not protocol-based, so they cannot be mocked
     /// the way Android's `EgtVerifierTest` spies on `HandshakeTranscript`
     /// via `mockkObject`). Never used outside tests.
-    init(verifySignatureOverride: @escaping (_ signature: Data, _ signedBytes: Data) -> Bool) {
+    init(verifySignatureOverride: @escaping @Sendable (_ signature: Data, _ signedBytes: Data) -> Bool) {
         self.verifySignature = verifySignatureOverride
     }
 

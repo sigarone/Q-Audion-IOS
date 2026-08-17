@@ -63,8 +63,8 @@ final class EgtVerifierTests: XCTestCase {
         XCTAssertEqual(claims.fea["feat.calls.video"], 1_700_000_000)
         XCTAssertEqual(claims.lim["lim.file_quota_bytes"], 21_474_836_480)
         XCTAssertEqual(claims.lim["lim.max_devices"], 3)
-        XCTAssertEqual(claims.pol.minAssurance, "none")
-        XCTAssertEqual(claims.pol.onViolation, "warn")
+        XCTAssertEqual(claims.pol?.minAssurance, "none")
+        XCTAssertEqual(claims.pol?.onViolation, "warn")
         XCTAssertEqual(claims.ee, 7)
         XCTAssertNil(claims.epr)
     }
@@ -90,16 +90,32 @@ final class EgtVerifierTests: XCTestCase {
     //         signature bytes are decoded or checked, not just "also rejects"
 
     func testAlgPinningHappensBeforeAnySignatureVerifyCall() {
-        var verifyCallCount = 0
+        let spy = VerifyCallSpy()
         let spyVerifier = EgtVerifier(verifySignatureOverride: { _, _ in
-            verifyCallCount += 1
+            spy.record()
             return false
         })
+
         XCTAssertNil(spyVerifier.verify(Self.algConfusionHS256))
         XCTAssertNil(spyVerifier.verify(Self.algNoneEmptySig))
         XCTAssertEqual(
-            verifyCallCount, 0,
+            spy.count, 0,
             "the alg gate must reject before the signature-verify primitive is ever invoked"
+        )
+
+        // POSITIVE CONTROL -- without this the assertion above is vacuous:
+        // a count of 0 is equally consistent with "the gate fired first"
+        // and with "this spy was never wired into the code path at all",
+        // so on its own it would keep passing even if the seam broke.
+        // Pushing a well-formed EdDSA/BEGT header through the SAME spy
+        // must move the counter, which is what makes the 0 above mean
+        // something. (Android's equivalent test still has the gap this
+        // closes -- out of scope to fix there from here, but do not copy
+        // the pattern forward.)
+        XCTAssertNil(spyVerifier.verify(Self.valid), "spy always reports an invalid signature")
+        XCTAssertEqual(
+            spy.count, 1,
+            "the spy must actually be on the verify path -- otherwise the 0 asserted above proves nothing"
         )
     }
 
@@ -214,6 +230,126 @@ final class EgtVerifierTests: XCTestCase {
         XCTAssertNil(freshVerifier?.verify(token))
     }
 
+    // MARK: - Lenient claim decoding (Android `parseClaims` parity)
+    //
+    // Every token below is REALLY SIGNED at runtime with a fresh
+    // Curve25519 keypair, the same way the round-trip tests above are --
+    // a hand-built unsigned fixture would prove nothing here, because the
+    // decoder only ever runs on payloads whose signature already checked
+    // out, and the whole point of these cases is what `verify` returns on
+    // the far side of that check.
+
+    func testATokenWithOnlyTheTwoRequiredClaimsDecodesWithAndroidsDefaults() throws {
+        let (verifier, token) = try signedToken(payload: #"{"v":1,"sub":"user-min"}"#)
+
+        let claims = try XCTUnwrap(verifier.verify(token))
+        XCTAssertEqual(claims.v, 1)
+        XCTAssertEqual(claims.sub, "user-min")
+        XCTAssertEqual(claims.did, "")
+        XCTAssertEqual(claims.dkt, "")
+        XCTAssertEqual(claims.pkg, [])
+        XCTAssertTrue(claims.fea.isEmpty)
+        XCTAssertTrue(claims.lim.isEmpty)
+        XCTAssertNil(claims.pol, "absence must be reported, not fabricated into a none/warn default")
+        XCTAssertEqual(claims.ee, 0)
+        XCTAssertNil(claims.epr)
+        XCTAssertEqual(claims.iat, 0)
+        XCTAssertEqual(claims.exp, 0)
+    }
+
+    func testExplicitJsonNullsDecodeToTheSameDefaultsAsAbsentClaims() throws {
+        // This is the concrete regression this whole change exists for: Go
+        // marshals a nil map/slice as `null`, not `{}`/`[]`. Under the
+        // synthesized Codable this file shipped with, a single `"fea":null`
+        // failed the entire decode, so `verify` returned nil and the user
+        // silently lost EVERY entitlement -- on a token whose signature was
+        // perfectly valid. Android degrades to empty here; iOS now does too.
+        let (verifier, token) = try signedToken(payload: """
+        {"v":1,"sub":"user-nulls","did":null,"dkt":null,"pkg":null,\
+        "fea":null,"lim":null,"pol":null,"ee":null,"epr":null,"iat":null,"exp":null}
+        """)
+
+        let claims = try XCTUnwrap(verifier.verify(token))
+        XCTAssertEqual(claims.sub, "user-nulls")
+        XCTAssertEqual(claims.did, "")
+        XCTAssertEqual(claims.pkg, [])
+        XCTAssertTrue(claims.fea.isEmpty)
+        XCTAssertTrue(claims.lim.isEmpty)
+        XCTAssertNil(claims.pol)
+        XCTAssertEqual(claims.ee, 0)
+        XCTAssertEqual(claims.exp, 0)
+    }
+
+    func testWronglyTypedClaimsFallBackInsteadOfKillingTheWholeDecode() throws {
+        // Android's accessors type-check per field (`stringField` requires
+        // isString, `longField` requires !isString) and yield the default
+        // on a mismatch rather than aborting. Same here.
+        let (verifier, token) = try signedToken(payload: """
+        {"v":1,"sub":"user-types","did":42,"dkt":true,"pkg":{"not":"an array"},\
+        "fea":[1,2],"lim":"nope","pol":"nope","ee":"7","iat":"0","exp":"0"}
+        """)
+
+        let claims = try XCTUnwrap(verifier.verify(token))
+        XCTAssertEqual(claims.did, "")
+        XCTAssertEqual(claims.dkt, "")
+        XCTAssertEqual(claims.pkg, [])
+        XCTAssertTrue(claims.fea.isEmpty)
+        XCTAssertTrue(claims.lim.isEmpty)
+        XCTAssertNil(claims.pol)
+        XCTAssertEqual(claims.ee, 0, "a STRING \"7\" is not a number -- Android drops it too")
+    }
+
+    func testOneBadEntryIsDroppedWithoutLosingItsSiblings() throws {
+        // Per-entry leniency, matching Android's mapNotNull-based
+        // stringListField/longMapField: a malformed element must not take
+        // the rest of the collection down with it.
+        let (verifier, token) = try signedToken(payload: """
+        {"v":1,"sub":"user-mixed","pkg":["base",7,"pro",null],\
+        "fea":{"feat.files":0,"feat.broken":"nope","feat.calls.video":1700000000}}
+        """)
+
+        let claims = try XCTUnwrap(verifier.verify(token))
+        XCTAssertEqual(claims.pkg, ["base", "pro"])
+        XCTAssertEqual(claims.fea, ["feat.files": 0, "feat.calls.video": 1_700_000_000])
+    }
+
+    func testAPartialPolicyObjectFillsInAndroidsPerFieldDefaults() throws {
+        let (verifier, token) = try signedToken(
+            payload: #"{"v":1,"sub":"user-pol","pol":{"min_assurance":"hw_only"}}"#
+        )
+
+        let claims = try XCTUnwrap(verifier.verify(token))
+        XCTAssertEqual(claims.pol?.minAssurance, "hw_only")
+        XCTAssertEqual(claims.pol?.onViolation, "warn", "absent on_violation defaults, per Android")
+    }
+
+    func testSubAndVStayHardRequiredEvenThoughEverythingElseIsLenient() throws {
+        // The leniency is deliberate, not blanket. A token with no subject
+        // (or a non-string one) cannot be attributed to a user at all, so
+        // it must still fail closed -- otherwise CapabilityGate's sub-match
+        // in Task 3 would have nothing to compare against.
+        let (noSubVerifier, noSub) = try signedToken(payload: #"{"v":1,"did":"d"}"#)
+        XCTAssertNil(noSubVerifier.verify(noSub))
+
+        let (noVVerifier, noV) = try signedToken(payload: #"{"sub":"user-a"}"#)
+        XCTAssertNil(noVVerifier.verify(noV))
+
+        let (badSubVerifier, badSub) = try signedToken(payload: #"{"v":1,"sub":12345}"#)
+        XCTAssertNil(badSubVerifier.verify(badSub))
+    }
+
+    /// Signs `payload` with a throwaway keypair and returns a verifier
+    /// pinned to that keypair's public half, so each case is fully
+    /// self-contained.
+    private func signedToken(payload: String) throws -> (EgtVerifier, String) {
+        let priv = Curve25519.Signing.PrivateKey()
+        let header = #"{"alg":"EdDSA","kid":"ent-v1","typ":"BEGT"}"#
+        let signedPart = "\(base64urlEncode(Data(header.utf8))).\(base64urlEncode(Data(payload.utf8)))"
+        let sig = try priv.signature(for: Data(signedPart.utf8))
+        let verifier = try XCTUnwrap(EgtVerifier(pinnedPublicKeyRaw: priv.publicKey.rawRepresentation))
+        return (verifier, "\(signedPart).\(base64urlEncode(sig))")
+    }
+
     // MARK: - Vectors (real, server-signed -- see file header)
 
     private static let valid =
@@ -252,9 +388,23 @@ final class EgtVerifierTests: XCTestCase {
         ".5ysbDWa9TUauYWJdvcoAbeiJSCZRKPTbUfCrvYuXUx4cJHzg7cTKFBDSA7Lotl9IcDO1Quo4Tbqu6VQWwWSNAQ"
 }
 
-// MARK: - Test-only base64url helper (standard base64url-no-padding
-// encoding, used only to construct fixtures above -- EgtVerifier has its
-// own internal decode side, kept private to that file on purpose).
+// MARK: - Test-only helpers
+
+/// Counter box for the alg-ordering spy. `EgtVerifier`'s injected closure
+/// is `@Sendable` (so the class can vouch for its own thread-safety), and a
+/// `@Sendable` closure cannot capture a mutable local `var` -- hence a
+/// reference box rather than the obvious `var count = 0`. Every call in
+/// these tests is synchronous on the test thread, so no locking is needed
+/// to make the count correct; `@unchecked` documents that rather than
+/// pretending the plain `var` is intrinsically safe.
+private final class VerifyCallSpy: @unchecked Sendable {
+    private(set) var count = 0
+    func record() { count += 1 }
+}
+
+// Test-only base64url helper (standard base64url-no-padding encoding, used
+// only to construct fixtures above -- EgtVerifier has its own internal
+// decode side, kept private to that file on purpose).
 
 private func base64urlEncode(_ data: Data) -> String {
     data.base64EncodedString()
