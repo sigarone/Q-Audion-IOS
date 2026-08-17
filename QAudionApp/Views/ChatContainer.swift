@@ -107,7 +107,44 @@ final class ChatContainer: ObservableObject {
         let existing = store.loadConversations().first(where: { $0.id == conversationId })
         let conv: Conversation
         if let e = existing {
-            conv = e
+            // W-CHATHEADERSTALE (2026-08-17) — `peerDisplayName` is written
+            // ONCE, the first time this conversation row is created, and
+            // this init used to keep that value forever regardless of what
+            // fresh name the caller just passed in. The chat LIST resolves
+            // the peer's name live on every render (DisplayName.forUser
+            // against the current rubrica); this stored row does not — so a
+            // peer who renamed themselves kept showing their OLD name in
+            // the chat header while the list right above it already showed
+            // the new one (confirmed live 2026-08-17: contact/avatar sync
+            // now works, but the in-chat header lagged behind it). The
+            // caller's `peerDisplayName` argument is exactly as fresh as
+            // what the list row just rendered (ChatListScreen passes
+            // `item.peerDisplayName` straight through), so trust it over
+            // the stored value whenever it looks like a real name and
+            // actually differs — same trust bar `resolvedPeerTitle` below
+            // already applies to the stored value at render time.
+            if !peerDisplayName.isEmpty,
+               !DisplayName.looksLikeUUID(peerDisplayName),
+               !DisplayName.isPlaceholderName(peerDisplayName),
+               peerDisplayName != e.peerDisplayName {
+                let refreshed = Conversation(
+                    id: e.id,
+                    peerUserId: e.peerUserId,
+                    peerDisplayName: peerDisplayName,
+                    lastMessagePreview: e.lastMessagePreview,
+                    lastActivity: e.lastActivity,
+                    unreadCount: e.unreadCount,
+                    pinned: e.pinned,
+                    kind: e.kind,
+                    muted: e.muted,
+                    ephemeralTimerSeconds: e.ephemeralTimerSeconds,
+                    screenshotGrantedByPeer: e.screenshotGrantedByPeer
+                )
+                store.upsertConversation(refreshed)
+                conv = refreshed
+            } else {
+                conv = e
+            }
         } else {
             conv = Conversation(
                 id: conversationId,
