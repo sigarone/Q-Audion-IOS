@@ -134,19 +134,26 @@ struct VpnToggleChip: View {
 
     private func handleTap() {
         guard !busy else { return }
-        // Entitlements Task 5 — Capability.vpn. A locked tap presents the
-        // upgrade sheet instead of connecting; disconnecting an ALREADY
-        // -connected tunnel is never blocked here (see the disconnect
-        // branch just below — a mid-session downgrade is handled by the
-        // stopAtBoundary revocation policy server/AppState-side, not by
-        // this UI-only gate refusing the disconnect action itself).
-        guard vpnUnlocked else {
-            showUpgradeSheet = true
+        // Entitlements Task 5 — Capability.vpn. Disconnecting an ALREADY
+        // -connected tunnel is never blocked, checked BEFORE the vpnUnlocked
+        // guard below on purpose: `isUnlocked` re-evaluates the claim's
+        // wall-clock `exp` on every access, so an ordinary token can lapse
+        // while the tunnel is still up. This chip is the only UI path that
+        // calls `vpnService.disconnect()` — if the lock guard ran first, a
+        // lapsed-grant user with an active tunnel would see only the
+        // upgrade sheet on tap, with no way to tear it down. A mid-session
+        // downgrade is handled by the stopAtBoundary revocation policy
+        // server/AppState-side, not by this UI-only gate refusing the
+        // disconnect action itself.
+        if case .connected = vpnService.state {
+            vpnService.disconnect()
             return
         }
 
-        if case .connected = vpnService.state {
-            vpnService.disconnect()
+        // Starting a NEW connection still requires the capability — only
+        // the disconnect path above bypasses the lock.
+        guard vpnUnlocked else {
+            showUpgradeSheet = true
             return
         }
 
