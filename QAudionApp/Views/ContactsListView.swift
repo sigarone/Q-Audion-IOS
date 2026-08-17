@@ -231,6 +231,11 @@ final class ContactsListContainer: ObservableObject {
 struct ContactsListView: View {
     @StateObject private var container: ContactsListContainer
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(isPresented:)` for `UpgradeSheet`.
+    @State private var showNfcUpgradeSheet: Bool = false
     @State private var searchText: String = ""
     @State private var showingQrScanner: Bool = false
     @State private var showingMyIdentity: Bool = false
@@ -295,8 +300,19 @@ struct ContactsListView: View {
                     Button("Mostra la mia identità", systemImage: "qrcode") {
                         showingMyIdentity = true
                     }
+                    // Entitlements Task 5 — Capability.nfc. A `Menu`
+                    // row can't render the dim+lock-badge visual treatment
+                    // `GatedActionButton` gives an icon button, so this
+                    // stays a plain always-visible, always-tappable row
+                    // (never removed, matching design doc §7.2) whose
+                    // ACTION branches on entitlement instead: unlocked →
+                    // the real NFC pairing sheet, locked → UpgradeSheet.
                     Button("Aggiungi via NFC", systemImage: "wave.3.right") {
-                        showingNfcPair = true
+                        if capabilityGate.isUnlocked(.nfc) {
+                            showingNfcPair = true
+                        } else {
+                            showNfcUpgradeSheet = true
+                        }
                     }
                     Button("Importa dal telefono", systemImage: "phone.badge.plus") {
                         showingPhonebookImport = true
@@ -353,6 +369,12 @@ struct ContactsListView: View {
                         }
                     }
             }
+        }
+        // Entitlements Task 5 — presents UpgradeSheet when the "Aggiungi
+        // via NFC" row is tapped while locked.
+        .sheet(isPresented: $showNfcUpgradeSheet) {
+            UpgradeSheet(capability: .nfc)
+                .environmentObject(appState)
         }
         .sheet(isPresented: $showingPhonebookImport) {
             NavigationStack {
