@@ -4,8 +4,8 @@ import XCTest
 /// Entitlements Task 2 (2026-08-17) — coverage for `TokenVault`'s new
 /// `saveEntitlement`/`loadEntitlement`/`clearEntitlement` Keychain API and
 /// its wiring into the existing full-wipe `clear()` (the same function
-/// `AuthService.clearToken()` calls on logout — `AuthService.swift:174` —
-/// so a stale EGT for a previous user is never left behind after logout).
+/// `AuthService.clearToken()` calls on logout, so a stale EGT for a
+/// previous user is never left behind after logout).
 ///
 /// NOTE (not yet wired into a build target): same gap `DisplayNameTests
 /// .swift`/`PeerTrustEvaluatorTests.swift`/`HeroPresenceLabelTests.swift`/
@@ -35,15 +35,24 @@ import XCTest
 /// necessarily calls the real `TokenVault.clear()` to prove the entitlement
 /// account was actually added to that shared wipe list (not just
 /// independently clearable via `clearEntitlement()` alone) — `setUp`/
-/// `tearDown` snapshot and restore whatever the other four accounts held
-/// before/after that one test runs, so a real device session is never
+/// `tearDown` snapshot and restore whatever ALL FIVE accounts held
+/// before/after each test runs, so a real device session is never
 /// permanently lost by running this suite.
+///
+/// `entitlementAccount` was NOT snapshot-restored here originally (Task 2,
+/// 2026-08-17) — harmless at the time since nothing yet wrote a real cached
+/// EGT, but Task 3's `CapabilityGate` is exactly what starts doing that
+/// (`loadCached()`/`refresh()`/`adopt()` all call `TokenVault.saveEntitlement`).
+/// Made symmetric with the other four accounts below (Task 3 carry-forward)
+/// so running this suite on a device holding a real cached EGT no longer
+/// silently discards it.
 final class TokenVaultTests: XCTestCase {
 
     private var savedAccessToken: String?
     private var savedRefreshToken: String?
     private var savedDeviceId: String?
     private var savedUserId: String?
+    private var savedEntitlement: String?
 
     override func setUp() {
         super.setUp()
@@ -51,6 +60,7 @@ final class TokenVaultTests: XCTestCase {
         savedRefreshToken = TokenVault.loadRefreshToken()
         savedDeviceId = TokenVault.loadDeviceId()
         savedUserId = TokenVault.loadUserId()
+        savedEntitlement = TokenVault.loadEntitlement()
         TokenVault.clearEntitlement()
     }
 
@@ -60,6 +70,7 @@ final class TokenVaultTests: XCTestCase {
         if let savedRefreshToken { TokenVault.saveRefreshToken(savedRefreshToken) }
         if let savedDeviceId { TokenVault.saveDeviceId(savedDeviceId) }
         if let savedUserId { TokenVault.saveUserId(savedUserId) }
+        if let savedEntitlement { TokenVault.saveEntitlement(savedEntitlement) }
         super.tearDown()
     }
 
