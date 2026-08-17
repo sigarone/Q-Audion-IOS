@@ -48,32 +48,24 @@ struct VpnToggleChip: View {
 
     var body: some View {
         Button(action: handleTap) {
-            HStack(spacing: 5) {
-                chipIcon
-                Text(vpnService.state.statusLabel)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(chipBackground, in: Capsule())
-            .overlay(Capsule().stroke(chipBorder, lineWidth: 1))
             // Entitlements Task 5 — Capability.vpn. This Button already
             // owns its own tap (handleTap branches on vpnUnlocked itself,
-            // and a long-press separately opens the exit picker), so this
-            // is the visual-only dim + lock-badge treatment, applied
-            // inline rather than via the separate GatedVisualBadge wrapper
-            // to avoid disturbing the chip's existing gesture composition.
-            .opacity(vpnUnlocked ? 1.0 : 0.55)
-            .overlay(alignment: .topTrailing) {
-                if !vpnUnlocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(3)
-                        .background(Circle().fill(Color.black.opacity(0.6)))
-                        .offset(x: 3, y: -3)
-                        .accessibilityLabel("Funzione Pro bloccata")
+            // and a long-press separately opens the exit picker) — the
+            // SAME "content already has its own click" shape
+            // `GatedVisualBadge`'s own doc describes, and the exact call
+            // site (`VpnToggle`) its Android counterpart's kdoc names as
+            // the canonical example. Visual-only: dim + lock badge, no
+            // second tap target.
+            GatedVisualBadge(unlocked: vpnUnlocked) {
+                HStack(spacing: 5) {
+                    chipIcon
+                    Text(vpnService.state.statusLabel)
+                        .font(.system(size: 12, weight: .medium))
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(chipBackground, in: Capsule())
+                .overlay(Capsule().stroke(chipBorder, lineWidth: 1))
             }
         }
         .buttonStyle(.plain)
