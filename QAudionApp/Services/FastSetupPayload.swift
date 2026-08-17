@@ -155,3 +155,13 @@ public struct FastSetupPayload: Codable, Equatable {
         return trimmed.isEmpty ? "\(extensionNumber)" : trimmed
     }
 }
+
+extension FastSetupPayload: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        return "FastSetupPayload(version: \(version), kind: \(kind), server: \(server), extensionNumber: \(extensionNumber), phoneId: \(phoneId), password: <REDACTED>, displayName: \(displayName))"
+    }
+
+    public var debugDescription: String {
+        return description
+    }
+}
