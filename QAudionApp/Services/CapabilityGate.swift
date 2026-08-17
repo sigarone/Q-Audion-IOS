@@ -70,14 +70,63 @@ public struct EntitlementsTokenResponse: Codable {
     }
 }
 
-/// Thin seam around the one network call `CapabilityGate` needs, so tests
-/// can fake it — investigation found no existing `Fake*Api` convention in
-/// `QAudionAppTests` to copy (every test there exercises a leaf value type
-/// or a static Keychain accessor), so this follows the general Swift
-/// idiom directly: a narrow protocol, one production conformance, one fake
-/// conformance in the test target.
+/// `POST /api/v1/entitlements/redeem` success response shape — confirmed
+/// real during Task 4 investigation (2026-08-17) by reading
+/// `handleEntitlementsRedeem` directly (`cmd/bcrypto-lite/main.go`):
+/// `jsonOK(w, map[string]any{"already_redeemed": res.AlreadyRedeemed,
+/// "token": tokenStr, "kid": kid})`. Same wire shape Android's Task 5
+/// already consumes (`RedeemActivationCodeResponse` in
+/// `core/core-data/.../net/dto/EntitlementsDto.kt`).
+///
+/// `token` is a freshly minted EGT (same shape as
+/// `EntitlementsTokenResponse.token`) — the server mints inline after a
+/// successful redemption specifically so the redeeming device never has a
+/// window where it's holding a stale token, and so the idempotent-replay
+/// path (`alreadyRedeemed == true`, where `entitlements_changed` is
+/// deliberately NOT fired — `entitlements_redemption.go`) still has a
+/// delivery mechanism for the grant. See `CapabilityGate.adopt(_:)`'s doc
+/// for why this must be adopted directly, never discarded in favor of a
+/// follow-up `refresh()`.
+///
+/// Non-2xx responses (400 invalid code, 409 conflict, 429 rate-limited,
+/// 503 disabled) surface as a thrown `BCryptoError.httpError` from
+/// `BCryptoRestClient` instead of populating this type.
+public struct RedeemActivationCodeResponse: Codable {
+    public let alreadyRedeemed: Bool
+    public let token: String
+    public let kid: String
+
+    enum CodingKeys: String, CodingKey {
+        case alreadyRedeemed = "already_redeemed"
+        case token
+        case kid
+    }
+
+    public init(alreadyRedeemed: Bool, token: String, kid: String) {
+        self.alreadyRedeemed = alreadyRedeemed
+        self.token = token
+        self.kid = kid
+    }
+}
+
+/// Thin seam around the entitlements network calls `CapabilityGate` and
+/// `UpgradeSheet` (Task 4) need, so tests can fake them — investigation
+/// found no existing `Fake*Api` convention in `QAudionAppTests` to copy
+/// (every test there exercises a leaf value type or a static Keychain
+/// accessor), so this follows the general Swift idiom directly: a narrow
+/// protocol, one production conformance, one fake conformance per test
+/// target. `redeemActivationCode` lives on the SAME protocol as
+/// `fetchEntitlementsToken` (not a separate type) — both are entitlements
+/// endpoints hit through the same `BCryptoRestClient`, mirroring Android's
+/// `BCryptoApi` carrying both `getEntitlementsToken`/`redeemActivationCode`
+/// side by side.
 public protocol EntitlementsApiClient {
     func fetchEntitlementsToken() async throws -> EntitlementsTokenResponse
+    /// `code` should already have passed `verifyActivationCodeChecksum`
+    /// (`ActivationCode.swift`) client-side before this is ever called —
+    /// the server re-checks it as its own first gate (design doc §5.1), so
+    /// a client-side pass is a UX courtesy, not the security boundary.
+    func redeemActivationCode(_ code: String) async throws -> RedeemActivationCodeResponse
 }
 
 /// Production `EntitlementsApiClient`, mirroring `BCryptoAccountApiImpl
@@ -116,6 +165,23 @@ public final class BCryptoEntitlementsApiClient: EntitlementsApiClient, @uncheck
         guard let rest = getRestClient?() else { throw BCryptoError.unauthorized }
         let data = try await rest.get("/api/v1/entitlements/token")
         return try JSONDecoder().decode(EntitlementsTokenResponse.self, from: data)
+    }
+
+    /// `POST /api/v1/entitlements/redeem` — same request-body shape every
+    /// other simple POST in this codebase uses (`{"code": "..."}` via
+    /// `JSONSerialization`, matching `BCryptoAccountApiImpl.requestOtp`'s
+    /// exact pattern, Investigation step 2), decoded via `JSONDecoder`
+    /// like `fetchEntitlementsToken` just above. Non-2xx responses throw
+    /// `BCryptoError.httpError`/`.unauthorized` from `BCryptoRestClient`,
+    /// same as every other call through this client — see that type's own
+    /// doc on why the failure response BODY (e.g. the specific 409 conflict
+    /// reason) is not available here, unlike Android's `HttpException
+    /// .response()?.errorBody()`.
+    public func redeemActivationCode(_ code: String) async throws -> RedeemActivationCodeResponse {
+        guard let rest = getRestClient?() else { throw BCryptoError.unauthorized }
+        let body = try JSONSerialization.data(withJSONObject: ["code": code])
+        let data = try await rest.post("/api/v1/entitlements/redeem", body: body)
+        return try JSONDecoder().decode(RedeemActivationCodeResponse.self, from: data)
     }
 }
 

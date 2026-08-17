@@ -302,6 +302,15 @@ private final class FakeEntitlementsApiClient: EntitlementsApiClient {
     private let result: Result<EntitlementsTokenResponse, Error>
     init(result: Result<EntitlementsTokenResponse, Error>) { self.result = result }
     func fetchEntitlementsToken() async throws -> EntitlementsTokenResponse { try result.get() }
+
+    // Task 4 (2026-08-17) added `redeemActivationCode` to the shared
+    // `EntitlementsApiClient` protocol — no `CapabilityGateTests` case
+    // exercises redemption (that is `UpgradeSheetContainerTests`'s job),
+    // so this stub only exists to keep this fake conforming; it must never
+    // be called from this file.
+    func redeemActivationCode(_ code: String) async throws -> RedeemActivationCodeResponse {
+        fatalError("FakeEntitlementsApiClient.redeemActivationCode should not be called from CapabilityGateTests")
+    }
 }
 
 private struct FakeApiError: Error {}
