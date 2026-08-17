@@ -34,6 +34,7 @@ import QAudionEngine
 /// deferred until the engine surfaces a unified `SettingsUiState`.
 struct SettingsScreen: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject private var capabilityGate: CapabilityGate
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -64,6 +65,13 @@ struct SettingsScreen: View {
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
+    /// Entitlements Task 4 — gate for the "Passa a Pro" upgrade sheet
+    /// tapped from `TrialBanner`, next to the profile card.
+    @State private var showTrialUpgradeSheet = false
+
+    private var planStatus: PlanStatus {
+        derivePlanStatus(claims: capabilityGate.claims, nowSeconds: Int64(Date().timeIntervalSince1970))
+    }
 
     /// W118+W134: footer with version + build + uptime tagline.
     /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
@@ -196,6 +204,12 @@ struct SettingsScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
 
+                    if case let .proTrial(daysRemaining, _) = planStatus {
+                        TrialBanner(daysRemaining: daysRemaining) {
+                            showTrialUpgradeSheet = true
+                        }
+                    }
+
                     SecurityChipsRow()
                         .padding(.top, 8)
 
@@ -262,6 +276,14 @@ struct SettingsScreen: View {
         // the culprit is that sub-screen's init.
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
+        }
+        // Entitlements Task 4 — "Passa a Pro" tap on TrialBanner opens the
+        // same UpgradeSheet the rest of the app uses; capability is a
+        // benefit-framing hint only (see UpgradeSheet's own doc), so
+        // .callsVideo (the anchor feature PlanStatus itself reads) is fine
+        // here even though the trial unlocks everything, not just video.
+        .sheet(isPresented: $showTrialUpgradeSheet) {
+            UpgradeSheet(capability: .callsVideo)
         }
     }
 
@@ -1057,7 +1079,12 @@ struct LazyView<Content: View>: View {
 }
 
 #Preview {
+    // Entitlements Task 4 — this screen now reads `@EnvironmentObject var
+    // capabilityGate: CapabilityGate` directly (previously only its child
+    // QAudionBrandBanner did), so the preview needs one injected or
+    // SwiftUI fatal-errors at render time.
     SettingsScreen()
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }
