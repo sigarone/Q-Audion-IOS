@@ -51,7 +51,26 @@ struct ChatMessage: Identifiable {
 final class AppState: ObservableObject {
     // MARK: - Auth state
     @Published var isAuthenticated: Bool = false
-    @Published var currentUserId: String?
+    /// Entitlements Task 3 (2026-08-17) — `didSet` fires on EVERY
+    /// assignment (login, logout, cold-launch cache-fill, profile refresh,
+    /// account switch), so this is the single reactive hook that mirrors
+    /// Android's `tokenStore.userId.collect { ... }` watcher
+    /// (`CapabilityGate.kt` `start()`) without needing `CapabilityGate` to
+    /// independently observe `AppState`'s state — see `CapabilityGate.swift`'s
+    /// class doc for why iOS's DI shape makes that the wrong direction here.
+    /// `loadCached()` re-verifies whatever `TokenVault` has cached against
+    /// `TokenVault.loadUserId()` (NOT against the `newValue` parameter —
+    /// they are guaranteed consistent at every real call site in this file:
+    /// `TokenVault.saveUserId`/`AuthService.saveCredentials` always run
+    /// BEFORE the matching `currentUserId =` assignment) and discards a
+    /// stale cross-user grant instantly (design doc §7.1) rather than
+    /// leaving a previous account's claims live until the next explicit
+    /// `loadCached()`/`refresh()` call. Cheap (Keychain read + one Ed25519
+    /// verify) and idempotent, so firing on every assignment — including a
+    /// same-value re-assignment — is intentionally not special-cased away.
+    @Published var currentUserId: String? {
+        didSet { capabilityGate.loadCached() }
+    }
     /// W444: server-assigned short PBX extension for the logged-in user (e.g. "103").
     /// Persisted to UserDefaults key "currentUserDialExtension" so the SettingsScreen
     /// hero card and caller-id display show the real short number immediately on
@@ -1751,6 +1770,33 @@ final class AppState: ObservableObject {
     let authService = AuthService()
     let callService = CallService()
     let messageCrypto = MessageCrypto()
+    /// Entitlements Task 3 (2026-08-17) — registered the same flat
+    /// stored-property way `authService`/`callService` are (confirmed
+    /// during investigation: no DI container in this app). `lazy`, not a
+    /// plain `let`, because the closure below wires `[weak self]` into
+    /// `BCryptoEntitlementsApiClient.getRestClient` — `self` does not exist
+    /// yet during a plain stored-property initializer (the same reason
+    /// `earbudCounterparty` just below is `lazy`), so this must defer
+    /// construction until first access. First access happens as early as
+    /// `currentUserId`'s own `didSet` (cold-launch cache-fill), well before
+    /// `connectPersistentSocket()` ever runs — safe, because
+    /// `getRestClient` is read lazily too, at call time inside
+    /// `fetchEntitlementsToken()`, not at wiring time.
+    ///
+    /// `EntitlementPublicKey.makeVerifier()` returning `nil` means the
+    /// pinned EGT pubkey build asset is missing or corrupt — per that
+    /// type's own doc, "every failure here means the app was built wrong
+    /// ... which no runtime branch can recover from" — so this fails hard
+    /// rather than silently constructing a `CapabilityGate` that could
+    /// never verify anything.
+    lazy var capabilityGate: CapabilityGate = {
+        guard let verifier = EntitlementPublicKey.makeVerifier() else {
+            preconditionFailure("EntitlementPublicKey.makeVerifier() failed — pinned EGT pubkey asset (bcrypto_entitlement_pubkey.pem) missing or corrupt; this is a packaging bug, not a runtime condition")
+        }
+        let api = BCryptoEntitlementsApiClient()
+        api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
+        return CapabilityGate(verifier: verifier, api: api)
+    }()
 
     /// earbud-relay-v1 — SW counterparty handshake coordinator for calls
     /// where the PEER's bonded earbud (HW firmware, CRUX SPE) owns the
@@ -3173,14 +3219,29 @@ final class AppState: ObservableObject {
             Task {
                 do {
                     let profile = try await provider.accountApi.getProfile()
-                    self.currentUserId = profile.userId
                     // W361 / W-USERID-PLAINTEXT: mirror to the Keychain
                     // (TokenVault) so engine-adjacent services
                     // (LinkNewDeviceScreen QR, future background tasks)
                     // can read the userId without taking a reference to
                     // AppState — was a plaintext UserDefaults mirror
                     // until 2026-08-15.
+                    //
+                    // Entitlements Task 3 (2026-08-17): moved ABOVE the
+                    // `currentUserId` assignment below — that property's
+                    // `didSet` reactively calls `capabilityGate.loadCached()`,
+                    // which compares a cached EGT's `sub` against
+                    // `TokenVault.loadUserId()`. With the old ordering, the
+                    // instant `currentUserId` flips to `profile.userId` the
+                    // Keychain copy still held the STALE cached id for one
+                    // statement, so a genuine account change here (this
+                    // provider's `getProfile()` returning a different user
+                    // than the pre-filled Keychain cache) would have compared
+                    // against the wrong value for that one reactive firing.
+                    // Pure reordering, no other behavior change — both writes
+                    // are synchronous local calls with no observers of their
+                    // own in between.
                     TokenVault.saveUserId(profile.userId)
+                    self.currentUserId = profile.userId
                     // W444: persist the short PBX extension so the SettingsScreen
                     // hero card shows "Int. 103" immediately on next launch.
                     // W461: log what the server actually returns so we can diagnose
@@ -4067,6 +4128,23 @@ final class AppState: ObservableObject {
                     // rebind (which runs before the socket even dials).
                     if prev != .authenticated {
                         self?.groupCallController?.rejoinAfterReconnect()
+                    }
+                    // Entitlements Task 3 (2026-08-17) — same
+                    // once-per-reconnect gate as `rejoinAfterReconnect`
+                    // immediately above, mirroring Android's
+                    // `wsDispatcher.state.collect { if (Connected) refresh() }`
+                    // (`CapabilityGate.kt` `start()`). This is the ONE place
+                    // `refresh()` gets triggered — deliberately not also
+                    // called ad-hoc from `login()`/`loginWithPhoneHash()`/
+                    // `activatePendingSession()`/cold-launch, since EVERY one
+                    // of those paths ends in a persistent-socket connect that
+                    // authenticates here, same as Android relies on its
+                    // single WS-state collector rather than one refresh()
+                    // call per login call site.
+                    if prev != .authenticated {
+                        Task { [weak self] in
+                            await self?.capabilityGate.refresh()
+                        }
                     }
                 }
             }
@@ -6385,6 +6463,28 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 self?.authService.clearToken()
                 self?.errorMessage = reason
+            }
+        }
+
+        // Entitlements Task 3 (2026-08-17) — handle `entitlements_changed`.
+        // Server sends this bare doorbell (`{"type":"entitlements_changed",
+        // "data":{"epoch":N,"reason":"..."}}`) whenever a user's grant
+        // changes (admin edit, activation-code redemption via a DIFFERENT
+        // device, expiry housekeeping) so every connected device re-fetches
+        // rather than waiting out its own local cache. Mirrors Android's
+        // `WsEvent.EntitlementsChanged` handling (`CapabilityGate.kt`
+        // `start()`): log epoch/reason for diagnostics, then `refresh()`.
+        // Confirmed no pre-existing handling of this frame type anywhere in
+        // this repo before this change (grep across the whole app found
+        // nothing) — iOS entitlements work only started with Task 1.
+        ws.registerHandler(type: "entitlements_changed") { [weak self] _, data in
+            let epoch = (data["epoch"] as? NSNumber)?.intValue ?? (data["epoch"] as? Int) ?? -1
+            let reason = (data["reason"] as? String) ?? "?"
+            print("[AppState] entitlements_changed epoch=\(epoch) reason=\(reason) — refreshing")
+            DispatchQueue.main.async {
+                Task { [weak self] in
+                    await self?.capabilityGate.refresh()
+                }
             }
         }
 
