@@ -379,8 +379,13 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // Entitlements Task 5 — Capability.keyManagement gates the
+            // WHOLE destination (not a single button): the row itself
+            // never hides or disables, tapping always navigates, but the
+            // pushed content swaps to UpgradeSheet when locked. Mirrors
+            // Android's gatedEntry<QAudionRoute.KeyManagement>.
             NavigationLink {
-                LazyView { KeyManagementScreen(state: appState) }
+                LazyView { GatedScreenEntry(capability: .keyManagement) { KeyManagementScreen(state: appState) } }
             } label: {
                 // The one row that keeps the PQC purple, deliberately: its
                 // subtitle IS "PSK · PQC · rotazione". Three neighbours
@@ -395,8 +400,10 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // Entitlements Task 5 — Capability.voiceBiometrics, same
+            // whole-destination gate as Gestione chiavi above.
             NavigationLink {
-                LazyView { VoiceEnrollmentScreen() }
+                LazyView { GatedScreenEntry(capability: .voiceBiometrics) { VoiceEnrollmentScreen() } }
             } label: {
                 SettingsRow(icon: "waveform.badge.mic",
                             iconColor: scheme.primary,
@@ -498,8 +505,10 @@ struct SettingsScreen: View {
     private var datiSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("DATI")
+            // Entitlements Task 5 — Capability.backup, same
+            // whole-destination gate as the other two settings screens.
             NavigationLink {
-                LazyView { BackupSettingsScreen(state: appState) }
+                LazyView { GatedScreenEntry(capability: .backup) { BackupSettingsScreen(state: appState) } }
             } label: {
                 SettingsRow(icon: "externaldrive.fill",
                             iconColor: scheme.primary,
