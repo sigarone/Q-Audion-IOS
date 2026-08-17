@@ -870,6 +870,14 @@ struct AboutSettingsScreen: View {
         return d == 1 ? "1 giorno fa" : "\(d) giorni fa"
     }
 
+    private static let aboutDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "it_IT")
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
     /// W158: read or stamp the first-launch timestamp under
     /// `qaudion.firstSeen`. Idempotent — only writes the value the
     /// first time this helper runs on a given device.
@@ -884,11 +892,7 @@ struct AboutSettingsScreen: View {
             store.set(now, forKey: key)
             return now
         }()
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f.string(from: date)
+        return aboutDateFormatter.string(from: date)
     }
 
     // MARK: - Rows
@@ -947,6 +951,9 @@ struct AboutSettingsScreen: View {
             HapticFeedback.messageSent()
             #endif
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Tocca due volte per copiare negli appunti")
     }
 
     private func statusRow(_ label: String, enabled: Bool) -> some View {

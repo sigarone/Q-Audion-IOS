@@ -598,11 +598,15 @@ struct OtaUpdateScreen: View {
         return String(format: "%.1f MB", mb)
     }
 
-    private func formatDate(_ date: Date) -> String {
+    private static let otaDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
         f.dateFormat = "d MMM"
-        return f.string(from: date)
+        return f
+    }()
+
+    private func formatDate(_ date: Date) -> String {
+        return OtaUpdateScreen.otaDateFormatter.string(from: date)
     }
 
     /// W304: 'Ultimo controllo N minuti fa' relative label. Static so
