@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.996",
+              date: "2026-08-17",
+              title: "v1.0.996",
+              bullets: [
+                "fix(app): stop app-root @AppStorage from deadlocking on launch",
+              ]),
         .init(id: "v1.0.995",
               date: "2026-08-16",
               title: "v1.0.995",
               bullets: [
+                "chore: regenerate changelog for v1.0.995",
                 "fix(identity): recognize Device-<hex> as a placeholder name (iOS parity)",
               ]),
         .init(id: "v1.0.994",
@@ -176,13 +183,6 @@ extension ReleaseNote {
                 "fix(video): can't tell \"nothing arrived\" from \"arrives but never reassembles\"",
                 "chore: regenerate changelog for v1.0.977",
                 "fix(avatar): can't tell \"left the device\" from \"peer actually got it\"",
-              ]),
-        .init(id: "v1.0.976",
-              date: "2026-08-13",
-              title: "v1.0.976",
-              bullets: [
-                "chore: regenerate changelog for v1.0.976",
-                "fix(mesh): can't prove why Visibile/Mesh completa never select",
               ]),
     ]
 }
