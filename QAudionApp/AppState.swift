@@ -1084,11 +1084,9 @@ final class AppState: ObservableObject {
             call["one_to_one_call_id"] = oneToOneCallId
         }
 
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let snapshot: [String: Any] = [
             "schema": 1,
-            "captured_at": iso.string(from: Date()),
+            "captured_at": AppState.isoFormatter.string(from: Date()),
             "ws_state": wsConnectionState.rawValue,
             "call": call,
         ]
@@ -7281,15 +7279,24 @@ final class AppState: ObservableObject {
         }
     }
 
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso
+    }()
+
+    private static let isoFormatterNoFrac: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        return iso
+    }()
+
     /// Parse the server RFC3339 `server_ts`; fall back to now (mirrors
     /// Android's `Instant.parse` with a `toLongOrNull` fallback).
     private static func parseGroupServerTs(_ ts: String?) -> Date {
         guard let ts = ts, !ts.isEmpty else { return Date() }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso.date(from: ts) { return d }
-        iso.formatOptions = [.withInternetDateTime]
-        if let d = iso.date(from: ts) { return d }
+        if let d = AppState.isoFormatter.date(from: ts) { return d }
+        if let d = AppState.isoFormatterNoFrac.date(from: ts) { return d }
         if let ms = Double(ts) { return Date(timeIntervalSince1970: ms / 1000.0) }
         return Date()
     }

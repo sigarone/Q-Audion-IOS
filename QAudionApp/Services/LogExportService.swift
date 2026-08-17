@@ -46,15 +46,19 @@ public final class LogExportService {
 
     /// Compose the dump payload (header + ring buffer snapshot).
     /// Returns Data ready to be uploaded or shared via UIActivityVC.
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     func makeDumpData(userId: String?) -> Data {
         var out = String()
         out.reserveCapacity(64 * 1024)
 
         // ---- Header ---------------------------------------------------
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         out.append("=== Q-Audion iOS runtime log dump ===\n")
-        out.append("generated_at  : \(f.string(from: Date()))\n")
+        out.append("generated_at  : \(LogExportService.isoFormatter.string(from: Date()))\n")
         // SECURITY M-17 — only the first 8 chars of the user id
         // (matches the upload-filename prefix convention) so the
         // dump body cannot tie a log to a full account identity.
@@ -104,10 +108,8 @@ public final class LogExportService {
                 .filter { $0.subsystem.hasPrefix("com.qaudion") }
             var out = String()
             out.reserveCapacity(64 * 1024)
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             for e in entries.suffix(2000) {
-                out.append(f.string(from: e.date))
+                out.append(LogExportService.isoFormatter.string(from: e.date))
                 out.append(" ")
                 out.append(String(describing: e.level).uppercased())
                 out.append(" [")

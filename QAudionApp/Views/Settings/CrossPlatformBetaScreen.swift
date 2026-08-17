@@ -20,6 +20,12 @@ struct CrossPlatformBetaScreen: View {
     @State private var resetPeerCapsConfirm: Bool = false
     @State private var clearedAt: String? = nil
 
+    private static let betaTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -40,8 +46,7 @@ struct CrossPlatformBetaScreen: View {
             Button("Annulla", role: .cancel) {}
             Button("Reset", role: .destructive) {
                 PeerCapabilityRegistry.shared.reset()
-                let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-                clearedAt = f.string(from: Date())
+                clearedAt = CrossPlatformBetaScreen.betaTimeFormatter.string(from: Date())
             }
         } message: {
             Text("Cancella tutti i flag v3-capable per peer. La discovery riparte da zero.")

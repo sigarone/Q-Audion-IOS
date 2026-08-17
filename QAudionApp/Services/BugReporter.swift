@@ -300,9 +300,7 @@ public final class BugReporter: ObservableObject {
         let osVersion = UIDevice.current.systemVersion
         let deviceModel = UIDevice.current.model
         let userPrefix = String(token.prefix(8))
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let timestamp = iso.string(from: report.capturedAt)
+        let timestamp = BugReporter.isoFormatter.string(from: report.capturedAt)
         let callId = getActiveCallId?() ?? ""
         let diagSnapshot = getDiagSnapshot?() ?? ""
 
@@ -438,6 +436,12 @@ public final class BugReporter: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso
+    }()
 
     private func resolveAppVersion() -> String {
         guard let info = Bundle.main.infoDictionary else { return "unknown" }
