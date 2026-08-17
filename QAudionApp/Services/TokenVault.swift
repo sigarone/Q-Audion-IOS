@@ -31,6 +31,8 @@ enum TokenVault {
     private static let deviceIdAccount = "device_id"
     /// W-USERID-PLAINTEXT (2026-08-15) — see `saveUserId` doc.
     private static let userIdAccount = "user_id"
+    /// Entitlements Task 2 (2026-08-17) — see `saveEntitlement` doc.
+    private static let entitlementAccount = "entitlement_blob"
 
     // MARK: - Public API
 
@@ -90,12 +92,38 @@ enum TokenVault {
         load(account: userIdAccount)
     }
 
+    /// Entitlements Task 2 (2026-08-17) — the current EGT (`header.payload.sig`,
+    /// design doc §3.1) is cached VERBATIM as an opaque string, exactly like
+    /// `EgtStore` on Android (`core-data/.../entitlements/EgtStore.kt`):
+    /// nothing here parses, decodes, or verifies it. `EgtVerifier` (Task 1)
+    /// re-checks the Ed25519 signature over the blob on every read
+    /// (`CapabilityGate.loadCached`/`.refresh`, Task 3), so a tampered or
+    /// corrupted cache entry simply fails verification and yields no
+    /// capabilities — it is never trusted just because it round-tripped
+    /// through this store. Kept in the SAME `com.qaudion.auth` Keychain
+    /// service as the tokens above (unlike Android's separate prefs file)
+    /// so it clears in lockstep with `clear()` below without a second wipe
+    /// path to keep in sync — Android achieves the same "never outlives its
+    /// user" property via `CapabilityGate`'s explicit `sub` check instead.
+    static func saveEntitlement(_ blob: String) {
+        save(account: entitlementAccount, value: blob)
+    }
+
+    static func loadEntitlement() -> String? {
+        load(account: entitlementAccount)
+    }
+
+    static func clearEntitlement() {
+        delete(account: entitlementAccount)
+    }
+
     /// Remove every credential item in the `com.qaudion.auth` scope.
     static func clear() {
         delete(account: accessAccount)
         delete(account: refreshAccount)
         delete(account: deviceIdAccount)
         delete(account: userIdAccount)
+        delete(account: entitlementAccount)
     }
 
     // MARK: - Keychain primitives
