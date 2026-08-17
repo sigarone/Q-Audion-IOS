@@ -167,11 +167,15 @@ final class DiagnosticsExportContainer: ObservableObject {
         generating = false
     }
 
-    private func formatNow() -> String {
+    private static let nowFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "it_IT")
         f.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
-        return f.string(from: Date())
+        return f
+    }()
+
+    private func formatNow() -> String {
+        return DiagnosticsExportContainer.nowFormatter.string(from: Date())
     }
 }
 

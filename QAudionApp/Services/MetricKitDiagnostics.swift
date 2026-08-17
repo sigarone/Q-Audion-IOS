@@ -139,12 +139,16 @@ extension MetricKitDiagnostics {
 
     // MARK: - Per-category summaries (each line is short + redaction-safe)
 
-    @available(iOS 14.0, *)
-    private static func emitWindow(_ payload: MXDiagnosticPayload) {
+    private static let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
-        let begin: String = f.string(from: payload.timeStampBegin)
-        let end: String = f.string(from: payload.timeStampEnd)
+        return f
+    }()
+
+    @available(iOS 14.0, *)
+    private static func emitWindow(_ payload: MXDiagnosticPayload) {
+        let begin: String = isoFormatter.string(from: payload.timeStampBegin)
+        let end: String = isoFormatter.string(from: payload.timeStampEnd)
         let line: String = "[MetricKit] window " + begin + " .. " + end
         print(line)
     }

@@ -263,6 +263,11 @@ final class AccountSettingsContainer: ObservableObject {
         }
     }
 
+    private static let exportIsoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        return f
+    }()
+
     // MARK: - Audit P0 #2.12 — GDPR data export
     /// Pulls /api/v1/account/export and presents a system Share sheet
     /// so the user can save the JSON envelope to Files or AirDrop it
@@ -276,7 +281,7 @@ final class AccountSettingsContainer: ObservableObject {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
             do {
                 let data = try await provider.accountApi.accountExport()
-                let ts = ISO8601DateFormatter().string(from: Date())
+                let ts = AccountSettingsContainer.exportIsoFormatter.string(from: Date())
                     .replacingOccurrences(of: ":", with: "")
                     .replacingOccurrences(of: "-", with: "")
                     .prefix(15)
