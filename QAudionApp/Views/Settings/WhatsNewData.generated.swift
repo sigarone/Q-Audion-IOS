@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1000",
+              date: "2026-08-17",
+              title: "v1.0.1000",
+              bullets: [
+                "fix(chat): wire peer avatar into the chat detail header",
+              ]),
         .init(id: "v1.0.999",
               date: "2026-08-17",
               title: "v1.0.999",
               bullets: [
+                "chore: regenerate changelog for v1.0.999",
                 "fix(call,mesh): wire the transport shield to live ICE stats, dedupe BLE-mesh peers, learn identity keys from ordinary calls",
               ]),
         .init(id: "v1.0.998",
@@ -178,15 +185,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.981",
                 "fix(call): make the negotiated audio-profile line reach Loki, unconditionally",
-              ]),
-        .init(id: "v1.0.980",
-              date: "2026-08-13",
-              title: "v1.0.980",
-              bullets: [
-                "chore: regenerate changelog for v1.0.980",
-                "fix(call): surface the live deepfake confidence score instead of only the rare alarm",
-                "fix(audio): stop the per-device bitrate ratchet from drifting the CBR wire size",
-                "fix(call): W-STALEPIPE is a known-benign guard, not an error",
               ]),
     ]
 }
