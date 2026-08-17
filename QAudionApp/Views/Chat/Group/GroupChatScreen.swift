@@ -51,6 +51,11 @@ struct GroupChatScreen: View {
     /// W409: needed to call AppState.leaveGroup from the
     /// GroupInfoScreen.onLeft callback.
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    @State private var upgradeSheetCapability: Capability? = nil
 
     let groupId: UUID
     @State private var state: GroupChatUiState
@@ -242,6 +247,13 @@ struct GroupChatScreen: View {
                 )
             }
         }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked control for
+        // (group call, group video call, file attach).
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
     }
 
     // MARK: - Top bar
@@ -298,23 +310,44 @@ struct GroupChatScreen: View {
             // same two-button pattern as the 1:1 ChatDetailScreen's
             // startAudioCall/startVideoCall pair. Invitees = the group
             // roster minus self.
-            Button(action: { handleStartGroupCall(video: false) }) {
+            // Entitlements Task 5 — Capability.callsGroup lock-badge. The
+            // roster-empty disabled look (`canStartGroupCall`) is unrelated
+            // to entitlement and takes precedence — a call with no members
+            // makes no sense regardless of tier, so `.disabled` still wins
+            // over the gate (mirrors Android's own GroupChatScreen.kt
+            // comment on the same precedence).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsGroup),
+                action: { handleStartGroupCall(video: false) },
+                onLockedClick: { upgradeSheetCapability = .callsGroup }
+            ) {
                 Image(systemName: "phone.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
-            .buttonStyle(.plain)
             .disabled(!canStartGroupCall)
             .accessibilityLabel("Chiama il gruppo (audio)")
 
-            Button(action: { handleStartGroupCall(video: true) }) {
+            // A video group call needs BOTH callsGroup (the call itself,
+            // group_call_create) AND callsGroupVideo (group_call_sfu_token)
+            // — tapping this button sends the two gated commands in
+            // sequence server-side, so a grant with only ONE of the two
+            // would render unlocked here and then fail on the very first
+            // message. Routes the locked tap to whichever capability is
+            // actually missing rather than always naming callsGroupVideo.
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsGroup) && capabilityGate.isUnlocked(.callsGroupVideo),
+                action: { handleStartGroupCall(video: true) },
+                onLockedClick: {
+                    upgradeSheetCapability = capabilityGate.isUnlocked(.callsGroup) ? .callsGroupVideo : .callsGroup
+                }
+            ) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
-            .buttonStyle(.plain)
             .disabled(!canStartGroupCall)
             .accessibilityLabel("Videochiama il gruppo")
         }
@@ -429,13 +462,18 @@ struct GroupChatScreen: View {
         HStack(spacing: 10) {
             // Fase 1B — attach button (parity with the 1:1 composer
             // paperclip). Opens the photo/file choice dialog.
-            Button(action: { showingAttachChoice = true }) {
+            // Entitlements Task 5 — Capability.files (server already
+            // enforces this at tus HandlePost/IssueToken).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.files),
+                action: { showingAttachChoice = true },
+                onLockedClick: { upgradeSheetCapability = .files }
+            ) {
                 Image(systemName: "paperclip")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 32, height: 32)
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Aggiungi allegato")
 
             TextField("",
