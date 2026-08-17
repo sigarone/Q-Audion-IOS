@@ -87,6 +87,24 @@ struct QAudionApp: App {
             ZStack {
                 ContentView()
                     .environmentObject(appState)
+                    // Entitlements Task 5 (whole-phase-review finding I4,
+                    // 2026-08-17) — `capabilityGate` is a plain `lazy var` on
+                    // `AppState`, a SEPARATE `ObservableObject`. SwiftUI does
+                    // NOT forward a nested ObservableObject's
+                    // `objectWillChange` through its parent automatically, so
+                    // a view reading `appState.capabilityGate.isUnlocked(...)`
+                    // would never re-render when `claims` changes (e.g. right
+                    // after a successful invite-code redemption, or a
+                    // background `refresh()` completing). Injecting
+                    // `capabilityGate` as its OWN environment object,
+                    // alongside `appState`, lets any child view declare
+                    // `@EnvironmentObject var capabilityGate: CapabilityGate`
+                    // directly and get correct, live updates — see
+                    // `CapabilityGate.claims`'s own doc for the full
+                    // analysis. This must travel together with `appState`'s
+                    // own injection since both come from the exact same
+                    // `AppState` instance.
+                    .environmentObject(appState.capabilityGate)
                     // W441: hide app content from app-switcher snapshots when
                     // screenshot protection is on (iOS 15+ system API).
                     .privacySensitive(screenshotProtectionEnabled)
