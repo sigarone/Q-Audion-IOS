@@ -3327,6 +3327,16 @@ final class AppState: ObservableObject {
                         let line: String = "[AppState] getProfile: device credential rejected after full refresh+device-renew cascade — clearing session, QR re-pair required"
                         print(line)
                         authService.clearToken()
+                        // Whole-phase-review finding I1 (2026-08-17): this
+                        // branch clears the Keychain token but does NOT nil
+                        // `currentUserId` (pre-existing behavior, not
+                        // changed here — widening what nilling it touches
+                        // at this site was out of scope for this fix), so
+                        // `capabilityGate`'s `currentUserId`-`didSet` discard
+                        // never fires on its own here. Explicit call closes
+                        // that gap without touching this site's existing
+                        // currentUserId/isAuthenticated behavior.
+                        self.capabilityGate.discard()
                         self.isAuthenticated = false
                     } else {
                         AppState.logAuthDiag("[AppState] getProfile transient failure — keeping session, will retry: ", error)
@@ -6457,6 +6467,15 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "remote_wipe") { [weak self] _, _ in
             DispatchQueue.main.async {
                 self?.authService.clearToken()
+                // Whole-phase-review finding I1 (2026-08-17): this handler
+                // clears the Keychain token but neither nils `currentUserId`
+                // nor flips `isAuthenticated` (pre-existing — the latter is
+                // a wider gap outside entitlements scope, not touched
+                // here), so `capabilityGate`'s reactive discard never fires
+                // on its own. Explicit call closes the entitlements-side
+                // leak without changing this handler's existing auth-state
+                // behavior.
+                self?.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
                 self?.errorMessage = "Account cancellato remotamente."
             }
@@ -6469,6 +6488,9 @@ final class AppState: ObservableObject {
             let reason = (data["reason"] as? String) ?? "Account bloccato"
             DispatchQueue.main.async {
                 self?.authService.clearToken()
+                // Whole-phase-review finding I1 (2026-08-17) — same
+                // reasoning as the `remote_wipe` handler just above.
+                self?.capabilityGate.discard()
                 self?.errorMessage = reason
             }
         }

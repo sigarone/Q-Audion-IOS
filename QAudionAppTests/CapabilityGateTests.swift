@@ -124,6 +124,37 @@ final class CapabilityGateTests: XCTestCase {
         XCTAssertFalse(gate.has(.files))
     }
 
+    // MARK: - discard() — whole-phase-review finding I1 (2026-08-17)
+
+    func testDiscardClearsInMemoryClaimsAndKeychainWithoutAnyUserIdChange() throws {
+        // The 4 session-ending sites that call this (hard credential
+        // rejection, remote_wipe, account_locked, account deletion) clear
+        // TokenVault via AuthService.clearToken() but do NOT change
+        // currentUserId, so the didSet-driven loadCached() discard never
+        // fires — discard() is the explicit substitute.
+        TokenVault.saveUserId("user-a")
+        let token = try signedToken(sub: "user-a", fea: ["feat.files": 0])
+        TokenVault.saveEntitlement(token)
+        let gate = makeGate()
+        gate.loadCached()
+        XCTAssertTrue(gate.has(.files), "sanity: cache valid before discard()")
+
+        gate.discard()
+
+        XCTAssertFalse(gate.has(.files))
+        XCTAssertNil(TokenVault.loadEntitlement())
+    }
+
+    func testDiscardIsSafeToCallWithNothingCached() {
+        TokenVault.saveUserId("user-a")
+        let gate = makeGate()
+
+        gate.discard()
+
+        XCTAssertFalse(gate.has(.files))
+        XCTAssertNil(TokenVault.loadEntitlement())
+    }
+
     // MARK: - refresh() — design doc §3.2: exp is a refresh target, not a kill switch
 
     func testRefreshFailureLeavesExistingCacheIntact() async throws {

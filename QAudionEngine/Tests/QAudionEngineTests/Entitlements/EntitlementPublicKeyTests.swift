@@ -12,6 +12,27 @@ import CryptoKit
 /// real server-minted EGT would fail verification and the whole fleet would
 /// resolve to Base — fail-closed, but a fleet-wide outage whose symptom is
 /// nowhere near its cause. Android carries the same guard.
+///
+/// **Acknowledged prerequisite gap (whole-phase-review finding I3,
+/// 2026-08-17):** this file's own doc, written at Task 1, called re-arming
+/// `testCommittedAssetIsNotStillThePlaceholderKey` (flipping
+/// `assetIsStillThePlaceholder` to `false`) "a hard prerequisite of Task 3
+/// (`CapabilityGate`), the first task that puts this key on a path real
+/// users depend on." Task 3 has now landed (`CapabilityGate.swift`,
+/// `AppState.capabilityGate`) and this prerequisite is still unsatisfied —
+/// the real `ent-v1` entitlement public key does not exist yet on the
+/// server side, so re-arming the guard now would just pin CI red for a
+/// known, already-tracked reason, not catch a real regression. That is a
+/// deliberate, written-down decision, not a silent skip: the guard stays
+/// off until the actual key-swap — swapping
+/// `Sources/QAudionEngine/Resources/bcrypto_entitlement_pubkey.pem` for the
+/// real `ent-v1` key, a Pavel-manual step per this whole rollout's
+/// established pattern (same class of step as the OTA signing key and the
+/// Reality disguise-target selection in `bcrypto-server`'s CLAUDE.md) —
+/// which is also the point `assetIsStillThePlaceholder` must flip to
+/// `false`, in the SAME commit, per the `XCTSkipIf` message below. Until
+/// then, every build after Task 3 verifies real EGTs against a throwaway
+/// test key, matching Android's identical stance.
 final class EntitlementPublicKeyTests: XCTestCase {
 
     /// Single switch for the two mutually-exclusive cases below. Flip to
