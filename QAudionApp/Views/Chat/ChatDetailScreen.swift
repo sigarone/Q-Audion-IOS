@@ -190,6 +190,23 @@ struct ChatDetailScreen: View {
                                    contacts: appState.cachedContacts)
     }
 
+    /// W-CHATHEADERAVATARSTALE (2026-08-17) — mirrors `ChatListScreen
+    /// .resolvedRowAvatarUrl` (2026-08-05 fix). The top bar built
+    /// `QAudionAvatar` with no `imageURL` argument at all, so it always
+    /// fell back to the initials placeholder regardless of what
+    /// `ContactsStore`/`AvatarAnnounceCoordinator` had cached for this
+    /// peer — the exact same class of bug the list row already had fixed,
+    /// just never ported to this screen. Visible as: chat list shows the
+    /// peer's real synced photo, tapping into the chat drops back to a
+    /// plain initials circle. Group avatars are out of scope here (no
+    /// single peer to key off) — same guard the list uses.
+    private var resolvedPeerAvatarUrl: URL? {
+        guard container.viewModel.conversation.kind != .group else { return nil }
+        return appState.cachedContacts.first(where: {
+            $0.userId == container.viewModel.conversation.peerUserId
+        })?.avatarUrl
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             topBar
@@ -577,6 +594,7 @@ struct ChatDetailScreen: View {
 
             QAudionAvatar(
                 displayName: resolvedPeerTitle,
+                imageURL: resolvedPeerAvatarUrl,
                 kind: container.viewModel.conversation.kind == .group ? .group : .person,
                 size: 36,
                 // W72: prefer live presence from engine, fall back to model.
