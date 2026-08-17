@@ -14,9 +14,21 @@
 
 import SwiftUI
 import NetworkExtension
+import CryptoKit
+import QAudionEngine
 
 struct VpnToggleChip: View {
     @ObservedObject var vpnService: VpnService
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc. Gated
+    /// centrally HERE rather than at each of this chip's 6 real call sites
+    /// (HomeView, CallHistoryView, ChatListScreen, ContactsScreen,
+    /// SettingsScreen, plus the chip's own preview) — one fix covers all
+    /// of them and none can drift out of sync.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — drives `.sheet(isPresented:)` for `UpgradeSheet`.
+    @State private var showUpgradeSheet = false
 
     /// The user's current session access token.
     let accessToken: String
@@ -32,6 +44,8 @@ struct VpnToggleChip: View {
 
     // MARK: - Body
 
+    private var vpnUnlocked: Bool { capabilityGate.isUnlocked(.vpn) }
+
     var body: some View {
         Button(action: handleTap) {
             HStack(spacing: 5) {
@@ -43,6 +57,24 @@ struct VpnToggleChip: View {
             .padding(.vertical, 5)
             .background(chipBackground, in: Capsule())
             .overlay(Capsule().stroke(chipBorder, lineWidth: 1))
+            // Entitlements Task 5 — Capability.vpn. This Button already
+            // owns its own tap (handleTap branches on vpnUnlocked itself,
+            // and a long-press separately opens the exit picker), so this
+            // is the visual-only dim + lock-badge treatment, applied
+            // inline rather than via the separate GatedVisualBadge wrapper
+            // to avoid disturbing the chip's existing gesture composition.
+            .opacity(vpnUnlocked ? 1.0 : 0.55)
+            .overlay(alignment: .topTrailing) {
+                if !vpnUnlocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(3)
+                        .background(Circle().fill(Color.black.opacity(0.6)))
+                        .offset(x: 3, y: -3)
+                        .accessibilityLabel("Funzione Pro bloccata")
+                }
+            }
         }
         .buttonStyle(.plain)
         .disabled(busy || vpnService.state.isConnecting)
@@ -50,10 +82,19 @@ struct VpnToggleChip: View {
         // Long-press the chip to choose the exit. highPriorityGesture (not
         // simultaneous) so a long-press opens the picker WITHOUT also firing the
         // button's tap action (connect/disconnect); a short tap still falls through.
+        // Entitlements Task 5 — deliberately NOT gated: selecting a node here
+        // only writes `preferredNodeId` (a stored preference for the NEXT
+        // successful connect), it never itself calls `vpnService.connect`.
+        // The one path that actually establishes a tunnel is `handleTap`,
+        // which IS gated above.
         .highPriorityGesture(
             LongPressGesture(minimumDuration: 0.45).onEnded { _ in openPicker() }
         )
         .sheet(isPresented: $showPicker) { pickerSheet }
+        .sheet(isPresented: $showUpgradeSheet) {
+            UpgradeSheet(capability: .vpn)
+                .environmentObject(appState)
+        }
     }
 
     // MARK: - Icon
@@ -103,6 +144,16 @@ struct VpnToggleChip: View {
 
     private func handleTap() {
         guard !busy else { return }
+        // Entitlements Task 5 — Capability.vpn. A locked tap presents the
+        // upgrade sheet instead of connecting; disconnecting an ALREADY
+        // -connected tunnel is never blocked here (see the disconnect
+        // branch just below — a mid-session downgrade is handled by the
+        // stopAtBoundary revocation policy server/AppState-side, not by
+        // this UI-only gate refusing the disconnect action itself).
+        guard vpnUnlocked else {
+            showUpgradeSheet = true
+            return
+        }
 
         if case .connected = vpnService.state {
             vpnService.disconnect()
@@ -228,9 +279,18 @@ private extension VpnNode {
 // MARK: - Preview
 
 #Preview {
-    VpnToggleChip(
+    // Entitlements Task 5 — this chip now reads `@EnvironmentObject var
+    // capabilityGate: CapabilityGate`, so the preview needs one injected
+    // or SwiftUI fatal-errors at render time. A throwaway verifier/API
+    // pair (never actually called by a preview) is enough — same
+    // minimal-real-dependency shape `CapabilityGateTests` uses.
+    let previewKey = Curve25519.Signing.PrivateKey()
+    let previewVerifier = EgtVerifier(pinnedPublicKeyRaw: previewKey.publicKey.rawRepresentation)!
+    return VpnToggleChip(
         vpnService: VpnService(),
         accessToken: "preview-token"
     )
     .padding()
+    .environmentObject(AppState())
+    .environmentObject(CapabilityGate(verifier: previewVerifier, api: BCryptoEntitlementsApiClient()))
 }
