@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.999",
+              date: "2026-08-17",
+              title: "v1.0.999",
+              bullets: [
+                "fix(call,mesh): wire the transport shield to live ICE stats, dedupe BLE-mesh peers, learn identity keys from ordinary calls",
+              ]),
         .init(id: "v1.0.998",
               date: "2026-08-17",
               title: "v1.0.998",
               bullets: [
+                "chore: regenerate changelog for v1.0.998",
                 "fix(ui): move Q-AUDION wordmark banner off shared safeAreaInset, inline per screen",
                 "fix(ui): shield+Q-AUDION wordmark banner now on all four main screens",
                 "feat(brand): splash screen uses the real shield+Q-AUDION wordmark, not text",
@@ -180,13 +187,6 @@ extension ReleaseNote {
                 "fix(call): surface the live deepfake confidence score instead of only the rare alarm",
                 "fix(audio): stop the per-device bitrate ratchet from drifting the CBR wire size",
                 "fix(call): W-STALEPIPE is a known-benign guard, not an error",
-              ]),
-        .init(id: "v1.0.979",
-              date: "2026-08-13",
-              title: "v1.0.979",
-              bullets: [
-                "chore: regenerate changelog for v1.0.979",
-                "fix(contacts): refresh a chat-only peer's server display name, not just on placeholder",
               ]),
     ]
 }
