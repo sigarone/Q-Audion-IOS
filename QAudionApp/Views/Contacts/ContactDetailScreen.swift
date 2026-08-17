@@ -23,6 +23,11 @@ import QAudionEngine
 /// yet — sensible defaults render so the screen still validates layout.
 struct ContactDetailScreen: View {
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    @State private var upgradeSheetCapability: Capability? = nil
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -193,6 +198,12 @@ struct ContactDetailScreen: View {
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
             }
+        }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked control for.
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
         }
     }
 
@@ -417,9 +428,15 @@ struct ContactDetailScreen: View {
                          tint: extras.success) {
                 Task { await appState.startCall(contactId: item.userId, video: false) }
             }
-            actionButton(icon: "video",
-                         caption: "Video",
-                         tint: extras.pqcAccent) {
+            // Entitlements Task 5 — Capability.callsVideo. Same capability
+            // as ChatDetailScreen's video-call button — a second independent
+            // trigger for the same server-side call_upgrade_request-equivalent
+            // gate (mirrors Android's ContactDetailScreen.kt review fix I1 #1).
+            gatedActionButton(icon: "video",
+                               caption: "Video",
+                               tint: extras.pqcAccent,
+                               unlocked: capabilityGate.isUnlocked(.callsVideo),
+                               onLockedClick: { upgradeSheetCapability = .callsVideo }) {
                 Task { await appState.startCall(contactId: item.userId, video: true) }
             }
             actionButton(icon: "shield.lefthalf.filled",
@@ -446,6 +463,33 @@ struct ContactDetailScreen: View {
                     .background(Circle().fill(scheme.surfaceVariant.opacity(0.6)))
             }
             .buttonStyle(.plain)
+            Text(caption)
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.2)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Entitlements Task 5 — gated counterpart to `actionButton` above,
+    /// same 52pt-circle-plus-caption footprint, wrapped in
+    /// `GatedActionButton` so the ONE quick-action this screen gates
+    /// (Video) gets the exact same dim + lock-badge treatment as every
+    /// other Task 5 site.
+    private func gatedActionButton(icon: String,
+                                    caption: String,
+                                    tint: Color,
+                                    unlocked: Bool,
+                                    onLockedClick: @escaping () -> Void,
+                                    action: @escaping () -> Void) -> some View {
+        VStack(spacing: 6) {
+            GatedActionButton(unlocked: unlocked, action: action, onLockedClick: onLockedClick) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 52, height: 52)
+                    .background(Circle().fill(scheme.surfaceVariant.opacity(0.6)))
+            }
             Text(caption)
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.2)
