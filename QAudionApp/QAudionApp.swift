@@ -31,12 +31,31 @@ struct QAudionApp: App {
     @StateObject private var lockService = AppLockService()
     @Environment(\.scenePhase) private var scenePhase
 
-    /// W441: reactive screenshot-protection flag — @AppStorage so the ZStack
-    /// modifier re-evaluates when the user toggles the setting in PrivacySettings.
-    @AppStorage("qaudion.privacy.screenshot_protection")
-    private var screenshotProtectionEnabled: Bool = false
+    /// W441: reactive screenshot-protection flag, so the ZStack modifier
+    /// re-evaluates when the user toggles the setting in PrivacySettings.
+    ///
+    /// W-APPSTORAGEDEADLOCK (2026-08-16) — this used to be `@AppStorage`
+    /// bound to a plain UserDefaults key, which was two bugs at once: (1)
+    /// the REAL value is Keychain-backed (`PrivacyGate.screenshotProtection-
+    /// Enabled`, SECURITY M-28), so the plain-UserDefaults `@AppStorage`
+    /// mirror never actually reflected the user's toggle; (2) @AppStorage
+    /// installs SwiftUI's own UserDefaults-change-notification observer for
+    /// the entire app lifetime (this is the App root, always live —
+    /// unlike every other @AppStorage use here, which is scoped to a
+    /// screen only instantiated while visible). Root-caused live via a
+    /// real TestFlight crash: a background PushKit-driven launch deadlocked
+    /// (EXC_CRASH/SIGKILL 0x8BADF00D, scene-update watchdog) with the main
+    /// thread inside a SwiftUI ForEach/Observation graph update while a
+    /// background thread's UserDefaults-change notification drove that same
+    /// @AppStorage observer into the same AttributeGraph lock. Plain
+    /// `@State`, seeded from the real Keychain value and kept in sync via
+    /// `PrivacyGate.screenshotProtectionDidChange` (posted only from the
+    /// one place that actually writes the value), sidesteps SwiftUI's
+    /// reactive-UserDefaults machinery entirely.
+    @State private var screenshotProtectionEnabled: Bool
 
     init() {
+        _screenshotProtectionEnabled = State(initialValue: PrivacyGate.screenshotProtectionEnabled)
         // W472 — install the native-crash catcher as the very first
         // thing, before any code that could crash. It persists a
         // backtrace on a signal / NSException; the report is flushed to
@@ -107,6 +126,19 @@ struct QAudionApp: App {
                 EphemeralMessageJanitor.shared.start()
                 // W441: listen for OS screenshot events and warn in the log.
                 registerScreenshotObserver()
+                // W-APPSTORAGEDEADLOCK — keep the root-level @State in sync
+                // with the real (Keychain-backed) value without SwiftUI's
+                // own @AppStorage/UserDefaults-observer machinery. See
+                // screenshotProtectionEnabled's doc for why this replaced
+                // @AppStorage. PrivacyGate.setScreenshotProtectionEnabled is
+                // the only writer, so this notification is the only source.
+                NotificationCenter.default.addObserver(
+                    forName: .screenshotProtectionDidChange,
+                    object: nil,
+                    queue: .main
+                ) { _ in
+                    screenshotProtectionEnabled = PrivacyGate.screenshotProtectionEnabled
+                }
             }
         }
     }

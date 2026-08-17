@@ -135,6 +135,26 @@ public enum PrivacyGate {
         // SECURITY L-8: audit-parity log line.
         let line: String = "PrivacyGate.screenshotProtection=" + String(value)
         RTLog.info("settings", line)
+        // W-APPSTORAGEDEADLOCK — the app root used to read this flag via
+        // `@AppStorage("qaudion.privacy.screenshot_protection")`, a plain
+        // UserDefaults key. That was already disconnected from the real
+        // value (Keychain-backed, per SECURITY M-28 above — the toggle
+        // never actually updated what @AppStorage was reading), and
+        // separately, @AppStorage installs SwiftUI's own UserDefaults-
+        // change observer for the ENTIRE app root regardless — root-caused
+        // live 2026-08-16 (crash report, EXC_CRASH/SIGKILL 0x8BADF00D,
+        // scene-update watchdog): during a background PushKit-driven
+        // launch, the main thread was inside SwiftUI's ForEach/Observation
+        // graph update while a background thread's UserDefaults-change
+        // notification concurrently drove SwiftUI's internal
+        // `UserDefaultObserver` into the SAME AttributeGraph lock — genuine
+        // deadlock, watchdog-killed after ~18s. This explicit notification
+        // replaces @AppStorage for that one root-level property so the app
+        // root observes the REAL Keychain value without SwiftUI's own
+        // reactive-UserDefaults machinery being present for the entire
+        // app lifetime (every other @AppStorage use in this app is scoped
+        // to a screen that is only instantiated while actually visible).
+        NotificationCenter.default.post(name: .screenshotProtectionDidChange, object: nil)
     }
     public static func setAppLockEnabled(_ value: Bool) {
         // SECURITY M-28: Keychain-backed.
@@ -292,4 +312,8 @@ extension Notification.Name {
     /// Posted by `PrivacyGate.setPresenceVisibleToContacts` only when the
     /// gate turns ON. See that setter for why this exists.
     static let presenceVisibilityDidChange = Notification.Name("qaudion.presenceVisibilityDidChange")
+    /// W-APPSTORAGEDEADLOCK (2026-08-16) — posted by
+    /// `PrivacyGate.setScreenshotProtectionEnabled`. See that setter's doc
+    /// for why the app root can no longer just use `@AppStorage` here.
+    static let screenshotProtectionDidChange = Notification.Name("qaudion.screenshotProtectionDidChange")
 }
