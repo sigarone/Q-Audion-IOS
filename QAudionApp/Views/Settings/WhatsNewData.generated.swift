@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.998",
+              date: "2026-08-17",
+              title: "v1.0.998",
+              bullets: [
+                "fix(ui): move Q-AUDION wordmark banner off shared safeAreaInset, inline per screen",
+                "fix(ui): shield+Q-AUDION wordmark banner now on all four main screens",
+                "feat(brand): splash screen uses the real shield+Q-AUDION wordmark, not text",
+              ]),
         .init(id: "v1.0.997",
               date: "2026-08-17",
               title: "v1.0.997",
               bullets: [
+                "chore: regenerate changelog for v1.0.997",
                 "fix(chat): refresh stale peer display name in chat header on entry",
               ]),
         .init(id: "v1.0.996",
@@ -178,13 +187,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.979",
                 "fix(contacts): refresh a chat-only peer's server display name, not just on placeholder",
-              ]),
-        .init(id: "v1.0.978",
-              date: "2026-08-13",
-              title: "v1.0.978",
-              bullets: [
-                "chore: regenerate changelog for v1.0.978",
-                "fix(chat): stop persisting screenshot-request control envelopes as chat messages",
               ]),
     ]
 }
