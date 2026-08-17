@@ -947,6 +947,9 @@ struct AboutSettingsScreen: View {
             HapticFeedback.messageSent()
             #endif
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Tocca due volte per copiare negli appunti")
     }
 
     private func statusRow(_ label: String, enabled: Bool) -> some View {

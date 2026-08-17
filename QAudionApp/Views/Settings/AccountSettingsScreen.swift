@@ -827,6 +827,9 @@ struct AccountSettingsScreen: View {
             HapticFeedback.messageSent()
             #endif
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Tocca due volte per copiare negli appunti")
     }
 
     /// 2026-07-29 — caller-id single-select. Options are "la mia

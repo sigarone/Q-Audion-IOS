@@ -369,6 +369,9 @@ struct BackupSettingsScreen: View {
             HapticFeedback.messageSent()
             #endif
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Tocca due volte per copiare negli appunti")
     }
 
     private func kvRow(label: String, value: String, mono: Bool) -> some View {
