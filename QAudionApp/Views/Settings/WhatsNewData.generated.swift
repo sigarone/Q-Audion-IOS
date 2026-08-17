@@ -9,11 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.997",
+              date: "2026-08-17",
+              title: "v1.0.997",
+              bullets: [
+                "fix(chat): refresh stale peer display name in chat header on entry",
+              ]),
         .init(id: "v1.0.996",
               date: "2026-08-17",
               title: "v1.0.996",
               bullets: [
+                "chore: regenerate changelog for v1.0.996",
                 "fix(app): stop app-root @AppStorage from deadlocking on launch",
+                "🛡️ Sentinel: [Security Improvement] Redact FastSetupPayload plaintext password from debug logs (#66)",
+                "⚡ Bolt: Extract DateFormatters to static let for performance (#67)",
+                "🎨 Palette: Improve accessibility of tap-to-copy rows (#68)",
               ]),
         .init(id: "v1.0.995",
               date: "2026-08-16",
@@ -175,14 +185,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.978",
                 "fix(chat): stop persisting screenshot-request control envelopes as chat messages",
-              ]),
-        .init(id: "v1.0.977",
-              date: "2026-08-13",
-              title: "v1.0.977",
-              bullets: [
-                "fix(video): can't tell \"nothing arrived\" from \"arrives but never reassembles\"",
-                "chore: regenerate changelog for v1.0.977",
-                "fix(avatar): can't tell \"left the device\" from \"peer actually got it\"",
               ]),
     ]
 }
