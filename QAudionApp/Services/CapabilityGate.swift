@@ -156,7 +156,14 @@ public final class BCryptoEntitlementsApiClient: EntitlementsApiClient, @uncheck
 ///     `AppState`'s `currentUserId` `didSet` calling `loadCached()` again
 ///     on every login/logout/account-switch (a mid-session account switch,
 ///     before the next successful `refresh()` has a chance to overwrite it
-///     with the new user's own grant).
+///     with the new user's own grant). Whole-phase-review finding I1
+///     (2026-08-17): this invariant does NOT hold for a session-ending
+///     event that clears `TokenVault` WITHOUT also nilling `currentUserId`
+///     — 4 of `AuthService.clearToken()`'s 5 call sites do exactly that
+///     (only `AppState.logout()` nils `currentUserId` too). Those 4 sites
+///     now call `discard()` explicitly instead — see that method's doc for
+///     the full list and why an explicit call was chosen over widening
+///     what `currentUserId = nil` touches at each site.
 @MainActor
 public final class CapabilityGate: ObservableObject {
     /// Read-only view for UI call sites that want to react to entitlement
@@ -165,14 +172,29 @@ public final class CapabilityGate: ObservableObject {
     /// Deliberately a plain `@Published` property read directly by
     /// `ObservableObject` conformance — NOT hoisted into a plain value and
     /// threaded down through a router/coordinator that builds a view
-    /// hierarchy once and caches it (see the SwiftUI-reactivity-trap note
-    /// in the Task 3 report: this app's `NavigationStack`/`.sheet`-based
-    /// navigation, unlike Jetpack Compose Nav3's `entry<T>` cache, rebuilds
-    /// its view closures on every SwiftUI diff pass, so a view reading
-    /// `capabilityGate.has(...)` via `@EnvironmentObject` inside `body`
-    /// re-evaluates on every publish — there is no equivalent trap
-    /// confirmed here, and this shape is the one least likely to invite
-    /// one by accident).
+    /// hierarchy once and caches it. This app's own navigation
+    /// (`NavigationStack`/`.sheet`/`.fullScreenCover` in `ContentView.swift`)
+    /// has no Jetpack-Compose-Nav3-`entry<T>`-style cache-the-hierarchy-once
+    /// idiom — Grep-verified, not exhaustively audited — so that specific
+    /// trap does not exist here.
+    ///
+    /// **A DIFFERENT, real reactivity gap DOES exist today (whole-phase-
+    /// review finding I4, 2026-08-17), left for Task 5 (real UI call sites)
+    /// to close, not fixed here:** `QAudionApp.swift` only does
+    /// `.environmentObject(appState)`, never
+    /// `.environmentObject(appState.capabilityGate)`, and `capabilityGate`
+    /// is a plain `lazy var` on `AppState`, not itself observed by
+    /// anything. A view that reads `appState.capabilityGate.has(...)`
+    /// (via `@EnvironmentObject var appState: AppState`) inside `body`
+    /// will NOT re-render when `claims` changes — SwiftUI does not forward
+    /// a nested `ObservableObject`'s publisher through its parent
+    /// automatically, and `AppState` never re-publishes on
+    /// `capabilityGate`'s behalf. Task 5 must either inject
+    /// `capabilityGate` as its OWN `@EnvironmentObject`
+    /// (`.environmentObject(appState.capabilityGate)` alongside
+    /// `appState`) or have `AppState` forward `capabilityGate.objectWillChange`
+    /// into its own — do not assume `@EnvironmentObject var appState`
+    /// alone makes a nested `capabilityGate.has(...)` read reactive.
     @Published public private(set) var claims: EgtClaims?
 
     private let verifier: EgtVerifier
@@ -224,11 +246,38 @@ public final class CapabilityGate: ObservableObject {
             return
         }
         guard let verified = verifier.verify(raw), verified.sub == TokenVault.loadUserId() else {
+            RTLog.warn("entitlements", "loadCached: cached token failed verification or sub mismatch — discarding")
             TokenVault.clearEntitlement()
             claims = nil
             return
         }
         claims = verified
+    }
+
+    /// Explicitly discards the in-memory grant and its persisted Keychain
+    /// copy, WITHOUT requiring `AppState.currentUserId` to change first.
+    ///
+    /// Whole-phase-review finding I1 (2026-08-17): `loadCached()`'s discard
+    /// only ever fires reactively through `currentUserId`'s `didSet`, but
+    /// `AuthService.clearToken()` (which wipes the Keychain EGT via
+    /// `TokenVault.clear()`) has 5 call sites in this app and only
+    /// `AppState.logout()` also nils `currentUserId` — the other 4 (hard
+    /// credential rejection after the refresh+device-renew cascade fails,
+    /// the `remote_wipe` WS handler, the `account_locked` WS handler, and
+    /// account deletion in `AccountSettingsScreen`) left `claims` fully
+    /// populated in memory after the Keychain copy was already gone.
+    /// Investigated each of those 4 sites before picking this fix over
+    /// also nilling `currentUserId` there: none of them currently touch
+    /// `currentUserId` (two — `remote_wipe`/`account_locked` — do not even
+    /// flip `isAuthenticated`, a wider pre-existing gap outside this
+    /// method's scope, not something specific to entitlements), so the
+    /// surgical fix is an explicit call here rather than widening what
+    /// `currentUserId = nil` touches at 4 sites whose other readers were
+    /// not fully audited in this pass.
+    public func discard() {
+        RTLog.warn("entitlements", "discard: session ended (token cleared) without a currentUserId change — clearing cached grant")
+        TokenVault.clearEntitlement()
+        claims = nil
     }
 
     /// Fetches a fresh token from the server, verifies it, and caches it.
@@ -238,11 +287,14 @@ public final class CapabilityGate: ObservableObject {
     /// match the logged-in user — this leaves whatever was already cached
     /// (both `claims` and `TokenVault`) completely untouched. Never throws:
     /// `try?` collapses the one call that can (`api.fetchEntitlementsToken`)
-    /// into an `Optional`, and `adopt(_:)` applies the same fail-closed
+    /// into an `Optional`, and `tryAdopt` applies the same fail-closed
     /// acceptance rule to the token itself.
     public func refresh() async {
-        guard let response = try? await api.fetchEntitlementsToken() else { return }
-        _ = adopt(response.token)
+        guard let response = try? await api.fetchEntitlementsToken() else {
+            RTLog.warn("entitlements", "refresh: fetchEntitlementsToken failed (network error or non-2xx) — keeping existing cache")
+            return
+        }
+        _ = tryAdopt(response.token, source: "refresh")
     }
 
     /// Adopts a token that already arrived through a side channel OTHER
@@ -259,11 +311,28 @@ public final class CapabilityGate: ObservableObject {
     /// left exactly as they were. Returns `true` iff `token` was adopted.
     @discardableResult
     public func adopt(_ token: String) -> Bool {
-        guard let verified = verifier.verify(token), verified.sub == TokenVault.loadUserId() else {
+        tryAdopt(token, source: "adopt")
+    }
+
+    /// Shared verify → sub-check → cache sequence `refresh()` and `adopt(_:)`
+    /// both need, single-sourced so the acceptance rule can't drift between
+    /// the two callers — mirrors Android's own `tryAdopt(token, source)`.
+    /// `source` distinguishes the two log lines below so a real support
+    /// case ("my Pro features disappeared") can tell a routine background
+    /// refresh failure from a rejected redemption-code adoption.
+    @discardableResult
+    private func tryAdopt(_ token: String, source: String) -> Bool {
+        guard let verified = verifier.verify(token) else {
+            RTLog.warn("entitlements", "\(source): token failed verification, keeping existing cache")
+            return false
+        }
+        guard verified.sub == TokenVault.loadUserId() else {
+            RTLog.warn("entitlements", "\(source): token sub mismatch, keeping existing cache")
             return false
         }
         TokenVault.saveEntitlement(token)
         claims = verified
+        RTLog.info("entitlements", "\(source): adopted a verified token")
         return true
     }
 }

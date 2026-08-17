@@ -341,6 +341,13 @@ final class AccountSettingsContainer: ObservableObject {
                 // round trip caught up. Clear both explicitly, same as the
                 // other two wipe call sites.
                 self.appState?.authService.clearToken()
+                // Whole-phase-review finding I1 (2026-08-17) — GDPR account
+                // deletion clears the Keychain token but doesn't nil
+                // `currentUserId` (pre-existing, not changed here), so
+                // `capabilityGate`'s reactive discard never fires on its
+                // own. Explicit call so a deleted account's in-memory grant
+                // doesn't outlive the process.
+                self.appState?.capabilityGate.discard()
                 self.appState?.isAuthenticated = false
                 self.isLoading = false
                 self.errorMessage = nil
