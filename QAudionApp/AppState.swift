@@ -5377,10 +5377,19 @@ final class AppState: ObservableObject {
                     // own; the proactive timeout armed below is no longer needed.
                     self.upgradeResponderIceConnectTask?.cancel()
                     self.upgradeResponderIceConnectTask = nil
+                    // W-SHIELDWIRE — best-guess placeholder from the static
+                    // setting; onActiveCandidatePairType (below) overwrites
+                    // this with the real negotiated candidate type within
+                    // the same tick, once getStats() resolves.
                     self.backendType = isRelayForced ? "turn" : "p2p"
                 }
             default:
                 break
+            }
+        }
+        controller.onActiveCandidatePairType = { [weak self] pairType in
+            Task { @MainActor [weak self] in
+                self?.backendType = (pairType == "relay") ? "turn" : "p2p"
             }
         }
         // K_video parity (v1.0.700): the native video FrameCryptor needs the
@@ -10124,6 +10133,28 @@ final class AppState: ObservableObject {
             witnessOk: final.witnessOk,
             mediaDwellMs: mediaDwellMs
         )
+        // W-MESHUNKNOWN (2026-08-17) — BLE-mesh peer attribution, the
+        // ordinary-call counterpart of the write above. `applyAssuranceOutcome`
+        // only persists `presenceAuth` for the `.nfcAuthenticated` (S2) verdict,
+        // which requires a physical NFC tap — so a contact the user calls
+        // regularly through ordinary SAS/PSK-confirmed calls (S8, the normal
+        // case for most real calls) left no copy of its identity key anywhere
+        // on this device. `MeshSheetViewModel.resolveContact()` can only match
+        // a discovered BLE peer to a contact via `pubkey` (or `presenceAuth
+        // .peerIdentityKey`, NFC-only) — neither gets written by a plain call,
+        // so every regularly-called-but-never-QR/NFC-paired contact showed up
+        // on the mesh radar as "Dispositivo non identificato" forever. Mirrors
+        // Android's `onCallVerifiedIdentityKey` (`CallController.kt`, wired in
+        // `CallModule.kt` to `contactDao.setCallVerifiedIdentityKey`), which
+        // fires on every call whose peer identity is known — not gated on NFC
+        // — for exactly this reason. `peerIdentityKey` here is the SAME
+        // TOFU-pinned, already-verified key `applyAssuranceOutcome` above just
+        // used, regardless of which AssuranceState tier this call reached.
+        // `setIdentityPubkeyIfAbsent` is fill-if-absent: never overwrites an
+        // existing different key (that would launder a real identity change
+        // past `verifiedFingerprintHex`'s job of catching one), no-ops
+        // harmlessly if already filled or if the contact has no row yet.
+        ContactsStore().setIdentityPubkeyIfAbsent(userId: final.peerId, pubkey: peerIdentityKey)
     }
 
     /// W534 — apply a remote `SCREEN_SHARE:start|stop` to the current
@@ -12381,10 +12412,18 @@ final class AppState: ObservableObject {
                             // W-ICEGRACE — ICE recovered: stand down the
                             // pending teardown countdown, the call lives on.
                             self?.cancelIceDisconnectGrace()
+                            // W-SHIELDWIRE — placeholder from the static
+                            // setting; onActiveCandidatePairType overwrites
+                            // this with the real negotiated candidate type.
                             self?.backendType = isRelayForced ? "turn" : "p2p"
                         }
                     default:
                         break
+                    }
+                }
+                controller.onActiveCandidatePairType = { [weak self] pairType in
+                    Task { @MainActor [weak self] in
+                        self?.backendType = (pairType == "relay") ? "turn" : "p2p"
                     }
                 }
                 // Same caller-id substitution as the legacy path —
@@ -18269,10 +18308,18 @@ extension AppState {
                 Task { @MainActor [weak self] in
                     // W-ICEGRACE — ICE recovered: stand down the countdown.
                     self?.cancelIceDisconnectGrace()
+                    // W-SHIELDWIRE — placeholder from the static setting;
+                    // onActiveCandidatePairType overwrites this with the
+                    // real negotiated candidate type.
                     self?.backendType = isRelayForced ? "turn" : "p2p"
                 }
             default:
                 break
+            }
+        }
+        controller.onActiveCandidatePairType = { [weak self] pairType in
+            Task { @MainActor [weak self] in
+                self?.backendType = (pairType == "relay") ? "turn" : "p2p"
             }
         }
         let cid = callerId

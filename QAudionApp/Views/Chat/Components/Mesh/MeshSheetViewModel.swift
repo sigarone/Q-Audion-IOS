@@ -83,10 +83,29 @@ final class MeshSheetViewModel: ObservableObject {
     }
 
     /// Reverse lookup: which known contact (if any) owns `nodeHex`.
+    ///
+    /// W-MESHUNKNOWN (2026-08-17) — used to check ONLY `contact.pubkey`,
+    /// which is populated exclusively by the QR-scan/NFC pairing flow
+    /// (`ContactsStore.StoredContact.pubkey` doc). A contact added through
+    /// the ordinary phone-number flow has `pubkey == nil` and could never
+    /// resolve here, however well "known" they are elsewhere in the app —
+    /// exactly the "unknown user" symptom reported live, since most real
+    /// contacts are never QR/NFC-paired. `presenceAuth?.peerIdentityKey` is
+    /// the SAME long-term Ed25519 identity key, already written whenever a
+    /// call with this contact reached NFC-authenticated presence (S2) — it
+    /// was just never consulted here. No new data, no schema change: this
+    /// only widens the lookup to a source that already exists on disk.
+    /// Mirrors Android's `MeshNodeIdentity.resolveNode()`, which already
+    /// unions its own multiple stored-key columns for the same reason.
     func resolveContact(nodeHex: String) -> ContactsStore.StoredContact? {
         for contact in contactsStore.load() {
-            guard let id = MeshFeature.nodeId(forContactPubkey: contact.pubkey) else { continue }
-            if id.hex == nodeHex { return contact }
+            if let id = MeshFeature.nodeId(forContactPubkey: contact.pubkey), id.hex == nodeHex {
+                return contact
+            }
+            if let key = contact.presenceAuth?.peerIdentityKey,
+               let id = MeshFeature.nodeId(forContactPubkey: key), id.hex == nodeHex {
+                return contact
+            }
         }
         return nil
     }

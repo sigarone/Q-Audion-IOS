@@ -47,6 +47,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onStateChange: ((State) -> Void)?
     public var onIceConnectionState: ((RTCIceConnectionState) -> Void)?
 
+    /// W-SHIELDWIRE (2026-08-17) — fired once per ICE connect/reconnect with
+    /// the ACTUAL negotiated candidate-pair type ("relay", "srflx", "prflx",
+    /// or "host"), read live from `RTCStatistics` — never re-derived from
+    /// `TransportGate.forcesRelay`. Before this, the in-call shield's P2P/
+    /// TURN/RELAY badge just echoed back the static Settings choice at the
+    /// moment ICE connected, so it showed "P2P" under AUTO/P2P mode even on
+    /// the real occasions ICE itself fell back to a relay candidate, and
+    /// showed the identical "TURN" label for both the TURN-only and the
+    /// (distinct, WS-relay) Relay-only settings — the shield could never
+    /// actually disagree with what the user had picked, which is what made
+    /// it look like the setting "did nothing" (Pavel, live device test).
+    public var onActiveCandidatePairType: ((String) -> Void)?
+
     /// W419/W-ICEVIS — this engine target cannot reach `RTLog` (app-target
     /// only, same constraint `CallKitProvider.log` was added for earlier).
     /// Every `print("[WebRTC] ...")` in this file was therefore invisible
@@ -1899,6 +1912,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             state = .connected
             // Start outbound/inbound video RTP telemetry once media can flow.
             startVideoStatsTelemetry()
+            pollActiveCandidatePairType()
         case .failed:
             state = .failed("ICE failed")
         case .disconnected, .closed:
@@ -1956,6 +1970,31 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private func stopVideoStatsTelemetry() {
         videoStatsTimer?.invalidate()
         videoStatsTimer = nil
+    }
+
+    /// W-SHIELDWIRE — read the live, succeeded `candidate-pair` stat and
+    /// resolve its `candidateType` ("relay"/"srflx"/"prflx"/"host") through
+    /// the matching local-candidate stats object, then report it via
+    /// `onActiveCandidatePairType`. Runs once per ICE connect/reconnect —
+    /// cheap, no polling loop needed (unlike video stats, which need a
+    /// timer because they change every frame; a candidate pair's type is
+    /// fixed for the life of that connection).
+    private func pollActiveCandidatePairType() {
+        guard let pc = peerConnection?.peerConnection else { return }
+        pc.statistics { report in
+            let succeededPair = report.statistics.values.first { s in
+                s.type == "candidate-pair" &&
+                    ((s.values["state"] as? String) == "succeeded" ||
+                        (s.values["nominated"] as? NSNumber)?.boolValue == true)
+            }
+            guard
+                let pair = succeededPair,
+                let localId = pair.values["localCandidateId"] as? String,
+                let localStat = report.statistics[localId],
+                let candidateType = localStat.values["candidateType"] as? String
+            else { return }
+            self.onActiveCandidatePairType?(candidateType)
+        }
     }
 
     private func pollVideoStatsOnce() {

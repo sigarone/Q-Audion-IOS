@@ -495,16 +495,47 @@ final class BleMeshTransport: NSObject, MeshTransport {
         }
     }
 
+    /// W-MESHDUPPEER (2026-08-17) — `deviceToNodeHex` is keyed on the
+    /// CoreBluetooth link identifier (`CBPeripheral`/`CBCentral.identifier`),
+    /// not the stable `MeshNodeId`. The same physical device routinely forms
+    /// an outgoing AND incoming link at once, giving it two identifiers that
+    /// resolve to the same `nodeHex`. Building one `MeshPeerInfo` per
+    /// identifier and relying on `Set<MeshPeerInfo>` to collapse them doesn't
+    /// work — `MeshPeerInfo`'s synthesized `Equatable`/`Hashable` covers ALL
+    /// stored fields (rssi/connected included), which almost always differ
+    /// between the two links, so both survive as separate rows sharing the
+    /// same `Identifiable.id` (`nodeHex`) downstream — the duplicate-device
+    /// entries reported live. Collapse by nodeHex HERE, before the Set is
+    /// even built, mirroring Android's `collapseMeshPeers()` (same root
+    /// cause, fixed there 2026-08-14 by commit a232e8d63): one identifier's
+    /// worth of state per node, picking the strongest RSSI across all of
+    /// that node's live links (RSSI is negative dBm, so max() = closest) and
+    /// treating the node connected if ANY of its links is.
     private func recomputeAndNotifyPeers() {
-        var peers: Set<MeshPeerInfo> = []
         let now = Int64(Date().timeIntervalSince1970 * 1000)
+        struct Accum {
+            var rssi: Int?
+            var connected = false
+            var neighbors: Set<MeshNodeId> = []
+        }
+        var byNode: [String: Accum] = [:]
         for (identifier, nodeHex) in deviceToNodeHex {
+            var acc = byNode[nodeHex] ?? Accum()
+            if let candidate = deviceRSSI[identifier] {
+                acc.rssi = max(acc.rssi ?? Int.min, candidate)
+            }
+            acc.connected = acc.connected || outgoingPeripherals[identifier] != nil || subscribedCentrals[identifier] != nil
+            if acc.neighbors.isEmpty {
+                acc.neighbors = Set((announcedNeighborsByNode[nodeHex] ?? []).compactMap { try? MeshNodeId(hex: $0) })
+            }
+            byNode[nodeHex] = acc
+        }
+        var peers: Set<MeshPeerInfo> = []
+        for (nodeHex, acc) in byNode {
             guard let nodeId = try? MeshNodeId(hex: nodeHex) else { continue }
-            let neighbors = Set((announcedNeighborsByNode[nodeHex] ?? []).compactMap { try? MeshNodeId(hex: $0) })
-            let connected = outgoingPeripherals[identifier] != nil || subscribedCentrals[identifier] != nil
             peers.insert(MeshPeerInfo(
-                nodeId: nodeId, lastSeenAtMs: now, rssi: deviceRSSI[identifier],
-                connected: connected, announcedNeighbors: neighbors
+                nodeId: nodeId, lastSeenAtMs: now, rssi: acc.rssi,
+                connected: acc.connected, announcedNeighbors: acc.neighbors
             ))
         }
         notifyDelegatePeers(peers)
