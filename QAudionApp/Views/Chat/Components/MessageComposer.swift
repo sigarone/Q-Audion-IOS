@@ -30,6 +30,15 @@ struct MessageComposer: View {
     /// W445: generic file attachment callback. Opens UIDocumentPickerViewController
     /// via the parent screen. Default no-op preserves all existing call sites.
     var onAttachFile: (() -> Void)? = nil
+    /// Entitlements Task 5 — whether `Capability.files` is entitled.
+    /// Defaults to `true` so every call site that doesn't pass this
+    /// (currently none besides `ChatDetailScreen`, but the preview below
+    /// and any future caller) renders byte-identical to before this
+    /// param existed.
+    var filesUnlocked: Bool = true
+    /// Invoked instead of `onAttach`/`onAttachFile` while `filesUnlocked`
+    /// is `false` — the caller opens `UpgradeSheet(capability: .files)`.
+    var onFilesLocked: (() -> Void)? = nil
     let onSend: () -> Void
     let onCancelEdit: () -> Void
     let onCancelReply: () -> Void
@@ -57,6 +66,8 @@ struct MessageComposer: View {
          recordingElapsedSeconds: TimeInterval = 0,
          onAttach: @escaping () -> Void = {},
          onAttachFile: (() -> Void)? = nil,
+         filesUnlocked: Bool = true,
+         onFilesLocked: (() -> Void)? = nil,
          onSend: @escaping () -> Void = {},
          onCancelEdit: @escaping () -> Void = {},
          onCancelReply: @escaping () -> Void = {},
@@ -69,6 +80,8 @@ struct MessageComposer: View {
         self.recordingElapsedSeconds = recordingElapsedSeconds
         self.onAttach = onAttach
         self.onAttachFile = onAttachFile
+        self.filesUnlocked = filesUnlocked
+        self.onFilesLocked = onFilesLocked
         self.onSend = onSend
         self.onCancelEdit = onCancelEdit
         self.onCancelReply = onCancelReply
@@ -251,7 +264,14 @@ struct MessageComposer: View {
 
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button(action: onAttach) {
+            // Entitlements Task 5 — Capability.files behind both
+            // attachment entry points in this row (server already
+            // enforces this at tus HandlePost/IssueToken).
+            GatedActionButton(
+                unlocked: filesUnlocked,
+                action: onAttach,
+                onLockedClick: { onFilesLocked?() }
+            ) {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(scheme.onSurfaceVariant)
@@ -262,7 +282,11 @@ struct MessageComposer: View {
             // the parent wires onAttachFile (ChatDetailScreen does so).
             // Keeps the composer layout unchanged for callers that don't.
             if let attachFile = onAttachFile {
-                Button(action: attachFile) {
+                GatedActionButton(
+                    unlocked: filesUnlocked,
+                    action: attachFile,
+                    onLockedClick: { onFilesLocked?() }
+                ) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(scheme.onSurfaceVariant)

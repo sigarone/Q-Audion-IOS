@@ -63,6 +63,12 @@ enum PendingAttachmentSend {
 struct ChatDetailScreen: View {
     @StateObject private var container: ChatContainer
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment (not via
+    /// `appState.capabilityGate`) so this screen's gated controls actually
+    /// re-render on a grant change; see the injection site's own doc in
+    /// `QAudionApp.swift` for why `appState.capabilityGate` alone is not
+    /// reactive.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -146,6 +152,10 @@ struct ChatDetailScreen: View {
         return meshRuntime.peers.contains { $0.nodeHex == nodeHex }
     }
     @ObservedObject private var meshRuntime = MeshRuntime.shared
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    /// Non-nil while the sheet is up; the sheet closure uses this exact
+    /// capability so the benefit text always matches what was tapped.
+    @State private var upgradeSheetCapability: Capability? = nil
     /// W445: Forward message state.
     @State private var showingForwardPicker: Bool = false
     @State private var forwardingMessage: Message? = nil
@@ -542,6 +552,16 @@ struct ChatDetailScreen: View {
                 onOpenConversation: handleMeshOpenConversation
             )
         }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked control for
+        // (video call, mesh, file attach). `appState` re-applied
+        // explicitly, matching this app's existing convention for every
+        // other `.sheet`/`.fullScreenCover` whose content reads
+        // `@EnvironmentObject var appState` (see ContentView.swift).
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
     }
 
     // MARK: - BLE mesh sheet callbacks (branch claude/ble-mesh-cleanroom-spike)
@@ -632,7 +652,18 @@ struct ChatDetailScreen: View {
             .disabled(container.viewModel.conversation.kind == .group)
             .accessibilityLabel("Chiamata audio")
 
-            Button(action: startVideoCall) {
+            // Entitlements Task 5 — 1:1 video calling behind
+            // Capability.callsVideo (design doc §7.2, and Phase 5 server
+            // plan Task 7's honest-client WsDispatcher-equivalent gate on
+            // call_upgrade_request — this is the matching UI trigger).
+            // Audio stays ungated: feat.calls.voice is Base-tier per
+            // design doc §2, never gated (see CapabilityGate.swift's own
+            // enum doc for the excluded-rows list).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsVideo),
+                action: startVideoCall,
+                onLockedClick: { upgradeSheetCapability = .callsVideo }
+            ) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(scheme.onSurface)
@@ -658,7 +689,17 @@ struct ChatDetailScreen: View {
                 let conversationKey = container.viewModel.conversation.id.uuidString
                 let armed = meshRuntime.activeTarget(for: conversationKey) != nil
                 let peerNearby = meshChatPeerIsNearby
-                Button { showingMeshSheet = true } label: {
+                // Entitlements Task 5 — Capability.meshBle lock-badge. No
+                // hide-outright here: BLE hardware is universal on the
+                // phones this app targets (unlike NFC), so this is a
+                // paid-tier gate, not a hardware-absence case — matches
+                // Android's own reasoning at the same site
+                // (ChatDetailScreen.kt's Capability.MESH_BLE comment).
+                GatedActionButton(
+                    unlocked: capabilityGate.isUnlocked(.meshBle),
+                    action: { showingMeshSheet = true },
+                    onLockedClick: { upgradeSheetCapability = .meshBle }
+                ) {
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .font(.system(size: 18, weight: .regular))
                         .foregroundStyle(armed || peerNearby ? extras.pqcAccent : scheme.onSurface)
@@ -1346,6 +1387,16 @@ struct ChatDetailScreen: View {
             onAttach: { showAttachmentChoice = true },
             // W445: file attachment callback — opens UIDocumentPickerViewController.
             onAttachFile: { showingDocPicker = true },
+            // Entitlements Task 5 — Capability.files (server already
+            // enforces this at tus HandlePost/IssueToken, Phase 5 server
+            // plan Task 2; this is the matching UI trigger). Gates BOTH
+            // composer attach affordances (photo/camera/paste picker AND
+            // the direct document picker) — this app splits what
+            // Android's single AttachFile icon does into two icons, but
+            // both are real "send a file/attachment" entry points funneling
+            // into the same server-gated upload path.
+            filesUnlocked: capabilityGate.isUnlocked(.files),
+            onFilesLocked: { upgradeSheetCapability = .files },
             onSend: handleSend,
             onCancelEdit: { editingTarget = nil },
             onCancelReply: { replyTarget = nil },
