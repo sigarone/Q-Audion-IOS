@@ -13,34 +13,16 @@ import CryptoKit
 /// resolve to Base — fail-closed, but a fleet-wide outage whose symptom is
 /// nowhere near its cause. Android carries the same guard.
 ///
-/// **Acknowledged prerequisite gap (whole-phase-review finding I3,
-/// 2026-08-17):** this file's own doc, written at Task 1, called re-arming
-/// `testCommittedAssetIsNotStillThePlaceholderKey` (flipping
-/// `assetIsStillThePlaceholder` to `false`) "a hard prerequisite of Task 3
-/// (`CapabilityGate`), the first task that puts this key on a path real
-/// users depend on." Task 3 has now landed (`CapabilityGate.swift`,
-/// `AppState.capabilityGate`) and this prerequisite is still unsatisfied —
-/// the real `ent-v1` entitlement public key does not exist yet on the
-/// server side, so re-arming the guard now would just pin CI red for a
-/// known, already-tracked reason, not catch a real regression. That is a
-/// deliberate, written-down decision, not a silent skip: the guard stays
-/// off until the actual key-swap — swapping
-/// `Sources/QAudionEngine/Resources/bcrypto_entitlement_pubkey.pem` for the
-/// real `ent-v1` key, a Pavel-manual step per this whole rollout's
-/// established pattern (same class of step as the OTA signing key and the
-/// Reality disguise-target selection in `bcrypto-server`'s CLAUDE.md) —
-/// which is also the point `assetIsStillThePlaceholder` must flip to
-/// `false`, in the SAME commit, per the `XCTSkipIf` message below. Until
-/// then, every build after Task 3 verifies real EGTs against a throwaway
-/// test key, matching Android's identical stance.
+/// **Armed 2026-08-17:** the real `ent-v1` keypair now lives on the VPS
+/// (server-generated via `auth.LoadOrCreateEd25519`, private half never
+/// left the box — see `bcrypto-server`'s CLAUDE.md key-custody table for
+/// the `BCRYPTO_ENTITLEMENTS_EDDSA_KEY_FILE` entry) and
+/// `Sources/QAudionEngine/Resources/bcrypto_entitlement_pubkey.pem` was
+/// swapped to match in the same commit.
 final class EntitlementPublicKeyTests: XCTestCase {
 
-    /// Single switch for the two mutually-exclusive cases below. Flip to
-    /// `false` in the same commit that swaps the asset for the real
-    /// `ent-v1` key: the ship-guard arms itself and the
-    /// placeholder-consistency case stands down, both correctly, with no
-    /// other edit needed.
-    private static let assetIsStillThePlaceholder = true
+    /// Single switch for the two mutually-exclusive cases below.
+    private static let assetIsStillThePlaceholder = false
 
     // MARK: - Ship-guard
 
