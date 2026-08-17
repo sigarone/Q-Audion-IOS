@@ -556,6 +556,12 @@ private struct CallHistoryRow: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — drives `.sheet(isPresented:)` for `UpgradeSheet`.
+    @State private var showUpgradeSheet = false
 
     let entry: CallHistoryEntry
     let onAudioCall: (String) -> Void
@@ -618,7 +624,17 @@ private struct CallHistoryRow: View {
             // video call is not a crypto statement. The green on the audio
             // button stays: that is the universal place-a-call affordance,
             // not a trust signal.
-            Button(action: { onVideoCall(entry.peerUserId) }) {
+            //
+            // Entitlements Task 5 — Capability.callsVideo. A third
+            // independent trigger for the same server-side gate already
+            // applied to ChatDetailScreen's and ContactDetailScreen's
+            // video buttons (mirrors Android's CallHistoryScreen.kt review
+            // fix I1 #2).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsVideo),
+                action: { onVideoCall(entry.peerUserId) },
+                onLockedClick: { showUpgradeSheet = true }
+            ) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 18))
                     .foregroundStyle(scheme.onSurfaceVariant)
@@ -627,6 +643,10 @@ private struct CallHistoryRow: View {
             .accessibilityLabel("Videochiama \(entry.peerDisplay)")
         }
         .padding(.vertical, 6)
+        .sheet(isPresented: $showUpgradeSheet) {
+            UpgradeSheet(capability: .callsVideo)
+                .environmentObject(appState)
+        }
     }
 
     private var directionIcon: String {
@@ -892,5 +912,6 @@ private struct DialKeyStyle: ButtonStyle {
 #Preview {
     CallHistoryView()
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }

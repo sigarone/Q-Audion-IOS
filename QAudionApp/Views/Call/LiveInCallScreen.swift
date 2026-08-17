@@ -42,6 +42,11 @@ import QAudionEngine
 @MainActor
 struct LiveInCallScreen: View {
     @EnvironmentObject var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    @State private var upgradeSheetCapability: Capability? = nil
     // ContactsStore is a plain final class (not ObservableObject) — used
     // as a one-shot lookup helper, not as reactive state.
     private let contactsStore = ContactsStore()
@@ -187,6 +192,13 @@ struct LiveInCallScreen: View {
                 lockedVideo: appState.isVideoCall
             )
         }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked in-call control
+        // for (upgrade-to-video, add-participant).
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
     }
 
     /// W-CALLPROMOTE — contacts selectable from the "+" sheet: every stored
@@ -330,6 +342,10 @@ struct LiveInCallScreen: View {
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
                 onToggleCamera: handleToggleCamera,
                 onUpgradeToVideo: handleUpgradeToVideo,
+                // Entitlements Task 5 — feat.calls.video for the mid-call
+                // escalation button.
+                upgradeToVideoUnlocked: capabilityGate.isUnlocked(.callsVideo),
+                onUpgradeToVideoLocked: { upgradeSheetCapability = .callsVideo },
                 screenSharing: appState.isScreenSharing,
                 onToggleScreenShare: handleToggleScreenShare,
                 peerScreenSharing: appState.peerScreenShareActive,
@@ -367,6 +383,10 @@ struct LiveInCallScreen: View {
                 // AppState.callPeerVoiceKeyEnrolled's doc).
                 peerVoiceKeyEnrolled: appState.callPeerVoiceKeyEnrolled,
                 onAddParticipant: { showAddParticipant = true },
+                // Entitlements Task 5 — feat.calls.group for the
+                // "add participant" (1:1 → group escalation) button.
+                addParticipantUnlocked: capabilityGate.isUnlocked(.callsGroup),
+                onAddParticipantLocked: { upgradeSheetCapability = .callsGroup },
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
@@ -808,5 +828,6 @@ struct LiveInCallScreen: View {
             s.isInCall = true
             return s
         }())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }
