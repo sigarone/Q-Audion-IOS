@@ -262,6 +262,18 @@ struct InCallScreen: View {
     /// Mirrors Android/Desktop "upgrade to video" button. On tap, starts the
     /// local camera and transitions the call to video mode.
     let onUpgradeToVideo: () -> Void
+    /// Entitlements Task 5 — whether `Capability.callsVideo` is entitled
+    /// (this is the mid-call escalation trigger for
+    /// `call_upgrade_request`, the SAME server gate as the pre-call video
+    /// buttons in ChatDetailScreen/ContactDetailScreen/CallHistoryView).
+    /// Defaults to `true` so this "pure presentation" view stays
+    /// byte-identical for every existing caller that doesn't pass it —
+    /// `LiveInCallScreen` (the only real caller today) computes the real
+    /// value from `CapabilityGate`, which this view deliberately has no
+    /// dependency on (mirrors Android's `CircularAction.kt` staying
+    /// capability-agnostic).
+    let upgradeToVideoUnlocked: Bool
+    let onUpgradeToVideoLocked: () -> Void
     /// W533: true when ReplayKit screen capture is currently feeding
     /// the WebRTC video sender instead of the camera. Drives the
     /// share-screen button's filled state.
@@ -332,6 +344,13 @@ struct InCallScreen: View {
     /// `pskMixedThisCall` above. Mirrors `AppState.callPeerVoiceKeyEnrolled`.
     let peerVoiceKeyEnrolled: Bool
     let onAddParticipant: () -> Void
+    /// Entitlements Task 5 — whether `Capability.callsGroup` is entitled
+    /// (escalating a 1:1 call to group via `promoteToGroupCall`, which
+    /// reuses the same server-side group-call-creation gate a brand-new
+    /// group call goes through). Same always-`true`-by-default,
+    /// capability-agnostic shape as `upgradeToVideoUnlocked` above.
+    let addParticipantUnlocked: Bool
+    let onAddParticipantLocked: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
@@ -410,6 +429,8 @@ struct InCallScreen: View {
          onToggleVoiceEnhancement: @escaping () -> Void = {},
          onToggleCamera: @escaping () -> Void = {},
          onUpgradeToVideo: @escaping () -> Void = {},
+         upgradeToVideoUnlocked: Bool = true,
+         onUpgradeToVideoLocked: @escaping () -> Void = {},
          screenSharing: Bool = false,
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
@@ -421,6 +442,8 @@ struct InCallScreen: View {
          pskMixedThisCall: Bool = false,
          peerVoiceKeyEnrolled: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
+         addParticipantUnlocked: Bool = true,
+         onAddParticipantLocked: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
@@ -461,6 +484,8 @@ struct InCallScreen: View {
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
         self.onToggleCamera = onToggleCamera
         self.onUpgradeToVideo = onUpgradeToVideo
+        self.upgradeToVideoUnlocked = upgradeToVideoUnlocked
+        self.onUpgradeToVideoLocked = onUpgradeToVideoLocked
         self.screenSharing = screenSharing
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
@@ -472,6 +497,8 @@ struct InCallScreen: View {
         self.pskMixedThisCall = pskMixedThisCall
         self.peerVoiceKeyEnrolled = peerVoiceKeyEnrolled
         self.onAddParticipant = onAddParticipant
+        self.addParticipantUnlocked = addParticipantUnlocked
+        self.onAddParticipantLocked = onAddParticipantLocked
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
@@ -2843,12 +2870,18 @@ struct InCallScreen: View {
                 )
                 .accessibilityLabel(cameraOn ? "Disattiva video" : "Attiva video")
             } else {
+                // Entitlements Task 5 — feat.calls.video at the mid-call
+                // escalation trigger (Phase 5 server plan Task 7's
+                // call_upgrade_request gate — the same capability as the
+                // pre-call video buttons elsewhere in this app).
                 CircularAction(
                     icon: "video.badge.plus",
                     action: onUpgradeToVideo,
                     diameter: 52,
                     background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface
+                    iconColor: scheme.onSurface,
+                    unlocked: upgradeToVideoUnlocked,
+                    onLockedClick: onUpgradeToVideoLocked
                 )
                 .accessibilityLabel("Passa a videochiamata")
             }
@@ -2888,12 +2921,17 @@ struct InCallScreen: View {
             // the add-participant sheet (LiveInCallScreen owns the sheet
             // state + submit handler that calls GroupCallController
             // .createCall, mirroring Android/Desktop's identical port).
+            // Entitlements Task 5 — feat.calls.group. Escalating a 1:1
+            // call to group reuses the same server-side group-call
+            // creation gate as starting a brand-new group call.
             CircularAction(
                 icon: "person.badge.plus",
                 action: onAddParticipant,
                 diameter: 48,
                 background: scheme.surfaceVariant,
-                iconColor: scheme.onSurface
+                iconColor: scheme.onSurface,
+                unlocked: addParticipantUnlocked,
+                onLockedClick: onAddParticipantLocked
             )
             .accessibilityLabel("Aggiungi partecipante")
             Spacer(minLength: 0)
