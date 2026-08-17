@@ -14,8 +14,6 @@
 
 import SwiftUI
 import NetworkExtension
-import CryptoKit
-import QAudionEngine
 
 struct VpnToggleChip: View {
     @ObservedObject var vpnService: VpnService
@@ -273,16 +271,12 @@ private extension VpnNode {
 #Preview {
     // Entitlements Task 5 — this chip now reads `@EnvironmentObject var
     // capabilityGate: CapabilityGate`, so the preview needs one injected
-    // or SwiftUI fatal-errors at render time. A throwaway verifier/API
-    // pair (never actually called by a preview) is enough — same
-    // minimal-real-dependency shape `CapabilityGateTests` uses.
-    let previewKey = Curve25519.Signing.PrivateKey()
-    let previewVerifier = EgtVerifier(pinnedPublicKeyRaw: previewKey.publicKey.rawRepresentation)!
-    return VpnToggleChip(
+    // or SwiftUI fatal-errors at render time.
+    VpnToggleChip(
         vpnService: VpnService(),
         accessToken: "preview-token"
     )
     .padding()
     .environmentObject(AppState())
-    .environmentObject(CapabilityGate(verifier: previewVerifier, api: BCryptoEntitlementsApiClient()))
+    .environmentObject(CapabilityGate.previewInstance())
 }

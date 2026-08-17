@@ -912,5 +912,6 @@ private struct DialKeyStyle: ButtonStyle {
 #Preview {
     CallHistoryView()
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }

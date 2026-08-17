@@ -1,4 +1,6 @@
 import SwiftUI
+import CryptoKit
+import QAudionEngine
 
 /// Entitlements Task 5 (design doc §7.2) — the lock-badge wrapper every
 /// gated UI trigger site uses: a control that stays visible and tappable
@@ -142,3 +144,23 @@ struct GatedScreenEntry<Destination: View>: View {
 extension Capability: Identifiable {
     public var id: String { rawValue }
 }
+
+#if DEBUG
+extension CapabilityGate {
+    /// Preview-only convenience — every Task 5 call site's `#Preview`
+    /// gained a `@EnvironmentObject var capabilityGate: CapabilityGate`
+    /// dependency once it started reading `capabilityGate.isUnlocked(_:)`
+    /// reactively; without an injected instance, SwiftUI fatal-errors at
+    /// preview render time ("no ObservableObject of type CapabilityGate
+    /// found"). This throwaway verifier/API pair is never actually
+    /// invoked by a preview — `isUnlocked(_:)` reads `claims` directly and
+    /// `claims` starts `nil`, so every preview renders every capability
+    /// UNLOCKED (design intent: `isUnlocked` treats "nothing loaded yet"
+    /// as unlocked, see that method's own doc).
+    static func previewInstance() -> CapabilityGate {
+        let key = Curve25519.Signing.PrivateKey()
+        let verifier = EgtVerifier(pinnedPublicKeyRaw: key.publicKey.rawRepresentation)!
+        return CapabilityGate(verifier: verifier, api: BCryptoEntitlementsApiClient())
+    }
+}
+#endif

@@ -1675,5 +1675,6 @@ struct DocumentPicker: UIViewControllerRepresentable {
         )
     }
     .environmentObject(AppState())
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }

@@ -1100,5 +1100,6 @@ private struct SasVerifySheet: View {
         ContactDetailScreen(item: ContactsListViewModel.mock.items[0])
     }
     .environmentObject(AppState())
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }

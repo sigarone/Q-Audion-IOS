@@ -662,4 +662,5 @@ struct ContactsListView: View {
     // presents MyIdentityQrSheet which requires it.
     NavigationStack { ContactsListView() }
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
 }

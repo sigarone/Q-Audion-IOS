@@ -828,5 +828,6 @@ struct LiveInCallScreen: View {
             s.isInCall = true
             return s
         }())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }

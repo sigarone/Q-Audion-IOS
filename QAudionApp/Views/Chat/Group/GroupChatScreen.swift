@@ -1214,6 +1214,13 @@ private struct MonoCaption: ViewModifier {
             messages: []
         )
     )
+    // Entitlements Task 5 — this preview was already missing
+    // `.environmentObject(AppState())` for the `appState` this screen has
+    // required since before this task (pre-existing gap, not fixed here —
+    // out of Task 5's scope); `capabilityGate` is added for consistency
+    // with every other Task 5 call site's preview even though this one
+    // still fatals on the pre-existing `appState` gap regardless.
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }
 
@@ -1237,5 +1244,6 @@ private struct MonoCaption: ViewModifier {
             ]
         )
     )
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }
