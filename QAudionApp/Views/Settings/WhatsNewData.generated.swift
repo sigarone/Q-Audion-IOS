@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1002",
+              date: "2026-08-18",
+              title: "v1.0.1002",
+              bullets: [
+                "fix(entitlements): CapabilityGate.previewInstance() must not be #if DEBUG",
+              ]),
         .init(id: "v1.0.1001",
               date: "2026-08-18",
               title: "v1.0.1001",
               bullets: [
+                "chore: regenerate changelog for v1.0.1001",
                 "feat(entitlements): pin the real ent-v1 EGT public key",
                 "feat(entitlements): TrialBanner in Settings next to profile",
                 "feat(entitlements): show ProBadge next to the wordmark when unlocked",
@@ -201,14 +208,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.983",
                 "fix(call): make WebRTC SDP-application failures reach Loki",
-              ]),
-        .init(id: "v1.0.982",
-              date: "2026-08-13",
-              title: "v1.0.982",
-              bullets: [
-                "chore: regenerate changelog for v1.0.982",
-                "fix(contacts): persist name-refresh provenance so it survives a relaunch",
-                "fix(diag): stop diagnostic screenshots coming back blank for SwiftUI screens",
               ]),
     ]
 }
