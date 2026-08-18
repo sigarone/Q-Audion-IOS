@@ -44,7 +44,7 @@ final class UpgradeSheetContainer: ObservableObject {
     @Published private(set) var alreadyRedeemed: Bool = false
 
     func onCodeChanged(_ value: String) {
-        codeInput = value
+        codeInput = liveFormatActivationCodeInput(value)
         error = nil
     }
 

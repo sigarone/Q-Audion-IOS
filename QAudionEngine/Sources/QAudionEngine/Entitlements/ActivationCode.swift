@@ -71,6 +71,32 @@ func normalizeActivationCode(_ raw: String) -> String {
     return formatActivationCode(prefix, payload, checksum)
 }
 
+/// Live "as you type" formatter for a code-entry text field's `onChange` —
+/// unlike `normalizeActivationCode` (which returns `""` unless the input is
+/// already exactly the right length, so it's only useful as a final-submit
+/// check), this uppercases and re-inserts dashes at every keystroke, on
+/// however many characters have been typed so far, truncating at the code's
+/// fixed total length so the field can never grow past QA1-XXXXX-XXXXX-XXXXX-CC.
+/// Bug found live 2026-08-18: every code-entry field required the user to
+/// type the dashes and capitalization exactly themselves with zero help.
+public func liveFormatActivationCodeInput(_ raw: String) -> String {
+    let upper = raw.uppercased()
+    let maxLen = activationCodePrefixLen + activationCodePayloadLen + activationCodeChecksumLen
+    let flat = String(upper.filter { crockfordAlphabet.contains($0) }.prefix(maxLen))
+    let dashBefore: Set<Int> = [
+        activationCodePrefixLen,
+        activationCodePrefixLen + 5,
+        activationCodePrefixLen + 10,
+        activationCodePrefixLen + activationCodePayloadLen,
+    ]
+    var result = ""
+    for (i, c) in flat.enumerated() {
+        if dashBefore.contains(i) { result.append("-") }
+        result.append(c)
+    }
+    return result
+}
+
 /// Normalizes `raw` and checks its embedded checksum without touching the
 /// network — the cheap, instant, LOCAL pre-check design doc §5.1 calls
 /// for, run before `POST /api/v1/entitlements/redeem` is ever called.

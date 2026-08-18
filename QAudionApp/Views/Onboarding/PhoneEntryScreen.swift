@@ -1,4 +1,5 @@
 import SwiftUI
+import QAudionEngine
 
 /// Phone-entry screen — visual replica of Android
 /// `qaudion-android-new/feature/feature-auth/ui/PhoneEntryScreen.kt`.
@@ -146,6 +147,10 @@ struct PhoneEntryScreen: View {
                         TextField("Codice invito", text: $inviteCode)
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
+                            .onChange(of: inviteCode) { newValue in
+                                let formatted = liveFormatActivationCodeInput(newValue)
+                                if formatted != inviteCode { inviteCode = formatted }
+                            }
                             .foregroundStyle(.white)
                             .padding(14)
                             .background(
