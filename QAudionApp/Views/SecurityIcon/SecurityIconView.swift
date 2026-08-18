@@ -304,7 +304,6 @@ struct SecurityIconHeaderView: View {
             if let spec = controller.spec {
                 HStack(spacing: 10) {
                     SecurityIconView(spec: spec, size: 36)
-                        .onTapGesture { showDetail = true }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(stateLabel(spec))
                             .font(.system(size: 12, weight: .medium))
@@ -316,6 +315,11 @@ struct SecurityIconHeaderView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .onTapGesture { showDetail = true }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Tocca per mostrare i dettagli hardware")
                 .sheet(isPresented: $showDetail) {
                     SecurityIconDetailSheet(spec: spec)
                 }
