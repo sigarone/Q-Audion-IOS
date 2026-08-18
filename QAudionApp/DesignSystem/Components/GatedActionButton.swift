@@ -145,7 +145,6 @@ extension Capability: Identifiable {
     public var id: String { rawValue }
 }
 
-#if DEBUG
 extension CapabilityGate {
     /// Preview-only convenience — every Task 5 call site's `#Preview`
     /// gained a `@EnvironmentObject var capabilityGate: CapabilityGate`
@@ -157,10 +156,17 @@ extension CapabilityGate {
     /// `claims` starts `nil`, so every preview renders every capability
     /// UNLOCKED (design intent: `isUnlocked` treats "nothing loaded yet"
     /// as unlocked, see that method's own doc).
+    ///
+    /// NOT `#if DEBUG`-guarded, on purpose: `#Preview` blocks compile
+    /// unconditionally in this project (no ENABLE_PREVIEWS stripping in
+    /// the Release/archive build config), so a DEBUG-only definition here
+    /// left every one of the 9 `#Preview` call sites that reference it
+    /// unresolved during the TestFlight archive build — confirmed via the
+    /// v1.0.1001 CI failure ("type 'CapabilityGate' has no member
+    /// 'previewInstance'" in VpnToggleChip.swift and 6 other files).
     static func previewInstance() -> CapabilityGate {
         let key = Curve25519.Signing.PrivateKey()
         let verifier = EgtVerifier(pinnedPublicKeyRaw: key.publicKey.rawRepresentation)!
         return CapabilityGate(verifier: verifier, api: BCryptoEntitlementsApiClient())
     }
 }
-#endif
