@@ -38,13 +38,29 @@ enum AccountIdentityLabels {
     // primitive values in, no AppState reference in the signature at all.
     @MainActor
     static func make(currentUserDialExtension: String?, accountAvatarName: String?) -> Labels {
-        let extLabel: String? = {
+        var extLabel: String? = {
             guard let raw = currentUserDialExtension, !raw.isEmpty else { return nil }
             let formatted = DisplayName.formatExtension(raw)
             return formatted.isEmpty ? nil : "#" + formatted
         }()
         let phoneLabel = AppState.locallyConfiguredPhone()
         let nameLabel = accountAvatarName
+
+        // W-CALLERIDSELF — matching Android parity fix. The caller-id
+        // picker (AccountSettingsScreen "CALLER-ID" section) has only two
+        // rows: "la mia estensione" (clears LocalCallerIdSettings back to
+        // nil) or a specific phone number (stores it). Unlike Android's
+        // three-way `localPublicPhone` ("" / extension digits / phone are
+        // three DISTINCT stored strings), iOS collapses "never touched
+        // this picker" and "explicitly chose the extension row" into the
+        // same nil value — there is no way to tell them apart from
+        // UserDefaults alone. So we only suppress the extension when the
+        // user has explicitly stored a phone as their caller-id; nil keeps
+        // showing both, exactly like before this fix, for every account
+        // that has never opened the picker.
+        if LocalCallerIdSettings.phoneNumber() != nil {
+            extLabel = nil
+        }
 
         let primary = nameLabel ?? extLabel ?? phoneLabel ?? "Profilo da completare"
         let secondary = [extLabel, phoneLabel]
