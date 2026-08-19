@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1005",
+              date: "2026-08-19",
+              title: "v1.0.1005",
+              bullets: [
+                "fix(entitlements): log redeem failures, distinguish connection errors",
+              ]),
         .init(id: "v1.0.1004",
               date: "2026-08-19",
               title: "v1.0.1004",
               bullets: [
+                "chore: regenerate changelog for v1.0.1004",
                 "fix(profile): anchor self-avatar version to epoch time, matches Android fix",
                 "fix(chat): memoize pinned/regular conversation lists, fix PR #73's naming and test gaps, close it",
               ]),
@@ -203,13 +210,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.986",
                 "fix(call): the caller's two accept-gate flags were comparing two different ids",
-              ]),
-        .init(id: "v1.0.985",
-              date: "2026-08-14",
-              title: "v1.0.985",
-              bullets: [
-                "chore: regenerate changelog for v1.0.985",
-                "fix(call): an SDP-bearing call_answer must not arm the accept-gate countdown",
               ]),
     ]
 }
