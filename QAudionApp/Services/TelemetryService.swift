@@ -29,6 +29,11 @@ import UIKit
 ///   3 retries, after which it's dropped.
 /// - Coexists with `LiveLogStreamer` (W417) — that one ships opaque
 ///   text chunks; this one ships structured JSON events.
+/// - **C7 consent gate (2026-08-19):** opt-in, default OFF via
+///   `TelemetryService.isEnabled` / `setEnabled(_:)` — parity with
+///   Android `SealedTelemetryService.consentEnabled` and Desktop
+///   `SealedTelemetryService.enabled`. Before this the pump ran
+///   unconditionally from app launch on iOS only.
 @MainActor
 public final class TelemetryService {
 
@@ -106,21 +111,71 @@ public final class TelemetryService {
         self.sessionId = UUID().uuidString
     }
 
+    // ─── C7 — consent gate ─────────────────────────────────────────
+    //
+    // Android (`SealedTelemetryService.consentEnabled`) and Desktop
+    // (`SealedTelemetryService.enabled`) both gate this exact wire
+    // stream behind an `operationalDiagnosticsEnabled` opt-in that
+    // defaults to false. iOS never got the equivalent gate — this
+    // pump ran unconditionally from app launch (audit 2026-08-19).
+    // Mirrors Desktop's shape: the UserDefaults flag decides whether
+    // start() actually arms the timer/pubkey-fetch; setEnabled(_:)
+    // is the runtime kill-switch a Settings toggle calls.
+
+    /// UserDefaults bool that gates this pump. Absent/false ⇒ inert —
+    /// unlike `LiveLogStreamer.isEnabled`, there is NO build-channel
+    /// default-on for TestFlight/dev: this stream ships structured
+    /// call-pipeline metrics (not just text logs), so it stays off
+    /// until the user explicitly opts in, same as Android/Desktop.
+    public static let consentKey: String = "qaudion.diagnostics.operationalDiagnosticsEnabled"
+
+    public static var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: consentKey)
+    }
+
+    /// Flip the consent flag at runtime. ON re-arms an already-wired
+    /// pump immediately (no relaunch needed); OFF tears the timer down
+    /// and drops whatever is buffered so nothing queued before the
+    /// withdrawal is shipped afterward — same as Android's
+    /// `buffer.clear()` / Desktop's `this.buffer = []` on revoke.
+    public static func setEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: consentKey)
+        if enabled {
+            TelemetryService.shared.activate()
+        } else {
+            TelemetryService.shared.disableAndClearBuffer()
+        }
+    }
+
     // ─── Lifecycle ─────────────────────────────────────────────────
 
-    /// Start the periodic pump. Idempotent — calling twice is a no-op.
-    /// AppState invokes this once at app start (BEFORE the call code
-    /// emits any events; events emitted before start are silently
-    /// dropped).
+    /// Wire the pump. Idempotent — calling twice is a no-op past the
+    /// first call. AppState invokes this once at app start (BEFORE the
+    /// call code emits any events; events emitted before activation are
+    /// silently dropped).
+    ///
+    /// C7: the closures are captured unconditionally so a later
+    /// Settings opt-in can activate the pump without AppState
+    /// re-supplying them, but the timer/pubkey-fetch only start when
+    /// `TelemetryService.isEnabled` is true — no consent, no network.
     public func start(
         serverUrl: String,
         getToken: @escaping TokenProvider,
         getUserId: @escaping UserIdProvider
     ) {
-        if started { return }
         self.serverUrl = serverUrl
         self.getToken = getToken
         self.getUserId = getUserId
+        guard TelemetryService.isEnabled else { return }
+        activate()
+    }
+
+    /// C7: actually arms the timer + pubkey prefetch. Split out of
+    /// `start()` so `setEnabled(true)` can call it directly once the
+    /// closures above are already wired from a prior `start()`.
+    private func activate() {
+        guard TelemetryService.isEnabled else { return }
+        if started { return }
         started = true
 
         flushTimer?.invalidate()
@@ -138,6 +193,16 @@ public final class TelemetryService {
         Task { @MainActor [weak self] in
             await self?.fetchServerPubKeyIfNeeded()
         }
+    }
+
+    /// C7 — consent-withdrawal path. Unlike `stop()`, this does NOT
+    /// flush: buffered events must not leak to the server after the
+    /// user has revoked consent.
+    private func disableAndClearBuffer() {
+        flushTimer?.invalidate()
+        flushTimer = nil
+        buffer.removeAll()
+        started = false
     }
 
     public func stop() {

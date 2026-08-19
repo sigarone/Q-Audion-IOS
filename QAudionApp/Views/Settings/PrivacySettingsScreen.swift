@@ -145,6 +145,21 @@ struct PrivacySettingsScreen: View {
         )
     }
 
+    // MARK: - C7 operational-diagnostics consent (audit 2026-08-19)
+    //
+    // Parity with Android `operationalDiagnosticsEnabled` / Desktop
+    // `SealedTelemetryService.enabled`: opt-in, default OFF. Bound
+    // through TelemetryService.setEnabled directly (not @AppStorage,
+    // same reasoning as screenshotProtectionEnabled/appLockEnabled
+    // above) because the setter has side effects — it arms/tears down
+    // the live flush timer immediately, not just a stored preference.
+    private var operationalDiagnosticsEnabled: Binding<Bool> {
+        Binding(
+            get: { TelemetryService.isEnabled },
+            set: { TelemetryService.setEnabled($0) }
+        )
+    }
+
     private var appLockTimeoutMs: Binding<Int> {
         Binding(
             get: { PrivacyGate.appLockTimeoutMs },
@@ -257,6 +272,17 @@ struct PrivacySettingsScreen: View {
                         if appLockEnabled.wrappedValue {
                             appLockTimeoutRow
                         }
+                    }
+
+                    // C7: encrypted operational-diagnostics opt-in (audit
+                    // 2026-08-19). Default OFF — parity with Android/Desktop.
+                    SettingsSectionHeader("DIAGNOSTICA")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Diagnostica operativa cifrata",
+                            subtitle: "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Disattivato di default.",
+                            isOn: operationalDiagnosticsEnabled
+                        )
                     }
 
                     // IOS-SE: hardware-gated custody of session keys. Default OFF

@@ -2526,6 +2526,10 @@ final class AppState: ObservableObject {
         // W541-3 — start structured telemetry pump (encrypted batch
         // POST every 5 s). Same primitives-only API constraint as
         // LiveLogStreamer per CLAUDE.md "Hard-won lesson 16".
+        // C7 (2026-08-19): start() wires the closures unconditionally
+        // but only arms the timer when TelemetryService.isEnabled is
+        // true (Settings → Privacy → "Diagnostica operativa cifrata",
+        // default OFF) — parity with the Android/Desktop consent gate.
         TelemetryService.shared.start(
             serverUrl: serverUrl,
             getToken: { [weak self] in self?.authService.loadToken() },
