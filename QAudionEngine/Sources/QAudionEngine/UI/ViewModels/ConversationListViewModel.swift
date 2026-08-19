@@ -35,6 +35,8 @@ public struct ConversationListViewModel: ViewModelProtocol {
     public let items: [Item]
     public let searchQuery: String
     public let filteredItems: [Item]
+    public let pinnedItems: [Item]
+    public let regularItems: [Item]
 
     public init(items: [Item], searchQuery: String = "") {
         self.items = items
@@ -45,14 +47,15 @@ public struct ConversationListViewModel: ViewModelProtocol {
             return lhs.lastActivity > rhs.lastActivity
         }
 
+        let computedFiltered: [Item]
         if searchQuery.isEmpty {
-            self.filteredItems = pinnedFirst
+            computedFiltered = pinnedFirst
         } else {
             let q = searchQuery.lowercased()
             // W104: extend search to also match the last-message preview.
             // Useful when the user remembers a phrase but not who said it
             // (e.g. searching "pizza" surfaces every conv mentioning food).
-            self.filteredItems = pinnedFirst.filter { item in
+            computedFiltered = pinnedFirst.filter { item in
                 if item.peerDisplayName.lowercased().contains(q) { return true }
                 if let preview = item.lastMessagePreview?.lowercased(), preview.contains(q) {
                     return true
@@ -60,6 +63,21 @@ public struct ConversationListViewModel: ViewModelProtocol {
                 return false
             }
         }
+        self.filteredItems = computedFiltered
+
+        var pinned: [Item] = []
+        var regular: [Item] = []
+
+        for item in computedFiltered where item.kind != .group {
+            if item.pinned {
+                pinned.append(item)
+            } else {
+                regular.append(item)
+            }
+        }
+
+        self.pinnedItems = pinned
+        self.regularItems = regular
     }
 
     // force-unwraps below are safe: fixed hardcoded UUID string literals

@@ -645,11 +645,11 @@ struct ChatListScreen: View {
     }
 
     private var pinned: [ConversationListViewModel.Item] {
-        container.viewModel.filteredItems.filter { $0.kind != .group && $0.pinned }
+        container.viewModel.pinnedItems
     }
 
     private var regular: [ConversationListViewModel.Item] {
-        container.viewModel.filteredItems.filter { $0.kind != .group && !$0.pinned }
+        container.viewModel.regularItems
     }
 
     // MARK: - Section header
