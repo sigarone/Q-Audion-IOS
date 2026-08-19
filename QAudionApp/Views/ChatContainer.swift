@@ -464,7 +464,7 @@ final class ChatContainer: ObservableObject {
     ) {
         Task { [weak self, conversationId, peerUserId, target, messageId, wireText] in
             guard let self else { return }
-            guard let selfId = await self.appState?.currentUserId else {
+            guard let selfId = self.appState?.currentUserId else {
                 await MainActor.run { self.markFailed(messageId: messageId, reason: .notAuthenticated) }
                 return
             }
@@ -478,7 +478,7 @@ final class ChatContainer: ObservableObject {
                 conversationId: conversationId.uuidString,
                 body: wireText,
                 sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-                senderNodeHex: await MeshRuntime.shared.localNodeIdHex,
+                senderNodeHex: MeshRuntime.shared.localNodeIdHex,
                 recipientNodeHex: target.nodeHex
             )
             let envelopeText = String(data: envelope.encode(), encoding: .utf8) ?? ""
@@ -518,7 +518,7 @@ final class ChatContainer: ObservableObject {
         target: MeshTargetSelection,
         messageId: UUID
     ) {
-        guard let selfUserId = appState?.currentUserId else {
+        guard appState?.currentUserId != nil else {
             markFailed(messageId: messageId, reason: .notAuthenticated)
             return
         }

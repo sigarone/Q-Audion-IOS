@@ -168,38 +168,39 @@ struct SettingsScreen: View {
                 VStack(alignment: .leading, spacing: 0) {
                     QAudionBrandBanner()
                     topBar
-                    ZStack {
-                        ProfileHeroCard(
-                            displayName: profileDisplayName,
-                            handle: profileHandle,
-                            statusMessage: profileStatus,
-                            // W-AVATARICONSHARED (2026-08-13) — was the raw
-                            // photo-cache URL: nil (and permanently stuck on
-                            // the initials bubble) for an icon-chosen avatar,
-                            // and not guaranteed to refresh after a
-                            // re-uploaded photo since the file path itself
-                            // never changes. See AvatarUploader.resolveSelfAvatarURL.
-                            avatarUrl: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
-                            // Digits only while there is no name to draw
-                            // initials from — same rule the chat header and
-                            // the iPad sidebar use, so the three "this is
-                            // you" avatars cannot disagree.
-                            shortNumber: appState.accountAvatarName == nil
-                                ? appState.currentUserDialExtension
-                                : nil,
-                            onEditTap: { showAccountFromEdit = true }
-                        )
-                        // 2026-08-06 fix: hidden NavigationLink driving the
-                        // MODIFICA pill to the same destination as the
-                        // "Profilo" row in accountSection below — the pill
-                        // used to call an empty closure and do nothing.
-                        NavigationLink(isActive: $showAccountFromEdit) {
-                            LazyView {
-                                AccountSettingsScreen(appState: appState)
-                                    .onAppear { print("[Settings] AccountSettingsScreen appeared (via EDIT)") }
-                            }
-                        } label: { EmptyView() }
-                        .opacity(0)
+                    ProfileHeroCard(
+                        displayName: profileDisplayName,
+                        handle: profileHandle,
+                        statusMessage: profileStatus,
+                        // W-AVATARICONSHARED (2026-08-13) — was the raw
+                        // photo-cache URL: nil (and permanently stuck on
+                        // the initials bubble) for an icon-chosen avatar,
+                        // and not guaranteed to refresh after a
+                        // re-uploaded photo since the file path itself
+                        // never changes. See AvatarUploader.resolveSelfAvatarURL.
+                        avatarUrl: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
+                        // Digits only while there is no name to draw
+                        // initials from — same rule the chat header and
+                        // the iPad sidebar use, so the three "this is
+                        // you" avatars cannot disagree.
+                        shortNumber: appState.accountAvatarName == nil
+                            ? appState.currentUserDialExtension
+                            : nil,
+                        onEditTap: { showAccountFromEdit = true }
+                    )
+                    // 2026-08-06 fix: drives the MODIFICA pill to the same
+                    // destination as the "Profilo" row in accountSection
+                    // below — the pill used to call an empty closure and do
+                    // nothing. 2026-08-20: migrated off the deprecated
+                    // `NavigationLink(isActive:destination:label:)` init;
+                    // `navigationDestination(isPresented:)`'s closure is
+                    // lazy the same way, so the W464 eager-init crash this
+                    // guarded against stays guarded against.
+                    .navigationDestination(isPresented: $showAccountFromEdit) {
+                        LazyView {
+                            AccountSettingsScreen(appState: appState)
+                                .onAppear { print("[Settings] AccountSettingsScreen appeared (via EDIT)") }
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)

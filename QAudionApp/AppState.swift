@@ -9263,12 +9263,12 @@ final class AppState: ObservableObject {
                     // the NEXT chat message. Safe no-op if the derive
                     // above actually failed (maybeAnnounceAvatarTo fails
                     // closed on a missing PSK).
-                    await self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                 }
             case .keyExchangeAccept(let pub):
                 Task { [weak self] in
                     await cke.handleAccept(senderId: senderId, peerPubKey: pub)
-                    await self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                 }
             case .offer:
                 Task { @MainActor [weak self] in
@@ -9298,7 +9298,7 @@ final class AppState: ObservableObject {
             Task { [weak self] in
                 do {
                     let result = try await receiver.receive(envelope: envelope)
-                    await self?.handleReceivedFileAttachment(result, senderId: senderId, fileId: envelope.fileId)
+                    self?.handleReceivedFileAttachment(result, senderId: senderId, fileId: envelope.fileId)
                 } catch {
                     RTLog.warn("chat", "file-attachment receive failed sender=\(senderId.prefix(8)) fileId=\(envelope.fileId.prefix(8)): \(error)")
                 }
