@@ -96,7 +96,32 @@ final class UpgradeSheetContainer: ObservableObject {
             success = true
             alreadyRedeemed = response.alreadyRedeemed
         } catch {
+            RTLog.error("entitlements", "UpgradeSheet: redeem failed — " + Self.errorLogSummary(error))
             self.error = Self.redemptionErrorMessage(error)
+        }
+    }
+
+    /// Short, redaction-safe summary for the W417 trail (never the code the
+    /// user typed, never a response body) — this catch block previously
+    /// logged nothing at all, so a failed redeem left zero trace in
+    /// `fetch-ios-live.py`'s dump (confirmed live 2026-08-19: a user-reported
+    /// "Errore imprevisto." had no corresponding log line to diagnose from).
+    /// `String(describing:)` throughout, matching `FeatureFlags.errorString`'s
+    /// existing convention — see CLAUDE.md §13 on why raw `String(_:)`/`+`
+    /// concatenation of typed values can trip the Swift 6 type-checker.
+    private static func errorLogSummary(_ error: Error) -> String {
+        guard let bcError = error as? BCryptoError else {
+            let ns = error as NSError
+            return "non-BCryptoError domain=" + ns.domain + " code=" + String(describing: ns.code)
+        }
+        switch bcError {
+        case .httpError(let status): return "httpError status=" + String(describing: status)
+        case .unauthorized: return "unauthorized"
+        case .invalidUrl: return "invalidUrl"
+        case .decodingError: return "decodingError"
+        case .notFound: return "notFound"
+        case .certPinningFailed: return "certPinningFailed"
+        case .server: return "server"
         }
     }
 
@@ -119,6 +144,19 @@ final class UpgradeSheetContainer: ObservableObject {
     /// is not reachable from here without changing `BCryptoRestClient`'s
     /// error contract app-wide, which is out of scope for this file. 409
     /// therefore routes to one generic conflict message on iOS today.
+    ///
+    /// `status == 0` is `BCryptoRestClient.performRequest`'s own sentinel
+    /// for "the transport returned something that wasn't even an
+    /// `HTTPURLResponse`" (`BCryptoRestClient.swift`'s
+    /// `guard let http = response as? HTTPURLResponse else { throw
+    /// BCryptoError.httpError(0) }`) — a genuine connectivity glitch, not a
+    /// server-side rejection, so it gets its own actionable message instead
+    /// of falling into the generic default (live 2026-08-19: a user saw
+    /// "Errore imprevisto." on a redeem that then succeeded on retry with no
+    /// code change — a transient failure this branch never named as such).
+    /// Any OTHER un-enumerated status still returns the status code inline
+    /// so a future report is diagnosable from the message alone, without
+    /// needing a VPS log pull.
     private static func redemptionErrorMessage(_ error: Error) -> String {
         guard let bcError = error as? BCryptoError else {
             return "Errore di rete — verifica la connessione e riprova."
@@ -126,12 +164,13 @@ final class UpgradeSheetContainer: ObservableObject {
         switch bcError {
         case .httpError(let status):
             switch status {
+            case 0: return "Errore di connessione — verifica la rete e riprova."
             case 400: return "Codice non valido."
             case 401, 403: return "Sessione non attiva — accedi di nuovo."
             case 409: return "Codice già utilizzato o non disponibile."
             case 429: return "Troppi tentativi — riprova più tardi."
             case 500...599: return "Errore del server — riprova più tardi."
-            default: return "Errore imprevisto."
+            default: return "Errore imprevisto (\(status))."
             }
         case .unauthorized:
             return "Sessione non attiva — accedi di nuovo."
