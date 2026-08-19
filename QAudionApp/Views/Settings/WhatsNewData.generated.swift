@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1004",
+              date: "2026-08-19",
+              title: "v1.0.1004",
+              bullets: [
+                "fix(profile): anchor self-avatar version to epoch time, matches Android fix",
+                "fix(chat): memoize pinned/regular conversation lists, fix PR #73's naming and test gaps, close it",
+              ]),
         .init(id: "v1.0.1003",
               date: "2026-08-19",
               title: "v1.0.1003",
               bullets: [
+                "chore: regenerate changelog for v1.0.1003",
                 "copy(entitlements): tighten Pro-gate wording across lock badges and upgrade sheet",
                 "fix(telemetry): gate TelemetryService behind operational-diagnostics consent (C7)",
                 "feat(chat): delivery/read receipts for the file-attachment + voice-note transport",
@@ -202,18 +210,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.985",
                 "fix(call): an SDP-bearing call_answer must not arm the accept-gate countdown",
-              ]),
-        .init(id: "v1.0.984",
-              date: "2026-08-14",
-              title: "v1.0.984",
-              bullets: [
-                "chore: regenerate changelog for v1.0.984",
-                "fix(audio): do not seed the playout ladder from the SEND profile",
-                "fix(chat): hoist DateFormatters out of hot render paths, without the locale bug",
-                "fix(engine): move QAudionAppState token storage to Keychain, isolated from TokenVault",
-                "feat(audio): make 60 ms / 256 B the unconditional call profile (W-ALL60)",
-                "fix(call): stop the duplicate call_incoming from binning the WebRTC SDP offer",
-                "🎨 Palette: Improve VoiceOver accessibility for in-call controls and settings footer (#54)",
               ]),
     ]
 }
