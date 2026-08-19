@@ -9,10 +9,23 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1003",
+              date: "2026-08-19",
+              title: "v1.0.1003",
+              bullets: [
+                "copy(entitlements): tighten Pro-gate wording across lock badges and upgrade sheet",
+                "fix(telemetry): gate TelemetryService behind operational-diagnostics consent (C7)",
+                "feat(chat): delivery/read receipts for the file-attachment + voice-note transport",
+                "fix(settings): self caller-id label respects LocalCallerIdSettings",
+                "feat(entitlements): live-format activation codes as you type; invite code required at registration",
+                "fix(auth): invite code is now mandatory at registration, client-side too",
+                "⚡ Bolt: Optimize ISO8601DateFormatter instantiation in RuntimeLogSink (#71)",
+              ]),
         .init(id: "v1.0.1002",
               date: "2026-08-18",
               title: "v1.0.1002",
               bullets: [
+                "chore: regenerate changelog for v1.0.1002",
                 "fix(entitlements): CapabilityGate.previewInstance() must not be #if DEBUG",
               ]),
         .init(id: "v1.0.1001",
@@ -201,13 +214,6 @@ extension ReleaseNote {
                 "feat(audio): make 60 ms / 256 B the unconditional call profile (W-ALL60)",
                 "fix(call): stop the duplicate call_incoming from binning the WebRTC SDP offer",
                 "🎨 Palette: Improve VoiceOver accessibility for in-call controls and settings footer (#54)",
-              ]),
-        .init(id: "v1.0.983",
-              date: "2026-08-13",
-              title: "v1.0.983",
-              bullets: [
-                "chore: regenerate changelog for v1.0.983",
-                "fix(call): make WebRTC SDP-application failures reach Loki",
               ]),
     ]
 }
