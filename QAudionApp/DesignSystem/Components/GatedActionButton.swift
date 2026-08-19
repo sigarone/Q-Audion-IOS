@@ -89,7 +89,7 @@ private struct LockBadgeGlyph: View {
             .padding(3)
             .background(Circle().fill(Color.black.opacity(0.6)))
             .offset(x: 3, y: -3)
-            .accessibilityLabel("Funzione Pro bloccata")
+            .accessibilityLabel("Richiede account Pro")
     }
 }
 
@@ -128,7 +128,7 @@ struct GatedScreenEntry<Destination: View>: View {
             destination()
         } else {
             UpgradeSheet(capability: capability)
-                .navigationTitle("Funzione Pro")
+                .navigationTitle("Account Pro")
                 .navigationBarTitleDisplayMode(.inline)
         }
     }

@@ -65,7 +65,7 @@ struct SettingsScreen: View {
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
-    /// Entitlements Task 4 — gate for the "Passa a Pro" upgrade sheet
+    /// Entitlements Task 4 — gate for the "Attiva Pro" upgrade sheet
     /// tapped from `TrialBanner`, next to the profile card.
     @State private var showTrialUpgradeSheet = false
 
@@ -277,7 +277,7 @@ struct SettingsScreen: View {
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
         }
-        // Entitlements Task 4 — "Passa a Pro" tap on TrialBanner opens the
+        // Entitlements Task 4 — "Attiva Pro" tap on TrialBanner opens the
         // same UpgradeSheet the rest of the app uses; capability is a
         // benefit-framing hint only (see UpgradeSheet's own doc), so
         // .callsVideo (the anchor feature PlanStatus itself reads) is fine

@@ -23,7 +23,7 @@ struct TrialBanner: View {
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
             Spacer(minLength: 8)
-            Button("Passa a Pro", action: onUpgradeTap)
+            Button("Attiva Pro", action: onUpgradeTap)
                 .buttonStyle(.borderless)
                 .foregroundStyle(scheme.primary)
         }

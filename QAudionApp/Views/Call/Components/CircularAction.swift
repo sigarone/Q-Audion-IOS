@@ -92,7 +92,7 @@ struct CircularAction: View {
                             .foregroundStyle(.white)
                             .padding(3)
                             .background(Circle().fill(Color.black.opacity(0.6)))
-                            .accessibilityLabel("Funzione Pro bloccata")
+                            .accessibilityLabel("Richiede account Pro")
                     }
                 }
             }

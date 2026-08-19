@@ -192,7 +192,7 @@ struct UpgradeSheet: View {
         .onChange(of: container.success) { success in
             guard success else { return }
             snackbar?.show(.init(
-                text: container.alreadyRedeemed ? "Codice già attivo su questo account." : "Funzione attivata.",
+                text: container.alreadyRedeemed ? "Codice già attivo su questo account." : "Account attivato.",
                 severity: .info))
         }
     }
@@ -206,10 +206,10 @@ struct UpgradeSheet: View {
                 .background(scheme.primary.opacity(0.15))
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text("Funzione Pro")
+                Text("Account Pro")
                     .qaudionStyle(type.titleSmall)
                     .foregroundStyle(scheme.onSurface)
-                Text("Inserisci un codice di attivazione per sbloccarla")
+                Text("Inserisci il codice di attivazione del tuo account Pro")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
