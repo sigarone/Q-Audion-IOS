@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1006",
+              date: "2026-08-20",
+              title: "v1.0.1006",
+              bullets: [
+                "fix(call): stop @AppStorage from deadlocking scene-update watchdog mid-call",
+              ]),
         .init(id: "v1.0.1005",
               date: "2026-08-19",
               title: "v1.0.1005",
               bullets: [
+                "chore: regenerate changelog for v1.0.1005",
                 "fix(entitlements): log redeem failures, distinguish connection errors",
               ]),
         .init(id: "v1.0.1004",
@@ -203,13 +210,6 @@ extension ReleaseNote {
                 "🎨 Palette: Add VoiceOver traits to CallSecurityBadge (#59)",
                 "⚡ Bolt: Extract DateFormatter instantiations to static properties (#60)",
                 "fix(call): never mint a call id on the send path of a running call",
-              ]),
-        .init(id: "v1.0.986",
-              date: "2026-08-14",
-              title: "v1.0.986",
-              bullets: [
-                "chore: regenerate changelog for v1.0.986",
-                "fix(call): the caller's two accept-gate flags were comparing two different ids",
               ]),
     ]
 }
