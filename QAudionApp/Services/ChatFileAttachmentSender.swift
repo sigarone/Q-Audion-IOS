@@ -71,6 +71,14 @@ final class ChatFileAttachmentSender {
     ///     three-way convention as `AttachAnnounceMeta.ex` (0/nil = none,
     ///     -1 = view-once, N = seconds).
     ///   - exportAllowed: export-permission choice; `false` embeds `xp: 0`.
+    /// - Returns: the announce envelope's `fileId` (a UUID string) — the
+    ///   caller must persist this onto the local outbound row's
+    ///   `Message.wireAttachmentId` (`ConversationStore.setWireAttachmentId`)
+    ///   so an incoming `qa_att_receipt:1` has something to match against.
+    ///   Bug found live 2026-08-18: without it, a sent file/voice-note
+    ///   bubble never left its single grey tick no matter what the
+    ///   recipient did with it.
+    @discardableResult
     func send(
         data: Data,
         mime: String,
@@ -78,7 +86,7 @@ final class ChatFileAttachmentSender {
         recipientUserId: String,
         ephemeralSpecSec: Int64? = nil,
         exportAllowed: Bool = true
-    ) async throws {
+    ) async throws -> String {
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let selfId = appState.currentUserId, !selfId.isEmpty else {
             throw SendError.notAuthenticated
@@ -185,6 +193,7 @@ final class ChatFileAttachmentSender {
         } catch {
             throw SendError.sendFailed(String(describing: error))
         }
+        return envelope.fileId
     }
 
     // MARK: - Helpers

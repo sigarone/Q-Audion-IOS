@@ -9126,7 +9126,9 @@ final class AppState: ObservableObject {
     /// `InboundFileAttachmentDispatcher.persistInboxRow` (get-or-create
     /// the 1:1 conversation, then insert the message).
     @MainActor
-    private func handleReceivedFileAttachment(_ result: ChatFileAttachmentReceiver.Result, senderId: String) {
+    private func handleReceivedFileAttachment(
+        _ result: ChatFileAttachmentReceiver.Result, senderId: String, fileId: String
+    ) {
         let store = ConversationStore()
         let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
         let conv: Conversation
@@ -9170,7 +9172,8 @@ final class AppState: ObservableObject {
             status: .delivered,
             senderUserId: senderId,
             mediaLocalPath: result.localUrl.path,
-            mediaMimeType: result.mime
+            mediaMimeType: result.mime,
+            wireAttachmentId: fileId
         )
         store.appendMessage(msg)
         let isMuted = conv.muted
@@ -9185,6 +9188,35 @@ final class AppState: ObservableObject {
             object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
         )
+        // Bug found live 2026-08-18 — the sender's tick never left "Sent"
+        // no matter what happened here, because nothing on this side ever
+        // told them the file actually arrived. See
+        // AttachmentReceiptEnvelope's doc for the wire shape.
+        Task { [weak self] in
+            await self?.sendAttachmentReceipt(
+                recipientId: senderId, wireId: fileId, status: AttachmentReceiptEnvelope.statusDelivered)
+        }
+    }
+
+    /// Bug found live 2026-08-18 — best-effort, never throws: a failure
+    /// here must not block or fail the caller's own receive/open flow
+    /// (signal-not-kill), same contract as every other opaque_message
+    /// sender in this file.
+    /// Bug found live 2026-08-18 — non-private so chat bubble views
+    /// (``ChatDetailScreen``) can call it directly when the user opens a
+    /// received file/voice note, to send a "read" receipt.
+    @MainActor
+    func sendAttachmentReceipt(recipientId: String, wireId: String, status: String) async {
+        guard !wireId.isEmpty else { return }
+        do {
+            let envelope = AttachmentReceiptEnvelope(
+                id: wireId, status: status, ts: Int64(Date().timeIntervalSince1970 * 1000))
+            let payload = try envelope.toWirePayload()
+            let provider = makeUploadProvider()
+            try await provider.callingApi.sendOpaqueMessageString(recipientId: recipientId, payload: payload)
+        } catch {
+            RTLog.warn("chat", "sendAttachmentReceipt failed wireId=\(wireId.prefix(8)): \(error)")
+        }
     }
 
     private func dispatchInboundOpaque(senderId: String, blobStr: String) {
@@ -9243,9 +9275,53 @@ final class AppState: ObservableObject {
             Task { [weak self] in
                 do {
                     let result = try await receiver.receive(envelope: envelope)
-                    await self?.handleReceivedFileAttachment(result, senderId: senderId)
+                    await self?.handleReceivedFileAttachment(result, senderId: senderId, fileId: envelope.fileId)
                 } catch {
                     RTLog.warn("chat", "file-attachment receive failed sender=\(senderId.prefix(8)) fileId=\(envelope.fileId.prefix(8)): \(error)")
+                }
+            }
+            return
+        }
+
+        // Path A2 — `qa_att_receipt:1` delivery/read receipt for the
+        // file-attachment/voice-note transports. Bug found live
+        // 2026-08-18: see AttachmentReceiptEnvelope's doc for why this
+        // exists — that transport's rows have no serverMessageId, so the
+        // normal msg_delivered/msg_read receipt path (handled elsewhere,
+        // via ConversationStore.updateStatusByServerId) never had
+        // anything to match against for them. Same safe-no-op-fallthrough
+        // contract as Path A1 above.
+        if let receipt = AttachmentReceiptEnvelope.parse(wirePayloadB64: blobStr) {
+            let store = ConversationStore()
+            if let msg = store.messageByWireAttachmentId(receipt.id) {
+                let newStatus: Message.Status? = {
+                    switch receipt.status {
+                    case AttachmentReceiptEnvelope.statusDelivered: return .delivered
+                    case AttachmentReceiptEnvelope.statusRead: return .read
+                    default: return nil
+                    }
+                }()
+                // Status only ever moves forward — an out-of-order or
+                // duplicate receipt must never take away a tick the user
+                // has already been shown. Mirrors updateStatusByServerId's
+                // own contract (and Android's identical rank table).
+                func rank(_ s: Message.Status) -> Int {
+                    switch s {
+                    case .sending: return 0
+                    case .sent: return 1
+                    case .delivered: return 2
+                    case .read: return 3
+                    case .failed: return -1
+                    }
+                }
+                if let newStatus, rank(newStatus) > rank(msg.status) {
+                    store.updateMessageStatus(
+                        id: msg.id, conversationId: msg.conversationId, newStatus: newStatus,
+                        deliveredAt: newStatus == .delivered ? Date() : nil,
+                        readAt: newStatus == .read ? Date() : nil)
+                    NotificationCenter.default.post(
+                        name: AppState.chatRefreshNotification, object: nil,
+                        userInfo: ["peerUserId": senderId, "conversationId": msg.conversationId])
                 }
             }
             return

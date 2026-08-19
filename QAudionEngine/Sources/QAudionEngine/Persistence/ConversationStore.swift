@@ -269,13 +269,65 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: viaMesh ?? msg.viaMesh
+                        viaMesh: viaMesh ?? msg.viaMesh,
+                        wireAttachmentId: msg.wireAttachmentId
                     )
                     try msg.save(db)
                 }
             }
         } catch {
             print("[ConversationStore] updateMessageStatus failed: \(error)")
+        }
+    }
+
+    /// Bug found live 2026-08-18 — see `Message.wireAttachmentId` doc.
+    /// Tags an OUTBOUND file/voice-note row with the announce envelope's
+    /// real `fileId`/`voiceNoteId` once minted, so an incoming
+    /// `qa_att_receipt:1` has something to match against.
+    public func setWireAttachmentId(id: UUID, wireAttachmentId: String) {
+        do {
+            try db.writer.write { db in
+                if var msg = try Message.fetchOne(db, key: id) {
+                    msg = Message(
+                        id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
+                        plaintext: msg.plaintext, sentAt: msg.sentAt,
+                        deliveredAt: msg.deliveredAt, readAt: msg.readAt,
+                        status: msg.status, senderUserId: msg.senderUserId,
+                        serverMessageId: msg.serverMessageId,
+                        mediaLocalPath: msg.mediaLocalPath,
+                        mediaDurationMs: msg.mediaDurationMs,
+                        mediaMimeType: msg.mediaMimeType,
+                        clientMsgId: msg.clientMsgId,
+                        edited: msg.edited,
+                        deletedAt: msg.deletedAt,
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh,
+                        wireAttachmentId: wireAttachmentId
+                    )
+                    try msg.save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setWireAttachmentId failed: \(error)")
+        }
+    }
+
+    /// Bug found live 2026-08-18 — see `Message.wireAttachmentId` doc.
+    /// `qa_att_receipt:1` receipts key off this instead of
+    /// `serverMessageId`, since the file/voice-note transport never has
+    /// one.
+    public func messageByWireAttachmentId(_ wireAttachmentId: String) -> Message? {
+        do {
+            return try db.reader.read { db in
+                try Message.filter(Column("wireAttachmentId") == wireAttachmentId).fetchOne(db)
+            }
+        } catch {
+            print("[ConversationStore] messageByWireAttachmentId failed: \(error)")
+            return nil
         }
     }
 

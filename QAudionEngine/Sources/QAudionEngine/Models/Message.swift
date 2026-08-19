@@ -99,6 +99,19 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// `false` = normal transport (today's behavior, unchanged and the
     /// default for every pre-existing stored row).
     public let viaMesh: Bool?
+    /// The E2EE file-attachment/voice-note pipeline's own `fileId`/
+    /// `voiceNoteId` (a UUID string), stashed here ONLY for OUTBOUND
+    /// attachment rows sent via `qa_fa_announce:1`/`qa_vn_announce:1` —
+    /// that pipeline rides `opaque_message` directly and has no
+    /// `serverMessageId` to key a delivery/read receipt off. `nil` for
+    /// every text message and for INBOUND attachment rows (the receiver
+    /// re-derives the id from its own envelope at read time instead).
+    /// Bug found live 2026-08-18: a sent file/voice-note bubble never
+    /// left its single grey tick no matter what the recipient did with
+    /// it, because nothing on either side ever sent or matched a
+    /// delivery/read signal for that transport. `nil` for backward
+    /// compat with every stored row predating this field.
+    public let wireAttachmentId: String?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -115,7 +128,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 isViewOnce: Bool? = nil,
                 viewOnceOpened: Bool? = nil,
                 exportBlocked: Bool? = nil,
-                viaMesh: Bool? = nil) {
+                viaMesh: Bool? = nil,
+                wireAttachmentId: String? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -138,5 +152,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.viewOnceOpened = viewOnceOpened
         self.exportBlocked = exportBlocked
         self.viaMesh = viaMesh
+        self.wireAttachmentId = wireAttachmentId
     }
 }

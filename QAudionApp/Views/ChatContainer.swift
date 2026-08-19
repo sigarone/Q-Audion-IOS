@@ -1149,7 +1149,7 @@ final class ChatContainer: ObservableObject {
         }
         let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            try await sender.send(
+            let fileId = try await sender.send(
                 data: bytes,
                 mime: recording.mimeType,
                 filename: "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a",
@@ -1157,6 +1157,10 @@ final class ChatContainer: ObservableObject {
                 ephemeralSpecSec: overrideTimerSeconds.map(Int64.init),
                 exportAllowed: !exportBlocked
             )
+            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
+            // doc: without this, the tick never leaves grey no matter what
+            // the recipient does.
+            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
         } catch let e as ChatFileAttachmentSender.SendError {
             print("[ChatContainer] voice note send failed: \(e.localizedDescription)")
             await MainActor.run {
@@ -1756,13 +1760,17 @@ final class ChatContainer: ObservableObject {
         // identical comment — images now ship over `qa_fa_announce:1`.
         let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            try await sender.send(
+            let fileId = try await sender.send(
                 data: jpeg,
                 mime: "image/jpeg",
                 filename: "image-\(msgId.uuidString).jpg",
                 recipientUserId: peerId,
                 ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
             )
+            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
+            // doc: without this, the tick never leaves grey no matter what
+            // the recipient does.
+            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
         } catch let e as ChatFileAttachmentSender.SendError {
             print("[ChatContainer] sendImage failed: \(e.localizedDescription)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
@@ -2063,13 +2071,17 @@ final class ChatContainer: ObservableObject {
         // `qa_fa_announce:1`.
         let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            try await sender.send(
+            let fileId = try await sender.send(
                 data: data,
                 mime: mime,
                 filename: filename,
                 recipientUserId: peerId,
                 ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
             )
+            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
+            // doc: without this, the tick never leaves grey no matter what
+            // the recipient does.
+            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
         } catch let e as ChatFileAttachmentSender.SendError {
             print("[ChatContainer] sendFileAttachment failed: \(e.localizedDescription)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }

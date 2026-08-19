@@ -1055,7 +1055,8 @@ struct ChatDetailScreen: View {
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
                     durationMs: msg.mediaDurationMs ?? 0,
-                    shareRequest: mediaShareRequestBinding(for: msg.id)
+                    shareRequest: mediaShareRequestBinding(for: msg.id),
+                    onOpened: { markAttachmentRead(msg) }
                 )
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
                 ImageBubbleContent(
@@ -1066,6 +1067,7 @@ struct ChatDetailScreen: View {
                     galleryItems: galleryItems,
                     exportBlocked: msg.exportBlocked ?? false
                 )
+                .onAppear { markAttachmentRead(msg) }
             } else if let mime = msg.mediaMimeType, !mime.isEmpty {
                 // W446: generic file attachment (PDF, doc, archive, …) —
                 // anything with a mime that isn't audio/image lands here
@@ -1080,13 +1082,15 @@ struct ChatDetailScreen: View {
                     mediaLocalPath: msg.mediaLocalPath,
                     exportBlocked: msg.exportBlocked ?? false
                 )
+                .onAppear { markAttachmentRead(msg) }
             } else if let dur = msg.mediaDurationMs, dur > 0 {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
                     durationMs: dur,
-                    shareRequest: mediaShareRequestBinding(for: msg.id)
+                    shareRequest: mediaShareRequestBinding(for: msg.id),
+                    onOpened: { markAttachmentRead(msg) }
                 )
             } else {
                 Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
@@ -1539,6 +1543,26 @@ struct ChatDetailScreen: View {
                 mediaShareRequestId = newValue ? msgId : (mediaShareRequestId == msgId ? nil : mediaShareRequestId)
             }
         )
+    }
+
+    /// Bug found live 2026-08-18 — sends a "read" `qa_att_receipt:1` to
+    /// the original sender the first time an INBOUND file/voice-note row
+    /// is actually opened. `msg.status != .read` doubles as a local dedup
+    /// guard against a re-tap or a bubble scrolling in/out of view
+    /// repeatedly. No-op for outbound rows, text rows, or rows predating
+    /// this field (`wireAttachmentId == nil` — nothing to match against
+    /// on the sender's side anyway).
+    private func markAttachmentRead(_ msg: Message) {
+        guard msg.direction == .incoming, msg.status != .read,
+              let wireId = msg.wireAttachmentId, !wireId.isEmpty
+        else { return }
+        let senderId = msg.senderUserId ?? container.viewModel.conversation.peerUserId
+        let store = ConversationStore()
+        store.updateMessageStatus(id: msg.id, conversationId: msg.conversationId, newStatus: .read, readAt: Date())
+        Task {
+            await appState.sendAttachmentReceipt(
+                recipientId: senderId, wireId: wireId, status: AttachmentReceiptEnvelope.statusRead)
+        }
     }
 
     private func startAudioCall() {

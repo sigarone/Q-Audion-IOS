@@ -138,6 +138,20 @@ public final class QAudionDatabase {
             }
         }
 
+        // File-attachment/voice-note delivery+read receipts
+        // (`Message.wireAttachmentId`). Bug found live 2026-08-18: a sent
+        // file/voice note never left its single grey tick, because that
+        // transport rides `opaque_message` directly and has no
+        // `serverMessageId` for a receipt to match against. Mirrors the
+        // v4/v5/v6 migrations above: a single nullable column, no data
+        // rewrite — every pre-existing row decodes with
+        // `wireAttachmentId == nil`.
+        migrator.registerMigration("v7-attachment-receipts") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "wireAttachmentId", .text)
+            }
+        }
+
         return migrator
     }
 
