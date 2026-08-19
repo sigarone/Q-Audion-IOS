@@ -35,7 +35,33 @@ struct VpnToggleChip: View {
 
     // Manual exit selection. '' = Auto (NodePicker best). Persisted in UserDefaults,
     // mirroring Desktop `vpnPreferredNodeId` and Android's node picker.
-    @AppStorage("vpn.preferredNodeId") private var preferredNodeId: String = ""
+    //
+    // W-CHATDEADLOCK (2026-08-19) — was `@AppStorage`. This chip is placed
+    // on 6 screens (see doc above), several of which (ChatListScreen,
+    // HomeView) stay instantiated as navigation ancestors underneath an
+    // active call, same as ChatDetailScreen's own `@AppStorage` removed in
+    // the same pass (see that file's W-CHATDEADLOCK note for the full
+    // mechanism — SwiftUI's own UserDefaults-change observer racing an
+    // in-progress ForEach/Observation update on the AttributeGraph lock,
+    // device-log-confirmed SIGKILL). `preferredNodeId` is read reactively
+    // only inside `pickerSheet`, which dismisses itself immediately on
+    // selection, so a plain `@State` synced from UserDefaults when the
+    // picker opens is enough; `chooseNode(in:)` (also called from the
+    // connect path, which can run without the picker ever having been
+    // opened this session) reads UserDefaults directly so it never sees a
+    // stale un-synced default.
+    @State private var preferredNodeId: String = ""
+
+    private static let preferredNodeIdKey = "vpn.preferredNodeId"
+
+    private static func loadPreferredNodeId() -> String {
+        UserDefaults.standard.string(forKey: preferredNodeIdKey) ?? ""
+    }
+
+    private func setPreferredNodeId(_ value: String) {
+        preferredNodeId = value
+        UserDefaults.standard.set(value, forKey: Self.preferredNodeIdKey)
+    }
     @State private var nodes: [VpnNode] = []
     @State private var showPicker = false
     @State private var pickerLoading = false
@@ -188,6 +214,7 @@ struct VpnToggleChip: View {
     // MARK: - Manual exit picker
 
     private func openPicker() {
+        preferredNodeId = Self.loadPreferredNodeId()
         showPicker = true
         guard nodes.isEmpty else { return }
         pickerLoading = true
@@ -198,9 +225,13 @@ struct VpnToggleChip: View {
     }
 
     /// The preferred node when it's still in the live list; nil → caller uses auto-best.
+    /// Reads UserDefaults directly (not the `@State` mirror) — called from
+    /// the connect path too, which can run without the picker ever having
+    /// been opened this session.
     private func chooseNode(in list: [VpnNode]) -> VpnNode? {
-        guard !preferredNodeId.isEmpty else { return nil }
-        return list.first { $0.id == preferredNodeId }
+        let id = Self.loadPreferredNodeId()
+        guard !id.isEmpty else { return nil }
+        return list.first { $0.id == id }
     }
 
     @ViewBuilder
@@ -208,14 +239,14 @@ struct VpnToggleChip: View {
         NavigationStack {
             List {
                 Button {
-                    preferredNodeId = ""
+                    setPreferredNodeId("")
                     showPicker = false
                 } label: {
                     pickerRow(title: "Auto", subtitle: "Best node · latency + load", selected: preferredNodeId.isEmpty)
                 }
                 ForEach(nodes) { n in
                     Button {
-                        preferredNodeId = n.id
+                        setPreferredNodeId(n.id)
                         showPicker = false
                     } label: {
                         pickerRow(

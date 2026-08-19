@@ -125,9 +125,30 @@ struct ChatDetailScreen: View {
     @State private var showClearHistoryConfirm: Bool = false
     /// W445: Screenshot lock — local user preference. Toggled from
     /// PrivacySettingsScreen; read here to activate/deactivate on
-    /// chat open/close. Persisted via AppStorage so it survives
-    /// app restarts.
-    @AppStorage("qaudion.chat.screenshot_lock_enabled") private var screenshotLockEnabled: Bool = true
+    /// chat open/close.
+    ///
+    /// W-CHATDEADLOCK (2026-08-19) — was `@AppStorage`, matching the
+    /// exact deadlock class already root-caused once at the app root
+    /// (see PrivacyGate.setScreenshotProtectionEnabled's
+    /// W-APPSTORAGEDEADLOCK note): `@AppStorage` installs SwiftUI's own
+    /// UserDefaults-change observer for as long as the owning view stays
+    /// instantiated, and ContentView's body is a single ZStack — the
+    /// call screens (VideoCallView/LiveInCallScreen) are layered ON TOP
+    /// of, not swapped in for, the chat detail view, so this screen
+    /// (and its observer) stays alive for the full duration of a call
+    /// placed from an open chat. Device-log-confirmed crash (call
+    /// 836638fa, iPhone callee, EXC_CRASH/SIGKILL 0x8BADF00D, scene-
+    /// update watchdog "is stuck (deadlock)"): the main thread was mid
+    /// SwiftUI ForEach/Observation update while a background Task's
+    /// UserDefaults write drove SwiftUI's internal `UserDefaultObserver`
+    /// into the same AttributeGraph lock. This property is read exactly
+    /// once per screen-appear (`handleScreenAppear`), never reactively,
+    /// so it needs no live-observing wrapper at all — a plain read
+    /// removes this screen from the set of long-lived UserDefaults
+    /// observers without changing behavior.
+    private func screenshotLockEnabled() -> Bool {
+        (UserDefaults.standard.object(forKey: "qaudion.chat.screenshot_lock_enabled") as? Bool) ?? true
+    }
     /// W445: Ephemeral timer picker.
     @State private var showingEphemeralPicker: Bool = false
     /// BLE-mesh offline chat fallback (branch claude/ble-mesh-cleanroom-spike).
@@ -1217,7 +1238,7 @@ struct ChatDetailScreen: View {
     private func handleScreenAppear() {
         // Lock screenshots unless the peer has explicitly granted permission.
         let peerGranted = container.screenshotGrantedByPeer == true
-        if screenshotLockEnabled && !peerGranted {
+        if screenshotLockEnabled() && !peerGranted {
             ScreenshotLockService.lock()
         } else {
             ScreenshotLockService.unlock()
