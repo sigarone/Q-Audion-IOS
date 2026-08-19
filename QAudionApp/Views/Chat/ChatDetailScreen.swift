@@ -192,11 +192,23 @@ struct ChatDetailScreen: View {
     /// raw UUID; re-resolve through the central chain.
     private var resolvedPeerTitle: String {
         let stored = container.viewModel.conversation.peerDisplayName
-        guard DisplayName.looksLikeUUID(stored) || stored.isEmpty else { return stored }
         if container.viewModel.conversation.kind == .group {
+            guard DisplayName.looksLikeUUID(stored) || stored.isEmpty else { return stored }
             return DisplayName.forGroup(id: container.viewModel.conversation.peerUserId, name: nil)
         }
+        // W-DETAILNAMESTALE (2026-08-19) — this used to short-circuit and
+        // return `stored` directly whenever it looked like a real name,
+        // bypassing DisplayName.forUser (and, with it, the
+        // NameResolutionService.ensureResolved() re-check forUser fires
+        // unconditionally on every call). ChatListScreen.resolvedRowTitle
+        // never had that shortcut — it always calls forUser with the
+        // freshest serverDisplay/contacts, so it visibly refreshed a
+        // peer's renamed/re-avatared profile while this header kept
+        // showing whatever name the conversation row was first created
+        // with. Route through the exact same resolution chain as the
+        // list so the two can never disagree again.
         return DisplayName.forUser(container.viewModel.conversation.peerUserId,
+                                   serverDisplay: stored,
                                    contacts: appState.cachedContacts)
     }
 

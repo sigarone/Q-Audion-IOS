@@ -8553,8 +8553,27 @@ final class AppState: ObservableObject {
     /// (see the presence-forwarding observer) for exactly this class of
     /// gap: a plain stored/computed property with no Combine publisher of
     /// its own, read directly by SwiftUI view bodies.
+    /// W-AVATARVERSIONRESET (2026-08-19, device-log-confirmed on the Android
+    /// sibling of this exact counter, same bug shape here) — `next =
+    /// selfAvatarVersion + 1` is a purely LOCAL counter in UserDefaults, no
+    /// server-side source of truth. On a reinstall/reset ("ho riconfigurato
+    /// un telefono"), UserDefaults is wiped and `selfAvatarVersion` goes
+    /// back to 0, so the first avatar set afterward computes `next=1` again
+    /// -- identical to whatever version a peer already cached from before
+    /// the reinstall. The receive-side gate (`version <= cached` -> skip)
+    /// then treats the genuinely new avatar as a stale duplicate forever,
+    /// since a small sequential counter restarting from 1 can never
+    /// numerically exceed a peer's already-cached value again on its own.
+    /// Anchoring to wall-clock epoch seconds (not millis -- stays inside
+    /// Int32 until year 2038, no wire-protocol change) makes a
+    /// post-reinstall version numerically enormous compared to any small
+    /// sequential value a peer could have cached, so it always compares as
+    /// newer. `max(...)` keeps normal sequential bumps monotonic on the
+    /// rare tick where the local counter is already ahead of the
+    /// clock-derived value.
     func bumpSelfAvatarVersion() -> Int {
-        let next = selfAvatarVersion + 1
+        let epochSeconds = Int(Date().timeIntervalSince1970)
+        let next = max(selfAvatarVersion + 1, epochSeconds)
         UserDefaults.standard.set(next, forKey: Self.selfAvatarVersionKey)
         objectWillChange.send()
         return next
