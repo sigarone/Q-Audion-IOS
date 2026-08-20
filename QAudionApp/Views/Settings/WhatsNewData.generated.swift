@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1008",
+              date: "2026-08-20",
+              title: "v1.0.1008",
+              bullets: [
+                "fix(mesh): unconditional call-verified identity key, close cross-platform unknown-device gap",
+                "fix(settings): back the operational-diagnostics toggle with real @State",
+                "perf(ui): cache filtered lists instead of recomputing on every render",
+              ]),
         .init(id: "v1.0.1007",
               date: "2026-08-20",
               title: "v1.0.1007",
               bullets: [
+                "chore: regenerate changelog for v1.0.1007",
                 "fix(kms): provision the real production server_identity",
                 "perf(video): amortize NACK cache eviction (#75)",
                 "perf(group-chat): cache unread counts (#76)",
@@ -188,13 +197,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.989",
                 "fix(mesh): antenna row couldn't tell \"Bluetooth is off\" from \"flag not on yet\"",
                 "fix(call): accept-gate guard silently dropped call_answer/call_accepted outside .ringing",
-              ]),
-        .init(id: "v1.0.988",
-              date: "2026-08-15",
-              title: "v1.0.988",
-              bullets: [
-                "chore: regenerate changelog for v1.0.988",
-                "feat(brand): splash screen uses the real shield+Q-AUDION wordmark, not text",
               ]),
     ]
 }
