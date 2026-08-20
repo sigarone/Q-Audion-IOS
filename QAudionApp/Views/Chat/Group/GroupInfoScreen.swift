@@ -589,12 +589,7 @@ private struct AddGroupMembersSheet: View {
     let onCancel: () -> Void
 
     @State private var query: String = ""
-
-    private var filtered: [ContactPickerRowUi] {
-        guard !query.isEmpty else { return candidates }
-        let q = query.lowercased()
-        return candidates.filter { $0.displayName.lowercased().contains(q) }
-    }
+    @State private var filteredCandidates: [ContactPickerRowUi] = []
 
     var body: some View {
         ZStack {
@@ -609,6 +604,24 @@ private struct AddGroupMembersSheet: View {
                 }
             }
         }
+        .onAppear {
+            updateFiltered(with: candidates, for: query)
+        }
+        .onChange(of: candidates) { newCandidates in
+            updateFiltered(with: newCandidates, for: query)
+        }
+        .onChange(of: query) { newQuery in
+            updateFiltered(with: candidates, for: newQuery)
+        }
+    }
+
+    private func updateFiltered(with currentCandidates: [ContactPickerRowUi], for currentQuery: String) {
+        guard !currentQuery.isEmpty else {
+            filteredCandidates = currentCandidates
+            return
+        }
+        let q = currentQuery.lowercased()
+        filteredCandidates = currentCandidates.filter { $0.displayName.lowercased().contains(q) }
     }
 
     private var header: some View {
@@ -644,7 +657,7 @@ private struct AddGroupMembersSheet: View {
     private var list: some View {
         ScrollView {
             VStack(spacing: 6) {
-                ForEach(filtered) { row in
+                ForEach(filteredCandidates) { row in
                     Button(action: { toggle(row.userId) }) {
                         HStack(spacing: 12) {
                             QAudionAvatar(displayName: row.displayName,

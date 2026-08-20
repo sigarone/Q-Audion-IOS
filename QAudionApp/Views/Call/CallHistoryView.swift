@@ -56,8 +56,22 @@ public struct CallHistoryEntry: Equatable, Identifiable {
 /// isn't empty immediately post-update).
 @MainActor
 final class CallHistoryStore: ObservableObject {
-    @Published private(set) var entries: [CallHistoryEntry] = []
+    @Published private(set) var entries: [CallHistoryEntry] = [] {
+        didSet { updateVisibleEntries() }
+    }
     @Published private(set) var loading: Bool = false
+    @Published var missedOnly: Bool = false {
+        didSet { updateVisibleEntries() }
+    }
+    @Published private(set) var visibleEntries: [CallHistoryEntry] = []
+
+    private func updateVisibleEntries() {
+        if missedOnly {
+            visibleEntries = entries.filter { $0.direction == .missed }
+        } else {
+            visibleEntries = entries
+        }
+    }
 
     /// Refresh from PersistentCallRecordStore. Falls back to
     /// `appState.recentCalls` stubs when the persistent store is empty
@@ -225,12 +239,6 @@ struct CallHistoryView: View {
     /// can't pop this alert back up.
     @State private var dialCallError: String?
 
-    /// W296: filter toggle. When true, only missed calls are shown.
-    /// State persists for the lifetime of the screen instance, not
-    /// across launches (intentional — most users want this scoped
-    /// to a single triage session).
-    @State private var missedOnly: Bool = false
-
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             scheme.background.ignoresSafeArea()
@@ -396,23 +404,13 @@ struct CallHistoryView: View {
         }
     }
 
-    /// W296: visible entries — either all of `store.entries` or just
-    /// the `.missed` ones depending on the filter toggle. Computed at
-    /// render time so toggling is reactive without re-fetch.
-    private var visibleEntries: [CallHistoryEntry] {
-        if missedOnly {
-            return store.entries.filter { $0.direction == .missed }
-        }
-        return store.entries
-    }
-
     /// W296: filter toggle row. Renders only when there's at least
     /// one entry (avoids cluttering the empty state).
     @ViewBuilder
     private var filterRow: some View {
         if !store.entries.isEmpty {
             HStack(spacing: 8) {
-                Toggle(isOn: $missedOnly) {
+                Toggle(isOn: $store.missedOnly) {
                     Text("Solo perse")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurface)
@@ -422,8 +420,8 @@ struct CallHistoryView: View {
                 Spacer()
                 Text(Self.filterCountLabel(
                     total: store.entries.count,
-                    visible: visibleEntries.count,
-                    filtered: missedOnly
+                    visible: store.visibleEntries.count,
+                    filtered: store.missedOnly
                 ))
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -449,7 +447,7 @@ struct CallHistoryView: View {
                 .listRowBackground(scheme.background)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            ForEach(visibleEntries) { entry in
+            ForEach(store.visibleEntries) { entry in
                 CallHistoryRow(entry: entry,
                                onAudioCall: { peerId in
                     Task { await appState.startCall(contactId: peerId, video: false) }
