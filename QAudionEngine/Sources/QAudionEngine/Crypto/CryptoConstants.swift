@@ -129,9 +129,13 @@ public enum CryptoConstants {
     /// on the wire (echoing would defeat anti-rogue-KMS). Cert-pin /
     /// JWTSecret-derived / zeros placeholders are REJECTED by the contract.
     ///
-    /// NOTE: this default is the KAT/test identity. A production build MUST
-    /// override it with the deployment's `[kms] server_identity`.
-    public static let kmsServerIdentity = "qa-kms-test-server-2026-06-16"
+    /// Production identity (2026-08-20): "qa-kms-prod-server-v1", matching
+    /// bcrypto-server's config.production.toml `[kms] server_identity` and
+    /// the identical Android/Desktop/KmsServerIdentity.SERVER_IDENTITY
+    /// constants. The KAT/test identity ("qa-kms-test-server-2026-06-16",
+    /// frozen by gen_kms_v2_kat.py) is a separate, permanently-frozen string
+    /// used only to validate the vendored KAT vectors.
+    public static let kmsServerIdentity = "qa-kms-prod-server-v1"
 
     /// §3.0/§3.4: server_id = SHA-256("qa-kms-server-id-v1|" || identity).
     /// 32-byte provisioned constant fed into the qa-kms-pop-v1 PoP input.
