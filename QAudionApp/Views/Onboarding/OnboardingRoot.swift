@@ -51,6 +51,7 @@ struct OnboardingRoot: View {
         case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, inviteCode: String?)
         case profileSetup
         case extensionOnlyRegister
+        case extensionLogin
         case recoveryReveal
         case recoveryRestore
     }
@@ -63,6 +64,7 @@ struct OnboardingRoot: View {
                     onStartFastSetup: { route = .fastSetup },
                     onStartRegister: { route = .phoneEntry(.register) },
                     onStartLogin: { route = .phoneEntry(.login) },
+                    onStartExtensionLogin: { route = .extensionLogin },
                     onStartExtensionOnlyRegister: { route = .extensionOnlyRegister },
                     onStartRecoveryRestore: { startRecoveryRestore() },
                     // W459: pre-decode QR on WelcomeScreen itself, then
@@ -110,6 +112,12 @@ struct OnboardingRoot: View {
                     appState: appState,
                     onBack: { route = .welcome },
                     onRegistered: { startRecoveryReveal() }
+                )
+            case .extensionLogin:
+                ExtensionLoginScreen(
+                    appState: appState,
+                    onBack: { route = .welcome },
+                    onLoggedIn: { route = .welcome }  // ContentView switches to HomeView on its own
                 )
             case .recoveryReveal, .recoveryRestore:
                 if let container = recoveryContainer {

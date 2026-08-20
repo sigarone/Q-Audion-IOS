@@ -99,6 +99,23 @@ final class AuthService {
         return creds
     }
 
+    /// Login with a PBX extension number + password — the manual-entry
+    /// alternative to fast-setup's QR scan, restricted server-side to
+    /// Fast Setup accounts. See `AccountApi.loginWithExtension`.
+    func loginWithExtension(extension ext: Int64, password: String, serverUrl: String) async throws -> AuthCredentials {
+        let backendConfig = BackendConfig.pinned(serverUrl: serverUrl)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+        let deviceName: String
+        #if canImport(UIKit)
+        deviceName = await UIDevice.current.name
+        #else
+        deviceName = "iOS Device"
+        #endif
+        let creds = try await provider.accountApi.loginWithExtension(extension: ext, password: password, deviceName: deviceName)
+        saveCredentials(creds)
+        return creds
+    }
+
     func register(phoneNumber: String, password: String, inviteCode: String?, serverUrl: String) async throws -> String {
         let backendConfig = BackendConfig.pinned(serverUrl: serverUrl)
         let provider = BCryptoBackendProvider(config: backendConfig)

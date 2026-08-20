@@ -10,6 +10,12 @@ public protocol AccountApi {
     /// The hash value travels on the wire under the `phone_number` key to match
     /// the Android/server contract (`LoginRequest`).
     func login(phoneHash: String, password: String, deviceName: String) async throws -> AuthCredentials
+    /// Login with PBX extension number + password + device name. Restricted
+    /// server-side to Fast Setup accounts (accounts with no real phone
+    /// number) — a manual-entry alternative to the QR scan/upload, for
+    /// reviewers (App Store, Google Play) or anyone else who cannot scan a
+    /// QR image. Matches `POST /api/v1/auth/login/extension`.
+    func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials
     /// Refresh access token.
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair
     /// Logout (revokes all tokens).

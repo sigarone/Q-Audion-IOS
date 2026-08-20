@@ -26,6 +26,13 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
     }
 
+    public func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials {
+        let dict: [String: Any] = ["extension": ext, "password": password, "device_name": deviceName]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/login/extension", body: body)
+        return try JSONDecoder().decode(AuthCredentials.self, from: data)
+    }
+
     public func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair {
         let dict = ["refresh_token": refreshToken]
         let body = try JSONSerialization.data(withJSONObject: dict)

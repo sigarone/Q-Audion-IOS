@@ -3503,6 +3503,31 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Login with a PBX extension number + password — manual-entry
+    /// alternative to fast-setup's QR scan (`loginWithPhoneHash`), for a
+    /// Fast Setup account. Same post-login sequence as the other two
+    /// interactive login paths above; server rejects any account that
+    /// isn't Fast Setup with a generic "invalid credentials" (indistinguishable
+    /// from a wrong password), so the error message here stays generic too.
+    func loginWithExtension(extension ext: Int64, credential: String) async {
+        do {
+            let creds = try await authService.loginWithExtension(
+                extension: ext, password: credential, serverUrl: defaultServerUrl
+            )
+            currentUserId = creds.userId  // authService already persisted it (TokenVault)
+            isAuthenticated = true
+            errorMessage = nil
+            replayPendingTrackB()
+            connectPersistentSocket()
+            bindPresenceAfterAuth()
+            reassertVoipPushTokenRegistration()
+            reassertStandardApnsTokenRegistration()
+            refreshOwnDialExtension()
+        } catch {
+            errorMessage = "Login failed: \(error.localizedDescription)"
+        }
+    }
+
     /// 2026-07-29 — SMS-OTP / extension-only registration onboarding.
     /// Persists the credentials returned by `otp/verify` or
     /// `register/extension` (Keychain + UserDefaults, exactly like
