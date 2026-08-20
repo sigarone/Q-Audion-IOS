@@ -30,9 +30,12 @@ final class VideoNackFragmentCache: @unchecked Sendable {
     private let lock = NSLock()
     /// Insertion-ordered (Swift dictionaries don't preserve insertion
     /// order across mutation the way Kotlin's LinkedHashMap does), so a
-    /// parallel FIFO of keys tracks eviction order explicitly.
+    /// parallel FIFO of keys tracks eviction order explicitly. Advancing
+    /// `firstLiveIndex` is O(1); periodically compacting amortizes the copy
+    /// instead of shifting the whole queue for every eviction.
     private var entries: [Int64: Entry] = [:]
     private var insertionOrder: [Int64] = []
+    private var firstLiveIndex = 0
 
     private let maxAgeMs: Int64
     private let maxEntries: Int
@@ -69,25 +72,34 @@ final class VideoNackFragmentCache: @unchecked Sendable {
         return entries[Self.key(frameId: frameId, fragIdx: fragIdx)]
     }
 
-    /// Must be called with `lock` held. Pops stale entries from the front
-    /// (oldest first) — insertionOrder IS chronological order since each
-    /// (frameId, fragIdx) key is unique and never re-inserted.
+    /// Must be called with `lock` held. Advances past stale entries from the
+    /// front (oldest first) — insertionOrder IS chronological order since
+    /// each (frameId, fragIdx) key is unique and never re-inserted.
     private func evictStaleLocked(nowMs: Int64) {
         let cutoff = nowMs - maxAgeMs
-        var dropCount = 0
-        for k in insertionOrder {
-            guard let entry = entries[k] else { dropCount += 1; continue }
-            if entry.sentAtMs >= cutoff { break }
+        while firstLiveIndex < insertionOrder.count {
+            let k = insertionOrder[firstLiveIndex]
+            guard let entry = entries[k] else {
+                firstLiveIndex += 1
+                continue
+            }
+            if entry.sentAtMs >= cutoff {
+                break
+            }
             entries.removeValue(forKey: k)
-            dropCount += 1
-        }
-        if dropCount > 0 {
-            insertionOrder.removeFirst(min(dropCount, insertionOrder.count))
+            firstLiveIndex += 1
         }
         // Hard safety net, independent of the age-based sweep above.
-        while entries.count > maxEntries, let oldest = insertionOrder.first {
+        while entries.count > maxEntries, firstLiveIndex < insertionOrder.count {
+            let oldest = insertionOrder[firstLiveIndex]
             entries.removeValue(forKey: oldest)
-            insertionOrder.removeFirst()
+            firstLiveIndex += 1
+        }
+        // Avoid retaining an ever-growing prefix while only copying the
+        // bounded live window once enough consumed keys have accumulated.
+        if firstLiveIndex >= maxEntries {
+            insertionOrder.removeFirst(firstLiveIndex)
+            firstLiveIndex = 0
         }
     }
 
@@ -95,6 +107,7 @@ final class VideoNackFragmentCache: @unchecked Sendable {
         lock.lock()
         entries.removeAll()
         insertionOrder.removeAll()
+        firstLiveIndex = 0
         lock.unlock()
     }
 }
