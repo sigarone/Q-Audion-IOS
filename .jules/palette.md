@@ -9,3 +9,7 @@
 ## 2026-08-15 - [SwiftUI Expandable Components a11y]
 **Learning:** For custom expandable components built with `onTapGesture`, adding `.accessibilityElement(children: .combine)` prevents VoiceOver from reading every sub-element separately (e.g., lock icon, dot, text). Additionally, providing an `.accessibilityHint` explaining what tapping does (expand/collapse) makes the interaction discoverable.
 **Action:** When building custom expandable views, combine elements for a cleaner readout, ensure it has the `.isButton` trait, and provide state-aware `.accessibilityHint` strings.
+
+## 2026-08-20 - [Accessibility on custom tappable views (Image/Error states)]
+**Learning:** Custom interactive components like images with `onTapGesture` (e.g. to open full screen) or error state boxes (e.g. tap to retry) are not inherently identified as buttons by VoiceOver. Screen reader users won't know they are interactive.
+**Action:** Always add `.accessibilityAddTraits(.isButton)`, an `.accessibilityLabel()`, and an `.accessibilityHint()` explaining the action to any `Image`, `Rectangle`, or custom view modifier that uses an `onTapGesture` to trigger logic. For composite error boxes, group with `.accessibilityElement(children: .combine)`.
