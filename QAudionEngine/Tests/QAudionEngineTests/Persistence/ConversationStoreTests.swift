@@ -111,6 +111,38 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(updated.plaintext, "hello")
     }
 
+    /// Regression guard for the fetch-all/loop-save → `updateAll` rewrite:
+    /// the batched UPDATE must still touch only the row matching
+    /// `serverMessageId`, still leave `readAt` alone when the caller only
+    /// passes `deliveredAt` (mirrors the old per-row `readAt ?? msg.readAt`
+    /// fallback), still leave unrelated columns (`plaintext`) untouched, and
+    /// still report false when nothing matched.
+    func test_updateStatusByServerId_updatesOnlyMatchingRowAndRequestedFields() {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let sid = "srv-\(UUID().uuidString)"
+        let msg = Message(id: mid, conversationId: convId, direction: .outgoing,
+                          plaintext: "hello", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .sent,
+                          serverMessageId: sid)
+        store.appendMessage(msg)
+
+        let matched = store.updateStatusByServerId(
+            serverMessageId: sid, newStatus: .delivered,
+            deliveredAt: Date(timeIntervalSince1970: 1_745_001_000))
+        XCTAssertTrue(matched)
+        // Exactly one message was appended above for this conversationId; list is guaranteed non-empty.
+        // swiftlint:disable:next force_unwrapping
+        let updated = store.loadMessages(conversationId: convId).first!
+        XCTAssertEqual(updated.status, .delivered)
+        XCTAssertNotNil(updated.deliveredAt)
+        XCTAssertNil(updated.readAt)
+        XCTAssertEqual(updated.plaintext, "hello")
+
+        let unmatched = store.updateStatusByServerId(serverMessageId: "no-such-server-id", newStatus: .read)
+        XCTAssertFalse(unmatched)
+    }
+
     func test_wipeAll_clearsEverything() {
         store.upsertConversation(makeConv(id: convId))
         store.appendMessage(makeMsg(in: convId))

@@ -402,32 +402,27 @@ public final class ConversationStore {
                                        deliveredAt: Date? = nil, readAt: Date? = nil) -> Bool {
         do {
             return try db.writer.write { db in
-                let msgs = try Message.filter(Column("serverMessageId") == serverMessageId).fetchAll(db)
-                for var msg in msgs {
-                    msg = Message(
-                        id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
-                        plaintext: msg.plaintext, sentAt: msg.sentAt,
-                        deliveredAt: deliveredAt ?? msg.deliveredAt,
-                        readAt: readAt ?? msg.readAt,
-                        status: newStatus,
-                        senderUserId: msg.senderUserId,
-                        serverMessageId: msg.serverMessageId,
-                        mediaLocalPath: msg.mediaLocalPath,
-                        mediaDurationMs: msg.mediaDurationMs,
-                        mediaMimeType: msg.mediaMimeType,
-                        clientMsgId: msg.clientMsgId,
-                        edited: msg.edited,
-                        deletedAt: msg.deletedAt,
-                        reactions: msg.reactions,
-                        expiresAt: msg.expiresAt,
-                        isViewOnce: msg.isViewOnce,
-                        viewOnceOpened: msg.viewOnceOpened,
-                        exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
-                    )
-                    try msg.save(db)
+                // `status`/`deliveredAt`/`readAt` are plain (unsealed) columns
+                // — see `LocalStoreCipher` and `Message.encode(to:)`, only
+                // `plaintext` goes through the at-rest cipher — so a direct
+                // column-level UPDATE is safe here: it can't desync from the
+                // per-row seal because it never touches a sealed column.
+                // Replaces the previous fetch-all + per-row re-encode-and-save
+                // loop with one statement. Omitting an assignment (rather than
+                // writing `msg.deliveredAt`/`msg.readAt` back unchanged)
+                // reproduces the original "leave the existing value alone
+                // when the caller passed nil" behavior for every matched row.
+                var assignments: [ColumnAssignment] = [Column("status").set(to: newStatus.rawValue)]
+                if let deliveredAt {
+                    assignments.append(Column("deliveredAt").set(to: deliveredAt))
                 }
-                return !msgs.isEmpty
+                if let readAt {
+                    assignments.append(Column("readAt").set(to: readAt))
+                }
+                let updated = try Message
+                    .filter(Column("serverMessageId") == serverMessageId)
+                    .updateAll(db, assignments)
+                return updated > 0
             }
         } catch {
             print("[ConversationStore] updateStatusByServerId failed: \(error)")
