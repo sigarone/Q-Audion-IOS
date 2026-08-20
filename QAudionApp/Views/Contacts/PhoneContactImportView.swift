@@ -27,6 +27,7 @@ struct PhoneContactImportView: View {
     @State private var candidates: [PhoneCandidate] = []
     @State private var loading: Bool = false
     @State private var selectedCandidate: PhoneCandidate? = nil
+    @State private var filtered: [PhoneCandidate] = []
 
     struct PhoneCandidate: Identifiable {
         let id: String      // CNContact.identifier
@@ -44,15 +45,6 @@ struct PhoneContactImportView: View {
             return permission == .limited
         }
         return false
-    }
-
-    private var filtered: [PhoneCandidate] {
-        guard !searchText.isEmpty else { return candidates }
-        let q = searchText.lowercased()
-        return candidates.filter {
-            $0.displayName.lowercased().contains(q)
-            || $0.phoneNumbers.contains { $0.contains(q) }
-        }
     }
 
     var body: some View {
@@ -74,7 +66,16 @@ struct PhoneContactImportView: View {
                 candidateList
             }
         }
-        .onAppear { refreshIfAuthorized() }
+        .onAppear {
+            refreshIfAuthorized()
+            updateFiltered(with: candidates)
+        }
+        .onChange(of: searchText) { _ in
+            updateFiltered(with: candidates)
+        }
+        .onChange(of: candidates) { newCandidates in
+            updateFiltered(with: newCandidates)
+        }
         .sheet(item: $selectedCandidate) { candidate in
             ImportContactSheet(candidate: candidate) { stored in
                 // Security-review fix (2026-07-30): `stored` is always a
@@ -308,6 +309,22 @@ struct PhoneContactImportView: View {
             break
         }
     }
+
+    // MARK: - Filter logic
+
+    private func updateFiltered(with currentCandidates: [PhoneCandidate]) {
+        guard !searchText.isEmpty else {
+            filtered = currentCandidates
+            return
+        }
+        let q = searchText.lowercased()
+        filtered = currentCandidates.filter {
+            $0.displayName.lowercased().contains(q)
+            || $0.phoneNumbers.contains { $0.contains(q) }
+        }
+    }
+
+    // MARK: - Loading
 
     private func refreshIfAuthorized() {
         if isAccessGranted { loadCandidates() }

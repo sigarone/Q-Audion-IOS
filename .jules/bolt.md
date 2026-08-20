@@ -9,3 +9,7 @@
 ## 2024-05-31 - ISO8601DateFormatter inline instantiation overhead
 **Learning:** Just like `DateFormatter`, `ISO8601DateFormatter` instantiation is expensive and can become a severe performance bottleneck when done repeatedly, such as inside data serialization methods that process ring buffers or large data sets (`RuntimeLogSink.swift`).
 **Action:** Extract `ISO8601DateFormatter` instantiation to a `private static let` property when used in methods that are called frequently or that iterate over large arrays.
+
+## 2024-06-05 - Computed Property Performance (Continued)
+**Learning:** In SwiftUI, avoid placing O(N) operations like `.filter { ... }` inside view computed properties (e.g., `private var visibleEntries`) because they are executed on every single render pass, leading to stuttering during updates or animations.
+**Action:** Extract filtered lists into stored `@State` or `@Published` properties. Update them only when their dependencies change using `.onChange(of:)`, `.onAppear()`, or `didSet` property observers in view models.
