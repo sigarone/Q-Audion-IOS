@@ -148,15 +148,35 @@ struct PrivacySettingsScreen: View {
     // MARK: - C7 operational-diagnostics consent (audit 2026-08-19)
     //
     // Parity with Android `operationalDiagnosticsEnabled` / Desktop
-    // `SealedTelemetryService.enabled`: opt-in, default OFF. Bound
-    // through TelemetryService.setEnabled directly (not @AppStorage,
-    // same reasoning as screenshotProtectionEnabled/appLockEnabled
-    // above) because the setter has side effects — it arms/tears down
-    // the live flush timer immediately, not just a stored preference.
+    // `SealedTelemetryService.enabled`: opt-in, default OFF. Setter has
+    // side effects — it arms/tears down the live flush timer immediately,
+    // not just a stored preference.
+    //
+    // W-DIAGTOGGLE-DEAD (2026-08-20) — was a plain `Binding(get:set:)`
+    // over `TelemetryService.isEnabled`/`setEnabled`, no `@State`/
+    // `@Published` backing it. Reported live: the switch does not move at
+    // all on tap. `SettingsToggleRow`'s own `@Binding var isOn` mutation
+    // (`isOn.toggle()`, fired from the row's `.onTapGesture` — the native
+    // `Toggle` has `.allowsHitTesting(false)` and never receives the touch
+    // itself) invalidates that row, but nothing here ever confirmed a
+    // closure-only `Binding` with no SwiftUI-tracked storage underneath
+    // reliably re-renders through that path, and `TelemetryService
+    // .setEnabled` posts no notification either — unlike
+    // `screenshotProtectionEnabled`'s `.screenshotProtectionDidChange`,
+    // there is nothing else that could rescue a re-render if the direct
+    // path silently doesn't fire one. A real `@State` var is the one
+    // SwiftUI primitive guaranteed to invalidate on write regardless of
+    // that uncertainty — `TelemetryService.setEnabled` still runs as the
+    // side effect, this only fixes what drives the switch's own position.
+    @State private var operationalDiagnosticsToggleState: Bool = TelemetryService.isEnabled
+
     private var operationalDiagnosticsEnabled: Binding<Bool> {
         Binding(
-            get: { TelemetryService.isEnabled },
-            set: { TelemetryService.setEnabled($0) }
+            get: { operationalDiagnosticsToggleState },
+            set: { newValue in
+                operationalDiagnosticsToggleState = newValue
+                TelemetryService.setEnabled(newValue)
+            }
         )
     }
 
