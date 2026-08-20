@@ -1500,6 +1500,28 @@ final class AppState: ObservableObject {
     /// Capped so a flood of undecryptable frames can't grow unbounded.
     private var bufferedGroupWires: [(data: [String: Any], live: Bool)] = []
     private static let maxBufferedGroupWires = 128
+    /// W-AVATARPOLLUTE (2026-08-20) — same buffering idea as
+    /// `bufferedGroupWires`, one layer down: a 1:1 ciphertext whose decrypt
+    /// failed on the FIRST attempt because the PSK it was actually sealed
+    /// under hadn't landed in `SovereignKeyVault` yet. Device-log-confirmed:
+    /// `avatar_announce` fires the instant a fresh PSK becomes available on
+    /// EITHER side of a key exchange (`maybeAnnounceAvatarTo`, right below
+    /// `handleOffer`/`handleAccept`), but the two sides don't persist that
+    /// same PSK at the same wall-clock moment — whichever side sends first
+    /// can have its announce arrive before the other side's own handshake
+    /// leg has landed. Before this buffer, a first-attempt failure here was
+    /// final: `handleIncomingMessage` fell straight through to persisting
+    /// "[messaggio cifrato non leggibile]" as a REAL chat row — for BOTH a
+    /// stray control payload like this one and an actual user message, with
+    /// no way to tell which, since the type is only knowable after a
+    /// successful decrypt. One retry after the next key-exchange leg lands
+    /// resolves the transient case without ever showing it; only a SECOND
+    /// failure (a genuinely undecryptable message, or the exchange truly
+    /// didn't fix it) still surfaces to the user. Capped for the same
+    /// flood-safety reason as `bufferedGroupWires`.
+    private var bufferedOneToOneCiphertexts:
+        [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?)] = []
+    private static let maxBufferedOneToOneCiphertexts = 64
     /// 2026-07-17 — same buffering idea as `bufferedGroupWires`, but for a
     /// `group_metadata_changed`/GET-fetched metadata blob whose decrypt
     /// failed because the ACTOR's (the renaming admin's) recv chain isn't
@@ -7398,6 +7420,41 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// W-AVATARPOLLUTE — append with the same drop-oldest-on-overflow
+    /// bound as `bufferGroupWire`.
+    private func bufferOneToOneCiphertext(
+        senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?
+    ) {
+        bufferedOneToOneCiphertexts.append(
+            (senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId))
+        if bufferedOneToOneCiphertexts.count > Self.maxBufferedOneToOneCiphertexts {
+            bufferedOneToOneCiphertexts.removeFirst(
+                bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)
+        }
+    }
+
+    /// Re-run every 1:1 ciphertext buffered for THIS sender through the
+    /// receive path once a fresh PSK for them has just landed (either
+    /// `handleOffer` or `handleAccept` — see the W-AVATARPOLLUTE note on
+    /// `bufferedOneToOneCiphertexts`). `isRetry: true` — a second failure
+    /// falls through to the normal "[messaggio cifrato non leggibile]"
+    /// row instead of re-buffering, so a genuinely undecryptable message
+    /// still surfaces exactly once, never disappears.
+    private func retryBufferedOneToOneMessages(for senderId: String) {
+        guard bufferedOneToOneCiphertexts.contains(where: { $0.senderId == senderId }) else { return }
+        var remaining: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?)] = []
+        var toRetry: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?)] = []
+        for e in bufferedOneToOneCiphertexts {
+            if e.senderId == senderId { toRetry.append(e) } else { remaining.append(e) }
+        }
+        bufferedOneToOneCiphertexts = remaining
+        for e in toRetry {
+            handleIncomingMessage(
+                senderId: e.senderId, serverMsgId: e.serverMsgId, cipher: e.cipher,
+                clientMsgId: e.clientMsgId, isRetry: true)
+        }
+    }
+
     /// Re-run every buffered group METADATA blob through
     /// `decryptAndApplyGroupMetadataBlob` (e.g. after a sender_key_init
     /// install unblocked the renaming admin's recv chain). Still-undecryptable
@@ -7447,7 +7504,11 @@ final class AppState: ObservableObject {
         senderId: String,
         serverMsgId: String,
         cipher: Data,
-        clientMsgId: String?
+        clientMsgId: String?,
+        // W-AVATARPOLLUTE — true only when this exact ciphertext already
+        // failed once and is being replayed from `bufferedOneToOneCiphertexts`
+        // after a fresh key-exchange leg landed. See that buffer's kdoc.
+        isRetry: Bool = false
     ) {
         let crypto = MessageCrypto()
         let vault = SovereignKeyVault()
@@ -7733,8 +7794,7 @@ final class AppState: ObservableObject {
             // the counters carry a numeric tail because the redactor blobs
             // every non-numeric token (see PairwiseChainKeyResolver's own
             // note): `undec=1` is what survives the trip.
-            RTLog.error("chat", "msg_receive undec=1 from=\(senderId.prefix(8)): \(error)")
-            plaintext = "[messaggio cifrato non leggibile]"
+            RTLog.error("chat", "msg_receive undec=1 from=\(senderId.prefix(8)) retry=\(isRetry): \(error)")
             // W77b: auto-rekey on decrypt failure. Same pattern as
             // qaudion-desktop's `MessageService.on('needRekey')` → fires
             // a fresh KEY_EXCHANGE_OFFER with `force=true` so the next
@@ -7742,6 +7802,20 @@ final class AppState: ObservableObject {
             // the user from having to manually re-pair when keychains
             // get desynced (e.g. after one side reinstalls).
             triggerKeyExchange(with: senderId, force: true)
+            // W-AVATARPOLLUTE — a FIRST failure buffers instead of showing
+            // "[messaggio cifrato non leggibile]": most of these are an
+            // avatar_announce (or another control payload) racing its own
+            // key exchange, and a retry once that exchange's next leg lands
+            // usually opens it silently. Only a retry that ALSO fails falls
+            // through below — this is the one path allowed to actually show
+            // the failure row, so a truly undecryptable message still
+            // surfaces exactly once rather than vanishing.
+            if !isRetry {
+                bufferOneToOneCiphertext(
+                    senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId)
+                return
+            }
+            plaintext = "[messaggio cifrato non leggibile]"
         }
 
         // Persist into the conversation store. The conversation is
@@ -9264,11 +9338,15 @@ final class AppState: ObservableObject {
                     // above actually failed (maybeAnnounceAvatarTo fails
                     // closed on a missing PSK).
                     self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    // W-AVATARPOLLUTE — this PSK is exactly what a buffered
+                    // decrypt failure from this sender was probably missing.
+                    self?.retryBufferedOneToOneMessages(for: senderId)
                 }
             case .keyExchangeAccept(let pub):
                 Task { [weak self] in
                     await cke.handleAccept(senderId: senderId, peerPubKey: pub)
                     self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    self?.retryBufferedOneToOneMessages(for: senderId)
                 }
             case .offer:
                 Task { @MainActor [weak self] in
