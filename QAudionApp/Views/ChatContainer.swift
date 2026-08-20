@@ -1184,9 +1184,20 @@ final class ChatContainer: ObservableObject {
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
+            // W-OPTIMISTICTICK (2026-08-20) — was `.delivered` here,
+            // stamped the instant the upload finished, before any real
+            // `qa_att_receipt:1` ack. That made the sent->delivered tick
+            // fictional (see AppState.handleReceivedFileAttachment's
+            // "Bug found live 2026-08-18" note just above the real
+            // receipt handler — the design was always "sender starts at
+            // .sent, the real receipt advances it", this call site just
+            // never honored it). `.sent` is accurate: the upload reached
+            // the server; delivered/read now come only from the peer's
+            // real receipt, matched forward-only by rank in
+            // dispatchInboundOpaque's Path A2.
             self.store.updateMessageStatus(
                 id: msgId, conversationId: convId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .sent
             )
             self.refreshFromStore()
         }
@@ -1510,16 +1521,24 @@ final class ChatContainer: ObservableObject {
                     conversationId: convId,
                     serverMessageId: serverMsgId
                 )
+                // W-OPTIMISTICTICK (2026-08-20) — was `.delivered` here,
+                // stamped the instant the marker reached the server, not
+                // the peer. This path rides the normal msg_send channel
+                // (a real serverMessageId is bound just above), so the
+                // real delivered/read ticks now come from the same
+                // handleDeliveryReceipts/handleReadReceipts path plain
+                // text messages already use — no attachment-specific
+                // receipt needed here.
                 self.store.updateMessageStatus(
                     id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
+                    newStatus: .sent
                 )
                 // Successful full completion — clear the breadcrumb.
                 TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
             case .sent:
                 self.store.updateMessageStatus(
                     id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
+                    newStatus: .sent
                 )
                 TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
             case .failed(let reason):
@@ -1790,9 +1809,11 @@ final class ChatContainer: ObservableObject {
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
+            // W-OPTIMISTICTICK (2026-08-20) — see the identical fix on the
+            // voice-note send completion above for the full rationale.
             self.store.updateMessageStatus(
                 id: msgId, conversationId: convId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .sent
             )
             self.refreshFromStore()
         }
@@ -2101,9 +2122,11 @@ final class ChatContainer: ObservableObject {
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
+            // W-OPTIMISTICTICK (2026-08-20) — see the identical fix on the
+            // voice-note send completion above for the full rationale.
             self.store.updateMessageStatus(
                 id: msgId, conversationId: convId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .sent
             )
             self.refreshFromStore()
         }
