@@ -434,12 +434,13 @@ final class ChatContainer: ObservableObject {
             return armed
         }
         guard MeshFeature.enabled else { return nil }
-        guard let contact = appState?.cachedContacts.first(where: { $0.userId == peerUserId }),
-              let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return nil }
+        guard let contact = appState?.cachedContacts.first(where: { $0.userId == peerUserId }) else { return nil }
+        let nodeHexes = MeshFeature.nodeHexes(forContact: contact)
+        guard !nodeHexes.isEmpty else { return nil }
         let preference = MeshRoutingPreferenceStore().preference(for: peerUserId)
-        let reachable = MeshRuntime.shared.peers.contains { $0.nodeHex == nodeHex && $0.connected }
+        let reachablePeer = MeshRuntime.shared.peers.first { nodeHexes.contains($0.nodeHex) && $0.connected }
         switch meshRoutingDecision(
-            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachable
+            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachablePeer != nil
         ) {
         case .sendOverMesh, .queueForMesh:
             // queueForMesh only arises from "solo Bluetooth": that choice asks
@@ -450,7 +451,13 @@ final class ChatContainer: ObservableObject {
             // MeshOutboxDrain retries once the peer is back in range (or
             // gives up past MeshOutboxStore.maxAgeMs). See
             // docs/ble-mesh/IOS_BLE_MESH_DESIGN.md §6.
-            return MeshTargetSelection(nodeHex: nodeHex, displayName: contact.displayName)
+            //
+            // W-MESHUNKNOWN-IOS: prefer the hex a peer is actually
+            // advertising right now (a source may have gone stale); fall
+            // back to any known hex when none is currently reachable, same
+            // as the original single-source behavior for the queued case.
+            let targetHex = reachablePeer?.nodeHex ?? nodeHexes.first!
+            return MeshTargetSelection(nodeHex: targetHex, displayName: contact.displayName)
         case .sendOverNetwork:
             return nil
         }
@@ -934,7 +941,7 @@ final class ChatContainer: ObservableObject {
         guard !meshInbound.isEmpty else { return }
         let peerId = peerUserId
         guard let contact = appState.cachedContacts.first(where: { $0.userId == peerId }),
-              let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return }
+              let nodeHex = MeshFeature.nodeHexes(forContact: contact).first else { return }
         for msg in meshInbound {
             guard let cid = msg.clientMsgId else { continue }
             appState.sendMeshReceipt(

@@ -167,10 +167,11 @@ struct ChatDetailScreen: View {
         guard meshRuntime.antennaMode != nil else { return false }
         let peerUserId = container.viewModel.conversation.peerUserId
         guard !peerUserId.isEmpty,
-              let pubkey = ContactsStore().findPubkey(userId: peerUserId),
-              let nodeHex = MeshFeature.nodeId(forContactPubkey: pubkey)?.hex
+              let contact = ContactsStore().load().first(where: { $0.userId == peerUserId })
         else { return false }
-        return meshRuntime.peers.contains { $0.nodeHex == nodeHex }
+        let nodeHexes = MeshFeature.nodeHexes(forContact: contact)
+        guard !nodeHexes.isEmpty else { return false }
+        return meshRuntime.peers.contains { nodeHexes.contains($0.nodeHex) }
     }
     @ObservedObject private var meshRuntime = MeshRuntime.shared
     /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.

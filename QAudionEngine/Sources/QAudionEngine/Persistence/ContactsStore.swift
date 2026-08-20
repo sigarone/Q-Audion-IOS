@@ -142,6 +142,29 @@ public final class ContactsStore {
         /// different signal, not a real one. Mirrors Android's independent
         /// nullable `voiceVerifiedAt` column for the same reason.
         public let voiceVerifiedAt: Int64?
+        /// W-MESHUNKNOWN-IOS (2026-08-20, parity with Android
+        /// `ContactEntity.callVerifiedPeerIdentityKeyB64` /
+        /// `MeshNodeIdentity.kt`'s kdoc) — raw 32-byte Ed25519 identity key
+        /// this device verified the PEER's signature against on the most
+        /// recent completed call, written unconditionally on
+        /// (signature-verified handshake), no NFC required. `presenceAuth`
+        /// above only ever gets set from `AssuranceState.nfcAuthenticated`
+        /// (S2), which needs a physical NFC tap — so a pair of phones that
+        /// only ever place ordinary SAS-confirmed calls, iOS included, wrote
+        /// no authenticated copy of each other's identity key anywhere, and
+        /// `MeshSheetViewModel.resolveContact` (the mesh radar's own
+        /// "who owns this node id" lookup) could never name a device it had
+        /// just finished a real call with. Android closed this gap in
+        /// `armKcMacObservation` on 2026-08-14; iOS never got the matching
+        /// field, so a device could speak to a peer for weeks over the
+        /// public network and their phones would still show each other as
+        /// "Dispositivo non identificato" the moment they came into BLE
+        /// range. Weakest of the three identity-key sources (see
+        /// `PresenceAuth`'s doc for the ranking) — a signature-verified key
+        /// from ANY call, not an in-person confirmation — and is overwritten
+        /// by the next call's key rather than accumulated. `nil` until a
+        /// call with this contact has verified a signature at least once.
+        public let callVerifiedPeerIdentityKey: Data?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -154,7 +177,8 @@ public final class ContactsStore {
                     phoneNumber: String? = nil,
                     `extension`: String? = nil,
                     avatarVersion: Int? = nil,
-                    voiceVerifiedAt: Int64? = nil) {
+                    voiceVerifiedAt: Int64? = nil,
+                    callVerifiedPeerIdentityKey: Data? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -171,6 +195,7 @@ public final class ContactsStore {
             self.`extension` = `extension`
             self.avatarVersion = avatarVersion
             self.voiceVerifiedAt = voiceVerifiedAt
+            self.callVerifiedPeerIdentityKey = callVerifiedPeerIdentityKey
         }
     }
 
@@ -530,7 +555,8 @@ public final class ContactsStore {
                 phoneNumber: existing.phoneNumber ?? phoneNumber,
                 extension: existing.`extension` ?? extensionNumber,
                 avatarVersion: existing.avatarVersion,
-                voiceVerifiedAt: existing.voiceVerifiedAt
+                voiceVerifiedAt: existing.voiceVerifiedAt,
+                callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
             )
             current[idx] = patched
             save(current)
@@ -586,7 +612,8 @@ public final class ContactsStore {
             phoneNumber: existing.phoneNumber,
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: existing.voiceVerifiedAt
+            voiceVerifiedAt: existing.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
         )
         save(current)
         return true
@@ -682,7 +709,8 @@ public final class ContactsStore {
             phoneNumber: existing.phoneNumber,
             extension: existing.`extension`,
             avatarVersion: version,
-            voiceVerifiedAt: existing.voiceVerifiedAt
+            voiceVerifiedAt: existing.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
         )
         save(current)
         return Self.persisted(userId: userId, version: version, in: self)
@@ -714,7 +742,8 @@ public final class ContactsStore {
             phoneNumber: existing.phoneNumber,
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: Int64(date.timeIntervalSince1970 * 1000)
+            voiceVerifiedAt: Int64(date.timeIntervalSince1970 * 1000),
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
         )
         save(current)
         return true
@@ -787,7 +816,8 @@ public final class ContactsStore {
             phoneNumber: existing.phoneNumber,
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: existing.voiceVerifiedAt
+            voiceVerifiedAt: existing.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
         )
         save(current)
         return .filled
@@ -900,6 +930,44 @@ public final class ContactsStore {
         }
     }
 
+    /// W-MESHUNKNOWN-IOS (2026-08-20) — the ONE write path for
+    /// `callVerifiedPeerIdentityKey`. Parity with Android's
+    /// `contactDao.setCallVerifiedIdentityKey`, called from the call
+    /// controller's handshake-outcome handling unconditionally whenever a
+    /// call's peer signature verifies — no NFC, no dwell floor, no
+    /// `AssuranceState` gating, because this claims strictly less than
+    /// `presenceAuth` does (see the field's own doc). No-op if `peerUserId`
+    /// has no existing contact row (never creates one), same contract as
+    /// `applyAssuranceOutcome`. Overwrites any prior value unconditionally —
+    /// this is a snapshot of the MOST RECENT verified call, not an
+    /// accumulated/pinned record like `presenceAuth.firstConfirmedCallId`.
+    @discardableResult
+    public func setCallVerifiedIdentityKey(peerUserId: String, key: Data) -> StoredContact? {
+        guard let existing = load().first(where: { $0.userId == peerUserId }) else { return nil }
+        guard existing.callVerifiedPeerIdentityKey != key else { return existing }
+        let updated = StoredContact(
+            userId: existing.userId,
+            displayName: existing.displayName,
+            phoneHash: existing.phoneHash,
+            avatarUrl: existing.avatarUrl,
+            lastSeen: existing.lastSeen,
+            isVerified: existing.isVerified,
+            pubkey: existing.pubkey,
+            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+            verifiedAtMs: existing.verifiedAtMs,
+            verificationMethod: existing.verificationMethod,
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor,
+            phoneNumber: existing.phoneNumber,
+            extension: existing.`extension`,
+            avatarVersion: existing.avatarVersion,
+            voiceVerifiedAt: existing.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: key
+        )
+        upsert(updated)
+        return updated
+    }
+
     /// Reconstruct a `StoredContact` identical to `base` except for
     /// `presenceAuth`/`presenceFloor` — every OTHER field threaded through
     /// unchanged. Centralised here (rather than repeated inline at each
@@ -924,7 +992,8 @@ public final class ContactsStore {
             phoneNumber: base.phoneNumber,
             extension: base.`extension`,
             avatarVersion: base.avatarVersion,
-            voiceVerifiedAt: base.voiceVerifiedAt
+            voiceVerifiedAt: base.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: base.callVerifiedPeerIdentityKey
         )
     }
 }

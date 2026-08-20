@@ -59,4 +59,34 @@ public enum MeshFeature {
         guard let pubkey, !pubkey.isEmpty else { return nil }
         return MeshNodeId.from(identityKeyRaw: pubkey)
     }
+
+    /// W-MESHUNKNOWN-IOS (2026-08-20) — every authenticated identity key on
+    /// record for a contact: the QR/NFC-paired `pubkey`, the NFC-in-person
+    /// `presenceAuth.peerIdentityKey`, and the most recent
+    /// `callVerifiedPeerIdentityKey` from an ordinary signature-verified
+    /// call. Three call sites each grew their own one- or two-source version
+    /// of this check over time (`MeshSheetViewModel.resolveContact`'s radar
+    /// lookup, and `AppState`'s `msg_receive`/`receipt_receive` sender
+    /// attribution) and each stayed narrower than the others as the sources
+    /// were added — the radar recognising a device did not mean its incoming
+    /// mesh traffic would be accepted, and vice versa. One shared check so a
+    /// source added here can never again land in only one of the three.
+    public static func matchesNodeHex(_ nodeHex: String, contact: ContactsStore.StoredContact) -> Bool {
+        nodeHexes(forContact: contact).contains(nodeHex)
+    }
+
+    /// Every mesh node id hex `contact` could currently be advertising, from
+    /// the same three sources `matchesNodeHex` checks — normally one, more
+    /// than one only while sources briefly disagree (a rotation seen by one
+    /// path and not yet another). Empty when no authenticated identity key
+    /// is known for this contact at all. Used wherever a SEND path needs to
+    /// find `contact` among nearby advertisers (`MeshRuntime.shared.peers`)
+    /// rather than just answer yes/no for one specific hex — the reachable
+    /// check must see every source too, or a contact whose `pubkey` is
+    /// stale but whose `callVerifiedPeerIdentityKey` is fresh would resolve
+    /// on the radar yet never be selectable to actually send to.
+    public static func nodeHexes(forContact contact: ContactsStore.StoredContact) -> Set<String> {
+        let keys: [Data?] = [contact.pubkey, contact.presenceAuth?.peerIdentityKey, contact.callVerifiedPeerIdentityKey]
+        return Set(keys.compactMap { nodeId(forContactPubkey: $0)?.hex })
+    }
 }

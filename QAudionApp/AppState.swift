@@ -8190,7 +8190,7 @@ final class AppState: ObservableObject {
         // the sender's node id. Resolving it through the contact list also means
         // an unknown device's traffic is dropped without a decryption attempt.
         guard let senderContact = cachedContacts.first(where: {
-            MeshFeature.nodeId(forContactPubkey: $0.pubkey)?.hex == fromNodeHex
+            MeshFeature.matchesNodeHex(fromNodeHex, contact: $0)
         }) else {
             RTLog.warn("mesh", "msg_receive unknownsender=1")
             return
@@ -8328,7 +8328,7 @@ final class AppState: ObservableObject {
         guard let selfId = currentUserId else { return }
         guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
         guard let senderContact = cachedContacts.first(where: {
-            MeshFeature.nodeId(forContactPubkey: $0.pubkey)?.hex == fromNodeHex
+            MeshFeature.matchesNodeHex(fromNodeHex, contact: $0)
         }) else {
             RTLog.warn("mesh", "receipt_receive unknownsender=1")
             return
@@ -10501,6 +10501,22 @@ final class AppState: ObservableObject {
         // past `verifiedFingerprintHex`'s job of catching one), no-ops
         // harmlessly if already filled or if the contact has no row yet.
         ContactsStore().setIdentityPubkeyIfAbsent(userId: final.peerId, pubkey: peerIdentityKey)
+        // W-MESHUNKNOWN-IOS (2026-08-20) — `setIdentityPubkeyIfAbsent` just
+        // above only ever FILLS `pubkey`, by design (see its own comment) —
+        // it deliberately never overwrites a value already there, so a
+        // contact whose `pubkey` got set once to a now-stale key (an old
+        // reinstall, a device that later signed in elsewhere and rotated
+        // its identity) stays stuck on that stale value forever, and the
+        // mesh radar keeps failing to recognise their CURRENT device even
+        // though this device just finished verifying their CURRENT
+        // signature. `callVerifiedPeerIdentityKey` is the unconditional
+        // counterpart — overwritten on every call, exactly matching
+        // Android's `callVerifiedPeerIdentityKeyB64` (`CallController.kt`
+        // `armKcMacObservation`, gated only on a verified signature, no
+        // fill-if-absent semantics) — so a stale `pubkey` can no longer
+        // permanently block mesh recognition once a fresh call has verified
+        // a different key. `MeshSheetViewModel.resolveContact` checks both.
+        ContactsStore().setCallVerifiedIdentityKey(peerUserId: final.peerId, key: peerIdentityKey)
     }
 
     /// W534 — apply a remote `SCREEN_SHARE:start|stop` to the current
