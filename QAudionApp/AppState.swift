@@ -6423,17 +6423,7 @@ final class AppState: ObservableObject {
                 // and reconcile the outbound row directly by `clientMsgId`
                 // instead of falling through to the inbound pipeline.
                 if senderId == self.currentUserId, let cmid = clientMsgId, !cmid.isEmpty {
-                    let matched = ConversationStore().bindServerMessageId(
-                        clientMsgId: cmid,
-                        serverMessageId: serverMsgId
-                    )
-                    if matched {
-                        NotificationCenter.default.post(
-                            name: AppState.chatRefreshNotification,
-                            object: nil,
-                            userInfo: ["clientMsgId": cmid]
-                        )
-                    }
+                    self.bindServerMessageIdWithRetry(clientMsgId: cmid, serverMsgId: serverMsgId)
                     return
                 }
                 self.handleIncomingMessage(
@@ -8728,6 +8718,43 @@ final class AppState: ObservableObject {
         avatarAnnounceCoordinator.handleInbound(envelope, senderId: senderId)
     }
 
+    /// W-TICKSTUCK (2026-08-20) — binds the server-assigned message id to
+    /// the local outbound row from the SELF-ECHO `msg_receive` (see the
+    /// W78-fix note on `wireIncomingChatHandlers`). `bindServerMessageId`
+    /// matches by `clientMsgId`, which requires the local row to already be
+    /// committed via `store.appendMessage` — normally true well before the
+    /// echo round-trips through the server, but not guaranteed. Previously
+    /// a miss here was completely silent: no log, no retry, and the row's
+    /// `serverMessageId` stayed nil forever, so every later
+    /// `msg_delivered`/`msg_read` for it — which match by THAT field — could
+    /// never find it, and the tick was stuck at "sent" permanently with no
+    /// trace anywhere of why. One bounded retry after a short delay covers
+    /// the local-write-not-yet-committed case without the complexity of a
+    /// general buffer/replay; a miss that persists past the retry is now at
+    /// least logged, so a recurrence is diagnosable instead of invisible.
+    private func bindServerMessageIdWithRetry(clientMsgId: String, serverMsgId: String, isRetry: Bool = false) {
+        let matched = ConversationStore().bindServerMessageId(
+            clientMsgId: clientMsgId,
+            serverMessageId: serverMsgId
+        )
+        if matched {
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification,
+                object: nil,
+                userInfo: ["clientMsgId": clientMsgId]
+            )
+            return
+        }
+        if !isRetry {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+                self?.bindServerMessageIdWithRetry(
+                    clientMsgId: clientMsgId, serverMsgId: serverMsgId, isRetry: true)
+            }
+            return
+        }
+        RTLog.error("chat", "msg_receive self-echo bind failed clientMsgId=\(clientMsgId.prefix(8)) — tick will stay stuck")
+    }
+
     /// Mark the locally-stored copies of delivered messages as
     /// `.delivered` so the sender's UI flips the receipt icon.
     /// W78: server↔client id reconciliation now wired. ChatContainer
@@ -8738,11 +8765,14 @@ final class AppState: ObservableObject {
         let store = ConversationStore()
         let now = Date()
         var matchedAny = false
+        var unmatched: [String] = []
         for sid in ids {
             if store.updateStatusByServerId(serverMessageId: sid,
                                             newStatus: .delivered,
                                             deliveredAt: now) {
                 matchedAny = true
+            } else {
+                unmatched.append(sid)
             }
         }
         if matchedAny {
@@ -8752,6 +8782,16 @@ final class AppState: ObservableObject {
                 userInfo: ["deliveredServerIds": ids]
             )
         }
+        // W-TICKSTUCK (2026-08-20) — this receipt referenced a server id no
+        // local row carries. The two writers of that field (the direct
+        // `.delivered(serverMessageId)` outcome in ChatContainer.sendMessage,
+        // and this self-echo bind in wireIncomingChatHandlers) were both
+        // previously silent on failure, so a permanently-stuck single tick
+        // had no trace anywhere. Logged now so a recurrence is diagnosable
+        // from a remote pull instead of only from a screenshot.
+        if !unmatched.isEmpty {
+            RTLog.warn("chat", "msg_delivered unmatched=\(unmatched.count) of=\(ids.count)")
+        }
     }
 
     /// Mark the locally-stored messages as `.read` for the given sender.
@@ -8760,11 +8800,14 @@ final class AppState: ObservableObject {
         let store = ConversationStore()
         let now = Date()
         var matchedAny = false
+        var unmatched: [String] = []
         for sid in ids {
             if store.updateStatusByServerId(serverMessageId: sid,
                                             newStatus: .read,
                                             readAt: now) {
                 matchedAny = true
+            } else {
+                unmatched.append(sid)
             }
         }
         if matchedAny {
@@ -8773,6 +8816,10 @@ final class AppState: ObservableObject {
                 object: nil,
                 userInfo: ["readSenderId": senderId, "readServerIds": ids]
             )
+        }
+        // W-TICKSTUCK — see handleDeliveryReceipts's note just above.
+        if !unmatched.isEmpty {
+            RTLog.warn("chat", "msg_read unmatched=\(unmatched.count) of=\(ids.count) from=\(senderId.prefix(8))")
         }
     }
 
