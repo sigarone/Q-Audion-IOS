@@ -74,7 +74,14 @@ public final class GuardianMode: @unchecked Sendable {
         guard due else { lock.unlock(); return }
         lock.unlock()
 
-        let score = analyzer.analyze(pcmFrame: pcmFrame)
+        // 2026-08-21 — analyzer.analyze returns nil when there's no real
+        // inference yet (model loading, or the ~4s window still filling).
+        // MUST skip the EMA update on nil rather than feeding it a
+        // fabricated score — see VoiceprintAnalyzer.analyze's kdoc for the
+        // live symptom this fixes (confidence stuck near 50 for genuine
+        // voice because the "not ready" placeholder fired far more often
+        // than real inferences and dominated the EMA).
+        guard let score = analyzer.analyze(pcmFrame: pcmFrame) else { return }
         let level = confidence.update(score)
 
         lock.lock()

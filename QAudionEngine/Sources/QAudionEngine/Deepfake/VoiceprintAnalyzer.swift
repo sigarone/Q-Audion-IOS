@@ -26,9 +26,27 @@ public final class VoiceprintAnalyzer {
         _ = modelManager.loadModel()
     }
 
-    /// Analyze PCM frame for deepfake. Returns confidence [0.0=fake, 1.0=genuine].
-    public func analyze(pcmFrame: Data) -> Float {
-        guard modelManager.isLoaded() else { return 0.5 }
+    /// Analyze PCM frame for deepfake. Returns confidence [0.0=fake,
+    /// 1.0=genuine], or `nil` when there is no real score yet (model not
+    /// loaded, or the ~4s inference window hasn't filled).
+    ///
+    /// 2026-08-21 — this used to return a fabricated `0.5` for the "not
+    /// ready" cases. The ~4s window only produces a fresh inference every
+    /// ~2s (half the buffer is kept for overlap after each run, so it
+    /// takes ~2s of new audio to refill); `GuardianMode` samples this every
+    /// 100ms, so roughly 19 of every 20 calls landed on "not ready" and fed
+    /// that fabricated 0.5 straight into `ConfidenceIndex`'s EMA (alpha
+    /// 0.1) — which anchors an EMA fed mostly-0.5 close to 0.5 regardless
+    /// of how high the real, infrequent inferences score. Reported live:
+    /// genuine human voice held the on-screen confidence near 50 instead
+    /// of the 0.7-0.99 the model is calibrated for. `nil` here, and
+    /// `GuardianMode` skipping the EMA update on `nil` (mirrors
+    /// `SpeakerVerifier.computeVerificationScore()`'s own established
+    /// "nil, never a fabricated placeholder" discipline for the identical
+    /// class of problem), fixes it at the source instead of retuning EMA
+    /// constants that were never the actual defect.
+    public func analyze(pcmFrame: Data) -> Float? {
+        guard modelManager.isLoaded() else { return nil }
 
         let floatSamples = pcmBytesToFloat(pcmFrame)
 
@@ -42,7 +60,7 @@ public final class VoiceprintAnalyzer {
         let ready = sampleCount >= Self.samplesPerFrame * Self.framesNeeded
         bufferLock.unlock()
 
-        guard ready else { return 0.5 }
+        guard ready else { return nil }
 
         let score = performInference()
 
@@ -59,8 +77,10 @@ public final class VoiceprintAnalyzer {
         return score
     }
 
-    /// Downsample 48kHz → 16kHz and run ONNX inference.
-    private func performInference() -> Float {
+    /// Downsample 48kHz → 16kHz and run ONNX inference. `nil` on an
+    /// inference error — never a fabricated placeholder, same reasoning as
+    /// `analyze`'s own kdoc above.
+    private func performInference() -> Float? {
         bufferLock.lock()
         let samples48k = Array(sampleBuffer[0..<sampleCount])
         bufferLock.unlock()
@@ -88,7 +108,7 @@ public final class VoiceprintAnalyzer {
             let logit = try modelManager.runInference(waveform: input)
             return sigmoid(logit)
         } catch {
-            return 0.5
+            return nil
         }
     }
 
