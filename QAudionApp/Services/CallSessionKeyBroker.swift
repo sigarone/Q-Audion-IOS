@@ -128,7 +128,13 @@ public final class CallSessionKeyBroker {
     /// wired). 10 × 200ms = 2s, generous for a same-thread-hop UI-state
     /// race, short enough that a call that's genuinely wrong/stale just
     /// drops as before.
-    private static let sessionKeyRetryMaxAttempts = 10
+    // internal, not private — used as a default argument value on two
+    // `public func`s below; Swift evaluates default-arg expressions at the
+    // call site, so anything less than `internal` fails to compile for a
+    // caller outside this file (confirmed by the real CI failure this fixes:
+    // "static property 'sessionKeyRetryMaxAttempts' is private and cannot be
+    // referenced from a default argument value").
+    static let sessionKeyRetryMaxAttempts = 10
     private static let sessionKeyRetryIntervalNs: UInt64 = 200_000_000
 
     /// Call this from the PQC handshake completion path with the
