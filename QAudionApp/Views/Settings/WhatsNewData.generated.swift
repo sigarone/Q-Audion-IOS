@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1024",
+              date: "2026-08-22",
+              title: "v1.0.1024",
+              bullets: [
+                "fix(ci): enable Associated Domains capability on the main app Bundle ID",
+              ]),
         .init(id: "v1.0.1023",
               date: "2026-08-22",
               title: "v1.0.1023",
               bullets: [
+                "chore: regenerate changelog for v1.0.1023",
                 "feat(links): handle the email-verify Universal Link end to end",
                 "feat(links): declare associated-domains for Universal Links",
               ]),
@@ -163,14 +170,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1005",
                 "fix(entitlements): log redeem failures, distinguish connection errors",
-              ]),
-        .init(id: "v1.0.1004",
-              date: "2026-08-19",
-              title: "v1.0.1004",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1004",
-                "fix(profile): anchor self-avatar version to epoch time, matches Android fix",
-                "fix(chat): memoize pinned/regular conversation lists, fix PR #73's naming and test gaps, close it",
               ]),
     ]
 }
