@@ -89,10 +89,16 @@ public enum PrivacyGate {
     /// while in background.
     /// SECURITY M-28: Keychain-backed (security-affecting flag).
     public static var appLockEnabled: Bool {
-        return readSecureBoolWithDefault(
-            keyAppLockEnabled,
-            default: KeychainProtectionPolicy.shared.isAuthenticationAvailable
-        )
+        // Reverted 2026-08-21 — defaulting this to
+        // KeychainProtectionPolicy.shared.isAuthenticationAvailable (device
+        // has Face ID/Touch ID/passcode configured -> app-lock ON by
+        // default) traps a user with no way out: AppLockGateView has no
+        // skip/bypass button, so a user who doesn't want to authenticate on
+        // every launch has no path to the Settings toggle that would turn
+        // this off. Confirmed live on device (infinite "Sblocca" retry with
+        // no escape). Back to the explicit-opt-in-only default; the user
+        // can still turn it ON from PrivacySettingsScreen if they want it.
+        return readSecureBoolWithDefault(keyAppLockEnabled, default: false)
     }
 
     /// Background grace period before lock triggers, in milliseconds.

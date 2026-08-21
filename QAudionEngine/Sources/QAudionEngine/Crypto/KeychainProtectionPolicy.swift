@@ -69,8 +69,15 @@ public final class KeychainProtectionPolicy: @unchecked Sendable {
     /// resolves to [isAuthenticationAvailable] as the computed default. An
     /// explicit prior choice (either value) is always honored unchanged.
     public var isEnabled: Bool {
+        // Reverted 2026-08-21 — the isAuthenticationAvailable default (see
+        // the type doc above) shipped without the device validation its own
+        // checklist demands, and the sibling PrivacyGate.appLockEnabled
+        // default from the same decision was confirmed live to trap a user
+        // with a mandatory, unskippable Face ID prompt. Reverting this one
+        // too rather than leaving an unvalidated default live. Explicit
+        // prior choices (either value) are still honored unchanged.
         if defaults.object(forKey: Self.enabledDefaultsKey) == nil {
-            return isAuthenticationAvailable
+            return false
         }
         return defaults.bool(forKey: Self.enabledDefaultsKey)
     }
