@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1023",
+              date: "2026-08-22",
+              title: "v1.0.1023",
+              bullets: [
+                "feat(links): handle the email-verify Universal Link end to end",
+                "feat(links): declare associated-domains for Universal Links",
+              ]),
         .init(id: "v1.0.1022",
               date: "2026-08-21",
               title: "v1.0.1022",
               bullets: [
+                "chore: regenerate changelog for v1.0.1022",
                 "fix(diag): surface the real error reason in livelog upload failures",
                 "docs(security): identify + verify liboqs's real upstream provenance",
                 "docs(security): correct liboqs provenance claims, add Aikido SAST placeholder",
@@ -163,19 +171,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1004",
                 "fix(profile): anchor self-avatar version to epoch time, matches Android fix",
                 "fix(chat): memoize pinned/regular conversation lists, fix PR #73's naming and test gaps, close it",
-              ]),
-        .init(id: "v1.0.1003",
-              date: "2026-08-19",
-              title: "v1.0.1003",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1003",
-                "copy(entitlements): tighten Pro-gate wording across lock badges and upgrade sheet",
-                "fix(telemetry): gate TelemetryService behind operational-diagnostics consent (C7)",
-                "feat(chat): delivery/read receipts for the file-attachment + voice-note transport",
-                "fix(settings): self caller-id label respects LocalCallerIdSettings",
-                "feat(entitlements): live-format activation codes as you type; invite code required at registration",
-                "fix(auth): invite code is now mandatory at registration, client-side too",
-                "⚡ Bolt: Optimize ISO8601DateFormatter instantiation in RuntimeLogSink (#71)",
               ]),
     ]
 }
