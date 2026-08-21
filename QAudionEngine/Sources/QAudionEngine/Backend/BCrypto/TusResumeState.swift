@@ -1,5 +1,8 @@
 import Foundation
 import CryptoKit
+#if canImport(Security)
+import Security
+#endif
 
 /// W-TUSRESUME — persisted state for a previously-attempted-but-not-
 /// completed TUS upload, keyed by the outbound message's `clientMsgId`.
@@ -167,20 +170,44 @@ public struct TusResumeState: Codable, Equatable {
     }
 }
 
-/// UserDefaults-backed store for `[clientMsgId: TusResumeState]`. Single
+/// Keychain-backed store for `[clientMsgId: TusResumeState]`. Single
 /// key (not one-key-per-upload) — mirrors `PendingGroupInviteStore`'s
 /// rationale: avoids key-sprawl and makes "is there anything in flight"
-/// trivial to answer without enumerating `UserDefaults.dictionaryRepresentation()`.
+/// trivial to answer without enumerating.
+///
+/// Moving to Keychain secures sensitive info (recipient IDs, PSK hashes).
 public enum TusResumeStateStore {
 
-    private static let key = "qaudion.tus.resumeState.v1"
+    private static let keychainService = "com.bcrypto.qaudion.tusresume"
+    private static let keychainAccount = "resume_state_v1"
 
     /// Load the full map. Corrupted/missing data decodes to an empty
     /// map rather than throwing — this is best-effort local bookkeeping,
     /// never a hard dependency (see the corruption-check / graceful-
     /// degradation contract on the caller side in `TusUploadClient`).
     public static func loadAll() -> [String: TusResumeState] {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return [:] }
+        #if canImport(Security)
+        // Sweep/delete the legacy plaintext store to prevent data lingering.
+        UserDefaults.standard.removeObject(forKey: "qaudion.tus.resumeState.v1")
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else {
+            return [:]
+        }
+        #else
+        // Tests or platforms without Security framework
+        guard let data = UserDefaults.standard.data(forKey: "qaudion.tus.resumeState.v1") else { return [:] }
+        #endif
+
         guard let decoded = try? JSONDecoder().decode([String: TusResumeState].self, from: data) else {
             return [:]
         }
@@ -214,7 +241,35 @@ public enum TusResumeStateStore {
 
     private static func write(_ all: [String: TusResumeState]) {
         guard let data = try? JSONEncoder().encode(all) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+
+        #if canImport(Security)
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount
+        ]
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return
+        }
+        if updateStatus == errSecItemNotFound {
+            for (k, v) in attributes { query[k] = v }
+            SecItemAdd(query as CFDictionary, nil)
+            return
+        }
+        // Any other status: hard-reset
+        SecItemDelete(query as CFDictionary)
+        for (k, v) in attributes { query[k] = v }
+        SecItemAdd(query as CFDictionary, nil)
+        #else
+        UserDefaults.standard.set(data, forKey: "qaudion.tus.resumeState.v1")
+        #endif
     }
 
     // MARK: - Corruption check
