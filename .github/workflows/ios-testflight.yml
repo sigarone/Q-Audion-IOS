@@ -397,6 +397,81 @@ jobs:
             --certificate-key "@file:$CERT_KEY_PATH" \
             --strict-match-identifier
 
+          # -- Main app: Associated Domains --------------------------------
+          # v1.0.1023 (2026-08-21): Universal Links support was added
+          # (QAudionApp.entitlements now declares
+          # com.apple.developer.associated-domains for the
+          # applinks:q-audion.com / applinks:www.q-audion.com domains), but
+          # the App Store profile above was created before that capability
+          # existed on the Bundle ID -- xcodebuild archive rejected it
+          # immediately with:
+          #   "Provisioning profile ... doesn't include the Associated
+          #    Domains capability."
+          # Same class of fix as the VPN extension/broadcast extension
+          # below (same root cause: fetch-signing-files --create makes the
+          # Bundle ID/profile but does not add a capability that didn't
+          # exist yet) -- reusing that exact Phase 1-4 pattern here instead
+          # of a one-off manual portal fix, so this self-heals on every
+          # future run rather than needing to be redone if the profile is
+          # ever recreated from scratch.
+          #
+          # Phase 1: resolve the main app's Bundle ID resource id. Verified
+          # 2026-08-21 against the real installed codemagic-cli-tools source
+          # (codemagic/apple/resources/resource.py Resource.__str__) that
+          # plain `list`/`profiles` output (unlike fetch-signing-files' own
+          # custom progress log lines used elsewhere in this file) always
+          # starts each printed resource with a literal "Id: <RESOURCE_ID>"
+          # line -- confirmed by running both commands locally against the
+          # real Apple API with a syntactically-valid-but-unauthorized key
+          # (got a real 401 from the real endpoint, not an argparse error,
+          # i.e. the flags/subcommands below are real and accepted).
+          echo "Resolving main app Bundle ID resource id for capability check..."
+          MAIN_BID_LOOKUP=$(app-store-connect bundle-ids list \
+            --bundle-id-identifier "$BUNDLE_ID" --strict-match-identifier 2>&1 || true)
+          MAIN_BID_PLAIN=$(printf '%s\n' "$MAIN_BID_LOOKUP" | sed 's/\x1b\[[0-9;]*m//g')
+          MAIN_BID_RES=$(printf '%s\n' "$MAIN_BID_PLAIN" \
+            | grep -E '^Id: ' | head -1 | sed 's/^Id: //' || echo "")
+          echo "Main app Bundle ID res-id: ${MAIN_BID_RES:-UNKNOWN}"
+
+          if [ -n "$MAIN_BID_RES" ]; then
+            echo "Enabling Associated Domains on $MAIN_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$MAIN_BID_RES" --capability "Associated Domains" 2>&1 \
+              && echo "  ASSOCIATED_DOMAINS: done" \
+              || echo "  ASSOCIATED_DOMAINS: WARN (may already be enabled)"
+
+            # Phase 2: delete the stale profile (created before the
+            # capability existed) so --create below makes a fresh one that
+            # actually includes it. `bundle-ids profiles` (not `profiles
+            # list`, which has no --bundle-id-identifier filter) is the
+            # real subcommand for "profiles for this bundle id".
+            MAIN_PROF_LOOKUP=$(app-store-connect bundle-ids profiles \
+              --bundle-ids "$MAIN_BID_RES" --type IOS_APP_STORE 2>&1 || true)
+            MAIN_PROF_PLAIN=$(printf '%s\n' "$MAIN_PROF_LOOKUP" | sed 's/\x1b\[[0-9;]*m//g')
+            MAIN_PROF_RES=$(printf '%s\n' "$MAIN_PROF_PLAIN" \
+              | grep -E '^Id: ' | head -1 | sed 's/^Id: //' || echo "")
+            if [ -n "$MAIN_PROF_RES" ]; then
+              echo "Deleting stale main app profile $MAIN_PROF_RES (created without Associated Domains)..."
+              app-store-connect profiles delete "$MAIN_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            else
+              echo "WARNING: could not resolve main app profile resource -- relying on --create below."
+            fi
+
+            # Phase 3: re-create the main app profile. It will now include
+            # Associated Domains, satisfying the entitlements file.
+            echo "Re-creating main app signing files with Associated Domains..."
+            app-store-connect fetch-signing-files "$BUNDLE_ID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "WARNING: could not resolve main app Bundle ID resource -- archive may still fail on Associated Domains."
+          fi
+
           # ?? VPN extension: App Groups + Network Extensions ???????????????????
           # QAudionPacketTunnel.entitlements requires both capabilities.
           # fetch-signing-files --create creates the Bundle ID but NOT the
