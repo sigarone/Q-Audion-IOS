@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1022",
+              date: "2026-08-21",
+              title: "v1.0.1022",
+              bullets: [
+                "fix(diag): surface the real error reason in livelog upload failures",
+                "docs(security): identify + verify liboqs's real upstream provenance",
+                "docs(security): correct liboqs provenance claims, add Aikido SAST placeholder",
+                "chore: gitignore stale agent-runner scratch, commit orphaned handover doc",
+              ]),
         .init(id: "v1.0.1021",
               date: "2026-08-21",
               title: "v1.0.1021",
               bullets: [
+                "chore: regenerate changelog for v1.0.1021",
                 "fix(livekit): bump AES-256 fork pin to 2.16.0 rebase (raw4)",
                 "docs(security): point to CERTIFICATION_STATUS.md for cert-closed checks",
                 "fix(livekit): rebase AES-256 fork onto 2.15.3, fixes ITMS-90338",
@@ -166,13 +176,6 @@ extension ReleaseNote {
                 "feat(entitlements): live-format activation codes as you type; invite code required at registration",
                 "fix(auth): invite code is now mandatory at registration, client-side too",
                 "⚡ Bolt: Optimize ISO8601DateFormatter instantiation in RuntimeLogSink (#71)",
-              ]),
-        .init(id: "v1.0.1002",
-              date: "2026-08-18",
-              title: "v1.0.1002",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1002",
-                "fix(entitlements): CapabilityGate.previewInstance() must not be #if DEBUG",
               ]),
     ]
 }
