@@ -367,9 +367,24 @@ public final class LiveLogStreamer {
             // pump never having started. "net" (not "livelog") so this
             // actually ships once the pump recovers, instead of being
             // filtered out by entriesSince's own livelog self-exclusion.
+            //
+            // W-LIVELOGSILENTFAIL (2026-08-21): the line used to stop at
+            // seq/totalfail — a bare failure COUNT with no REASON, so a run
+            // of failures was visible but undiagnosable from the server
+            // side (confirmed live: a call session logged
+            // "totalfail=4" and nothing else ever shipped from that
+            // device for the rest of the call, no way to tell why).
+            // `TusUploadClient.TusError` already conforms to
+            // `LocalizedError` with a real per-case message ("TUS create
+            // failed: HTTP 401", "TUS patch failed: HTTP 404", ...) — it
+            // was just never read here. Appending it costs nothing (this
+            // whole pump is already gated on explicit consent, C-10) and
+            // turns the next occurrence into an actionable line instead of
+            // a dead end.
             let seqStr: String = String(seq)
             let failStr: String = String(failedUploads)
-            let line: String = "livelog upload error seq=" + seqStr + " totalfail=" + failStr
+            let reason: String = error.localizedDescription
+            let line: String = "livelog upload error seq=" + seqStr + " totalfail=" + failStr + " reason=" + reason
             RTLog.warn("net", line)
         }
     }
