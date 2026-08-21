@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1011",
+              date: "2026-08-21",
+              title: "v1.0.1011",
+              bullets: [
+                "fix(build): TestFlight v1.0.1010 compile failures",
+              ]),
         .init(id: "v1.0.1010",
               date: "2026-08-21",
               title: "v1.0.1010",
               bullets: [
+                "chore: regenerate changelog for v1.0.1010",
                 "fix(security): I3 §5 — iOS-as-initiator PQC re-key + v4 ratchet reset fix",
                 "fix(security): I3 — mid-call PQC re-key content-based dedup",
                 "fix(security): MASVS remediation — telemetry consent, biometric default, DB backup exclusion, rekey scaffold",
@@ -193,13 +200,6 @@ extension ReleaseNote {
                 "fix(identity): stop passing AppState directly into AccountIdentityLabels.make",
                 "feat(call): port fragment-level NACK/retransmission (W-VNACK) from Android",
                 "fix(settings): resolve Toggle/onTapGesture conflict in PR #63, close it",
-              ]),
-        .init(id: "v1.0.991",
-              date: "2026-08-15",
-              title: "v1.0.991",
-              bullets: [
-                "chore: regenerate changelog for v1.0.991",
-                "fix(ui): move Q-AUDION wordmark banner off shared safeAreaInset, inline per screen",
               ]),
     ]
 }
