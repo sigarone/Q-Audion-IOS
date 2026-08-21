@@ -120,6 +120,31 @@ struct QAudionApp: App {
             .onChange(of: scenePhase) { newPhase in
                 handleScenePhase(newPhase)
             }
+            // W-EMAILVERIFYLINK — Universal Link entry point (parity with
+            // Android's App Link intent-filter). associated-domains in
+            // QAudion.entitlements is what makes the OS route the tapped
+            // link here instead of Safari; AppState does the actual
+            // host/path/token parsing so this stays a one-liner.
+            .onOpenURL { url in
+                appState.handleIncomingUniversalLink(url)
+            }
+            .sheet(isPresented: Binding(
+                get: { appState.pendingEmailVerifyToken != nil },
+                set: { if !$0 { appState.pendingEmailVerifyToken = nil } }
+            )) {
+                // `.sheet`'s content inherits the environment of the view
+                // this modifier is attached to (the ZStack) — appState is
+                // only injected further down, onto ContentView() — so it
+                // must be added explicitly here too, or the view's
+                // `@EnvironmentObject var appState: AppState` fatals at
+                // presentation time with "No ObservableObject found".
+                if let token = appState.pendingEmailVerifyToken {
+                    EmailVerifyConfirmView(token: token) {
+                        appState.pendingEmailVerifyToken = nil
+                    }
+                    .environmentObject(appState)
+                }
+            }
             .onAppear {
                 // W416: ring-buffer stdout tee from launch for live telemetry.
                 RuntimeLogSink.shared.attachStdoutTee()

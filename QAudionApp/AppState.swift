@@ -1193,6 +1193,38 @@ final class AppState: ObservableObject {
     /// `join()` immediately: no ring, no accept/reject — audit gap).
     @Published var incomingGroupCallInvite: IncomingGroupCallInvite?
 
+    /// W-EMAILVERIFYLINK (2026-08-21) — non-nil while the email-verify-landing
+    /// confirm sheet should be presented, holding the token extracted from
+    /// the Universal Link. Parity with Android's `QAudionRoute.EmailVerifyConfirm`
+    /// (`MainActivity.resolveStartRoute`): email verification always redeems
+    /// against the ALREADY-authenticated session — there is no "restore a lost
+    /// session" case here — so this is a plain presented/dismissed token, not
+    /// a cold-start latch like `pendingGroupCallJoinId` above (the entitlement
+    /// that makes this link even reach the app, `com.apple.developer.
+    /// associated-domains`, requires the OS to already consider a foreground-
+    /// capable app installed; a truly cold, logged-out launch just shows the
+    /// "Accedi..." failure state below rather than needing a queue).
+    @Published var pendingEmailVerifyToken: String?
+
+    /// Parses an incoming URL against the same host/path the server's
+    /// `apple-app-site-association` advertises and the Android App Link's
+    /// intent-filter matches (`voip.bcrypto.com/api/v1/auth/email/
+    /// verify-landing?token=...`). Ignores anything else — this is the
+    /// ONLY Universal Link path declared today (see AASA's `paths` array in
+    /// bcrypto-server's `cmd/bcrypto-lite/main.go`).
+    @MainActor
+    func handleIncomingUniversalLink(_ url: URL) {
+        guard url.host == "voip.bcrypto.com",
+              url.path.hasPrefix("/api/v1/auth/email/verify-landing") else { return }
+        guard let token = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "token" })?.value,
+            !token.isEmpty else {
+            RTLog.warn("account", "email verify-landing link with no token; ignoring")
+            return
+        }
+        pendingEmailVerifyToken = token
+    }
+
     /// W-GRPRING — the CallKit UUID we reported for the pending/active group
     /// call, so `onAnswerCall` / `onEndCall` can tell a GROUP call apart from
     /// a 1:1 one and route to the group accept/leave path instead of the 1:1
