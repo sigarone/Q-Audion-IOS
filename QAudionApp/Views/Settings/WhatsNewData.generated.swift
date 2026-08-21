@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1015",
+              date: "2026-08-21",
+              title: "v1.0.1015",
+              bullets: [
+                "fix(ios): sessionKeyRetryMaxAttempts needs public, not just internal",
+              ]),
         .init(id: "v1.0.1014",
               date: "2026-08-21",
               title: "v1.0.1014",
               bullets: [
+                "chore: regenerate changelog for v1.0.1014",
                 "fix(ios): sessionKeyRetryMaxAttempts must not be private for use as a public default arg",
               ]),
         .init(id: "v1.0.1013",
@@ -189,13 +196,6 @@ extension ReleaseNote {
                 "🛡️ Sentinel: [Security Improvement] Redact FastSetupPayload plaintext password from debug logs (#66)",
                 "⚡ Bolt: Extract DateFormatters to static let for performance (#67)",
                 "🎨 Palette: Improve accessibility of tap-to-copy rows (#68)",
-              ]),
-        .init(id: "v1.0.995",
-              date: "2026-08-16",
-              title: "v1.0.995",
-              bullets: [
-                "chore: regenerate changelog for v1.0.995",
-                "fix(identity): recognize Device-<hex> as a placeholder name (iOS parity)",
               ]),
     ]
 }
