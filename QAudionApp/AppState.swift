@@ -3116,7 +3116,7 @@ final class AppState: ObservableObject {
                         fallbackName: payload.callerName
                     )
                 }
-                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId) hasVideo=\(payload.hasVideo) reportedHasVideo=true(forced)"
+                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId.uuidString.prefix(8))… hasVideo=\(payload.hasVideo) reportedHasVideo=true(forced)"
                 print(pkDiag)
                 // W-CALLKITVIDEOFORCE (2026-07-27, Pavel) — always report
                 // hasVideo=true to CallKit regardless of the real call type.
@@ -3161,7 +3161,7 @@ final class AppState: ObservableObject {
                 }
                 // Pre-bound single-segment locals — SWIFT6_PATTERNS rule 1 (no
                 // multi-segment interpolation inside a closure).
-                let grpUuid: String = String(describing: prepared.uuid)
+                let grpUuid: String = String(prepared.uuid.uuidString.prefix(8)) + "…"
                 let grpPresented: String = String(describing: prepared.presented)
                 let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented
                 print(grpDiag)
@@ -4845,7 +4845,7 @@ final class AppState: ObservableObject {
                         UIApplication.shared.applicationState == .active
                     }
                     let wsDiagVideo: Bool = (callType == "video")
-                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID) hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground)"
+                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground)"
                     print(wsDiag)
                     let useCustomUI = CallsGate.callKitFreeMode
                     if !alreadyRegisteredByPushKit {
@@ -7824,7 +7824,7 @@ final class AppState: ObservableObject {
                 default:
                     // W403: dropped "group_invite_decline" (was dead code:
                     // a declined invite is just an ignored sender_key_init).
-                    print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId)")
+                    print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId.prefix(8))…")
                 }
                 // W-GRPMSG: a freshly-installed recv chain may unblock
                 // group TEXT frames we buffered because they arrived
@@ -8151,7 +8151,7 @@ final class AppState: ObservableObject {
                         )
                     }
                 } catch {
-                    print("[AppState] attachment receive failed from \(senderId): \(error)")
+                    print("[AppState] attachment receive failed from \(senderId.prefix(8))…: \(error)")
                     // Leave the placeholder text in place; user can
                     // tap a retry CTA in a future patch (snackbar
                     // not surfaced today to avoid noise on transient
@@ -8201,7 +8201,7 @@ final class AppState: ObservableObject {
                         )
                     }
                 } catch {
-                    print("[AppState] attach_announce receive failed from \(senderId): \(error)")
+                    print("[AppState] attach_announce receive failed from \(senderId.prefix(8))…: \(error)")
                 }
             }
         }
@@ -8598,7 +8598,7 @@ final class AppState: ObservableObject {
             return
         }
         if original.senderUserId != envelopeSenderId {
-            print("[AppState] qa_ctl envelope: sender mismatch (envelope=\(envelopeSenderId), original=\(original.senderUserId ?? "?")) — rejected")
+            print("[AppState] qa_ctl envelope: sender mismatch (envelope=\(envelopeSenderId.prefix(8))…, original=\(String((original.senderUserId ?? "?").prefix(8)))…) — rejected")
             return
         }
         // Apply.
@@ -10743,7 +10743,7 @@ final class AppState: ObservableObject {
         }
         guard let integration = callService.callIntegration,
               let provider = liveProvider else {
-            print("[AppState] PQC ACCEPT arrived from \(senderId) with no caller integration")
+            print("[AppState] PQC ACCEPT arrived from \(senderId.prefix(8))… with no caller integration")
             return
         }
         // Reuse the same opaque sender the caller startCall built.
@@ -12877,7 +12877,7 @@ final class AppState: ObservableObject {
                             callerDisplay: webRtcCallerDisplay,
                             callId: webRtcCallId
                         )
-                        print("[AppState] WebRTC outgoing offer sent to \(contactId)")
+                        print("[AppState] WebRTC outgoing offer sent to \(contactId.prefix(8))…")
                         // After startOutgoingCall the WebRTC video source exists.
                         // Wire VideoCallPipeline → RTCVideoSource so Android
                         // receives real camera video over WebRTC RTP.
@@ -14763,7 +14763,7 @@ extension AppState {
                     // K_video (salt = psk, not the default string).
                     ctrl.videoContactPsk = self.callVideoPsk
                     ctrl.pqcSessionKey = key
-                    print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId))")
+                    print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId.prefix(8))…)")
                 }
                 #endif
                 // W394 + Task 10: rotate the video pipeline's sealer with
@@ -14958,20 +14958,20 @@ extension AppState {
     @MainActor
     fileprivate func handleInboundGroupInvite(json: String, fromUserId senderId: String) {
         guard let env = GroupInviteEnvelope.decodeInvite(json) else {
-            print("[AppState] handleInboundGroupInvite: malformed JSON from \(senderId)")
+            print("[AppState] handleInboundGroupInvite: malformed JSON from \(senderId.prefix(8))…")
             return
         }
         // Sanity: the sender must actually be in the admins list of
         // the invite. A spoofed invite from a non-admin is rejected
         // (defense-in-depth — the sender_id is server-overridden).
         guard env.admins.contains(senderId) || env.from == senderId else {
-            print("[AppState] handleInboundGroupInvite: sender \(senderId) not in admins of invite for group \(env.g) — rejecting")
+            print("[AppState] handleInboundGroupInvite: sender \(senderId.prefix(8))… not in admins of invite for group \(env.g.prefix(8))… — rejecting")
             return
         }
         // If we're already in this group, treat as a no-op (idempotent
         // re-invites are valid for offline peers replaying).
         if GroupRegistry.shared.entry(for: env.g) != nil {
-            print("[AppState] handleInboundGroupInvite: already member of \(env.g), ignoring re-invite")
+            print("[AppState] handleInboundGroupInvite: already member of \(env.g.prefix(8))…, ignoring re-invite")
             return
         }
         // W-GRPDEL — an invite for a group this device deleted is still
@@ -15064,7 +15064,7 @@ extension AppState {
         // session if it bootstrapped.
         GroupRegistry.shared.remove(groupId: groupId)
         GroupChatService.shared.invalidate(groupId: groupId)
-        print("[AppState] declined invite for group \(groupId) from admin \(admin) (no decline envelope shipped — W403 alignment)")
+        print("[AppState] declined invite for group \(groupId.prefix(8))… from admin \(admin.prefix(8))… (no decline envelope shipped — W403 alignment)")
     }
 
     /// Public API: admin creates a new group and ships invites to
@@ -15383,7 +15383,7 @@ extension AppState {
     fileprivate func handleInboundMemberLeft(json: String, fromUserId senderId: String) {
         guard let env = GroupInviteEnvelope.decodeMemberLeft(json) else { return }
         guard env.member == senderId else {
-            print("[AppState] member_left from \(senderId) but member=\(env.member) — rejecting")
+            print("[AppState] member_left from \(senderId.prefix(8))… but member=\(env.member.prefix(8))… — rejecting")
             return
         }
         applyMemberRemoved(
@@ -15410,7 +15410,7 @@ extension AppState {
             // Future: bind GroupRegistry.Entry.epoch and compare exactly.
             _ = entry  // silence unused if no future field added
             if envEpoch != 0 && envEpoch < 1 {
-                print("[AppState] legacy \(env.t) for \(env.g) e=\(envEpoch) below local epoch — dropping (replay/downgrade defense)")
+                print("[AppState] legacy \(env.t) for \(env.g.prefix(8))… e=\(envEpoch) below local epoch — dropping (replay/downgrade defense)")
                 return
             }
         }
@@ -15425,7 +15425,7 @@ extension AppState {
                 member: env.member, from: resolvedFrom, senderId: senderId,
                 voluntary: false)
         }
-        print("[AppState] DEPRECATED qa_grp legacy token \(env.t) processed (sender=\(senderId), group=\(env.g))")
+        print("[AppState] DEPRECATED qa_grp legacy token \(env.t) processed (sender=\(senderId.prefix(8))…, group=\(env.g.prefix(8))…)")
     }
 
     // MARK: - W403 shared apply helpers
@@ -15441,7 +15441,7 @@ extension AppState {
             // (server might rewrite sender_id; the from field is our
             // ground-truth admin claim, but it MUST be in admins[]).
             guard entry.admins.contains(adminUserId) || entry.admins.contains(senderId) else {
-                print("[AppState] member_added from non-admin \(senderId)/from=\(adminUserId) for \(groupId) — rejecting")
+                print("[AppState] member_added from non-admin \(senderId.prefix(8))…/from=\(adminUserId.prefix(8))… for \(groupId.prefix(8))… — rejecting")
                 return
             }
             GroupRegistry.shared.addMember(groupId: groupId, userId: member)
@@ -15514,7 +15514,7 @@ extension AppState {
         guard let entry = GroupRegistry.shared.entry(for: groupId) else { return }
         if !voluntary {
             guard entry.admins.contains(sender) || entry.admins.contains(senderId) else {
-                print("[AppState] member_removed from non-admin \(senderId)/from=\(sender) for \(groupId) — rejecting")
+                print("[AppState] member_removed from non-admin \(senderId.prefix(8))…/from=\(sender.prefix(8))… for \(groupId.prefix(8))… — rejecting")
                 return
             }
         }
@@ -17892,7 +17892,7 @@ extension AppState {
             }
             abr.start()
             self.abrController = abr
-            print("[AppState] video pipeline up for peer \(peerId), ABR active")
+            print("[AppState] video pipeline up for peer \(peerId.prefix(8))…, ABR active")
         } catch let err as VideoCallPipeline.PipelineError {
             // W393: user-visible error surfacing. The audio call keeps
             // running; only the video portion is degraded. Surface a
@@ -18421,7 +18421,7 @@ extension AppState {
         let fingerprint = String(Data(SHA256.hash(data: rk0)).map { String(format: "%02x", $0) }.joined().prefix(16))
         do {
             try vault.storePsk(name: name, key: rk0, fingerprint: fingerprint)
-            print("[AppState] KmsPreBootstrap: installed RK_0 PSK peer=\(peer.prefix(8))… name=\(name)")
+            print("[AppState] KmsPreBootstrap: installed RK_0 PSK peer=\(peer.prefix(8))… name=auto:\(prefix)…")
         } catch {
             print("[AppState] KmsPreBootstrap: installRatchetSeed failed peer=\(peer.prefix(8))…: \(error)")
         }

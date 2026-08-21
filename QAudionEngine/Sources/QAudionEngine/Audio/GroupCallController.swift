@@ -1262,11 +1262,11 @@ public final class GroupCallController: @unchecked Sendable {
         lock.unlock()
         guard let decoder = decoder else { return }
         guard let opus = opus else {
-            print("[GroupCallController] open failed sender=\(senderId)")
+            print("[GroupCallController] open failed sender=\(senderId.prefix(8))…")
             return
         }
         guard let pcm = decoder.decode(opus) else {
-            print("[GroupCallController] opus decode failed sender=\(senderId)")
+            print("[GroupCallController] opus decode failed sender=\(senderId.prefix(8))…")
             return
         }
         onIncomingPcmFrame?(senderId, pcm)

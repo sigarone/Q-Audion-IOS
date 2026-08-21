@@ -263,7 +263,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // The previous version had no log here, so when the Android peer
         // got "ghost call" the maintainer had no signal that iOS even
         // tried to send the hangup.
-        print("[BCryptoCalling] sendHangup call_id=\(cid) recipientId=\(recipientId)")
+        print("[BCryptoCalling] sendHangup call_id=\(cid.prefix(8))… recipientId=\(recipientId.prefix(8))…")
         ws.send(
             type: "call_hangup",
             data: [

@@ -185,7 +185,7 @@ public final class GroupChatService {
         guard let buffered = bufferedInits.removeValue(forKey: groupId), !buffered.isEmpty else {
             return
         }
-        print("[GroupChatService] replaying \(buffered.count) buffered ctl envelopes for group \(groupId)")
+        print("[GroupChatService] replaying \(buffered.count) buffered ctl envelopes for group \(groupId.prefix(8))…")
         for entry in buffered {
             switch entry.kind {
             case "sender_key_init":
@@ -408,7 +408,7 @@ public final class GroupChatService {
     ) {
         guard let data = envelopeJson.data(using: .utf8),
               let env = try? JSONDecoder().decode(SenderKeyInitEnvelope.self, from: data) else {
-            print("[GroupChatService] handleInboundSenderKeyInit: malformed JSON from \(fromUserId)")
+            print("[GroupChatService] handleInboundSenderKeyInit: malformed JSON from \(fromUserId.prefix(8))…")
             return
         }
         // W395: if no local session yet, BUFFER instead of drop. When
@@ -422,7 +422,7 @@ public final class GroupChatService {
         do {
             try engine.handleSenderKeyInit(state: state, env: env, fromUserId: fromUserId)
         } catch {
-            print("[GroupChatService] handleInboundSenderKeyInit failed (group=\(env.g), from=\(fromUserId)): \(error)")
+            print("[GroupChatService] handleInboundSenderKeyInit failed (group=\(env.g.prefix(8))…, from=\(fromUserId.prefix(8))…): \(error)")
         }
     }
 
@@ -437,7 +437,7 @@ public final class GroupChatService {
     ) {
         guard let data = envelopeJson.data(using: .utf8),
               let env = try? JSONDecoder().decode(SenderKeyRotateEnvelope.self, from: data) else {
-            print("[GroupChatService] handleInboundSenderKeyRotate: malformed JSON from \(fromUserId)")
+            print("[GroupChatService] handleInboundSenderKeyRotate: malformed JSON from \(fromUserId.prefix(8))…")
             return
         }
         guard let state = loadExistingSession(groupId: env.g, selfId: selfId) else {
@@ -449,7 +449,7 @@ public final class GroupChatService {
         do {
             try engine.handleSenderKeyRotate(state: state, env: env, fromUserId: fromUserId)
         } catch {
-            print("[GroupChatService] handleInboundSenderKeyRotate failed (group=\(env.g), from=\(fromUserId)): \(error)")
+            print("[GroupChatService] handleInboundSenderKeyRotate failed (group=\(env.g.prefix(8))…, from=\(fromUserId.prefix(8))…): \(error)")
         }
     }
 
@@ -464,7 +464,7 @@ public final class GroupChatService {
             arr.removeFirst(arr.count - 32)
         }
         bufferedInits[groupId] = arr
-        print("[GroupChatService] buffered \(kind) for group \(groupId) from \(fromUserId) (queue depth = \(arr.count))")
+        print("[GroupChatService] buffered \(kind) for group \(groupId.prefix(8))… from \(fromUserId.prefix(8))… (queue depth = \(arr.count))")
     }
 
     /// Lightweight detector for the 1:1 chat inbound dispatcher.

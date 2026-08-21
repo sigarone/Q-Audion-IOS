@@ -147,7 +147,7 @@ final class ChatMessageSendService {
         // before any v3/v2 PSK lookup). The 0xE5 frame is OPAQUE — emitted by the
         // engine-routed method; we never build it here.
         let useV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
-        print("[PQC_DIAG_V4] send peer=\(peerUserId) useV4=\(useV4) hasV4Session=\(useV4)")
+        print("[PQC_DIAG_V4] send peer=\(peerUserId.prefix(8))… useV4=\(useV4) hasV4Session=\(useV4)")
 
         let wireBlob: Data
         if useV4 {
@@ -209,7 +209,7 @@ final class ChatMessageSendService {
                     // X25519-derived PSK gets bound under `auto:<prefix>:<peerId>`,
                     // and fail this send. Once the peer's ACCEPT lands, the user's
                     // Retry succeeds against the real PSK (resolved above).
-                    print("[ChatSend] PSK not found for \(peerUserId) — refusing to send, triggering key exchange")
+                    print("[ChatSend] PSK not found for \(peerUserId.prefix(8))… — refusing to send, triggering key exchange")
                     appState.triggerKeyExchange(with: peerUserId)
                     return .failure(.pskMissing)
                 }

@@ -170,7 +170,7 @@ public final class CallSessionKeyBroker {
             // being replay-triggered (this class has no hook into every
             // `callContactId = ...` assignment site in AppState).
             guard retriesLeft > 0 else {
-                print("[CallSessionKeyBroker] callContactId never became available for " + peerId + " after retry window — dropping PQC session key (SAS will not appear, call may stall)")
+                print("[CallSessionKeyBroker] callContactId never became available for " + String(peerId.prefix(8)) + "… after retry window — dropping PQC session key (SAS will not appear, call may stall)")
                 return
             }
             Task { @MainActor [weak self] in
@@ -180,7 +180,7 @@ public final class CallSessionKeyBroker {
             return
         }
         guard currentPeer == peerId else {
-            print("[CallSessionKeyBroker] late PQC key for " + peerId + " - current peer is " + currentPeer + "; ignoring")
+            print("[CallSessionKeyBroker] late PQC key for " + String(peerId.prefix(8)) + "… - current peer is " + String(currentPeer.prefix(8)) + "…; ignoring")
             return
         }
         guard sharedSecret.count == 32 else {

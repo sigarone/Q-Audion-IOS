@@ -301,7 +301,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
             if let raw = Self.rawKeyMaterial(selfKey.keyB64) {
                 keyProvider.setKey(keyData: raw, participantId: selfKey.identity, index: selfKey.keyIndex)
             } else {
-                print("[GroupCallController][telemetry] e2ee self-key REJECTED identity=\(selfKey.identity) idx=\(selfKey.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
+                print("[GroupCallController][telemetry] e2ee self-key REJECTED identity=\(selfKey.identity.prefix(8))… idx=\(selfKey.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
                 emitTelemetry("call.media.e2ee_key_invalid", ["identity": selfKey.identity, "key_index": Int(selfKey.keyIndex), "site": "connect_self_seed"])
             }
         }
@@ -589,7 +589,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public func applyKey(_ key: GroupMediaKey) {
         guard let kp = keyProvider else { return }
         guard let raw = Self.rawKeyMaterial(key.keyB64) else {
-            print("[GroupCallController][telemetry] e2ee key REJECTED identity=\(key.identity) idx=\(key.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
+            print("[GroupCallController][telemetry] e2ee key REJECTED identity=\(key.identity.prefix(8))… idx=\(key.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
             emitTelemetry("call.media.e2ee_key_invalid", ["identity": key.identity, "key_index": Int(key.keyIndex), "site": "apply_key"])
             return
         }
