@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1014",
+              date: "2026-08-21",
+              title: "v1.0.1014",
+              bullets: [
+                "fix(ios): sessionKeyRetryMaxAttempts must not be private for use as a public default arg",
+              ]),
         .init(id: "v1.0.1013",
               date: "2026-08-21",
               title: "v1.0.1013",
               bullets: [
+                "chore: regenerate changelog for v1.0.1013",
                 "fix(call): SAS never appears + call times out — callContactId race",
               ]),
         .init(id: "v1.0.1012",
@@ -189,13 +196,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.995",
                 "fix(identity): recognize Device-<hex> as a placeholder name (iOS parity)",
-              ]),
-        .init(id: "v1.0.994",
-              date: "2026-08-16",
-              title: "v1.0.994",
-              bullets: [
-                "chore: regenerate changelog for v1.0.994",
-                "fix(call): make the outgoing-screen 3rd handshake checkmark reachable",
               ]),
     ]
 }
