@@ -378,7 +378,10 @@ public final class GroupMessageStore: ObservableObject {
             do {
                 try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
             } catch {
-                print("[GroupMessageStore] deleteExpiredMessages: cache cleanup failed for \(path): \(error)")
+                // I8 FIX: drop the raw cache path from the print — matches
+                // this file's own `clear()` sibling, which already omits the
+                // path for the identical cleanup-failure case (g=<hex> only).
+                print("[GroupMessageStore] deleteExpiredMessages: cache cleanup failed: \(error)")
             }
         }
         // Notify every open GroupChatScreen/GroupCallChatPanel so a

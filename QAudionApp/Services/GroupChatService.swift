@@ -172,7 +172,12 @@ public final class GroupChatService {
             replayBufferedCtl(groupId: groupId, state: state, selfId: selfId)
             return state
         } catch {
-            print("[GroupChatService] session create failed: \(error)")
+            // I8 FIX: engine.create() can throw SessionError.selfNotMember(selfId)
+            // — the enum's default description embeds the raw id. Print the
+            // case name only (Mirror gives the label without the payload);
+            // selfId itself is already truncated below.
+            let reason = Mirror(reflecting: error).children.first?.label ?? "\(error)"
+            print("[GroupChatService] session create failed for self=\(selfId.prefix(8))…: \(reason)")
             return nil
         }
     }
@@ -290,7 +295,14 @@ public final class GroupChatService {
         do {
             pkg = try engine.handleMemberAdded(state: state, newMember: newMember)
         } catch {
-            print("[GroupChatService] addMemberLocally failed (\(newMember)): \(error)")
+            // I8 FIX: newMember was printed raw (full user id, untruncated).
+            // engine.handleMemberAdded's only throw is
+            // SessionError.alreadyMember(newMember), which re-embeds the same
+            // raw id in its default description — truncate the id and print
+            // the error's case name only (Mirror gives the label without the
+            // payload), matching this codebase's identifier-truncation idiom.
+            let reason = Mirror(reflecting: error).children.first?.label ?? "\(error)"
+            print("[GroupChatService] addMemberLocally failed (\(newMember.prefix(8))…): \(reason)")
             return nil
         }
         guard let jsonData = try? JSONEncoder().encode(pkg.initForNewMember),
@@ -330,7 +342,14 @@ public final class GroupChatService {
         } catch {
             // notMember == already processed on the other channel: an
             // idempotent no-op, not an error.
-            print("[GroupChatService] removeMemberLocally skipped (\(removed)): \(error)")
+            // I8 FIX: removed was printed raw (full user id, untruncated),
+            // and engine.handleMemberRemoved's only throw here —
+            // SessionError.notMember(removed) — re-embeds the same raw id
+            // in its default description. Truncate the id and print the
+            // error's case name only (Mirror gives the label without the
+            // payload).
+            let reason = Mirror(reflecting: error).children.first?.label ?? "\(error)"
+            print("[GroupChatService] removeMemberLocally skipped (\(removed.prefix(8))…): \(reason)")
             return nil
         }
         // Fresh epoch — everyone re-keys via rotate, so reset the init-ship

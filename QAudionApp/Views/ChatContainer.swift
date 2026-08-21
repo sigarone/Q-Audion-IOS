@@ -394,7 +394,11 @@ final class ChatContainer: ObservableObject {
                 encryptedPayload: Data(text.utf8),
                 clientMsgId: msg.id.uuidString
             ).encodeAsJsonString() {
-                print("[Chat] would send envelope (no sendService attached): \(envelopeJson.prefix(120))...")
+                // I8 FIX: encodeAsJsonString()'s `encrypted_payload` field is
+                // the raw plaintext bytes in this pre-attach preview stub (no
+                // sendService yet) — printing the JSON leaked message content
+                // + the full recipient id. Log only a structural summary.
+                print("[Chat] would send envelope (no sendService attached): recipient=\(peerUserId.prefix(8))… bytes=\(envelopeJson.utf8.count)")
             }
             Task { [conversationId, msgId = msg.id] in
                 try? await Task.sleep(nanoseconds: 500_000_000)
@@ -1380,7 +1384,9 @@ final class ChatContainer: ObservableObject {
         let check = TusResumeStateStore.checkCorruption(state: state, sourcePath: sourcePath)
         guard case .resumable = check else {
             if case .corrupted(let reason) = check {
-                print("[ChatContainer] resumeAttachmentIfPossible: stale TusResumeState for \(clientMsgId): \(reason) — clearing, falling through to tier 3")
+                // I8 FIX: truncate clientMsgId, matching this codebase's
+                // established .prefix(8) identifier convention.
+                print("[ChatContainer] resumeAttachmentIfPossible: stale TusResumeState for \(clientMsgId.prefix(8))…: \(reason) — clearing, falling through to tier 3")
             }
             TusResumeStateStore.clear(clientMsgId: clientMsgId)
             return false
@@ -1995,7 +2001,10 @@ final class ChatContainer: ObservableObject {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else {
-            print("[ChatContainer] sendFileAttachment: could not read \(filename)")
+            // I8 FIX: `filename` is the user's original document name (can
+            // reveal personal/financial/identity content) — log only the
+            // extension, never the name.
+            print("[ChatContainer] sendFileAttachment: could not read file (ext=\(url.pathExtension))")
             return
         }
         let mime = Self.mimeType(for: url)

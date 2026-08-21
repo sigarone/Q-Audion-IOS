@@ -290,7 +290,11 @@ struct VoiceNoteBubbleContent: View {
         guard let path = mediaLocalPath, !path.isEmpty else { return }
         // W124: missing cache → no-op rather than crash the player.
         guard FileManager.default.fileExists(atPath: path) else {
-            print("[VoiceNoteBubbleContent] file missing at \(path)")
+            // I8 FIX: the filename embeds the attachment's fileId (see
+            // ChatVoiceNoteReceiver.fetch) — print only the truncated last
+            // path component, not the full sandbox path, matching every
+            // other identifier print in this codebase.
+            print("[VoiceNoteBubbleContent] file missing at \((path as NSString).lastPathComponent.prefix(8))…")
             return
         }
         if isPlayingThis {

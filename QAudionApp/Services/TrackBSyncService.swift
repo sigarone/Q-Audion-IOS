@@ -41,7 +41,8 @@ final class TrackBSyncService {
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
         addAuth(&req)
-        await fireAndLog(req, label: "calls.history.delete[\(entryId)]")
+        // I8 FIX — entryId truncated before it reaches fireAndLog's print().
+        await fireAndLog(req, label: "calls.history.delete[\(entryId.prefix(8))…]")
     }
 
     /// DELETE /api/v1/calls/history (no id) — bulk wipe per l'utente.
@@ -69,7 +70,8 @@ final class TrackBSyncService {
         } else {
             req.httpBody = "{}".data(using: .utf8)
         }
-        await fireAndLog(req, label: "conversations.read[\(convId)]")
+        // I8 FIX — convId truncated before it reaches fireAndLog's print().
+        await fireAndLog(req, label: "conversations.read[\(convId.prefix(8))…]")
     }
 
     /// POST /api/v1/conversations/read-all — bulk mark.
@@ -102,7 +104,8 @@ final class TrackBSyncService {
             body["inviterUserId"] = inviter
         }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fireAndLog(req, label: "groups.join[\(groupId)]")
+        // I8 FIX — groupId truncated before it reaches fireAndLog's print().
+        return await fireAndLog(req, label: "groups.join[\(groupId.prefix(8))…]")
     }
 
     /// Drain `PendingGroupInviteStore` chiamando `requestGroupJoin` per

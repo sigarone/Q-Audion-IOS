@@ -421,7 +421,7 @@ struct GroupCallChatPanel: View {
         guard let sealed = GroupChatService.shared.encryptForWire(
             plaintext: plaintext, groupId: groupHex, members: members, selfId: selfId
         ) else {
-            print("[GroupCallChatPanel] encrypt failed for group \(groupHex)")
+            print("[GroupCallChatPanel] encrypt failed for group \(groupHex.prefix(8))…")
             snackbar?.show(.init(text: "Messaggio non inviato", severity: .error))
             return
         }
@@ -589,7 +589,7 @@ struct GroupCallChatPanel: View {
             plaintext: prepared.descriptorJson,
             groupId: groupHex, members: members, selfId: selfId
         ) else {
-            print("[GroupCallChatPanel] attachment encrypt failed for group \(groupHex)")
+            print("[GroupCallChatPanel] attachment encrypt failed for group \(groupHex.prefix(8))…")
             return
         }
         NotificationCenter.default.post(

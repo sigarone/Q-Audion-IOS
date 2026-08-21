@@ -196,7 +196,9 @@ final class DeviceManagementContainer: ObservableObject {
                 let config = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
                 let provider = BCryptoBackendProvider(config: config)
                 _ = try await provider.getRestClient().delete("/api/v1/devices/\(deviceId)")
-                print("[DeviceManagementContainer] revoke OK for \(deviceId)")
+                // I8: deviceId truncated — full ids don't belong in the
+                // uploadable log ring buffer (LiveLogStreamer stdout tee).
+                print("[DeviceManagementContainer] revoke OK for \(deviceId.prefix(8))…")
             } catch {
                 // Restore the row on failure so the user can retry.
                 await MainActor.run {
@@ -320,7 +322,9 @@ struct DeviceManagementScreen: View {
                         text: "Dispositivo collegato.",
                         severity: .info
                     ))
-                    print("[DeviceMgmt] linked device \(newDeviceId)")
+                    // I8: truncate device id before it reaches the uploadable
+                    // log ring buffer.
+                    print("[DeviceMgmt] linked device \(newDeviceId.prefix(8))…")
                     container.refresh()
                 }
             }

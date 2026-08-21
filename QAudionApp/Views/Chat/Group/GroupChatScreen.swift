@@ -764,7 +764,7 @@ struct GroupChatScreen: View {
             members: memberIds,
             selfId: selfId
         ) else {
-            print("[GroupChatScreen] encrypt failed for group \(groupHex)")
+            print("[GroupChatScreen] encrypt failed for group \(groupHex.prefix(8))…")
             return
         }
         NotificationCenter.default.post(
@@ -964,7 +964,7 @@ struct GroupChatScreen: View {
             plaintext: prepared.descriptorJson,
             groupId: groupHex, members: memberIds, selfId: selfId
         ) else {
-            print("[GroupChatScreen] attachment encrypt failed for group \(groupHex)")
+            print("[GroupChatScreen] attachment encrypt failed for group \(groupHex.prefix(8))…")
             return
         }
         NotificationCenter.default.post(

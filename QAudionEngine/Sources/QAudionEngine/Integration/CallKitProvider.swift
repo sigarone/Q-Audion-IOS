@@ -103,7 +103,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
         // vs WS) is logged at the call sites in AppState.
         let alreadyUp: Bool = nativelyReportedUUIDs.contains(uuid)
-        print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid) hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
+        // I8 FIX — truncate the call UUID (same convention as AppState's
+        // W-CALLDIAG lines for this same call) instead of printing it whole.
+        print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
             nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY
@@ -127,7 +129,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // call CallKit actually knows about was reported by the other
             // branch, never latched to this banner's answer path.
             let nsErr = error as NSError
-            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid)")
+            // I8 FIX — truncated uuid, see above.
+            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid.uuidString.prefix(8))…")
             // Numeric tail so this survives the remote-log redactor: without it
             // the whole CallKit path is invisible off-device, and a rejection
             // that costs the user an incoming call looks exactly like silence.
@@ -239,7 +242,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         guard nativelyReportedUUIDs.contains(uuid) else { return false }
         nativelyReportedUUIDs.remove(uuid)
         provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
-        print("[CallKitProvider] W-WAKEONLY — released system call UI for \(uuid)")
+        // I8 FIX — truncated uuid, see above.
+        print("[CallKitProvider] W-WAKEONLY — released system call UI for \(uuid.uuidString.prefix(8))…")
         return true
     }
 
@@ -367,11 +371,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID)")
+        // I8 FIX — truncated uuid, see above.
+        print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID.uuidString.prefix(8))…")
         Task {
             await onAnswerCall?(action.callUUID)
             action.fulfill()
-            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID)")
+            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,

@@ -218,7 +218,10 @@ struct ImageBubbleContent: View {
                 self.loadedImage = img
                 self.loadFailed = false
             } else {
-                print("[ImageBubbleContent] failed to load \(path) — cache reclaimed?")
+                // I8: the full on-disk cache path is an identifier we don't
+                // need in the log — the messageId (truncated) is enough to
+                // correlate this failure with a specific bubble.
+                print("[ImageBubbleContent] failed to load cache for message \(self.messageId.uuidString.prefix(8))… — cache reclaimed?")
                 self.loadFailed = true
             }
         }

@@ -418,7 +418,8 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): local publish
         // confirmation — proves OUR OWN mic reached the SFU at all, cheap
         // to cross-reference against the SFU-side "track published" log.
-        print("[GroupCallController][telemetry] local audio track published identity=\(room.localParticipant.identity?.stringValue ?? "self") callSid=\(room.sid?.stringValue ?? "?")")
+        // I8 FIX: identity/callSid are user-identifying — truncate like every other identity print in this file.
+        print("[GroupCallController][telemetry] local audio track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))… callSid=\((room.sid?.stringValue ?? "?").prefix(8))…")
         // W-GRPTELEM (item a): the `call.media.connected`-equivalent — fired
         // right here, NOT from a delegate callback, because no RoomDelegate
         // method fires on a successful INITIAL connect in this SDK version
@@ -443,7 +444,8 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 // defaultVideoPublishOptions above (see its comment for why)
                 // — no per-call override needed here.
                 _ = try await room.localParticipant.setCamera(enabled: true)
-                print("[GroupCallController][telemetry] local video track published identity=\(room.localParticipant.identity?.stringValue ?? "self")")
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
                 onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
                 attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
             } else {
@@ -630,7 +632,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // track regardless of source (camera/screen-share/mic).
         attachStatsReporting(to: publication.track)
         if let audioTrack = publication.track as? RemoteAudioTrack {
-            print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity)")
+            // I8 FIX: truncate identity like every other identity print in this file.
+            print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity.prefix(8))…")
             emitTelemetry("call.audio.remote_track", ["identity": identity, "track_sid": publication.sid.stringValue])
             onRemoteAudioTrack?(identity, audioTrack)
         } else if let videoTrack = publication.track as? RemoteVideoTrack {
@@ -642,11 +645,13 @@ extension LiveKitGroupCallRoom: RoomDelegate {
             // handling. Routing both through `onRemoteVideoTrack` would
             // silently drop whichever published second.
             if publication.source == .screenShareVideo {
-                print("[GroupCallController][telemetry] remote screen-share track subscribed identity=\(identity)")
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] remote screen-share track subscribed identity=\(identity.prefix(8))…")
                 emitTelemetry("video.remote_track", ["identity": identity, "kind": "screen_share", "track_sid": publication.sid.stringValue])
                 onRemoteScreenShareTrack?(identity, videoTrack)
             } else {
-                print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity)")
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity.prefix(8))…")
                 emitTelemetry("video.remote_track", ["identity": identity, "kind": "camera", "track_sid": publication.sid.stringValue])
                 onRemoteVideoTrack?(identity, videoTrack)
             }
@@ -671,7 +676,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         detachStatsReporting(from: publication.track)
         guard publication.source == .screenShareVideo else { return }
         let identity = participant.identity?.stringValue ?? ""
-        print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity)")
+        // I8 FIX: truncate identity like every other identity print in this file.
+        print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity.prefix(8))…")
         onRemoteScreenShareTrack?(identity, nil)
     }
 
@@ -695,7 +701,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // `didSubscribeTrack` above — if this fires for a peer whose track
         // publish the SFU logs confirm succeeded, the failure is on OUR
         // subscribe side (ICE/transport), not the sender's publish.
-        print("[GroupCallController][telemetry] remote track subscribe FAILED identity=\(participant.identity?.stringValue ?? "") sid=\(trackSid) error=\(error)")
+        // I8 FIX: truncate identity like every other identity print in this file.
+        print("[GroupCallController][telemetry] remote track subscribe FAILED identity=\((participant.identity?.stringValue ?? "").prefix(8))… sid=\(trackSid) error=\(error)")
         emitTelemetry("video.remote_track_failed", [
             "identity": participant.identity?.stringValue ?? "",
             "track_sid": trackSid.stringValue,
@@ -779,7 +786,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // onE2eeStateChanged's kdoc in GroupCallController.swift for the full
         // live incident this was root-caused from).
         let isSelf = identity == nil ? false : room.localParticipant.trackPublications[trackPublication.sid] != nil
-        print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") self=\(isSelf) kind=\(kind) state=\(state.toString())")
+        // I8 FIX: truncate identity like every other identity print in this file.
+        print("[GroupCallController][telemetry] e2ee-state identity=\((identity ?? "?").prefix(8))… self=\(isSelf) kind=\(kind) state=\(state.toString())")
         emitTelemetry("call.media.e2ee_state", ["identity": identity ?? "?", "self": isSelf, "kind": kind, "state": state.toString()])
         // W-GRPSENDERKEY-NACK (2026-07-17) — forward this SAME signal
         // operationally, not just diagnostically: GroupCallController

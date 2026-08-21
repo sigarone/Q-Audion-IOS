@@ -249,8 +249,10 @@ final class GroupMembershipApi {
             body["metadata_version"] = Int(metadataVersion)
         }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        // I8: label is printed verbatim on error in fireRaw() — truncate
+        // the group id so a full UUID never reaches the log ring buffer.
         guard let (data, status) = await fireRaw(
-            req, label: "groups.create[\(groupIdWire)]") else { return nil }
+            req, label: "groups.create[\(groupIdWire.prefix(8))…]") else { return nil }
         return parseGroupResponse(data, status: status)
     }
 
@@ -272,7 +274,8 @@ final class GroupMembershipApi {
             "admin_signature_b64": adminSignatureB64,
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fire(req, label: "groups.addMember[\(userId)]")
+        // I8: truncate — label is printed verbatim on a non-2xx/error path.
+        return await fire(req, label: "groups.addMember[\(userId.prefix(8))…]")
     }
 
     /// DELETE /api/v1/groups/{gid}/members/{uid} — admin removes `userId`.
@@ -292,7 +295,8 @@ final class GroupMembershipApi {
             "admin_signature_b64": adminSignatureB64,
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fire(req, label: "groups.removeMember[\(userId)]")
+        // I8: truncate — label is printed verbatim on a non-2xx/error path.
+        return await fire(req, label: "groups.removeMember[\(userId.prefix(8))…]")
     }
 
     /// POST /api/v1/groups/{gid}/leave — self-leave.
@@ -337,7 +341,8 @@ final class GroupMembershipApi {
             "leaver_signature_b64": leaverSignatureB64,
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fire(req, label: "groups.leave[\(groupIdWire)]")
+        // I8: truncate — label is printed verbatim on a non-2xx/error path.
+        return await fire(req, label: "groups.leave[\(groupIdWire.prefix(8))…]")
     }
 
     /// POST /api/v1/groups/{gid}/admins/{uid} — admin promotes `userId`.
@@ -357,7 +362,8 @@ final class GroupMembershipApi {
             "admin_signature_b64": adminSignatureB64,
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fire(req, label: "groups.promoteAdmin[\(userId)]")
+        // I8: truncate — label is printed verbatim on a non-2xx/error path.
+        return await fire(req, label: "groups.promoteAdmin[\(userId.prefix(8))…]")
     }
 
     /// DELETE /api/v1/groups/{gid}/admins/{uid} — admin demotes `userId`.
@@ -378,7 +384,8 @@ final class GroupMembershipApi {
             "admin_signature_b64": adminSignatureB64,
         ]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        return await fire(req, label: "groups.demoteAdmin[\(userId)]")
+        // I8: truncate — label is printed verbatim on a non-2xx/error path.
+        return await fire(req, label: "groups.demoteAdmin[\(userId.prefix(8))…]")
     }
 
     /// PUT /api/v1/groups/{gid}/metadata — admin renames / sets the avatar.
@@ -425,7 +432,8 @@ final class GroupMembershipApi {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         addAuth(&req)
-        guard let (data, status) = await fireRaw(req, label: "groups.fetch[\(groupIdWire)]") else { return nil }
+        // I8: truncate — label is printed verbatim on a non-2xx/error path.
+        guard let (data, status) = await fireRaw(req, label: "groups.fetch[\(groupIdWire.prefix(8))…]") else { return nil }
         return parseGroupResponse(data, status: status)
     }
 

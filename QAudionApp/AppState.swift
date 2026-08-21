@@ -9557,7 +9557,12 @@ final class AppState: ObservableObject {
             // string instead. Dropped silently, same as any other
             // malformed/unexpected piggy-back on this channel.
             if OpaqueSelfEchoFilter.shared.shouldDropInbound(blobStr) {
-                print("[AppState] piggy-back dropped as self-echo: \(blobStr.prefix(48))…")
+                // I8 FIX: was printing up to 48 raw chars of the wire string —
+                // for short callIds this exposed leading base64 of an
+                // EARBUDPDU/FPSET/KCMAC payload. Byte count + truncated
+                // sender is enough to confirm the self-echo drop, matching
+                // the sibling diagnostic a few branches below (:9788).
+                print("[AppState] piggy-back dropped as self-echo: from=\(senderId.prefix(8))… len=\(blobStr.count)")
                 return
             }
             Task { @MainActor [weak self] in
@@ -13197,7 +13202,10 @@ final class AppState: ObservableObject {
         // the same call). A repeat would re-enter activateIncomingCallAudio
         // mid-start → uncatchable NSException.
         if self.answeredCallKitId == uuid {
-            print("[AppState] performAcceptIncoming: duplicate answer for \(uuid) ignored (Bug A guard)")
+            // I8 FIX: truncate the CallKit call UUID to match this file's
+            // established identifier convention (.prefix(8)) instead of
+            // printing it in full.
+            print("[AppState] performAcceptIncoming: duplicate answer for \(uuid.uuidString.prefix(8))… ignored (Bug A guard)")
             return
         }
         self.answeredCallKitId = uuid
@@ -14941,7 +14949,9 @@ extension AppState {
                 case .delivered, .sent:
                     break
                 case .failed(let reason):
-                    print("[AppState] sender_key_ctl ship to \(recipient) failed: \(reason)")
+                    // I8 FIX: recipient is a full userId — truncate to match
+                    // this file's established identifier convention.
+                    print("[AppState] sender_key_ctl ship to \(recipient.prefix(8))… failed: \(reason)")
                 }
             }
         }
@@ -15497,7 +15507,9 @@ extension AppState {
         } else {
             // Unknown group AND we're not the new member. Ignore: this
             // is a fan-out for a group we're not in.
-            print("[AppState] member_added for unknown group \(groupId) (member=\(member.prefix(8))…) — ignoring")
+            // I8 FIX: groupId is a full group identifier — truncate to
+            // match this file's established identifier convention.
+            print("[AppState] member_added for unknown group \(groupId.prefix(8))… (member=\(member.prefix(8))…) — ignoring")
             return
         }
         NotificationCenter.default.post(
@@ -15871,11 +15883,13 @@ extension AppState {
     public func addGroupMembers(groupId groupHex: String, newMembers rawNew: [String]) {
         guard let selfId = currentUserId, !selfId.isEmpty else { return }
         guard var entry = GroupRegistry.shared.entry(for: groupHex) else {
-            print("[AppState] addGroupMembers: unknown group \(groupHex)")
+            // I8 FIX: groupHex is a full group identifier — truncate to
+            // match this file's established identifier convention.
+            print("[AppState] addGroupMembers: unknown group \(groupHex.prefix(8))…")
             return
         }
         guard entry.admins.contains(selfId) else {
-            print("[AppState] addGroupMembers: self not admin of \(groupHex)")
+            print("[AppState] addGroupMembers: self not admin of \(groupHex.prefix(8))…")
             return
         }
         let newMembers = rawNew.filter {
@@ -15979,7 +15993,7 @@ extension AppState {
         guard let selfId = currentUserId, !selfId.isEmpty else { return }
         guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
         guard entry.admins.contains(selfId) else {
-            print("[AppState] removeGroupMember: self not admin of \(groupHex)")
+            print("[AppState] removeGroupMember: self not admin of \(groupHex.prefix(8))…")
             return
         }
         guard removed != selfId else {
@@ -16047,7 +16061,7 @@ extension AppState {
         guard let selfId = currentUserId, !selfId.isEmpty else { return }
         guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
         guard entry.admins.contains(selfId) else {
-            print("[AppState] promoteGroupAdmin: self not admin of \(groupHex)")
+            print("[AppState] promoteGroupAdmin: self not admin of \(groupHex.prefix(8))…")
             return
         }
         guard entry.members.contains(uid), !entry.admins.contains(uid) else { return }
@@ -16088,7 +16102,7 @@ extension AppState {
         guard let selfId = currentUserId, !selfId.isEmpty else { return }
         guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
         guard entry.admins.contains(selfId) else {
-            print("[AppState] demoteGroupAdmin: self not admin of \(groupHex)")
+            print("[AppState] demoteGroupAdmin: self not admin of \(groupHex.prefix(8))…")
             return
         }
         guard entry.admins.contains(uid) else { return }
@@ -16110,7 +16124,7 @@ extension AppState {
                 groupIdWire: groupIdWire, userId: uid,
                 signedEnvelopeB64: envB64, adminSignatureB64: sigB64),
                 res.isSuccess else {
-                print("[AppState] demoteGroupAdmin: server rejected (last admin?) for \(uid)")
+                print("[AppState] demoteGroupAdmin: server rejected (last admin?) for \(uid.prefix(8))…")
                 return
             }
             GroupRegistry.shared.setAdmin(groupId: groupHex, userId: uid, isAdmin: false)
@@ -16148,7 +16162,7 @@ extension AppState {
         guard let selfId = currentUserId, !selfId.isEmpty else { return }
         guard let entry = GroupRegistry.shared.entry(for: groupHex) else { return }
         guard entry.admins.contains(selfId) else {
-            print("[AppState] updateGroupMetadata: self not admin of \(groupHex)")
+            print("[AppState] updateGroupMetadata: self not admin of \(groupHex.prefix(8))…")
             return
         }
         let trimmed = newName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -16195,7 +16209,7 @@ extension AppState {
             guard let sealed = GroupChatService.shared.encryptForWire(
                 plaintext: payloadJson, groupId: groupHex,
                 members: members, selfId: selfId) else {
-                print("[AppState] updateGroupMetadata: encrypt failed for \(groupHex)")
+                print("[AppState] updateGroupMetadata: encrypt failed for \(groupHex.prefix(8))…")
                 return
             }
             let blobB64 = sealed.wire.base64EncodedString()
@@ -16215,7 +16229,7 @@ extension AppState {
                 signedEnvelopeB64: envelope.base64EncodedString(),
                 adminSignatureB64: sig.base64EncodedString()),
                 res.isSuccess else {
-                print("[AppState] updateGroupMetadata: server rejected for \(groupHex)")
+                print("[AppState] updateGroupMetadata: server rejected for \(groupHex.prefix(8))…")
                 return
             }
             // 3) Apply locally — same treatment the actor gets synchronously
@@ -16312,7 +16326,7 @@ extension AppState {
                 name: AppState.groupRegistryChangedNotification,
                 object: nil,
                 userInfo: ["groupId": groupHex])
-            print("[AppState] group_membership_changed: removed from \(groupHex) (op=\(operation))")
+            print("[AppState] group_membership_changed: removed from \(groupHex.prefix(8))… (op=\(operation))")
             return
         }
 
@@ -18777,7 +18791,9 @@ extension AppState {
                                                          offerSdp: sdp,
                                                          audioOnly: audioOnly)
                 controller.acceptPeerCapabilities(caps)
-                print("[AppState] WebRTC: accepted incoming call from \(cid) (video=\(hasVideo), peerCaps=\(caps ?? []))")
+                // I8 FIX: cid is a full userId — truncate to match this
+                // file's established identifier convention.
+                print("[AppState] WebRTC: accepted incoming call from \(cid.prefix(8))… (video=\(hasVideo), peerCaps=\(caps ?? []))")
                 // Wire VideoCallPipeline → RTCVideoSource (callee side) so
                 // Android sees iOS camera video over WebRTC RTP.
                 #if os(iOS)

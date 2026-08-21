@@ -80,7 +80,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             p.rate = playbackRate
             p.prepareToPlay()
             guard p.play() else {
-                print("[VoiceNotePlayer] play() returned false for \(url.lastPathComponent)")
+                // I8 FIX: the filename embeds the attachment's fileId (see
+                // ChatVoiceNoteReceiver.fetch) — truncate like every other
+                // identifier print in this codebase.
+                print("[VoiceNotePlayer] play() returned false for \(url.lastPathComponent.prefix(8))…")
                 stop()
                 return
             }
@@ -90,7 +93,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             self.progress = 0
             startTick()
         } catch {
-            print("[VoiceNotePlayer] failed to load \(url.path): \(error)")
+            // I8 FIX: same fileId-in-filename concern as above — print only
+            // the truncated last path component, not the full sandbox path.
+            print("[VoiceNotePlayer] failed to load \(url.lastPathComponent.prefix(8))…: \(error)")
             stop()
         }
     }
