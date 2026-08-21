@@ -61,7 +61,15 @@ let package = Package(
         // ios-testflight.yml). QAudionEngine's own swift-tools-version (5.9, top of
         // this file) is unaffected — a package can depend on a higher-swift-tools-
         // version package as long as the actual toolchain resolves it.
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
+        // MASVS I5 (2026-08-21) — switched from `from:` to `exact:`, matching
+        // onnxruntime-spm's own pin below and every other dependency in this
+        // manifest that has a committed Package.resolved to anchor an exact
+        // version against (`from:` lets a future `swift package update` drift
+        // to any 7.x without anyone noticing). 7.11.1 is the version this
+        // package actually resolved to, confirmed via the real CI-produced
+        // Package.resolved now committed at
+        // QAudionApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/.
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
         // W-GRPLIVEKIT: self-hosted LiveKit SFU for group calls (audio, +video
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.

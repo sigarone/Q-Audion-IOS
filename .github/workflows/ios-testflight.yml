@@ -590,10 +590,21 @@ jobs:
       #     (Windows), so this macOS runner is the only place the actual
       #     resolved dependency graph is ever materialized; committing it
       #     to the repo (for reproducible-build / supply-chain pinning)
-      #     needs it pulled from here. Collects every Package.resolved the
-      #     build produced -- the Xcode-managed workspace one AND
-      #     QAudionEngine's own standalone one, if that package resolves
-      #     separately -- rather than guessing a single DerivedData path.
+      #     needs it pulled from here.
+      #
+      #     ONE file only, ONE known path: the Xcode-managed workspace's own
+      #     xcshareddata/swiftpm/Package.resolved. The first version of this
+      #     step also globbed all of DerivedData "just in case" -- that
+      #     picked up a SECOND, unrelated Package.resolved belonging to
+      #     GRDB.swift's own vendored test-fixture sub-project
+      #     (.../SourcePackages/checkouts/GRDB.swift/Tests/Performance/
+      #     GRDBPerformance/...), confirmed from that run's own logged
+      #     source paths -- not this app's dependency graph at all, and
+      #     genuinely confusing to find sitting next to the real one with no
+      #     way to tell them apart without re-reading the log. QAudionEngine
+      #     itself has no separate Package.resolved (it resolves as part of
+      #     the same workspace graph, confirmed by this fix -- only one file
+      #     was ever real).
       #     Always runs (not gated on success) so a Package.resolved that
       #     did get written before a later failure is still recoverable.
       # ----------------------------------------------------------
@@ -604,14 +615,13 @@ jobs:
         run: |
           OUT="$GITHUB_WORKSPACE/package-resolved-out"
           mkdir -p "$OUT"
-          n=0
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            n=$((n+1))
-            cp "$f" "$OUT/Package.resolved.$n" || true
-            echo "Found: $f"
-          done < <(find . ~/Library/Developer/Xcode/DerivedData -name 'Package.resolved' 2>/dev/null)
-          echo "Collected $n Package.resolved file(s)."
+          SRC="QAudionApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+          if [ -f "$SRC" ]; then
+            cp "$SRC" "$OUT/Package.resolved"
+            echo "Found: $SRC"
+          else
+            echo "Package.resolved not found at expected path: $SRC"
+          fi
 
       - name: Upload Package.resolved
         if: always()
