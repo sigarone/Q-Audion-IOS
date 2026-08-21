@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1016",
+              date: "2026-08-21",
+              title: "v1.0.1016",
+              bullets: [
+                "fix(deepfake): stop feeding the confidence EMA a fabricated placeholder",
+                "fix(tests): skip TusResumeStateTests store round-trips when Keychain is unusable",
+              ]),
         .init(id: "v1.0.1015",
               date: "2026-08-21",
               title: "v1.0.1015",
               bullets: [
+                "chore: regenerate changelog for v1.0.1015",
                 "fix(ios): sessionKeyRetryMaxAttempts needs public, not just internal",
               ]),
         .init(id: "v1.0.1014",
@@ -186,16 +194,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.997",
                 "fix(chat): refresh stale peer display name in chat header on entry",
-              ]),
-        .init(id: "v1.0.996",
-              date: "2026-08-17",
-              title: "v1.0.996",
-              bullets: [
-                "chore: regenerate changelog for v1.0.996",
-                "fix(app): stop app-root @AppStorage from deadlocking on launch",
-                "🛡️ Sentinel: [Security Improvement] Redact FastSetupPayload plaintext password from debug logs (#66)",
-                "⚡ Bolt: Extract DateFormatters to static let for performance (#67)",
-                "🎨 Palette: Improve accessibility of tap-to-copy rows (#68)",
               ]),
     ]
 }
