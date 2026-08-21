@@ -22,5 +22,13 @@
 	<array>
 		<string>packet-tunnel-provider</string>
 	</array>
+	<!-- Universal Links — parity with the Android App Link intent-filter
+	     for the same host/path (email-verify-landing). Requires
+	     https://voip.bcrypto.com/.well-known/apple-app-site-association
+	     to list this app's Team ID + bundle ID (cmd/bcrypto-lite/main.go). -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:voip.bcrypto.com</string>
+	</array>
 </dict>
 </plist>
