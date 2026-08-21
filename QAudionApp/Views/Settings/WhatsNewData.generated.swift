@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1020",
+              date: "2026-08-21",
+              title: "v1.0.1020",
+              bullets: [
+                "fix(security): I8 full follow-up sweep — remaining ~679 print() sites read, 14 files fixed",
+              ]),
         .init(id: "v1.0.1019",
               date: "2026-08-21",
               title: "v1.0.1019",
               bullets: [
+                "chore: regenerate changelog for v1.0.1019",
                 "feat(call): enable dc-mux-v1 advertisement on iOS",
               ]),
         .init(id: "v1.0.1018",
@@ -186,13 +193,6 @@ extension ReleaseNote {
                 "feat(entitlements): store the EGT blob in Keychain via TokenVault, cleared on logout/wipe",
                 "fixup(entitlements): pin the pubkey build asset, match Android's lenient claim decoding",
                 "feat(entitlements): EGT verification via CryptoKit Curve25519.Signing, alg-pinned",
-              ]),
-        .init(id: "v1.0.1000",
-              date: "2026-08-17",
-              title: "v1.0.1000",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1000",
-                "fix(chat): wire peer avatar into the chat detail header",
               ]),
     ]
 }
