@@ -1789,6 +1789,12 @@ final class AppState: ObservableObject {
     var engine: QAudionEngine?
     let authService = AuthService()
     let callService = CallService()
+    /// MASVS-CRYPTO remediation (2026-08-20/21) — UNVERIFIED, see
+    /// `ReKeyScheduler`'s file-level kdoc for the full context: this drives
+    /// the adaptive re-key deadline off the live "voce remota" confidence
+    /// signal, but the actual mid-call PQC re-handshake trigger is not yet
+    /// wired — every tick is currently only logged, not acted on.
+    let reKeyScheduler = ReKeyScheduler()
     let messageCrypto = MessageCrypto()
     /// Entitlements Task 3 (2026-08-17) — registered the same flat
     /// stored-property way `authService`/`callService` are (confirmed
@@ -2850,6 +2856,30 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 self?.contactVoiceLevel = level
             }
+        }
+        // MASVS-CRYPTO remediation (2026-08-20/21) — feed the raw
+        // continuity score into the re-key scheduler's adaptive deadline.
+        // Off-main is fine here: `observeConfidence` is thread-safe (own
+        // lock) and touches no `@MainActor` state.
+        callService.onContactVoiceScoreUpdated = { [weak self] score in
+            self?.reKeyScheduler.observeConfidence(score)
+        }
+        // MASVS-CRYPTO remediation (2026-08-20/21) — UNVERIFIED, see
+        // `ReKeyScheduler`'s file-level kdoc. This is deliberately a LOUD
+        // no-op, not a silent one: the scheduler correctly computes when a
+        // re-key SHOULD happen, but nothing downstream actually rotates the
+        // PQC session key on iOS yet (unlike Android, which drives a real
+        // ML-KEM re-handshake here). Logging every tick keeps this gap
+        // visible in the field instead of it silently looking "handled"
+        // because the scheduler exists and runs.
+        reKeyScheduler.onReKeyTick = { tick in
+            let reason = tick.reason
+            let seq = String(tick.sequence)
+            let conf = String(format: "%.2f", tick.confidenceAtTrigger)
+            RTLog.warn(
+                "rekey",
+                "ReKeyScheduler tick #" + seq + " reason=" + reason + " confidence=" + conf +
+                    " — NOT YET WIRED to a real PQC re-handshake on iOS (see ReKeyScheduler.swift kdoc)")
         }
 
         callService.onTxWaveformUpdate = { [weak self] samples in
@@ -13439,6 +13469,11 @@ final class AppState: ObservableObject {
         callService.activateContactVoiceVerification(contactId: peerId)
         maybeAutoStartVoiceLearning(for: peerId)
         startVoiceKeyAnnounceLoop(peerId: peerId)
+        // MASVS-CRYPTO remediation (2026-08-20/21) — UNVERIFIED. Mirrors
+        // Android's `CallController` calling `reKey.start()` at the same
+        // "session established" convergence point. See `ReKeyScheduler`'s
+        // kdoc for what this does and does not yet do on iOS.
+        reKeyScheduler.start()
     }
 
     /// W-AUTOLEARN parity (Android 2026-07-31) — "voce verificata" no
@@ -13677,6 +13712,10 @@ final class AppState: ObservableObject {
             activeOutgoingRecordId = nil
         }
         callService.endCall()
+        // MASVS-CRYPTO remediation (2026-08-20/21) — stop the re-key
+        // scheduler's background timer alongside the other call-scoped
+        // controllers below. UNVERIFIED, see `ReKeyScheduler` kdoc.
+        reKeyScheduler.stop()
         // W398: stop ABR loop before video pipeline teardown so the
         // controller doesn't try to set bitrate on a freed encoder.
         abrController?.stop()

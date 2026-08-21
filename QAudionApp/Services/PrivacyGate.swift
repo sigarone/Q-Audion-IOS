@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import QAudionEngine
 
 /// W404 — single source of truth for privacy / notification gates.
 ///
@@ -77,11 +78,21 @@ public enum PrivacyGate {
         return readSecureBoolWithDefault(keyScreenshotProtection, default: false)
     }
 
-    /// Default OFF. Prompts biometric/passcode after the grace period
-    /// elapses while in background.
+    /// MASVS-AUTH remediation (2026-08-21, A1b/I4) — the default (used only
+    /// when the user has never explicitly chosen; `readSecureBoolWithDefault`
+    /// already distinguishes that from an explicit `false`) now mirrors
+    /// device capability: on wherever Face ID/Touch ID/passcode is actually
+    /// enrolled (`KeychainProtectionPolicy.shared.isAuthenticationAvailable`),
+    /// inert on a device with none configured — never forces a requirement
+    /// the device can't satisfy, and never overrides an explicit prior choice
+    /// either way. Prompts biometric/passcode after the grace period elapses
+    /// while in background.
     /// SECURITY M-28: Keychain-backed (security-affecting flag).
     public static var appLockEnabled: Bool {
-        return readSecureBoolWithDefault(keyAppLockEnabled, default: false)
+        return readSecureBoolWithDefault(
+            keyAppLockEnabled,
+            default: KeychainProtectionPolicy.shared.isAuthenticationAvailable
+        )
     }
 
     /// Background grace period before lock triggers, in milliseconds.

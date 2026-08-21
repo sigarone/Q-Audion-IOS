@@ -17,7 +17,7 @@ public final class QAudionDatabase {
 
     private init() {
         do {
-            let dbURL = try FileManager.default
+            var dbURL = try FileManager.default
                 .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("qaudion.sqlite")
 
@@ -28,6 +28,19 @@ public final class QAudionDatabase {
                 ])
             }
 
+            // MASVS-STORAGE remediation (2026-08-21, I6) — the message/
+            // conversation database was the one local data class in this
+            // app WITHOUT backup exclusion (avatar cache and every Keychain
+            // item already have it). An unencrypted local iTunes/Finder
+            // backup (no password set — a common, real scenario) would
+            // otherwise expose the whole local message history in
+            // plaintext once restored to any device, independent of the
+            // wire-level E2EE that protects it in transit. Best-effort: a
+            // failure here must not block database initialization.
+            var excludeFromBackup = URLResourceValues()
+            excludeFromBackup.isExcludedFromBackup = true
+            try? dbURL.setResourceValues(excludeFromBackup)
+
             var config = Configuration()
             config.prepareDatabase { db in
                 try db.execute(sql: "PRAGMA secure_delete = ON")
@@ -35,6 +48,19 @@ public final class QAudionDatabase {
             }
 
             self.dbQueue = try DatabaseQueue(path: dbURL.path, configuration: config)
+
+            // GRDB's default journal mode is WAL — the `-wal`/`-shm`
+            // sidecar files hold recent, not-yet-checkpointed writes (real
+            // message data) and don't inherit the main file's resource
+            // values automatically. Exclude them too, best-effort; a
+            // missing sidecar (fresh DB, nothing written yet) is expected
+            // and not an error.
+            for suffix in ["-wal", "-shm"] {
+                var sidecarURL = URL(fileURLWithPath: dbURL.path + suffix)
+                var sidecarExclude = URLResourceValues()
+                sidecarExclude.isExcludedFromBackup = true
+                try? sidecarURL.setResourceValues(sidecarExclude)
+            }
 
             try migrator.migrate(dbQueue)
 

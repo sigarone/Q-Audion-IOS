@@ -110,6 +110,10 @@ final class CallService: @unchecked Sendable {
     /// Same wiring/threading contract as `onOwnerContinuityStateChanged`
     /// above.
     var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
+    /// MASVS-CRYPTO remediation (2026-08-20/21) — see
+    /// `QAudionCallIntegration.onContactVoiceScoreUpdated` kdoc. Feeds
+    /// `ReKeyScheduler` in `AppState`.
+    var onContactVoiceScoreUpdated: ((Float) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -1128,6 +1132,9 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceLevelChanged = { [weak self] level in
             self?.onContactVoiceLevelChanged?(level)
         }
+        integration.onContactVoiceScoreUpdated = { [weak self] score in
+            self?.onContactVoiceScoreUpdated?(score)
+        }
 
         // NOTE: do NOT call `integration.onCallSetupStarted` here.
         // That legacy entry point flipped the engine state machine into
@@ -1348,6 +1355,9 @@ final class CallService: @unchecked Sendable {
         }
         integration.onContactVoiceLevelChanged = { [weak self] level in
             self?.onContactVoiceLevelChanged?(level)
+        }
+        integration.onContactVoiceScoreUpdated = { [weak self] score in
+            self?.onContactVoiceScoreUpdated?(score)
         }
         // For incoming calls the PQC handshake started before answer, so
         // engine.initialize() has already run — apply tuner prefs now.

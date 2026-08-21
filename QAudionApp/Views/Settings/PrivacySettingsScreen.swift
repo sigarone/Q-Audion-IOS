@@ -180,6 +180,30 @@ struct PrivacySettingsScreen: View {
         )
     }
 
+    // MARK: - MASVS-PRIVACY remediation (2026-08-20) — LiveLogStreamer consent
+    //
+    // DISTINCT from `operationalDiagnosticsEnabled` above: that one gates the
+    // encrypted call-pipeline metrics stream (X25519+AES-GCM). This one gates
+    // `LiveLogStreamer` — raw-ish application log lines (redacted, but a
+    // continuous stream, not a single encrypted event) shipped every ~3s
+    // while the app runs. Before this fix `LiveLogStreamer.setEnabled` had
+    // zero reachable UI call sites anywhere in the app and the flag defaulted
+    // on for TestFlight — see `docs/security/MASVS_ASSESSMENT_2026-08-20.md`
+    // §1.1. Uses the same real-`@State`-backing pattern as
+    // `operationalDiagnosticsEnabled` (W-DIAGTOGGLE-DEAD, 2026-08-20) so the
+    // switch actually re-renders on tap.
+    @State private var liveLogStreamerToggleState: Bool = LiveLogStreamer.isEnabled
+
+    private var liveLogStreamerEnabled: Binding<Bool> {
+        Binding(
+            get: { liveLogStreamerToggleState },
+            set: { newValue in
+                liveLogStreamerToggleState = newValue
+                LiveLogStreamer.setEnabled(newValue)
+            }
+        )
+    }
+
     private var appLockTimeoutMs: Binding<Int> {
         Binding(
             get: { PrivacyGate.appLockTimeoutMs },
@@ -302,6 +326,14 @@ struct PrivacySettingsScreen: View {
                             title: "Diagnostica operativa cifrata",
                             subtitle: "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Disattivato di default.",
                             isOn: operationalDiagnosticsEnabled
+                        )
+                        // MASVS-PRIVACY remediation (2026-08-20) — real
+                        // toggle for LiveLogStreamer, previously unreachable
+                        // from any UI and on by default for TestFlight.
+                        SettingsToggleRow(
+                            title: "Log diagnostici in tempo reale",
+                            subtitle: "Invia log applicativi redatti (tag, dimensioni, fingerprint troncati — mai chiavi, token o contenuto messaggi) al backend di diagnostica ogni pochi secondi mentre l'app è in uso. Canale separato dal precedente. Disattivato di default.",
+                            isOn: liveLogStreamerEnabled
                         )
                     }
 

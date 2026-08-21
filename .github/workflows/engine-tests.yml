@@ -262,13 +262,18 @@ jobs:
 
   # SwiftLint over QAudionEngine only (scope + exclusions come from the
   # existing .swiftlint.yml at repo root — CLiboqs/COpus are already
-  # excluded there since they're C, not Swift). Deliberately does NOT
-  # touch QAudionApp: that's the SwiftUI app with the documented Xcode
-  # 26.4 type-checker-timeout traps (see CLAUDE.md), and adding lint
-  # there is a separate, higher-risk decision for later. Runs the
-  # official realm/swiftlint Docker image directly (no third-party
-  # Action) on ubuntu-latest — no Xcode/macOS runner needed for pure
-  # linting, so this doesn't compete for macOS runner capacity.
+  # excluded there since they're C, not Swift). Deliberately does NOT run
+  # the FULL rule set against QAudionApp: that's the SwiftUI app with the
+  # documented Xcode 26.4 type-checker-timeout traps (see CLAUDE.md), and
+  # widening this config's `included:` to it would also expose it to every
+  # default/opt-in rule at once — a real flood-of-violations risk this same
+  # config's identifier_name history already demonstrated (2258/3380
+  # violations from one rule alone). See the separate, narrowly-scoped
+  # `swiftlint-qaudionapp-print-check` job below for the one QAudionApp
+  # rule that IS active (2026-08-21, MASVS-CODE I8). Runs the official
+  # realm/swiftlint Docker image directly (no third-party Action) on
+  # ubuntu-latest — no Xcode/macOS runner needed for pure linting, so this
+  # doesn't compete for macOS runner capacity.
   swiftlint-report:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -332,6 +337,25 @@ jobs:
           path: swiftlint-report.json
           if-no-files-found: warn
           retention-days: 14
+
+  # MASVS-CODE remediation (2026-08-21, I8) — narrowly-scoped QAudionApp
+  # pass, deliberately separate from swiftlint-report above. Uses
+  # .swiftlint-qaudionapp.yml (only_rules: [] + one custom rule banning
+  # new bare print() calls) instead of widening the main .swiftlint.yml,
+  # so this does NOT run any of the default/opt-in rules against
+  # QAudionApp — see that file's own header comment for the full
+  # rationale. Non-blocking (continue-on-error, same as swiftlint-report):
+  # this is a visibility signal for new violations, not a merge gate.
+  swiftlint-qaudionapp-print-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: SwiftLint (QAudionApp, print()-ban rule only)
+        continue-on-error: true
+        uses: docker://ghcr.io/realm/swiftlint:latest
+        with:
+          args: lint --config .swiftlint-qaudionapp.yml --path QAudionApp
 
   # RealityCore (VLESS+REALITY Go core, see ios-simulator-tests above
   # for the gomobile-bind build of the same module) has go.mod/tests

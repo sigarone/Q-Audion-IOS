@@ -65,29 +65,25 @@ public final class LiveLogStreamer {
 
     /// SECURITY C-10 — current consent state.
     ///
-    /// An EXPLICIT user choice (Settings toggle → `setEnabled`) always
-    /// wins. When the user has never chosen, the default is build-channel
-    /// aware:
-    ///   • public App Store build → OFF (GDPR / C-10 intent for end users)
-    ///   • TestFlight / sandbox / dev → ON (it is a testing channel where
-    ///     diagnostics are expected; this also restores the maintainer
-    ///     trail when the app is otherwise undebuggable — e.g. a Settings
-    ///     crash means the in-app toggle is unreachable).
+    /// MASVS-PRIVACY remediation (2026-08-20): an EXPLICIT user choice
+    /// (Settings → Diagnostica → toggle → `setEnabled`) always wins. When
+    /// the user has never chosen, the default is now unconditionally
+    /// `false` on EVERY build channel — including TestFlight. Before this
+    /// fix, the default was `!isAppStoreBuild`, which resolved `true` for
+    /// TestFlight (the app's only real distribution channel today, per
+    /// `CLAUDE.md`), with `setEnabled()` having zero reachable UI call
+    /// sites anywhere in the app — i.e. the pump was silently on for every
+    /// real user with no way to see or disable it, contradicting this very
+    /// file's "opt-in" framing. See
+    /// `docs/security/MASVS_ASSESSMENT_2026-08-20.md` §1.1 for the full
+    /// writeup. A real Settings toggle now exists (`PrivacySettingsScreen`,
+    /// "Log diagnostici in tempo reale" under DIAGNOSTICA) and is the only
+    /// way this ever becomes `true`.
     public static var isEnabled: Bool {
         if let explicit = UserDefaults.standard.object(forKey: consentKey) as? Bool {
             return explicit
         }
-        return !isAppStoreBuild
-    }
-
-    /// True only for the public App Store receipt ("receipt").
-    /// TestFlight/sandbox receipts are "sandboxReceipt"; dev/simulator
-    /// has no receipt URL → both treated as non-App-Store (debuggable).
-    private static var isAppStoreBuild: Bool {
-        guard let name = Bundle.main.appStoreReceiptURL?.lastPathComponent else {
-            return false
-        }
-        return name == "receipt"
+        return false
     }
 
     /// SECURITY C-10 — flip the consent flag. When disabled we also

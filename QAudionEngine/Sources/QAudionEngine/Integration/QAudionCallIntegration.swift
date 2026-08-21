@@ -279,6 +279,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `onOwnerContinuityStateChanged` above (fires on
     /// `ContactVoiceVerifier`'s own private queue).
     public var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
+    /// MASVS-CRYPTO remediation (2026-08-20/21) — see
+    /// `ContactVoiceVerifier.onScoreUpdated` kdoc. Feeds `ReKeyScheduler`.
+    public var onContactVoiceScoreUpdated: ((Float) -> Void)?
 
     /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
     /// successfully on EITHER side (caller `case .accept` after
@@ -759,6 +762,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
         contactVoiceVerifier.onLevelChanged = { [weak self] level in self?.onContactVoiceLevelChanged?(level) }
+        // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score
+        // alongside the level, same pattern. See ContactVoiceVerifier's
+        // `onScoreUpdated` kdoc.
+        contactVoiceVerifier.onScoreUpdated = { [weak self] score in self?.onContactVoiceScoreUpdated?(score) }
         // Task #11 — head-start the ephemeral ML-KEM keypair off the
         // call-start critical path (the reused responder integration and
         // any caller integration created with lead time get it for free).

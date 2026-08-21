@@ -13,9 +13,16 @@ import LocalAuthentication
 /// an "authenticate once per app-unlock" UX instead of a prompt on every read.
 ///
 /// DESIGN — deliberately conservative so it cannot brick existing users:
-///   • **Default OFF.** Existing installs are byte-identical to today until
-///     the user explicitly enables the toggle in Settings. No silent
-///     migration on update.
+///   • **Default = device capability (2026-08-21, MASVS-AUTH A1b/I4).** When
+///     the user has never explicitly chosen, the default now resolves to
+///     [isAuthenticationAvailable] instead of a hardcoded `false` — on by
+///     default wherever the device can actually satisfy it (mirrors the
+///     device's own security posture), inert on a device with no biometry/
+///     passcode enrolled at all (never bricks, matches concern #5 below).
+///     This ONLY changes what a never-set preference resolves to — the
+///     enable/migrate mechanism itself is untouched, and an EXISTING user
+///     who already has an explicit choice recorded keeps it exactly as-is:
+///     **no silent migration on update**, that guarantee still holds.
 ///   • **`.userPresence`, NOT `.biometryCurrentSet`.** `.userPresence`
 ///     accepts biometry OR the device passcode and SURVIVES a Face/Touch
 ///     re-enrollment, so a user can never be permanently locked out of their
@@ -55,8 +62,17 @@ public final class KeychainProtectionPolicy: @unchecked Sendable {
     // MARK: - Toggle state
 
     /// Whether biometric key protection is currently enabled (persisted).
+    ///
+    /// MASVS-AUTH remediation (2026-08-21, A1b/I4) — `UserDefaults.bool`
+    /// alone can't distinguish "never set" from "explicitly false" (both
+    /// read as `false`), so the never-set case is checked explicitly and
+    /// resolves to [isAuthenticationAvailable] as the computed default. An
+    /// explicit prior choice (either value) is always honored unchanged.
     public var isEnabled: Bool {
-        defaults.bool(forKey: Self.enabledDefaultsKey)
+        if defaults.object(forKey: Self.enabledDefaultsKey) == nil {
+            return isAuthenticationAvailable
+        }
+        return defaults.bool(forKey: Self.enabledDefaultsKey)
     }
 
     /// Persist the toggle state. Callers MUST run `SovereignKeyVault.migrate*`

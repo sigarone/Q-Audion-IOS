@@ -44,6 +44,15 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// changes as a result of a new score tick.
     public var onLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
 
+    /// MASVS-CRYPTO remediation (2026-08-20/21) — the raw 0..1 continuity
+    /// score, fired alongside [onLevelChanged] on the same `scoreQueue`
+    /// tick. `onLevelChanged` only exposes the 3-band hysteresis level
+    /// (green/yellow/red), which is too coarse for
+    /// `ReKeyScheduler.observeConfidence` — Android's adaptive re-key
+    /// period formula needs the continuous value. Additive: does not
+    /// change any existing consumer's behavior.
+    public var onScoreUpdated: ((Float) -> Void)?
+
     public init(embedder: CamPlusSpeakerEmbedder = .shared, store: VoiceprintStore = VoiceprintStore()) {
         self.verifier = SpeakerVerifier(embedder: embedder)
         self.store = store
@@ -105,6 +114,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             let score = self.verifier.computeVerificationScore()
             self.gate.feed(score)
             self.onLevelChanged?(self.gate.level)
+            self.onScoreUpdated?(score)
         }
         timer.resume()
         scoreTimer = timer

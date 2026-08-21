@@ -127,6 +127,29 @@
                 <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
             </array>
         </dict>
+
+        <!-- Other Diagnostic Data — MASVS-PRIVACY remediation (2026-08-20).
+             LiveLogStreamer (Services/LiveLogStreamer.swift) ships redacted
+             application log lines to /api/v1/files/upload roughly every 3s
+             while the user has opted in via Settings → Diagnostica → "Log
+             diagnostici in tempo reale" (default OFF; see the class kdoc
+             for the full consent-gate history — this entry was previously
+             missing because the toggle itself was previously unreachable).
+             Linked=true: the upload call is authenticated with the user's
+             real access token even though the log filename itself carries
+             only a per-session HMAC tag, not the raw user id. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
     </array>
 
     <!-- =========================================================
