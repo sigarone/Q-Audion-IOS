@@ -47,6 +47,44 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// duplicates. Per OpenRouter glm-5.1 review 2026-05-06.
     private var sessionInitializedByCall: Set<String> = []
 
+    /// I3 (2026-08-21) — content-based dedup for the Android-JSON OFFER
+    /// responder path (`onAndroidBundleReceived`, `.offer` case). W529's
+    /// `sessionInitializedByCall` above answers "have we EVER completed a
+    /// handshake for this callId" — correct for the 30s pre-handshake
+    /// timeout and the reconnect-replay window, but it cannot distinguish a
+    /// byte-identical OFFER *retransmit* (adversarial review 2026-08-21
+    /// corrected the original attribution here: Android's app layer is
+    /// single-shot for the first handshake — one OFFER, `HANDSHAKE_TIMEOUT`,
+    /// then hangup, no resend — and `performReKey` never retries a failed
+    /// round either, it just waits for the next periodic tick with a FRESH
+    /// keypair. The real source of a byte-identical redelivery is WS/push
+    /// message-layer redelivery, e.g. the documented "W-PUSHWAKE
+    /// buffered-offer redelivery" incident, call `c74487d2` — see this
+    /// file's own W-PQCENTRY comment above `onAndroidBundleReceived`. That
+    /// still MUST replay the same cached ACCEPT, never re-derive) from a
+    /// genuinely NEW OFFER on the SAME callId carrying fresh ML-KEM/X25519
+    /// public keys (a mid-call PQC
+    /// re-key — Android's `ReKeyScheduler`/`performReKey`, WIRE_SPEC §3: a
+    /// re-key OFFER is byte-identical in *shape* to the first handshake's,
+    /// the only way to tell them apart is the key material itself).
+    /// Before this fix, every OFFER after the first for a given callId hit
+    /// `sessionInitializedByCall`'s callId-only check and was silently
+    /// answered by replaying the STALE original ACCEPT, discarding the
+    /// re-key's new keys entirely and desyncing the session key from the
+    /// peer's. See `docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md` in the
+    /// qaudion-android-new repo (cross-repo doc, not in this repo) for the
+    /// full root-cause trace. Keyed by
+    /// "<lowercased callId>#<base64 SHA-256(pqcPub || x25519Pub)>", cleared
+    /// alongside `sessionInitializedByCall` at call teardown/reuse.
+    private var processedOfferFingerprintsByCall: Set<String> = []
+    /// ACCEPT wire bundle cached per entry in
+    /// `processedOfferFingerprintsByCall`, so a retransmit of THAT SPECIFIC
+    /// OFFER round replays the matching ACCEPT bytes — never a different
+    /// round's (e.g. a stale retransmit of the ORIGINAL OFFER arriving
+    /// after a re-key must still get the ORIGINAL ACCEPT back, not the
+    /// re-key's).
+    private var acceptWireByOfferFingerprint: [String: String] = [:]
+
     /// M-15 — handle for the 15s capability-exchange fallback timer so
     /// it can be cancelled when the call ends (otherwise it fires on a
     /// stale/unrelated subsequent call and forces it into `.fallback`).
@@ -1870,32 +1908,62 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: acceptToSend)
 
-            // W529 — stash the ACCEPT wire BEFORE checking the
-            // session-init guard so a duplicate OFFER replays this
-            // EXACT same bundle (same ciphertext, same shared secret)
-            // instead of deriving a fresh one. Re-deriving on every
-            // duplicate OFFER would produce a different ML-KEM
-            // ciphertext (encapsulation is randomized) and the caller
-            // would race between two valid-but-different ACCEPTs.
             let normalizedOId = callId.lowercased()
-            let alreadyInit = lock.withLock {
-                let r = sessionInitializedByCall.contains(normalizedOId)
-                if !r {
+            // I3 fix (2026-08-21) — content-based dedup, see
+            // processedOfferFingerprintsByCall's doc for the full
+            // rationale. sessionInitializedByCall (callId-only) is kept
+            // for the 30s-timeout / reconnect-replay checks elsewhere,
+            // which legitimately only care about "any handshake ever
+            // completed for this call" — the duplicate-vs-fresh DECISION
+            // below now also looks at the OFFER's own key material, so a
+            // genuine re-key OFFER (fresh pqcPub/x25519Pub, same callId)
+            // falls through to full reprocessing instead of being
+            // discarded as a stale retransmit.
+            let offerFingerprint = Data(SHA256.hash(data: pqcPub + x25519Pub)).base64EncodedString()
+            let offerDedupKey = normalizedOId + "#" + offerFingerprint
+            // isReKeyRound: this callId already completed a FULL handshake
+            // round before this one arrived — i.e. this OFFER's key material
+            // is new but the call itself is not. Distinguishing this matters
+            // because `engine.initialize()` below does far more than key
+            // rotation: it allocates BRAND NEW SessionManager instances and
+            // rebuilds `audioProcessor`, resetting `audioProfileLatched` to
+            // false and `audioProfile` to `.defaultProfile` — silently
+            // discarding a call's negotiated long-audio-profile latch
+            // mid-call (exactly the "wire-format change mid-call" the
+            // constant-rate property forbids — see W-LONGAUDIO/W-ALL60 in
+            // QAudionEngine.swift). Android's own re-key path never touches
+            // its equivalent of this reset (`performReKey` calls
+            // `pqcHandshake.initiate()` directly, never `startOutgoing`) —
+            // a re-key round here must skip `engine.initialize()` the same
+            // way and go straight to `engine.initSession()`, which is
+            // already safe to call again mid-session (`state ==
+            // .sessionActive` is an explicit allowed transition — see
+            // QAudionEngine.initSession's guard — and SessionManager
+            // .initSession is a pure key-derivation + atomic swap, safe to
+            // re-run). See docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md
+            // in the qaudion-android-new repo (cross-repo doc).
+            let (alreadyInit, isReKeyRound) = lock.withLock { () -> (Bool, Bool) in
+                let dup = processedOfferFingerprintsByCall.contains(offerDedupKey)
+                let wasAlreadyHandshaked = sessionInitializedByCall.contains(normalizedOId)
+                if !dup {
+                    processedOfferFingerprintsByCall.insert(offerDedupKey)
+                    acceptWireByOfferFingerprint[offerDedupKey] = wire
                     sessionInitializedByCall.insert(normalizedOId)
-                    lastSentAcceptWire = wire
                     if handshakeStartedAt == nil { handshakeStartedAt = Date() }
                     // Capture the responder-side sender closure for
                     // W531 (WS-reconnect replay) so we don't depend on
                     // AppState re-supplying it.
                     retrySenderClosure = sendOpaqueRaw
                 }
-                return r
+                return (dup, wasAlreadyHandshaked && !dup)
             }
             if alreadyInit {
-                // W529: idempotent replay — re-emit the SAME bundle the
-                // first OFFER produced. Caller will recognise it via
-                // their own session-init guard and discard.
-                if let cached = lock.withLock({ lastSentAcceptWire }) {
+                // Idempotent replay — re-emit the SAME bundle THIS OFFER
+                // round produced (looked up by its own fingerprint, never a
+                // different round's — a stale retransmit of the ORIGINAL
+                // OFFER arriving after a later re-key must still get the
+                // ORIGINAL ACCEPT back, not the re-key's).
+                if let cached = lock.withLock({ acceptWireByOfferFingerprint[offerDedupKey] }) {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — replaying cached ACCEPT")
                     try await sendOpaqueRaw(cached)
                 } else {
@@ -1903,12 +1971,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 return
             }
+            print("[QAudionCallIntegration] OFFER for callId=\(callId.prefix(8))… — processing (fingerprint=\(offerFingerprint.prefix(12))…, reKey=\(isReKeyRound), roundsSeen=\(processedOfferFingerprintsByCall.count))")
             try await sendOpaqueRaw(wire)
-            try engine.initialize()
+            if !isReKeyRound {
+                try engine.initialize()
+            }
             // W479 — Android peer: use AdaptivePaddingController-compatible
             // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
             // Byte-identical to Android FrameRelayTransport.send/decode +
             // AdaptivePaddingController.sealAudio/openAudio.
+            // I3 — on a re-key round this re-keys the EXISTING session
+            // managers in place (state == .sessionActive is an explicit
+            // allowed transition) without touching the audio profile latch
+            // or rebuilding the codec — see the isReKeyRound doc above.
             try engine.initSession(sharedSecret: combined, adaptivePadding: true)
             onRelaySessionReady?(combined, callId)
             lock.withLock { state = .active }
@@ -2029,7 +2104,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `call_incoming` as acknowledged (suppressing the backup VoIP
             // push). Sent AFTER the ACCEPT so the crypto round-trip is
             // already in flight when the caller starts ringing.
-            if !callerId.isEmpty {
+            // I3 — this is a call-SETUP signal ("we are now ringing"),
+            // meaningless (and actively confusing to the caller's UI) once
+            // the call is already Active. Only send it on the first round;
+            // a re-key round must not re-announce "ringing" on an
+            // already-connected call. Found by adversarial review, not the
+            // original pass — see I3_IOS_REKEY_DESIGN_2026-08-21.md §8 in
+            // the qaudion-android-new repo (cross-repo doc).
+            if !callerId.isEmpty && !isReKeyRound {
                 sendCallReady?(callId, callerId)
             }
 
@@ -3606,6 +3688,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // later call: clear all per-callId state so the next call
         // re-runs key generation + session init from scratch.
         sessionInitializedByCall.removeAll()
+        // I3 — same reasoning as sessionInitializedByCall above: a reused
+        // integration instance must not carry a prior call's OFFER
+        // fingerprints/cached ACCEPTs into the next call.
+        processedOfferFingerprintsByCall.removeAll()
+        acceptWireByOfferFingerprint.removeAll()
         localHybridKeysByCall.removeAll()
         // Phase-10b: clear the stashed sent-OFFER transcripts so a reused
         // integration does not leak a prior call's offer_binding into the next
