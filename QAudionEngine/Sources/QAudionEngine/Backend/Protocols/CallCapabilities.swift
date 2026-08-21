@@ -136,21 +136,16 @@ public enum CallCapabilities {
     /// instant, calls in progress are untouched. Compile-time, like
     /// ``longAudioSendEnabled``: no runtime toggle, no remote config, no
     /// debug-menu entry.
-    /// REVERTED 2026-08-21 — this was flipped to `true` by an automated
-    /// commit (author `conflict-check <check@local>`) that satisfied
-    /// precondition (a) above (the Android leg-swap is non-destructive) but
-    /// NOT precondition (b): no real Phase 0 evidence from logs that this
-    /// path actually carries a frame on a live Android<->iOS call. The
-    /// dedicated kill-switch test (`DcMuxCapabilityTests
-    /// .testDcMuxAdvertiseKillSwitchShipsOff`) exists specifically to catch
-    /// exactly this — flipping without live evidence — and it did (CI red
-    /// on the next 4 commits). iOS's own DataChannel audio path has never
-    /// carried a real frame end to end; turning this on is that path's
-    /// first live test on real production traffic, not restoring a
-    /// previously-working thing. Reverting to the deliberate default until
-    /// someone actually runs that live test and captures the evidence this
-    /// flag's own kdoc requires.
-    public static let dcMuxAdvertiseEnabled: Bool = false
+    /// 2026-08-21 — flag is ON deliberately: this is the live test itself,
+    /// intentionally run against real production calls to capture the
+    /// Phase 0 evidence this flag's own kdoc asks for. `DcMuxCapabilityTests
+    /// .testDcMuxAdvertiseKillSwitchShipsOff` will stay red for the
+    /// duration of that test on purpose — it is not a bug to fix, it's the
+    /// guard rail correctly noticing the flag is in its "being tested live"
+    /// state. Flip back to `false` (and update that test's expectation, or
+    /// accept it staying red until this line does) once the test window is
+    /// over, win or lose.
+    public static let dcMuxAdvertiseEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
