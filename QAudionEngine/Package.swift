@@ -150,29 +150,42 @@ let package = Package(
         // call-waiting/concurrent-call scenario would need explicit
         // handoff between the two.
         //
-        // AES-256 fork (sigarone/client-sdk-swift, tag 2.15.1-aes256-raw,
-        // rebased from 2.13.1-aes256-raw's same two commits onto upstream
-        // 2.15.1): (1) redirects the transitive webrtc-xcframework
-        // dependency to sigarone/webrtc-xcframework@144.7559.10-aes256-livekit
-        // (itself rebuilt via sigarone/webrtc-aes256-build's
-        // build-livekit-ios.yml from sigarone/webrtc@f47af7bc9658 — one day
-        // before livekit/webrtc-xcframework's real 144.7559.10 cut on
-        // 2026-06-16, same day-prior matching methodology already validated
-        // for 144.7559.03; verified in the build log: LK-prefixed symbols
+        // AES-256 fork (sigarone/client-sdk-swift, tag 2.15.3-aes256-raw3,
+        // rebased from 2.15.1-aes256-raw2's same 3 commits onto upstream
+        // 2.15.3 on 2026-08-21): (1) redirects the transitive
+        // webrtc-xcframework dependency to
+        // sigarone/webrtc-xcframework@144.7559.10-aes256-livekit (itself
+        // rebuilt via sigarone/webrtc-aes256-build's build-livekit-ios.yml
+        // from sigarone/webrtc@f47af7bc9658 — one day before
+        // livekit/webrtc-xcframework's real 144.7559.10 cut on 2026-06-16,
+        // same day-prior matching methodology already validated for
+        // 144.7559.03; verified in the build log: LK-prefixed symbols
         // present, "AES-256 GCM using openssl" string present in the
         // binary), carrying the same aes256-framecryptor.patch as this
         // app's own WebRTC binaryTarget below — group-call media gets
         // AES-256-GCM instead of the fixed AES-128 FrameCryptor once a
         // 32-byte shared key is supplied (matches the Android wiring).
-        // (2) a raw-Data `setKey(keyData:participantId:index:)` overload on
+        // STILL pinned at 144.7559.10-aes256-livekit even though 2.15.3
+        // upstream itself moved to 144.7559.11: no aes256 build of .11
+        // exists yet (needs the native rebuild pipeline on a Mac — not run
+        // this pass), and the checked 2.15.1..2.15.3 upstream diff touches
+        // zero files under Sources/LiveKit/E2EE/, so staying one WebRTC
+        // binary behind is safe for this release. (2) a raw-Data
+        // `setKey(keyData:participantId:index:)` overload on
         // `BaseKeyProvider` that hands the bytes VERBATIM to
         // `LKRTCFrameCryptorKeyProvider` (the String overload UTF-8-encodes,
         // so a 44-char base64 key can never fire the patched native
         // `password.size() == 32 ? 256 : 128` gate). `LiveKitGroupCallRoom`
         // feeds the RAW 32-byte SK_0 through this overload -> native
-        // derives AES-256-GCM. Every other file/line in client-sdk-swift
-        // 2.15.1 is untouched — same-tag-shape fork, not a rewrite.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.1-aes256-raw2"),
+        // derives AES-256-GCM. (3) per-participant FrameCryptor keyIndex
+        // pinning (W-GRPKEYPIN-SWIFT). This rebase ALSO picks up upstream's
+        // own fix for Apple's ITMS-90338 rejection (Guideline 2.5.1):
+        // Broadcast/BroadcastManager.swift no longer calls the non-public
+        // `buttonPressed:` selector (removed upstream in 2.15.3, PR #1065 /
+        // commit 11a2c490), using public `UIButton.sendActions` instead.
+        // Every other file/line in client-sdk-swift 2.15.3 is untouched —
+        // same-tag-shape fork, not a rewrite.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.3-aes256-raw3"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
