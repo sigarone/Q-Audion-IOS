@@ -114,7 +114,13 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             let score = self.verifier.computeVerificationScore()
             self.gate.feed(score)
             self.onLevelChanged?(self.gate.level)
-            self.onScoreUpdated?(score)
+            // score is nil when there's not yet enough audio for a real
+            // verification result (SpeakerVerifier's own gate) — nothing
+            // meaningful to report to the re-key confidence signal in that
+            // case, unlike gate.feed above which has its own nil handling.
+            if let score {
+                self.onScoreUpdated?(score)
+            }
         }
         timer.resume()
         scoreTimer = timer

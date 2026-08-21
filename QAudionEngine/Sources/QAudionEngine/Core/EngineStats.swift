@@ -18,7 +18,6 @@ public struct EngineStats {
     public var avgDecryptionMs: Double = 0
     public var keyRatchetCount: Int64 = 0
     public var avgDeepfakeConfidence: Float = 0.5
-    public var trustReport: TrustReport?
 
     public enum ThreatLevel: String { case safe; case uncertain; case suspicious; case critical }
 
