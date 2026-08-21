@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1010",
+              date: "2026-08-21",
+              title: "v1.0.1010",
+              bullets: [
+                "fix(security): I3 §5 — iOS-as-initiator PQC re-key + v4 ratchet reset fix",
+                "fix(security): I3 — mid-call PQC re-key content-based dedup",
+                "fix(security): MASVS remediation — telemetry consent, biometric default, DB backup exclusion, rekey scaffold",
+                "fix(security): migrate TusResumeStateStore off plaintext UserDefaults",
+              ]),
         .init(id: "v1.0.1009",
               date: "2026-08-20",
               title: "v1.0.1009",
               bullets: [
+                "chore: regenerate changelog for v1.0.1009",
                 "feat(auth): manual extension+password login for Fast Setup accounts",
                 "fix(chat): stop stamping attachment sends as delivered before any real ack",
               ]),
@@ -190,13 +200,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.991",
                 "fix(ui): move Q-AUDION wordmark banner off shared safeAreaInset, inline per screen",
-              ]),
-        .init(id: "v1.0.990",
-              date: "2026-08-15",
-              title: "v1.0.990",
-              bullets: [
-                "chore: regenerate changelog for v1.0.990",
-                "fix(ui): shield+Q-AUDION wordmark banner now on all four main screens",
               ]),
     ]
 }
