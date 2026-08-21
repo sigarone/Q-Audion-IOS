@@ -4587,6 +4587,21 @@ final class AppState: ObservableObject {
                             // the actual offer below; only CallKit's own
                             // hasVideo is forced so answering always
                             // auto-dismisses the native UI into the app.
+                            //
+                            // noCallInFlight()-race fix: set activeCallKitId /
+                            // incomingCallRingVisible BEFORE reportIncomingCall
+                            // runs, not after — mirrors the PushKit path
+                            // (prepareIncomingPushCall runs before its own
+                            // reportIncomingCall above). Without this, a
+                            // willEnterForeground fired in the gap between
+                            // reportIncomingCall registering the UUID with
+                            // CallKit and this MainActor hop setting our own
+                            // state could see noCallInFlight() == true and
+                            // reap a call CallKit already knows is ringing.
+                            await MainActor.run {
+                                if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
+                                self.incomingCallRingVisible = true
+                            }
                             await ck.reportIncomingCall(
                                 uuid: callUUID,
                                 callerName: resolvedCallerName,
@@ -4606,6 +4621,10 @@ final class AppState: ObservableObject {
                         // invite: this is what makes IncomingCallScreen appear the
                         // instant the app can draw, independent of whether CallKit
                         // also owns the ring (see ContentView's fullScreenCover).
+                        // (Already set pre-reportIncomingCall above for the
+                        // ck-branch race fix; setting again here is a harmless
+                        // no-op and keeps this block correct standalone for the
+                        // useCustomUI/registerSuppressedCall branches too.)
                         self.incomingCallRingVisible = true
                         // W450-fix: when PushKit woke the device first, CallKit's
                         // native phone UI is already visible. Setting .ringing here
@@ -12506,12 +12525,34 @@ final class AppState: ObservableObject {
     /// hand-off, so together they cover the whole window.
     @MainActor
     private func noCallInFlight() -> Bool {
-        if callState != .idle { return false }
-        if activeCallKitId != nil { return false }
-        if incomingCallRingVisible { return false }
-        if isInCall { return false }
-        return true
+        evaluateNoCallInFlight(
+            callState: callState,
+            activeCallKitId: activeCallKitId,
+            incomingCallRingVisible: incomingCallRingVisible,
+            isInCall: isInCall
+        )
     }
+}
+
+/// W-FGREAP — pure predicate extracted from `AppState.noCallInFlight()` so it's
+/// unit-testable without constructing a full `AppState` (a heavy, deeply-
+/// dependency-injected @MainActor class with no lightweight test init). Same
+/// four-property gate, same semantics; `AppState.noCallInFlight()` is a thin
+/// `@MainActor` wrapper that reads its own properties and delegates here.
+func evaluateNoCallInFlight(
+    callState: CallState,
+    activeCallKitId: UUID?,
+    incomingCallRingVisible: Bool,
+    isInCall: Bool
+) -> Bool {
+    if callState != .idle { return false }
+    if activeCallKitId != nil { return false }
+    if incomingCallRingVisible { return false }
+    if isInCall { return false }
+    return true
+}
+
+extension AppState {
 
     /// call_accepted rollout-safety net (WIRE_SPEC §3.5) — bounded fallback
     /// so a caller talking to a not-yet-upgraded peer doesn't wait forever.
