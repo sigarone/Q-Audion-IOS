@@ -4,6 +4,7 @@ Q-Audion iOS is the native Swift client for the Q-Audion E2EE post-quantum messe
 
 **Authoritative protocol spec:** `apps/bcrypto-server/docs/WIRE_SPEC.md`
 **Master security policy:** `apps/bcrypto-server/SECURITY.md`
+**MASVS certification status:** [`../qaudion-android-new/docs/security/CERTIFICATION_STATUS.md`](../qaudion-android-new/docs/security/CERTIFICATION_STATUS.md) — read this before answering "is the certification closed"
 
 ## Reporting
 
