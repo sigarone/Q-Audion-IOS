@@ -43,3 +43,6 @@ __pycache__/
 # `git add`; removed 2026-07-28. This guards against a repeat.
 /WebRTC-M147.zip
 /pod-onnxruntime-ext-0.13.0.zip
+
+# transient commit-message staging from headless agent runs (agent_runner-style), never real deliverables
+.scratch/
