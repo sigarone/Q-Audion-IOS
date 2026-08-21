@@ -584,6 +584,46 @@ jobs:
           || (echo ""; echo "=== BUILD FAILED -- full build.log ==="; cat build.log; exit 1)
 
       # ----------------------------------------------------------
+      # 7a-2) I5 (MASVS assessment) -- publish the real Package.resolved
+      #     produced by this build as an artifact. No Swift/Xcode toolchain
+      #     exists on the dev machine that authors these workflow changes
+      #     (Windows), so this macOS runner is the only place the actual
+      #     resolved dependency graph is ever materialized; committing it
+      #     to the repo (for reproducible-build / supply-chain pinning)
+      #     needs it pulled from here. Collects every Package.resolved the
+      #     build produced -- the Xcode-managed workspace one AND
+      #     QAudionEngine's own standalone one, if that package resolves
+      #     separately -- rather than guessing a single DerivedData path.
+      #     Always runs (not gated on success) so a Package.resolved that
+      #     did get written before a later failure is still recoverable.
+      # ----------------------------------------------------------
+      - name: Collect Package.resolved
+        if: always()
+        working-directory: QAudionApp
+        continue-on-error: true
+        run: |
+          OUT="$GITHUB_WORKSPACE/package-resolved-out"
+          mkdir -p "$OUT"
+          n=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            n=$((n+1))
+            cp "$f" "$OUT/Package.resolved.$n" || true
+            echo "Found: $f"
+          done < <(find . ~/Library/Developer/Xcode/DerivedData -name 'Package.resolved' 2>/dev/null)
+          echo "Collected $n Package.resolved file(s)."
+
+      - name: Upload Package.resolved
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-resolved-${{ github.run_number }}
+          path: package-resolved-out
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ----------------------------------------------------------
       # 7b) Diagnose Swift compile errors ONLY when Build IPA fails.
       #     Previously this ran BEFORE Build IPA as a precaution (raw
       #     xcodebuild with CODE_SIGNING_ALLOWED=NO so Swift errors
