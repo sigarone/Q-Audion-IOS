@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1012",
+              date: "2026-08-21",
+              title: "v1.0.1012",
+              bullets: [
+                "fix(security): revert app-lock default-on, no escape from a mandatory Face ID prompt",
+              ]),
         .init(id: "v1.0.1011",
               date: "2026-08-21",
               title: "v1.0.1011",
               bullets: [
+                "chore: regenerate changelog for v1.0.1011",
                 "fix(build): TestFlight v1.0.1010 compile failures",
               ]),
         .init(id: "v1.0.1010",
@@ -191,15 +198,6 @@ extension ReleaseNote {
                 "feat(mesh): close the two real iOS/Android parity gaps",
                 "fix(mesh): stop claiming an outbox iOS mesh sends don't have",
                 "fix(mesh): antenna toggle silently never reports on-state on iOS (#64)",
-              ]),
-        .init(id: "v1.0.992",
-              date: "2026-08-16",
-              title: "v1.0.992",
-              bullets: [
-                "chore: regenerate changelog for v1.0.992",
-                "fix(identity): stop passing AppState directly into AccountIdentityLabels.make",
-                "feat(call): port fragment-level NACK/retransmission (W-VNACK) from Android",
-                "fix(settings): resolve Toggle/onTapGesture conflict in PR #63, close it",
               ]),
     ]
 }
