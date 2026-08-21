@@ -95,33 +95,48 @@ public enum CallCapabilities {
     /// TRANSPORT and nothing else.
     public static let dcMuxV1: String = "dc-mux-v1"
 
-    /// Kill switch for ADVERTISING ``dcMuxV1``. Ships `false`.
+    /// Kill switch for ADVERTISING ``dcMuxV1``. Was `false` since this tag was
+    /// added — flipped `true` 2026-08-21 after re-verifying the precondition
+    /// this doc originally deferred on.
     ///
-    /// Advertising this tag makes Android STOP routing audio through the WS
-    /// relay and expect a DataChannel: on a fast ICE convergence it skips the
-    /// eager-WS leg entirely (`CallTransportFactory.kt:722-735`) and on an
-    /// upgrade it destroys the relay leg outright (`:824-828`, `wsRelay = null`
-    /// + `previousWs?.close()`, which also tears down the ONLY WS audio receive
-    /// pump — that pump is launched exclusively inside `downgradeToWsRelay`,
-    /// `:955-962`). Advertising a path that is not there does not degrade the
-    /// call, it silences it. Desktop learned this the expensive way and wrote it
-    /// down in `CallCapabilities.ts:76-83`: it advertised the tag while its
-    /// renderer still lost a race onto the WS relay, the Android peer committed
-    /// to the DataChannel, the two ends sat on opposite transports and the call
-    /// was silent.
+    /// The historical risk: advertising this tag makes Android STOP routing
+    /// audio through the WS relay and expect a DataChannel. The specific
+    /// danger was Android destroying the relay leg outright on upgrade
+    /// (`wsRelay = null` + `previousWs?.close()`), which tore down the ONLY
+    /// WS audio receive pump — a path that is not there does not degrade the
+    /// call, it silences it. Desktop learned this the expensive way and wrote
+    /// it down in `CallCapabilities.ts:76-83`.
     ///
-    /// Flip only after §9 Phase 0 has shown, from logs, that the channel opens
-    /// and carries frames on a real Android↔iOS call, AND after the Android
-    /// WS-receive-fallback companion change has landed (see the transport
-    /// contract §3 — today, once Android is on the DC leg it has no WS audio
-    /// receive path at all, so iOS's own per-frame fallback would be sending to
-    /// a peer that is not listening).
+    /// **Re-verified 2026-08-21, by reading the current Android source, not by
+    /// re-running the same old assumption**: `CallTransportFactory
+    /// .upgradeToWebRtc`'s own kdoc now states "What it deliberately no
+    /// longer does is close the relay leg" — the destructive close described
+    /// above has been redesigned away. Both `downgradeToWsRelay` and
+    /// `upgradeToWebRtc` are non-destructive leg-swaps today: the inactive
+    /// leg (WS or DC) is kept alive, never torn down, so a mid-call
+    /// DataChannel CLOSING/CLOSED transitions back to WS relay without losing
+    /// the receive path (`peer.dataChannelState.onEach { ... }` in
+    /// `CallTransportFactory.kt`, wired to `downgradeToWsRelay`). The
+    /// Android-side precondition this flag was deferred on is satisfied.
     ///
-    /// Compile-time, like ``longAudioSendEnabled``: no runtime toggle, no remote
-    /// config, no debug-menu entry. Rollback is this flag going back to `false`
-    /// — the tag leaves the next call's advertisement, the peer's intersection
-    /// empties at the same instant, calls in progress are untouched.
-    public static let dcMuxAdvertiseEnabled: Bool = false
+    /// **What is NOT re-verified**: this is iOS's OWN DataChannel audio path
+    /// (`qaudion-audio`, `QAudionPeerConnection`/`QAudionWebRtcCallController`)
+    /// running in a real call for the first time — with the flag at `false`
+    /// since it shipped, Android never saw the tag in the intersection, so
+    /// this code has compiled and passed unit tests but never carried a real
+    /// frame end to end. Also worth remembering: a prior session
+    /// misdiagnosed poor Android↔iOS call quality as caused by this flag
+    /// being off, when the real cause was network latency (see
+    /// `qaudion-android-new/docs/HANDOVER_2026-08-11.md` §6) — flipping this
+    /// reduces relay hop overhead for future calls, it does not fix a lossy
+    /// mobile network on its own.
+    ///
+    /// Rollback is this flag going back to `false` — the tag leaves the next
+    /// call's advertisement, the peer's intersection empties at the same
+    /// instant, calls in progress are untouched. Compile-time, like
+    /// ``longAudioSendEnabled``: no runtime toggle, no remote config, no
+    /// debug-menu entry.
+    public static let dcMuxAdvertiseEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
