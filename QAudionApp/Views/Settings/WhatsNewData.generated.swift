@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1013",
+              date: "2026-08-21",
+              title: "v1.0.1013",
+              bullets: [
+                "fix(call): SAS never appears + call times out — callContactId race",
+              ]),
         .init(id: "v1.0.1012",
               date: "2026-08-21",
               title: "v1.0.1012",
               bullets: [
+                "chore: regenerate changelog for v1.0.1012",
                 "fix(security): revert app-lock default-on, no escape from a mandatory Face ID prompt",
               ]),
         .init(id: "v1.0.1011",
@@ -189,15 +196,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.994",
                 "fix(call): make the outgoing-screen 3rd handshake checkmark reachable",
-              ]),
-        .init(id: "v1.0.993",
-              date: "2026-08-16",
-              title: "v1.0.993",
-              bullets: [
-                "chore: regenerate changelog for v1.0.993",
-                "feat(mesh): close the two real iOS/Android parity gaps",
-                "fix(mesh): stop claiming an outbox iOS mesh sends don't have",
-                "fix(mesh): antenna toggle silently never reports on-state on iOS (#64)",
               ]),
     ]
 }
