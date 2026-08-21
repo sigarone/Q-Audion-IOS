@@ -2864,22 +2864,34 @@ final class AppState: ObservableObject {
         callService.onContactVoiceScoreUpdated = { [weak self] score in
             self?.reKeyScheduler.observeConfidence(score)
         }
-        // MASVS-CRYPTO remediation (2026-08-20/21) — UNVERIFIED, see
-        // `ReKeyScheduler`'s file-level kdoc. This is deliberately a LOUD
-        // no-op, not a silent one: the scheduler correctly computes when a
-        // re-key SHOULD happen, but nothing downstream actually rotates the
-        // PQC session key on iOS yet (unlike Android, which drives a real
-        // ML-KEM re-handshake here). Logging every tick keeps this gap
-        // visible in the field instead of it silently looking "handled"
-        // because the scheduler exists and runs.
-        reKeyScheduler.onReKeyTick = { tick in
+        // I3 §5 (2026-08-21) — drives a real PQC re-handshake via
+        // QAudionCallIntegration.performPqcReKey. Only ever does anything on
+        // the device that originated the call — performPqcReKey's own
+        // isCaller guard is the actual enforcement (glare-avoidance, mirrors
+        // Android's !isInitiator early-return in performReKey); a responder
+        // integration's ticks are cheap no-ops here (the guard fails fast
+        // before any network/crypto work). See
+        // docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md §5 (qaudion-android-new
+        // repo) for the full design.
+        reKeyScheduler.onReKeyTick = { [weak self] tick in
             let reason = tick.reason
             let seq = String(tick.sequence)
             let conf = String(format: "%.2f", tick.confidenceAtTrigger)
-            RTLog.warn(
+            RTLog.info(
                 "rekey",
-                "ReKeyScheduler tick #" + seq + " reason=" + reason + " confidence=" + conf +
-                    " — NOT YET WIRED to a real PQC re-handshake on iOS (see ReKeyScheduler.swift kdoc)")
+                "ReKeyScheduler tick #" + seq + " reason=" + reason + " confidence=" + conf)
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let integration = self.callService.callIntegration,
+                      let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+                      let peerId = self.callContactId
+                else {
+                    RTLog.warn("rekey", "tick #" + seq + " skipped — no active call/integration/peer")
+                    return
+                }
+                let ok = await integration.performPqcReKey(callId: cid, peerId: peerId)
+                RTLog.info("rekey", "tick #" + seq + " performPqcReKey result=" + String(ok))
+            }
         }
 
         callService.onTxWaveformUpdate = { [weak self] samples in

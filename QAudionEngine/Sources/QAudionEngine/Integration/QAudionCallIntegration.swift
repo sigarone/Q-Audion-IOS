@@ -85,6 +85,39 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// re-key's).
     private var acceptWireByOfferFingerprint: [String: String] = [:]
 
+    /// I3 §5 (2026-08-21) — content-based dedup for the CALLER's ACCEPT
+    /// processing (`.accept` case), symmetric to
+    /// `processedOfferFingerprintsByCall` on the responder side. The old
+    /// "Double-ACCEPT guard" deduped by callId alone — harmless while iOS
+    /// never re-sent an OFFER as caller, but `performPqcReKey` below now
+    /// does exactly that, and a genuine re-key ACCEPT (fresh ciphertext,
+    /// same callId) would otherwise hit the callId-only guard and be
+    /// silently discarded as "already initialised" — the exact same bug
+    /// class §4 fixed on the responder side, mirrored here. Keyed by
+    /// "<lowercased callId>#<base64 SHA-256(ct.pqc || ct.x25519)>".
+    private var processedAcceptFingerprintsByCall: Set<String> = []
+
+    /// I3 §5 — one in-flight caller-initiated mid-call re-key attempt at a
+    /// time (glare-avoidance: `performPqcReKey` only ever runs on the
+    /// device that originated the call, mirrors Android's `!isInitiator`
+    /// early-return in `performReKey`, `CallController.kt:6879`). Holds the
+    /// FRESH ephemeral keypair generated for this round — deliberately
+    /// separate from `localHybridKeysByCall`, which is zeroed and removed
+    /// right after the ORIGINAL handshake's ACCEPT lands
+    /// (`QAudionCallIntegration.swift`, `.accept` case, step 7) and must
+    /// stay that way; reusing that slot for a re-key would risk a stale
+    /// retransmit of the ORIGINAL ACCEPT decapsulating against the WRONG
+    /// (re-key) private key. `resume` resolves the awaiting continuation
+    /// exactly once — whichever of {a matching ACCEPT arrives, the attempt
+    /// times out} fires first; the loser is a no-op because both paths
+    /// clear `pendingReKeyAttempt` before calling `resume`.
+    private struct PendingReKeyAttempt {
+        let id: UUID
+        let localKeys: HybridLocalKeys
+        let resume: (Data?) -> Void
+    }
+    private var pendingReKeyAttempt: PendingReKeyAttempt?
+
     /// M-15 — handle for the 15s capability-exchange fallback timer so
     /// it can be cancelled when the call ends (otherwise it fires on a
     /// stale/unrelated subsequent call and forces it into `.fallback`).
@@ -1208,6 +1241,175 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
+    /// I3 §5 (2026-08-21) — mid-call PQC re-key, INITIATOR side. Mirrors
+    /// Android's `performReKey` (`CallController.kt:6860`): reuses the
+    /// SAME `AndroidHandshakeBundle` OFFER shape as
+    /// `onAndroidCallSetupStarted` (fresh ephemeral ML-KEM+X25519 keypair,
+    /// same PSK-advertisement/signing steps), sent over the SAME
+    /// `opaque_message` channel — but deliberately skips every ONE-TIME
+    /// call-SETUP side effect that function has: no `engine.initialize()`
+    /// (would reset the negotiated audio profile — see the `isReKeyRound`
+    /// guard in the `.offer` case's own doc), no `state` transition away
+    /// from `.active`, no 30s pre-handshake fallback timer, no touch to
+    /// `localKeyPair`/`pendingOutgoingCallId` (those belong to the
+    /// ORIGINAL handshake's own bookkeeping).
+    ///
+    /// Glare-avoidance: only ever call this on the device that originated
+    /// the call. There is no `isInitiator`-equivalent enforcement inside
+    /// this function beyond the `isCaller` guard below — the CALLER of
+    /// this function (the app layer, driven by `ReKeyScheduler`'s ticks)
+    /// is responsible for not calling it on a responder integration.
+    ///
+    /// Returns `true` if a new key was derived and installed, `false` on
+    /// any failure (timeout, network error, keygen failure) — in every
+    /// failure case the call is left running on whatever key was active
+    /// before this call, exactly like Android's `performReKey.onFailure`
+    /// ("NEVER brick an otherwise-healthy call over one failed periodic
+    /// re-key round"). There is no Android-style "provisional swap + revert
+    /// on no-confirmation" watchdog here because there is no need for one:
+    /// unlike Android's `installRekeyedAudioKey`, this function never
+    /// installs anything until AFTER a real ACCEPT has been received and
+    /// the key derived from it — the swap is naturally deferred, not
+    /// optimistic, so there is nothing to revert if the ACCEPT never
+    /// arrives.
+    @discardableResult
+    public func performPqcReKey(callId: String, peerId: String, timeoutSec: Double = 8.0) async -> Bool {
+        let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
+            guard isCaller, state == .active, pendingReKeyAttempt == nil else { return (false, nil) }
+            return (true, retrySenderClosure)
+        }
+        guard canProceed, let sendOpaqueRaw else {
+            print("[QAudionCallIntegration] performPqcReKey skipped (isCaller/state/in-flight guard) callId=\(callId.prefix(8))… peer=\(peerId.prefix(8))…")
+            return false
+        }
+
+        let pqcKp: PqcKeyExchange.KeyPair
+        let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
+        let pqcRawPub: Data
+        do {
+            // consumeOrGenerateKeyPair has no one-shot restriction — safe
+            // to call again mid-call (verified by reading it: it either
+            // returns a pre-warmed keypair or generates a fresh one cold).
+            pqcKp = try consumeOrGenerateKeyPair()
+            pqcRawPub = try PqcKeyExchange.extractRawPublicKey(pqcKp.publicKey)
+        } catch {
+            print("[QAudionCallIntegration] performPqcReKey keygen failed callId=\(callId.prefix(8))…: \(error)")
+            return false
+        }
+        let localKeys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
+        let x25519RawPub = Data(x25519Priv.publicKey.rawRepresentation)
+
+        // Same PSK-advertisement construction as onAndroidCallSetupStarted
+        // — a re-key OFFER re-advertises the caller's current PSK
+        // catalogue exactly like the original handshake did (Android does
+        // the same: PqcHandshake.initiate() re-runs the full PSK
+        // negotiation on every round, not just the first).
+        let pskVault = SovereignKeyVault()
+        let pskAdvertEntries: [PskAdvertising.Entry] = pskVault.listPskEntries().compactMap { entry in
+            guard let raw = (try? pskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
+            return PskAdvertising.Entry(
+                name: entry.name, origin: pskVault.origin(name: entry.name),
+                material: raw, createdAt: entry.createdAt)
+        }
+        let advert = PskAdvertResolver.buildAdvertisement(
+            dialect: Self.offerAdvertDialect, callId: callId,
+            ownEphemeralX25519Pub: x25519RawPub,
+            candidates: PskAdvertising.candidatesForAdvertisement(pskAdvertEntries))
+        let offerBundle = AndroidHandshakeBundle(
+            kind: .offer,
+            callId: callId,
+            pqcPublicKey: pqcRawPub.base64EncodedString(),
+            x25519PublicKey: x25519RawPub.base64EncodedString(),
+            capabilities: AndroidHandshakeBundle.Capabilities(
+                ratchetV3: true,
+                sframeV1: true,
+                vkeyV1: true,
+                ratchetV4: Self.advertisesRatchetV4 ? true : nil,
+                srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
+                pskMixV1: true
+            ),
+            pskFingerprints: advert.fingerprints,
+            pskRoles: advert.roles
+        )
+        // Stash the advert list (KCMAC needs it, same as the original
+        // handshake) and sign the OFFER — same steps as
+        // onAndroidCallSetupStarted, deliberately OVERWRITING the
+        // ORIGINAL handshake's stash (callId-keyed, not round-keyed): by
+        // the time a re-key round starts, the original handshake is long
+        // complete (glare-guard above requires `state == .active`) and its
+        // stashed transcript is never read again — the ACCEPT-verify path
+        // for THIS round needs THIS round's transcript.
+        lock.withLock {
+            sentOfferPskFingerprintsByCall[callId.lowercased()] = advert.fingerprints
+            sentOfferPskRolesByCall[callId.lowercased()] = advert.roles ?? []
+        }
+        var bundleToSend = offerBundle
+        if signingEnabled, let idKey = localSignerIdentityKey,
+           let offerT = Self.offerTranscript(from: offerBundle, callId: callId, signerKeyRaw: idKey) {
+            let offerTV2 = Self.offerTranscriptV2(from: offerBundle, callId: callId, signerKeyRaw: idKey)
+            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2)
+            if bundleToSend.signature != nil {
+                lock.withLock {
+                    sentOfferTranscriptByCall[callId.lowercased()] = offerT
+                    if let offerTV2 { sentOfferTranscriptV2ByCall[callId.lowercased()] = offerTV2 }
+                }
+            }
+        }
+        let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: bundleToSend)
+
+        // Arm the pending-attempt continuation BEFORE sending — a
+        // same-machine-speed ACCEPT can never race ahead of
+        // pendingReKeyAttempt being ready to receive it. Whichever of
+        // {the .accept dispatch below, the timeout task} resolves first
+        // wins; both clear pendingReKeyAttempt atomically before calling
+        // resume, so the other is guaranteed a no-op.
+        let attemptId = UUID()
+        let combined: Data? = await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
+            lock.withLock {
+                pendingReKeyAttempt = PendingReKeyAttempt(id: attemptId, localKeys: localKeys) { value in
+                    cont.resume(returning: value)
+                }
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await sendOpaqueRaw(jsonWire)
+                } catch {
+                    print("[QAudionCallIntegration] performPqcReKey send failed callId=\(callId.prefix(8))…: \(error)")
+                    let resume: ((Data?) -> Void)? = self.lock.withLock {
+                        guard self.pendingReKeyAttempt?.id == attemptId else { return nil }
+                        let r = self.pendingReKeyAttempt?.resume
+                        self.pendingReKeyAttempt = nil
+                        return r
+                    }
+                    resume?(nil)
+                }
+            }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSec * 1_000_000_000))
+                guard let self else { return }
+                let resume: ((Data?) -> Void)? = self.lock.withLock {
+                    guard self.pendingReKeyAttempt?.id == attemptId else { return nil }
+                    let r = self.pendingReKeyAttempt?.resume
+                    self.pendingReKeyAttempt = nil
+                    return r
+                }
+                if resume != nil {
+                    print("[QAudionCallIntegration] performPqcReKey timed out after \(timeoutSec)s callId=\(callId.prefix(8))… — keeping current key")
+                }
+                resume?(nil)
+            }
+        }
+
+        guard combined != nil else { return false }
+        // The .accept dispatch (onAndroidBundleReceived's rekey completion
+        // branch) already ran engine.initSession() and fired the session-
+        // key-rotation callbacks before resolving this continuation — see
+        // that branch's own doc for why nothing further is needed here.
+        print("[QAudionCallIntegration] performPqcReKey completed callId=\(callId.prefix(8))… peer=\(peerId.prefix(8))…")
+        return true
+    }
+
     public func onCapabilityMessageReceived(data: Data, fromSenderId: String = "", sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
@@ -2019,8 +2221,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let v4PeerSik = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
             let v4PeerIdValid = (v4PeerSik?.count == 32)
             let v4BindingPresent = !verifiedOfferBinding.isEmpty
-            let v4Fire = negotiatedRatchetV4 && v4SelfIdPresent && v4PeerIdValid && v4BindingPresent
-            print("[PQC_DIAG_V4] responder callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4SelfIdPresent) peer=\(v4PeerIdValid) bindingEmpty=\(verifiedOfferBinding.isEmpty) → fire=\(v4Fire)")
+            // I3 — v4 message-ratchet bootstrap must fire only on the
+            // call's first handshake, never on a re-key round. See the
+            // matching guard + full rationale in the .accept case's
+            // v4InitFire below (same fix, both directions of the handshake).
+            let v4Fire = negotiatedRatchetV4 && v4SelfIdPresent && v4PeerIdValid && v4BindingPresent && !isReKeyRound
+            print("[PQC_DIAG_V4] responder callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4SelfIdPresent) peer=\(v4PeerIdValid) bindingEmpty=\(verifiedOfferBinding.isEmpty) reKey=\(isReKeyRound) → fire=\(v4Fire)")
             if v4Fire,
                let selfId = localSignerIdentityKey,
                let peerId = v4PeerSik {
@@ -2120,7 +2326,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // the local hybrid privs we stashed in onAndroidCallSetupStarted.
             // W461: look up with both original and lowercase callId because
             // Android may echo a lowercase UUID even when iOS sent uppercase.
-            let localKeys = localHybridKeysByCall[callId]
+            //
+            // I3 §5 — a re-key ACCEPT must decapsulate against the FRESH
+            // keypair `performPqcReKey` generated for THIS round, never
+            // against `localHybridKeysByCall` (zeroed and removed right
+            // after the ORIGINAL handshake, step 7 below — reusing that
+            // slot for a re-key would also risk a stale retransmit of the
+            // ORIGINAL ACCEPT decapsulating with the WRONG private key).
+            // `pendingReKeyAttempt` only exists while a re-key round this
+            // integration itself initiated is in flight (single-call
+            // architecture — one integration instance handles one call at
+            // a time, same invariant `localHybridKeysByCall`'s own lookup
+            // already relies on).
+            let rekeyAttempt = lock.withLock { pendingReKeyAttempt }
+            let isReKeyAccept = rekeyAttempt != nil
+            let localKeys = rekeyAttempt?.localKeys
+                         ?? localHybridKeysByCall[callId]
                          ?? localHybridKeysByCall[callId.lowercased()]
             guard let local = localKeys else {
                 let stashed: String = localHybridKeysByCall.keys.map { String($0.prefix(8)) }.joined(separator: ",")
@@ -2137,6 +2358,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             guard let x25519EphPub = Data(base64Encoded: ct.x25519) else {
                 print("[QAudionCallIntegration] ACCEPT base64-decode of ciphertext.x25519 failed (\(ct.x25519.count) chars)")
+                return
+            }
+
+            // I3 §5 — early duplicate short-circuit, found by adversarial
+            // review (2026-08-21). `sentOfferTranscriptByCall` (read a few
+            // lines below by the verify step) is keyed by plain callId, and
+            // `performPqcReKey` OVERWRITES it with each new round's own
+            // transcript. A RETRANSMIT of an ACCEPT from an EARLIER round
+            // (e.g. the original handshake's ACCEPT, redelivered late after
+            // a re-key has since started) would otherwise be verified
+            // against the WRONG (current round's) offer_binding — a
+            // spurious `sig_invalid`/`identity_key_mismatch` that clears
+            // the peer's stored SAS and forces re-confirmation on an
+            // otherwise-healthy, already-rekeyed call (W-NOBRICK keeps the
+            // call itself alive, but the UX regression is real and was
+            // fully avoidable). The content-fingerprint dedup a few lines
+            // below already correctly identifies a retransmit as a
+            // duplicate — computed here, earlier, so a duplicate skips
+            // verification entirely instead of running it against a
+            // transcript that no longer belongs to it. A genuinely NEW
+            // ACCEPT (first arrival of the original's, of any re-key
+            // round's) is unaffected — it always verifies against whatever
+            // is CURRENTLY stashed, which is correct because it IS the
+            // current round.
+            let normalizedIdForDedup = callId.lowercased()
+            let acceptFingerprint = Data(SHA256.hash(data: pqcCt + x25519EphPub)).base64EncodedString()
+            let acceptDedupKey = normalizedIdForDedup + "#" + acceptFingerprint
+            if lock.withLock({ processedAcceptFingerprintsByCall.contains(acceptDedupKey) }) {
+                print("[QAudionCallIntegration] ACCEPT duplicate (pre-verify) for callId=\(callId.prefix(8))… — skipping verify + initSession")
                 return
             }
 
@@ -2366,21 +2616,66 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 )
             }
 
-            // 5. Double-ACCEPT guard — normalise to lowercase so both the
-            //    original-case and lowercase-echo paths converge on one key.
-            let normalizedId = callId.lowercased()
+            // I3 §5 — stale-attempt guard, found by adversarial review
+            // (2026-08-21): `rekeyAttempt` above was snapshotted BEFORE the
+            // crypto/FPSET work this case just did, some of which awaits
+            // (GATT round-trip, awaitFpSet's 5s wait). If this round's OWN
+            // timeout fires WHILE this function is suspended there,
+            // `pendingReKeyAttempt` gets cleared and performPqcReKey already
+            // returned `false` to its caller — but this ACCEPT, still
+            // in-flight, would otherwise reach `engine.initSession()` below
+            // and install ITS key anyway (ML-KEM decapsulation doesn't throw
+            // on a stale-but-structurally-valid ciphertext, it just returns
+            // SOME shared secret), silently overriding the "never brick"
+            // property `performPqcReKey`'s deferred-swap design was supposed
+            // to guarantee. Worse: if a NEW re-key round had already started
+            // in the meantime, this stale ACCEPT's resolution would grab and
+            // wrongly resolve THAT round's continuation (see the resolve-time
+            // `.id` check below) with THIS round's key. Bail out before
+            // touching the engine or any dedup/session state — a stale
+            // ACCEPT for an attempt that's no longer the live one is
+            // discarded, exactly like a lost/never-arriving ACCEPT is
+            // (performPqcReKey already returned false for it).
+            if isReKeyAccept {
+                let stillLive = lock.withLock { pendingReKeyAttempt?.id == rekeyAttempt?.id }
+                guard stillLive else {
+                    print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… arrived for a re-key attempt that already resolved/timed out — discarding stale ACCEPT")
+                    return
+                }
+            }
+
+            // 5. Double-ACCEPT guard — the AUTHORITATIVE, atomic check-and-insert
+            //    (the early return right after ct/x25519EphPub decode above is
+            //    only a cheap pre-verify optimization for the common retransmit
+            //    case; two near-simultaneous copies of the same ACCEPT could
+            //    both pass that early check before either inserts, so this
+            //    lock-guarded check-and-insert is what actually prevents a
+            //    double session-install). I3 §5 — content-based dedup, symmetric
+            //    to the OFFER-side fix (see processedAcceptFingerprintsByCall's
+            //    doc): keyed by the ACCEPT's own ciphertext, not callId alone,
+            //    so a genuine re-key ACCEPT (fresh ciphertext, same callId) is
+            //    NOT mistaken for a duplicate of the ORIGINAL ACCEPT and
+            //    silently discarded — the same bug class §4 fixed on the
+            //    responder side.
             let alreadyInit = lock.withLock {
-                let r = sessionInitializedByCall.contains(normalizedId)
-                if !r { sessionInitializedByCall.insert(normalizedId) }
+                let r = processedAcceptFingerprintsByCall.contains(acceptDedupKey)
+                if !r {
+                    processedAcceptFingerprintsByCall.insert(acceptDedupKey)
+                    sessionInitializedByCall.insert(normalizedIdForDedup)
+                }
                 return r
             }
             if alreadyInit {
                 print("[QAudionCallIntegration] ACCEPT duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 return
             }
-            print("[QAudionCallIntegration] ACCEPT accepted for callId=\(callId.prefix(8))… — initialising session")
+            print("[QAudionCallIntegration] ACCEPT accepted for callId=\(callId.prefix(8))… reKey=\(isReKeyAccept) — initialising session")
 
-            // 6. Initialise the audio session and fire the broker hook.
+            // 6. Initialise the audio session and fire the broker hook. No
+            //    engine.initialize() call in this case (unlike the .offer
+            //    case) — engine.initSession() alone is already safe to call
+            //    again mid-session, so this step needed no isReKeyRound
+            //    guard to begin with.
             // W479 — Android peer (caller side): same AdaptivePadding scheme.
             try engine.initSession(sharedSecret: combined, adaptivePadding: true)
             onRelaySessionReady?(combined, callId)
@@ -2393,8 +2688,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 //    and the Curve25519 PrivateKey (CryptoKit will deinit
                 //    the wrapped opaque handle on dealloc). Zeroing
                 //    earlier risks the second-ACCEPT branch trying to
-                //    decap with empty bytes.
+                //    decap with empty bytes. No-op on a re-key round (this
+                //    slot was already removed after the ORIGINAL handshake).
                 localHybridKeysByCall.removeValue(forKey: callId)
+            }
+            // I3 §5 — resolve performPqcReKey's awaiting continuation now
+            // that the new key is installed. The `stillLive` gate above
+            // already guarantees `pendingReKeyAttempt?.id == rekeyAttempt?.id`
+            // at this point (nothing between there and here can start a NEW
+            // re-key round — that only happens from a fresh
+            // performPqcReKey call, and the glare guard there requires
+            // `pendingReKeyAttempt == nil`, which isn't true again until
+            // THIS resolution clears it a few lines down). The `.id` check
+            // is repeated here anyway, matching the send-failure/timeout
+            // paths' own pattern exactly, rather than relying on that
+            // invariant holding across a future edit to either function.
+            if isReKeyAccept {
+                let resume: ((Data?) -> Void)? = lock.withLock {
+                    guard pendingReKeyAttempt?.id == rekeyAttempt?.id else { return nil }
+                    let r = pendingReKeyAttempt?.resume
+                    pendingReKeyAttempt = nil
+                    return r
+                }
+                resume?(combined)
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
@@ -2449,8 +2765,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let v4InitPeerSik = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
             let v4InitPeerIdValid = (v4InitPeerSik?.count == 32)
             let v4InitBindingPresent = (sentOfferTForV4 != nil)
-            let v4InitFire = negotiatedRatchetV4 && v4InitSelfIdPresent && v4InitPeerIdValid && v4InitBindingPresent
-            print("[PQC_DIAG_V4] initiator callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4InitSelfIdPresent) peer=\(v4InitPeerIdValid) bindingEmpty=\(!v4InitBindingPresent) → fire=\(v4InitFire)")
+            // I3 (2026-08-21) — v4 message-ratchet bootstrap must fire ONLY
+            // on the call's very first handshake, never on a re-key round.
+            // onV4BootstrapReady's consumer (AppState.sharedV4Ratchet
+            // .bootstrapV4AndPersist) unconditionally OVERWRITES the
+            // persisted v4 CHAT ratchet session for this contact — that is
+            // the message layer, not the call's audio/video key. Re-firing
+            // it every ~5 minutes during a call would silently reset a
+            // contact's chat ratchet chain state mid-call, making any chat
+            // message in flight at that moment permanently undecryptable
+            // (confirmed by reading MessageRatchet's decrypt path: fail-
+            // closed, no fallback, no state kept on failure). Real gap
+            // found investigating a spun-off follow-up from the I3 re-key
+            // fix — same root pattern (Android's finalize()/
+            // persistMessagePsk() has the identical unconditional call and
+            // needs the mirrored isReKeyRound guard there too).
+            let v4InitFire = negotiatedRatchetV4 && v4InitSelfIdPresent && v4InitPeerIdValid && v4InitBindingPresent && !isReKeyAccept
+            print("[PQC_DIAG_V4] initiator callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4InitSelfIdPresent) peer=\(v4InitPeerIdValid) bindingEmpty=\(!v4InitBindingPresent) reKey=\(isReKeyAccept) → fire=\(v4InitFire)")
             if v4InitFire,
                let selfId = localSignerIdentityKey,
                let peerId = v4InitPeerSik,
@@ -3693,6 +4024,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // fingerprints/cached ACCEPTs into the next call.
         processedOfferFingerprintsByCall.removeAll()
         acceptWireByOfferFingerprint.removeAll()
+        // I3 §5 — same reasoning; also resolve (never leak) an in-flight
+        // re-key attempt's continuation if the call ends while one is
+        // outstanding, so performPqcReKey's awaiter returns `false` instead
+        // of hanging until its own timeout fires on a dead call.
+        processedAcceptFingerprintsByCall.removeAll()
+        let orphanedReKeyResume = pendingReKeyAttempt?.resume
+        pendingReKeyAttempt = nil
+        orphanedReKeyResume?(nil)
         localHybridKeysByCall.removeAll()
         // Phase-10b: clear the stashed sent-OFFER transcripts so a reused
         // integration does not leak a prior call's offer_binding into the next
