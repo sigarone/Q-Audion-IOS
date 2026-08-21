@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1018",
+              date: "2026-08-21",
+              title: "v1.0.1018",
+              bullets: [
+                "fix(deps): GRDB exact pin + fix Package.resolved CI collection (MASVS I5)",
+              ]),
         .init(id: "v1.0.1017",
               date: "2026-08-21",
               title: "v1.0.1017",
               bullets: [
+                "chore: regenerate changelog for v1.0.1017",
                 "fix(security): I8 redaction audit — fix 37 genuine print() findings",
                 "ci(ios): publish Package.resolved as a build artifact (MASVS I5)",
               ]),
@@ -186,15 +193,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.999",
                 "fix(call,mesh): wire the transport shield to live ICE stats, dedupe BLE-mesh peers, learn identity keys from ordinary calls",
-              ]),
-        .init(id: "v1.0.998",
-              date: "2026-08-17",
-              title: "v1.0.998",
-              bullets: [
-                "chore: regenerate changelog for v1.0.998",
-                "fix(ui): move Q-AUDION wordmark banner off shared safeAreaInset, inline per screen",
-                "fix(ui): shield+Q-AUDION wordmark banner now on all four main screens",
-                "feat(brand): splash screen uses the real shield+Q-AUDION wordmark, not text",
               ]),
     ]
 }
