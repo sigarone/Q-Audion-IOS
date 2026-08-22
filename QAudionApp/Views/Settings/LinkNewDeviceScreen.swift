@@ -216,7 +216,7 @@ struct LinkNewDeviceScreen: View {
         .onTapGesture(perform: copyFingerprint)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Tocca due volte per copiare negli appunti")
+        .accessibilityHint("Copia negli appunti")
     }
 
     // W316 — extracted copy helper. Closure body kept trivial per

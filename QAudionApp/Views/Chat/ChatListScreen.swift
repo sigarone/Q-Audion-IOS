@@ -415,6 +415,10 @@ struct ChatListScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
             container.loadFromStore()
         }
+        .onAppear { updateGroupRows() }
+        .onChange(of: searchText) { _ in updateGroupRows() }
+        .onChange(of: groupRefreshToken) { _ in updateGroupRows() }
+        .onChange(of: groupRegistry.entries) { _ in updateGroupRows() }
         // W94: navigationDestination triggered by the deep-link state.
         // When a notification tap publishes appState.pendingDeepLinkConversationId,
         // the onChange below captures the matching item and flips the
@@ -591,10 +595,11 @@ struct ChatListScreen: View {
     /// last activity (newest first) to match the 1:1 ordering. Filtered by
     /// the same search field (name match). `groupRefreshToken` is read so
     /// the rows recompute when GroupMessageStore posts a change.
-    private var groupRows: [GroupRowUi] {
-        _ = groupRefreshToken   // dependency: recompute on message change
+    @State private var groupRows: [GroupRowUi] = []
+
+    private func updateGroupRows() {
         let q = searchText.lowercased()
-        return groupRegistry.entries.compactMap { e -> GroupRowUi? in
+        let result = groupRegistry.entries.compactMap { e -> GroupRowUi? in
             guard let uuid = Self.hexToUUID(e.id) else { return nil }
             if !q.isEmpty && !e.name.lowercased().contains(q) { return nil }
             let last = GroupMessageStore.shared.lastMessage(forGroupHex: e.id)
@@ -615,6 +620,8 @@ struct ChatListScreen: View {
                 })
         }
         .sorted { $0.lastActivity > $1.lastActivity }
+
+        groupRows = result
     }
 
     /// Fase 1B — chat-list row preview text for a group's newest message.

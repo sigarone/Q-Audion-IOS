@@ -344,3 +344,27 @@ public struct UserProfile: Codable {
         self.dialExtension = dialExtension
     }
 }
+
+// MARK: - Security: Token Redaction
+// Prevent sensitive tokens from leaking via Swift's default reflection in logs.
+
+extension OtpAuthResult: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "OtpAuthResult(userId: \(userId), deviceId: \(deviceId), accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)), tokenType: \(String(describing: tokenType)), assignedExtension: \(String(describing: assignedExtension)), emailPendingVerification: \(String(describing: emailPendingVerification)))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension AuthCredentials: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "AuthCredentials(userId: \(userId), deviceId: \(deviceId), accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension AuthTokenPair: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "AuthTokenPair(accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)))"
+    }
+    public var debugDescription: String { description }
+}
