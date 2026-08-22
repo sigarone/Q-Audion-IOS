@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1026",
+              date: "2026-08-22",
+              title: "v1.0.1026",
+              bullets: [
+                "revert(call): dcMuxAdvertiseEnabled back to false — test window closed",
+              ]),
         .init(id: "v1.0.1025",
               date: "2026-08-22",
               title: "v1.0.1025",
               bullets: [
+                "chore: regenerate changelog for v1.0.1025",
                 "fix(security,perf,a11y): cherry-pick verified hunks from Jules PRs #81/#82/#80",
                 "fix(security): GitHub Actions template injection via workflow_dispatch inputs",
               ]),
@@ -164,13 +171,6 @@ extension ReleaseNote {
                 "fix(chat): harden + log the msg_delivered/msg_read reconciliation path",
                 "fix(chat): buffer+retry a 1:1 decrypt failure instead of showing it",
                 "fix(ios): clean up compiler warnings from v1.0.1006 CI build",
-              ]),
-        .init(id: "v1.0.1006",
-              date: "2026-08-20",
-              title: "v1.0.1006",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1006",
-                "fix(call): stop @AppStorage from deadlocking scene-update watchdog mid-call",
               ]),
     ]
 }
