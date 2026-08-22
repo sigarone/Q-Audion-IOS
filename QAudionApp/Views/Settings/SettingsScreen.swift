@@ -109,7 +109,7 @@ struct SettingsScreen: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Tocca due volte per copiare versione e build negli appunti")
+        .accessibilityHint("Copia versione e build negli appunti")
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {

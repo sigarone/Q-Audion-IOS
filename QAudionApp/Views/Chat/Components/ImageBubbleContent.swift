@@ -105,7 +105,7 @@ struct ImageBubbleContent: View {
                         .onTapGesture { fullscreen = true }
                         .accessibilityAddTraits(.isButton)
                         .accessibilityLabel("Immagine allegata")
-                        .accessibilityHint("Tocca due volte per visualizzare a schermo intero")
+                        .accessibilityHint("Visualizza a schermo intero")
                 } else if loadFailed {
                     failedBox(path: path)
                 } else {
@@ -256,7 +256,7 @@ struct ImageBubbleContent: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("Foto non disponibile")
-        .accessibilityHint("Tocca due volte per riprovare")
+        .accessibilityHint("Riprova")
     }
 }
 

@@ -371,7 +371,7 @@ struct BackupSettingsScreen: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Tocca due volte per copiare negli appunti")
+        .accessibilityHint("Copia negli appunti")
     }
 
     private func kvRow(label: String, value: String, mono: Bool) -> some View {

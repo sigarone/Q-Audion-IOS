@@ -327,7 +327,7 @@ struct MessageBubble<Body: View>: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reazione \(r.emoji), \(r.count)")
-            .accessibilityHint(r.highlighted ? "Tocca per rimuovere la tua reazione" : "Tocca per aggiungere questa reazione")
+            .accessibilityHint(r.highlighted ? "Rimuovi la tua reazione" : "Aggiungi questa reazione")
         } else {
             label
         }

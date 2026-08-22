@@ -953,7 +953,7 @@ struct AboutSettingsScreen: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Tocca due volte per copiare negli appunti")
+        .accessibilityHint("Copia negli appunti")
     }
 
     private func statusRow(_ label: String, enabled: Bool) -> some View {
