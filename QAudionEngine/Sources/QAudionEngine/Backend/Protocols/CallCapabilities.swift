@@ -145,7 +145,7 @@ public enum CallCapabilities {
     /// state. Flip back to `false` (and update that test's expectation, or
     /// accept it staying red until this line does) once the test window is
     /// over, win or lose.
-    public static let dcMuxAdvertiseEnabled: Bool = true
+    public static let dcMuxAdvertiseEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
