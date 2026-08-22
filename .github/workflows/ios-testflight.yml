@@ -301,6 +301,13 @@ jobs:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # SEC (Aikido, 2026-08-21): pass workflow_dispatch input via env,
+          # never interpolate ${{ }} directly into the script — the ${{ }}
+          # form splices raw text into the run: block BEFORE bash parses it,
+          # so shell metacharacters in a malicious `tag` value would execute.
+          # Referencing $TAG_INPUT below is a normal shell variable read —
+          # its value can never be reinterpreted as script syntax.
+          TAG_INPUT: ${{ github.event.inputs.tag }}
         run: |
           set -e
           # Marketing version from tag (strip leading "v" + any "-suffix").
@@ -312,7 +319,7 @@ jobs:
           # gets an actionable error before the build runs.
           GIT_TAG="${GITHUB_REF#refs/tags/}"
           if [ -z "$GIT_TAG" ] || [ "$GIT_TAG" = "$GITHUB_REF" ]; then
-            GIT_TAG="${{ github.event.inputs.tag }}"
+            GIT_TAG="$TAG_INPUT"
           fi
           if [ -z "$GIT_TAG" ]; then
             echo "::error::No tag resolved. tag-push triggers set GITHUB_REF=refs/tags/v*; workflow_dispatch must fill the 'tag' input (e.g. v1.0.415). Refusing to upload a fallback version to TestFlight." >&2
@@ -1046,6 +1053,10 @@ jobs:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # SEC (Aikido, 2026-08-21): env, not ${{ }} spliced into the
+          # script — see the "Bump version" step's identical fix above.
+          TAG_INPUT: ${{ github.event.inputs.tag }}
+          MARKETING_VERSION_OUTPUT: ${{ steps.version.outputs.marketing_version }}
         run: |
           # NB: intentionally NO `set -x` -- it would echo the .p8 secret.
           set -uo pipefail
@@ -1085,9 +1096,9 @@ jobs:
           mkdir -p "$REC_OUT"
 
           # version: prefer the bumped value, else parse the dispatch tag.
-          VER="${{ steps.version.outputs.marketing_version }}"
+          VER="$MARKETING_VERSION_OUTPUT"
           if [ -z "$VER" ]; then
-            VER="$(echo "${{ github.event.inputs.tag }}" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
+            VER="$(echo "$TAG_INPUT" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
           fi
           echo "Recovering dSYMs for app $BUNDLE_ID${VER:+ version $VER}"
 

