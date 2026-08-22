@@ -158,6 +158,20 @@ final class ContactsListContainer: ObservableObject {
             // fastSetup è onboarding-time, gestito da OnboardingFlow.
             return false
         }
+        // Security fix (2026-08-22, W-SELFCONTACT): the app has a single
+        // generic QR scanner shared between "add contact" and scanning a
+        // companion-device-link QR (LinkNewDeviceScreen, whose payload
+        // encodes the SCANNING device's own account id — device-link
+        // pairing is not yet wired server-side). Without this guard,
+        // scanning your own "Collega nuovo dispositivo" QR with the
+        // ordinary contacts scanner silently created a contact row whose
+        // userId equals your own account, and every call to that "contact"
+        // (avatar_announce included) then routed back to yourself. Root
+        // cause confirmed end-to-end from QR generation to this call site.
+        if let appState = self.appState, userId == appState.currentUserId {
+            RTLog.warn("security", "addScannedContact rejected — scanned QR resolves to own account id")
+            return false
+        }
         // Security-review fix (2026-07-30): this used to build a bare
         // StoredContact and upsert() unconditionally — a full-record
         // replace (ContactsStore.upsert never merges). Re-scanning an
