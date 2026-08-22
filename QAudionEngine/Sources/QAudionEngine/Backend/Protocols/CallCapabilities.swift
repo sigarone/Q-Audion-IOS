@@ -136,16 +136,11 @@ public enum CallCapabilities {
     /// instant, calls in progress are untouched. Compile-time, like
     /// ``longAudioSendEnabled``: no runtime toggle, no remote config, no
     /// debug-menu entry.
-    /// 2026-08-21 — flag is ON deliberately: this is the live test itself,
-    /// intentionally run against real production calls to capture the
-    /// Phase 0 evidence this flag's own kdoc asks for. `DcMuxCapabilityTests
-    /// .testDcMuxAdvertiseKillSwitchShipsOff` will stay red for the
-    /// duration of that test on purpose — it is not a bug to fix, it's the
-    /// guard rail correctly noticing the flag is in its "being tested live"
-    /// state. Flip back to `false` (and update that test's expectation, or
-    /// accept it staying red until this line does) once the test window is
-    /// over, win or lose.
-    public static let dcMuxAdvertiseEnabled: Bool = true
+    /// 2026-08-21 — flipped ON for a live test window against real
+    /// production calls (Android<->iOS). 2026-08-22 — flipped back OFF:
+    /// test window closed. `DcMuxCapabilityTests
+    /// .testDcMuxAdvertiseKillSwitchShipsOff` is green again.
+    public static let dcMuxAdvertiseEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
