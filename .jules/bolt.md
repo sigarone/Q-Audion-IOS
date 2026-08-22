@@ -9,7 +9,3 @@
 ## 2024-05-31 - ISO8601DateFormatter inline instantiation overhead
 **Learning:** Just like `DateFormatter`, `ISO8601DateFormatter` instantiation is expensive and can become a severe performance bottleneck when done repeatedly, such as inside data serialization methods that process ring buffers or large data sets (`RuntimeLogSink.swift`).
 **Action:** Extract `ISO8601DateFormatter` instantiation to a `private static let` property when used in methods that are called frequently or that iterate over large arrays.
-
-## 2024-05-30 - Stateful lists from ObservableObject array properties
-**Learning:** When generating a SwiftUI `List` or `ForEach` that relies on an O(N log N) filtering/sorting operation over an array owned by an `@ObservedObject` (e.g., `groupRegistry.entries`), placing the logic inside a view computed property causes the expensive operation to re-run on EVERY render cycle.
-**Action:** Extract the sorted/filtered array into an `@State` variable, create an update function, and call it from `.onAppear` and `.onChange(of: observedObject.entries)` (if the array elements are `Equatable`) to restrict execution exclusively to when the source data changes.
