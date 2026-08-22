@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1027",
+              date: "2026-08-22",
+              title: "v1.0.1027",
+              bullets: [
+                "fix(contacts): reject self-referencing contact rows from QR scan",
+              ]),
         .init(id: "v1.0.1026",
               date: "2026-08-22",
               title: "v1.0.1026",
               bullets: [
+                "chore: regenerate changelog for v1.0.1026",
                 "revert(call): dcMuxAdvertiseEnabled back to false — test window closed",
               ]),
         .init(id: "v1.0.1025",
@@ -157,20 +164,6 @@ extension ReleaseNote {
                 "fix(mesh): unconditional call-verified identity key, close cross-platform unknown-device gap",
                 "fix(settings): back the operational-diagnostics toggle with real @State",
                 "perf(ui): cache filtered lists instead of recomputing on every render",
-              ]),
-        .init(id: "v1.0.1007",
-              date: "2026-08-20",
-              title: "v1.0.1007",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1007",
-                "fix(kms): provision the real production server_identity",
-                "perf(video): amortize NACK cache eviction (#75)",
-                "perf(group-chat): cache unread counts (#76)",
-                "fix(persistence): batch updateStatusByServerId into single UPDATE",
-                "fix(chat): VoiceOver traits on image message tap targets, apply PR #74, close it",
-                "fix(chat): harden + log the msg_delivered/msg_read reconciliation path",
-                "fix(chat): buffer+retry a 1:1 decrypt failure instead of showing it",
-                "fix(ios): clean up compiler warnings from v1.0.1006 CI build",
               ]),
     ]
 }
