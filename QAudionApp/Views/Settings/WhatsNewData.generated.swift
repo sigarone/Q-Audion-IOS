@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1028",
+              date: "2026-08-23",
+              title: "v1.0.1028",
+              bullets: [
+                "fix(call): observe AVCaptureSession interruption/runtime-error notifications (W-CAPSESSIONWATCH)",
+                "fix(security): cherry-pick verified token-redaction hunk from Jules PR #83",
+              ]),
         .init(id: "v1.0.1027",
               date: "2026-08-22",
               title: "v1.0.1027",
               bullets: [
+                "chore: regenerate changelog for v1.0.1027",
                 "fix(contacts): reject self-referencing contact rows from QR scan",
               ]),
         .init(id: "v1.0.1026",
@@ -155,15 +163,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1009",
                 "feat(auth): manual extension+password login for Fast Setup accounts",
                 "fix(chat): stop stamping attachment sends as delivered before any real ack",
-              ]),
-        .init(id: "v1.0.1008",
-              date: "2026-08-20",
-              title: "v1.0.1008",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1008",
-                "fix(mesh): unconditional call-verified identity key, close cross-platform unknown-device gap",
-                "fix(settings): back the operational-diagnostics toggle with real @State",
-                "perf(ui): cache filtered lists instead of recomputing on every render",
               ]),
     ]
 }
