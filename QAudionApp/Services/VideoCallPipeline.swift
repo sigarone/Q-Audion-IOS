@@ -221,6 +221,24 @@ public final class VideoCallPipeline: NSObject {
     private nonisolated(unsafe) var stallTrackedSinceMs: Int64 = 0
     private nonisolated(unsafe) var stallNackedFrameId: Int = -1
 
+    /// W-CAPSESSIONWATCH (2026-08-23) — `AVCaptureSession` can stop
+    /// delivering frames for reasons entirely outside this pipeline's
+    /// control: another app claims the camera, thermal throttling under
+    /// sustained encode load, a system alert, a multitasking camera-access
+    /// change. Apple posts three notifications for exactly this — without
+    /// observing them the app has no way to know the camera died, and no
+    /// way to bring it back; frames just silently stop. Root-caused from a
+    /// real production call (Loki, 2026-08-22, call 532a3161): the peer's
+    /// receive side saw 75+ seconds of zero inbound video while ICE/DC
+    /// stayed healthy, meaning the freeze originated here on the send side,
+    /// not on the network. Tokens kept so `stop()` can remove exactly what
+    /// `start()` added — the same pattern this class already uses for its
+    /// timers.
+    private var captureInterruptedObserver: NSObjectProtocol?
+    private var captureInterruptionEndedObserver: NSObjectProtocol?
+    private var captureRuntimeErrorObserver: NSObjectProtocol?
+    private var captureDidStopObserver: NSObjectProtocol?
+
     // MARK: - Lifecycle
 
     public override init() {
@@ -273,6 +291,7 @@ public final class VideoCallPipeline: NSObject {
         encoder.requestForcedKeyFrame()
         startPurgeTimer()
         startNackWatchdog()
+        startSessionHealthObservers()
         isRunning = true
     }
 
@@ -281,6 +300,7 @@ public final class VideoCallPipeline: NSObject {
         // Drop the WebRTC bridge callback before stopping the session so
         // no frames are pushed to a deallocated RTCVideoSource after teardown.
         onCapturedPixelBuffer = nil
+        stopSessionHealthObservers()
         // W-CRASH-AVF: stopRunning() must run on captureQueue, same as
         // startRunning()/setupSession() — see the note on setupSession().
         // This used to call stopRunning() directly on whatever thread
@@ -301,6 +321,95 @@ public final class VideoCallPipeline: NSObject {
         stallTrackedFrameId = -1
         stallNackedFrameId = -1
         isRunning = false
+    }
+
+    /// W-CAPSESSIONWATCH — observe the three AVFoundation notifications
+    /// that fire when the capture session stops for a reason outside our
+    /// control, and recover automatically where Apple's own guidance says
+    /// recovery is the app's responsibility:
+    ///
+    ///  - `wasInterrupted`: session paused (another app took the camera,
+    ///    a system alert, etc). No restart here — `interruptionEnded`
+    ///    fires when it's safe to resume and is where we act.
+    ///  - `interruptionEnded`: safe to resume. AVCaptureSession does NOT
+    ///    restart itself; the app must call `startRunning()` again
+    ///    (same pattern as Apple's own AVCam sample).
+    ///  - `runtimeError`: the session stopped on an actual error
+    ///    (`AVError.Code`, e.g. `.mediaServicesWereReset`). Restart is
+    ///    the standard baseline recovery Apple's docs describe.
+    ///  - `didStopRunning`: catch-all diagnostic only, no action — fires
+    ///    for intentional stops too (our own `stop()`), so it must never
+    ///    drive a restart on its own.
+    ///
+    /// Skips `.external` source mode, which never opens the camera and
+    /// has no `captureSession` activity to watch.
+    private func startSessionHealthObservers() {
+        guard sourceMode == .camera else { return }
+        let center = NotificationCenter.default
+        let session = captureSession
+
+        captureInterruptedObserver = center.addObserver(
+            forName: AVCaptureSession.wasInterruptedNotification,
+            object: session,
+            queue: nil
+        ) { note in
+            let reasonValue = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
+            RTLog.warn("call", "vcap session_interrupted reason=\(reasonValue)")
+        }
+
+        captureInterruptionEndedObserver = center.addObserver(
+            forName: AVCaptureSession.interruptionEndedNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] _ in
+            RTLog.info("call", "vcap session_interruption_ended")
+            self?.restartSessionIfNeeded(reason: "interruption_ended")
+        }
+
+        captureRuntimeErrorObserver = center.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] note in
+            let code = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.code ?? -1
+            RTLog.warn("call", "vcap session_runtime_error code=\(code)")
+            self?.restartSessionIfNeeded(reason: "runtime_error")
+        }
+
+        captureDidStopObserver = center.addObserver(
+            forName: AVCaptureSession.didStopRunningNotification,
+            object: session,
+            queue: nil
+        ) { _ in
+            RTLog.info("call", "vcap session_did_stop")
+        }
+    }
+
+    private func stopSessionHealthObservers() {
+        let center = NotificationCenter.default
+        [captureInterruptedObserver, captureInterruptionEndedObserver,
+         captureRuntimeErrorObserver, captureDidStopObserver].forEach {
+            if let token = $0 { center.removeObserver(token) }
+        }
+        captureInterruptedObserver = nil
+        captureInterruptionEndedObserver = nil
+        captureRuntimeErrorObserver = nil
+        captureDidStopObserver = nil
+    }
+
+    /// Restart the capture session on `captureQueue` — same thread-safety
+    /// rule as every other `startRunning()`/`stopRunning()` call in this
+    /// file (W565: never on the main thread). No-op if the pipeline was
+    /// torn down (`stop()`) or the session is already running, so a
+    /// `runtimeError` racing a legitimate `stop()` can't resurrect a
+    /// session the caller just asked to end.
+    private nonisolated func restartSessionIfNeeded(reason: String) {
+        let session = captureSession
+        captureQueue.async {
+            guard !session.isRunning else { return }
+            session.startRunning()
+            RTLog.info("call", "vcap session_restarted reason=\(reason) running=\(session.isRunning ? 1 : 0)")
+        }
     }
 
     /// W393: flip front ↔ rear camera mid-call. Reconfigures the
