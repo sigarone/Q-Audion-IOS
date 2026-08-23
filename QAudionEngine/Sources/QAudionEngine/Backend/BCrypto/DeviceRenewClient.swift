@@ -152,7 +152,7 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
         }
     }
 
-    private struct RenewResp: Decodable {
+    private struct RenewResp: Decodable, CustomStringConvertible, CustomDebugStringConvertible {
         let accessToken: String
         let refreshToken: String
         let expiresIn: Int
@@ -168,6 +168,11 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
             case userId = "user_id"
             case deviceId = "device_id"
         }
+
+        var description: String {
+            "RenewResp(accessToken: <redacted>, refreshToken: <redacted>, expiresIn: \(expiresIn), tokenType: \(tokenType), userId: \(userId), deviceId: \(deviceId))"
+        }
+        var debugDescription: String { description }
     }
 
     private struct RevokeResp: Decodable {
@@ -191,11 +196,4 @@ extension BCryptoDeviceRenewClient.RenewedTokens: CustomStringConvertible, Custo
         "RenewedTokens(accessToken: <redacted>, refreshToken: <redacted>, userId: \(userId), deviceId: \(deviceId), expiresInSec: \(expiresInSec))"
     }
     public var debugDescription: String { description }
-}
-
-extension BCryptoDeviceRenewClient.RenewResp: CustomStringConvertible, CustomDebugStringConvertible {
-    var description: String {
-        "RenewResp(accessToken: <redacted>, refreshToken: <redacted>, expiresIn: \(expiresIn), tokenType: \(tokenType), userId: \(userId), deviceId: \(deviceId))"
-    }
-    var debugDescription: String { description }
 }
