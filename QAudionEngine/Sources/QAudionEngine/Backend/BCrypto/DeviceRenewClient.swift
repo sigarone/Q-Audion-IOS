@@ -182,3 +182,20 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
         return s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s
     }
 }
+
+// MARK: - Security: Token Redaction
+// Prevent sensitive tokens from leaking via Swift's default reflection in logs.
+
+extension BCryptoDeviceRenewClient.RenewedTokens: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "RenewedTokens(accessToken: <redacted>, refreshToken: <redacted>, userId: \(userId), deviceId: \(deviceId), expiresInSec: \(expiresInSec))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension BCryptoDeviceRenewClient.RenewResp: CustomStringConvertible, CustomDebugStringConvertible {
+    var description: String {
+        "RenewResp(accessToken: <redacted>, refreshToken: <redacted>, expiresIn: \(expiresIn), tokenType: \(tokenType), userId: \(userId), deviceId: \(deviceId))"
+    }
+    var debugDescription: String { description }
+}
