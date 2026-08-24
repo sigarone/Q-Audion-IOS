@@ -42,6 +42,8 @@ struct ContactsScreen: View {
     /// and after each block/unblock action.
     @State private var blockedIds: Set<String> = BlockedContactsStore.loadBlockedIds()
 
+    @State private var sortedContacts: [ContactsListViewModel.Item] = []
+
     @Environment(\.qaudionSnackbar) private var snackbar
 
     enum Tab: Hashable, CaseIterable {
@@ -142,9 +144,22 @@ struct ContactsScreen: View {
         .onAppear {
             container.attach(appState)
             blockedIds = BlockedContactsStore.loadBlockedIds()
+            updateSortedContacts()
         }
         .onChange(of: searchText) { newValue in
             container.setSearchQuery(newValue)
+        }
+        .onChange(of: container.viewModel.filteredItems) { _ in
+            updateSortedContacts()
+        }
+        .onChange(of: sortMode) { _ in
+            updateSortedContacts()
+        }
+        .onChange(of: appState.orphanPeerIds) { _ in
+            updateSortedContacts()
+        }
+        .onChange(of: appState.presenceService.statuses) { _ in
+            updateSortedContacts()
         }
         .sheet(isPresented: $showingNewContact) {
             // W23.E: full ContactEditor in Add mode.
@@ -328,6 +343,30 @@ struct ContactsScreen: View {
 
     // MARK: - Lists
 
+    private func updateSortedContacts() {
+        let unsorted = container.viewModel.filteredItems
+            .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+
+        switch sortMode {
+        case .nameAsc:
+            sortedContacts = unsorted.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+        case .onlineFirst:
+            sortedContacts = unsorted.sorted { a, b in
+                let aOnline = appState.presenceService.isOnline(a.userId)
+                let bOnline = appState.presenceService.isOnline(b.userId)
+                if aOnline != bOnline { return aOnline && !bOnline }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+        case .verifiedFirst:
+            sortedContacts = unsorted.sorted { a, b in
+                if a.isVerified != b.isVerified { return a.isVerified && !b.isVerified }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+        }
+    }
+
     private var allList: some View {
         // W-ORPHANPEER — drop peers whose account no longer exists on the
         // server. Filtered HERE, at read time, and not inside the container:
@@ -335,45 +374,20 @@ struct ContactsScreen: View {
         // observe `.contactsDidChange`, so a filter baked in there would keep
         // a contact visible after the 404 lands. Reading `appState.orphanPeerIds`
         // (@Published) also makes this re-render on its own as lookups resolve.
-        let unsorted = container.viewModel.filteredItems
-            .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+
         // W58: applica il sort prescelto. Locale-aware comparison sul
         // displayName — `localizedCaseInsensitiveCompare` rispetta
         // l'ordinamento italiano (es. é < f, à < b).
-        let items: [ContactsListViewModel.Item] = {
-            switch sortMode {
-            case .nameAsc:
-                return unsorted.sorted {
-                    $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-                }
-            case .onlineFirst:
-                // I2: `item.isOnline` is a static snapshot value hardcoded
-                // to `false` at construction time (ContactsListContainer) —
-                // reading it here always produced a no-op sort. Read the
-                // live PresenceService state instead, same source the row
-                // dot below already uses.
-                return unsorted.sorted { a, b in
-                    let aOnline = appState.presenceService.isOnline(a.userId)
-                    let bOnline = appState.presenceService.isOnline(b.userId)
-                    if aOnline != bOnline { return aOnline && !bOnline }
-                    return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
-                }
-            case .verifiedFirst:
-                return unsorted.sorted { a, b in
-                    if a.isVerified != b.isVerified { return a.isVerified && !b.isVerified }
-                    return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
-                }
-            }
-        }()
+
         // I2: same fix as the sort above — the header used to read the
         // hardcoded `item.isOnline` and always rendered "ONLINE · 0/N".
-        let onlineCount = items.filter { appState.presenceService.isOnline($0.userId) }.count
-        let totalCount  = items.count
+        let onlineCount = sortedContacts.filter { appState.presenceService.isOnline($0.userId) }.count
+        let totalCount  = sortedContacts.count
 
         return List {
-            if !items.isEmpty {
+            if !sortedContacts.isEmpty {
                 Section {
-                    ForEach(items, id: \.userId) { item in
+                    ForEach(sortedContacts, id: \.userId) { item in
                         NavigationLink(destination: detailDestination(for: item)) {
                             // W72: live presence dot from the engine
                             // `BCryptoPresenceManager`. Falls back to the
