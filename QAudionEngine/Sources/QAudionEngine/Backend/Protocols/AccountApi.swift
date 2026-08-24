@@ -355,6 +355,20 @@ extension OtpAuthResult: CustomStringConvertible, CustomDebugStringConvertible {
     public var debugDescription: String { description }
 }
 
+extension PublicUser: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "PublicUser(userId: \(userId), displayName: \(String(describing: displayName)), avatarUrl: \(String(describing: avatarUrl)), statusMessage: \(String(describing: statusMessage)), extensionNumber: \(String(describing: extensionNumber)), phoneNumber: \(phoneNumber == nil ? "nil" : "<redacted>"))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension UserProfile: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "UserProfile(userId: \(userId), displayName: \(String(describing: displayName)), avatarUrl: \(String(describing: avatarUrl)), statusMessage: \(String(describing: statusMessage)), phoneHash: \(phoneHash == nil ? "nil" : "<redacted>"), dialExtension: \(String(describing: dialExtension)))"
+    }
+    public var debugDescription: String { description }
+}
+
 extension AuthCredentials: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String {
         "AuthCredentials(userId: \(userId), deviceId: \(deviceId), accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)))"
