@@ -7,3 +7,8 @@
 **Vulnerability:** Similar to previous token leakage, `BCryptoDeviceRenewClient.RenewedTokens` and `BCryptoDeviceRenewClient.RenewResp` did not override default reflection, risking exposure of `accessToken` and `refreshToken` in logs.
 **Learning:** Same as above - inner private structs or specific client structs must also be considered for redaction if they contain sensitive data.
 **Prevention:** Ensured `CustomStringConvertible` and `CustomDebugStringConvertible` implementations were added to redact sensitive fields within `DeviceRenewClient`.
+
+## 2026-08-24 - PII Leakage via Swift Struct Default Reflection in Profile Structs
+**Vulnerability:** The profile structs `UserProfile` and `PublicUser` did not override default reflection, risking exposure of sensitive PII (`phoneHash` and `phoneNumber`) in logs.
+**Learning:** Default reflection in Swift struct descriptions can leak sensitive PII just as it can leak authentication tokens. Any struct containing potentially identifying or sensitive data must explicitly handle its string representation.
+**Prevention:** Ensured `CustomStringConvertible` and `CustomDebugStringConvertible` implementations were added to redact `phoneHash` and `phoneNumber` within profile-related structs in `AccountApi.swift`.
