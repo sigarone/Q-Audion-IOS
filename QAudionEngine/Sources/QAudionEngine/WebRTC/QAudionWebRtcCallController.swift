@@ -70,6 +70,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// W-UPGRADEICEWATCHDOG-ANCHOR (2026-08-24, mirrors Android's
+    /// W-ICEANCHOR / `remoteDescriptionAppliedAtMs`) — fired once
+    /// `setRemoteOffer` has actually succeeded inside
+    /// `acceptUpgradeOfferBuildingPeerConnection`, i.e. the moment ICE
+    /// negotiation can genuinely begin. Exists so a caller-armed "give up on
+    /// ICE after N seconds" watchdog can anchor its countdown here instead
+    /// of at controller-construction time — `fetchIceServers()` (an await
+    /// just above the call site) can itself eat part of a fixed budget
+    /// otherwise, undercounting how long ICE actually had. `nil` by default;
+    /// only `AppState.makeUpgradeResponderController()` currently sets it.
+    public var onRemoteDescriptionApplied: (() -> Void)?
+
     /// WIRE_SPEC §8.7 — fired ONCE per call when the RECEIVER-side native
     /// video cryptor is BOTH attached to the inbound RTP receiver AND
     /// keyed (K_video published). The argument is the established inbound
@@ -798,6 +810,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if let err = err { cont.resume(throwing: err) } else { cont.resume() }
             }
         }
+        // W-UPGRADEICEWATCHDOG-ANCHOR — remote description is applied; ICE
+        // can genuinely start now. Fire before any further await (createAnswer
+        // etc.) so a caller-armed give-up watchdog gets the full budget.
+        onRemoteDescriptionApplied?()
         // 2. Build the local answer (mirror the peer's video intent).
         let answerSdp: String = try await withCheckedThrowingContinuation { cont in
             pc.createAnswer(hasVideo: true) { result in

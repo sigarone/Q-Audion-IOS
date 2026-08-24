@@ -531,6 +531,20 @@ final class AppState: ObservableObject {
     /// (observed live: 90+ s). Arms alongside the ICE grace/disconnect handling
     /// above but is its own independent watchdog since this PC is a distinct
     /// object from the call's primary controller.
+    ///
+    /// W-UPGRADEICEWATCHDOG-ANCHOR (2026-08-24) — the countdown itself used
+    /// to start inside `makeUpgradeResponderController()`, before the caller
+    /// even calls `acceptUpgradeOfferBuildingPeerConnection` (whose own
+    /// `await fetchIceServers()` and `setRemoteOffer` run afterward) — the
+    /// same "budget measured from the wrong start point" mistake Android's
+    /// primary-call ICE watchdog had (W-ICEANCHOR). Now armed from
+    /// `QAudionWebRtcCallController.onRemoteDescriptionApplied`, fired the
+    /// moment `setRemoteOffer` actually succeeds, so the full
+    /// `upgradeResponderIceConnectTimeoutMs` is available to ICE negotiation
+    /// itself. No live incident is known to have been caused by this on
+    /// iOS (this responder path's own await chain is short — see the
+    /// investigation this change landed with) — ported defensively for
+    /// correctness and cross-platform consistency, not a confirmed field bug.
     private var upgradeResponderIceConnectTask: Task<Void, Never>?
     /// W-UPGRADEICEWATCHDOG — how long the on-demand upgrade responder PC gets
     /// to reach `.connected`/`.completed` before we treat it as failed and roll
@@ -5624,13 +5638,31 @@ final class AppState: ObservableObject {
         // `webRtcController` before the deadline can't roll back the WRONG
         // (newer) controller — the identity check below is the real guard,
         // this is belt-and-suspenders against a retained closure outliving it.
+        //
+        // W-UPGRADEICEWATCHDOG-ANCHOR (2026-08-24, mirrors Android's
+        // W-ICEANCHOR): clear any STALE watchdog from an earlier attempt
+        // right away, but do NOT start the new countdown here — this
+        // function returns before `acceptUpgradeOfferBuildingPeerConnection`
+        // even calls `fetchIceServers()`/`setRemoteOffer`, so arming here
+        // would silently eat part of the budget on that await before ICE
+        // negotiation can even begin (the same wrong-anchor shape Android's
+        // primary-call watchdog had). Arm instead inside
+        // `onRemoteDescriptionApplied`, fired the moment `setRemoteOffer`
+        // actually succeeds.
         upgradeResponderIceConnectTask?.cancel()
-        upgradeResponderIceConnectTask = Task { @MainActor [weak self, weak controller] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.upgradeResponderIceConnectTimeoutMs) * 1_000_000)
-            guard !Task.isCancelled, let self = self, let controller = controller,
-                  (self.webRtcController as? QAudionWebRtcCallController) === controller else { return }
-            RTLog.warn("call", "video upgrade ICE-connect watchdog fired after \(Self.upgradeResponderIceConnectTimeoutMs)ms — never reached connected/completed, rolling back")
-            self.rollbackUpgradeVideo()
+        upgradeResponderIceConnectTask = nil
+        controller.onRemoteDescriptionApplied = { [weak self, weak controller] in
+            Task { @MainActor [weak self, weak controller] in
+                guard let self = self, let controller = controller else { return }
+                self.upgradeResponderIceConnectTask?.cancel()
+                self.upgradeResponderIceConnectTask = Task { @MainActor [weak self, weak controller] in
+                    try? await Task.sleep(nanoseconds: UInt64(Self.upgradeResponderIceConnectTimeoutMs) * 1_000_000)
+                    guard !Task.isCancelled, let self = self, let controller = controller,
+                          (self.webRtcController as? QAudionWebRtcCallController) === controller else { return }
+                    RTLog.warn("call", "video upgrade ICE-connect watchdog fired after \(Self.upgradeResponderIceConnectTimeoutMs)ms — never reached connected/completed, rolling back")
+                    self.rollbackUpgradeVideo()
+                }
+            }
         }
         return controller
     }
