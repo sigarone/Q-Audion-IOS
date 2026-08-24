@@ -14,6 +14,19 @@ public struct EngineStats {
     /// silently losing audio. Reset per session with the rest of `EngineStats`;
     /// read it at call teardown.
     public var padOverflowFrames: Int64 = 0
+    /// W-RXREORDER — inbound frames that arrived AFTER the ratchet had already
+    /// stepped past their wire position, and were opened with a retained key
+    /// instead of being discarded.
+    ///
+    /// Unlike `padOverflowFrames` a non-zero value here is NOT a defect: it is
+    /// the measure of how much audio the unordered sealed-audio DataChannel
+    /// (and the per-frame DataChannel/WS-relay alternation above it) reorders,
+    /// and therefore how much audio this retention window is recovering. Every
+    /// one of these was silently lost before 2026-08-13, along with every frame
+    /// queued behind it. Read it at teardown next to `framesRx`: a ratio in the
+    /// percent range is normal on a P2P call, zero means the call never left
+    /// the ordered WS relay.
+    public var framesRxReordered: Int64 = 0
     public var avgEncryptionMs: Double = 0
     public var avgDecryptionMs: Double = 0
     public var keyRatchetCount: Int64 = 0

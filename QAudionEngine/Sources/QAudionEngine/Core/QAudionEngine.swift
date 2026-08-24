@@ -107,6 +107,10 @@ public final class QAudionEngine: @unchecked Sendable {
         useAdaptivePadding = false
         sessionKey = nil
         txSeqAdaptive = 0
+        // W-RXREORDER — a retained frame key belongs to exactly one session's
+        // chain; carrying one into a new call would be both useless and a key
+        // held past its purpose.
+        clearSkippedKeys()
         state = .initialized
     }
 
@@ -176,6 +180,10 @@ public final class QAudionEngine: @unchecked Sendable {
         useAdaptivePadding = adaptivePadding
         sessionKey = adaptivePadding ? sharedSecret : nil
         txSeqAdaptive = 0
+        // W-RXREORDER — the RX chain restarts here, so any key retained against
+        // the previous chain's positions is now meaningless. Re-keying mid-call
+        // (the handshake fires from several sites) must not leave a window open.
+        clearSkippedKeys()
         state = .sessionActive
     }
 
@@ -351,10 +359,46 @@ public final class QAudionEngine: @unchecked Sendable {
         // call (matches telemetry: iOS↔iOS calls decrypting zero audio
         // partway through). Use frame.sequenceNumber (already trusted for
         // the AAD below) to detect the gap and fast-forward the missing
-        // ratchet steps — their keys are simply discarded, which is safe:
-        // this ratchet is one-way/forward-secure, those frames are gone.
+        // ratchet steps. (Those steps' keys used to be discarded here on the
+        // grounds that "those frames are gone" — see W-RXREORDER immediately
+        // below for why that premise was wrong, and what happens now instead.)
+        //
+        // W-RXREORDER (2026-08-13) — the catch-up above is only half the
+        // problem, and the other half is the one that reaches the user on an
+        // iOS↔iOS call.
+        //
+        // This ratchet path carries audio over a transport that is explicitly
+        // UNORDERED: the sealed-audio DataChannel is created with
+        // `isOrdered = false, maxRetransmits = 0`
+        // (`QAudionPeerConnection.createAudioDataChannel`, matching Android's
+        // DC), and the sender additionally alternates between that DataChannel
+        // and the WS relay per frame (`CallService.processAndSendEncryptedFrame`
+        // falls back the instant the DC is not open). Two transports with very
+        // different latencies feeding one chain means a later frame routinely
+        // arrives BEFORE an earlier one — guaranteed at the moment the call
+        // switches from the relay to the freshly-opened P2P channel, and again
+        // on every DC flap.
+        //
+        // Before this change the two branches below turned that into permanent
+        // loss: an early frame fast-forwarded the chain, and then EVERY frame
+        // still in flight behind it hit the `seq64 <= frameCounter` branch and
+        // was thrown away as "stale". One reordering event destroyed the whole
+        // burst behind it, not one frame.
+        //
+        // Why only iOS↔iOS: the adaptive-padding branch above (the path taken
+        // for an Android peer) has a STATIC session key and no sequence
+        // dependency at all, so reordering there is free. This branch is the
+        // only one where wire order is load-bearing, and it is the branch a
+        // call between two iOS devices always takes (see `useAdaptivePadding`).
+        //
+        // The fix is the standard one for a symmetric chain: RETAIN the keys
+        // the catch-up skips, in a bounded window, so a late frame can still be
+        // opened with the key belonging to ITS wire position. A key is removed
+        // the moment it is used, so a replayed frame still fails — the replay
+        // property the old branch provided is kept, the collateral loss is not.
         let expectedNext = rxSm.frameCounter + 1
         let seq64 = Int64(frame.sequenceNumber)
+        let frameKey: Data
         if seq64 > expectedNext {
             let gap = seq64 - expectedNext
             guard gap <= Self.maxRatchetCatchUpFrames else {
@@ -365,18 +409,32 @@ public final class QAudionEngine: @unchecked Sendable {
                 throw QAudionEngineError.malformedFrame(
                     "ratchet catch-up gap too large: \(gap)")
             }
-            for _ in 0..<gap { _ = try rxSm.ratchet() }
+            // Retain, don't discard: each skipped step is the key for exactly
+            // one wire position, and that frame may simply be late rather than
+            // lost. `rememberSkippedKey` bounds the window.
+            for i in 0..<gap {
+                let skippedKey = try rxSm.ratchet()
+                rememberSkippedKey(skippedKey, forSeq: expectedNext + i)
+            }
+            frameKey = try rxSm.ratchet()
         } else if seq64 <= rxSm.frameCounter {
-            // Stale, duplicate, or reordered-late frame: the ratchet
-            // already advanced past this wire position. There is no way
-            // back (forward-secure, one-way), so it is genuinely
-            // undecryptable — drop it rather than stepping the chain
-            // again, which would just reintroduce the same permanent-
-            // desync bug in the opposite direction.
-            throw QAudionEngineError.malformedFrame(
-                "stale/duplicate frame seq=\(frame.sequenceNumber)")
+            // Reordered-late, or a duplicate/replay. The chain itself cannot go
+            // backwards (forward-secure, one-way), but if we retained this
+            // position's key when we skipped past it, the frame is perfectly
+            // decryptable and its audio is still wanted — at 60 ms a dropped
+            // frame is 60 ms of hole, three times what it costs at 20 ms.
+            guard let retained = takeSkippedKey(forSeq: seq64) else {
+                // No retained key: either a genuine duplicate (the key was
+                // consumed by the first copy), or the frame is older than the
+                // retention window. Both are undecryptable here.
+                throw QAudionEngineError.malformedFrame(
+                    "stale/duplicate frame seq=\(frame.sequenceNumber)")
+            }
+            stats.framesRxReordered &+= 1
+            frameKey = retained
+        } else {
+            frameKey = try rxSm.ratchet()
         }
-        let frameKey = try rxSm.ratchet()
         let cipherOutput = AeadCipher.CipherOutput(
             nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag
         )
@@ -410,6 +468,65 @@ public final class QAudionEngine: @unchecked Sendable {
     /// unrecoverable rather than looping the chain thousands of times.
     private static let maxRatchetCatchUpFrames: Int64 = 1000
 
+    // ── W-RXREORDER (2026-08-13) — retained keys for out-of-order frames ──
+    //
+    // Keyed by the WIRE sequence number the key belongs to. Populated only by
+    // the catch-up loop in `processIncomingAudio`, drained by a late frame that
+    // names one of those positions, and emptied with the session.
+    //
+    // Bounded at `maxRetainedSkippedKeys`. The bound is a real security knob,
+    // not housekeeping: a retained frame key is one the chain has already
+    // stepped past, so holding it postpones forward secrecy for exactly that
+    // frame. 128 is ~2.5 s of audio at 20 ms and ~7.7 s at 60 ms — far longer
+    // than any reordering a live call produces, and short enough that the
+    // forward-secrecy window stays measured in seconds.
+    private var rxSkippedFrameKeys: [Int64: Data] = [:]
+
+    /// Max retained out-of-order frame keys. See `rxSkippedFrameKeys`.
+    private static let maxRetainedSkippedKeys = 128
+
+    /// Retain one skipped frame key, evicting the OLDEST wire position when the
+    /// window is full — the oldest is the one least likely to still be in
+    /// flight, and evicting it is what keeps the forward-secrecy window bounded.
+    ///
+    /// Caller must hold `lock` (both call sites are inside `processIncomingAudio`).
+    private func rememberSkippedKey(_ key: Data, forSeq seq: Int64) {
+        rxSkippedFrameKeys[seq] = key
+        while rxSkippedFrameKeys.count > Self.maxRetainedSkippedKeys {
+            guard let oldest = rxSkippedFrameKeys.keys.min() else { break }
+            if var stale = rxSkippedFrameKeys.removeValue(forKey: oldest) {
+                // SECURITY C-8 parity — scrub the evicted key rather than
+                // letting ARC drop the buffer unzeroed.
+                CryptoConstants.zeroize(&stale)
+            }
+        }
+    }
+
+    /// Consume the retained key for `seq`, if one is held. Removing on read is
+    /// what preserves replay protection: a second copy of the same frame finds
+    /// nothing and is rejected exactly as before.
+    ///
+    /// Caller must hold `lock`.
+    private func takeSkippedKey(forSeq seq: Int64) -> Data? {
+        rxSkippedFrameKeys.removeValue(forKey: seq)
+    }
+
+    /// Drop every retained key. Called wherever the session ends or restarts —
+    /// a key from a previous session must never be reachable from a new one.
+    ///
+    /// Caller must hold `lock`.
+    private func clearSkippedKeys() {
+        // Snapshot the keys first: removing from the dictionary while iterating
+        // its own `keys` view mutates the collection being walked.
+        let positions = Array(rxSkippedFrameKeys.keys)
+        for k in positions {
+            if var stale = rxSkippedFrameKeys.removeValue(forKey: k) {
+                CryptoConstants.zeroize(&stale)
+            }
+        }
+        rxSkippedFrameKeys.removeAll()
+    }
+
     public func destroySession() {
         lock.lock(); defer { lock.unlock() }
         txSessionManager?.destroySession()
@@ -422,6 +539,9 @@ public final class QAudionEngine: @unchecked Sendable {
         sessionKey = nil
         useAdaptivePadding = false
         txSeqAdaptive = 0
+        // W-RXREORDER — the retention window is the one place frame keys outlive
+        // their own ratchet step, so ending the session must close it.
+        clearSkippedKeys()
         if state.canTransitionTo(.initialized) { state = .initialized }
     }
 
@@ -431,6 +551,7 @@ public final class QAudionEngine: @unchecked Sendable {
         rxSessionManager?.destroySession()
         txSessionManager = nil; rxSessionManager = nil
         aeadCipher = nil; pqcKeyExchange = nil; audioProcessor = nil
+        clearSkippedKeys()  // W-RXREORDER
         state = .destroyed
     }
 
