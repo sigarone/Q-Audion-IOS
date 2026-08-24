@@ -7678,9 +7678,13 @@ final class AppState: ObservableObject {
                 }
                 pt = plain
             case .v3:
+                // W-MSGPSKSWEEP: sweeps every candidate PSK internally (see
+                // ratchetDecryptV3's own doc comment) — the outer alt-psk
+                // retry loop below is a no-op for this case, deliberately
+                // skipped for .v3 rather than re-run.
                 pt = try ratchetDecryptV3(
                     wire: cipher,
-                    psk: psk,
+                    pskCandidates: pskCandidates,
                     senderId: senderId,
                     msgId: clientMsgId ?? serverMsgId)
             case .v2:
@@ -7718,6 +7722,12 @@ final class AppState: ObservableObject {
             do {
                 pt = try attemptDecrypt(withPsk: psk)
             } catch {
+                // W-MSGPSKSWEEP: a .v3 wire already swept every candidate
+                // inside ratchetDecryptV3 itself — retrying here would just
+                // re-run the identical exhaustive sweep and fail identically.
+                // Only non-v3 formats (v2/v1, no internal sweep) benefit
+                // from retrying attemptDecrypt with a different candidate.
+                guard MessageWireFormat.detect(cipher) != .v3 else { throw error }
                 var recovered: Data?
                 for alt in pskCandidates.dropFirst() where recovered == nil {
                     recovered = try? attemptDecrypt(withPsk: alt)
@@ -8526,7 +8536,10 @@ final class AppState: ObservableObject {
             case .v4:
                 return ratchetDecryptV4(wire: cipher, senderId: senderId)
             case .v3:
-                return try? ratchetDecryptV3(wire: cipher, psk: psk, senderId: senderId, msgId: clientMsgId)
+                // W-MSGPSKSWEEP: sweeps every candidate PSK internally —
+                // ignores the per-call `psk` on purpose, same as the
+                // 1:1 chat path's attemptDecrypt above.
+                return try? ratchetDecryptV3(wire: cipher, pskCandidates: pskCandidates, senderId: senderId, msgId: clientMsgId)
             case .v2:
                 let recipient = currentUserId ?? ""
                 let aad = meshAad ?? Data("msg:\(senderId):\(recipient):\(clientMsgId)".utf8)
@@ -8544,6 +8557,12 @@ final class AppState: ObservableObject {
         }
 
         if let pt = attempt(withPsk: firstPsk) { return pt }
+        // W-MSGPSKSWEEP: a .v3 wire already swept every candidate inside
+        // ratchetDecryptV3 itself on the attempt above — retrying here
+        // would just re-run the identical exhaustive sweep and fail
+        // identically every time. Only non-v3 formats benefit from retrying
+        // `attempt` with a different candidate.
+        guard MessageWireFormat.detect(cipher) != .v3 else { return nil }
         for alt in pskCandidates.dropFirst() {
             if let pt = attempt(withPsk: alt) { return pt }
         }
@@ -18612,18 +18631,45 @@ extension AppState {
     /// `psk` if the vault has no snapshot yet. Throws on AEAD failure /
     /// replay / wire malformation, matching the v1 path's error
     /// behaviour so the surrounding catch can trigger auto-rekey.
-    func ratchetDecryptV3(wire: Data, psk: Data, senderId: String, msgId: String) throws -> Data {
+    /// W-MSGPSKSWEEP (2026-08-24) — ports the identical fix already shipped
+    /// for the group-control channel (`AppState.swift`'s
+    /// `W-GRPCTRL-PSKSWEEP2`, 2026-07-28) to this, the far more heavily-used
+    /// 1:1 chat path. `ensureSession` is snapshot-first: once ANY session
+    /// exists for `("v1", senderId)` it returns that session and SILENTLY
+    /// IGNORES `pskRoot`, and on a genuine first-contact miss it derives
+    /// AND PERSISTS unconditionally. Feeding it a single untrusted PSK guess
+    /// per call — which is what every caller of this function used to do,
+    /// each retrying with a different candidate on failure — either
+    /// poisons the session on a wrong first-contact guess, or (once any
+    /// session exists) makes every later "retry" collapse onto the SAME
+    /// cached session and re-run the identical decrypt, learning nothing.
+    /// The retry loop callers used to wrap around this function therefore
+    /// never actually retried anything past the very first bootstrap.
+    ///
+    /// Fix: try the ESTABLISHED session first (the normal path, and the
+    /// only one that carries forward chain state / replay-window
+    /// continuity), then sweep `pskCandidates` via `deriveSessionUnpersisted`
+    /// (pure derivation — no vault read, no vault write) + the
+    /// non-throwing `decrypt`, which persists the winning session itself
+    /// once it actually opens a frame. A caller no longer needs its own
+    /// outer per-candidate retry loop — this sweeps everything in one call.
+    func ratchetDecryptV3(wire: Data, pskCandidates: [Data], senderId: String, msgId: String) throws -> Data {
         let selfId = currentUserId ?? ""
-        let session = try Self.ratchet.ensureSession(
-            epochId: "v1",                  // single epoch until we wire negotiation
-            selfId: selfId,
-            peerId: senderId,
-            pskRoot: psk
-        )
         let aad = MessageRatchet.buildMessageAD(
             senderId: senderId, recipientId: selfId, clientMsgId: msgId)
-        return try Self.ratchet.decryptOrThrow(
-            session: session, wire: wire, aad: aad)
+
+        if let stored = Self.ratchet.existingSession(epochId: "v1", peerId: senderId),
+           let plain = Self.ratchet.decrypt(session: stored, wire: wire, aad: aad) {
+            return plain
+        }
+        for psk in pskCandidates {
+            guard let session = try? Self.ratchet.deriveSessionUnpersisted(
+                epochId: "v1", selfId: selfId, peerId: senderId, pskRoot: psk) else { continue }
+            if let plain = Self.ratchet.decrypt(session: session, wire: wire, aad: aad) {
+                return plain
+            }
+        }
+        throw MessageRatchet.RatchetError.aeadFailed("no PSK candidate opened v1/senderId=\(senderId.prefix(8)) (tried=\(pskCandidates.count))")
     }
 
     /// Phase 18 — decrypt a v4 native PQ-ratchet frame (opaque 0xE5). Routes by
