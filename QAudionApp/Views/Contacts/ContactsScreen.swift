@@ -42,6 +42,10 @@ struct ContactsScreen: View {
     /// and after each block/unblock action.
     @State private var blockedIds: Set<String> = BlockedContactsStore.loadBlockedIds()
 
+    // Performance: pre-computed list values to avoid O(N log N) work in view body
+    @State private var sortedItems: [ContactsListViewModel.Item] = []
+    @State private var onlineCount: Int = 0
+
     @Environment(\.qaudionSnackbar) private var snackbar
 
     enum Tab: Hashable, CaseIterable {
@@ -142,9 +146,18 @@ struct ContactsScreen: View {
         .onAppear {
             container.attach(appState)
             blockedIds = BlockedContactsStore.loadBlockedIds()
+            updateSortedItems()
         }
         .onChange(of: searchText) { newValue in
             container.setSearchQuery(newValue)
+        }
+        .onChange(of: container.viewModel.filteredItems) { _ in updateSortedItems() }
+        .onChange(of: appState.orphanPeerIds) { _ in updateSortedItems() }
+        .onChange(of: sortMode) { _ in updateSortedItems() }
+        // Watch for online presence changes since onlineCount and onlineFirst sorting depends on it
+        .onReceive(appState.presenceService.objectWillChange) { _ in
+            // Dispatch async so we read the updated presence state
+            DispatchQueue.main.async { updateSortedItems() }
         }
         .sheet(isPresented: $showingNewContact) {
             // W23.E: full ContactEditor in Add mode.
@@ -326,9 +339,9 @@ struct ContactsScreen: View {
         }
     }
 
-    // MARK: - Lists
+    // MARK: - State updates
 
-    private var allList: some View {
+    private func updateSortedItems() {
         // W-ORPHANPEER — drop peers whose account no longer exists on the
         // server. Filtered HERE, at read time, and not inside the container:
         // `ContactsListContainer` builds its view model once and does not
@@ -337,6 +350,7 @@ struct ContactsScreen: View {
         // (@Published) also makes this re-render on its own as lookups resolve.
         let unsorted = container.viewModel.filteredItems
             .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+
         // W58: applica il sort prescelto. Locale-aware comparison sul
         // displayName — `localizedCaseInsensitiveCompare` rispetta
         // l'ordinamento italiano (es. é < f, à < b).
@@ -365,10 +379,18 @@ struct ContactsScreen: View {
                 }
             }
         }()
+
         // I2: same fix as the sort above — the header used to read the
         // hardcoded `item.isOnline` and always rendered "ONLINE · 0/N".
-        let onlineCount = items.filter { appState.presenceService.isOnline($0.userId) }.count
-        let totalCount  = items.count
+        self.onlineCount = items.filter { appState.presenceService.isOnline($0.userId) }.count
+        self.sortedItems = items
+    }
+
+    // MARK: - Lists
+
+    private var allList: some View {
+        let items = sortedItems
+        let totalCount = items.count
 
         return List {
             if !items.isEmpty {

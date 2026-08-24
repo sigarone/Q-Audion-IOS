@@ -13,3 +13,7 @@
 ## 2024-05-30 - Stateful lists from ObservableObject array properties
 **Learning:** When generating a SwiftUI `List` or `ForEach` that relies on an O(N log N) filtering/sorting operation over an array owned by an `@ObservedObject` (e.g., `groupRegistry.entries`), placing the logic inside a view computed property causes the expensive operation to re-run on EVERY render cycle.
 **Action:** Extract the sorted/filtered array into an `@State` variable, create an update function, and call it from `.onAppear` and `.onChange(of: observedObject.entries)` (if the array elements are `Equatable`) to restrict execution exclusively to when the source data changes.
+
+## 2024-05-31 - SwiftUI objectWillChange timing
+**Learning:** In SwiftUI, when observing an `ObservableObject`'s `.objectWillChange` publisher via `.onReceive` to trigger local state updates (e.g., `PresenceService`), the closure executes *before* the object's properties have actually updated. If you read the state synchronously in that closure, you will get stale data.
+**Action:** When using `.onReceive` with `.objectWillChange` and the callback needs to read the *new* state, dispatch the work asynchronously (e.g., `DispatchQueue.main.async { ... }`).
