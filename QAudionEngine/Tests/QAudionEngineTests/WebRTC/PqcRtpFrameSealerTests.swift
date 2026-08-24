@@ -139,5 +139,88 @@ final class PqcRtpFrameSealerTests: XCTestCase {
         XCTAssertEqual(hex(try aSend.seal(pt)), a2b, "A2B KAT must match Android/Desktop")
         XCTAssertEqual(hex(try bSend.seal(pt)), b2a, "B2A KAT must match Android/Desktop")
     }
+
+    // MARK: - M-14 anti-replay window (W-VNACK-REPLAY, 2026-08-24)
+    //
+    // Previously untested on iOS. These pin the CURRENT replayWindowSize
+    // (1024) behaviourally rather than by literal value, so a future width
+    // change doesn't silently break these — they only assume "wide enough to
+    // hold 900 frames, narrow enough that 1100 exceeds it", which holds for
+    // both the pre-fix 512 and the current 1024.
+
+    /// A sealed frame opened a second time (byte-identical replay) is rejected.
+    func testReplayRejectsExactDuplicate() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let wire = try sealer.seal(Data("voice".utf8))
+        XCTAssertNoThrow(try receiver.open(wire))
+        XCTAssertThrowsError(try receiver.open(wire), "byte-identical replay must be rejected")
+    }
+
+    /// The direct regression guard for the bug this window widening fixes:
+    /// a frame legitimately recovered by NACK long after it was originally
+    /// sent (here, ~900 frames behind the highest counter already seen) must
+    /// still be accepted, not false-positive-rejected as a replay.
+    func testReplayAcceptsFrameRecoveredHundredsOfPositionsLate() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        // Frame #0 is the one that will arrive "late" (simulating a NACK
+        // round trip recovering it long after it was first sent).
+        let lateFrame = try sealer.seal(Data("recovered-by-nack".utf8))
+        // Advance the sender's counter to ~900 by sealing filler frames, then
+        // open the newest one on the receiver first — this is what actually
+        // advances replayHighest, exactly as an out-of-order/late-arriving
+        // network would.
+        var newest: Data = lateFrame
+        for _ in 0..<900 { newest = try sealer.seal(Data("filler".utf8)) }
+        XCTAssertNoThrow(try receiver.open(newest), "precondition: advancing receiver's replayHighest to ~900")
+        XCTAssertNoThrow(
+            try receiver.open(lateFrame),
+            "a frame ~900 positions behind the highest counter seen must still be accepted — this is the exact scenario a NACK-recovered fragment hits, and the bug this window widening fixes"
+        )
+    }
+
+    /// A frame old enough to exceed the window (not just old — genuinely too
+    /// old) is still correctly rejected. The window widening must not have
+    /// turned this into "accept everything".
+    func testReplayRejectsFrameOlderThanWindow() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let tooOldFrame = try sealer.seal(Data("ancient".utf8))
+        var newest: Data = tooOldFrame
+        // 1100 exceeds every window size this fix has ever used (512 or
+        // 1024) — the point is confirming REJECTION still happens somewhere,
+        // not pinning the exact boundary.
+        for _ in 0..<1100 { newest = try sealer.seal(Data("filler".utf8)) }
+        XCTAssertNoThrow(try receiver.open(newest), "precondition: advance receiver's replayHighest")
+        XCTAssertThrowsError(
+            try receiver.open(tooOldFrame),
+            "a frame far older than the window must still be rejected — widening the window must not disable the anti-replay check"
+        )
+    }
+
+    /// Once the window has fully slid past a given counter (a fresh frame
+    /// pushed it out), a REPLAY of that same counter must still be rejected
+    /// as too old — not accepted just because it was legitimately seen once
+    /// before. Confirms the shift-based design still closes correctly at the
+    /// current window size.
+    func testReplayOfNowExpiredCounterStillRejected() throws {
+        let key = Data(repeating: 0x42, count: 32)
+        let sealer = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let receiver = try PqcRtpFrameSealer(pqcSessionKey: key)
+        let firstFrame = try sealer.seal(Data("first".utf8))
+        XCTAssertNoThrow(try receiver.open(firstFrame))
+        var newest: Data = firstFrame
+        // 1100 pushes counter 0 out of even the widened 1024-slot window.
+        for _ in 0..<1100 { newest = try sealer.seal(Data("filler".utf8)) }
+        XCTAssertNoThrow(try receiver.open(newest))
+        XCTAssertThrowsError(
+            try receiver.open(firstFrame),
+            "replaying a counter whose window slot has since expired must be rejected as too old, not accepted"
+        )
+    }
 }
 #endif

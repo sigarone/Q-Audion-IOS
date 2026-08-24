@@ -37,6 +37,12 @@ final class VideoNackFragmentCache: @unchecked Sendable {
     private var insertionOrder: [Int64] = []
     private var firstLiveIndex = 0
 
+    // W-VNACK-REPLAY (2026-08-24): a fragment resent from this cache near
+    // `maxAgeMs` old must still fall inside PqcRtpFrameSealer's
+    // `replayWindowSize` (QAudionEngine/.../WebRTC/PqcRtpFrameSealer.swift) —
+    // that constant was widened 512→1024 specifically to keep covering this
+    // cache's full retention window at VideoConstants.maxVideoBitrateBps.
+    // If either constant changes, re-check the other.
     private let maxAgeMs: Int64
     private let maxEntries: Int
 
