@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1029",
+              date: "2026-08-24",
+              title: "v1.0.1029",
+              bullets: [
+                "fix(call): anchor upgrade-responder ICE watchdog to setRemoteOffer success",
+                "fix(crypto): widen video M-14 anti-replay window 512->1024 (W-VNACK-REPLAY)",
+                "fix(messaging): stop chat-message v3 decrypt from poisoning the session on a wrong PSK guess",
+              ]),
         .init(id: "v1.0.1028",
               date: "2026-08-23",
               title: "v1.0.1028",
               bullets: [
+                "chore: regenerate changelog for v1.0.1028",
                 "fix(call): observe AVCaptureSession interruption/runtime-error notifications (W-CAPSESSIONWATCH)",
                 "fix(security): cherry-pick verified token-redaction hunk from Jules PR #83",
               ]),
@@ -155,14 +164,6 @@ extension ReleaseNote {
                 "fix(security): I3 — mid-call PQC re-key content-based dedup",
                 "fix(security): MASVS remediation — telemetry consent, biometric default, DB backup exclusion, rekey scaffold",
                 "fix(security): migrate TusResumeStateStore off plaintext UserDefaults",
-              ]),
-        .init(id: "v1.0.1009",
-              date: "2026-08-20",
-              title: "v1.0.1009",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1009",
-                "feat(auth): manual extension+password login for Fast Setup accounts",
-                "fix(chat): stop stamping attachment sends as delivered before any real ack",
               ]),
     ]
 }
