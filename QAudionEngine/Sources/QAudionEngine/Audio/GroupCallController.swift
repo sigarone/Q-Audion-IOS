@@ -264,7 +264,7 @@ public final class GroupCallController: @unchecked Sendable {
     }
 
     /// Tier-1 mute-request auto-mute-on-receipt (item 4, 2026-07-16 wire
-    /// contract) — Signal's real behavior: no confirmation dialog, fully
+    /// contract) — standard industry behavior for this feature: no confirmation dialog, fully
     /// reversible in one tap, no lockout. Flips BOTH the legacy
     /// WS-relay-mesh gate (`setMuted`, gates `sendOutgoingOpusFrame`) AND
     /// the real LiveKit SFU mic toggle (`setMicrophoneEnabled`) — item 6's

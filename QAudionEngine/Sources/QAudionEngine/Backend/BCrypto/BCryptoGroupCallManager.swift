@@ -425,8 +425,8 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// `group_call_signal` verbatim). FLAT, non-admin-gated by design: the
     /// server does zero role/permission check beyond both parties being
     /// current participants — any participant can request any other mute,
-    /// matching Signal's real behavior (no moderator role in Signal group
-    /// calls).
+    /// matching standard industry behavior for this feature (no moderator
+    /// role in group calls).
     public func sendGroupCallMuteRequest(targetId: String) {
         guard let cid = callId else { return }
         ws.send(type: "group_call_mute_request", data: [

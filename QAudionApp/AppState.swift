@@ -11448,7 +11448,7 @@ final class AppState: ObservableObject {
         // dismissing the native UI just returns to the lock/home screen, not the
         // app). So wake-only removed the system call UI without showing ours —
         // strictly worse. The SAS screen is reachable only by tapping the
-        // Q-Audion icon on the native call screen (standard iOS, same as Signal).
+        // Q-Audion icon on the native call screen (standard iOS CallKit behavior).
         // Kept behind the flag so it can be force-ON for experiments, but OFF by
         // default restores the standard native call UI.
         guard FeatureFlags.bool("ios_callkit_wake_only", false) else {
