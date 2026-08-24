@@ -51,6 +51,9 @@ public struct TapCopyRow: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: copyToPasteboard)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Copia negli appunti")
     }
 
     /// W309: extracted to a method to keep the .onTapGesture closure
