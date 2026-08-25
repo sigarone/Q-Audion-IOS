@@ -37,6 +37,39 @@ import Foundation
 /// Producer (network decode) and consumer (audio render) are different threads,
 /// so the queue is lock-protected. The counters are read at teardown from a
 /// third thread; they are plain values behind the same lock.
+///
+/// ## W-JBADAPT + W-JBSTRETCH port (2026-08-25, parity plan Fase C3)
+///
+/// Two more pieces ported from Android's `JitterBuffer.kt`, both landing the
+/// same day on the far side:
+///
+///  - **W-JBADAPT** — the steady-state target (`nominal`, and the tier-3
+///    drain target derived from it) is no longer the fixed 80/40 ms Android
+///    also used to ship. It now tracks the buffer's own observed
+///    inter-arrival lateness (p95 over a rolling window, plus one frame of
+///    headroom), clamped to the envelope the fixed constants already
+///    defined. A clean link converges to less standing latency than the old
+///    constant bought; a jittery one gets more depth than the constant
+///    would have given it, instead of starving under it. See
+///    `recordArrival`/`computeTargetMs`.
+///  - **W-JBSTRETCH** — the correction this class had for excess depth used
+///    to be binary: delivered unmodified, or excised whole (energy-gated
+///    where possible, budgeted and latched in the emergency case). Every
+///    excision is a discontinuity, audible as a pop/skip even when
+///    energy-gated timing hid it most of the time. `TimeStretch.compress`
+///    (a fixed-splice, linear-crossfade intra-frame time compression —
+///    "SOLA-lite", see that file's own kdoc for why intra-frame rather than
+///    a cross-frame WSOLA search) gives the moderate-excess band a cheaper
+///    first option: shave a few ms off the head-of-queue frame instead of
+///    discarding it. See `tryTimeStretch` and `timeStretchWatermark`.
+///
+/// Both are byte-for-byte ports of the Android twins in
+/// `com.bcrypto.qaudion.audio.JitterBuffer` / `TimeStretch` — same
+/// constants, same band boundaries, same splice math — adapted only for
+/// this class's single-lock threading model (Android's queue is lock-free
+/// with atomics; this class already serialises push and pop under one
+/// `NSLock`, so there is no analogous "which fields are single-thread-only"
+/// bookkeeping to carry over).
 public final class PlayoutJitterBuffer: @unchecked Sendable {
 
     // MARK: - Tuning, ported from Android's JitterBuffer
@@ -136,6 +169,57 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// this are split; a frame is only excisable when EVERY sub-block is silent.
     static let silenceSubBlockMs = 20
 
+    // MARK: - W-JBADAPT (2026-08-25) — adaptive steady-state target
+    //
+    // Ported from Android's `JitterBuffer.kt` companion object (`ADAPT_*`).
+    // See `recordArrival`/`computeTargetMs` for where these are used.
+
+    /// Target before enough arrivals have been observed — the shipped
+    /// nominal watermark (80 ms), so a fresh buffer is behaviourally
+    /// identical to the fixed-constant one it replaces.
+    static let adaptDefaultTargetMs = 80
+    /// Clamp floor = the shipped emergency-drain target (40 ms): the lowest
+    /// depth this class has ever deliberately drained to.
+    static let adaptTargetMinMs = 40
+    /// Clamp ceiling = the shipped high watermark (160 ms). A link worse
+    /// than this needs the emergency tier, not more standing depth.
+    static let adaptTargetMaxMs = 160
+    /// How far below the target the tier-3 drain stops, preserving the
+    /// shipped 80→40 relationship at the default.
+    static let adaptDrainUndershootMs = 40
+    /// Lateness samples kept: ~5 s of audio at 20 ms cadence.
+    static let adaptWindow = 256
+    /// Arrivals required before the first adaptation — a p95 over a
+    /// handful of samples is noise.
+    static let adaptMinSamples = 64
+    /// Republish cadence: the sort in `computeTargetMs` is trivial, but
+    /// there is no reason to pay it on every push for a target that moves
+    /// on the scale of seconds.
+    static let adaptRecomputeEvery = 16
+
+    // MARK: - W-JBSTRETCH (2026-08-25) — time-stretch correction band
+    //
+    // Ported from Android's `JitterBuffer.kt` (`TIME_STRETCH_*`) and
+    // `TimeStretch.kt`. See `tryTimeStretch` and `TimeStretch.compress`.
+
+    /// Samples removed per `TimeStretch.compress` pass. A FIXED ms amount —
+    /// not scaled by frame duration — so the same absolute shave applies at
+    /// 20 ms and at 60 ms alike. See `TimeStretch.kt`'s Android twin for why
+    /// 3 ms specifically (inside the 2-5 ms band this correction must stay
+    /// within).
+    static let timeStretchShaveMs = 3
+    /// `timeStretchShaveMs` resolved to samples at `AudioConstants.sampleRate`.
+    static let timeStretchShaveSamples = AudioConstants.sampleRate / 1000 * timeStretchShaveMs
+    /// Ceiling, in ms, of the band where time-stretch is tried BEFORE the
+    /// existing whole-frame drop machinery. Deliberately its own constant
+    /// rather than a reuse of `trimWatermarkMs`(140)/`highWatermarkMs`(160):
+    /// those two round to ADJACENT frame counts at every cadence this class
+    /// supports, so reusing either would leave the "try compression first"
+    /// band empty. 200 ms sits at roughly the midpoint of the escalation
+    /// ladder's non-emergency span (140 ms trim floor to 300 ms emergency
+    /// watermark).
+    static let timeStretchCeilingMs = 200
+
     // MARK: - State
 
     private let lock = NSLock()
@@ -162,6 +246,57 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     private var highScan: Int = PlayoutJitterBuffer.highTierScanLimit
     private var highDropBudget: Int = PlayoutJitterBuffer.highTierDropBudget
 
+    /// W-JBSTRETCH — the ceiling of the "try time-compression first" band,
+    /// in frames at the CURRENT cadence. See `timeStretchCeilingMs`'s kdoc.
+    private var timeStretchWatermark: Int = PlayoutJitterBuffer.nominalWatermark
+
+    // MARK: - W-JBADAPT (2026-08-25): inter-arrival tracker
+    //
+    // Honesty note ported from Android's own: before this, the buffer
+    // collected NO arrival-timing statistics at all. The tracker below is
+    // the collection AND the consumer, in one place, because the buffer's
+    // own arrival cadence is the quantity that decides the right
+    // steady-state depth and nothing upstream sees it earlier.
+    //
+    // Threading: unlike Android's lock-free queue (where this ring is
+    // documented single-thread — pushing side only), every field here sits
+    // behind this class's one `lock`, which already serialises push and
+    // pop, so there is nothing further to reason about.
+
+    /// Monotonic clock, injectable so the adaptive-target tests can drive
+    /// time deterministically instead of sleeping. Production default is
+    /// `ProcessInfo.processInfo.systemUptime` — never wall-clock, which
+    /// jumps on NTP/timezone changes.
+    private let nowSeconds: () -> Double
+
+    /// Timestamp of the previous `push`, in `nowSeconds` units, or `nil`
+    /// before the first arrival / since the last `reset()`.
+    private var lastPushMonotonic: Double?
+
+    /// Ring of recent per-arrival LATENESS values, in ms: how much later
+    /// than the nominal cadence each frame arrived, floored at 0. Lateness
+    /// rather than raw gap, because depth only has to cover frames that
+    /// arrive LATE — an early (bunched) arrival costs no depth.
+    private var latenessRing: [Int]
+
+    /// Number of arrivals recorded since construction / the last `reset()`.
+    /// Can exceed `latenessRing.count`; the ring wraps.
+    private var latenessCount: Int = 0
+
+    /// The adaptive steady-state target, in ms. Seeded at the shipped
+    /// constant and republished every `adaptRecomputeEvery` arrivals once
+    /// the window has `adaptMinSamples` observations.
+    private var adaptTargetMs: Int = PlayoutJitterBuffer.adaptDefaultTargetMs
+
+    // MARK: - W-JBSTRETCH (2026-08-25): time-stretch correction
+
+    /// Reusable output buffer for `tryTimeStretch`. A compressed frame is a
+    /// different LENGTH than the polled frame, so it cannot be produced in
+    /// place; resized only when the needed size actually changes (i.e. on a
+    /// cadence change), the same amortised cost every other duration-derived
+    /// quantity in this class already pays.
+    private var stretchScratch = Data()
+
     /// Re-derive every watermark for a new inbound frame duration.
     ///
     /// Idempotent and cheap; call it whenever the observed inbound duration
@@ -175,7 +310,16 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard ms != frameMs else { return }
         frameMs = ms
-        // 2026-08-11 — the conversion now follows the constant's ROLE, because
+        recomputeTierGeometry()
+    }
+
+    /// Re-derive every watermark from the current `frameMs` AND the current
+    /// `adaptTargetMs`. Called whenever either changes: from
+    /// `setInboundFrameDurationMs` (cadence change) and from `recordArrival`
+    /// (the adaptive target moved). Callers must already hold `lock`.
+    private func recomputeTierGeometry() {
+        let ms = frameMs
+        // 2026-08-11 — the conversion follows the constant's ROLE, because
         // rounding to nearest is right for a boundary and wrong for a ceiling.
         // A budget that says "never excise more than 60 ms" rounded UP to
         // 2 frames at 40 ms authorises excising 80 ms; truncation cannot, and
@@ -198,17 +342,90 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         // structurally instead: each rung is at least one frame above the one
         // below it. At 20 ms every `max` below picks the converted value
         // unchanged, so this is inert on the shipping cadence.
-        nominal = AudioConstants.framesForMs(Self.nominalWatermarkMs, frameDurationMs: ms)
+        //
+        // W-JBADAPT (2026-08-25) — `nominal` is now the ADAPTIVE target
+        // (`adaptTargetMs`), not the fixed `nominalWatermarkMs` constant.
+        // The monotonic chain below is an iOS-specific safety net Android
+        // does not carry (Android accepts the adaptive target transiently
+        // outranking the fixed `trimWatermarkMs` at its 160 ms clamp
+        // ceiling, and documents the consequence: the energy-gated tiers
+        // simply stop firing on a link jittery enough to need it). This
+        // class instead keeps trim/high/emergency forced strictly above
+        // whatever nominal resolves to, for the same reason it already
+        // forces them above each other: it was built to survive many more
+        // reachable frame durations (5/10/20/40/60 ms, see
+        // `FrameQuantisationInvariantsTests`) than Android's two, and a
+        // silently-empty tier band is exactly the class of bug that net
+        // already exists to catch.
+        nominal = AudioConstants.framesForMs(adaptTargetMs, frameDurationMs: ms)
         trim = max(nominal + 1, AudioConstants.framesForMs(Self.trimWatermarkMs, frameDurationMs: ms))
         high = max(trim + 1, AudioConstants.framesForMs(Self.highWatermarkMs, frameDurationMs: ms))
         emergency = max(high + 1, AudioConstants.framesForMs(Self.emergencyWatermarkMs, frameDurationMs: ms))
         capFrames = max(emergency + 1, capFrames)
-        drainTarget = AudioConstants.framesForMs(Self.emergencyDrainTargetMs, frameDurationMs: ms)
+        // W-JBSTRETCH — the "try compression first" ceiling. Same monotonic
+        // safety net as above: must sit strictly above `trim`, or the band
+        // it defines is empty.
+        timeStretchWatermark = max(trim + 1, AudioConstants.framesForMs(Self.timeStretchCeilingMs, frameDurationMs: ms))
+        // W-JBADAPT — the tier-3 drain target tracks the adaptive target at
+        // the same 40 ms undershoot the shipped constants had (80→40), floored
+        // at the clamp floor so the drain never targets less than it ever did.
+        let undershootTargetMs = max(adaptTargetMs - Self.adaptDrainUndershootMs, Self.adaptTargetMinMs)
+        drainTarget = AudioConstants.framesForMs(undershootTargetMs, frameDurationMs: ms)
         maxDropsPerPop = AudioConstants.boundedFramesForMs(Self.emergencyMaxDropsPerPopMs, frameDurationMs: ms)
         silenceScan = AudioConstants.boundedFramesForMs(Self.silenceScanLimitMs, frameDurationMs: ms)
         highScan = AudioConstants.boundedFramesForMs(Self.highTierScanLimitMs, frameDurationMs: ms)
         highDropBudget = AudioConstants.boundedFramesForMs(Self.highTierDropBudgetMs, frameDurationMs: ms)
     }
+
+    /// Record one arrival and, periodically, republish the adaptive target.
+    /// Ported from Android's `JitterBuffer.recordArrival` (W-JBADAPT).
+    /// Caller (`push`) already holds `lock`.
+    ///
+    /// Target rule: p95 of the recent lateness window, plus one frame of
+    /// headroom (the frame being waited for is itself a frame long), clamped
+    /// to `[adaptTargetMinMs, adaptTargetMaxMs]`. p95 rather than max so a
+    /// single pathological gap (cell handover, a stall) does not park the
+    /// whole call at the clamp ceiling for the length of the window; rather
+    /// than mean/stddev because arrival lateness is heavy-tailed and the
+    /// tail is precisely what underruns are made of.
+    ///
+    /// A gap while the pipeline was stopped is excluded structurally:
+    /// `reset()` clears `lastPushMonotonic`, so the first frame of a
+    /// (re)started stream records nothing.
+    private func recordArrival() {
+        let now = nowSeconds()
+        guard let prev = lastPushMonotonic else {
+            lastPushMonotonic = now
+            return
+        }
+        lastPushMonotonic = now
+        let gapMs = Int(((now - prev) * 1000.0).rounded())
+        guard gapMs >= 0 else { return } // injected/broken clock went backwards: skip the sample
+        let lateness = min(max(gapMs - frameMs, 0), Self.adaptTargetMaxMs)
+        latenessRing[latenessCount % latenessRing.count] = lateness
+        latenessCount += 1
+        if latenessCount >= Self.adaptMinSamples, latenessCount % Self.adaptRecomputeEvery == 0 {
+            adaptTargetMs = computeTargetMs()
+            recomputeTierGeometry()
+        }
+    }
+
+    /// p95 of the lateness ring + one frame, clamped. Caller (`recordArrival`)
+    /// already holds `lock`.
+    private func computeTargetMs() -> Int {
+        let n = min(latenessCount, latenessRing.count)
+        guard n > 0 else { return adaptTargetMs }
+        var sorted = Array(latenessRing.prefix(n))
+        sorted.sort()
+        let p95 = sorted[((n - 1) * 95) / 100]
+        return min(max(p95 + frameMs, Self.adaptTargetMinMs), Self.adaptTargetMaxMs)
+    }
+
+    /// The adaptive steady-state depth target currently in force, in
+    /// milliseconds. `adaptDefaultTargetMs` until enough arrivals have been
+    /// observed. Exposed for diagnostics and for parity with Android's
+    /// `BufferStats.adaptiveTargetMs`.
+    public var adaptiveTargetMs: Int { lock.lock(); defer { lock.unlock() }; return adaptTargetMs }
 
     /// The inbound frame duration the tiers are currently sized for, in ms.
     public var inboundFrameDurationMs: Int { lock.lock(); defer { lock.unlock() }; return frameMs }
@@ -235,6 +452,12 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         let silenceScan: Int
         let highScan: Int
         let highDropBudget: Int
+        /// W-JBSTRETCH — the ceiling of the "try time-compression first"
+        /// band. See `timeStretchCeilingMs`'s kdoc.
+        let timeStretchWatermark: Int
+        /// W-JBADAPT — the adaptive target `nominal` was resolved from, in
+        /// ms, at the moment this snapshot was taken.
+        let adaptiveTargetMs: Int
     }
 
     var tierGeometryForTesting: TierGeometry {
@@ -243,7 +466,9 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
                             trim: trim, high: high, emergency: emergency,
                             drainTarget: drainTarget, maxDropsPerPop: maxDropsPerPop,
                             silenceScan: silenceScan, highScan: highScan,
-                            highDropBudget: highDropBudget)
+                            highDropBudget: highDropBudget,
+                            timeStretchWatermark: timeStretchWatermark,
+                            adaptiveTargetMs: adaptTargetMs)
     }
 
     // MARK: - Counters (the Android field names, so the two legs compare)
@@ -253,6 +478,9 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     private var _hardDrops: Int64 = 0
     private var _silenceDrops: Int64 = 0
     private var _pushed: Int64 = 0
+    /// W-JBSTRETCH — pops satisfied by shaving `timeStretchShaveMs` ms off
+    /// the head-of-queue frame instead of dropping it outright.
+    private var _timeStretchFrames: Int64 = 0
 
     // W-ALL60 (2026-08-14) — deliberately NOT seeded from the send profile.
     //
@@ -265,7 +493,15 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     // row — would have been met with a 60 ms ladder instead. Deriving receive
     // geometry from what WE transmit is the exact bug the send/receive split in
     // `AudioCapture` was introduced to remove.
-    public init() {}
+    ///
+    /// - Parameter nowSeconds: monotonic clock for the W-JBADAPT
+    ///   inter-arrival tracker (see that section's kdoc). Injectable so
+    ///   tests can drive time deterministically; production callers should
+    ///   not override the default.
+    public init(nowSeconds: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+        self.nowSeconds = nowSeconds
+        self.latenessRing = [Int](repeating: 0, count: PlayoutJitterBuffer.adaptWindow)
+    }
 
     /// Frames the consumer asked for and the queue could not supply.
     public var underruns: Int64 { lock.lock(); defer { lock.unlock() }; return _underruns }
@@ -277,6 +513,11 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     public var silenceDrops: Int64 { lock.lock(); defer { lock.unlock() }; return _silenceDrops }
     /// Denominator: without it the drop counts cannot be read as a rate.
     public var pushed: Int64 { lock.lock(); defer { lock.unlock() }; return _pushed }
+    /// W-JBSTRETCH — pops satisfied by time-compression instead of a
+    /// whole-frame drop. A call with a high value here and low `hardDrops`
+    /// is recovering from jitter mostly without the audible skip the
+    /// excision tiers cost.
+    public var timeStretchFrames: Int64 { lock.lock(); defer { lock.unlock() }; return _timeStretchFrames }
     public var depth: Int { lock.lock(); defer { lock.unlock() }; return queue.count }
 
     public func reset() {
@@ -284,10 +525,20 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         queue.removeAll()
         emergencyDraining = false
         _underruns = 0; _overruns = 0; _hardDrops = 0; _silenceDrops = 0; _pushed = 0
+        _timeStretchFrames = 0
+        // W-JBADAPT — the NEXT push must not record the stopped interval as a
+        // giant inter-arrival gap. The learned target itself is deliberately
+        // kept (see `recordArrival`'s kdoc): it describes the link, and the
+        // link did not change because the queue was cleared.
+        lastPushMonotonic = nil
     }
 
     public func push(_ frame: Data) {
         lock.lock(); defer { lock.unlock() }
+        // W-JBADAPT — feed the arrival tracker before any drop decision, so
+        // the cadence statistics describe the LINK, not this buffer's own
+        // overrun policy.
+        recordArrival()
         if queue.count >= capFrames {
             queue.removeFirst()
             _overruns += 1
@@ -347,6 +598,26 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
             return delivered
         }
 
+        // W-JBSTRETCH (2026-08-25) — NEW FIRST OPTION, not a replacement: at
+        // this point depth is past `trim` (tier 0 already returned) and
+        // short of `emergency` (tier 3 already returned) — somewhere on the
+        // escalation ladder between "fine" and "emergency". Below
+        // `timeStretchWatermark` a few-ms time-compression can plausibly buy
+        // back depth as fast as it accumulates, without excising a frame at
+        // all; at or above it, the backlog is deep enough that a small
+        // nibble cannot keep up, so this deliberately falls straight through
+        // to the unchanged energy-gated drop machinery below instead of
+        // trying and failing on every call. Ported from Android's
+        // `JitterBuffer.popWithDriftCatchup` (same constant, same ordering).
+        if d <= timeStretchWatermark {
+            if let stretched = tryTimeStretch() {
+                return stretched
+            }
+            // Nothing was polled (queue raced to empty, or the cadence is
+            // too short to shave) — fall through to the loop below, which
+            // polls itself and already handles an empty queue correctly.
+        }
+
         // Tiers 1/2 — walk the queue discarding only INAUDIBLE frames.
         let maxDrops = d >= high ? highDropBudget : 1
         let scanLimit = d >= high ? highScan : silenceScan
@@ -392,6 +663,85 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
             return nil
         }
         return queue.removeFirst()
+    }
+
+    // MARK: - W-JBSTRETCH (2026-08-25): time-stretch correction
+
+    /// Resizes `stretchScratch` only when the needed length actually
+    /// changes (i.e. a cadence change) — not reallocated per correction
+    /// event.
+    private func ensureStretchScratch(outSamples: Int) {
+        let neededBytes = outSamples * 2
+        if stretchScratch.count != neededBytes {
+            stretchScratch = Data(count: neededBytes)
+        }
+    }
+
+    /// Try to correct excess depth by shaving `timeStretchShaveMs` ms off
+    /// the head-of-queue frame via `TimeStretch.compress`, instead of
+    /// dropping a whole frame. Ported from Android's
+    /// `JitterBuffer.tryTimeStretch` (W-JBSTRETCH).
+    ///
+    /// Callers must already hold `lock` and must only invoke this when
+    /// depth is already known to be in the "moderately over target" band
+    /// (above `trim`, at or below `timeStretchWatermark`). This function
+    /// itself does not re-check depth: it is a pure "try to shrink the next
+    /// frame" operation, not a tier-selection decision.
+    ///
+    /// - Returns: the compressed frame on success (also incrementing
+    ///   `_timeStretchFrames`); the head-of-queue frame UNMODIFIED if it was
+    ///   polled but could not be safely compressed (its actual length does
+    ///   not match the currently-adopted cadence — a malformed/truncated
+    ///   inbound frame, or a duration transition mid-burst — or
+    ///   `TimeStretch.compress` otherwise declined); or `nil` only when
+    ///   nothing was polled at all (frame duration too short to shave
+    ///   safely, or the queue raced to empty). A `nil` return is never a
+    ///   discard — nothing was removed from the queue — so the caller's
+    ///   existing fallback path (which itself polls) is free to run exactly
+    ///   as if this function had not been called.
+    private func tryTimeStretch() -> Data? {
+        let n = AudioConstants.sampleRate / 1000 * frameMs
+        let shave = Self.timeStretchShaveSamples
+        guard n >= shave * 2 else { return nil } // cadence too short to shave safely
+        guard !queue.isEmpty else { return nil }
+
+        let head = queue.removeFirst()
+        let headSamples = head.count / 2
+        guard headSamples == n else {
+            // Does not match the CURRENTLY adopted cadence — hand it back
+            // unmodified rather than compress it. `frameMs` is driven by
+            // whichever frame was pushed MOST RECENTLY (see
+            // `AudioCapture`'s inbound-duration observation), so with more
+            // than one frame already queued across a duration transition (a
+            // profile renegotiation mid-burst — see `AudioConstants`'
+            // W-FRAMEAGNOSTIC kdoc), the frame actually at the head of the
+            // queue can legitimately be a DIFFERENT duration than what
+            // `frameMs` reads right now. A shorter head risks the splice
+            // reading past the buffer; a LONGER head would have
+            // `TimeStretch.compress` silently read only its first `n`
+            // samples and discard the genuine remainder as if it never
+            // arrived — worse than either declining or an audible skip.
+            return head
+        }
+
+        let outSamples = n - shave
+        ensureStretchScratch(outSamples: outSamples)
+        let written = TimeStretch.compress(
+            input: head,
+            inputSamples: n,
+            shaveSamples: shave,
+            out: &stretchScratch
+        )
+        guard written == outSamples * 2 else {
+            // Declined by the pure function. Should not happen given the
+            // guards above, but the frame was already removed from the
+            // queue, so deliver it whole rather than lose it — never trust
+            // an external boundary silently.
+            return head
+        }
+
+        _timeStretchFrames += 1
+        return stretchScratch
     }
 
     // MARK: - Pure decision functions (tested directly)

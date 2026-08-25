@@ -74,6 +74,24 @@ public final class AbrController {
     /// .getActiveCallId. nil → event still emitted, just unattributed.
     public var callIdProvider: (() -> String?)?
 
+    /// W-SCREENPROFILE (2026-08-25) — mirrors `AppState.isScreenSharing`
+    /// (set by `startScreenShare()`/`stopScreenShare()`) so the WS-HEVC
+    /// leg's resolution ladder never steps DOWN a screen share the way it
+    /// steps down camera video. Camera-oriented `updateResolution()` was
+    /// previously ungated for screen share entirely — it only avoided
+    /// visibly letterboxed frames as a SIDE EFFECT of
+    /// `VideoCallPipeline.submitExternalFrame` re-deriving the encoder
+    /// size from the incoming ReplayKit buffer every call, not as a
+    /// designed profile, and it churned `VTCompressionSession` needlessly
+    /// on every ABR tick during a share. Bitrate (layer 1) and FPS (layer
+    /// 3) adaptation stay ON — dropping frame rate under pressure is the
+    /// right trade for a screen share (mirrors the WebRTC leg's
+    /// `.maintainResolution` degradation preference, see
+    /// `QAudionPeerConnection.setVideoDegradationPreference`); only the
+    /// resolution ladder (layer 2, the one that would blur shared text)
+    /// is held at whatever tier it was on when the share started.
+    public var isScreenSharing: Bool = false
+
     // MARK: - Lifecycle
 
     public init(pipeline: VideoCallPipeline) {
@@ -268,6 +286,15 @@ public final class AbrController {
 
     private func updateResolution(now: TimeInterval) {
         guard let pipeline = pipeline else { return }
+        // W-SCREENPROFILE — never step the resolution ladder while sharing
+        // the screen; see `isScreenSharing`'s kdoc. Also clears the
+        // sustain-timer state so a step doesn't fire immediately off a
+        // stale timer the moment the share ends.
+        guard !isScreenSharing else {
+            lowBitrateSustainedSince = 0
+            highBitrateSustainedSince = 0
+            return
+        }
         let sustainSec = TimeInterval(VideoConstants.resolutionChangeSustainMs) / 1000.0
 
         if currentBitrateBps < VideoConstants.resolutionStepDownThresholdBps {

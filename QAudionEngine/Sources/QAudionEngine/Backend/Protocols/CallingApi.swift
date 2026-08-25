@@ -136,6 +136,37 @@ public protocol CallingApi {
     /// active callId on most backends).
     func sendCallHangupForId(callId: String, recipientId: String) async throws
 
+    /// W-SILENTPATHDEATH / W-RESTARTOFFERPARK (2026-08-25) — the
+    /// INITIATOR-side send primitive for a mid-call ICE-restart offer.
+    /// Ships a `call_offer` reusing the ALREADY-BOUND active call id (no
+    /// callId parameter — mirrors `sendIceCandidate`/`sendHangup`, which
+    /// read the backend's own internally-tracked active call id rather
+    /// than requiring the caller to carry it around) — a restart offer is
+    /// never a new call session.
+    ///
+    /// Returns `true` the moment the envelope reaches an authenticated
+    /// socket, `false` when it could not (caller-owned retry/park loop —
+    /// `QAudionWebRtcCallController.restartIce` — decides what to do
+    /// next). This is a THIN, non-blocking-beyond-the-single-attempt
+    /// primitive by design: `sendCallOfferWithId`'s own W-SETUPRETRY
+    /// ladder is gated off once the call has demonstrably progressed past
+    /// setup (see `BCryptoCallingApiImpl._setupProgressed`), which is
+    /// always true by the time an ICE restart can happen — reusing it here
+    /// would silently drop the retry coverage this method exists to
+    /// provide.
+    ///
+    /// Default impl returns `false` unconditionally (no-op) — backends
+    /// that haven't wired ICE-restart support keep compiling; only
+    /// `BCryptoCallingApiImpl` overrides with the real W-RESTARTOFFERPARK
+    /// send+park behavior (mirrors `deliverHangup`'s proven two-phase
+    /// shape: best-effort immediate send, then a detached park up to the
+    /// server's disconnect-grace ceiling).
+    func sendIceRestartOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async -> Bool
+
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
@@ -304,6 +335,17 @@ public extension CallingApi {
     /// override to actually pin the supplied callId.
     func sendCallHangupForId(callId: String, recipientId: String) async throws {
         try await sendHangup(recipientId: recipientId)
+    }
+
+    /// Default impl — no-op, `false`. Backends supporting ICE-restart
+    /// recovery (BCryptoCallingApiImpl) MUST override; see the protocol
+    /// kdoc for why the setup-retry ladder cannot be reused here.
+    func sendIceRestartOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async -> Bool {
+        return false
     }
 }
 

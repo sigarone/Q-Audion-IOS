@@ -520,6 +520,24 @@ final class AppState: ObservableObject {
     /// W-ICEGRACE — grace window length. Byte-for-byte the same 3000 ms
     /// Android has used since its own fix; keep the two in lockstep.
     private static let iceDisconnectGraceMs: Int = 3_000
+    /// W-SILENTPATHDEATH (2026-08-25) — `true` once the base 3s W-ICEGRACE
+    /// countdown has been extended for a live restart-offer attempt THIS
+    /// disconnect episode. Guards `extendIceDisconnectGraceForRestartAttempt`
+    /// against extending more than once per episode (a flapping restart
+    /// attempt must not push the teardown deadline out forever — same
+    /// anti-flap discipline `handleIceTermination`'s own `endAfterGrace`
+    /// applies to the base grace). Reset alongside `iceDisconnectGraceTask`.
+    private var iceGraceExtendedForRestart: Bool = false
+    /// W-SILENTPATHDEATH — extended grace budget once a genuine restart
+    /// attempt is in flight. The base 3s W-ICEGRACE window only covers
+    /// "give ICE a moment to self-heal"; an actual restart-offer/answer
+    /// round trip across a real network handoff routinely takes several
+    /// seconds, so ending the call at 3s would make the whole ICE-restart
+    /// machine decorative. Bounded under the server's 60s disconnect-grace
+    /// ceiling with margin, matching the same budget class as
+    /// `RestartIceDecisions.restartOfferParkBudgetMs` (45s) plus room for
+    /// the watchdog's own settle-window retries.
+    private static let iceDisconnectGraceExtendedMs: Int = 50_000
     /// W-UPGRADEICEWATCHDOG (2026-07-28) — the on-demand PeerConnection built
     /// by `makeUpgradeResponderController()` for a video upgrade on a
     /// WS-relay-only (audio-only) call has NO proactive timeout: `onIceConnectionState`
@@ -4838,6 +4856,43 @@ final class AppState: ObservableObject {
                     break
                 }
             }
+            // W-SILENTPATHDEATH / W-OFFERGLARE (2026-08-25, parity plan Fase
+            // E3) — a `call_incoming` carrying the id of the call ALREADY
+            // CONNECTED here (same call_id as the live call, not a new one)
+            // is the peer's mid-call ICE-restart offer, not a fresh call.
+            // Route it to the live controller's restart-glare-aware apply
+            // path INSTEAD of falling into the fresh-provisioning flow
+            // below: `IncomingCallEnvelopeDecisions.resolveDuplicateCallIncoming`
+            // would otherwise classify this exact shape (`sameCallProvisioned
+            // && hasWebRtcController && sdpLength > 0`) as `.dropDuplicate` —
+            // correct for a genuine retransmit of the SAME offer, wrong for a
+            // restart offer carrying a DIFFERENT SDP body (fresh ICE
+            // ufrag/pwd). `applyRemoteRestartOffer` itself owns the
+            // same-SDP dedup (`lastAppliedRemoteRestartSdp`), so this check
+            // only needs to prove "this is OUR live call, not a new one".
+            // Placed AFTER the age-gate / mutual-dial-glare checks above:
+            // neither applies to an already-connected call (both concern a
+            // call still being SET UP), so ordering relative to them is
+            // immaterial — it only has to run BEFORE the fresh-provisioning
+            // flow below. On a build without WebRTC linked there is no
+            // controller to route to, so the whole check is skipped and
+            // execution falls through to the existing behavior unchanged.
+            #if canImport(WebRTC)
+            if let restartCalling = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+               let activeId = restartCalling.getActiveCallId(),
+               activeId.caseInsensitiveCompare(callIdStr) == .orderedSame,
+               self.callContactId == senderId,
+               (self.callState == .active || self.callState == .encrypted),
+               let restartSdp = data["sdp"] as? String, !restartSdp.isEmpty,
+               let restartController = self.webRtcController as? QAudionWebRtcCallController {
+                let line: String = "restart_offer_incoming id=" + String(callIdStr.prefix(8))
+                RTLog.info("call", line)
+                Task { @MainActor in
+                    await restartController.applyRemoteRestartOffer(sdp: restartSdp)
+                }
+                return
+            }
+            #endif
             // D11: stash the server-stamped `sender_device_id` keyed by sender so
             // the later OFFER/ACCEPT (which arrive over `opaque_message` WITHOUT a
             // device id — the server relays only `sender_id` there) can verify
@@ -13391,6 +13446,17 @@ final class AppState: ObservableObject {
                 // R-4 (DEFECT 2): strip `vkey-v1` from every offer/answer
                 // this controller advertises when sovereign-only is on.
                 controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
+                // W-SILENTPATHDEATH (2026-08-25) — a live restart-offer
+                // attempt must not be preempted by the base W-ICEGRACE
+                // grace, tuned for a plain "give the self-heal a moment"
+                // window (3s), not for an actual offer/answer round trip
+                // (which, across a real handoff, routinely takes several
+                // seconds). See `extendIceDisconnectGraceForRestartAttempt`.
+                controller.onRestartAttemptStarted = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.extendIceDisconnectGraceForRestartAttempt()
+                    }
+                }
                 // If ICE fails / drops mid-call (network change, TURN
                 // unreachable) the controller flips to .failed/.disconnected
                 // but nothing tore down AppState — isInCall stayed true and
@@ -13615,6 +13681,43 @@ final class AppState: ObservableObject {
     private func cancelIceDisconnectGrace() {
         iceDisconnectGraceTask?.cancel()
         iceDisconnectGraceTask = nil
+        iceGraceExtendedForRestart = false
+    }
+
+    /// W-SILENTPATHDEATH (2026-08-25) — extend the SHORT W-ICEGRACE
+    /// teardown countdown into a LONG one the first time a genuine
+    /// restart-offer attempt starts for this disconnect episode. Without
+    /// this, the base 3s grace (tuned for "give the self-heal a moment",
+    /// not for an actual SDP round trip) ends the call before any restart
+    /// offer/answer exchange could possibly land across a real handoff —
+    /// making the whole ICE-restart machine decorative. Wired from both
+    /// `QAudionWebRtcCallController.onRestartAttemptStarted` call sites
+    /// (offering side via `restartIce`, receiving side via
+    /// `applyRemoteRestartOffer`) so whichever role ends up doing the SDP
+    /// work gets the extension. No-op if no grace is currently counting
+    /// down (ICE is healthy, or already terminal) or if this episode's
+    /// grace was already extended once — `iceGraceExtendedForRestart`
+    /// applies the same anti-flap discipline `handleIceTermination`'s own
+    /// `endAfterGrace` branch already uses for the base grace.
+    @MainActor
+    private func extendIceDisconnectGraceForRestartAttempt() {
+        guard iceDisconnectGraceTask != nil, !iceGraceExtendedForRestart else { return }
+        iceGraceExtendedForRestart = true
+        iceDisconnectGraceTask?.cancel()
+        RTLog.info("call", "ICE restart attempt in flight — extending grace to \(Self.iceDisconnectGraceExtendedMs)ms")
+        iceDisconnectGraceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.iceDisconnectGraceExtendedMs) * 1_000_000)
+            guard !Task.isCancelled, let self = self else { return }
+            self.iceDisconnectGraceTask = nil
+            self.iceGraceExtendedForRestart = false
+            switch self.callState {
+            case .idle, .ended:
+                return
+            case .connecting, .ringing, .active, .encrypted:
+                RTLog.info("call", "ICE restart grace expired without recovery — ending call")
+                self.endCall()
+            }
+        }
     }
 
     /// call_accepted two-flag latch (WIRE_SPEC §3.5) — runs the original
@@ -14634,6 +14737,7 @@ extension AppState {
         // outlive its own call regardless.)
         iceDisconnectGraceTask?.cancel()
         iceDisconnectGraceTask = nil
+        iceGraceExtendedForRestart = false
         // W347 / H-6: tear down the WebRTC bridge for this call.
         // W495 — send WS call_hangup BEFORE closing the peer connection.
         // Old pattern (closeSynchronously THEN Task { hangup() }) was broken:
@@ -15242,6 +15346,15 @@ extension AppState {
         #if canImport(WebRTC)
         var capturer: WebRTCPixelBufferCapturer?
         if let controller = webRtcController as? QAudionWebRtcCallController {
+            // W-SCREENPROFILE — set BEFORE upgradeToVideo() (mirroring
+            // useExternalVideoSource just below) so a freshly created video
+            // source is flagged screencast; also covers the case where a
+            // camera video track already exists (webrtcPixelBufferCapturer
+            // != nil, branch below skipped) via the controller's didSet,
+            // which applies the sender-level degradationPreference override
+            // directly. See QAudionPeerConnection.addLocalVideoTrack /
+            // QAudionWebRtcCallController.isScreenSharing kdoc.
+            controller.isScreenSharing = true
             if controller.webrtcPixelBufferCapturer == nil {
                 RTLog.info("call", "startScreenShare: adding camera-less video transceiver (media=screen)")
                 controller.useExternalVideoSource = true
@@ -15266,6 +15379,12 @@ extension AppState {
         if videoPipeline == nil {
             await startVideoPipeline(for: peerId, sourceMode: .external)
         }
+        // W-SCREENPROFILE — gate the WS-HEVC leg's resolution ladder off
+        // for the duration of the share (bitrate/fps adaptation stay on).
+        // Set AFTER startVideoPipeline so this applies whether abrController
+        // was just created there or already existed (an active video call
+        // that starts sharing its screen on top of the camera feed).
+        abrController?.isScreenSharing = true
         guard capturer != nil || videoPipeline != nil else {
             RTLog.warn("call", "startScreenShare: no transport available (WebRTC capturer nil, pipeline nil)")
             errorMessage = "Condivisione schermo non disponibile: trasporto video non pronto."
@@ -15319,6 +15438,17 @@ extension AppState {
         videoPipeline?.externalFeedActive = false
         preScreenShareCameraClosure = nil
         isScreenSharing = false
+        // W-SCREENPROFILE — re-enable the WS-HEVC resolution ladder (only
+        // matters if the pipeline survives the share, below) and clear the
+        // WebRTC sender-level degradationPreference override so a camera
+        // track that survives the share (an active video call that only
+        // briefly shared its screen) goes back to the SDK's default
+        // (frame-rate/motion favored) instead of staying pinned to
+        // maintainResolution for the rest of the call.
+        abrController?.isScreenSharing = false
+        #if canImport(WebRTC)
+        (webRtcController as? QAudionWebRtcCallController)?.isScreenSharing = false
+        #endif
         // media-consent v1: if the pipeline existed only to encode the
         // screen on an audio-only call (external mode, no camera), tear it
         // down — the call drops cleanly back to voice.
@@ -19503,6 +19633,15 @@ extension AppState {
         // R-4 (DEFECT 2): strip `vkey-v1` from this controller's
         // offer/answer advertisements under sovereign-only (responder).
         controller.advertisedCapabilitiesFilter = { CallsGate.filterAdvertisedCapabilities($0) }
+        // W-SILENTPATHDEATH (2026-08-25) — responder-side mirror of the
+        // caller-side wiring: a live restart-offer attempt must not be
+        // preempted by the base W-ICEGRACE grace. See
+        // `extendIceDisconnectGraceForRestartAttempt`.
+        controller.onRestartAttemptStarted = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.extendIceDisconnectGraceForRestartAttempt()
+            }
+        }
         // Mirror of the caller-side teardown: a mid-call ICE failure on
         // the responder side would otherwise leave isInCall == true and
         // the UI stuck on the call screen. Guarded by isInCall to avoid

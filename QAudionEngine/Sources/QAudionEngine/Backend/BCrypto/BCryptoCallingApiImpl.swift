@@ -467,6 +467,86 @@ public final class BCryptoCallingApiImpl: CallingApi {
         }
     }
 
+    /// W-SILENTPATHDEATH / W-RESTARTOFFERPARK (2026-08-25) — the single
+    /// choke point for a mid-call ICE-restart `call_offer`, reusing the
+    /// bound active call id (a restart offer is never a new call session).
+    ///
+    /// Same two-phase shape as `deliverHangup` above (same file, same
+    /// day, same 45s-under-60s-ceiling park budget — Android's
+    /// `RESTART_OFFER_PARK_BUDGET_MS`): fast path waits up to 5s for an
+    /// authenticated socket; failing that, a DETACHED task parks for up to
+    /// 40 more seconds (~45s total from the call) and resends the moment
+    /// `ensureAuthenticated` sees the socket come back — comfortably under
+    /// the server's 60s disconnect-grace ceiling, so a landing resend also
+    /// renews the server-side grace via signaling activity, exactly like
+    /// Android's park. This is NOT Android's separate 5-attempt inline
+    /// backoff ladder (250ms→4s) BEFORE the park — that ladder exists
+    /// there to race a specific `WsDispatcher.awaitSendReady` primitive
+    /// this iOS WS client doesn't expose the same way; `ws
+    /// .ensureAuthenticated(timeoutSec:)` already IS a bounded,
+    /// event-driven "wait for ready" (not a blind sleep), so folding
+    /// straight into the park after one 5s attempt preserves the
+    /// INVARIANT (send now if possible, otherwise park under the 45s/60s
+    /// budget and resend the instant the socket recovers) without a
+    /// second, redundant backoff layer on top of it.
+    ///
+    /// `QAudionWebRtcCallController.restartIce` calls this exactly once
+    /// per restart attempt (its own `iceRestartDebounceMs` prevents
+    /// hammering); the recovery watchdog re-invokes `restartIce` on its own
+    /// backed-off settle-window cadence if ICE is still bad afterwards —
+    /// that outer loop is where Android's repeated-attempt behavior lives
+    /// on this platform, not inside a single send call.
+    ///
+    /// No `sendCallOfferWithId`/`scheduleSetupRetransmit` reuse — see the
+    /// protocol kdoc: that ladder is a no-op once the call has
+    /// demonstrably progressed past setup, which every ICE-restart call
+    /// always has by definition.
+    public func sendIceRestartOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String]
+    ) async -> Bool {
+        guard let cid = activeCallIdOrNil() else {
+            print("[BCryptoCalling] sendIceRestartOffer DROPPED — no active call_id bound")
+            return false
+        }
+        var data: [String: Any] = [
+            "recipient_id": recipientId,
+            "call_id": cid,
+            "sdp": sdp,
+            // W-RESTARTOFFERPARK — mirrors Android's restart-offer envelope
+            // verbatim: `call_type` stays "audio" even on a video call. The
+            // restart's actual video-negotiation outcome is carried
+            // entirely by the SDP body (the existing m=video section is
+            // renegotiated in place, unaffected by this top-level field) —
+            // `call_type` only matters for the FIRST offer of a call; a
+            // restart offer does not re-establish it.
+            "call_type": "audio",
+        ]
+        if !capabilities.isEmpty { data["capabilities"] = capabilities }
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if ready {
+            ws.send(type: "call_offer", data: data)
+            return true
+        }
+        // Best-effort immediate attempt anyway (same reasoning as
+        // deliverHangup: `send` kicks its own reconnect for control
+        // envelopes, and the readiness probe can be wrong).
+        ws.send(type: "call_offer", data: data)
+        print("[BCryptoCalling] restart offer park armed call_id=\(cid.prefix(8))… (WS not ready)")
+        let wsRef = ws
+        Task.detached(priority: .utility) {
+            let late = await wsRef.ensureAuthenticated(timeoutSec: 40)
+            guard late else {
+                print("[BCryptoCalling] restart offer park expired call_id=\(cid.prefix(8))…")
+                return
+            }
+            wsRef.send(type: "call_offer", data: data)
+            print("[BCryptoCalling] restart offer park delivered call_id=\(cid.prefix(8))…")
+        }
+        return false
+    }
+
     // MARK: - Pre-negotiation (Android/Desktop interop)
 
     /// Acknowledge to the caller that this device received the call_offer and is

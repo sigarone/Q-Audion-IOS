@@ -439,10 +439,29 @@ public final class QAudionPeerConnection: NSObject {
     /// Add a local video track from the supplied capturer. Caller is
     /// responsible for starting the capturer; this method just plumbs the
     /// track into the peer connection.
+    ///
+    /// - Parameter isScreencast: W-SCREENPROFILE (2026-08-25) — pass `true`
+    ///   when the track will carry screen-share content (ReplayKit frames)
+    ///   rather than camera frames. Selects `factory.videoSource(forScreenCast:)`
+    ///   instead of the plain `factory.videoSource()` — verified against
+    ///   webrtc-sdk `m144_release`'s `sdk/objc/api/peerconnection/
+    ///   RTCPeerConnectionFactory.h` (same pinned branch this app's WebRTC
+    ///   binaryTarget builds from, see `Package.swift`), which declares
+    ///   `- (RTCVideoSource *)videoSourceForScreenCast:(BOOL)forScreenCast;`
+    ///   alongside the plain `videoSource`. Marking the source as screencast
+    ///   feeds libwebrtc's own content-type heuristics (`VideoAdapter` /
+    ///   send-stream degradation-preference selection) that this
+    ///   camera-oriented default was silently missing for every screen
+    ///   share — see `setVideoDegradationPreference` below for the
+    ///   explicit sender-level override layered on top for the case where
+    ///   a video track already exists (this parameter only affects a
+    ///   FRESH source; the `localVideoTrack == nil` guard above means an
+    ///   in-progress camera call that then starts a screen share reuses
+    ///   the already-created, non-screencast source instead).
     @discardableResult
-    public func addLocalVideoTrack(capturer: RTCVideoCapturer? = nil) -> RTCVideoSource? {
+    public func addLocalVideoTrack(capturer: RTCVideoCapturer? = nil, isScreencast: Bool = false) -> RTCVideoSource? {
         guard let pc = peerConnection, localVideoTrack == nil else { return nil }
-        let source = factory.videoSource()
+        let source = factory.videoSource(forScreenCast: isScreencast)
         let track = factory.videoTrack(with: source, trackId: videoTrackId)
         track.isEnabled = true
         // W-DUPETRANSCEIVER (2026-07-28) — createOffer() pre-allocates a
@@ -507,6 +526,7 @@ public final class QAudionPeerConnection: NSObject {
             if let capturer = capturer {
                 capturer.delegate = source
             }
+            if isScreencast { setVideoDegradationPreference(.maintainResolution) }
             print("[WebRTC] local VIDEO track bound to EXISTING transceiver mid=\(existing.mid) (W-DUPETRANSCEIVER)")
             return source
         }
@@ -520,10 +540,40 @@ public final class QAudionPeerConnection: NSObject {
             // Hook the capturer's frames to the source.
             capturer.delegate = source
         }
+        if isScreencast { setVideoDegradationPreference(.maintainResolution) }
         // W466 — confirm the local camera track was plumbed into the
         // peer connection.
         print("[WebRTC] local VIDEO track added to peer connection (sender=\(videoSender != nil))")
         return source
+    }
+
+    /// W-SCREENPROFILE (2026-08-25) — explicit override for WebRTC's
+    /// bandwidth-adaptation degradation strategy on the local video sender.
+    /// `nil` restores the SDK's implementation default (camera video:
+    /// smooth motion favored over resolution). `.maintainResolution` keeps
+    /// frame legibility during a screen share instead of letting the
+    /// encoder shrink resolution first under pressure — the opposite of
+    /// what legible shared text needs. Callable independently of
+    /// `addLocalVideoTrack`'s `isScreencast` flag so a track created BEFORE
+    /// screen share started (an already-live camera call that then shares
+    /// its screen, where the source-level flag above can no longer apply —
+    /// see that method's kdoc) still gets the override.
+    ///
+    /// `sender.parameters` get/mutate/set-back — same core WebRTC ObjC SDK
+    /// pattern `QAudionWebRtcCallController.applyVideoSenderMaxBitrate`
+    /// already uses for `encodings[0].maxBitrateBps`. Verified against
+    /// webrtc-sdk `m144_release`'s `RTCRtpParameters.h`: `degradationPreference`
+    /// is `NSNumber * _Nullable` boxing the `RTCDegradationPreference`
+    /// NS_ENUM raw value (there is no native enum-typed property to assign
+    /// directly). No-op when there is no video sender yet.
+    @discardableResult
+    public func setVideoDegradationPreference(_ preference: RTCDegradationPreference?) -> Bool {
+        guard let sender = videoSender else { return false }
+        let params = sender.parameters
+        params.degradationPreference = preference.map { NSNumber(value: $0.rawValue) }
+        sender.parameters = params
+        print("[WebRTC] W-SCREENPROFILE: video sender degradationPreference=\(preference.map { String($0.rawValue) } ?? "default")")
+        return true
     }
 
     // MARK: - Native video FrameCryptor (insertable streams)
@@ -721,6 +771,17 @@ public final class QAudionPeerConnection: NSObject {
         print("[WebRTC] local VIDEO track removed (upgrade rollback)")
     }
 
+    /// W-OFFERGLARE / W-SILENTPATHDEATH (2026-08-25) — read-only mirror of
+    /// the underlying `RTCPeerConnection.signalingState`. `nil` when no PC
+    /// exists yet (mirrors every other `pc?.` accessor in this class).
+    /// Callers that need to branch on the state (restart-offer glare
+    /// detection) use `RestartIceDecisions.LocalSignalingState`, not this
+    /// raw WebRTC enum, so the branch logic stays testable without the
+    /// WebRTC binary target.
+    public var signalingState: RTCSignalingState? {
+        peerConnection?.signalingState
+    }
+
     /// W536 decline-rollback — JSEP rollback of a pending local offer so
     /// the PC returns to `stable`. After a declined/timed-out upgrade the
     /// PC was parked in `have-local-offer`; the peer's NEXT upgrade offer
@@ -729,6 +790,11 @@ public final class QAudionPeerConnection: NSObject {
     /// its explicit-rollback fix), which auto-sent accepted=false — one
     /// decline killed upgrades in BOTH directions. No-op unless
     /// signalingState == haveLocalOffer.
+    ///
+    /// W-OFFERGLARE reuses this SAME primitive for the restart-offer glare
+    /// rollback (`QAudionWebRtcCallController.applyRemoteRestartOffer`) —
+    /// it is a raw JSEP rollback with no `videoUpgradeInProgress` gate, so
+    /// it is safe to call from a non-video-upgrade context too.
     public func rollbackLocalOffer(completion: @escaping (Error?) -> Void) {
         guard let pc = peerConnection, pc.signalingState == .haveLocalOffer else {
             completion(nil)
@@ -747,7 +813,22 @@ public final class QAudionPeerConnection: NSObject {
 
     // MARK: - Offer / Answer
 
+    /// - Parameter iceRestart: W-SILENTPATHDEATH (2026-08-25) — when `true`,
+    ///   adds the standard WebRTC `"IceRestart": "true"` mandatory
+    ///   constraint so the resulting offer carries FRESH local ICE
+    ///   ufrag/pwd, forcing a full local re-gather. This is the SAME
+    ///   constraint-key mechanism Android's `createOffer(pc, iceRestart =
+    ///   true)` uses (`MediaConstraints.KeyValuePair("IceRestart",
+    ///   "true")`, `PeerConnectionHolder.kt`) — "IceRestart" is a
+    ///   core-libwebrtc constraint name shared by every SDK binding, not an
+    ///   ObjC/Swift-specific API, so this is a verified 1:1 wire-level
+    ///   match rather than a guessed API surface (no toolchain available
+    ///   here to grep-verify a `restartIce()` method symbol on
+    ///   `RTCPeerConnection` directly — this constraint-based path sidesteps
+    ///   that entirely and has been stable across every WebRTC ObjC binding
+    ///   version).
     public func createOffer(audioOnly: Bool = true,
+                            iceRestart: Bool = false,
                             completion: @escaping (Result<String, Error>) -> Void) {
         guard let pc = peerConnection else {
             completion(.failure(WebRTCError.notInitialized))
@@ -795,10 +876,13 @@ public final class QAudionPeerConnection: NSObject {
             print("[WebRTC] pre-allocated sendrecv video transceiver on audio-only offer (BUG2 fix)")
         }
 
-        let mandatory: [String: String] = [
+        var mandatory: [String: String] = [
             "OfferToReceiveAudio": "true",
             "OfferToReceiveVideo": "true"
         ]
+        if iceRestart {
+            mandatory["IceRestart"] = "true"
+        }
         let constraints = RTCMediaConstraints(mandatoryConstraints: mandatory, optionalConstraints: nil)
         pc.offer(for: constraints) { [weak self] sdp, err in
             if let err = err {
@@ -807,7 +891,7 @@ public final class QAudionPeerConnection: NSObject {
             guard let sdp = sdp else {
                 completion(.failure(WebRTCError.sdpFailed("offer returned nil"))); return
             }
-            logH265FmtpLines(sdp.sdp, tag: "LOCAL_OFFER")
+            logH265FmtpLines(sdp.sdp, tag: iceRestart ? "LOCAL_OFFER_ICE_RESTART" : "LOCAL_OFFER")
             self?.peerConnection?.setLocalDescription(sdp, completionHandler: { setErr in
                 if let setErr = setErr {
                     completion(.failure(setErr))

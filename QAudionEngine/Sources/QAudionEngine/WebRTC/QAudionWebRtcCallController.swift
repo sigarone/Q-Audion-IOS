@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Network
 #if canImport(WebRTC)
 import WebRTC
 #if os(iOS)
@@ -548,11 +549,108 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Set BEFORE `startOutgoingCall` / `acceptIncomingCall`.
     public var useExternalVideoSource: Bool = false
 
+    /// W-SCREENPROFILE (2026-08-25) — true while the local video track
+    /// carries screen-share content (ReplayKit) rather than camera frames.
+    /// AppState sets this BEFORE `upgradeToVideo()` in `startScreenShare()`
+    /// (mirroring how it already sets `useExternalVideoSource` there) so a
+    /// freshly-created video source is flagged `isScreencast` at
+    /// `QAudionPeerConnection.addLocalVideoTrack` — see that method's kdoc.
+    /// The `didSet` below ALSO applies (or clears) the sender-level
+    /// `degradationPreference` override directly, independent of whether a
+    /// fresh source was created this call: it is the only fix that reaches
+    /// the case where a camera video track already existed (an active
+    /// video call that then shares its screen) and
+    /// `addLocalVideoTrack`'s `localVideoTrack == nil` guard makes the
+    /// `isScreencast` source flag a no-op for that reused source.
+    public var isScreenSharing: Bool = false {
+        didSet {
+            guard isScreenSharing != oldValue else { return }
+            peerConnection?.setVideoDegradationPreference(isScreenSharing ? .maintainResolution : nil)
+        }
+    }
+
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
     private var peerConnection: QAudionPeerConnection?
     private var wssTurnBridge: WssTurnBridge?
     private var recipientId: String?
+
+    // MARK: - W-SILENTPATHDEATH / W-OFFERGLARE / W-RESTARTOFFERPARK
+    // (2026-08-25) — ICE-restart recovery machine. Parity plan Fase E3,
+    // ported from Android's `PeerConnectionHolder.restartIce` /
+    // `.handleRemoteOffer` + `CallController.notifyNetworkChanged` /
+    // `.iceFailedRecoveryJob` (qaudion-android-new). See
+    // `RestartIceDecisions` for the pure decision logic these methods
+    // drive.
+
+    /// The ORIGINAL role of this call, fixed for its whole lifetime —
+    /// `true` set by `startOutgoingCall`, `false` by `acceptIncomingCall`.
+    /// This is iOS's equivalent of Android's `activeAsInitiator`: the
+    /// restart-offer glare tiebreak in `applyRemoteRestartOffer` is keyed
+    /// to this, never to the mutual-dial call-id comparison `GlareDecisions`
+    /// uses (that mechanism doesn't apply to a same-call-id restart race).
+    private(set) var isInitiator: Bool = false
+
+    /// W-SILENTPATHDEATH — call-scoped path monitor. Deliberately owned by
+    /// the controller (not the shared `BCryptoWebSocketClient` one, which
+    /// only ever retunes WS ping cadence — see the item's kdoc in the
+    /// parity plan) so the call layer gets its OWN OS network-change
+    /// signal, independent of and un-coupled from the WS client's internal
+    /// reconnect/debounce policy. Started in `startOutgoingCall`/
+    /// `acceptIncomingCall`, stopped in `closeSynchronously()`.
+    private var restartPathMonitor: NWPathMonitor?
+    private let restartPathMonitorQueue = DispatchQueue(label: "qaudion.webrtc.restart-path-monitor")
+
+    /// W-SILENTPATHDEATH — timestamp of the last EXTERNAL (OS-driven)
+    /// network-change signal, excluding this controller's own recovery
+    /// watchdog re-entrant calls. `nil` (never seen one this call) behaves
+    /// like Android's zero-initialized `lastExternalNetworkChangeAtMs`
+    /// default — see `RestartIceDecisions.selfRepairWindowMs`.
+    private var lastExternalNetworkChangeAt: Date?
+
+    /// Debounce guard mirroring Android's `lastIceRestartAtMs` +
+    /// `ICE_RESTART_DEBOUNCE_MS` — a flapping interface must not spam
+    /// fresh CallOffer frames.
+    private var lastIceRestartAt: Date?
+
+    /// The recovery watchdog: armed the moment ICE first enters a bad
+    /// state, cancelled the moment it genuinely recovers (`.connected`/
+    /// `.completed`) or the call tears down. Mirrors Android's
+    /// `iceFailedRecoveryJob`.
+    private var iceRecoveryWatchdogTask: Task<Void, Never>?
+
+    /// Latest ICE connection state, written once from the single
+    /// `didChangeIceConnectionState` delegate callback — see that
+    /// method's kdoc. Read by the watchdog to re-check "still bad?"
+    /// without touching WebRTC objects from its own Task.
+    private var lastIceConnectionState: RTCIceConnectionState = .new
+
+    /// `true` once ICE has connected at least once THIS call. Gates the
+    /// recovery watchdog to MID-CALL path death (parity plan Fase E3's
+    /// actual target — a handoff after the call is already up) rather
+    /// than also taking over INITIAL connection-failure handling, which
+    /// has its own existing path (the call never reaches `.connected` at
+    /// all, and AppState/CallKit already surface that as a failed call).
+    private var hasEverConnectedIce: Bool = false
+
+    /// The most recently APPLIED remote restart-offer SDP — mirrors
+    /// Android's `lastAppliedRemoteSdp` duplicate guard at the top of
+    /// `handleRemoteOffer`. A retried/duplicated restart-offer resend
+    /// (this controller's own park logic, or the peer's) must not be
+    /// re-applied.
+    private var lastAppliedRemoteRestartSdp: String?
+
+    /// Fired once per restart ATTEMPT (offer creation kicked off, not
+    /// necessarily sent) — AppState uses this to extend the pre-existing
+    /// W-ICEGRACE teardown countdown so a live restart round-trip is not
+    /// preempted by the short self-heal-only grace that timer was tuned
+    /// for. See `AppState.handleIceTermination`'s kdoc for the full
+    /// reasoning: without this, iOS's existing 3s ICE-disconnect grace
+    /// would `endCall()` the call before any restart offer/answer round
+    /// trip (which, across a real handoff, routinely takes several
+    /// seconds) could possibly land — making this entire machine
+    /// decorative in practice.
+    public var onRestartAttemptStarted: (() -> Void)?
     #if os(iOS)
     private var localVideoCapturer: RTCCameraVideoCapturer?
     /// Non-nil when useExternalVideoSource == true. AppState wires
@@ -647,6 +745,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         intentionalShutdown = false      // Bug-C guard — fresh call, clear any prior teardown latch
         state = .outgoingOffering
         self.recipientId = recipientId
+        // W-SILENTPATHDEATH — this device placed the call: the original
+        // initiator, fixed for the rest of the call's life.
+        isInitiator = true
+        armRestartPathMonitor()
 
         let iceServers = await fetchIceServers()
         // Bug-C guard: a hangup/closeSynchronously racing the fetchIceServers()
@@ -787,6 +889,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         intentionalShutdown = false      // Bug-C guard — fresh call, clear any prior teardown latch
         state = .incomingAnswering
         self.recipientId = callerId
+        // W-SILENTPATHDEATH — this device answered: the original
+        // responder, fixed for the rest of the call's life.
+        isInitiator = false
+        armRestartPathMonitor()
 
         let iceServers = await fetchIceServers()
         // Bug-C guard: see startOutgoingCall's identical check.
@@ -1040,7 +1146,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Adding the track BEFORE createOffer is what gets the
         // m=video section into the SDP. RTCPeerConnection's offer
         // generation enumerates current transceivers — order matters.
-        let source: RTCVideoSource? = pc.addLocalVideoTrack()
+        // W-SCREENPROFILE — `isScreenSharing` is set by AppState's
+        // `startScreenShare()` BEFORE this call (mirroring
+        // `useExternalVideoSource` just above it there) so a freshly
+        // created source is flagged screencast; see addLocalVideoTrack's
+        // kdoc for why this alone doesn't cover every case.
+        let source: RTCVideoSource? = pc.addLocalVideoTrack(isScreencast: isScreenSharing)
         guard let videoSource = source else {
             videoUpgradeInProgress = false
             throw ControllerError.videoAddFailed
@@ -1468,6 +1579,32 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // this teardown races a start method that hasn't assigned
         // `peerConnection` yet (the exact gap the early-return used to miss).
         intentionalShutdown = true
+        // W-SILENTPATHDEATH — stop the call-scoped path monitor and the
+        // recovery watchdog/park unconditionally, even on the early-return
+        // below: `armRestartPathMonitor()` can have started them during a
+        // `startOutgoingCall`/`acceptIncomingCall` that then failed before
+        // `peerConnection` was ever assigned (Bug-C guard race), same class
+        // of leak this early-return already exists to close for other
+        // per-call resources.
+        restartPathMonitor?.cancel()
+        restartPathMonitor = nil
+        iceRecoveryWatchdogTask?.cancel()
+        iceRecoveryWatchdogTask = nil
+        // NOTE: `sendIceRestartOffer`'s own W-RESTARTOFFERPARK resend
+        // (BCryptoCallingApiImpl) is intentionally NOT cancelled here — it
+        // is a detached, fire-and-forget Task scoped to the CallingApi
+        // layer, not this controller. If it fires after this call already
+        // ended, the envelope carries a call_id the server no longer
+        // tracks; the server's W-STALEOFFER path (`recentCallEndings`)
+        // bounces a `call_hangup` back at the sender, which this app's
+        // existing idempotent hangup handler absorbs as a no-op — same
+        // safety argument `deliverHangup`'s identically-shaped park
+        // already relies on for a hangup landing after the call is gone.
+        lastExternalNetworkChangeAt = nil
+        lastIceRestartAt = nil
+        lastAppliedRemoteRestartSdp = nil
+        lastIceConnectionState = .new
+        hasEverConnectedIce = false
         guard peerConnection != nil else {
             state = .disconnected
             return
@@ -1543,6 +1680,317 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard let r = rid else { return }
         Task.detached(priority: .userInitiated) {
             try? await api.sendHangup(recipientId: r)
+        }
+    }
+
+    // MARK: - W-SILENTPATHDEATH — ICE-restart recovery machine
+    //
+    // Parity plan Fase E3 (docs/interop/2026-08-25-cross-platform-parity-
+    // plan.md), ported from Android's real, shipped implementation:
+    // `PeerConnectionHolder.restartIce`/`.handleRemoteOffer` +
+    // `CallController.notifyNetworkChanged`/`.iceFailedRecoveryJob`
+    // (qaudion-android-new, graph-verified against
+    // feature/feature-call/.../data/webrtc/PeerConnectionHolder.kt and
+    // .../domain/CallController.kt). See `RestartIceDecisions` for the
+    // pure decision logic (self-repair window sizing, glare verdicts) —
+    // this section is the imperative wiring around it.
+
+    /// Start the call-scoped OS network-change signal. Idempotent — a
+    /// second call (e.g. a defensive re-invocation) is a no-op.
+    private func armRestartPathMonitor() {
+        guard restartPathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
+            // ANY path callback is an external, OS-driven network signal
+            // (interface up/down, transport switch). Mirrors Android's
+            // `NetworkChangeReactor` -> `CallController
+            // .notifyNetworkChanged`: this does NOT itself trigger a
+            // restart — it only timestamps the signal so the recovery
+            // watchdog below can size its self-repair window
+            // (W-SILENTPATHDEATH: a bad ICE state shortly after a real
+            // OS event gets the FULL self-repair window because fresh
+            // candidates are probably already arriving; a bad ICE state
+            // with NO such event is the silent-path-death case this item
+            // is named for — same-SSID AP roam, carrier NAT rebind — and
+            // gets a SHORT window because nothing is coming). The
+            // watchdog itself reacts to the PeerConnection's OWN ICE
+            // state (`didChangeIceConnectionState`), which fires
+            // independent of any OS event at all — that native
+            // consent-freshness/STUN-check detection, not this monitor,
+            // is what covers the silent case.
+            self?.lastExternalNetworkChangeAt = Date()
+        }
+        monitor.start(queue: restartPathMonitorQueue)
+        restartPathMonitor = monitor
+    }
+
+    private func isIceStateBad(_ s: RTCIceConnectionState) -> Bool {
+        s == .failed || s == .disconnected
+    }
+
+    /// W-SILENTPATHDEATH — cancel the recovery watchdog. Called on genuine
+    /// ICE recovery (`.connected`/`.completed`) and on `.closed`/teardown.
+    private func disarmIceRecoveryWatchdog() {
+        iceRecoveryWatchdogTask?.cancel()
+        iceRecoveryWatchdogTask = nil
+    }
+
+    /// W-SILENTPATHDEATH — arm the recovery watchdog if ICE just went bad
+    /// and nothing is already running. Mirrors Android's
+    /// `iceFailedRecoveryJob`: size a self-repair window (short if no
+    /// recent OS network event — silent path death — long otherwise),
+    /// wait it out, and if ICE is STILL bad afterwards escalate to
+    /// `restartIce`, retrying on a backed-off settle-window cadence for as
+    /// long as ICE stays bad. Cooperative cancellation (Task.sleep
+    /// throwing on `.cancel()`) is what makes this event-driven rather
+    /// than polling: `disarmIceRecoveryWatchdog` cancels this task the
+    /// INSTANT `didChangeIceConnectionState` reports recovery, so a
+    /// self-heal that lands mid-window is not waited out.
+    private func armIceRecoveryWatchdogIfNeeded() {
+        guard hasEverConnectedIce else { return }
+        guard iceRecoveryWatchdogTask == nil else { return }
+        let elapsedMs: Int64? = lastExternalNetworkChangeAt.map {
+            Int64(Date().timeIntervalSince($0) * 1000)
+        }
+        let repairWindowMs = RestartIceDecisions.selfRepairWindowMs(msSinceLastExternalNetworkChange: elapsedMs)
+        let silentPathDeath = (elapsedMs == nil) || (elapsedMs! > RestartIceDecisions.silentPathDeathLookbackMs)
+        // Numeric-safe (this repo's redactor rule): no free-text word run.
+        log?("ice_recovery armed=1 silent=\(silentPathDeath ? 1 : 0) window_ms=\(repairWindowMs)")
+        iceRecoveryWatchdogTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(repairWindowMs) * 1_000_000)
+            guard !Task.isCancelled else { return }
+            guard self.isIceStateBad(self.lastIceConnectionState) else {
+                self.log?("ice_recovery self_healed=1")
+                self.iceRecoveryWatchdogTask = nil
+                return
+            }
+            self.log?("ice_recovery escalate=1")
+            var settleMs = RestartIceDecisions.recoverySettleInitialMs
+            while !Task.isCancelled && self.isIceStateBad(self.lastIceConnectionState) {
+                await self.restartIce(reason: "ice-failed-recovery-watchdog")
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(nanoseconds: UInt64(settleMs) * 1_000_000)
+                guard !Task.isCancelled else { return }
+                if !self.isIceStateBad(self.lastIceConnectionState) { break }
+                settleMs = min(settleMs * 2, RestartIceDecisions.recoverySettleMaxMs)
+            }
+            self.iceRecoveryWatchdogTask = nil
+        }
+    }
+
+    /// Trigger an ICE restart. Only the ORIGINAL call initiator ships a
+    /// fresh offer — mirrors Android's `restartIce`: "if both sides offer
+    /// at once we hit SDP glare". The responder side has no ACTION here:
+    /// Android proactively calls the native `pc.restartIce()` to prime
+    /// local candidate re-gathering slightly before the initiator's
+    /// restart offer even lands; that specific call was deliberately NOT
+    /// ported (see the responder-branch comment below for why) — the
+    /// CORRECTNESS guarantee (fresh local ICE credentials + re-gather on
+    /// this side too) is unaffected: applying the initiator's restart
+    /// offer (which carries fresh remote ice-ufrag/pwd) via
+    /// `setRemoteOffer` + `createAnswer` is a JSEP-MANDATED trigger for
+    /// the LOCAL ICE agent to restart and re-gather regardless of any
+    /// proactive priming; only the head start (candidates already
+    /// gathering the moment the offer arrives, instead of starting then)
+    /// is not reproduced.
+    ///
+    /// Debounced by `RestartIceDecisions.iceRestartDebounceMs` — a
+    /// flapping interface must not spam fresh CallOffer frames.
+    public func restartIce(reason: String) async {
+        guard peerConnection != nil, !intentionalShutdown else { return }
+        guard let rid = recipientId else { return }
+        guard isInitiator else {
+            // NOT PORTED (documented, not silently skipped — see the kdoc
+            // above): Android's `pc.restartIce()` bare call on the
+            // responder side. No toolchain is available in this repo to
+            // grep-verify an `RTCPeerConnection.restartIce()` method
+            // symbol on the exact custom webrtc-sdk M144 binary this app
+            // links (Windows dev box, no vendored headers, no cached
+            // xcframework — confirmed absent by search). Calling an
+            // unverified native API surface risked shipping code that
+            // fails to compile/link; the constraint-string mechanism used
+            // for the INITIATOR's offer below ("IceRestart":"true") is a
+            // core-libwebrtc constraint name shared by every binding and
+            // needed no such verification.
+            log?("restart_ice role=responder noop=1 reason=\(reason)")
+            return
+        }
+        let now = Date()
+        if let last = lastIceRestartAt,
+           now.timeIntervalSince(last) * 1000 < Double(RestartIceDecisions.iceRestartDebounceMs) {
+            log?("restart_ice debounced=1 reason=\(reason)")
+            return
+        }
+        lastIceRestartAt = now
+        onRestartAttemptStarted?()
+        guard let pc = peerConnection else { return }
+        // `audioOnly: true` here does NOT mean "drop video on restart" —
+        // it only gates `createOffer`'s BUG2 pre-allocation of an EMPTY
+        // sendrecv video transceiver when none exists yet. By the time a
+        // restart can happen the call is already connected, so this PC's
+        // transceivers (video included, if the call has video) are
+        // whatever the ORIGINAL negotiation already established; that
+        // existing state, not this flag, is what `createOffer` renegotiates
+        // around — exactly the same as every other renegotiation path in
+        // this class (e.g. `upgradeToVideo`) reusing the same `pc`. Android
+        // mirrors this: its restart `createOffer(pc, iceRestart=true)` has
+        // no audio/video distinction at all.
+        let offerSdp: String? = await withCheckedContinuation { cont in
+            pc.createOffer(audioOnly: true, iceRestart: true) { result in
+                switch result {
+                case .success(let sdp): cont.resume(returning: sdp)
+                case .failure: cont.resume(returning: nil)
+                }
+            }
+        }
+        guard let sdp = offerSdp else {
+            log?("restart_ice create_offer_failed=1 reason=\(reason)")
+            return
+        }
+        log?("restart_ice offer_created=1 reason=\(reason)")
+        // W-RESTARTOFFERPARK — `sendIceRestartOffer` owns the send+park
+        // budget end to end (BCryptoCallingApiImpl, up to 45s under the
+        // server's 60s disconnect-grace ceiling); this call does not block
+        // on the park itself finishing beyond that method's own 5s
+        // fast-path attempt.
+        let sent = await callingApi.sendIceRestartOffer(
+            recipientId: rid,
+            sdp: sdp,
+            capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps())
+        )
+        log?("restart_ice sent=\(sent ? 1 : 0) reason=\(reason)")
+    }
+
+    /// W-OFFERGLARE — apply an incoming restart-offer `call_offer` for
+    /// THIS already-connected call (same call_id, a NEW SDP body — the
+    /// initiator's `restartIce` fresh offer). `AppState`'s `call_incoming`
+    /// handler routes here INSTEAD OF `handleIncomingWebRtcOffer`'s
+    /// "always build a fresh controller" path, which would discard this
+    /// live call's entire PQC/audio/video state.
+    ///
+    /// SIGNALING-LOCK REENTRANCY CHECK (2026-08-25) — Android's
+    /// `handleRemoteOffer` paid for this exact lesson live: the glare
+    /// rollback is done INLINE, never via a helper that re-acquires
+    /// `signalingMutex`, because Kotlin's coroutine `Mutex` is NOT
+    /// reentrant and a nested `withLock` there deadlocks the call forever
+    /// (see that method's own kdoc, `PeerConnectionHolder.kt`). Before
+    /// writing the rollback call below, `QAudionPeerConnection.swift` was
+    /// read in full for iOS's own analog of that lock. FINDING: this class
+    /// holds NO app-level serializing lock/actor around its SDP operation
+    /// sequence AT ALL — `createOffer`/`setRemoteOffer`/`createAnswer`/
+    /// `rollbackLocalOffer` are thin completion-handler wrappers directly
+    /// over `RTCPeerConnection`'s OWN native signaling-thread
+    /// serialization, with no NSLock/DispatchQueue/actor wrapping the
+    /// CALL CHAIN of "read state, decide, act" the way Android's
+    /// `signalingMutex.withLock { ... }` wraps `handleRemoteOffer`'s
+    /// entire body. The NSLock-guarded flags this file DOES use for the
+    /// analogous class of race (`answerLock`/`hasAppliedRemoteAnswer`,
+    /// `shutdownLock`/`intentionalShutdown`) are, by this codebase's own
+    /// established convention, held ONLY for a synchronous test-and-set
+    /// and released BEFORE any `await` — never spanning an SDP operation —
+    /// which structurally rules out the reentrancy bug class Android hit,
+    /// rather than requiring an "inline vs. helper" workaround to dodge
+    /// it. This method follows that same discipline: it calls
+    /// `pc.rollbackLocalOffer` / `pc.setRemoteOffer` / `pc.createAnswer`
+    /// DIRECTLY, introduces no new lock of its own, and therefore cannot
+    /// re-enter anything already held by its caller (the plain
+    /// `DispatchQueue.main.async`-hopped WS handler closure in AppState —
+    /// not a lock, just serial main-actor dispatch, which this `async`
+    /// method suspends across normally, exactly like every other
+    /// controller method already does).
+    public func applyRemoteRestartOffer(sdp: String) async {
+        guard let pc = peerConnection, let rid = recipientId else {
+            log?("restart_offer_apply dropped=1 reason=noPeerConnection")
+            return
+        }
+        guard sdp != lastAppliedRemoteRestartSdp else {
+            log?("restart_offer_apply dropped=1 reason=duplicate")
+            return
+        }
+        let localState: RestartIceDecisions.LocalSignalingState
+        switch pc.signalingState {
+        case .some(.stable):         localState = .stable
+        case .some(.haveLocalOffer): localState = .haveLocalOffer
+        default:                     localState = .other
+        }
+        switch RestartIceDecisions.resolveIncomingOffer(signalingState: localState, isInitiator: isInitiator) {
+        case .initiatorIgnoreKeepPendingOffer:
+            log?("restart_offer_apply glare=1 verdict=initiator_wins")
+        case .ignoreUnexpectedState:
+            log?("restart_offer_apply dropped=1 reason=unexpectedState")
+        case .responderRollbackThenApply:
+            log?("restart_offer_apply glare=1 verdict=responder_rollback")
+            // W-SILENTPATHDEATH — real SDP work is about to happen on THIS
+            // side too (rollback + setRemoteOffer + createAnswer, a real
+            // round trip): extend the base W-ICEGRACE grace here as well,
+            // mirroring `restartIce`'s own call on the offering side. Fires
+            // on whichever role actually ends up doing the work — this
+            // branch can be reached by either role (see
+            // `RestartIceDecisions.resolveIncomingOffer`'s kdoc: an
+            // initiator can land here too on a genuine glare loss, though
+            // that never happens for the initiator by construction).
+            onRestartAttemptStarted?()
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                pc.rollbackLocalOffer { _ in cont.resume() }
+            }
+            await applyRestartOfferAndAnswer(pc: pc, sdp: sdp, recipientId: rid)
+        case .applyNormally:
+            onRestartAttemptStarted?()
+            await applyRestartOfferAndAnswer(pc: pc, sdp: sdp, recipientId: rid)
+        }
+    }
+
+    /// Second half of `applyRemoteRestartOffer`: set the (possibly
+    /// post-rollback) remote offer, create the answer, ship it back.
+    /// Extracted so both the glare and non-glare branches above share one
+    /// copy. `hasVideo: true` unconditionally on `createAnswer` mirrors
+    /// this class's OWN `createOffer`'s unconditional
+    /// `"OfferToReceiveVideo": "true"` mandatory constraint (see
+    /// `QAudionPeerConnection.createOffer`) — on a RENEGOTIATION the
+    /// actual negotiated direction is governed by the already-established
+    /// transceivers, not by this legacy constraint, so it is not read as
+    /// "this restart turns video on".
+    private func applyRestartOfferAndAnswer(pc: QAudionPeerConnection, sdp: String, recipientId: String) async {
+        let setOk: Bool = await withCheckedContinuation { cont in
+            pc.setRemoteOffer(sdp: sdp) { err in cont.resume(returning: err == nil) }
+        }
+        guard setOk else {
+            log?("restart_offer_apply set_remote_failed=1")
+            return
+        }
+        lastAppliedRemoteRestartSdp = sdp
+        let answerSdp: String? = await withCheckedContinuation { cont in
+            pc.createAnswer(hasVideo: true) { result in
+                switch result {
+                case .success(let s): cont.resume(returning: s)
+                case .failure: cont.resume(returning: nil)
+                }
+            }
+        }
+        guard let answer = answerSdp else {
+            log?("restart_offer_apply create_answer_failed=1")
+            return
+        }
+        do {
+            // W-SETUPRETRY's ladder is a no-op post-connection (see
+            // `sendIceRestartOffer`'s kdoc for the same reasoning applied
+            // to the offer side) — sent once, best-effort. The robustness
+            // net here is the OFFERER's own recovery watchdog: if this
+            // answer is lost, ICE stays bad on the initiator's side and
+            // its watchdog re-fires `restartIce` on its backed-off settle
+            // cadence, exactly mirroring how Android's watchdog loop (not
+            // a dedicated answer-retry) is what actually makes a lost
+            // restart-answer self-heal there too.
+            try await callingApi.sendCallAnswer(
+                recipientId: recipientId,
+                sdp: answer,
+                capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps()),
+                hasVideo: true
+            )
+            log?("restart_offer_apply answered=1")
+        } catch {
+            log?("restart_offer_apply send_answer_failed=1")
         }
     }
 
@@ -2074,6 +2522,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     public func peerConnection(_ pc: QAudionPeerConnection,
                                didChangeIceConnectionState s: RTCIceConnectionState) {
+        // W-SILENTPATHDEATH — snapshot for the recovery watchdog's
+        // "still bad after the self-repair window?" re-check. Written
+        // here (the single ICE-state delegate callback) so the watchdog
+        // never has to touch WebRTC objects off whatever thread this
+        // fires on.
+        lastIceConnectionState = s
+        if s == .connected || s == .completed { hasEverConnectedIce = true }
         // W419 — log every ICE state transition. Crucial for diagnosing
         // "audio drops after 30s" bugs: typically ICE goes connected →
         // disconnected → failed when network is unstable, or stays
@@ -2104,11 +2559,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // Start outbound/inbound video RTP telemetry once media can flow.
             startVideoStatsTelemetry()
             resolveAndApplyRouteTier()
-        case .failed:
-            state = .failed("ICE failed")
-        case .disconnected, .closed:
+            // W-SILENTPATHDEATH — ICE genuinely recovered: stand the
+            // recovery watchdog down. Mirrors Android's loop `continue`ing
+            // past `self.first { !isBad(it) }`.
+            disarmIceRecoveryWatchdog()
+        case .failed, .disconnected:
+            if s == .failed { state = .failed("ICE failed") }
+            else { state = .disconnected; stopVideoStatsTelemetry() }
+            // W-SILENTPATHDEATH — arm (or leave running) the recovery
+            // watchdog. `.closed` is deliberately excluded — that is a
+            // terminal, intentional teardown (closeSynchronously already
+            // cancels the watchdog directly), not a recoverable path
+            // death.
+            armIceRecoveryWatchdogIfNeeded()
+        case .closed:
             state = .disconnected
             stopVideoStatsTelemetry()
+            disarmIceRecoveryWatchdog()
         default:
             break
         }

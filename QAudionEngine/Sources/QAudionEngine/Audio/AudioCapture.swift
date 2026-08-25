@@ -777,9 +777,19 @@ public final class AudioCapture {
         public let silenceDrops: Int64
         public let concealed: Int
         public let depth: Int
+        /// W-JBSTRETCH (2026-08-25) — pops satisfied by time-compression
+        /// (`TimeStretch.compress`) instead of a whole-frame drop. High here
+        /// with low `hardDrops` means jitter recovery mostly avoided the
+        /// audible skip the excision tiers cost. In-process only for now,
+        /// same as `silenceDrops` — see the CallService log line's own note
+        /// on why a diagnostic field does not automatically get a wire slot.
+        public let timeStretchFrames: Int64
+        /// W-JBADAPT (2026-08-25) — the adaptive steady-state depth target
+        /// in force when this snapshot was taken, in ms.
+        public let adaptiveTargetMs: Int
     }
 
-    /// Snapshot of [PlayoutStats]. Cheap (six lock-guarded reads); safe from
+    /// Snapshot of [PlayoutStats]. Cheap (lock-guarded reads); safe from
     /// any thread. Cumulative for the call — the caller reports deltas.
     public var playoutStats: PlayoutStats {
         PlayoutStats(
@@ -790,6 +800,8 @@ public final class AudioCapture {
             silenceDrops: playoutJitter.silenceDrops,
             concealed: playoutConcealed,
             depth: playoutJitter.depth,
+            timeStretchFrames: playoutJitter.timeStretchFrames,
+            adaptiveTargetMs: playoutJitter.adaptiveTargetMs,
         )
     }
 
