@@ -40,6 +40,16 @@ public enum WireRelayFrameCodec {
 
     public static let muxAudio: UInt8 = 0x01
     public static let muxVideo: UInt8 = 0x02
+    /// W-DCHANGUP (2026-08-25) — control frame mux discriminator. Mirrors
+    /// Android `DefaultFrameRelayTransport.MUX_BYTE_CONTROL` (0x03). A
+    /// control frame is `0x03 || kind || body` — NO nonce/seq/ctLen tail, so
+    /// it must be peeked and consumed BEFORE the audio decode path ever sees
+    /// it (this codec's `decode` would misparse it as legacy untagged audio).
+    public static let muxControl: UInt8 = 0x03
+    /// W-DCHANGUP — control frame kind: peer hangup. Mirrors Android
+    /// `FrameRelayTransport.ControlFrame.KIND_HANGUP` (0x01). Body is the
+    /// UTF-8 hangup reason, at most 255 bytes.
+    public static let controlKindHangup: UInt8 = 0x01
 
     public static let nonceSize = 12
     public static let tagSize = 16
@@ -107,6 +117,41 @@ public enum WireRelayFrameCodec {
         appendUInt16BigEndian(&out, UInt16(truncatingIfNeeded: ctLen))
         out.append(ct)
         return out
+    }
+
+    // MARK: - Control (W-DCHANGUP)
+
+    /// W-DCHANGUP — encode one raw control frame: `muxControl || kind ||
+    /// body`. No explicit length field — the underlying transport
+    /// (DataChannel message, WS relay frame) already preserves message
+    /// boundaries, so the body is simply "everything after the 2-byte
+    /// header". Byte-identical to Android
+    /// `DefaultFrameRelayTransport.sendControlRaw`. `body` is capped at 255
+    /// bytes (a hangup reason string fits comfortably); longer bodies are
+    /// truncated rather than thrown, since this is a best-effort
+    /// notification, never a correctness-load-bearing path.
+    public static func encodeControl(kind: UInt8, body: Data) -> Data {
+        let truncated = body.count > 255 ? body.prefix(255) : body
+        var out = Data(capacity: 2 + truncated.count)
+        out.append(muxControl)
+        out.append(kind)
+        out.append(truncated)
+        return out
+    }
+
+    /// W-DCHANGUP — decode a raw control frame previously built by
+    /// ``encodeControl(kind:body:)``. Caller (the RX path) has already
+    /// peeked `payload.first == muxControl` before calling this. Throws on
+    /// a frame too short to carry the 2-byte header, mirroring Android
+    /// `decodeControl`'s `require(payload.size >= 2)`.
+    public static func decodeControl(_ data: Data) throws -> (kind: UInt8, body: Data) {
+        guard data.count >= 2 else {
+            throw CodecError.truncated(expected: 2, got: data.count)
+        }
+        let base = data.startIndex
+        let kind = data[base + 1]
+        let body = data.count > 2 ? data.subdata(in: (base + 2)..<data.endIndex) : Data()
+        return (kind, body)
     }
 
     // MARK: - Decode

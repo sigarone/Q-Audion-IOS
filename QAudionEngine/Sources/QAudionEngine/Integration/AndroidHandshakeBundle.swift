@@ -310,9 +310,13 @@ public enum AndroidHandshakeEnvelope {
 ///     `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
 ///   - `CAPS:<csv>` — peer capability announce (reserved, not consumed
 ///     by iOS yet — silently dropped).
-///   - `HANGUP:<reason>` — peer hangup piggy-back (reserved, not
-///     consumed by iOS yet — the regular `call_hangup` WS envelope is
-///     authoritative; silently dropped).
+///   - `HANGUP:<reason>` — peer hangup piggy-back. Consumed since
+///     2026-08-25 (W-HANGUPECHO): an id-matched HANGUP runs the same
+///     definitive teardown as the `call_hangup` WS envelope, and is
+///     echoed to the server as `call_hangup {reason:"peer-acknowledged"}`
+///     so its books close. Also EMITTED alongside every outbound
+///     `call_hangup` envelope (hangup-opaque-piggyback — bcrypto-lite in
+///     certain paths drops the envelope silently, the opaque survives).
 ///   - `KCMAC:<payload>` — PSK-mix ship-step-2: reserved for a future
 ///     key-confirmation MAC tied to PSK mixing. Recognised-and-ignored
 ///     for now (logged, then dropped) — no handler logic yet. The point
@@ -357,10 +361,15 @@ public enum CallPiggyBack: Equatable {
     /// `OwnerContinuityAnnounce` byte for byte.
     case ownerContinuity(callId: String, level: String)
 
-    /// `<callId>|HANGUP:<reason>` — secondary hangup signal. The
-    /// authoritative teardown still arrives on the `call_hangup` WS
-    /// envelope; this branch exists so the parser doesn't classify the
-    /// piggy-back as malformed.
+    /// `<callId>|HANGUP:<reason>` — secondary hangup signal. Exists because
+    /// bcrypto-lite in certain paths drops `call_hangup` envelopes silently
+    /// while forwarding opaques — so this is NOT redundancy theatre: it is
+    /// the channel that survives exactly when the envelope does not. The
+    /// receiver treats an id-matched HANGUP as definitive teardown (same
+    /// semantics as the envelope, W-CALLHANGUP-SEMANTICS id gate applied)
+    /// and echoes `call_hangup {reason:"peer-acknowledged"}` to the server
+    /// (W-HANGUPECHO). Byte-for-byte matches Android
+    /// `WsCallSignaller.HANGUP_PAYLOAD_PREFIX` framing.
     case hangup(callId: String, reason: String)
 
     /// `<callId>|EARBUDPDU:<base64>` — opaque earbud-firmware handshake
@@ -500,6 +509,18 @@ public enum CallPiggyBack: Equatable {
     /// `WsCallSignaller.sendVoiceKeyAnnounce`.
     public static func serializeVoiceKey(callId: String, enrolled: Bool) -> String {
         return "\(callId)|VOICE_KEY:\(enrolled ? "1" : "0")"
+    }
+
+    /// Build a wire string for a HANGUP piggy-back — the inverse of the
+    /// `.hangup` parse branch. Byte-for-byte matches Android
+    /// `WsCallSignaller.sendHangup`'s opaque leg
+    /// (`"$callId|HANGUP:$reason"`): plain UTF-8 string, NOT base64 —
+    /// it must ship via `sendOpaqueMessageString`, never via the
+    /// base64-wrapping `sendOpaqueMessage(payload: Data)` overload
+    /// (the pipe would vanish inside the base64 alphabet and every
+    /// receiver would drop the envelope as malformed).
+    public static func serializeHangup(callId: String, reason: String) -> String {
+        return "\(callId)|HANGUP:\(reason)"
     }
 
     /// Build a wire string for a VNACK request — the inverse of the

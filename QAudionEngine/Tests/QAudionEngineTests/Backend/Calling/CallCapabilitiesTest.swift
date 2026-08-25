@@ -94,4 +94,12 @@ final class CallCapabilitiesTest: XCTestCase {
         XCTAssertEqual(CallCapabilities.iceBatchV1, "ice-batch-v1")
         XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.iceBatchV1))
     }
+
+    // W-DCHANGUP (2026-08-25) — RX support shipped with this tag (control-mux
+    // peek → same teardown as call_hangup), so advertising it is honest; the
+    // string must stay byte-identical to Android's `DC_HANGUP_V1`.
+    func test_LOCAL_containsDcHangupV1() {
+        XCTAssertEqual(CallCapabilities.dcHangupV1, "dc-hangup-v1")
+        XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.dcHangupV1))
+    }
 }

@@ -175,6 +175,28 @@ public enum CallCapabilities {
     /// no wire representation at all before this tag).
     public static let iceBatchV1: String = "ice-batch-v1"
 
+    // ── W-DCHANGUP (2026-08-25): in-band hangup control frame ───────────────
+
+    /// In-band hangup control frame v1 (`dc-hangup-v1`). Mirrors Android
+    /// `DC_HANGUP_V1` (`CallCapabilities.kt:307`). Byte-exact string, plain
+    /// ASCII — compared with string equality on every platform, so a rename
+    /// or re-case is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE a control frame on the
+    /// sealed media leg (DataChannel or WS relay — the same leg the
+    /// ``dcMuxV1`` audio envelopes ride) whose first byte is the control mux
+    /// discriminator `0x03`, followed by a 1-byte kind (`0x01` = HANGUP) and
+    /// a UTF-8 reason body of at most 255 bytes. On HANGUP the receiver runs
+    /// the same definitive teardown as a `call_hangup` envelope — the leg
+    /// belongs to exactly one call by construction, so no id travels on the
+    /// wire. TX is best-effort and gated on the PEER having advertised this
+    /// tag (symmetric intersection, enforced by the sender); RX is
+    /// unconditional, exactly like Android's mux-byte peek. It is the third
+    /// hangup channel, additive to the `call_hangup` envelope and the
+    /// `HANGUP:` opaque piggy-back — when the peer's WS is mid-reconnect at
+    /// hangup time, this is the one that arrives.
+    public static let dcHangupV1: String = "dc-hangup-v1"
+
     // ── W-LONGAUDIO (2026-08-10): the negotiated 60 ms / 256-byte profile ──
     //
     // Two tags, byte-exact, identical on Android, iOS, Desktop. They are
@@ -325,7 +347,12 @@ public enum CallCapabilities {
         // in the `call_ice` handler), so advertising is honest; ungated and
         // never stripped, matching Android's registry (the tag is transport
         // plumbing, orthogonal to earbud/sovereign key custody).
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1]
+        // W-DCHANGUP — RX support ships with this tag (control-mux peek in
+        // CallService's inbound frame path routes 0x03/HANGUP into the same
+        // teardown as call_hangup), so advertising is honest; ungated and
+        // never stripped, matching Android's registry (`add(DC_HANGUP_V1)`,
+        // no kill switch — sending is itself best-effort and additive).
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         // W-LONGAUDIO — receive support, then send support. Both gated; both
         // ship absent. See the two kill switches above for why the RECEIVE one

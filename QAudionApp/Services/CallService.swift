@@ -419,7 +419,20 @@ final class CallService: @unchecked Sendable {
     // that makes every subsequent decrypt fail (CryptoKitError error 3).
     // We buffer up to kRxPreBufferCap frames and drain them immediately
     // after callIntegration is set. Cap = 20 ≈ 400 ms at 20 ms/frame.
-    private var rxPreBuffer: [Data] = []
+    //
+    // W-DCHANGUP (2026-08-25) — each entry now carries the `call_id` the
+    // frame's WS envelope named (nil for legacy/DC frames). The stale-session
+    // filter can only compare when an ACTIVE id exists, and pre-bind there is
+    // none — so before this, a frame arriving while idle (e.g. the peer's
+    // in-band HANGUP control frame losing the race against our own teardown)
+    // sat here and was replayed into the NEXT call's drain, where a control
+    // frame would have torn the new call down at bind. The drain now drops
+    // any entry whose stored id provably names another call; a nil stored id
+    // (a peer whose WS envelope doesn't stamp call_id — DC frames DO stamp
+    // the active call_id at receipt, per handleIncomingDataChannelAudio)
+    // replays as before — it cannot be proven foreign, and dropping it would
+    // recreate the ratchet off-by-one this buffer exists to prevent.
+    private var rxPreBuffer: [(frame: Data, callId: String?)] = []
     private static let rxPreBufferCap = 20
 
     // MARK: - W469 — cross-platform audio wire format
@@ -519,6 +532,48 @@ final class CallService: @unchecked Sendable {
     /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
     /// payload is the raw WireRelayFrameCodec envelope (same bytes as the WS path).
     public var sendAudioOverDataChannel: ((Data) -> Bool)?
+    /// W-DCHANGUP (2026-08-25) — an inbound 0x03/HANGUP control frame arrived
+    /// on the sealed media leg (DataChannel or WS relay). Parameter is the
+    /// UTF-8 reason body. The leg belongs to exactly ONE call by
+    /// construction (one transport per call, the stale-call filter already
+    /// ran), so no id travels with it — AppState routes it into the same
+    /// definitive teardown as a `call_hangup` envelope and echoes
+    /// `peer-acknowledged` to the server (W-HANGUPECHO). Invoked on the
+    /// main queue (the RX path already hopped there).
+    public var onInboundControlHangup: ((String) -> Void)?
+    /// W-SETUPRETRY (2026-08-25) — fired EXACTLY ONCE per call, on the first
+    /// successfully decrypted+decoded REAL inbound audio frame (never PLC,
+    /// never concealment — this closure sits behind the AEAD open). Wired by
+    /// AppState to `BCryptoCallingApiImpl.noteCallSetupProgressed(nil)`:
+    /// media from the peer is proof the setup envelopes got through, which
+    /// stops the bounded answer/accepted retransmit ladders on the callee
+    /// side (the side that has no inbound signaling ack to latch on).
+    /// Invoked on the main queue. Re-armed by `teardownAudioStack()` (which
+    /// `endCall()` always runs).
+    public var onFirstRealDecode: (() -> Void)?
+    /// W-SETUPRETRY — one-shot latch for `onFirstRealDecode`, covering both the
+    /// live RX path and the pre-bind drain replay. Reset in
+    /// `teardownAudioStack()`.
+    private var firedFirstRealDecode = false
+    /// W-MEDIADEAD (2026-08-25) — wall-clock millis of the last REAL decoded
+    /// inbound audio frame (successful AEAD open + Opus decode — never PLC,
+    /// never concealment: the write sits behind the decode `try`). Mirrors
+    /// Android `MediaPathDiag.lastRealRxFrameAtMs`. 0 = never this call.
+    /// Written and read on the main queue only; reset in
+    /// `teardownAudioStack()`.
+    private var lastRealInboundDecodeAtMs: Int64 = 0
+    /// W-MEDIADEAD — the 90 s inbound-audio liveness backstop fired: this
+    /// Connected call has decoded ZERO real inbound audio for the whole
+    /// window, every hangup channel the peer had has already missed, and the
+    /// call is a phantom. Parameter = the measured silent span in ms (for the
+    /// log line). Wired by AppState to: notify the peer best-effort
+    /// (`sendControlHangup` + reason-bearing `call_hangup` "media-lost"),
+    /// then run the local teardown. Invoked on the main queue.
+    public var onMediaDead: ((Int64) -> Void)?
+    /// W-MEDIADEAD — the poll task; non-nil while armed. Armed when the call
+    /// reaches its answered state (both `peerAnswered = true` sites),
+    /// cancelled + cleared in `teardownAudioStack()`.
+    private var mediaDeadWatchdogTask: Task<Void, Never>?
     /// W-DCMUX (2026-08-11) — why the closure above returned `false`, as a
     /// single Int. Wired by AppState; read ONLY when a fallback line is about to
     /// be printed (first occurrence, then every 250th), never per frame.
@@ -1326,6 +1381,7 @@ final class CallService: @unchecked Sendable {
         // answer handler, so the call is answered by definition. Unblock the
         // pre-answer mic gate before the (possibly deferred) engine start.
         peerAnswered = true
+        armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
         // fix): the incoming path never wired `getVoiceAnalysis().onResult`,
@@ -1573,13 +1629,35 @@ final class CallService: @unchecked Sendable {
         rxPreBuffer.removeAll()
         let n: String = frames.count.description
         print("[CallService] RX W481: draining " + n + " pre-buffered frame(s)")
-        for frame in frames {
+        let activeId = getCallId?()
+        for entry in frames {
+            // W-DCHANGUP — a buffered entry whose stored envelope id provably
+            // names ANOTHER call is a leftover from a race against teardown,
+            // not this call's early audio. Replaying it would at best cost a
+            // decrypt error and at worst (a control HANGUP frame) tear the
+            // brand-new call down at bind. Same both-sides-known rule as the
+            // live stale-session filter above: nil on either side replays.
+            if let storedId = entry.callId, let activeId,
+               storedId.caseInsensitiveCompare(activeId) != .orderedSame {
+                rxStaleDropCount &+= 1
+                print("[CallService] RX W481: dropped pre-buffered frame from foreign call "
+                      + Self.short8(storedId) + "… (active " + Self.short8(activeId) + "…)")
+                continue
+            }
+            let frame = entry.frame
             // W574e — these buffered frames arrived pre-bind (pre-handshake),
             // so they are normally unsealed pass-through; unsealRelayFrame
             // returns them unchanged when the sealer isn't installed yet, or
             // strips the seal / drops if it is.
             guard let inner = unsealRelayFrame(frame) else {
                 rxDecryptErrorCount &+= 1
+                continue
+            }
+            // W-DCHANGUP — same control-mux peek as the live RX path: a
+            // control frame buffered pre-bind must not reach the Opus
+            // decoder as garbage on replay.
+            if inner.first == WireRelayFrameCodec.muxControl {
+                consumeInboundControlFrame(inner)
                 continue
             }
             // W-NETVIS — same layer as the live RX path above. These bytes did
@@ -1591,11 +1669,181 @@ final class CallService: @unchecked Sendable {
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 framesDecryptedRx &+= 1
+                noteRealInboundDecode()
                 audioCapture?.playFrame(pcm)  // single-engine: playback lives on the capture engine
             } catch {
                 rxDecryptErrorCount &+= 1
             }
         }
+    }
+
+    /// W-SETUPRETRY + W-MEDIADEAD — record one REAL inbound decode. Called
+    /// from both RX sites (live path + pre-bind drain) immediately after a
+    /// successful AEAD open + Opus decode, never for PLC/concealment. Both
+    /// call sites already run on the main queue.
+    ///
+    /// Two consumers of the same fact:
+    ///   - W-SETUPRETRY: the FIRST real decode fires ``onFirstRealDecode``
+    ///     exactly once per call (one-shot latch) — media from the peer is
+    ///     proof the setup envelopes got through;
+    ///   - W-MEDIADEAD: EVERY real decode refreshes
+    ///     ``lastRealInboundDecodeAtMs`` — the liveness source the 90 s
+    ///     watchdog polls (mirrors Android `MediaPathDiag.lastRealRxFrameAtMs`,
+    ///     written only for really-decoded frames by the same rule).
+    private func noteRealInboundDecode() {
+        lastRealInboundDecodeAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        guard !firedFirstRealDecode else { return }
+        firedFirstRealDecode = true
+        onFirstRealDecode?()
+    }
+
+    /// W-MEDIADEAD (2026-08-25) — arm the per-call inbound-audio liveness
+    /// backstop. Port of Android `CallController.onConnected`'s
+    /// mediaDeadWatchdogJob (same 15 s poll / 90 s threshold, same
+    /// real-decode-only liveness rule, same earbud exemption); on iOS the
+    /// sealed DC/WS-relay path is the ONLY inbound audio (no m=audio track is
+    /// ever built for 1:1 — see the parity plan's C4), so
+    /// ``lastRealInboundDecodeAtMs`` is the single liveness source rather
+    /// than Android's two (inbound-rtp bytes + bridge stamp).
+    ///
+    /// Invariant (testable, per-platform): a Connected call whose inbound
+    /// audio has been COMPLETELY absent for `MediaDeadDecisions.timeoutMs`
+    /// ends itself instead of sitting in a phantom forever. The threshold
+    /// sits ABOVE the server's 60 s disconnect-grace ceiling and the 45 s
+    /// hangup-park budget, so it can only fire after every genuine recovery
+    /// mechanism has already had its full window. The tick decision itself
+    /// is pure (`MediaDeadDecisions.evaluate`) and unit-tested.
+    ///
+    /// Called from both `peerAnswered = true` sites (idempotent — an armed
+    /// watchdog stays); cancelled in `teardownAudioStack()`. Runs on the
+    /// main actor: every field it reads is main-queue state.
+    private func armMediaDeadWatchdog() {
+        guard mediaDeadWatchdogTask == nil else { return }
+        var lastAliveAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        mediaDeadWatchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(MediaDeadDecisions.pollMs) * 1_000_000)
+                if Task.isCancelled { return }
+                guard let self else { return }
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                // Gate — only a genuinely active/encrypted call accumulates
+                // silence (Android gates on CallState.Connected). While the
+                // call is still in setup/ring the baseline is pushed forward,
+                // so the 90 s only ever measures CONNECTED silence.
+                guard self.isCallActive?() == true else {
+                    lastAliveAtMs = now
+                    continue
+                }
+                // Earbud exemption — the phone relays sealed frames it never
+                // decodes on that path, so the decode stamp is legitimately
+                // silent there (same carve-out as Android's isEarbudCall).
+                let peerCaps = self.getPeerCapabilities?(self.getCallId?())
+                if CallCapabilities.peerAdvertisedEarbudRelay(peerCaps) {
+                    lastAliveAtMs = now
+                    continue
+                }
+                switch MediaDeadDecisions.evaluate(
+                    nowMs: now,
+                    lastAliveAtMs: lastAliveAtMs,
+                    lastRealDecodeAtMs: self.lastRealInboundDecodeAtMs
+                ) {
+                case .alive:
+                    lastAliveAtMs = now
+                case .counting:
+                    break
+                case .dead:
+                    let silentMs = now - lastAliveAtMs
+                    print("[CallService] W-MEDIADEAD: no real inbound audio for \(silentMs) ms — ending phantom call")
+                    // Numeric tail per the iOS log-pipeline rule; token stays
+                    // under the shipper's 12-char blob scrub for any real span.
+                    RTLog.error("call", "mediadead ms=" + String(silentMs))
+                    self.mediaDeadWatchdogTask = nil
+                    self.onMediaDead?(silentMs)
+                    return
+                }
+            }
+        }
+    }
+
+    /// W-DCHANGUP (2026-08-25) — decode one inbound control frame (leading
+    /// byte already peeked as `muxControl`) and route by kind. HANGUP hands
+    /// the UTF-8 reason to ``onInboundControlHangup``; any other kind is
+    /// dropped silently (forward-compat). Runs on the main queue (both call
+    /// sites are there).
+    private func consumeInboundControlFrame(_ inner: Data) {
+        guard let (kind, body) = try? WireRelayFrameCodec.decodeControl(inner) else {
+            print("[CallService] RX control frame decode failed (\(inner.count) bytes) — dropped")
+            return
+        }
+        guard kind == WireRelayFrameCodec.controlKindHangup else {
+            print("[CallService] RX control frame unknown kind=\(Int(kind)) — dropped")
+            return
+        }
+        let reason = String(data: body, encoding: .utf8) ?? "peer-dc-hangup"
+        // Numeric-tail + short tokens per the iOS log-pipeline rule (the
+        // shipper's 12-char blob scrub): `rsn=` values here are short ASCII
+        // reason words ("local_hangup" is 12 → would blob; ship the length
+        // instead and keep the word in the device-only print).
+        print("[CallService] dchangup rx reason=\(reason)")
+        RTLog.info("call", "dchangup rx=1 rlen=" + String(reason.count))
+        onInboundControlHangup?(reason)
+    }
+
+    /// W-DCHANGUP (2026-08-25) — TX: best-effort in-band hangup control
+    /// frame on the active sealed media leg. Third hangup channel, additive
+    /// to the `call_hangup` envelope and the `HANGUP:` opaque piggy-back —
+    /// when the peer's WS is mid-reconnect at hangup time, this is the one
+    /// that arrives. Mirrors Android `ResilientFrameRelayTransport
+    /// .sendControl` + `CallController.hangup`'s W-DCHANGUP block:
+    ///
+    ///   - symmetric intersection: sent ONLY when the peer advertised
+    ///     `dc-hangup-v1` for THIS call (`getPeerCapabilities`, id-bound);
+    ///     a caps race / legacy peer degrades to "don't send" — the two
+    ///     older channels are unaffected either way;
+    ///   - same leg preference as audio: DataChannel when open, WS relay
+    ///     `audio_frame` otherwise (the peer's pumps peek the mux byte on
+    ///     both legs before audio decode);
+    ///   - same outer seal as audio (the M-15 relay sealer when installed),
+    ///     so the on-wire bytes match Android's sealed control frames.
+    ///
+    /// Call BEFORE `endCall()`/`teardownAudioStack()` — the leg must still
+    /// be up. Never throws, never blocks: a hangup notification that cannot
+    /// be sent is exactly the case the other two channels + W-MEDIADEAD
+    /// exist for.
+    func sendControlHangup(reason: String) {
+        let cid = getCallId?()
+        let peerCaps = getPeerCapabilities?(cid)
+        guard peerCaps?.contains(CallCapabilities.dcHangupV1) == true else {
+            print("[CallService] dchangup tx skipped — peer did not advertise the tag")
+            return
+        }
+        let frame = WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindHangup,
+            body: Data(reason.utf8)
+        )
+        // Same outer seal as the audio TX path (W574e) — the peer's RX
+        // removes it before its own mux peek.
+        let sealed: Data
+        if let sealer = relaySlotLock.withLock({ relaySealerSend }) {
+            sealed = (try? sealer.seal(frame)) ?? frame
+        } else {
+            sealed = frame
+        }
+        let sentOnDc: Bool = sendAudioOverDataChannel?(sealed) ?? false
+        if !sentOnDc {
+            let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
+                relaySlotLock.withLock { (wsClient, peerUserId) }
+            let effectiveWs = getWsClient?() ?? cachedWs
+            let effectivePeer = cachedPeer ?? getPeerId?()
+            guard let ws = effectiveWs, let peer = effectivePeer else {
+                print("[CallService] dchangup tx dropped — no transport leg available")
+                return
+            }
+            ws.sendAudioFrame(recipientId: peer, frame: sealed, callId: cid)
+        }
+        let dcFlag: String = sentOnDc ? "1" : "0"
+        RTLog.info("call", "dchangup tx=1 dc=" + dcFlag + " rlen=" + String(reason.count))
     }
 
     /// W66+W67: ingresso per il RX path. Chiamato dal handler "audio_frame"
@@ -1740,7 +1988,10 @@ final class CallService: @unchecked Sendable {
                 // subsequent frame). Buffer up to rxPreBufferCap frames;
                 // drainRxPreBuffer() replays them once callIntegration binds.
                 if self.rxPreBuffer.count < Self.rxPreBufferCap {
-                    self.rxPreBuffer.append(serializedFrame)
+                    // W-DCHANGUP — keep the envelope's call_id with the bytes so
+                    // the drain can refuse provably-foreign replays (see the
+                    // buffer's own doc comment).
+                    self.rxPreBuffer.append((frame: serializedFrame, callId: callId))
                 }
                 if !self.loggedRxNoIntegration {
                     self.loggedRxNoIntegration = true
@@ -1759,6 +2010,18 @@ final class CallService: @unchecked Sendable {
                 }
                 return
             }
+            // W-DCHANGUP (2026-08-25) — peek the control mux byte AFTER the
+            // M-15 unseal (matching Android, whose pumps peek on bytes the
+            // seal was already removed from) and BEFORE the audio decode
+            // path ever sees it: a control frame is not audio and would
+            // misparse as legacy untagged audio. Kind HANGUP routes into
+            // the same definitive-teardown path as a call_hangup envelope;
+            // unknown kinds drop silently (forward-compat, same contract as
+            // unknown opaque piggy-back tags).
+            if inner.first == WireRelayFrameCodec.muxControl {
+                self.consumeInboundControlFrame(inner)
+                return
+            }
             // W-NETVIS — the FLUSSO rx counter, at Android's exact layer: the
             // POST-UNSEAL length, counted the moment the open succeeds and
             // before the Opus decode, mirroring `rxBytes.addAndGet(bytes.size)`
@@ -1770,6 +2033,7 @@ final class CallService: @unchecked Sendable {
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 self.framesDecryptedRx &+= 1
+                self.noteRealInboundDecode()
                 if !self.loggedFirstRxDecrypt {
                     self.loggedFirstRxDecrypt = true
                     print("[CallService] RX: first frame DECRYPTED ok — AEAD+Opus decode live")
@@ -2223,6 +2487,14 @@ final class CallService: @unchecked Sendable {
         loggedFirstTxOnDc = false
         loggedFirstRxOnDc = false
         rxPreBuffer.removeAll()  // W481
+        // W-SETUPRETRY + W-MEDIADEAD — per-call RX liveness state. The
+        // one-shot first-decode latch re-arms for the next call, the decode
+        // stamp zeroes so a new call never inherits a dead call's "alive
+        // recently" evidence, and the watchdog dies with its call.
+        firedFirstRealDecode = false
+        lastRealInboundDecodeAtMs = 0
+        mediaDeadWatchdogTask?.cancel()
+        mediaDeadWatchdogTask = nil
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
@@ -2412,6 +2684,7 @@ final class CallService: @unchecked Sendable {
     /// `handleAudioSessionActivated()` will complete the start once it fires.
     public func handleCallAnswered() {
         peerAnswered = true
+        armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // W574b — post-answer W469 fallback. The 1.5s timer in startCall
         // now (correctly) skips while the peer hasn't answered, so it no

@@ -39,6 +39,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// Guard against sending call_answer more than once per call session.
     /// Reset alongside activeCallId in clearActiveCallId().
     private var _answerSent = false
+    /// W-SETUPRETRY (2026-08-25) — latched `true` the moment the call
+    /// demonstrably progressed past setup (answer/accepted received,
+    /// connected, first real inbound media frame decoded). Stops the bounded
+    /// JSON-envelope retransmit ladders below; guarded by `callIdLock`, reset
+    /// alongside `activeCallId` on every bind so a new call never inherits
+    /// the previous call's latch.
+    private var _setupProgressed = false
 
     init(ws: BCryptoWebSocketClient, rest: BCryptoRestClient) { self.ws = ws; self.rest = rest }
 
@@ -104,6 +111,14 @@ public final class BCryptoCallingApiImpl: CallingApi {
             data["caller_display"] = cd
         }
         ws.send(type: "call_offer", data: data)
+        // W-SETUPRETRY (2026-08-25) — a single lost call_offer used to fail
+        // the whole setup. Bounded retransmit; RX side dedups (the callee's
+        // call_incoming handler drops/rescues duplicates by design). The
+        // opaque PQC OFFER bundle is NOT retried here — it stays emitted
+        // exactly once per contract (the server's store+replay is
+        // load-bearing and receivers replay the cached ACCEPT); this ladder
+        // covers ONLY the plain JSON envelope.
+        scheduleSetupRetransmit(callId: cid, type: "call_offer", data: data, label: "call_offer")
     }
 
     public func sendCallOffer(
@@ -194,6 +209,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         ws.send(type: "call_answer", data: data)
+        // W-SETUPRETRY — a lost call_answer used to strand the caller in its
+        // full ring timeout on a call this side already answered. Bounded
+        // retransmit of the byte-identical payload; the caller's RX side is
+        // idempotent (duplicate call_answer is the long-known W418 case).
+        // The retransmit bypasses `checkAndMarkAnswerSent` on purpose — that
+        // guard dedups CALLERS of this method, not the ladder's own resends.
+        scheduleSetupRetransmit(callId: cid, type: "call_answer", data: data, label: "call_answer")
     }
 
     public func sendIceCandidate(recipientId: String, candidate: String) async throws {
@@ -251,6 +273,14 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     public func sendHangup(recipientId: String) async throws {
+        try await sendHangup(recipientId: recipientId, reason: "local_hangup")
+    }
+
+    /// Reason-bearing overload (impl-only, not on the `CallingApi` protocol —
+    /// callers that need a specific wire reason, e.g. W-GLARE's `"glare"` or
+    /// W-MEDIADEAD's `"media-lost"`, downcast and call this; the protocol
+    /// method above delegates with the historical `"local_hangup"`).
+    public func sendHangup(recipientId: String, reason: String) async throws {
         // W-PHANTOMCALLID — hanging up a call that was never bound is a no-op,
         // not a reason to mint an id. `sendCallHangupForId` remains the way to
         // hang up an explicitly-known call (originator cleanup path).
@@ -264,16 +294,12 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // got "ghost call" the maintainer had no signal that iOS even
         // tried to send the hangup.
         print("[BCryptoCalling] sendHangup call_id=\(cid.prefix(8))… recipientId=\(recipientId.prefix(8))…")
-        ws.send(
-            type: "call_hangup",
-            data: [
-                "call_id": cid,
-                "reason": "local_hangup",  // mirrors Android CallHangup.reason
-                "recipient_id": recipientId,     // belt-and-braces routing fallback
-            ]
-        )
-        // Clear after hangup so the next outgoing call starts fresh.
+        // Clear BEFORE the (possibly parked, async) delivery so the next
+        // `authenticate` never re-asserts a call this side has already
+        // decided is dead (W-ACTIVECALLASSERT), and so a next outgoing call
+        // starts fresh even while a park is still pending.
         clearActiveCallId()
+        await deliverHangup(callId: cid, recipientId: recipientId, reason: reason)
     }
 
     public func sendOpaqueMessage(recipientId: String, data: Data) async throws {
@@ -350,6 +376,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
             data["caller_display"] = cd
         }
         ws.send(type: "call_offer", data: data)
+        // W-SETUPRETRY — same ladder as the minting overload above; this is
+        // the externally-chosen-id path (Android-originator pipeline).
+        scheduleSetupRetransmit(callId: callId, type: "call_offer", data: data, label: "call_offer")
     }
 
     /// Send a call_hangup explicitly bound to a specific callId,
@@ -361,21 +390,81 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// stale value).
     /// Per OpenRouter glm-5.1 review 2026-05-06 P0 #3.
     public func sendCallHangupForId(callId: String, recipientId: String) async throws {
-        ws.send(
-            type: "call_hangup",
-            data: [
-                "call_id": callId,
-                "reason": "originator_offer_failed",
-                "recipient_id": recipientId,   // belt-and-braces routing fallback
-            ]
-        )
+        try await sendCallHangupForId(callId: callId, recipientId: recipientId,
+                                      reason: "originator_offer_failed")
+    }
+
+    /// Reason-bearing overload (impl-only) — W-GLARE's loser teardown hangs
+    /// up its outgoing call by EXPLICIT id with reason `"glare"` through
+    /// here, after synchronously unbinding via ``unbindActiveCallId(matching:)``
+    /// so `endCall()`'s own generic hangup paths find no binding and no-op
+    /// (exactly one reason-bearing hangup reaches the wire).
+    public func sendCallHangupForId(callId: String, recipientId: String, reason: String) async throws {
         // W-ACTIVECALLASSERT — a call we just explicitly hung up is no
         // longer "believed live": unbind it (when it is the bound one) so
         // the next `authenticate` does not assert a dead call. Harmless if
         // it lingered anyway (the server answers a stale assertion with a
         // call_hangup the handler no-ops), but asserting truthfully is
-        // strictly better than relying on that backstop.
+        // strictly better than relying on that backstop. Moved BEFORE the
+        // delivery (2026-08-25): delivery can now park asynchronously, and
+        // the unbind must not wait for the socket.
         unbindCallIdIfMatching(callId)
+        await deliverHangup(callId: callId, recipientId: recipientId, reason: reason)
+    }
+
+    /// W-HANGUPPARK + hangup-opaque-piggyback (2026-08-25) — the single
+    /// choke point every outbound hangup flows through.
+    ///
+    /// Two-channel send, mirroring Android `WsCallSignaller.sendHangup`:
+    /// bcrypto-lite is observed to forward `opaque_message` while dropping
+    /// `call_hangup` envelopes silently in certain paths, so BOTH go out —
+    /// the envelope for any server path that does forward it, the
+    /// `<callId>|HANGUP:<reason>` opaque (plain string, NOT base64) for the
+    /// one that doesn't. Receivers dedup in their state machines; the
+    /// server-side EndCall is party-authorized and idempotent, so duplicates
+    /// are silent no-ops everywhere.
+    ///
+    /// Park: a hangup pressed mid-network-outage must NOT be lost — the
+    /// live Android incident (call afc64e8d) had the peer learn via the DC
+    /// control frame while the SERVER kept the call tracked, leaving both
+    /// users "busy" to any third caller until the sweep. Fast path waits up
+    /// to 5 s for an authenticated socket (same gate as call_offer/answer);
+    /// failing that, a DETACHED task parks the pair for up to 40 more
+    /// seconds (~45 s total from the press, under the server's 60 s
+    /// disconnect-grace ceiling, matching Android's HANGUP_PARK_BUDGET_MS)
+    /// and resends the moment `ensureAuthenticated` sees the socket come
+    /// back. Detached so the caller (endCall's fire-and-forget Task, the
+    /// originator-cleanup error path) is never blocked for the park window.
+    private func deliverHangup(callId: String, recipientId: String, reason: String) async {
+        let envelope: [String: Any] = [
+            "call_id": callId,
+            "reason": reason,                // mirrors Android CallHangup.reason
+            "recipient_id": recipientId,     // belt-and-braces routing fallback
+        ]
+        let opaque = CallPiggyBack.serializeHangup(callId: callId, reason: reason)
+        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        if ready {
+            ws.send(type: "call_hangup", data: envelope)
+            ws.sendOpaqueMessageString(recipientId: recipientId, payload: opaque)
+            return
+        }
+        // Best-effort immediate attempt anyway — `send` kicks its own
+        // reconnect for control envelopes and the state probe can be wrong;
+        // a duplicate arrival after the parked resend is a server no-op.
+        ws.send(type: "call_hangup", data: envelope)
+        ws.sendOpaqueMessageString(recipientId: recipientId, payload: opaque)
+        print("[BCryptoCalling] hangup park armed call_id=\(callId.prefix(8))… (WS not ready)")
+        let wsRef = ws
+        Task.detached(priority: .utility) {
+            let late = await wsRef.ensureAuthenticated(timeoutSec: 40)
+            guard late else {
+                print("[BCryptoCalling] hangup park expired call_id=\(callId.prefix(8))… — server sweep will collect")
+                return
+            }
+            wsRef.send(type: "call_hangup", data: envelope)
+            wsRef.sendOpaqueMessageString(recipientId: recipientId, payload: opaque)
+            print("[BCryptoCalling] hangup park delivered call_id=\(callId.prefix(8))…")
+        }
     }
 
     // MARK: - Pre-negotiation (Android/Desktop interop)
@@ -433,9 +522,18 @@ public final class BCryptoCallingApiImpl: CallingApi {
         if !ready {
             throw BCryptoCallingError.wsUnavailable
         }
-        ws.send(type: "call_accepted", data: [
-            "call_id": callId,
-        ])
+        let data: [String: Any] = ["call_id": callId]
+        ws.send(type: "call_accepted", data: data)
+        // W-SETUPRETRY — mirrors Android's accept-retransmit (2.5 s / 5 s,
+        // CallController.startIncoming): the accept can be WRITTEN into a
+        // socket already dead on the wire, and the caller then sits out its
+        // ring timeout on a call this side already answered. Receipt is
+        // idempotent for the caller (it only gates the SAS/active display),
+        // so a duplicate is harmless; the ladder stops on unbind (hangup /
+        // new call) or on the progression latch (first real inbound decode —
+        // media from the caller proves the accept, or its answer sibling,
+        // got through).
+        scheduleSetupRetransmit(callId: callId, type: "call_accepted", data: data, label: "call_accepted")
     }
 
     /// W536 — initiator-side mid-call upgrade request. Ships the new
@@ -591,7 +689,86 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// AppState binds the inbound call_id here so the subsequent
     /// `sendCallAnswer` / `sendIceCandidate` / `sendHangup` use it.
     public func bindIncomingCallId(_ callId: String) {
-        callIdLock.lock(); activeCallId = callId; callIdLock.unlock()
+        callIdLock.lock(); activeCallId = callId; _setupProgressed = false; callIdLock.unlock()
+    }
+
+    /// W-SETUPRETRY (2026-08-25) — the call demonstrably progressed past
+    /// setup: an answer/accepted arrived, the call connected, or the first
+    /// REAL inbound media frame decoded. Stops every pending retransmit
+    /// ladder for the bound call. `callId == nil` (or empty) latches
+    /// unconditionally for whatever call is bound — used by the sites that
+    /// know "the current call progressed" without holding the wire id; a
+    /// non-matching id is ignored (a late signal for a previous call must
+    /// not stop a NEW call's ladder).
+    public func noteCallSetupProgressed(_ callId: String?) {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        if let cid = callId, !cid.isEmpty {
+            guard let bound = activeCallId,
+                  bound.caseInsensitiveCompare(cid) == .orderedSame else { return }
+        }
+        _setupProgressed = true
+    }
+
+    /// W-GLARE (2026-08-25) — synchronous unbind for the glare-loser
+    /// teardown path. The loser must ship its reason-bearing hangup against
+    /// the EXPLICIT outgoing id (``sendCallHangupForId(callId:recipientId:reason:)``)
+    /// while `endCall()`'s generic hangup paths — which read the binding —
+    /// find nothing and no-op; calling this FIRST, synchronously, is what
+    /// makes exactly one `"glare"` hangup reach the wire instead of a
+    /// nondeterministic race between two reasons. Case-insensitive match,
+    /// same rationale as `unbindCallIdIfMatching`.
+    public func unbindActiveCallId(matching callId: String) {
+        unbindCallIdIfMatching(callId)
+    }
+
+    /// W-GLARE (2026-08-25) — `true` while `callId` is the bound call and its
+    /// setup has NOT yet demonstrably progressed (no answer/accepted received,
+    /// not connected, no real inbound media decoded). This is iOS's mapping of
+    /// Android's `outgoingCallIdIfDialing` window (`CallState.Handshaking` +
+    /// `asInitiator`): the state AppState keeps (`callState`) cannot express
+    /// "dialing, pre-answer" — the outgoing flow sets `.active` right after
+    /// the OFFER round-trip — while this latch flips on exactly the signals
+    /// that end the dialing phase. In every physically-realizable mutual-dial
+    /// glare both peers are pre-answer on their outgoing legs, so the two
+    /// predicates agree; once anything progressed, the incoming envelope is
+    /// an ICE-restart/replay case and belongs to the existing dedup guards,
+    /// which is precisely what returning `false` here hands it to.
+    public func isCallSetupStillPending(_ callId: String) -> Bool {
+        return setupRetryShouldResend(for: callId)
+    }
+
+    /// W-SETUPRETRY — `true` while the retransmit ladder for `callId` should
+    /// keep firing: the id is still the bound call AND nothing has latched
+    /// progression. Sync helper for the Swift 6 NSLock-in-async rule (see
+    /// `checkAndMarkAnswerSent`).
+    private func setupRetryShouldResend(for callId: String) -> Bool {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        guard let bound = activeCallId,
+              bound.caseInsensitiveCompare(callId) == .orderedSame else { return false }
+        return !_setupProgressed
+    }
+
+    /// W-SETUPRETRY — bounded retransmit of one already-sent JSON setup
+    /// envelope: 2.5 s then 5 s (Android's accept-retransmit ladder,
+    /// `CallController.startIncoming`), byte-identical payload each time,
+    /// stopping the moment the call unbinds (hangup, teardown, a new call)
+    /// or progression latches. At most 2 extra sends per envelope, ever —
+    /// safe by construction against RX sides that are idempotent by
+    /// contract (offer: the callee's dup-drop/rescue; answer: W418;
+    /// accepted: the two-flag latch).
+    private func scheduleSetupRetransmit(callId: String,
+                                         type: String,
+                                         data: [String: Any],
+                                         label: String) {
+        Task { [weak self] in
+            for delayMs in [2_500, 5_000] {
+                try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                guard let self else { return }
+                guard self.setupRetryShouldResend(for: callId) else { return }
+                print("[BCryptoCalling] \(label) retransmit call_id=\(callId.prefix(8))… (setup still pending)")
+                self.ws.send(type: type, data: data)
+            }
+        }
     }
 
     /// W525 — public read of the currently-bound call_id. Used by
@@ -633,7 +810,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     private let keyframeRequestLock = NSLock()
 
     private func setActiveCallId(_ cid: String) {
-        callIdLock.lock(); activeCallId = cid; callIdLock.unlock()
+        callIdLock.lock(); activeCallId = cid; _setupProgressed = false; callIdLock.unlock()
     }
 
     /// W-ACTIVECALLASSERT — clear the bound id ONLY when it names the same
@@ -649,6 +826,6 @@ public final class BCryptoCallingApiImpl: CallingApi {
     }
 
     private func clearActiveCallId() {
-        callIdLock.lock(); activeCallId = nil; _answerSent = false; callIdLock.unlock()
+        callIdLock.lock(); activeCallId = nil; _answerSent = false; _setupProgressed = false; callIdLock.unlock()
     }
 }

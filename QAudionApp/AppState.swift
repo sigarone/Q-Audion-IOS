@@ -3843,6 +3843,58 @@ final class AppState: ObservableObject {
         callService.getPeerCapabilities = { [weak self] callId in
             self?.peerCapabilityBinding.capabilities(forCallId: callId)
         }
+        // W-SETUPRETRY (2026-08-25) — first REAL inbound decode = proof the
+        // setup envelopes got through. Stops the bounded call_offer/answer/
+        // accepted retransmit ladders for the bound call; the callee side has
+        // no inbound signaling ack to latch on, so this is ITS progression
+        // signal. Fired at most once per call, on the main queue.
+        callService.onFirstRealDecode = { [weak self] in
+            guard let self, let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl
+            else { return }
+            impl.noteCallSetupProgressed(nil)
+        }
+        // W-DCHANGUP (2026-08-25) — an in-band 0x03/HANGUP control frame
+        // arrived on the sealed media leg. Same definitive teardown as a
+        // `call_hangup` envelope (the leg belongs to exactly one call by
+        // construction — the stale-call filter and the foreign-id drain drop
+        // both ran before this fires), plus the W-HANGUPECHO bookkeeping echo:
+        // this channel bypasses the server entirely, so without the echo the
+        // server keeps the call tracked until its sweep and both users stay
+        // "busy" to any third caller. Runs on the main queue.
+        callService.onInboundControlHangup = { [weak self] reason in
+            guard let self else { return }
+            guard self.isInCall || self.callState != .idle else {
+                RTLog.info("call", "dchangup noop=1 rlen=" + String(reason.count))
+                return
+            }
+            if let cid = self.canonicalActiveCallId() {
+                self.echoHangupToServer(callId: cid, tag: "dc")
+            }
+            self.handleRemoteCallHangup(reasonString: reason)
+        }
+        // W-MEDIADEAD (2026-08-25) — the 90 s inbound-audio backstop fired: a
+        // Connected call decoded ZERO real audio for the whole window. Notify
+        // the peer best-effort on every channel that could still work — the
+        // in-band control frame first (needs the media leg + call binding
+        // still up), then the reason-bearing envelope+opaque pair by EXPLICIT
+        // id after a synchronous unbind, so endCall()'s generic hangup paths
+        // find no binding and no-op (exactly one "media-lost" reaches the
+        // wire) — then run the local teardown. Runs on the main queue.
+        callService.onMediaDead = { [weak self] silentMs in
+            guard let self else { return }
+            RTLog.error("call", "mediadead end=1 s=" + String(silentMs / 1000))
+            self.callService.sendControlHangup(reason: "media-lost")
+            if let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+               let cid = impl.getActiveCallId(),
+               let peer = self.callContactId {
+                impl.unbindActiveCallId(matching: cid)
+                Task {
+                    try? await impl.sendCallHangupForId(
+                        callId: cid, recipientId: peer, reason: "media-lost")
+                }
+            }
+            self.endCall(notifyPeerInBand: false)
+        }
         // W-KCMAC (ship step 5) — same live-getter pattern as `getCallId` above,
         // read at teardown (`CallService.teardownAudioStack`) so `psk_mix_n`/
         // `kc_mac_result`/`assurance_state`/`expected_but_missing` ride the
@@ -4700,6 +4752,69 @@ final class AppState: ObservableObject {
                     return
                 }
             }
+            // W-GLARE (2026-08-25) — mutual dialing: an incoming offer from
+            // the very peer we are currently DIALING is glare, not a second
+            // call. Without resolution both phones ring each other forever
+            // (the server's busy guard deliberately exempts glare) — and
+            // before this, iOS busy-rejected the incoming leg, so the
+            // surviving leg could die too. Deterministic tiebreak both sides
+            // compute identically (rule bit-identical to Android's
+            // MainActivity call_incoming collector, ported via
+            // `GlareDecisions` — Kotlin compareTo semantics pinned by test):
+            // the side whose OUTGOING id is GREATER wins and suppresses the
+            // incoming; the LOSER tears down its outgoing with reason
+            // "glare" (the winner's id-gated call_hangup handler / recently-
+            // ended absorption makes that a silent no-op there) and lets the
+            // surviving incoming call ring normally.
+            //
+            // Runs BEFORE any state reset/provisioning below — the winner
+            // must return with its outgoing call untouched. Peer-id must
+            // match the dialed peer; a different-peer incoming keeps today's
+            // behavior. "Dialing" = outgoing bound + role .caller + setup
+            // not yet progressed (`isCallSetupStillPending` — see its kdoc
+            // for why that is iOS's mapping of Android's Handshaking gate).
+            // A same-id envelope resolves .notGlare and falls through to the
+            // existing ICE-restart/dedup guards, exactly as before.
+            if let glareCalling = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+               let glareOutgoingId = glareCalling.getActiveCallId(),
+               self.isInCall,
+               self.originalCallRole == .caller,
+               self.callContactId == senderId,
+               glareCalling.isCallSetupStillPending(glareOutgoingId) {
+                switch GlareDecisions.resolve(outgoingCallId: glareOutgoingId,
+                                              incomingCallId: callIdStr) {
+                case .winnerSuppressIncoming:
+                    // 12-char rule: "o="+8 / "i="+8 tokens ship intact.
+                    let line: String = "glare win=1 o=" + String(glareOutgoingId.prefix(8))
+                        + " i=" + String(callIdStr.prefix(8))
+                    RTLog.warn("call", line)
+                    return
+                case .loserYieldToIncoming:
+                    let line: String = "glare win=0 o=" + String(glareOutgoingId.prefix(8))
+                        + " i=" + String(callIdStr.prefix(8))
+                    RTLog.warn("call", line)
+                    // Unbind FIRST, synchronously: endCall()'s generic hangup
+                    // paths (W517 sendHangup, sendHangupAndClose) read the
+                    // binding and now no-op — exactly one reason-bearing
+                    // "glare" hangup reaches the wire, via the explicit-id
+                    // overload (envelope + opaque piggy-back + park). The
+                    // in-band control channel is not fired here: pre-answer
+                    // there is no armed media leg and no peer caps yet, the
+                    // same conditions under which Android's sendControl is a
+                    // structural no-op during Handshaking.
+                    glareCalling.unbindActiveCallId(matching: glareOutgoingId)
+                    let glarePeer = senderId
+                    Task {
+                        try? await glareCalling.sendCallHangupForId(
+                            callId: glareOutgoingId, recipientId: glarePeer, reason: "glare")
+                    }
+                    self.endCall(notifyPeerInBand: false)
+                    // Fall through: the incoming offer rings normally (the
+                    // synchronous endCall left callState == .idle).
+                case .notGlare:
+                    break
+                }
+            }
             // D11: stash the server-stamped `sender_device_id` keyed by sender so
             // the later OFFER/ACCEPT (which arrive over `opaque_message` WITHOUT a
             // device id — the server relays only `sender_id` there) can verify
@@ -5206,63 +5321,16 @@ final class AppState: ObservableObject {
         // stale placeholder shown verbatim).
         ws.registerHandler(type: "call_missed") { [weak self] _, data in
             guard let self = self else { return }
-            let callIdStr = (data["call_id"] as? String) ?? UUID().uuidString
-            let callerId = (data["caller_id"] as? String) ?? ""
-            let isVid: Bool = ((data["call_type"] as? String) ?? "audio") == "video"
-            // H-15 parity: caller_display is peer-controlled — sanitise it the
-            // same way the call_incoming path does before it reaches any UI.
-            let rawWireDisplay = (data["caller_display"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let sanitisedWireDisplay = StringSanitiser.displayName(rawWireDisplay, fallback: "")
             // Hop to main: PersistentCallRecordStore is @MainActor, and
             // cachedContacts is main-isolated AppState state (this handler is
             // invoked on the WS delegate background thread — see call_incoming).
+            // W-MISSEDEVT (2026-08-25) — body extracted to
+            // `handleMissedCallEvent` so the DURABLE replay path (a
+            // `call_missed` entry in `msg_pending_sync`, stored by the server
+            // when the buffered offer expired with this device offline)
+            // reaches the SAME recorder + notifier as the live envelope.
             DispatchQueue.main.async {
-                // Bug fix (2026-08-05): same call-history extension fallback as
-                // the `call_incoming` handler above — see that fix's comment.
-                let missedHistoryExt: String? = PersistentCallRecordStore.shared.records
-                    .first(where: { $0.peerUserId == callerId && $0.peerExtension != nil })?
-                    .peerExtension.flatMap { $0 > 0 ? String($0) : nil }
-                let resolvedName: String = callerId.isEmpty
-                    ? "Sconosciuto"
-                    : DisplayName.forUser(
-                        callerId,
-                        serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
-                        knownExtension: missedHistoryExt,
-                        contacts: self.cachedContacts
-                    )
-                let missedPeerExt: Int? = callerId.isEmpty ? nil : DisplayName.resolvedExtension(
-                    for: callerId,
-                    serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
-                    knownExtension: missedHistoryExt,
-                    contacts: self.cachedContacts).flatMap { Int($0) }
-                // Record the missed call directly (dedup by call_id). A `.missed`
-                // insert — NOT markMissed — because this device never registered
-                // an in-progress record for this call (it was busy, no ring).
-                PersistentCallRecordStore.shared.beginCall(
-                    id: callIdStr,
-                    peerUserId: callerId,
-                    peerDisplayName: resolvedName,
-                    direction: .missed,
-                    isVideo: isVid,
-                    peerExtension: missedPeerExt
-                )
-                // Passive reminder only. The `.missedCall` category posts a plain
-                // banner (no ringtone, no audio-session seizure — unlike the
-                // INCOMING_CALL category), so it cannot disturb the call the user
-                // is currently in.
-                Task { @MainActor in
-                    await NotificationCenterService.shared.scheduleLocal(
-                        category: .missedCall,
-                        title: "Chiamata persa",
-                        body: "Chiamata persa da \(resolvedName)",
-                        userInfo: [
-                            "call_id": callIdStr,
-                            "peer_id": callerId,
-                        ],
-                        delay: 0.1
-                    )
-                }
+                self.handleMissedCallEvent(data, source: "live")
             }
         }
 
@@ -6574,6 +6642,126 @@ final class AppState: ObservableObject {
     // DiagForwardingVideoRenderer that WebRTCRemoteVideoView wraps around
     // the real renderer (attach/detach in lockstep with the view).
 
+    /// W-MISSEDEVT (2026-08-25) — record + surface one missed-call event.
+    /// Shared by the LIVE `call_missed` envelope handler and the DURABLE
+    /// replay path (`msg_pending_sync` entries with `msg_type ==
+    /// "call_missed"`, whose payload the server writes with the exact same
+    /// field set: {call_id, caller_id, caller_display, call_type, ts_ms} —
+    /// `persistMissedCallFromOffer`, cmd/bcrypto-lite/main.go). Before the
+    /// durable branch existed, iOS silently lost every missed call that
+    /// expired while the device was offline >60 s: the replay entry fell
+    /// into the chat decrypt path, failed the base64 guard, and vanished —
+    /// while the Android caller assumed the callee had been notified.
+    ///
+    /// Dedup by call_id: a record that already exists (live envelope
+    /// consumed, then the same event replayed on reconnect — or a duplicate
+    /// redelivery) records nothing and posts NO second notification.
+    /// Must run on the main queue (PersistentCallRecordStore is @MainActor,
+    /// cachedContacts is main-isolated).
+    private func handleMissedCallEvent(_ data: [String: Any], source: String) {
+        let callIdStr = (data["call_id"] as? String) ?? UUID().uuidString
+        let callerId = (data["caller_id"] as? String) ?? ""
+        let isVid: Bool = ((data["call_type"] as? String) ?? "audio") == "video"
+        // H-15 parity: caller_display is peer-controlled — sanitise it the
+        // same way the call_incoming path does before it reaches any UI.
+        let rawWireDisplay = (data["caller_display"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitisedWireDisplay = StringSanitiser.displayName(rawWireDisplay, fallback: "")
+        // Dedup BEFORE any side effect — beginCall's own id dedup only
+        // silences the insert, not the notification banner.
+        if PersistentCallRecordStore.shared.records.contains(where: { $0.id == callIdStr }) {
+            let line: String = "missedevt dup=1 id=" + String(callIdStr.prefix(8))
+            RTLog.info("call", line)
+            return
+        }
+        let liveFlag: String = source == "live" ? "1" : "0"
+        RTLog.info("call", "missedevt rx=1 live=" + liveFlag)
+        // Bug fix (2026-08-05): same call-history extension fallback as
+        // the `call_incoming` handler — see that fix's comment.
+        let missedHistoryExt: String? = PersistentCallRecordStore.shared.records
+            .first(where: { $0.peerUserId == callerId && $0.peerExtension != nil })?
+            .peerExtension.flatMap { $0 > 0 ? String($0) : nil }
+        let resolvedName: String = callerId.isEmpty
+            ? "Sconosciuto"
+            : DisplayName.forUser(
+                callerId,
+                serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
+                knownExtension: missedHistoryExt,
+                contacts: self.cachedContacts
+            )
+        let missedPeerExt: Int? = callerId.isEmpty ? nil : DisplayName.resolvedExtension(
+            for: callerId,
+            serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
+            knownExtension: missedHistoryExt,
+            contacts: self.cachedContacts).flatMap { Int($0) }
+        // Record the missed call directly (dedup by call_id). A `.missed`
+        // insert — NOT markMissed — because this device never registered
+        // an in-progress record for this call (it was busy or offline, no
+        // ring).
+        PersistentCallRecordStore.shared.beginCall(
+            id: callIdStr,
+            peerUserId: callerId,
+            peerDisplayName: resolvedName,
+            direction: .missed,
+            isVideo: isVid,
+            peerExtension: missedPeerExt
+        )
+        // Passive reminder only. The `.missedCall` category posts a plain
+        // banner (no ringtone, no audio-session seizure — unlike the
+        // INCOMING_CALL category), so it cannot disturb any call the user
+        // is currently in — true for the live path and doubly so for a
+        // durable replay landing mid-cold-sync.
+        Task { @MainActor in
+            await NotificationCenterService.shared.scheduleLocal(
+                category: .missedCall,
+                title: "Chiamata persa",
+                body: "Chiamata persa da \(resolvedName)",
+                userInfo: [
+                    "call_id": callIdStr,
+                    "peer_id": callerId,
+                ],
+                delay: 0.1
+            )
+        }
+    }
+
+    /// W-HANGUPECHO (2026-08-25) — tell the SERVER the call is over when the
+    /// ending reached us on a channel the server does not interpret (the
+    /// `HANGUP:` opaque piggy-back, the W-DCHANGUP control frame). Both
+    /// bypass the server's call_hangup handler, and the hanging-up peer's own
+    /// envelope can die with its WS — the server then keeps the call tracked
+    /// until its 60 s sweep, leaving BOTH users "busy" to any third caller
+    /// (live Android incident, call afc64e8d). This side's WS is typically
+    /// alive (it just delivered the opaque, or survived the handoff), so a
+    /// best-effort envelope from HERE closes the server's books in
+    /// milliseconds. Server-side this is an authorized-party EndCall,
+    /// idempotent: double echoes and echo-after-envelope are silent no-ops.
+    /// NOT called for a `call_hangup` received FROM the server — its books
+    /// are already closed on that path. Mirrors Android
+    /// `CallController.echoHangupToServer` (3 attempts, growing waits).
+    private func echoHangupToServer(callId: String, tag: String) {
+        guard let ws = liveProvider?.getWebSocketClient() else {
+            RTLog.warn("call", "hangupecho nows=1 id=" + String(callId.prefix(8)))
+            return
+        }
+        let short = String(callId.prefix(8))
+        RTLog.info("call", "hangupecho tx=1 id=" + short)
+        print("[AppState] W-HANGUPECHO (\(tag)) call=\(short)…")
+        Task.detached(priority: .utility) {
+            for attempt in 1...3 {
+                let ready = await ws.ensureAuthenticated(timeoutSec: TimeInterval(2 * attempt))
+                if ready {
+                    ws.send(type: "call_hangup", data: [
+                        "call_id": callId,
+                        "reason": "peer-acknowledged",
+                    ])
+                    return
+                }
+            }
+            print("[AppState] W-HANGUPECHO (\(tag)) server never reachable call=\(short)… — sweep will collect")
+        }
+    }
+
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
     /// state reset UNCONDITIONALLY (the old code bailed when
     /// `activeCallKitId == nil`, leaving isInCall/callState stuck on a
@@ -6585,6 +6773,25 @@ final class AppState: ObservableObject {
         case "busy":      reason = .declined
         case "timeout":   reason = .unanswered
         case "error":     reason = .failed("error")
+        // W-ENDREASONS (2026-08-25, parity plan A5/B8) — the two server-emitted
+        // reasons get a sensible mapping instead of the generic default, and
+        // no raw wire string ever reaches UI (CallKit renders the enum case;
+        // the call history renders direction only):
+        //   peer_disconnected — the peer was LOST (disconnect-grace expiry,
+        //     W-STALEOFFER/W-LATERECONNECT replays), not a deliberate hangup →
+        //     CallKit's "failed" treatment, matching what actually happened;
+        //   recall — superseded by a NEW call from the same pair; the
+        //     replacement rings immediately after, so the ending is presented
+        //     as an ordinary remote end, never a failure;
+        //   media-lost — the peer's own W-MEDIADEAD watchdog ended the
+        //     phantom → same "failed" family as peer_disconnected.
+        // `peer-acknowledged` needs no case: an id-matched one is definitive
+        // teardown regardless of string (A5 rule, enforced by the id gate in
+        // the call_hangup handler), and a late one for a dead call never
+        // reaches this function at all.
+        case "peer_disconnected": reason = .failed("peer_disconnected")
+        case "media-lost":        reason = .failed("media-lost")
+        case "recall":            reason = .remoteEnded
         default:          reason = .remoteEnded
         }
         // If the call was still ringing when the hangup arrived the
@@ -6608,7 +6815,12 @@ final class AppState: ObservableObject {
                     PersistentCallRecordStore.shared.markMissed(id: rid)
                     self.activeOutgoingRecordId = nil
                 }
-                self.endCall()
+                // W-DCHANGUP — remote-initiated teardown: the peer already
+                // knows the call is over (they ended it), so the in-band
+                // control-frame notify is skipped (mirrors Android's
+                // hangup(reason = "peer:…", notifyPeer = false) posture on
+                // its own peer-hangup consumption paths).
+                self.endCall(notifyPeerInBand: false)
             }
         }
     }
@@ -6909,6 +7121,19 @@ final class AppState: ObservableObject {
             // a mismatch — the stored id still belongs to the previous call — so
             // the race resolves to STANDARD instead of to stale tags.
             let answerEnvelopeCallId = (data["call_id"] as? String) ?? ""
+            // W-SETUPRETRY (2026-08-25) — an answer for the bound call is
+            // proof the call_offer got through: stop the caller-side offer
+            // retransmit ladder. Id-matched inside (a late answer for a
+            // previous call must not stop a NEW call's ladder); an empty
+            // envelope id latches the bound call unconditionally, same
+            // fallback the capability branch below uses. Main hop for the
+            // liveProvider read only — the latch itself is lock-guarded.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl
+                else { return }
+                impl.noteCallSetupProgressed(
+                    answerEnvelopeCallId.isEmpty ? nil : answerEnvelopeCallId)
+            }
             if let pc = peerCaps, !pc.isEmpty {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
@@ -7227,6 +7452,25 @@ final class AppState: ObservableObject {
         // Already on the main queue (caller dispatches the batch on .main).
         if (entry["msg_type"] as? String) == "opaque" {
             dispatchInboundOpaque(senderId: senderId, blobStr: cipherB64)
+            return
+        }
+        // W-MISSEDEVT (2026-08-25) — durable missed-call replay. The server
+        // stores an expired-unclaimed buffered offer as msg_type
+        // "call_missed" with a PLAIN-JSON payload (NOT base64, NOT chat
+        // ciphertext — `persistMissedCallFromOffer`), so before this branch
+        // it fell through to the chat path below and died on the
+        // base64 guard: every missed call that expired while this device
+        // was offline >60 s was silently lost. Same demux-by-msg_type rule
+        // the "opaque" branch above established after the 2026-08-01
+        // inbound outage. Routes to the SAME recorder+notifier as the live
+        // envelope (dedup by call_id inside).
+        if (entry["msg_type"] as? String) == "call_missed" {
+            if let payloadData = cipherB64.data(using: .utf8),
+               let missed = (try? JSONSerialization.jsonObject(with: payloadData)) as? [String: Any] {
+                handleMissedCallEvent(missed, source: "durable")
+            } else {
+                RTLog.warn("call", "missedevt parse=0 len=" + String(cipherB64.count))
+            }
             return
         }
         guard let serverMsgId = entry["message_id"] as? String,
@@ -10363,9 +10607,9 @@ final class AppState: ObservableObject {
     }
 
     /// W534 — dispatch for `<callId>|<TAG>:value` piggy-backs.
-    /// Currently consumes `SCREEN_SHARE:` (start/stop) and silently
-    /// drops CAPS / HANGUP (the regular `call_hangup` envelope is
-    /// authoritative for teardown). See
+    /// Consumes `SCREEN_SHARE:` (start/stop) and — since 2026-08-25
+    /// (W-HANGUPECHO) — `HANGUP:` (id-gated definitive teardown + server
+    /// bookkeeping echo); CAPS is still silently dropped. See
     /// `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
     @MainActor
     private func routeInboundCallPiggyBack(_ piggy: CallPiggyBack, senderId: String) {
@@ -10379,9 +10623,33 @@ final class AppState: ObservableObject {
             // hole when Desktop / Android add new tags.
             print("[AppState] piggy-back CAPS dropped (not consumed): callId=\(callId.prefix(8))… raw=\(raw)")
         case .hangup(let callId, let reason):
-            // The authoritative teardown still arrives on the
-            // `call_hangup` WS envelope. Log + drop.
-            print("[AppState] piggy-back HANGUP dropped (call_hangup is authoritative): callId=\(callId.prefix(8))… reason=\(reason) from=\(senderId.prefix(8))…")
+            // W-HANGUPECHO (2026-08-25) — consumed, no longer dropped. This
+            // channel exists because bcrypto-lite in certain paths drops the
+            // `call_hangup` envelope silently while forwarding opaques — so
+            // an id-matched HANGUP runs the SAME definitive teardown as the
+            // envelope, under the SAME W-CALLHANGUP-SEMANTICS gate: sender
+            // must be the call peer, id must name the call we are actually
+            // running; anything else is a silent no-op (the opaque always
+            // carries an id, so there is no absent-id legacy branch here).
+            // Then the ending is echoed to the server as
+            // `call_hangup {reason:"peer-acknowledged"}` — this channel
+            // bypassed the server's books entirely, and without the echo the
+            // call stays tracked until the 60 s sweep with both users "busy"
+            // to any third caller.
+            guard callContactId == senderId else {
+                print("[AppState] piggy-back HANGUP dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            let hangupId = callId.lowercased()
+            guard let active = canonicalActiveCallId(), active == hangupId else {
+                let line: String = "opaquehang noop=1 id=" + String(hangupId.prefix(8))
+                RTLog.info("call", line)
+                return
+            }
+            let line: String = "opaquehang rx=1 id=" + String(hangupId.prefix(8))
+            RTLog.info("call", line)
+            echoHangupToServer(callId: callId, tag: "opaque")
+            handleRemoteCallHangup(reasonString: reason)
         case .earbudPdu(let callId, let pdu):
             // earbud-relay-v1 — HSRESP fragments relayed by the
             // earbud-side phone. Sender must be the active call peer
@@ -13247,6 +13515,13 @@ final class AppState: ObservableObject {
     /// landed for the active call.
     @MainActor
     private func finalizeCallActive() {
+        // W-SETUPRETRY (2026-08-25) — connected is the strongest progression
+        // signal there is: stop every pending retransmit ladder for the
+        // bound call (nil = latch whatever is bound; this site has no wire
+        // id in hand and cannot need one — a call cannot finalize without
+        // being the bound call).
+        (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+            .noteCallSetupProgressed(nil)
         if self.callSasKeySource == .mlKem {
             self.callState = .encrypted
             RTLog.info("call", "call_answer: PQC already done — .ringing → .encrypted")
@@ -13362,6 +13637,13 @@ final class AppState: ObservableObject {
 
     @MainActor
     private func handleCallAccepted(callId: String) {
+        // W-SETUPRETRY (2026-08-25) — the callee's real-user accept proves the
+        // whole setup exchange got through: stop any pending retransmit
+        // ladder for this call. Before the .ringing guard below on purpose —
+        // the accept is progression evidence even when it arrives too
+        // early/late to finalize the UI. Id-matched inside (case-insensitive).
+        (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+            .noteCallSetupProgressed(callId)
         // W-ACCEPTGATE-ID — lowercase BOTH sides: the wire id's case has drifted
         // before (iOS shipped an un-lowercased call_id for months, W-ENDCALLID),
         // and a latch that depends on case is a latch that silently stops
@@ -13902,7 +14184,13 @@ extension AppState {
         }
     }
 
-    func endCall() {
+    /// `notifyPeerInBand`: whether to fire the W-DCHANGUP in-band control
+    /// frame at the peer before teardown. `true` (default) for every
+    /// locally-initiated ending; `false` when the ending was learned FROM the
+    /// peer (call_hangup envelope, opaque HANGUP, inbound control frame) or
+    /// when the caller already sent its own reason-bearing notify
+    /// (W-MEDIADEAD, W-GLARE) — mirrors Android `hangup(notifyPeer=)`.
+    func endCall(notifyPeerInBand: Bool = true) {
         // H-6: idempotency — a second endCall() while teardown is
         // already in flight (CallKit onEndCall racing a remote
         // call_hangup) must be a no-op, otherwise we double-hangup the
@@ -13914,6 +14202,21 @@ extension AppState {
         incomingCallRingVisible = false
         guard !isEndingCall else { return }
         isEndingCall = true
+
+        // W-DCHANGUP (2026-08-25) — third, fastest hangup channel: a sealed
+        // control frame on the active media leg (DataChannel when open, WS
+        // relay otherwise). The two WS-based channels (envelope + opaque
+        // piggy-back, both emitted by deliverHangup below) can be stuck
+        // behind the exact signaling turbulence a mid-call network event
+        // causes; the media leg is frequently still up through that same
+        // window. MUST run before callService.endCall()/the WebRTC teardown
+        // below — the leg dies there. Best-effort and capability-gated
+        // inside (peer must have advertised dc-hangup-v1 for THIS call);
+        // mirrors Android CallController.hangup's W-DCHANGUP block, which
+        // fires it alongside the signaller sendHangup before teardown.
+        if notifyPeerInBand {
+            callService.sendControlHangup(reason: "local_hangup")
+        }
 
         // W517: send call_hangup for non-WebRTC paths (QUAD binary iOS↔Android
         // and all incoming calls). The WebRTC path uses sendHangupAndClose()
