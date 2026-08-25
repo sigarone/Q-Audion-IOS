@@ -3857,6 +3857,17 @@ final class AppState: ObservableObject {
             else { return nil }
             return impl.getActiveCallId()
         }
+        // IOS-C4b (2026-08-26) — wired ONCE here, same "lazy provider read
+        // live off webRtcController" pattern as the getters above:
+        // `webRtcController` is reassigned per call (startCall /
+        // handleIncomingWebRtcOffer), so a single closure set at login stays
+        // correct across every call's lifetime. Gates CallService's manual
+        // AVAudioEngine capture/decode path — see
+        // `startAudioIOIfReady`'s IOS-C4b guard and `NativeAudioPcmTap`'s
+        // doc for why the two paths must never run concurrently.
+        callService.getUsesNativeAudioSrtp = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true
+        }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
         // stashed by the `call_incoming` handler (responder side) and by the
@@ -13439,6 +13450,34 @@ final class AppState: ObservableObject {
                 controller.onAudioDataChannelStateChange = { [weak self] raw in
                     self?.callService.noteAudioDataChannelState(raw: raw, role: "caller")
                 }
+                // IOS-C4b / PCM-TAP PARITY (2026-08-26) — feed the native
+                // audio-srtp RX/TX PCM into the SAME analysis consumers the
+                // sealed-DataChannel decode path already feeds. See
+                // `NativeAudioPcmTap`'s doc for why this exists. `nil`-op on
+                // any call that never negotiates `audioSrtpV1`.
+                controller.onNativeAudioSrtpRxPcm = { [weak self] pcm in
+                    self?.callService.callIntegration?.feedNativeAudioSrtpRxPcm(pcm)
+                }
+                controller.onNativeAudioSrtpTxPcm = { [weak self] pcm in
+                    self?.callService.callIntegration?.feedNativeAudioSrtpTxPcm(pcm)
+                }
+                // W-SRTPFALLBACK — re-engage/recover CallService's manual
+                // capture path across a native-audio-srtp ICE outage.
+                // `engageAudioSrtpFallback`/`recoverAudioSrtpFallback` touch
+                // AVAudioEngine/AVAudioSession state, which (like every
+                // other CallService audio-IO entry point) expects the main
+                // thread — hop there, same as `onStateChange`/
+                // `onIceConnectionState` below.
+                controller.onAudioSrtpFallbackEngage = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.callService.engageAudioSrtpFallback()
+                    }
+                }
+                controller.onAudioSrtpFallbackRecover = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.callService.recoverAudioSrtpFallback()
+                    }
+                }
                 // R-4 (sovereign-only): reject incoming video when the
                 // policy is on. Read live (not captured) so a mid-session
                 // toggle takes effect on the next inbound track.
@@ -19626,6 +19665,25 @@ extension AppState {
         // the signature of Phase 0 outcome (a): the channel never arrived.
         controller.onAudioDataChannelStateChange = { [weak self] raw in
             self?.callService.noteAudioDataChannelState(raw: raw, role: "callee")
+        }
+        // IOS-C4b / PCM-TAP PARITY (2026-08-26) — same wiring as the
+        // outgoing-call setup (startCall) above; see that site's comment for
+        // the full rationale.
+        controller.onNativeAudioSrtpRxPcm = { [weak self] pcm in
+            self?.callService.callIntegration?.feedNativeAudioSrtpRxPcm(pcm)
+        }
+        controller.onNativeAudioSrtpTxPcm = { [weak self] pcm in
+            self?.callService.callIntegration?.feedNativeAudioSrtpTxPcm(pcm)
+        }
+        controller.onAudioSrtpFallbackEngage = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.callService.engageAudioSrtpFallback()
+            }
+        }
+        controller.onAudioSrtpFallbackRecover = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.callService.recoverAudioSrtpFallback()
+            }
         }
         // R-4 (sovereign-only): reject incoming video when the policy is
         // on (responder side). Mirror of the caller-side wiring.

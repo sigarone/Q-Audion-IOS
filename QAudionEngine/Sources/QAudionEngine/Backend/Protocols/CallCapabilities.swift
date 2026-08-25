@@ -157,6 +157,75 @@ public enum CallCapabilities {
     /// debug-menu entry.
     public static let dcMuxAdvertiseEnabled: Bool = true
 
+    // ── IOS-C4b (2026-08-26): native SRTP audio path ────────────────────────
+
+    /// Native-RTP audio v1 (`audio-srtp-v1`). Mirrors Android `AUDIO_SRTP_V1`
+    /// (`CallCapabilities.kt:272`). Byte-exact string, plain ASCII — compared
+    /// with string equality on every platform, so a rename or re-case is a
+    /// silent interop break.
+    ///
+    /// It means exactly: this endpoint can send a real m=audio SEND_RECV RTP
+    /// track (mic capture via the WebRTC ADM, not the manual Opus/AVAudioEngine
+    /// pipeline) with a native `RTCFrameCryptor` (AES-GCM, keyed off the PQC
+    /// session key, same key-provider discipline as the video path) layered on
+    /// the sender AND receiver. Native NACK/RTX repair the RTP stream and
+    /// NetEQ owns jitter/concealment — real wins the sealed-DataChannel path
+    /// gets for free on a real SRTP audio track. When either side omits it
+    /// (legacy peer, this build's kill switch off, or an earbud call), audio
+    /// stays on the existing sealed-DataChannel/WS-relay path, unchanged.
+    ///
+    /// NEVER advertised on an earbud call: the sovereign-earbud "phone relays
+    /// the sealed frame without ever opening it" design has no equivalent on
+    /// this path (the FrameCryptor decrypts on-device, which is exactly the
+    /// thing an earbud call structurally refuses to do on the phone).
+    /// ``localCaps(earbudActive:sovereignOnly:earbudPaired:)`` withholds it
+    /// whenever `earbudPaired`, exactly like the long-audio-profile tags and
+    /// mirroring Android's `localCaps` (`CallCapabilities.kt:481-486`).
+    ///
+    /// Gated by ``audioSrtpSendEnabled``. Not yet verified live on iOS
+    /// hardware (no toolchain on this box to compile/run) — symmetric
+    /// intersection means shipping the mechanism with the switch off is safe
+    /// either way: the tag never appears in any intersection until a peer
+    /// also advertises it, so every existing call is unaffected by
+    /// construction.
+    public static let audioSrtpV1: String = "audio-srtp-v1"
+
+    /// Kill switch for the native-RTP-audio path (``audioSrtpV1``). Ships
+    /// `false`. Compile-time only, exactly like ``longAudioSendEnabled``: no
+    /// runtime toggle, no remote config, no debug-menu entry reachable on a
+    /// user build. Flipping it changes only what THIS build advertises; a
+    /// call only uses the new path when the peer also advertises it, so
+    /// partial rollout across a fleet is always safe (the intersection is
+    /// symmetric).
+    ///
+    /// Flipped to `true` 2026-08-26 on explicit user sign-off, mirroring
+    /// desktop's own DSK-C4 commit (`qaudion-desktop@1a505bc`) the same
+    /// evening. The PCM-tap-parity gate — the one precondition this
+    /// orchestrator checks before flipping any of these three platforms'
+    /// switches — closed with real, cited findings, not an open question:
+    /// ``NativeAudioPcmTap`` taps the remote SRTP track and feeds the exact
+    /// same `enqueueForAnalysis` choke point `processIncomingAudio` already
+    /// fed, so `VoiceAnalysisEngine`/`GuardianMode`/`ContactVoiceVerifier`/
+    /// `VoiceLearningSession` see no gap in coverage (full trace in the
+    /// IOS-C4b task report). `VoiceUnlockController` was confirmed local-mic
+    /// only, unaffected either way.
+    ///
+    /// What is NOT yet closed, and remains a real risk carried forward: this
+    /// build has never compiled (no Xcode/Swift toolchain on the authoring
+    /// machine) and has zero live-call verification, unlike Android's own
+    /// `true` (device-verified 2026-08-25 — 4 real A36↔S26 calls, though
+    /// AND-6's underlying mic-race is itself recorded as inconclusive, not
+    /// proven fixed) and desktop's `true` (full local typecheck+vitest
+    /// green, still no live cross-platform call either). The FIRST real
+    /// build of this flag must be a TestFlight build exercised call-to-call
+    /// against Android/desktop before wider distribution — watch specifically
+    /// for the ontrack-before-negotiation race (mitigated but not proven to
+    /// the depth of the video path's phantom-transceiver state machine, per
+    /// the IOS-C4b report) and the AND-6 failure class (one-way audio on
+    /// initiator) — same discipline as ``longAudioRecvAdvertiseEnabled``/
+    /// ``longAudioSendEnabled``.
+    public static let audioSrtpSendEnabled: Bool = true
+
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
     /// / Desktop `CAP_UPGRADE_INTENT_RECV_V1`. iOS handles incoming
@@ -380,6 +449,10 @@ public enum CallCapabilities {
         // holds the key, so the sovereign/earbud gates must not strip it. This
         // matches Android, which never strips it either.
         if dcMuxAdvertiseEnabled { caps.append(dcMuxV1) }
+        // IOS-C4b — native RTP audio. Gated, ships absent. Withheld on an
+        // earbud call regardless (see applyAdvertisementGates), exactly like
+        // Android's `if (AUDIO_SRTP_SEND_ENABLED) add(AUDIO_SRTP_V1)`.
+        if audioSrtpSendEnabled { caps.append(audioSrtpV1) }
         return caps
     }()
 
@@ -433,6 +506,15 @@ public enum CallCapabilities {
         var caps = sovereignOnly ? base.filter { $0 != vkeyV1 } : base
         if paired {
             caps = caps.filter { $0 != aprof60x256V1 && $0 != aprof60x256RecvV1 }
+        }
+        // IOS-C4b — native RTP audio requires a native FrameCryptor, which
+        // decrypts ON THE PHONE. Structurally incompatible with the
+        // sovereign-earbud "phone relays the sealed frame without ever
+        // opening it" design (same reasoning as the long-audio-profile gate
+        // above). Withhold unconditionally on a paired earbud call. Mirrors
+        // Android `localCaps` (`CallCapabilities.kt:484-486`).
+        if paired {
+            caps = caps.filter { $0 != audioSrtpV1 }
         }
         return earbudActive ? caps + [earbudRelayV1] : caps
     }
@@ -506,6 +588,16 @@ public enum CallCapabilities {
         public var bothAdvertiseLongAudioSend: Bool {
             agreedTags.contains(CallCapabilities.aprof60x256V1)
         }
+
+        /// IOS-C4b — true iff both sides advertised ``CallCapabilities/audioSrtpV1``
+        /// — audio rides a real SRTP m=audio track + native `RTCFrameCryptor`
+        /// (native NACK/RTX + NetEQ) instead of the sealed DataChannel/WS
+        /// relay. ``localCaps(earbudActive:sovereignOnly:earbudPaired:)``
+        /// already guarantees neither side advertises this on an earbud
+        /// call, so this being `true` also implies neither end is
+        /// earbud-paired. Derived — no wire/ctor change. Mirrors Android
+        /// `Negotiated.useAudioSrtp` (`CallCapabilities.kt:551`).
+        public var useAudioSrtp: Bool { agreedTags.contains(CallCapabilities.audioSrtpV1) }
     }
 
     /// W-LONGAUDIO (2026-08-10) — the audio profile to SEND on this call.

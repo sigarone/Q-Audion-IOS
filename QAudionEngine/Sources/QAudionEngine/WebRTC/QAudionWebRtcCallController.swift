@@ -71,6 +71,36 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onRemoteAudioTrack: ((RTCAudioTrack) -> Void)?
     public var onRemoteVideoTrack: ((RTCVideoTrack) -> Void)?
 
+    /// IOS-C4b / PCM-TAP PARITY (2026-08-26) — fired with each little-endian
+    /// Int16 mono 48 kHz chunk of the REMOTE peer's decoded native-SRTP
+    /// audio. `CallService` wires this to
+    /// `QAudionCallIntegration.feedNativeAudioSrtpRxPcm(_:)`, which reuses
+    /// the exact same Guardian/VoiceAnalysis/ContactVoiceVerifier/
+    /// VoiceLearningSession consumer chain the sealed-DataChannel decode
+    /// path already feeds — see `NativeAudioPcmTap`'s doc for why this
+    /// exists. May be invoked from WebRTC's own audio callback thread;
+    /// consumers must not block (same contract as
+    /// `QAudionCallIntegration.enqueueForAnalysis`).
+    public var onNativeAudioSrtpRxPcm: ((Data) -> Void)?
+    /// TX/local-mic counterpart — mirrors Android's `feedOwnerContinuity`
+    /// wiring on `audioSrtpTxSink`. `CallService` wires this to
+    /// `QAudionCallIntegration.feedNativeAudioSrtpTxPcm(_:)`.
+    public var onNativeAudioSrtpTxPcm: ((Data) -> Void)?
+
+    /// W-SRTPFALLBACK (2026-08-26) — fired when a native-audio-srtp call's
+    /// ICE has been bad for the full debounce window (see
+    /// `SrtpFallbackDecisions`). `CallService` wires this to (re-)start its
+    /// manual AVAudioEngine capture/decode path — the one it bypasses for
+    /// the whole call while native audio owns TX/RX — so the call does not
+    /// go silent while ICE is down. Never fires on a call that did not
+    /// negotiate `audioSrtpV1` (nothing to fall back from).
+    public var onAudioSrtpFallbackEngage: (() -> Void)?
+    /// Counterpart — fired the instant ICE recovers after an engage.
+    /// `CallService` wires this to stop the manual capture path again so
+    /// native audio resumes as the sole TX/RX owner (bounding the
+    /// double-audio window).
+    public var onAudioSrtpFallbackRecover: (() -> Void)?
+
     /// W-UPGRADEICEWATCHDOG-ANCHOR (2026-08-24, mirrors Android's
     /// W-ICEANCHOR / `remoteDescriptionAppliedAtMs`) — fired once
     /// `setRemoteOffer` has actually succeeded inside
@@ -453,6 +483,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // LiveKit cryptor; whichever arrives last triggers the
             // install via this didSet or acceptPeerCapabilities below.
             _ = ensureVideoSealerInternal()
+            // IOS-C4b — same "whichever arrives last" pattern for the
+            // native audio-srtp path: install/rekey the moment BOTH the
+            // peer's audioSrtpV1 negotiation AND a fresh key are available.
+            installAudioSrtpIfPossible()
         }
     }
 
@@ -624,6 +658,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// method's kdoc. Read by the watchdog to re-check "still bad?"
     /// without touching WebRTC objects from its own Task.
     private var lastIceConnectionState: RTCIceConnectionState = .new
+
+    // ── IOS-C4b / W-SRTPFALLBACK (2026-08-26) ────────────────────────────
+
+    /// Monotonic ms timestamp the CURRENT bad-ICE streak started, or `nil`
+    /// when ICE is not currently bad. Feeds `SrtpFallbackDecisions
+    /// .shouldEngageFallback`'s debounce. Reset to `nil` the instant ICE
+    /// recovers.
+    private var iceBadSinceMs: Int64?
+    /// True once `onAudioSrtpFallbackEngage` has fired for the CURRENT
+    /// outage and not yet recovered — the "never double-engage" guard
+    /// `SrtpFallbackDecisions` checks.
+    private var srtpFallbackEngaged: Bool = false
+    /// Debounce task for the fallback engage decision. Cancelled on genuine
+    /// ICE recovery (mirrors `iceRecoveryWatchdogTask`'s own cancel-on-heal
+    /// discipline) so a self-healed blip never fires the engage callback
+    /// after the fact.
+    private var srtpFallbackTask: Task<Void, Never>?
+
+    private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     /// `true` once ICE has connected at least once THIS call. Gates the
     /// recovery watchdog to MID-CALL path death (parity plan Fase E3's
@@ -1779,6 +1832,59 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
+    /// W-SRTPFALLBACK — arm the fallback-engage debounce if ICE just went
+    /// bad on a native-audio-srtp call and nothing is already running.
+    /// Independent of `armIceRecoveryWatchdogIfNeeded` above — that watchdog
+    /// tries to RECOVER ICE itself (restart offers); this one only decides
+    /// whether to reopen the manual audio capture path while ICE stays down,
+    /// on a completely separate timer (`SrtpFallbackDecisions
+    /// .fallbackEngageDebounceMs`, 1 s — deliberately shorter than the ICE
+    /// self-repair window, because every second of an audio-srtp outage is
+    /// a second of one-way silence, not merely a routing inefficiency).
+    private func armSrtpFallbackIfNeeded() {
+        guard peerConnection?.usingNativeAudioSrtp == true else { return }
+        guard iceBadSinceMs == nil else { return }
+        let since = Self.nowMs()
+        iceBadSinceMs = since
+        guard srtpFallbackTask == nil else { return }
+        srtpFallbackTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: UInt64(SrtpFallbackDecisions.fallbackEngageDebounceMs) * 1_000_000)
+            guard !Task.isCancelled else { return }
+            let engage = SrtpFallbackDecisions.shouldEngageFallback(
+                usingNativeAudioSrtp: self.peerConnection?.usingNativeAudioSrtp == true,
+                iceBad: self.isIceStateBad(self.lastIceConnectionState),
+                iceBadSinceMs: self.iceBadSinceMs,
+                nowMs: Self.nowMs(),
+                fallbackAlreadyEngaged: self.srtpFallbackEngaged
+            )
+            self.srtpFallbackTask = nil
+            guard engage else { return }
+            self.srtpFallbackEngaged = true
+            self.log?("audiosrtp_fallback engage=1")
+            self.onAudioSrtpFallbackEngage?()
+        }
+    }
+
+    /// W-SRTPFALLBACK — the recover edge is deliberately ungated (no
+    /// debounce): the moment ICE leaves the bad states, native audio is
+    /// carrying the call again and the second capture path must stop
+    /// promptly. Cancels any still-pending engage debounce too, so a blip
+    /// that heals inside the debounce window never fires the engage
+    /// callback after the fact.
+    private func disarmSrtpFallbackIfRecovered() {
+        srtpFallbackTask?.cancel()
+        srtpFallbackTask = nil
+        iceBadSinceMs = nil
+        guard SrtpFallbackDecisions.shouldRecoverFromFallback(
+            fallbackEngaged: srtpFallbackEngaged,
+            iceBad: false
+        ) else { return }
+        srtpFallbackEngaged = false
+        log?("audiosrtp_fallback recover=1")
+        onAudioSrtpFallbackRecover?()
+    }
+
     /// Trigger an ICE restart. Only the ORIGINAL call initiator ships a
     /// fresh offer — mirrors Android's `restartIce`: "if both sides offer
     /// at once we hit SDP glare". The responder side has no ACTION here:
@@ -2051,6 +2157,41 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // alone would send the frames before the cryptor exists.
         if case .native = videoSealer {
             peerConnection?.reopenVideoAfterE2eeAgreed()
+        }
+        // IOS-C4b — opportunistic install, same reasoning as the video
+        // cryptor above: on the responder path the PQC key can already be
+        // held by the time the peer's caps arrive.
+        installAudioSrtpIfPossible()
+    }
+
+    /// IOS-C4b (2026-08-26) — install/rekey the native SRTP audio path the
+    /// moment BOTH the peer's negotiated capabilities (`audioSrtpV1` in the
+    /// intersection) AND a 32-byte PQC session key are available. Mirrors
+    /// `ensureVideoSealerInternal` exactly: called from the SAME two trigger
+    /// sites (`pqcSessionKey` didSet, `acceptPeerCapabilities`) plus the
+    /// `didReceiveNativeAudioSrtpReceiver` opportunistic-install call —
+    /// whichever of the three fires last completes the activation.
+    /// Idempotent: `QAudionPeerConnection.activateNativeAudioSrtp` only
+    /// creates the mic track/cryptor once; repeat calls (rekey) just
+    /// re-publish the key.
+    private func installAudioSrtpIfPossible() {
+        guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else { return }
+        guard let key = pqcSessionKey, key.count == 32 else { return }
+        let participant = recipientId ?? "peer"
+        let installed = peerConnection?.activateNativeAudioSrtp(
+            key: key,
+            participantId: participant,
+            txSink: { [weak self] pcm in
+                // PCM-TAP PARITY (TX/local mic) — mirrors Android's
+                // `feedOwnerContinuity` wiring on `audioSrtpTxSink`. Tier 1
+                // ("voce come chiave") is the only TX-side consumer; RX has
+                // the larger consumer set (see the RX sink above).
+                self?.onNativeAudioSrtpTxPcm?(pcm)
+            }
+        ) ?? false
+        if installed {
+            print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")
+            print("audiosrtp tx=1")
         }
     }
 
@@ -2563,6 +2704,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // recovery watchdog down. Mirrors Android's loop `continue`ing
             // past `self.first { !isBad(it) }`.
             disarmIceRecoveryWatchdog()
+            // W-SRTPFALLBACK — same recovery instant, independent gate.
+            disarmSrtpFallbackIfRecovered()
         case .failed, .disconnected:
             if s == .failed { state = .failed("ICE failed") }
             else { state = .disconnected; stopVideoStatsTelemetry() }
@@ -2572,10 +2715,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // cancels the watchdog directly), not a recoverable path
             // death.
             armIceRecoveryWatchdogIfNeeded()
+            // W-SRTPFALLBACK — same bad-ICE instant, independent debounce.
+            armSrtpFallbackIfNeeded()
         case .closed:
             state = .disconnected
             stopVideoStatsTelemetry()
             disarmIceRecoveryWatchdog()
+            srtpFallbackTask?.cancel()
+            srtpFallbackTask = nil
         default:
             break
         }
@@ -2980,6 +3127,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W466 — confirm the remote audio track arrived. If this never
         // logs, the peer never published audio (or SDP m-line missing).
         //
+        // IOS-C4b (2026-08-26) — when both peers negotiated
+        // CallCapabilities.audioSrtpV1, `pc.usingNativeAudioSrtp` is already
+        // `true` (set inside `QAudionPeerConnection`'s own `didAdd
+        // rtpReceiver`, BEFORE this delegate callback runs) and the track is
+        // ALREADY the real call audio — this is the ONE case where W574d's
+        // disable must NOT run, or the native audio-srtp path would play
+        // silence despite negotiating correctly.
+        guard !pc.usingNativeAudioSrtp else {
+            print("[WebRTC] remote AUDIO track received — audio-srtp negotiated, playback stays ENABLED (native path)")
+            onRemoteAudioTrack?(track)
+            return
+        }
         // W574d — DISABLE playback of the remote SRTP audio. Voice rides
         // the sealed relay path only; the Android peer keeps its SRTP mic
         // track enabled, and before this gate its voice played out of the
@@ -2990,6 +3149,33 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         track.isEnabled = false
         print("[WebRTC] remote AUDIO track received — playback disabled (sealed relay carries voice)")
         onRemoteAudioTrack?(track)
+    }
+
+    /// IOS-C4b (2026-08-26) — attach the native AUDIO FrameCryptor + the
+    /// PCM-tap-parity RX renderer to the inbound SRTP audio receiver. Runs
+    /// on the WebRTC signalling thread. Mirrors
+    /// `didReceiveRemoteVideoReceiver` immediately above and Android's
+    /// `PeerConnectionHolder.onTrack` AUDIO_SRTP_V1 branch
+    /// (`pendingReceiverForAudioCryptor` + `flushPendingAudioCryptors`).
+    public func peerConnection(_ pc: QAudionPeerConnection,
+                               didReceiveNativeAudioSrtpReceiver receiver: RTCRtpReceiver) {
+        let participant = recipientId ?? "peer"
+        let attached = pc.attachAudioReceiverCryptor(receiver, participantId: participant) { [weak self] pcm in
+            // PCM-TAP PARITY — see NativeAudioPcmTap's own doc. Feeds the
+            // SAME Guardian/VoiceAnalysis/ContactVoiceVerifier/
+            // VoiceLearningSession consumers the sealed-DataChannel decode
+            // path already feeds; `processIncomingAudio` never runs on an
+            // audio-srtp call (the peer sends real RTP, not sealed frames),
+            // so without this wiring those consumers would silently see
+            // zero frames for the call's whole life.
+            self?.onNativeAudioSrtpRxPcm?(pcm)
+        }
+        print("[WebRtcCallController] IOS-C4b: native audio receiver cryptor attached=\(attached) participant=\(participant)")
+        // Publish the session key now if it's already held (idempotent —
+        // same "opportunistic install" pattern as the video receiver
+        // handler right above); the pqcSessionKey didSet / acceptPeerCapabilities
+        // paths (re)publish on arrival/rotation.
+        installAudioSrtpIfPossible()
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,

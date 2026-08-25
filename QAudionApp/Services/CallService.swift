@@ -537,6 +537,22 @@ final class CallService: @unchecked Sendable {
     /// entry points here is defense-in-depth: it closes every path at once
     /// rather than playing whack-a-mole with individual message handlers.
     public var isGroupCallActive: (() -> Bool)?
+    /// IOS-C4b (2026-08-26) — true while the active call negotiated
+    /// `CallCapabilities.audioSrtpV1` and native WebRTC owns capture+
+    /// playout directly via its own audio device module. Read LIVE (not
+    /// captured) from `startAudioIOIfReady`'s gate, same "lazy provider"
+    /// pattern as `isGroupCallActive` — wired ONCE at login by AppState to
+    /// `{ webRtcController?.peerNegotiated()?.useAudioSrtp == true }`, which
+    /// stays correct across every call because `webRtcController` itself is
+    /// reassigned per call. `nil`/`false` (every call before this feature
+    /// existed, and every call whose kill switch is off) makes
+    /// `startAudioIOIfReady` byte-for-byte what it was before.
+    public var getUsesNativeAudioSrtp: (() -> Bool)?
+    /// W-SRTPFALLBACK — true while the manual capture/decode path has been
+    /// explicitly RE-ENGAGED during a native-audio-srtp call's ICE outage
+    /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
+    /// skip in `startAudioIOIfReady` for exactly as long as the outage lasts.
+    private var audioSrtpFallbackActive: Bool = false
     /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
     /// open; returns true if queued there, false to fall back to the WS relay.
     /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
@@ -2683,6 +2699,27 @@ final class CallService: @unchecked Sendable {
             RTLog.info("call", "audioIO defer=1 gate=3")
             return
         }
+        // IOS-C4b (2026-08-26) — the call negotiated CallCapabilities
+        // .audioSrtpV1: native WebRTC owns capture+playout directly via its
+        // own audio device module (QAudionPeerConnection.activateNativeAudioSrtp
+        // / attachAudioReceiverCryptor), so starting AudioCapture's
+        // AVAudioEngine here too would open a SECOND mic/speaker path next
+        // to it — exactly the resource contention this feature exists to
+        // avoid (Android's real, shipped incident: a second AudioRecord
+        // fighting the ADM for the mic, `channel.cc` never configuring
+        // `send=1`). W-SRTPFALLBACK below re-engages this path deliberately
+        // during a native-audio-srtp ICE outage — `audioSrtpFallbackActive`
+        // is the one escape hatch, checked here so the ONE chokepoint
+        // decides for every caller (activateIncomingCallAudio,
+        // handleAudioSessionActivated, handleCallAnswered, CallKit
+        // didActivate) at once, same discipline as the group-call guard
+        // above. `getUsesNativeAudioSrtp` is `nil`/`false` for every call
+        // before this feature existed and every call whose kill switch is
+        // off, so this guard is inert there — byte-for-byte prior behavior.
+        if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
+            RTLog.info("call", "audioIO skip=1 gate=4")
+            return
+        }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
         // owns both the mic tap AND the playback player node, so there is no
         // separate AudioPlayback engine to start (a second engine on the same
@@ -2769,6 +2806,32 @@ final class CallService: @unchecked Sendable {
         if audioCapture != nil {
             audioEnginesStarted = true
         }
+    }
+
+    /// W-SRTPFALLBACK (2026-08-26) — re-engage the manual capture/decode
+    /// path while a native-audio-srtp call's ICE has been down for the full
+    /// debounce (`SrtpFallbackDecisions`, wired from
+    /// `QAudionWebRtcCallController.onAudioSrtpFallbackEngage` via
+    /// AppState). Flips the one escape hatch `startAudioIOIfReady`'s IOS-C4b
+    /// guard checks, then re-runs that SAME chokepoint so every existing
+    /// gate (group-call, session-active, peer-answered) still applies — this
+    /// does not bypass them, it only lifts the audio-srtp-specific one.
+    public func engageAudioSrtpFallback() {
+        guard !audioSrtpFallbackActive else { return }
+        audioSrtpFallbackActive = true
+        RTLog.warn("call", "audiosrtpfb engage=1")
+        startAudioIOIfReady()
+    }
+
+    /// Counterpart — fired the instant ICE recovers. Stops the manual
+    /// capture path again (native audio resumes as the sole TX/RX owner)
+    /// and drops the escape hatch so a LATER outage re-engages cleanly.
+    public func recoverAudioSrtpFallback() {
+        guard audioSrtpFallbackActive else { return }
+        audioSrtpFallbackActive = false
+        RTLog.warn("call", "audiosrtpfb recover=1")
+        audioCapture?.stop()
+        audioEnginesStarted = false
     }
 
     /// W464 — CallKit activated the shared `AVAudioSession`. This is the

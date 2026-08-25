@@ -3881,6 +3881,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return pcm
     }
 
+    /// IOS-C4b / PCM-TAP PARITY (2026-08-26) — the native-audio-srtp RX
+    /// counterpart of `processIncomingAudio`, for a call that negotiated
+    /// `CallCapabilities.audioSrtpV1`. On such a call the peer sends real
+    /// SRTP, never a serialized DataChannel/WS frame, so
+    /// `processIncomingAudio` above is NEVER called for its whole
+    /// life — without this method every RX consumer it feeds
+    /// (`guardianMode`, `contactVoiceVerifier`, `voiceLearningSession`,
+    /// `voiceAnalysis`, `spectrumExtractor`) would silently see zero frames.
+    /// See `NativeAudioPcmTap`'s own doc for the full incident this exists
+    /// to avoid (Android's real, shipped `W-AUDIOSRTPFEATUREPARITY`
+    /// incident, confirmed present on iOS by tracing this exact call chain).
+    ///
+    /// Wired from `QAudionWebRtcCallController.onNativeAudioSrtpRxPcm` via
+    /// `CallService`. `pcm` is already little-endian Int16 mono 48 kHz —
+    /// the SAME layout `enqueueForAnalysis`'s callers assume — so this
+    /// reuses the identical bounded-ring / rxAnalysisQueue machinery with
+    /// zero new consumer code, only a new PRODUCER.
+    public func feedNativeAudioSrtpRxPcm(_ pcm: Data) {
+        enqueueForAnalysis(pcm)
+    }
+
+    /// TX/local-mic counterpart — mirrors `processOutgoingAudio`'s
+    /// `ownerContinuityMonitor.feed(pcmFrame:)` call, minus the Opus encode
+    /// (native SRTP owns encoding on this path). Wired from
+    /// `QAudionWebRtcCallController.onNativeAudioSrtpTxPcm`.
+    public func feedNativeAudioSrtpTxPcm(_ pcm: Data) {
+        ownerContinuityMonitor.feed(pcmFrame: pcm)
+    }
+
     /// Hand decoded RX PCM to the analysis queue. Bounded and drop-oldest:
     /// under load this discards analysis frames rather than letting the
     /// backlog grow or blocking the audio thread. Every consumer downstream
