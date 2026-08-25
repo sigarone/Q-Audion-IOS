@@ -87,6 +87,7 @@ struct ChatListScreen: View {
     /// irreversible locally, hence the confirmation.
     @State private var pendingGroupDelete: GroupRowUi? = nil
     @State private var showingGroupDeleteConfirm = false
+    @State private var recentAlert: AdminBannerData? = nil
 
     /// Sentinel Identifiable per `.fullScreenCover(item:)` con il
     /// groupId + name appena creati.
@@ -247,7 +248,7 @@ struct ChatListScreen: View {
         guard !adminBannerDismissed else { return nil }
 
         // 1. Recent security alert (≤ 24h, severity warning/alert).
-        if let recentAlert = recentSecurityAlertBanner() {
+        if let recentAlert = recentAlert {
             return recentAlert
         }
 
@@ -396,6 +397,10 @@ struct ChatListScreen: View {
         // refreshes the same way the old per-entry loop did (one bulk call
         // instead of N per-group GETs — see `reconcileAllGroupsFromServer`).
         .task {
+            // W57 - load alert banner off the main thread to avoid blocking render
+            // with synchronous Keychain and UserDefaults decryption.
+            let alert = await Task.detached { recentSecurityAlertBanner() }.value
+            recentAlert = alert
             await appState.reconcileAllGroupsFromServer()
         }
         // Fase 1B — recompute the group rows' preview / unread / time when a
