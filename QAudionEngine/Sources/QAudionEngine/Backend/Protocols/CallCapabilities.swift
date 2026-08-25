@@ -95,52 +95,67 @@ public enum CallCapabilities {
     /// TRANSPORT and nothing else.
     public static let dcMuxV1: String = "dc-mux-v1"
 
-    /// Kill switch for ADVERTISING ``dcMuxV1``. Was `false` since this tag was
-    /// added — flipped `true` 2026-08-21 after re-verifying the precondition
-    /// this doc originally deferred on.
+    /// Kill switch for ADVERTISING ``dcMuxV1``. History: `false` since the tag
+    /// was added → `true` 2026-08-21 (live test window) → `false` 2026-08-22
+    /// (window closed, evidence banked) → `true` 2026-08-25 (this change),
+    /// after both conditions the kill-switch test names were independently
+    /// verified with evidence, not re-run as another live experiment.
     ///
     /// The historical risk: advertising this tag makes Android STOP routing
     /// audio through the WS relay and expect a DataChannel. The specific
-    /// danger was Android destroying the relay leg outright on upgrade
-    /// (`wsRelay = null` + `previousWs?.close()`), which tore down the ONLY
-    /// WS audio receive pump — a path that is not there does not degrade the
-    /// call, it silences it. Desktop learned this the expensive way and wrote
-    /// it down in `CallCapabilities.ts:76-83`.
+    /// danger was Android destroying the relay leg outright on upgrade,
+    /// which tore down the ONLY WS audio receive pump — a path that is not
+    /// there does not degrade the call, it silences it. Desktop learned this
+    /// the expensive way and wrote it down in `CallCapabilities.ts:76-83`.
     ///
-    /// **Re-verified 2026-08-21, by reading the current Android source, not by
-    /// re-running the same old assumption**: `CallTransportFactory
-    /// .upgradeToWebRtc`'s own kdoc now states "What it deliberately no
-    /// longer does is close the relay leg" — the destructive close described
-    /// above has been redesigned away. Both `downgradeToWsRelay` and
-    /// `upgradeToWebRtc` are non-destructive leg-swaps today: the inactive
-    /// leg (WS or DC) is kept alive, never torn down, so a mid-call
-    /// DataChannel CLOSING/CLOSED transitions back to WS relay without losing
-    /// the receive path (`peer.dataChannelState.onEach { ... }` in
-    /// `CallTransportFactory.kt`, wired to `downgradeToWsRelay`). The
-    /// Android-side precondition this flag was deferred on is satisfied.
+    /// `DcMuxCapabilityTests.testDcMuxAdvertiseKillSwitchMatchesItsDocumentedPreconditions`
+    /// (formerly `testDcMuxAdvertiseKillSwitchShipsOff`, before this change)
+    /// named two conditions in its assertion message for flipping this. Both
+    /// are now closed, with citations instead of assumptions:
     ///
-    /// **What is NOT re-verified**: this is iOS's OWN DataChannel audio path
-    /// (`qaudion-audio`, `QAudionPeerConnection`/`QAudionWebRtcCallController`)
-    /// running in a real call for the first time — with the flag at `false`
-    /// since it shipped, Android never saw the tag in the intersection, so
-    /// this code has compiled and passed unit tests but never carried a real
-    /// frame end to end. Also worth remembering: a prior session
-    /// misdiagnosed poor Android↔iOS call quality as caused by this flag
-    /// being off, when the real cause was network latency (see
-    /// `qaudion-android-new/docs/HANDOVER_2026-08-11.md` §6) — flipping this
-    /// reduces relay hop overhead for future calls, it does not fix a lossy
-    /// mobile network on its own.
+    /// **(a) Phase 0 log evidence the DataChannel opens and carries frames on
+    /// a real Android↔iOS call.** Gathered 2026-08-22 (Loki cross-platform
+    /// correlation) during the prior live-test window: call `532a3161` —
+    /// dc=2717 / ws=33, ~99% of frames rode the DataChannel once ICE
+    /// converged. (The same session also showed call `222f6b4e` never got ICE
+    /// past NEW inside the 20 s fast-path budget and stayed on WS relay for
+    /// its whole duration — an ICE-convergence gap upstream of dc-mux, not a
+    /// dc-mux failure; dc-mux carried every frame it was asked to carry when
+    /// the path existed to use.)
+    ///
+    /// **(b) "the Android WS-receive-fallback companion change."** Read
+    /// directly from `qaudion-android-new`'s current
+    /// `CallTransportFactory.kt` (2026-08-25) rather than assumed either way:
+    /// this already shipped, under the name `ResilientFrameRelayTransport`.
+    /// Both the WS-relay receive pump and the DataChannel receive pump are
+    /// built once in `start()` and stay subscribed for the entire call,
+    /// regardless of which leg is `active` for transmit — the file's own
+    /// kdoc: "a frame that arrives on the leg we are NOT sending on still
+    /// decodes and still plays. That is the whole point: which leg we
+    /// transmit on must not decide what we can hear." This exact invariant is
+    /// pinned by two dedicated regression tests in
+    /// `ResilientTransportLegSymmetryTest.kt` — `inbound relay audio is heard
+    /// while the transport is transmitting on the DataChannel` and the
+    /// symmetric case for DC audio while transmitting on the relay — kept
+    /// explicit so a regression "would fail here instead of shipping." iOS's
+    /// own receive path already has the same shape and is not a new risk
+    /// introduced by this flip: `CallService.swift`'s WS `audio_frame`
+    /// handler is registered once at login and re-attached on every
+    /// reconnect (`attachIncomingAudioHandler`), never torn down on a
+    /// DataChannel upgrade, and converges with
+    /// `handleIncomingDataChannelAudio` on the same
+    /// `handleIncomingEncryptedFrame` — "The two receive paths converge...
+    /// by design... and that must not change" (`CallService.swift:210-213`).
+    /// So condition (b), as literally worded, was Android-side and was
+    /// already satisfied before this investigation; nothing needed building
+    /// or changing in this repo to close it.
     ///
     /// Rollback is this flag going back to `false` — the tag leaves the next
     /// call's advertisement, the peer's intersection empties at the same
     /// instant, calls in progress are untouched. Compile-time, like
     /// ``longAudioSendEnabled``: no runtime toggle, no remote config, no
     /// debug-menu entry.
-    /// 2026-08-21 — flipped ON for a live test window against real
-    /// production calls (Android<->iOS). 2026-08-22 — flipped back OFF:
-    /// test window closed. `DcMuxCapabilityTests
-    /// .testDcMuxAdvertiseKillSwitchShipsOff` is green again.
-    public static let dcMuxAdvertiseEnabled: Bool = false
+    public static let dcMuxAdvertiseEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`

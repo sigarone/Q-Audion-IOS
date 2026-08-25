@@ -69,7 +69,7 @@ Legenda stato: presente / parziale / assente / n.a. Priorità: P0 = chiude chiam
 | server-call-fixes-bundle | server-done | presente | presente | Nessun rischio trovato — hangup/cancel idempotenti su entrambe, che è tutto ciò che il bundle server richiede | P2 |
 | W-RELAYFLEET (lato client) | server-done | presente (spot-check dovuto) | presente (caveat bridge) | Flotta visibile a entrambi; minori: bridge WSS-TURN desktop prende credenziali solo da relays[0]; parser iOS da verificare su porte-stringa e node_id | P2 |
 | aprof-60x256-long-audio | wire | presente (1.0.959) | presente (default incondizionato) | Negoziazione completa ovunque. Residuo: copertura live sottile sul playout 60 ms desktop; invariante "il consumer audio non si affama mai" da testare per piattaforma | P2 |
-| dc-mux-v1 | wire | parziale (codato, advertise OFF per decisione utente) | presente (path primario) | Audio iOS↔tutti resta su WS relay (carico server + latenza). NON flippare lo switch come chore di parità: condizione (b) è decisione deliberata, va risolta prima | P2 |
+| dc-mux-v1 | wire | presente (advertise ON dal 2026-08-25, condizione (b) chiusa con evidenza — IOS-C5) | presente (path primario) | Risolto lato iOS: `dcMuxAdvertiseEnabled=true`, entrambe le condizioni del kill-switch (evidenza Phase 0 + WS-receive-fallback, già presente in Android come `ResilientFrameRelayTransport`) verificate con citazioni in `CallCapabilities.swift`. Le copie di questo piano negli altri due repo (android-new, desktop) restano da allineare | P2 |
 | W-DELAYSPLIT+W-RELAYID | piattaforma-specifico | n.a. | n.a. | Non è un item di porting; ma l'osservabilità equivalente è prerequisito per debuggare i report di latenza iOS/desktop | P2 |
 
 ---
@@ -197,8 +197,21 @@ C4 — Decisione audio-srtp-v1 (+ W-SRTPFALLBACK, W-SRTPPTIME contingenti).
 Stato reale, senza edulcorare: su desktop l'assenza dell'audio SRTP è una POSIZIONE DI SICUREZZA deliberata (W574d: un track audio SRTP giudicato classico/relay-MITM-abile fuori dal SAS; `srtpDirKeyV1` è pubblicizzato solo per rilevare downgrade), non un'omissione. Su iOS è un blocker tecnico: la build WebRTC in uso non espone RTCFrameEncryptor, e iOS deliberatamente non costruisce alcun track m=audio. Ogni chiamata mista oggi viaggia quindi sul path audio sealed DC/WS-relay: niente NetEQ, niente NACK/RTX, latenza e gestione perdita peggiori del comportamento standard di settore che Android-Android già ottiene.
 Il piano NON prescrive il porting: prescrive la RISOLUZIONE ESPLICITA della questione di policy, con tre esiti possibili da registrare in docs/: (a) il path sealed resta il canale audio cross-platform permanente — allora si codifica la scelta, si smette di considerarlo un gap, e si investe sul renderlo buono (C3 diventa ancora più centrale); (b) si porta SRTP audio — allora il bundle è indivisibile day-one: `audio-srtp-v1` + W-SRTPFALLBACK (o le chiamate SRTP muoiono sugli outage ICE che Android sopravvive) + W-SRTPPTIME (munging ptime 60, o si regredisce a 3x packet rate contro il pin Android); su iOS il prerequisito è risolvere il gap RTCFrameEncryptor (fork/upgrade della build WebRTC — sforzo NON stimato, incognita dichiarata); (c) si rinvia con non-advertise esplicito e data di revisione. Fino alla decisione: sicuro per costruzione, l'intersezione non scatta mai.
 
-C5 — dc-mux-v1 su iOS: non è un chore di parità.
-Il codice è completo (W-DCMUX, DC-first per-frame con fallback relay) ma `dcMuxAdvertiseEnabled=false` per decisione esplicita dell'utente: la condizione (b) del kill-switch non è soddisfatta (acceso il 2026-08-21 per finestra di test, rispento il 2026-08-22). Costo attuale: l'audio iOS↔tutti resta su WS relay end-to-end (carico server + latenza contro DC). Azione nel piano: portare la condizione (b) a risoluzione documentata, POI flippare — mai il contrario.
+C5 — dc-mux-v1 su iOS: RISOLTO 2026-08-25 (IOS-C5).
+Il codice era completo (W-DCMUX, DC-first per-frame con fallback relay); mancava solo la
+risoluzione documentata della condizione (b) del kill-switch prima di riaccenderlo (acceso il
+2026-08-21 per finestra di test, rispento il 2026-08-22 a finestra chiusa). Investigazione
+2026-08-25: (a) evidenza Phase 0 già raccolta il 2026-08-22 (chiamata `532a3161`, dc=2717/
+ws=33, ~99% via DC); (b) "the Android WS-receive-fallback companion change" verificato
+presente nel sorgente reale di `qaudion-android-new` — `CallTransportFactory.kt`
+(`ResilientFrameRelayTransport`) tiene entrambe le pump di ricezione (WS + DC) vive per
+l'intera chiamata indipendentemente dalla gamba di trasmissione attiva, invariante fissato da
+test dedicati (`ResilientTransportLegSymmetryTest.kt`); iOS ha la stessa proprietà strutturale
+lato proprio (`CallService.swift`: l'handler WS `audio_frame` resta sempre registrato e
+converge con il path DataChannel sullo stesso `handleIncomingEncryptedFrame`). Nessun fix di
+codice necessario in questo repo per la condizione (b) — era già soddisfatta lato Android;
+solo `CallCapabilities.swift`/`DcMuxCapabilityTests.swift` aggiornati con le citazioni e il
+flag portato a `true`. Dettaglio completo nel commento di `dcMuxAdvertiseEnabled`.
 
 C6 — Residui aprof-60x256: la negoziazione è completa ovunque (iOS 1.0.959 con fix del floor di playout; desktop default incondizionato dal 2026-08-14 — l'inventario che lo dava "ancora spento" era stale). Restano: copertura live del playout scheduling 60 ms desktop, e il test per-piattaforma dell'invariante "il consumer audio non si affama mai" (il budget di concealment è in TEMPO: a 60 ms una perdita costa 3x).
 
