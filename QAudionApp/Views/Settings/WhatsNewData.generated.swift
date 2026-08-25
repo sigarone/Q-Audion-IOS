@@ -9,10 +9,28 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1030",
+              date: "2026-08-26",
+              title: "v1.0.1030",
+              bullets: [
+                "feat(call): native SRTP audio (IOS-C4b, audio-srtp-v1) — PCM-tap parity closed, enabled on explicit sign-off",
+                "feat(call): parity batch — jitter-buffer time-stretch, screenshare quality profile, ICE restart machine",
+                "feat(call): parity Fase C/D batch — FEC decode, PLP feedback loop, keyframe fast-recovery, bandwidth cap, route clamp, backpressure, transport hygiene",
+                "feat(call): resolve dc-mux-v1 kill-switch condition (b), advertise ON",
+                "feat(call): parity Fase B — setup retry, glare tiebreak, hangup echo/park, dc-hangup-v1, media-dead watchdog, durable missed-call replay",
+                "feat(call): parity Fase A — active_call_id assert, ice-batch-v1 RX, hangup id-gate, offer age gate, fleet-relay decode pin",
+                "docs(interop): cross-platform parity plan — iOS+desktop alignment to the Android call-stack baseline",
+                "⚡ Bolt: Fix main-thread bottleneck in ChatListScreen by moving heavy crypto/IO out of computed properties (#89)",
+                "docs(comments): rephrase design-rationale comments to avoid naming competing products",
+                "fix(security,perf): cherry-pick verified hunks from Jules PRs #86/#88",
+                "fix(call): close the WS-branch reportIncomingCall/state-set race + test noCallInFlight",
+                "fix(call): an out-of-order audio frame is late, not stale — and a ringing CallKit call is not an orphan",
+              ]),
         .init(id: "v1.0.1029",
               date: "2026-08-24",
               title: "v1.0.1029",
               bullets: [
+                "chore: regenerate changelog for v1.0.1029",
                 "fix(call): anchor upgrade-responder ICE watchdog to setRemoteOffer success",
                 "fix(crypto): widen video M-14 anti-replay window 512->1024 (W-VNACK-REPLAY)",
                 "fix(messaging): stop chat-message v3 decrypt from poisoning the session on a wrong PSK guess",
@@ -154,16 +172,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1011",
                 "fix(build): TestFlight v1.0.1010 compile failures",
-              ]),
-        .init(id: "v1.0.1010",
-              date: "2026-08-21",
-              title: "v1.0.1010",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1010",
-                "fix(security): I3 §5 — iOS-as-initiator PQC re-key + v4 ratchet reset fix",
-                "fix(security): I3 — mid-call PQC re-key content-based dedup",
-                "fix(security): MASVS remediation — telemetry consent, biometric default, DB backup exclusion, rekey scaffold",
-                "fix(security): migrate TusResumeStateStore off plaintext UserDefaults",
               ]),
     ]
 }
