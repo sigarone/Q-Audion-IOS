@@ -869,6 +869,19 @@ public final class QAudionPeerConnection: NSObject {
         pc.add(cand) { _ in /* errors logged at signaling layer */ }
     }
 
+    /// W-ICEBATCH (2026-08-25) — prune a remote candidate the peer withdrew
+    /// (`removed: true` in the batched `call_ice` form). `removeIceCandidates:`
+    /// is stock libwebrtc ObjC API (imported as `remove(_:)`); removing a
+    /// candidate that was never added is a native no-op, which is exactly
+    /// right for a removal that raced ahead of (or outlived) its add.
+    public func removeRemoteIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+        guard let pc = peerConnection else { return }
+        let cand = RTCIceCandidate(sdp: candidate,
+                                   sdpMLineIndex: sdpMLineIndex,
+                                   sdpMid: sdpMid)
+        pc.remove([cand])
+    }
+
     // MARK: - Close
 
     public func close() {

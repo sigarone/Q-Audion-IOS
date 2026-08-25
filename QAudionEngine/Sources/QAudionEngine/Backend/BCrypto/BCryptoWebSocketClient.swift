@@ -116,6 +116,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// (see ``VideoStateBeacon``).
     public var onCallVideoState: ((_ callId: String, _ paused: Bool, _ seq: Int?) -> Void)?
 
+    /// W-ACTIVECALLASSERT (2026-08-25) — live view of the call id this
+    /// process currently believes is live, or `nil` when it holds no call
+    /// state. Consulted on EVERY `authenticate` frame so a mid-call
+    /// reconnect asserts the call and the server cancels its pending
+    /// disconnect-grace teardown (exact match only — a wrong or absent
+    /// assertion lets the timer run and the call dies). Wired by the
+    /// integration layer (BCryptoBackendProvider → the calling impl's
+    /// bound call id), mirroring Android's `WsDispatcher
+    /// .activeCallIdProvider`, so this transport file never depends on
+    /// the call layer. Invoked on the WS delegate thread — the closure
+    /// MUST be thread-safe (the calling impl's accessor locks).
+    public var activeCallIdProvider: (@Sendable () -> String?)?
+
     private var webSocketTask: URLSessionWebSocketTask?
     /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
     /// survives the lifetime of the `URLSession` (URLSession only holds
@@ -1536,6 +1549,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // entirely and this frame is byte-for-byte what it was before.
         if CallCapabilities.binRelayReceiveEnabled {
             data["bin_relay"] = 1
+        }
+        // W-ACTIVECALLASSERT — assert the call this process still believes
+        // is live so the server cancels the pending disconnect-grace
+        // teardown on reconnect (it cancels ONLY on exact match). Same
+        // omit-when-absent shape as `bin_relay`: no live call means no key,
+        // and the frame stays byte-for-byte what it was before. A stale
+        // assertion is answered by the server with a plain `call_hangup`
+        // on this fresh socket, which the normal handler treats as
+        // definitive teardown — no special-case code anywhere here.
+        if let liveCallId = activeCallIdProvider?(), !liveCallId.isEmpty {
+            data["active_call_id"] = liveCallId
         }
         send(type: "authenticate", data: data)
     }

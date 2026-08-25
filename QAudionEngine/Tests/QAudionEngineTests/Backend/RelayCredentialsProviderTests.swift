@@ -95,4 +95,41 @@ final class RelayCredentialsProviderTests: XCTestCase {
         XCTAssertEqual(resp.wssTurnUrl, "wss://wss-turn.example")
         XCTAssertEqual(resp.onionAddress, "abc.onion")
     }
+
+    /// W-RELAYFLEET (2026-08-25) — the deployed `/api/v1/calling/relays`
+    /// multi-group shape, spot-checked end to end. Groups 3..n (one per
+    /// fresh VPN exit node) differ from groups 1–2 in exactly the ways a
+    /// brittle parser would choke on: an EXTRA `node_id` key, `hostname`
+    /// carrying the node IP, and `port` serialized as a STRING (the server
+    /// builds it via SplitHostPort) where groups 1–2 send a NUMBER. The
+    /// parser must tolerate all of it — plus unknown keys anywhere and
+    /// url lists of different lengths — decode every group, and leave ICE
+    /// to elect by measured RTT.
+    func testRelayResponseMultiGroupFleetDecode() throws {
+        let json = Data("""
+        {
+          "relays": [
+            {"type": "turn", "hostname": "203.0.113.10", "port": 3478,
+             "urls": ["stun:turn.example:3478", "turn:turn.example:3478?transport=udp", "turn:turn.example:3478?transport=tcp", "turns:turn.example:5349"],
+             "username": "1756100000:fleet", "password": "p", "credential": "p", "ttl": 3600},
+            {"type": "turn", "hostname": "203.0.113.10", "port": 3478,
+             "urls": ["stun:203.0.113.10:3478", "turn:203.0.113.10:3478?transport=udp"],
+             "username": "1756100000:fleet", "password": "p", "credential": "p", "ttl": 3600},
+            {"type": "turn", "node_id": "node-fra-07", "hostname": "198.51.100.23", "port": "3478",
+             "urls": ["stun:198.51.100.23:3478", "turn:198.51.100.23:3478?transport=udp"],
+             "username": "1756100000:fleet", "password": "p", "credential": "p", "ttl": 3600,
+             "some_future_key": {"nested": true}}
+          ],
+          "wss_turn_url": "wss://wss-turn.example",
+          "masque_url": "https://masque.example"
+        }
+        """.utf8)
+        let resp = try JSONDecoder().decode(RelayResponse.self, from: json)
+        XCTAssertEqual(resp.relays.count, 3, "every group decodes — string port / node_id / unknown keys must not fail the batch")
+        XCTAssertEqual(resp.relays[0].urls.count, 4)
+        XCTAssertEqual(resp.relays[2].urls, ["stun:198.51.100.23:3478", "turn:198.51.100.23:3478?transport=udp"])
+        XCTAssertEqual(resp.relays[2].username, "1756100000:fleet")
+        XCTAssertEqual(resp.relays[2].credential, "p")
+        XCTAssertEqual(resp.relays[2].ttl, 3600)
+    }
 }

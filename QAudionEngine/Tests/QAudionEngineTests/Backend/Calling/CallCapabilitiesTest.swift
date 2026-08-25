@@ -86,4 +86,12 @@ final class CallCapabilitiesTest: XCTestCase {
     func test_LOCAL_containsRatchetV3() {
         XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.ratchetV3))
     }
+
+    // W-ICEBATCH (2026-08-25) — RX support shipped with this tag, so
+    // advertising it is honest; the string must stay byte-identical to
+    // Android's `ICE_BATCH_V1`.
+    func test_LOCAL_containsIceBatchV1() {
+        XCTAssertEqual(CallCapabilities.iceBatchV1, "ice-batch-v1")
+        XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.iceBatchV1))
+    }
 }

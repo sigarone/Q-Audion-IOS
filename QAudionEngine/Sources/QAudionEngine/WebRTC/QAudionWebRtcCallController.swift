@@ -1303,6 +1303,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection?.addRemoteIce(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
     }
 
+    /// W-ICEBATCH (2026-08-25) — batch-form candidate removal (`removed:
+    /// true` entry in a `candidates` array): the peer withdrew this
+    /// candidate, prune it from the ICE agent immediately.
+    public func handleRemoteIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+        peerConnection?.removeRemoteIce(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
+    }
+
     // MARK: - Mute / hangup
 
     public func setMicrophoneMuted(_ muted: Bool) {

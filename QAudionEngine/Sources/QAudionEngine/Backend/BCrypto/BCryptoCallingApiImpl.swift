@@ -369,6 +369,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
                 "recipient_id": recipientId,   // belt-and-braces routing fallback
             ]
         )
+        // W-ACTIVECALLASSERT — a call we just explicitly hung up is no
+        // longer "believed live": unbind it (when it is the bound one) so
+        // the next `authenticate` does not assert a dead call. Harmless if
+        // it lingered anyway (the server answers a stale assertion with a
+        // call_hangup the handler no-ops), but asserting truthfully is
+        // strictly better than relying on that backstop.
+        unbindCallIdIfMatching(callId)
     }
 
     // MARK: - Pre-negotiation (Android/Desktop interop)
@@ -627,6 +634,18 @@ public final class BCryptoCallingApiImpl: CallingApi {
 
     private func setActiveCallId(_ cid: String) {
         callIdLock.lock(); activeCallId = cid; callIdLock.unlock()
+    }
+
+    /// W-ACTIVECALLASSERT — clear the bound id ONLY when it names the same
+    /// call (case-insensitive, same rationale as `peerCapabilities`' fold:
+    /// the wire id's case has drifted before). Sync helper for the same
+    /// Swift 6 NSLock-in-async rule as `checkAndMarkAnswerSent` above.
+    private func unbindCallIdIfMatching(_ callId: String) {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        guard let bound = activeCallId,
+              bound.caseInsensitiveCompare(callId) == .orderedSame else { return }
+        activeCallId = nil
+        _answerSent = false
     }
 
     private func clearActiveCallId() {

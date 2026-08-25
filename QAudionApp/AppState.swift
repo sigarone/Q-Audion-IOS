@@ -1639,7 +1639,10 @@ final class AppState: ObservableObject {
     /// a controller at all) cannot grow this forever; flushed the instant
     /// `webRtcController` is assigned, cleared on every teardown so a next
     /// call never inherits a previous one's stale candidates.
-    private var pendingRemoteIceCandidates: [(candidate: String, sdpMid: String?, sdpMLineIndex: Int32)] = []
+    /// W-ICEBATCH (2026-08-25) — `removed` carries a batch-form candidate
+    /// REMOVAL through the same FIFO, so a queued add followed by its own
+    /// queued removal replays in order at flush time and nets out.
+    private var pendingRemoteIceCandidates: [(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, removed: Bool)] = []
     private static let pendingRemoteIceCandidatesCap = 25
     /// Remote video track delivered by the WebRTC stack when the peer
     /// sends video via RTP (Android interop path). Typed as Any? so the
@@ -4629,6 +4632,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// W-OFFERTS (2026-08-25) — maximum age of a server-stamped
+    /// `call_incoming` before the ring is suppressed. Aligned with
+    /// Android's W-OFFERTS constant (60 s, `MainActivity` call_incoming
+    /// collector) — the two platforms must agree on when an offer is
+    /// "given up on" or a mixed pair rings differently for the same
+    /// redelivery.
+    private static let incomingOfferMaxAgeMs: Int64 = 60_000
+
     /// W74: register the WS dispatch handlers that turn server-relayed
     /// call signaling into CallKit + ring on the responder side. Three
     /// inbound types matter:
@@ -4669,6 +4680,26 @@ final class AppState: ObservableObject {
             // A blocked caller must not be able to ring the device or
             // trigger key-exchange side effects.
             if BlockedContactsStore.isBlocked(senderId) { return }
+            // W-OFFERTS (2026-08-25) — offer age gate (phantom ring). The
+            // server stamps every relayed `call_incoming` with
+            // `server_ts_ms` (unix millis at server receive), and a
+            // buffered push-wake redelivery keeps the ORIGINAL stamp — so
+            // the field can legitimately be much older than "now", and
+            // that is exactly the case to gate: an offer older than the
+            // threshold is one the caller has long since given up on.
+            // Ringing it at full strength is the phantom ring; return
+            // BEFORE any provisioning, binding, or state reset, same as
+            // the blocked-contact drop above. A missing field is a legacy
+            // server → no gate, ring normally.
+            if let serverTs = (data["server_ts_ms"] as? NSNumber)?.int64Value, serverTs > 0 {
+                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                let offerAgeMs = nowMs - serverTs
+                if offerAgeMs > AppState.incomingOfferMaxAgeMs {
+                    let line: String = "offerts suppress id=" + String(callIdStr.prefix(8)) + " age_ms=" + String(offerAgeMs)
+                    RTLog.warn("call", line)
+                    return
+                }
+            }
             // D11: stash the server-stamped `sender_device_id` keyed by sender so
             // the later OFFER/ACCEPT (which arrive over `opaque_message` WITHOUT a
             // device id — the server relays only `sender_id` there) can verify
@@ -5105,7 +5136,36 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "call_hangup") { [weak self] _, data in
             guard let self = self else { return }
             let reasonString = data["reason"] as? String ?? "normal"
+            let hangupCallId = ((data["call_id"] as? String) ?? "").lowercased()
             DispatchQueue.main.async {
+                // W-CALLHANGUP-SEMANTICS (2026-08-25) — a call_hangup naming
+                // the call we are actually running is definitive teardown
+                // whatever the reason string says (`peer_disconnected`,
+                // `recall`, or anything unknown — including a peer's late
+                // `peer-acknowledged` bookkeeping echo). What it must NEVER
+                // do is tear down a DIFFERENT call: the server replays
+                // hangups for recently-ended calls (W-STALEOFFER /
+                // W-LATERECONNECT answer a stale re-offer or a stale
+                // `active_call_id` assertion this way), and before this gate
+                // any such late envelope ran the FULL teardown against
+                // whatever call happened to be live. A call_id that names
+                // some other call, or no call held at all = silent no-op,
+                // log only. An ABSENT call_id keeps the old behaviour
+                // (teardown) — we cannot prove it is foreign, and dropping
+                // it would strand a real hangup from a peer that omits the
+                // field. Duplicates for the matching call stay safe: endCall
+                // is already idempotent (H-6 `isEndingCall`).
+                let active = self.canonicalActiveCallId()
+                if !hangupCallId.isEmpty, let active, active != hangupCallId {
+                    let line: String = "hangup noop id=" + String(hangupCallId.prefix(8)) + " active=" + String(active.prefix(8)) + " match=0"
+                    RTLog.info("call", line)
+                    return
+                }
+                if active == nil && self.noCallInFlight() {
+                    let line: String = "hangup noop id=" + String(hangupCallId.prefix(8)) + " rsn=" + reasonString + " inflight=0"
+                    RTLog.info("call", line)
+                    return
+                }
                 self.handleRemoteCallHangup(reasonString: reasonString)
             }
         }
@@ -6993,6 +7053,30 @@ final class AppState: ObservableObject {
         }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
             guard let self = self else { return }
+            // W-ICEBATCH (2026-08-25) — batch form (`ice-batch-v1`): a
+            // `candidates` array of {candidate, sdp_mid?, sdp_mline_index?,
+            // removed?} entries. When the array is present the legacy
+            // top-level fields are empty and MUST be ignored. `removed: true`
+            // entries prune the candidate immediately. Receivers accept BOTH
+            // forms forever, regardless of what was negotiated — only the
+            // SENDER gates the batch form on the capability intersection.
+            if let batch = data["candidates"] as? [[String: Any]] {
+                for entry in batch {
+                    let cand = (entry["candidate"] as? String) ?? ""
+                    let mid = entry["sdp_mid"] as? String
+                    let mline = (entry["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
+                    if (entry["removed"] as? Bool) == true {
+                        self.handleIncomingWebRtcIceRemoval(candidate: cand,
+                                                            sdpMid: mid,
+                                                            sdpMLineIndex: mline)
+                    } else if !cand.isEmpty {
+                        self.handleIncomingWebRtcIce(candidate: cand,
+                                                     sdpMid: mid,
+                                                     sdpMLineIndex: mline)
+                    }
+                }
+                return
+            }
             let candidate = (data["candidate"] as? String) ?? ""
             let sdpMid = data["sdp_mid"] as? String
             let mlineIndex = (data["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
@@ -19071,13 +19155,33 @@ extension AppState {
             if pendingRemoteIceCandidates.count >= Self.pendingRemoteIceCandidatesCap {
                 pendingRemoteIceCandidates.removeFirst()
             }
-            pendingRemoteIceCandidates.append((candidate, sdpMid, sdpMLineIndex))
+            pendingRemoteIceCandidates.append((candidate, sdpMid, sdpMLineIndex, false))
             RTLog.warn("call", "ice candidate queued — no controller yet n=\(pendingRemoteIceCandidates.count)")
             return
         }
         controller.handleRemoteIce(candidate: candidate,
                                      sdpMid: sdpMid,
                                      sdpMLineIndex: sdpMLineIndex)
+    }
+
+    /// W-ICEBATCH (2026-08-25) — batch-form candidate REMOVAL (`removed:
+    /// true`): the peer withdrew this candidate, prune it immediately so
+    /// it does not sit stale in the ICE agent aging out via failed
+    /// connectivity checks. Queued through the same W-ICEQUEUE FIFO when
+    /// the controller isn't up yet, so an add + its own removal replay in
+    /// order at flush time.
+    func handleIncomingWebRtcIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+        guard let controller = webRtcController as? QAudionWebRtcCallController else {
+            if pendingRemoteIceCandidates.count >= Self.pendingRemoteIceCandidatesCap {
+                pendingRemoteIceCandidates.removeFirst()
+            }
+            pendingRemoteIceCandidates.append((candidate, sdpMid, sdpMLineIndex, true))
+            RTLog.warn("call", "ice removal queued — no controller yet n=\(pendingRemoteIceCandidates.count)")
+            return
+        }
+        controller.handleRemoteIceRemoval(candidate: candidate,
+                                          sdpMid: sdpMid,
+                                          sdpMLineIndex: sdpMLineIndex)
     }
 
     /// W-ICEQUEUE — apply every candidate that arrived before `controller`
@@ -19090,7 +19194,11 @@ extension AppState {
         pendingRemoteIceCandidates.removeAll()
         RTLog.info("call", "ice candidate flush n=\(queued.count)")
         for c in queued {
-            controller.handleRemoteIce(candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex)
+            if c.removed {
+                controller.handleRemoteIceRemoval(candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex)
+            } else {
+                controller.handleRemoteIce(candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex)
+            }
         }
     }
 }
@@ -19110,5 +19218,6 @@ extension AppState {
         print("[AppState] WebRTC: call_answer received but WebRTC framework not linked")
     }
     func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {}
+    func handleIncomingWebRtcIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {}
 }
 #endif

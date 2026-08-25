@@ -48,7 +48,19 @@ public final class BCryptoBackendProvider: BackendProvider {
         return c
     }
 
-    public lazy var callingApi: CallingApi = BCryptoCallingApiImpl(ws: wsClient, rest: restClient)
+    public lazy var callingApi: CallingApi = {
+        let impl = BCryptoCallingApiImpl(ws: wsClient, rest: restClient)
+        // W-ACTIVECALLASSERT — hand the WS layer a live view of the bound
+        // call id so every `authenticate` frame asserts it and the server's
+        // mid-call blip recovery can cancel its pending disconnect-grace
+        // teardown (or answer with the late definitive `call_hangup` for a
+        // call that already ended). The impl's accessor is NSLock-guarded,
+        // so the read is safe from the WS delegate thread. No call bound =
+        // nil = the field is omitted — "I hold no call state" is exactly
+        // what a fresh session should say.
+        wsClient.activeCallIdProvider = { [weak impl] in impl?.getActiveCallId() }
+        return impl
+    }()
     public lazy var messageApi: MessageApi = BCryptoMessageApiImpl(ws: wsClient)
     public lazy var accountApi: AccountApi = BCryptoAccountApiImpl(rest: restClient)
     public lazy var contactsApi: ContactsApi = BCryptoContactsApiImpl(rest: restClient)

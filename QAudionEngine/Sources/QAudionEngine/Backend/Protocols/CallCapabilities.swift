@@ -151,6 +151,30 @@ public enum CallCapabilities {
     /// direct `call_upgrade_request` real-offer.
     public static let upgradeIntentRecvV1: String = "upgrade-intent-recv-v1"
 
+    // ── W-ICEBATCH (2026-08-25): batched trickle-ICE signaling ──────────────
+
+    /// Batched `call_ice` v1 (`ice-batch-v1`). Mirrors Android `ICE_BATCH_V1`
+    /// (`CallCapabilities.kt`). Byte-exact string, plain ASCII — compared
+    /// with string equality on every platform, so a rename or re-case is a
+    /// silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE a `call_ice` envelope
+    /// whose data carries a `candidates` ARRAY of `{candidate, sdp_mid?,
+    /// sdp_mline_index?, removed?}` entries — coalesced additions plus
+    /// explicit candidate REMOVALS (`removed: true`, pruned immediately on
+    /// receipt) — instead of the legacy one-candidate-per-envelope top-level
+    /// form. The legacy form stays accepted forever regardless of
+    /// negotiation; the batch form is only ever SENT when BOTH peers
+    /// advertised the tag (the sender enforces that gate). The server never
+    /// sees any of it: `call_ice` data rides the party-scoped opaque relay
+    /// end-to-end, so no server change is involved.
+    ///
+    /// iOS advertises RECEIVE support only — TX stays legacy per-candidate
+    /// (deliberately deferred; the interop value is receiving the peer's
+    /// coalesced bursts and, above all, its candidate removals, which had
+    /// no wire representation at all before this tag).
+    public static let iceBatchV1: String = "ice-batch-v1"
+
     // ── W-LONGAUDIO (2026-08-10): the negotiated 60 ms / 256-byte profile ──
     //
     // Two tags, byte-exact, identical on Android, iOS, Desktop. They are
@@ -297,7 +321,11 @@ public enum CallCapabilities {
     /// the gates. Sending this raw bypasses the earbud filter — see that
     /// method's notes for what that costs.
     public static let local: [String] = {
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1]
+        // W-ICEBATCH — RX support is implemented (batch + removals consumed
+        // in the `call_ice` handler), so advertising is honest; ungated and
+        // never stripped, matching Android's registry (the tag is transport
+        // plumbing, orthogonal to earbud/sovereign key custody).
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         // W-LONGAUDIO — receive support, then send support. Both gated; both
         // ship absent. See the two kill switches above for why the RECEIVE one
