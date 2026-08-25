@@ -923,37 +923,7 @@ struct AboutSettingsScreen: View {
     /// Tapping copies `value` to UIPasteboard and shows haptic feedback.
     /// Mono-formatted (since copyable values are usually IDs / hashes).
     private func tapCopyRow(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 14) {
-            Text(label)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Text(value)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            #if canImport(UIKit)
-            UIPasteboard.general.string = value
-            HapticFeedback.messageSent()
-            #endif
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Copia negli appunti")
+        TapCopyRow(label: label, value: value)
     }
 
     private func statusRow(_ label: String, enabled: Bool) -> some View {
