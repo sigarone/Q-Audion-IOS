@@ -1822,6 +1822,18 @@ final class AppState: ObservableObject {
     /// derive the per-second delta.
     private var cryptoMeterLastTotal: Int64 = 0
 
+    #if canImport(WebRTC)
+    /// W-DELAYSPLIT (IOS-E6) — previous poll's cumulative jitter-buffer
+    /// counters, for the delta-based windowed average computed by
+    /// `computeJitterBufferWindowMs` (see the `sampleCallNetworkStats`
+    /// extension below). Mirrors Android's `CallViewModel.lastJbDelaySec`/
+    /// `lastJbEmitted` (CallViewModel.kt:2459-2460). Declared here (main
+    /// class body, not the extension below) because Swift extensions
+    /// cannot hold stored properties.
+    private var lastJbDelaySec: Double = 0.0
+    private var lastJbEmittedCount: Int64 = 0
+    #endif
+
     // MARK: - Server connection state
     /// Pinned to `PinnedServerHost.url` (`https://voip.bcrypto.com`).
     /// We keep it as `@Published var` (not `let`) only because the
@@ -2939,6 +2951,17 @@ final class AppState: ObservableObject {
         // lock) and touches no `@MainActor` state.
         callService.onContactVoiceScoreUpdated = { [weak self] score in
             self?.reKeyScheduler.observeConfidence(score)
+        }
+        // W-PLPFEEDBACK (2026-08-25) — CallService's own timer measured a
+        // fresh windowed inbound-loss percentage; ship it to the peer. Same
+        // defensive hop as `onOwnerContinuityStateChanged` above rather than
+        // assuming the Timer fires on main: `callContactId` is `@MainActor`
+        // state and `sendPlpAnnounce` is itself `@MainActor`-isolated.
+        callService.onLocalInboundLossReport = { [weak self] pct in
+            Task { @MainActor in
+                guard let self, let peerId = self.callContactId else { return }
+                await self.sendPlpAnnounce(pct: pct, peerId: peerId)
+            }
         }
         // I3 §5 (2026-08-21) — drives a real PQC re-handshake via
         // QAudionCallIntegration.performPqcReKey. Only ever does anything on
@@ -5734,6 +5757,17 @@ final class AppState: ObservableObject {
         controller.onVideoStallDetected = { [weak self] in
             Task { @MainActor [weak self] in self?.requestKeyframeFromSender() }
         }
+        // W-KFFAST (2026-08-25) — receiver cryptor decrypt-fail → nudge the
+        // sender sub-second, same wire path/rate-limiter as the stall ladder
+        // above but fired within one frame of the cryptor detecting failure.
+        controller.onDecryptFailureDetected = { [weak self] in
+            Task { @MainActor [weak self] in self?.requestKeyframeFromSender(reason: "decryptfail") }
+        }
+        // W-BWCAP (2026-08-25) — our own route-tier ceiling changed →
+        // report it to the peer as our local downlink decision.
+        controller.onLocalVideoCapBpsChanged = { [weak self] bps in
+            Task { @MainActor [weak self] in self?.announceVideoBwCap(bps: bps) }
+        }
         controller.videoTelemetry = { [weak self] kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
             // VIDEODIAG — feed the arrived/decoded counters off the
@@ -6240,14 +6274,19 @@ final class AppState: ObservableObject {
     /// which forces a local encoder IDR (WS-HEVC rail) or is a harmless no-op
     /// (pure-WebRTC sender). The API layer rate-limits to 1/s per §8.7, so
     /// callers may fire this freely on a persistent stall.
+    /// `reason` distinguishes the two nudge sources in the remote log:
+    /// `"stall"` (the multi-second `onVideoStallDetected` ladder, default —
+    /// unchanged call sites) vs `"decryptfail"` (W-KFFAST's sub-second
+    /// cryptor-state callback, 2026-08-25). Same rate-limited wire send
+    /// either way — the API layer's 1/s limiter doesn't distinguish reason.
     @MainActor
-    private func requestKeyframeFromSender() {
+    private func requestKeyframeFromSender(reason: String = "stall") {
         guard isInCall,
               let peerId = callContactId,
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
         videoDiag.noteKeyframeRequested()   // VIDEODIAG — lastKeyframeRequestAtMs
-        RTLog.info("call", "keyframe request ev=kfreq reason=stall")
+        RTLog.info("call", "keyframe request ev=kfreq reason=\(reason)")
         Task {
             try? await impl.sendVideoKeyframeRequest(
                 callId: callId, recipientId: peerId)
@@ -10650,6 +10689,16 @@ final class AppState: ObservableObject {
             RTLog.info("call", line)
             echoHangupToServer(callId: callId, tag: "opaque")
             handleRemoteCallHangup(reasonString: reason)
+        case .plp(let callId, let percent):
+            // W-PLPFEEDBACK — the peer's own measured inbound loss. Sender
+            // guard mirrors VOICE_KEY/OWNER_CONT/EARBUDPDU: only the current
+            // call's peer can move our TX encoder's loss-hint knob.
+            guard callContactId == senderId else {
+                print("[AppState] PLP dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            callService.applyPeerPacketLossReport(percent)
+            print("[AppState] PLP received callId=\(callId.prefix(8))… percent=\(percent) from=\(senderId.prefix(8))…")
         case .earbudPdu(let callId, let pdu):
             // earbud-relay-v1 — HSRESP fragments relayed by the
             // earbud-side phone. Sender must be the active call peer
@@ -10735,6 +10784,22 @@ final class AppState: ObservableObject {
                 hits += 1
             }
             print("[AppState] VNACK resent \(hits)/\(missing.count) fragments callId=\(callId.prefix(8))… frameId=\(frameId)")
+        case .videoBwCap(let callId, let bps):
+            // W-BWCAP (2026-08-25) — peer's own local downlink decision;
+            // clamp OUR outbound video sender to it. Sender guard mirrors
+            // VNACK/VOICE_KEY/EARBUDPDU: only the current call's peer can
+            // update this. Consumed by `VideoBandwidthCap` (pure logic,
+            // read by `QAudionWebRtcCallController
+            // .applyComposedVideoSenderClamp` on every route/backpressure
+            // re-apply) — no direct controller reference needed here,
+            // same decoupling as Android's `PeerBitrateCap` singleton.
+            guard callContactId == senderId else {
+                print("[AppState] VBWCAP dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            VideoBandwidthCap.update(reportedBps: bps)
+            RTLog.info("call", "video bw-cap received ev=vbwcaprx bps=\(bps)")
+            print("[AppState] VBWCAP received callId=\(callId.prefix(8))… bps=\(bps) from=\(senderId.prefix(8))…")
         }
     }
 
@@ -11152,6 +11217,34 @@ final class AppState: ObservableObject {
             print("[AppState] SCREEN_SHARE announce shipped active=\(active) callId=\(callId.prefix(8))…")
         } catch {
             print("[AppState] announceScreenShare failed: \(error)")
+        }
+    }
+
+    /// W-BWCAP (2026-08-25) — ship OUR local video-ladder decision (the
+    /// route-tier ceiling `QAudionWebRtcCallController
+    /// .onLocalVideoCapBpsChanged` just resolved) to the peer as a
+    /// receive-side bitrate cap. Mirrors `announceScreenShare` byte for
+    /// byte (same opaque_message piggy-back channel, same self-echo
+    /// guard). Best-effort: a lost report just means the peer keeps its
+    /// previous cap one period longer, exactly like Android's
+    /// `reportLocalVideoCapBps`.
+    @MainActor
+    private func announceVideoBwCap(bps: Int) {
+        guard let peer = callContactId, !peer.isEmpty,
+              let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty
+        else { return }
+        let wire = CallPiggyBack.serializeVideoBwCap(callId: callId, bps: bps)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        RTLog.info("call", "video bw-cap report ev=vbwcap bps=\(bps)")
+        Task {
+            do {
+                try await provider.callingApi.sendOpaqueMessageString(
+                    recipientId: peer, payload: wire)
+            } catch {
+                print("[AppState] announceVideoBwCap failed: \(error)")
+            }
         }
     }
 
@@ -13252,6 +13345,21 @@ final class AppState: ObservableObject {
                         self?.requestKeyframeFromSender()
                     }
                 }
+                // W-KFFAST (2026-08-25) — receiver cryptor decrypt-fail →
+                // nudge the sender sub-second (see the other construction
+                // site's doc for the full rationale).
+                controller.onDecryptFailureDetected = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.requestKeyframeFromSender(reason: "decryptfail")
+                    }
+                }
+                // W-BWCAP (2026-08-25) — our own route-tier ceiling changed
+                // → report it to the peer as our local downlink decision.
+                controller.onLocalVideoCapBpsChanged = { [weak self] bps in
+                    Task { @MainActor [weak self] in
+                        self?.announceVideoBwCap(bps: bps)
+                    }
+                }
                 // Remote-readable video diagnostics (mirrors Android). Ships
                 // outbound/inbound video RTP stats + remote-track arrival to
                 // the server so an iOS→Android video failure is diagnosable
@@ -13920,6 +14028,7 @@ extension AppState {
     @MainActor
     private func sampleCallNetworkStats() {
         var rtt: Double? = nil
+        var bufMs: Int? = nil
         #if canImport(WebRTC)
         if let controller = webRtcController as? QAudionWebRtcCallController {
             // Kick the next async sample, then read the one the previous tick
@@ -13937,10 +14046,46 @@ extension AppState {
             if !audioPinnedToWsRelay, controller.isAudioDataChannelOpen {
                 rtt = controller.mediaRttMs
             }
+            // W-DELAYSPLIT (IOS-E6) — windowed playout-buffer average from the
+            // cumulative counters' deltas, mirroring Android's
+            // `CallViewModel.computeBufWindowMs` (CallViewModel.kt:2469-2481).
+            // Deliberately NOT gated on `isAudioDataChannelOpen`/
+            // `audioPinnedToWsRelay` like RTT above: the counters themselves
+            // read zero whenever they don't apply (no SRTP-audio inbound-rtp
+            // row exists on iOS today — see the IOS-E6 note on
+            // `QAudionWebRtcCallController`), so `emittedCount <= 0` already
+            // makes this nil without a separate gate.
+            bufMs = computeJitterBufferWindowMs(controller)
         }
         #endif
-        callService.sampleWireThroughput(mediaRttMs: rtt)
+        callService.sampleWireThroughput(mediaRttMs: rtt, mediaJitterBufferMs: bufMs)
     }
+
+    #if canImport(WebRTC)
+    /// Average ms a sample spent in the audio jitter buffer over the window
+    /// since the previous poll. Delta-based on purpose — a lifetime average
+    /// would smear a post-storm swollen buffer into invisibility exactly
+    /// when attribution matters. Resets its baseline on counter regression
+    /// (new call / receiver restart: the fresh call's near-zero counters
+    /// read as a negative delta against the previous call's accumulated
+    /// values, which this treats as "nothing to report yet" rather than a
+    /// nonsensical negative buffer). Mirrors
+    /// `CallViewModel.computeBufWindowMs` (CallViewModel.kt:2469-2481)
+    /// exactly, including the [0, 9999] clamp.
+    private func computeJitterBufferWindowMs(_ controller: QAudionWebRtcCallController) -> Int? {
+        let d = controller.mediaJitterBufferDelaySec
+        let n = controller.mediaJitterBufferEmittedCount
+        guard n > 0 else { return nil }
+        let dd = d - lastJbDelaySec
+        let dn = n - lastJbEmittedCount
+        let regressed = dd < 0 || dn < 0
+        lastJbDelaySec = d
+        lastJbEmittedCount = n
+        if regressed || dn == 0 { return nil }
+        let ms = Int((dd / Double(dn)) * 1000.0)
+        return min(max(ms, 0), 9999)
+    }
+    #endif
 
     // MARK: - Item 5 (2026-07-31 InCallScreen Android→iOS port) — live
     //         voice-confidence wave sampler
@@ -14181,6 +14326,29 @@ extension AppState {
             try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
         } catch {
             print("[AppState] OWNER_CONT announce failed: \(error)")
+        }
+    }
+
+    /// W-PLPFEEDBACK (2026-08-25) — ship one PLP announce. Mirrors
+    /// `sendOwnerContinuityAnnounce`'s shape exactly (same `getActiveCallId()`
+    /// guard, same fire-and-forget error handling, same `OpaqueSelfEchoFilter`
+    /// self-echo guard) — unlike OWNER_CONT/VOICE_KEY this fires on a fixed
+    /// timer rather than a state transition, so there is no
+    /// last-sent-value dedup: every report is a fresh measurement worth
+    /// shipping even if the number repeats.
+    @MainActor
+    private func sendPlpAnnounce(pct: Int, peerId: String) async {
+        guard callContactId == peerId else { return }
+        guard let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty
+        else { return }
+        let wire = CallPiggyBack.serializePlp(callId: callId, percent: pct)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        do {
+            try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+        } catch {
+            print("[AppState] PLP announce failed: \(error)")
         }
     }
 
@@ -19294,6 +19462,20 @@ extension AppState {
         controller.onVideoStallDetected = { [weak self] in
             Task { @MainActor [weak self] in
                 self?.requestKeyframeFromSender()
+            }
+        }
+        // W-KFFAST (2026-08-25) — receiver cryptor decrypt-fail → nudge the
+        // sender sub-second (responder side, mirrors caller).
+        controller.onDecryptFailureDetected = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.requestKeyframeFromSender(reason: "decryptfail")
+            }
+        }
+        // W-BWCAP (2026-08-25) — our own route-tier ceiling changed → report
+        // it to the peer as our local downlink decision (responder side).
+        controller.onLocalVideoCapBpsChanged = { [weak self] bps in
+            Task { @MainActor [weak self] in
+                self?.announceVideoBwCap(bps: bps)
             }
         }
         // Remote-readable video diagnostics (responder side, mirrors caller).

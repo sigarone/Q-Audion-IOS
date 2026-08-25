@@ -288,8 +288,17 @@ final class CallService: @unchecked Sendable {
     /// converged). Written on the main actor by the sampler only.
     public private(set) var mediaRttMs: Double?
 
-    /// Compute the tx/rx kbps for this tick and store the RTT the caller
-    /// resolved for the active media leg.
+    /// W-DELAYSPLIT (IOS-E6) — windowed average ms a sample spent in the
+    /// audio jitter buffer since the previous poll, or `nil` when there is
+    /// nothing to report (no SRTP-audio inbound-rtp row, first sample of a
+    /// window, or a counter regression). Mirrors Android's `CallUiState.bufMs`
+    /// (`CallViewModel.kt:409`) — displayed next to [mediaRttMs] as
+    /// "<rtt>+<buf>ms" on the stats band. Written on the main actor by the
+    /// sampler only.
+    public private(set) var mediaJitterBufferMs: Int?
+
+    /// Compute the tx/rx kbps for this tick and store the RTT + jitter-buffer
+    /// delay the caller resolved for the active media leg.
     ///
     /// The rate formula is Android's, verbatim
     /// (`CallViewModel.publishNetworkStats`, CallViewModel.kt:1966-1977):
@@ -312,8 +321,9 @@ final class CallService: @unchecked Sendable {
     ///   a different quantity (this device → signalling server, every 30 s) and
     ///   under this label it would be undetectably wrong.
     @MainActor
-    public func sampleWireThroughput(mediaRttMs rttMs: Double?) {
+    public func sampleWireThroughput(mediaRttMs rttMs: Double?, mediaJitterBufferMs bufMs: Int? = nil) {
         self.mediaRttMs = rttMs
+        self.mediaJitterBufferMs = bufMs
         // Monotonic: a wall-clock step (NTP, timezone) must not manufacture a
         // spike or a negative dt.
         let nowSec = ProcessInfo.processInfo.systemUptime
@@ -985,6 +995,79 @@ final class CallService: @unchecked Sendable {
         durationTimer = nil
     }
 
+    // MARK: - W-PLPFEEDBACK (2026-08-25) — periodic inbound-loss report
+
+    /// Fired every `plpReportIntervalSeconds` with OUR measured inbound loss
+    /// over the last window, as an integer percent. AppState sets this to
+    /// build+send the `PLP:<percent>` piggy-back — this service has no
+    /// standing route to the peer mid-call (see `CallPiggyBack`'s doc:
+    /// `beginAndroidOutgoing`'s `callingApi` is a one-shot handshake
+    /// parameter, not a stored reference), the same reason
+    /// `onOwnerContinuityStateChanged` above is a closure and not a direct
+    /// send from here.
+    public var onLocalInboundLossReport: ((Int) -> Void)?
+
+    private var plpReportTimer: Timer?
+    /// Cumulative loss-meter snapshot as of the last tick, so each report is
+    /// a WINDOWED delta rather than the whole call's figure — a bad first
+    /// minute must not haunt every report for the rest of the call. Mirrors
+    /// Android's `CallAudioBridge.plpPrevExpected`/`plpPrevLost`.
+    private var plpPrevExpected: Int64 = 0
+    private var plpPrevLost: Int64 = 0
+    /// Cadence, matching Android's `CallAudioBridge.PLP_REPORT_INTERVAL_MS`
+    /// (4000 ms) — the same value doubles as the wire reference the C2 spec
+    /// points at, so a mixed-platform call's two reporters run in step.
+    private static let plpReportIntervalSeconds: TimeInterval = 4.0
+
+    private func startPlpReportTimer() {
+        plpReportTimer?.invalidate()
+        plpPrevExpected = 0
+        plpPrevLost = 0
+        plpReportTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.plpReportIntervalSeconds, repeats: true
+        ) { [weak self] _ in
+            guard let self, let integration = self.callIntegration else { return }
+            let snap = integration.rxLossSnapshot()
+            let dExp = snap.expected - self.plpPrevExpected
+            let dLost = snap.lost - self.plpPrevLost
+            self.plpPrevExpected = snap.expected
+            self.plpPrevLost = snap.lost
+            // Nothing new to report (idle window, or the meter has not
+            // anchored yet) — Android's reporter skips the same way rather
+            // than shipping a stale/undefined percentage.
+            guard dExp > 0 else { return }
+            let pct = Int((Double(max(dLost, 0)) * 100.0 / Double(dExp)).rounded())
+            self.onLocalInboundLossReport?(min(max(pct, 0), 100))
+        }
+    }
+
+    private func stopPlpReportTimer() {
+        plpReportTimer?.invalidate()
+        plpReportTimer = nil
+    }
+
+    /// The PLP value this call's encoder currently carries — the `next()`
+    /// accumulator `PlpPolicy` steps from on each peer report. Starts from
+    /// the tuner-persisted preference, exactly what `reconfigureAudioCodec`
+    /// was already called with at call setup.
+    private var currentAppliedPlpPct: Int = AudioCodecPrefs.plp
+
+    /// W-PLPFEEDBACK — consume the PEER's `PLP:<percent>` report: drive our
+    /// TX encoder's expected-loss knob via `PlpPolicy`, so LBRR redundancy
+    /// tracks what the PEER is actually experiencing on our uplink instead of
+    /// the fixed provisioning constant (or our own possibly-asymmetric RX
+    /// loss, which is all `AudioCodecPrefs.plp`'s post-call tuner can see).
+    /// Called from `AppState.routeInboundCallPiggyBack`'s `.plp` case, the
+    /// same consumption site every other opaque-message control tag uses.
+    func applyPeerPacketLossReport(_ observedPct: Int) {
+        let clamped = min(max(observedPct, 0), 100)
+        let next = PlpPolicy.next(currentPct: currentAppliedPlpPct, observedLossPct: Double(clamped))
+        guard next != currentAppliedPlpPct else { return }
+        currentAppliedPlpPct = next
+        callIntegration?.reconfigureAudioCodec(bitrateKbps: AudioCodecPrefs.bitrateKbps, plp: next)
+        RTLog.info("call", "plpfeedback peer=\(clamped) applied=\(next)")
+    }
+
     func startCall(engine: QAudionEngine, contactId: String) throws {
         // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
         teardownAudioStack()
@@ -1190,6 +1273,15 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceScoreUpdated = { [weak self] score in
             self?.onContactVoiceScoreUpdated?(score)
         }
+        // W-FECDECODE (2026-08-25) — a single-frame wire gap just got a real
+        // reconstruction instead of concealment; play it BEFORE the frame
+        // that carried it (see `QAudionAudioProcessor.onFecRecoveredPcm`'s
+        // doc for the ordering contract). No AppState round-trip needed —
+        // playout is entirely local to this service, unlike the wire
+        // announces above.
+        integration.onFecRecoveredAudio = { [weak self] pcm in
+            self?.audioCapture?.playFrame(pcm)
+        }
 
         // NOTE: do NOT call `integration.onCallSetupStarted` here.
         // That legacy entry point flipped the engine state machine into
@@ -1206,6 +1298,7 @@ final class CallService: @unchecked Sendable {
         self.callIntegration = integration
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
+        startPlpReportTimer()
 
         // W469 — CallKit `didActivate` fallback for OUTGOING calls.
         // The W467 path defers the audio-engine start to
@@ -1415,6 +1508,11 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceScoreUpdated = { [weak self] score in
             self?.onContactVoiceScoreUpdated?(score)
         }
+        // W-FECDECODE — mirror the outgoing-side wiring 1:1, same reasoning
+        // as `onOwnerContinuityStateChanged` above.
+        integration.onFecRecoveredAudio = { [weak self] pcm in
+            self?.audioCapture?.playFrame(pcm)
+        }
         // For incoming calls the PQC handshake started before answer, so
         // engine.initialize() has already run — apply tuner prefs now.
         integration.reconfigureAudioCodec(
@@ -1431,6 +1529,7 @@ final class CallService: @unchecked Sendable {
         }
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
         startDurationTimer()
+        startPlpReportTimer()
 
         // Bug B — `didActivate` fallback. CallKit emits
         // provider(_:didActivate:) ONLY on an inactive→active AVAudioSession
@@ -1583,6 +1682,7 @@ final class CallService: @unchecked Sendable {
     func endCall() {
         onDeepfakeAlert?(false)
         stopDurationTimer()
+        stopPlpReportTimer()
         callStartedAt = nil
         callDurationSeconds = 0
         isMuted = false
@@ -2118,6 +2218,22 @@ final class CallService: @unchecked Sendable {
                             + " dp=" + s.depth.description
                         print(stats)
                     }
+                    // W-FECDECODE (2026-08-25) — same cadence as the playout
+                    // block above (~5 s), and ships to the remote timeline
+                    // (unlike the local-only `print()`s here): the acceptance
+                    // criterion is that induced loss shows FEC recoveries
+                    // counted against concealment. `fr`/`ff` (not the fuller
+                    // `fec_rec`/`fec_fail`) for the SAME reason `pu`/`un`/`ov`
+                    // above are two characters and not their full names — see
+                    // the 12-CHARACTER RULE note on that block: `fec_rec=999`
+                    // is 11 and survives, `fec_rec=1250` is 12 and ships as
+                    // [REDACTED:blob], and a long lossy call can reach four
+                    // digits of recoveries. `fr=` stays safe to six digits,
+                    // matching the margin the rest of this line family keeps.
+                    if let integration = self.callIntegration {
+                        let fec = integration.rxFecStats()
+                        RTLog.info("call", "fec fr=\(fec.recovered) ff=\(fec.failed)")
+                    }
                 }
                 let rxSamples = self.updateWaveformSamples(from: pcm)
                 self.onRxWaveformUpdate?(rxSamples)
@@ -2454,6 +2570,7 @@ final class CallService: @unchecked Sendable {
         wireTxKbps = nil
         wireRxKbps = nil
         mediaRttMs = nil
+        mediaJitterBufferMs = nil
         // W466 — reset the per-call diagnostic counters/markers so the
         // next call's telemetry starts from a clean slate.
         framesReceivedRx = 0

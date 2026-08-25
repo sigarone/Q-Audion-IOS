@@ -1,6 +1,7 @@
 import Foundation
 import CommonCrypto
 import os
+import Network
 
 public final class BCryptoRestClient {
     /// Callback invoked when a protected request returns HTTP 401.
@@ -27,6 +28,66 @@ public final class BCryptoRestClient {
     private let refreshLock = OSAllocatedUnfairLock<Void>(initialState: ())
     private var refreshInFlight: Task<Bool, Error>?
 
+    // MARK: - IOS-E2 — anti-zombie-pool HTTP trio + W-INFLIGHTCANCEL
+    //
+    // Mirror of Android's `StaleConnectionEvictor` + `NetworkBoundCallRegistry`
+    // (core/core-data/.../net/StaleConnectionEvictor.kt) — SAME invariant
+    // ("nothing on the handshake hot path waits out a dead pooled
+    // connection"), DIFFERENT mechanism, because `URLSession` exposes none of
+    // OkHttp's introspection: no `connectionPool`, no per-call `Call` handle
+    // to cancel from outside, no `pingInterval()` builder knob. What Foundation
+    // DOES give us, checked against `URLSession`'s public API surface:
+    //   - `URLSession.reset(completionHandler:)` — "Empties all cookies,
+    //     caches and credential stores, removes disk files, flushes
+    //     in-progress downloads to disk, and ensures that future requests
+    //     occur on a new socket." That last clause is the pool-evict
+    //     equivalent of `OkHttpClient.connectionPool.evictAll()` — the
+    //     closest public analogue that exists.
+    //   - No public HTTP/2 PING knob exists on `URLSessionConfiguration`, so
+    //     leg (2) below is a DIFFERENT mechanism for the SAME invariant
+    //     ("a dead connection fails fast instead of hanging out the full
+    //     default timeout"): a bounded `timeoutIntervalForRequest`, tight
+    //     enough that no request — identity-key fetch included, the exact
+    //     endpoint that hung 47.7 s on Android's zombie socket — can silently
+    //     sit for anywhere near that long.
+    //   - No handle to the underlying `URLSessionTask` comes back from the
+    //     async `session.data(for:)` API used by `performRequest` below.
+    //     What Swift's structured concurrency DOES give us: `data(for:)` is
+    //     documented to observe cooperative cancellation — cancelling the
+    //     `Task` that awaits it cancels the underlying request. `request()`
+    //     below wraps each call in its own `Task`, keyed by the network
+    //     generation live when it started, so a genuine network change can
+    //     cancel every Task whose generation is now stale — the per-call
+    //     filter Android's `cancelCallsNotOn(netId)` applies, restated in
+    //     Task-cancellation terms instead of `Call.cancel()`.
+    private let pathMonitor = NWPathMonitor()
+    private let pathMonitorQueue = DispatchQueue(label: "com.qaudion.rest.pathmonitor", qos: .utility)
+    private let netLock = NSLock()
+    private var _networkGeneration: Int = 0
+    private var _isOffline: Bool = false
+    private var _lastPathSatisfied: Bool = false
+    private var _lastTransport: NWInterface.InterfaceType?
+
+    /// W-INFLIGHTCANCEL — in-flight request cancellers, keyed by a per-call
+    /// id, each tagged with the network generation live when that request
+    /// started. A genuine network change cancels every entry whose
+    /// generation predates the new one; a request that started on the
+    /// CURRENT network is never touched (never a blanket cancel-all).
+    private var inFlightCancellers: [UUID: (cancel: () -> Void, generation: Int)] = [:]
+    private let inFlightLock = NSLock()
+
+    /// Offline-aware identity-resolve — true iff the path monitor's most
+    /// recent report was `.unsatisfied` (no usable network transport at
+    /// all). Read by `BCryptoKmsClient`'s identity-key fetches so a call
+    /// placed while offline (airplane mode, dead zone) returns immediately
+    /// instead of burning `timeoutIntervalForRequest` finding out the hard
+    /// way — the "bounded" half of "identity resolve offline-aware e
+    /// bounded" (playbook §IOS-E2).
+    public var isOffline: Bool {
+        netLock.lock(); defer { netLock.unlock() }
+        return _isOffline
+    }
+
     public init(config: BackendConfig) {
         self.config = config
         // SECURITY H-1 — `acceptSelfSignedCerts` is honoured ONLY in
@@ -34,21 +95,98 @@ public final class BCryptoRestClient {
         // staging box). Release builds NEVER instantiate
         // `SelfSignedCertDelegate`; they fall through to cert pinning
         // (if a pin is configured) or the system default TLS chain.
+        //
+        // IOS-E2: always a DEDICATED session (never `URLSession.shared`).
+        // `.reset()` (the pool-evict leg below) affects every consumer of
+        // whichever session it's called on; sharing `.shared` would evict
+        // connections for unrelated `.shared` callers elsewhere in the app
+        // on every one of THIS client's network-change events. TLS
+        // behaviour is unchanged: the branch that used to fall through to
+        // `.shared` (no pin, no self-signed override) gets a plain
+        // `URLSessionConfiguration.default` session with no custom
+        // delegate — identical system-default chain validation to what
+        // `.shared` was already doing.
+        let sessionConfig = URLSessionConfiguration.default
+        // IOS-E2 leg (2) — bounded request timeout, the fail-fast substitute
+        // for OkHttp's HTTP/2 `pingInterval(10s)` (no equivalent knob exists
+        // on `URLSessionConfiguration`). Default is 60 s; this is the number
+        // that let Android's identity-key fetch hang 47.7 s on a zombie
+        // pooled connection before the PING probe existed.
+        sessionConfig.timeoutIntervalForRequest = 15
         #if DEBUG
         if config.acceptSelfSignedCerts {
-            self.session = URLSession(configuration: .default, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
+            self.session = URLSession(configuration: sessionConfig, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
         } else if let pin = config.certPinSha256B64 {
-            self.session = URLSession(configuration: .default, delegate: CertPinningDelegate(pinB64: pin), delegateQueue: nil)
+            self.session = URLSession(configuration: sessionConfig, delegate: CertPinningDelegate(pinB64: pin), delegateQueue: nil)
         } else {
-            self.session = URLSession.shared
+            self.session = URLSession(configuration: sessionConfig, delegate: nil, delegateQueue: nil)
         }
         #else
         if let pin = config.certPinSha256B64 {
-            self.session = URLSession(configuration: .default, delegate: CertPinningDelegate(pinB64: pin), delegateQueue: nil)
+            self.session = URLSession(configuration: sessionConfig, delegate: CertPinningDelegate(pinB64: pin), delegateQueue: nil)
         } else {
-            self.session = URLSession.shared
+            self.session = URLSession(configuration: sessionConfig, delegate: nil, delegateQueue: nil)
         }
         #endif
+        startNetworkMonitor()
+    }
+
+    deinit {
+        pathMonitor.cancel()
+    }
+
+    // MARK: - IOS-E2 network-change reaction
+
+    private func startNetworkMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.handlePathUpdate(path)
+        }
+        pathMonitor.start(queue: pathMonitorQueue)
+    }
+
+    /// React to EVERY genuine network-kind change, including the
+    /// satisfied→unsatisfied edge (network lost entirely) — mirrored from
+    /// Android's evictor comment verbatim: the pool is just as dead on a
+    /// local outage, and evicting is free, so there is no reason to gate
+    /// this narrower than the WS client's flap-storm debounce does (that
+    /// debounce protects a live authenticated socket from being torn down;
+    /// nothing here is a standing connection worth protecting the same way
+    /// — a pool evict + stale-Task cancel is idempotent and cheap even if
+    /// it fires on a flapping path).
+    private func handlePathUpdate(_ path: NWPath) {
+        let satisfied = (path.status == .satisfied)
+        let transport: NWInterface.InterfaceType? = satisfied
+            ? path.availableInterfaces.first(where: { $0.type != .loopback })?.type
+            : nil
+
+        netLock.lock()
+        let changed = (satisfied != _lastPathSatisfied) || (transport != _lastTransport)
+        _lastPathSatisfied = satisfied
+        _lastTransport = transport
+        _isOffline = !satisfied
+        guard changed else { netLock.unlock(); return }
+        _networkGeneration &+= 1
+        let generation = _networkGeneration
+        netLock.unlock()
+
+        // (1) Pool evict — see the class-level kdoc for why `.reset()` is
+        // the mechanism here.
+        session.reset {}
+
+        // (4) W-INFLIGHTCANCEL — cancel every request whose captured
+        // generation is now stale. Never a blanket cancel: a request that
+        // started on the network we just moved TO (generation already
+        // matches) is left alone.
+        inFlightLock.lock()
+        let stale = inFlightCancellers.filter { $0.value.generation != generation }
+        inFlightLock.unlock()
+        for (_, entry) in stale {
+            entry.cancel()
+        }
+
+        // Numeric tail, lowercase greppable tag — iOS log-line rule.
+        let line = "[BCryptoRest] netchange satisfied=\(satisfied ? 1 : 0) gen=\(generation) cancelled=\(stale.count)"
+        print(line)
     }
 
     /// Install the callback that knows how to perform a token refresh. The
@@ -123,7 +261,40 @@ public final class BCryptoRestClient {
         return data
     }
 
+    /// W-INFLIGHTCANCEL — public chokepoint every `get`/`post`/`put`/`delete`
+    /// funnels through. Wraps the real request in its own `Task`, registered
+    /// under the network generation live when it started, so a network
+    /// change (`handlePathUpdate` above) can cancel it outright instead of
+    /// letting it run out `timeoutIntervalForRequest` on a connection that
+    /// belonged to the network we just left. `session.data(for:)` inside
+    /// `requestUncancellable` is Foundation's async URLSession API, which
+    /// is documented to participate in cooperative `Task` cancellation —
+    /// cancelling the wrapping `Task` cancels the underlying
+    /// `URLSessionTask`. NOTE (honesty per playbook §0.8): that propagation
+    /// is Apple's documented behaviour for `data(for:)`, not something this
+    /// session could verify on-device (no Swift toolchain / iOS device in
+    /// this environment) — the orchestrator's live handoff test is what
+    /// closes that gap.
     private func request(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> Data {
+        let id = UUID()
+        netLock.lock()
+        let generation = _networkGeneration
+        netLock.unlock()
+        let task = Task<Data, Error> {
+            try await self.requestUncancellable(method, path: path, body: body, headers: headers)
+        }
+        inFlightLock.lock()
+        inFlightCancellers[id] = (cancel: { task.cancel() }, generation: generation)
+        inFlightLock.unlock()
+        defer {
+            inFlightLock.lock()
+            inFlightCancellers.removeValue(forKey: id)
+            inFlightLock.unlock()
+        }
+        return try await task.value
+    }
+
+    private func requestUncancellable(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> Data {
         // First attempt with the currently cached access token.
         let (data, status) = try await performRequest(method, path: path, body: body, headers: headers)
         if (200...299).contains(status) {

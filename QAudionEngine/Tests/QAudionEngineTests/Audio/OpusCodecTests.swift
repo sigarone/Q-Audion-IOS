@@ -137,4 +137,73 @@ final class OpusCodecTests: XCTestCase {
         for _ in 0..<4 { last = rms(codec.decode(codec.encode(silence)!)!) }
         XCTAssertLessThan(last, rms(loud) * 0.2, "silence decoded at RMS \(last)")
     }
+
+    // MARK: - W-FECDECODE (2026-08-25)
+
+    /// The acceptance test the spec asks for: a synthetic stream with a
+    /// KNOWN single-frame loss, and `decodeFEC` on the frame that follows it
+    /// must reconstruct real signal — not concealment, not silence — for the
+    /// frame that never made it to `decode`.
+    ///
+    /// Same reasoning as `testDecodeRendersTheCurrentFrameAndNotThePreviousOne`
+    /// for why the probe alternates rather than holding one tone throughout:
+    /// a steady signal cannot distinguish "recovered the lost frame" from
+    /// "recovered nothing and decoder history leaked through anyway".
+    func testDecodeFECRecoversAKnownSingleFrameLoss() {
+        let codec = OpusCodec()
+        let silence = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
+        let loud = tone()
+        let inputRms = rms(loud)
+        XCTAssertGreaterThan(inputRms, 1000, "the probe tone itself must be loud")
+
+        // Warm up encoder lookahead / decoder history on silence, exactly as
+        // the sibling test above does, before the frame that matters.
+        for _ in 0..<2 {
+            guard let enc = codec.encode(silence) else { return XCTFail("encode warmup") }
+            _ = codec.decode(enc)
+        }
+
+        // Frame A: LOUD, and simulated LOST — encoded, but never handed to
+        // `decode`. Frame B: silence, arrives normally and carries A's LBRR.
+        guard let packetA = codec.encode(loud) else { return XCTFail("encode A") }
+        guard let packetB = codec.encode(silence) else { return XCTFail("encode B") }
+        _ = packetA  // never decoded — this IS the simulated loss
+
+        // Step 1 of the call-order contract: recover A from B's LBRR FIRST.
+        let recovered = codec.decodeFEC(packetB)
+        XCTAssertGreaterThan(
+            rms(recovered), inputRms * 0.15,
+            "FEC did not reconstruct the lost loud frame — got rms \(rms(recovered)) " +
+            "against an input of \(inputRms); this is concealment or silence, not recovery")
+        XCTAssertEqual(codec.fecRecoveredFrames, 1)
+        XCTAssertEqual(codec.fecFailedFrames, 0)
+
+        // Step 2: decode B itself normally — must land as silence, not a
+        // repeat of the just-recovered loud frame.
+        guard let decodedB = codec.decode(packetB) else { return XCTFail("decode B") }
+        XCTAssertLessThan(rms(decodedB), inputRms * 0.2,
+                          "frame B decoded loud (\(rms(decodedB))) — it should be silence")
+    }
+
+    /// The failure path: no successor packet at all (nil-equivalent — an
+    /// empty frame) must degrade to silence of the requested duration and
+    /// count as a FAILED recovery, never a crash or a bogus non-silent
+    /// result.
+    func testDecodeFECOnEmptyFrameReturnsSilenceAndCountsAsFailed() {
+        let codec = OpusCodec()
+        let result = codec.decodeFEC(Data(), lostMs: 20)
+        XCTAssertEqual(result.count, AudioConstants.bytesPerFrame)
+        XCTAssertTrue(result.allSatisfy { $0 == 0 })
+        XCTAssertEqual(codec.fecFailedFrames, 1)
+        XCTAssertEqual(codec.fecRecoveredFrames, 0)
+    }
+
+    /// `lostMs` sizes the OUTPUT, exactly like `decodePLC`'s documented
+    /// contract — a 60 ms request must come back as 2880 samples (5760 B),
+    /// not the 20 ms default.
+    func testDecodeFECRespectsTheRequestedDuration() {
+        let codec = OpusCodec()
+        let result = codec.decodeFEC(Data(), lostMs: 60)
+        XCTAssertEqual(result.count, 5760)
+    }
 }

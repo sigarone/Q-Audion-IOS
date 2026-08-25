@@ -60,6 +60,20 @@ public final class QAudionPeerConnection: NSObject {
         /// no-op so non-video conformers need not implement it.
         func peerConnection(_ pc: QAudionPeerConnection,
                             didReceiveRemoteVideoReceiver receiver: RTCRtpReceiver)
+
+        /// W-TURNSUSPECT (playbook §IOS-E4, 2026-08-25) — ICE gathering for
+        /// this cycle just reached `.complete`; `relayCandidateCount` is how
+        /// many local RELAY-type candidates it produced (parsed off each
+        /// `didGenerate candidate`'s SDP, " typ relay "). Zero on a call
+        /// whose `RelayCredentialsProvider` handed out TURN servers is the
+        /// "these credentials look wrong" symptom the existing post-auth-
+        /// failure `forceRefresh` never catches by itself — a TURN
+        /// allocation can fail silently (expired secret, revoked realm)
+        /// without ever tripping a 401/403 on the TURN control channel.
+        /// Fires once per gathering cycle (covers an ICE-restart re-gather
+        /// too, once that machinery exists). Default no-op below.
+        func peerConnection(_ pc: QAudionPeerConnection,
+                            didCompleteIceGatheringWithRelayCandidates count: Int)
     }
 
     public weak var delegate: Delegate?
@@ -67,6 +81,15 @@ public final class QAudionPeerConnection: NSObject {
     /// Underlying RTCPeerConnection. Avoid touching directly — use the
     /// high-level methods on this class instead.
     public private(set) var peerConnection: RTCPeerConnection?
+
+    /// W-TURNSUSPECT (IOS-E4) — relay-type local candidates gathered during
+    /// THIS ICE gathering cycle. Reset when a fresh cycle starts
+    /// (`didChange newState: .gathering`), read once it reaches `.complete`.
+    /// Touched only from the `RTCPeerConnectionDelegate` callbacks below,
+    /// which WebRTC serialises on its own signalling thread — no additional
+    /// lock needed, same assumption the rest of this delegate extension
+    /// already relies on.
+    private var relayCandidateCount: Int = 0
 
     private let factory: RTCPeerConnectionFactory
     private var localAudioTrack: RTCAudioTrack?
@@ -934,8 +957,27 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
         delegate?.peerConnection(self, didChangeConnectionState: newState)
     }
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        // W-TURNSUSPECT (IOS-E4) — a fresh cycle starting (covers the
+        // initial gather and any future ICE-restart re-gather) resets the
+        // counter; reaching `.complete` reports what it found.
+        switch newState {
+        case .gathering:
+            relayCandidateCount = 0
+        case .complete:
+            delegate?.peerConnection(self, didCompleteIceGatheringWithRelayCandidates: relayCandidateCount)
+        default:
+            break
+        }
+    }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        // W-TURNSUSPECT (IOS-E4) — standard ICE-SDP candidate line shape is
+        // `candidate:<foundation> <component> <transport> <priority> <ip>
+        // <port> typ <type> ...`; " typ relay " is the RFC 5245 marker for a
+        // TURN-allocated relay candidate.
+        if candidate.sdp.contains(" typ relay ") {
+            relayCandidateCount += 1
+        }
         delegate?.peerConnection(self,
                                  didDiscoverLocalIceCandidate: candidate.sdp,
                                  sdpMid: candidate.sdpMid,
@@ -1088,6 +1130,9 @@ public extension QAudionPeerConnection.Delegate {
 
     func peerConnection(_ pc: QAudionPeerConnection,
                         didChangeConnectionState state: RTCPeerConnectionState) {}
+
+    func peerConnection(_ pc: QAudionPeerConnection,
+                        didCompleteIceGatheringWithRelayCandidates count: Int) {}
 }
 
 // MARK: - RTCDataChannelDelegate (W-DCAUDIO sealed-audio channel)

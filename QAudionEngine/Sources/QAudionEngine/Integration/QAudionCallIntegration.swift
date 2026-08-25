@@ -4385,6 +4385,27 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         engine.reconfigureAudioCodec(bitrateKbps: bitrateKbps, plp: plp)
     }
 
+    /// W-FECDECODE (2026-08-25) — forwards `engine.onFecRecoveredAudio`. A
+    /// computed proxy rather than a copied closure: `engine` is a `let`
+    /// constant for this integration's whole life, so there is no rebuild to
+    /// go stale against, unlike `engine`'s own forwarding to `audioProcessor`.
+    public var onFecRecoveredAudio: ((Data) -> Void)? {
+        get { engine.onFecRecoveredAudio }
+        set { engine.onFecRecoveredAudio = newValue }
+    }
+
+    /// W-FECDECODE — cumulative FEC recovery counters, for the rate-limited
+    /// `fec_rec=<n> fec_fail=<n>` diagnostic.
+    public func rxFecStats() -> (recovered: Int64, failed: Int64) {
+        engine.rxFecStats()
+    }
+
+    /// W-PLPFEEDBACK — cumulative inbound-loss snapshot, for the periodic
+    /// PLP: report timer.
+    public func rxLossSnapshot() -> (expected: Int64, lost: Int64) {
+        engine.rxLossSnapshot()
+    }
+
     /// W-LONGAUDIO (2026-08-10) — latch this call's audio profile on the engine.
     /// Once per call, after the handshake, before capture starts. See
     /// `QAudionEngine.latchAudioProfile` for why it is terminal.

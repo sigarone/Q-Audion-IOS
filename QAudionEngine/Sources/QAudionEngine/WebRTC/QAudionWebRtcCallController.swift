@@ -117,6 +117,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// @MainActor themselves.
     public var onVideoStallDetected: (() -> Void)?
 
+    /// W-KFFAST (2026-08-25) — fired the moment the RECEIVER-side native
+    /// video cryptor's own state callback reports DECRYPTIONFAILED /
+    /// MISSINGKEY / INTERNALERROR (rekey skew, a storm of failing frames,
+    /// ratchet gap). The E2EE frame transform suppresses libwebrtc's
+    /// native PLI, so before this the only recovery signal was the
+    /// multi-second `onVideoStallDetected` ladder above (3s poll x 2 ≈
+    /// 6s minimum) — this fires within ONE frame of the cryptor detecting
+    /// the failure, matching Android's `FrameCryptor.setObserver` hook in
+    /// `PeerConnectionHolder.enableVideoFrameCryptorOnReceiver`
+    /// (PeerConnectionHolder.kt:1551-1562, W-KFFAST 2026-08-25). AppState
+    /// wires this to the SAME `requestKeyframeFromSender` AppState already
+    /// uses for `onVideoStallDetected`, so the wire-layer 1/s limiter
+    /// (`BCryptoCallingApiImpl.checkKeyframeRequestRateLimit`, matching
+    /// Android's `KEYFRAME_WIRE_RATE_LIMIT_MS = 1_000L`) absorbs a storm
+    /// of failing frames into one `video_keyframe_request` per second.
+    /// Healthy states (NEW/OK/KEYRATCHETED) do not trigger. May fire from
+    /// the WebRTC signalling thread (the native cryptor's own callback
+    /// thread) — consumers hop to @MainActor themselves, same contract as
+    /// `onVideoStallDetected`.
+    public var onDecryptFailureDetected: (() -> Void)?
+
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
     /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
@@ -202,6 +223,56 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         return _mediaRttMs
     }
 
+    // ── IOS-E6 (W-DELAYSPLIT parity, 2026-08-25) ──────────────────────────
+    //
+    // Android's `CallDiagnostics.audioJitterBufferDelaySec` /
+    // `audioJitterBufferEmittedCount` (feature-call
+    // `.../diagnostics/CallDiagnostics.kt:79-80`) are the CUMULATIVE
+    // `inbound-rtp` (kind=audio) `jitterBufferDelay` seconds /
+    // `jitterBufferEmittedCount` samples straight off `RTCStatsReport`
+    // (`PeerConnectionHolder.kt:5087-5088`). The ViewModel derives a
+    // WINDOWED average playout-buffer delay in ms from the DELTA between
+    // two consecutive polls (`CallViewModel.computeBufWindowMs`,
+    // CallViewModel.kt:2469-2481) and shows it next to RTT as
+    // "<rtt>+<buf>ms" once ≥10 ms (`InCallScreen.kt:1170-1176`).
+    //
+    // These two properties are the iOS mirror of the RAW cumulative pair —
+    // the windowing/delta math lives in `AppState.sampleCallNetworkStats`
+    // (the same layer that already owns the RTT windowing/gating), exactly
+    // where Android's ViewModel owns it, not here.
+    //
+    // Honesty note (graph-verified iOS reality, not Android's): iOS has NO
+    // SRTP audio track today — W574d disables the inbound SRTP audio track
+    // at receiver-discovery (`QAudionPeerConnection.swift`, `didAdd
+    // rtpReceiver`) and voice rides the sealed DataChannel / WS relay
+    // instead. Android's OWN field is documented "Zero on the DataChannel
+    // path" — so this reading zero on every iOS call today is not iOS-
+    // specific breakage, it is the SAME documented behaviour the metric
+    // already has on Android whenever DC carries the audio. This is
+    // observability infrastructure for the day iOS/audio-srtp ships (or for
+    // any future SRTP-audio call), not a dormant iOS-only feature — the
+    // playbook explicitly asks for the instrumentation prerequisite ahead
+    // of the capability, not gated behind it.
+    private var _mediaJitterBufferDelaySec: Double = 0.0
+    private var _mediaJitterBufferEmittedCount: Int64 = 0
+
+    /// Cumulative seconds audio samples have spent in the jitter buffer,
+    /// straight off `inbound-rtp.jitterBufferDelay` (kind=audio). Pair with
+    /// [mediaJitterBufferEmittedCount] and diff across polls for a windowed
+    /// average — see the class-level IOS-E6 note above for why the delta
+    /// math belongs one layer up, not here.
+    public var mediaJitterBufferDelaySec: Double {
+        mediaRttLock.lock(); defer { mediaRttLock.unlock() }
+        return _mediaJitterBufferDelaySec
+    }
+
+    /// Cumulative `inbound-rtp.jitterBufferEmittedCount` (kind=audio) paired
+    /// with [mediaJitterBufferDelaySec].
+    public var mediaJitterBufferEmittedCount: Int64 {
+        mediaRttLock.lock(); defer { mediaRttLock.unlock() }
+        return _mediaJitterBufferEmittedCount
+    }
+
     /// True while the sealed-audio DataChannel ("qaudion-audio") is open, i.e.
     /// while voice is riding the P2P WebRTC leg rather than the WS relay. Same
     /// predicate `sendAudioFrameData` itself tests (`QAudionPeerConnection
@@ -218,14 +289,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         mediaRttLock.unlock()
     }
 
-    /// Sample the selected candidate pair's `currentRoundTripTime` once.
-    /// Async (libwebrtc delivers the stats report on its own thread); the
-    /// result lands in [mediaRttMs] for the next read. Cheap enough for the
-    /// 1 Hz call sampler — one `getStats` per second is well under the video
-    /// telemetry poll this file already runs at 3 s.
+    /// IOS-E6 — set the raw cumulative jitter-buffer counters read from the
+    /// same statistics report `pollMediaRttOnce` already fetches.
+    private func setMediaJitterBuffer(delaySec: Double, emittedCount: Int64) {
+        mediaRttLock.lock()
+        _mediaJitterBufferDelaySec = delaySec
+        _mediaJitterBufferEmittedCount = emittedCount
+        mediaRttLock.unlock()
+    }
+
+    /// Sample the selected candidate pair's `currentRoundTripTime` once, AND
+    /// (IOS-E6) the audio `inbound-rtp` jitter-buffer counters, off the SAME
+    /// `getStats` report — one poll, two readings, no extra async round trip
+    /// per tick. Async (libwebrtc delivers the stats report on its own
+    /// thread); results land in [mediaRttMs] / [mediaJitterBufferDelaySec] /
+    /// [mediaJitterBufferEmittedCount] for the next read. Cheap enough for
+    /// the 1 Hz call sampler — one `getStats` per second is well under the
+    /// video telemetry poll this file already runs at 3 s.
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
+            setMediaJitterBuffer(delaySec: 0.0, emittedCount: 0)
             return
         }
         pc.statistics { [weak self] report in
@@ -239,7 +323,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var haveFallback = false
             var preferredRttSec: Double?
             var fallbackRttSec: Double?
+            // IOS-E6 — mirrors PeerConnectionHolder.kt:5087-5088 exactly:
+            // `inbound-rtp` row, kind=audio, `jitterBufferDelay` (Double
+            // seconds) / `jitterBufferEmittedCount` (integer samples). Zero
+            // by default (see the class-level IOS-E6 note): no such row
+            // exists while audio rides the sealed DataChannel.
+            var jbDelaySec = 0.0
+            var jbEmitted: Int64 = 0
             for (_, s) in report.statistics {
+                if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
+                    jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
+                    jbEmitted = (s.values["jitterBufferEmittedCount"] as? NSNumber)?.int64Value ?? 0
+                }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
                 let rttSec = (s.values["currentRoundTripTime"] as? NSNumber)?.doubleValue
@@ -258,6 +353,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // is nothing to report. nil, not a carried-over previous value.
             let seconds = havePreferred ? preferredRttSec : fallbackRttSec
             self.setMediaRttMs(seconds.map { $0 * 1000.0 })
+            self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
         }
     }
 
@@ -271,6 +367,43 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private var _videoStallPolls: Int = 0
     /// Consecutive stalled polls before firing (3s cadence × 2 ≈ 6s ≥ ~5s).
     private let videoStallPollThreshold: Int = 2
+
+    // W-ROUTECLAMP (2026-08-25) / W-BWCAP (2026-08-25) / W-BACKPRESSURE
+    // (2026-08-25) — sender-side video bitrate ceiling state. The
+    // effective ceiling is composed as
+    //   effectiveMaxBps = routeTier.senderMaxBitrateBps × backpressureFactor
+    // then intersected with the peer's reported VBWCAP via
+    // `VideoBandwidthCap.clamp` — mirrors Android's documented
+    // `cap = min(local, remote-requested, relay)` composition
+    // (`AdaptiveQualityRuntime.localCapBps` doc, PeerConnectionHolder.kt
+    // W-ROUTECLAMP). Driven off `resolveAndApplyRouteTier` (called once on
+    // ICE-connect AND every 3s from `pollVideoStatsOnce` — see that
+    // method's doc for the event-driven verification gap) and
+    // `evaluateBackpressure` (called every 3s from `pollVideoStatsOnce`).
+    private var _routeTier: RouteTier = .unknown
+    private var _cpuLimitedPolls: Int = 0
+    private var _healthyPolls: Int = 0
+    private var _backpressureSteps: Int = 0
+    /// Consecutive CPU-limited polls before stepping DOWN (3s cadence × 2 ≈ 6s).
+    private let backpressureSustainPolls: Int = 2
+    /// Consecutive healthy polls before stepping back UP (3s cadence × 3 ≈ 9s
+    /// — slower to recover than to back off, same asymmetry as Android's
+    /// AIMD bitrate controller and this file's own AbrController sibling).
+    private let backpressureRecoverPolls: Int = 3
+    /// Same multiplicative decrease factor as `AbrController.abrDecreaseFactor`
+    /// (VideoConstants.abrDecreaseFactor = 0.7) — kept as its own literal here
+    /// because that legacy-pipeline constant lives in the app target, not
+    /// this engine module.
+    private let backpressureStepFactor: Double = 0.7
+    /// Caps the step ladder so a persistently CPU-bound device never
+    /// spirals the ceiling to near-zero (0.7^3 ≈ 34% of the route ceiling).
+    private let backpressureMaxSteps: Int = 3
+    /// Fired when the route tier ceiling actually CHANGES (not every poll)
+    /// with the new tier's bps ceiling — AppState wires this to a VBWCAP
+    /// wire emit (`CallPiggyBack.serializeVideoBwCap`), mirroring
+    /// `onVideoStallDetected`'s contract. May fire from the WebRTC stats
+    /// callback thread — consumers hop to @MainActor themselves.
+    public var onLocalVideoCapBpsChanged: ((Int) -> Void)?
 
     /// R-4 (vkey-v1 / sovereign-only) — injectable policy hook consulted
     /// when a remote VIDEO track arrives. When it returns `true` the
@@ -1365,6 +1498,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _lastFramesDecoded = -1
         _lastBytesReceived = -1
         _videoStallPolls = 0
+        // W-ROUTECLAMP / W-BWCAP / W-BACKPRESSURE — per-call state must not
+        // bleed into the next call (mirrors Android's
+        // `PeerBitrateCap.reset()` at call teardown).
+        _routeTier = .unknown
+        _cpuLimitedPolls = 0
+        _healthyPolls = 0
+        _backpressureSteps = 0
+        VideoBandwidthCap.reset()
         // WIRE_SPEC §8.7 — drop any armed TX-hold (endCall funnels through
         // here via sendHangupAndClose): cancel the 2s watchdog and clear
         // the one-shot latch so the next call/upgrade starts clean. The
@@ -1904,6 +2045,33 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
+    /// W-TURNSUSPECT (playbook §IOS-E4) — ICE gathering for this call
+    /// finished with ZERO relay-type local candidates. `RelayCredentialsProvider`
+    /// already forces a refresh after an explicit TURN auth failure; this is
+    /// the complementary trigger for the failure mode that never surfaces one
+    /// — a TURN allocation that silently returns nothing (expired secret,
+    /// revoked realm) looks identical to "no relay servers were configured"
+    /// from here, so any zero-count with a live provider is worth refreshing
+    /// for. Never awaited / never blocks call setup: this call has already
+    /// gathered what it's going to gather, so the refresh can only help the
+    /// NEXT call on this provider.
+    public func peerConnection(_ pc: QAudionPeerConnection,
+                               didCompleteIceGatheringWithRelayCandidates count: Int) {
+        guard count == 0, let provider = relayProvider else { return }
+        // Verified against scripts/ship-ios-logs.py's redact_body (iOS
+        // log-line rule): "turnsuspect count=0 refresh=1" survives the
+        // structured-shape gate (the bracketed class-name prefix itself
+        // gets blob-redacted, everything after it stays greppable
+        // verbatim); the longer key names originally here
+        // ("relay_candidates=0 forcing_refresh=1") pushed the free/
+        // structural-word ratio over the gate's threshold and dropped the
+        // whole line — re-verified 2026-08-25.
+        print("[WebRtcCallController] turnsuspect count=0 refresh=1")
+        Task {
+            _ = try? await provider.credentials(forceRefresh: true)
+        }
+    }
+
     public func peerConnection(_ pc: QAudionPeerConnection,
                                didChangeIceConnectionState s: RTCIceConnectionState) {
         // W419 — log every ICE state transition. Crucial for diagnosing
@@ -1935,7 +2103,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             state = .connected
             // Start outbound/inbound video RTP telemetry once media can flow.
             startVideoStatsTelemetry()
-            pollActiveCandidatePairType()
+            resolveAndApplyRouteTier()
         case .failed:
             state = .failed("ICE failed")
         case .disconnected, .closed:
@@ -1997,26 +2165,148 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     /// W-SHIELDWIRE — read the live, succeeded `candidate-pair` stat and
     /// resolve its `candidateType` ("relay"/"srflx"/"prflx"/"host") through
-    /// the matching local-candidate stats object, then report it via
-    /// `onActiveCandidatePairType`. Runs once per ICE connect/reconnect —
-    /// cheap, no polling loop needed (unlike video stats, which need a
-    /// timer because they change every frame; a candidate pair's type is
-    /// fixed for the life of that connection).
-    private func pollActiveCandidatePairType() {
+    /// the matching local/remote-candidate stats objects, then report the
+    /// local type via `onActiveCandidatePairType` (UI shield badge).
+    ///
+    /// W-ROUTECLAMP (2026-08-25) — ALSO classifies the pair as
+    /// `RouteTier.direct`/`.relay` (Android `PeerConnectionHolder
+    /// .classifyFromStats`: relay if EITHER end's candidateType is
+    /// "relay") and, on a REAL tier transition (including the first
+    /// resolution of the call, not just later demotions — mirrors
+    /// Android's W-ROUTECLAMP fix which explicitly stopped applying the
+    /// policy "only once on the first Direct classification"), clamps the
+    /// outgoing video sender's bitrate ceiling
+    /// (`applyComposedVideoSenderClamp`) and fires
+    /// `onLocalVideoCapBpsChanged` so AppState reports the new ceiling to
+    /// the peer as our own W-BWCAP `VBWCAP:<bps>`.
+    ///
+    /// CALL SITES (mirrors Android's event callback + belt-and-braces
+    /// poll, `PeerConnectionHolder.onSelectedCandidatePairChanged` +
+    /// `startPairPolling`): once per ICE connect/reconnect from
+    /// `didChangeIceConnectionState` (cheap — the common "settled on the
+    /// first pair" case), AND every 3s from `pollVideoStatsOnce` for the
+    /// WHOLE call (Android's own poll is capped to a 30s post-connect
+    /// window because it ALSO has the `onSelectedCandidatePairChanged`
+    /// event covering the rest of the call; iOS keeps polling for the
+    /// whole call instead — see the verification-gap note below).
+    ///
+    /// VERIFICATION GAP (no Swift toolchain / no local xcframework header
+    /// on this box): Android's event source is `PeerConnection.Observer
+    /// .onSelectedCandidatePairChanged`, a real public API on the Android
+    /// WebRTC binding. Whether this vendored iOS `WebRTC.xcframework`
+    /// (remote binaryTarget, not present in this build environment)
+    /// exposes an equivalent `RTCPeerConnectionDelegate` callback (some
+    /// WebRTC ObjC SDK versions add `didChangeLocalCandidate:remote
+    /// Candidate:lastReceivedMs:reason:`) could NOT be grep-verified. A
+    /// wrong guess at that selector would NOT fail to compile (an
+    /// unmatched method in a protocol-conforming extension is just dead,
+    /// silently-never-called code in Swift) — a worse failure mode than a
+    /// compile error, since it would look correct in review. Rather than
+    /// risk that silent gap, this ships on the ALREADY-VERIFIED
+    /// `pc.statistics` polling path only, for the whole call, at the same
+    /// 3s cadence the video-stats telemetry already uses. Report to
+    /// orchestrator: confirm on a real build whether the delegate event
+    /// exists and wire it for sub-3s reaction time if so.
+    private func resolveAndApplyRouteTier() {
         guard let pc = peerConnection?.peerConnection else { return }
-        pc.statistics { report in
+        pc.statistics { [weak self] report in
+            guard let self else { return }
             let succeededPair = report.statistics.values.first { s in
                 s.type == "candidate-pair" &&
                     ((s.values["state"] as? String) == "succeeded" ||
                         (s.values["nominated"] as? NSNumber)?.boolValue == true)
             }
-            guard
-                let pair = succeededPair,
-                let localId = pair.values["localCandidateId"] as? String,
-                let localStat = report.statistics[localId],
-                let candidateType = localStat.values["candidateType"] as? String
-            else { return }
-            self.onActiveCandidatePairType?(candidateType)
+            guard let pair = succeededPair else { return }
+            var localType = ""
+            if let localId = pair.values["localCandidateId"] as? String,
+               let localStat = report.statistics[localId] {
+                localType = (localStat.values["candidateType"] as? String) ?? ""
+                if !localType.isEmpty { self.onActiveCandidatePairType?(localType) }
+            }
+            var remoteType = ""
+            if let remoteId = pair.values["remoteCandidateId"] as? String,
+               let remoteStat = report.statistics[remoteId] {
+                remoteType = (remoteStat.values["candidateType"] as? String) ?? ""
+            }
+            let tier = RouteTier.classify(localType: localType, remoteType: remoteType)
+            guard tier != .unknown, tier != self._routeTier else { return }
+            self._routeTier = tier
+            print("[WebRtcCallController] W-ROUTECLAMP: route tier -> \(tier) (local=\(localType) remote=\(remoteType))")
+            // Numeric tail for the redactor, same reason as the ICE/DTLS
+            // state lines above (relay=1/direct=0, never the word itself).
+            self.log?("route tier=\(tier == .relay ? 1 : 0)")
+            self.applyComposedVideoSenderClamp()
+            if let ceiling = tier.senderMaxBitrateBps {
+                self.onLocalVideoCapBpsChanged?(ceiling)
+            }
+        }
+    }
+
+    /// Compose ALL THREE clamp layers into one effective sender ceiling
+    /// and apply it: route tier (W-ROUTECLAMP) x CPU-backpressure step
+    /// factor (W-BACKPRESSURE), floored at `VideoConstants
+    /// .minVideoBitrateBps`, then intersected with the peer's reported
+    /// VBWCAP (W-BWCAP) via `VideoBandwidthCap.clamp`. Mirrors Android's
+    /// documented `cap = min(local, remote-requested, relay)` composition
+    /// (`AdaptiveQualityRuntime.localCapBps` doc). No-op before the route
+    /// tier has resolved at least once.
+    private func applyComposedVideoSenderClamp() {
+        guard let routeCeiling = _routeTier.senderMaxBitrateBps else { return }
+        let backpressureFactor = pow(backpressureStepFactor, Double(_backpressureSteps))
+        let localMax = max(VideoConstants.minVideoBitrateBps,
+                           Int(Double(routeCeiling) * backpressureFactor))
+        let finalMax = VideoBandwidthCap.clamp(localMax)
+        applyVideoSenderMaxBitrate(finalMax)
+    }
+
+    /// Clamp the outgoing video RTP sender's per-encoding bitrate ceiling.
+    /// Standard WebRTC W3C-mirroring API (`RTCRtpSender.parameters` — get,
+    /// mutate `encodings[0].maxBitrateBps`, set back) — core WebRTC ObjC
+    /// SDK surface unrelated to the AES256/PLI FrameCryptor patch, present
+    /// in every WebRTC iOS build. No-op when there is no video sender yet
+    /// (audio-only call, or video not yet negotiated) or no encoding
+    /// entry (pre-negotiation transceiver).
+    private func applyVideoSenderMaxBitrate(_ maxBps: Int) {
+        guard let sender = peerConnection?.videoSender else { return }
+        let params = sender.parameters
+        let encodings = params.encodings
+        guard !encodings.isEmpty else { return }
+        encodings[0].maxBitrateBps = NSNumber(value: maxBps)
+        sender.parameters = params
+        print("[WebRtcCallController] W-ROUTECLAMP/W-BWCAP/W-BACKPRESSURE: video sender maxBitrateBps=\(maxBps)")
+        log?("video maxbps=\(maxBps)")
+    }
+
+    /// W-BACKPRESSURE (2026-08-25) — `qualityLimitationReason == "cpu"`
+    /// sustained for `backpressureSustainPolls` consecutive 3s polls
+    /// steps the bitrate ceiling DOWN one notch (x0.7, same AIMD decrease
+    /// factor as this app's legacy-pipeline `AbrController
+    /// .abrDecreaseFactor`); `backpressureRecoverPolls` consecutive
+    /// healthy polls step it back UP one notch. Re-applies the composed
+    /// clamp on every step. No-op before the route tier has resolved
+    /// (nothing to step down FROM yet).
+    private func evaluateBackpressure(qualityLimitationReason: String) {
+        guard _routeTier != .unknown else { return }
+        if qualityLimitationReason == "cpu" {
+            _healthyPolls = 0
+            _cpuLimitedPolls += 1
+            guard _cpuLimitedPolls >= backpressureSustainPolls,
+                  _backpressureSteps < backpressureMaxSteps else { return }
+            _cpuLimitedPolls = 0
+            _backpressureSteps += 1
+            print("[WebRtcCallController] W-BACKPRESSURE: CPU-limited -> step DOWN to level \(_backpressureSteps)")
+            log?("backpressure step=\(_backpressureSteps) dir=0")
+            applyComposedVideoSenderClamp()
+        } else {
+            _cpuLimitedPolls = 0
+            guard _backpressureSteps > 0 else { return }
+            _healthyPolls += 1
+            guard _healthyPolls >= backpressureRecoverPolls else { return }
+            _healthyPolls = 0
+            _backpressureSteps -= 1
+            print("[WebRtcCallController] W-BACKPRESSURE: recovered -> step UP to level \(_backpressureSteps)")
+            log?("backpressure step=\(_backpressureSteps) dir=1")
+            applyComposedVideoSenderClamp()
         }
     }
 
@@ -2135,6 +2425,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // Sendable and these fields are touched ONLY here + on close (the
             // 3s single-timer serializes them).
             self.evaluateVideoStall(framesDecoded: inFramesDec, bytesReceived: inBytes)
+            // W-BACKPRESSURE (2026-08-25) — CPU-limited encoder step-down,
+            // fed by the SAME outbound-rtp `qualityLimitationReason` this
+            // poll already reads for `out_quality_limit` above.
+            self.evaluateBackpressure(qualityLimitationReason: outQualityLimit)
+            // W-ROUTECLAMP (2026-08-25) — belt-and-braces poll for the
+            // WHOLE call (not just post-connect): catches a silent
+            // Direct<->Relay route demotion under continual ICE gathering
+            // that `didChangeIceConnectionState` alone would miss. See
+            // `resolveAndApplyRouteTier`'s doc for why this is a second,
+            // separate `pc.statistics` round-trip rather than reusing
+            // `report` directly (avoids a cross-closure typed-parameter
+            // guess this box cannot grep-verify).
+            self.resolveAndApplyRouteTier()
         }
     }
 
@@ -2257,7 +2560,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Create the cryptor holder now even if the PQC key hasn't arrived — the
         // KeyProvider discards frames until setKey runs, so attaching the
         // receiver early avoids the receiver-before-key deadlock.
-        _ = pc.ensureNativeVideoCryptor(participantId: recipientId ?? "peer")
+        let cryptor = pc.ensureNativeVideoCryptor(participantId: recipientId ?? "peer")
+        // W-KFFAST (2026-08-25) — wire the cryptor's decrypt-fail state
+        // callback to the controller's own closure. Idempotent (re-assigns
+        // the same closure) across every `didReceiveRemoteVideoReceiver`
+        // call, including relatch/rebind — the closure lives on the
+        // OUTER `NativeVideoFrameCryptor` holder, not the transient
+        // `RTCFrameCryptor` instance `attachReceiver`/`rebindReceiver`
+        // recreate underneath it, so it survives a mid-call rebind
+        // without needing to be re-set there.
+        cryptor.onDecryptFailure = { [weak self] in
+            print("[WebRtcCallController] W-KFFAST: receiver cryptor decrypt-fail — requesting peer keyframe")
+            self?.onDecryptFailureDetected?()
+        }
         // Publish K_video if we already hold a session key (idempotent); the
         // pqcSessionKey didSet path (re)publishes it on arrival/rotation.
         _ = ensureVideoSealerInternal()

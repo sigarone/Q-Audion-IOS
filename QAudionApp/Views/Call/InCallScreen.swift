@@ -195,6 +195,14 @@ struct InCallScreen: View {
     /// but of a DIFFERENT quantity — this device to the signalling server,
     /// sampled every 30 s — so it is never shown under this label.
     let rttMs: Double?
+    /// W-DELAYSPLIT (IOS-E6, playbook parity with Android's
+    /// `CallUiState.bufMs`) — windowed average ms a sample spent in the
+    /// audio jitter buffer since the previous poll. `nil` ⇒ shown as RTT
+    /// alone; a non-nil value ≥10 ms appends "+<buf>ms" to the RITARDO
+    /// column, mirroring `InCallScreen.kt:1170-1176` exactly (buffer noise
+    /// under 10 ms stays hidden). Zero/nil on today's iOS builds (no
+    /// SRTP-audio inbound-rtp row) — see `CallService.mediaJitterBufferMs`.
+    let bufMs: Int?
     let pqcActive: Bool
     let sasWords: [String]
     let sasVerified: Bool
@@ -407,6 +415,7 @@ struct InCallScreen: View {
          txKbps: Double? = nil,
          rxKbps: Double? = nil,
          rttMs: Double? = nil,
+         bufMs: Int? = nil,
          pqcActive: Bool = true,
          sasWords: [String] = [],
          sasVerified: Bool = false,
@@ -462,6 +471,7 @@ struct InCallScreen: View {
         self.txKbps = txKbps
         self.rxKbps = rxKbps
         self.rttMs = rttMs
+        self.bufMs = bufMs
         self.pqcActive = pqcActive
         self.sasWords = sasWords
         self.sasVerified = sasVerified
@@ -964,7 +974,7 @@ struct InCallScreen: View {
                 Spacer(minLength: 6)
                 // Measured RTT on the active media path; "—" wherever no such
                 // measurement exists (never an invented or last-known number).
-                statColumn("RITARDO", Self.delayText(rttMs), delayColor)
+                statColumn("RITARDO", Self.delayText(rttMs, bufMs: bufMs), delayColor)
             }
             HStack(alignment: .center, spacing: 0) {
                 statColumn("CONFIDENCE", Self.confidenceText(confidence), confidenceLabelColor)
@@ -1047,9 +1057,15 @@ struct InCallScreen: View {
         return txText + "/" + rxText
     }
 
-    /// Measured round-trip time: "128ms", or "—".
-    private static func delayText(_ ms: Double?) -> String {
+    /// Measured round-trip time, optionally split with the windowed
+    /// jitter-buffer delay: "128ms", or "128+40ms" once `bufMs` is ≥10 ms
+    /// (buffer noise under that stays hidden), or "—". Mirrors Android's
+    /// W-DELAYSPLIT column exactly (`InCallScreen.kt:1170-1176`).
+    private static func delayText(_ ms: Double?, bufMs: Int?) -> String {
         guard let ms else { return Self.statDash }
+        if let buf = bufMs, buf >= 10 {
+            return String(format: "%.0f+%dms", ms, buf)
+        }
         return String(format: "%.0fms", ms)
     }
 
@@ -1072,11 +1088,15 @@ struct InCallScreen: View {
     }
 
     /// RITARDO colour — Android's exact thresholds: red above 400 ms,
-    /// warning above 200 ms, success below; neutral when unmeasured.
+    /// warning above 200 ms, success below; neutral when unmeasured. The
+    /// threshold is evaluated against RTT + jitter-buffer delay together
+    /// (W-DELAYSPLIT, `InCallScreen.kt:1177-1182`) — total ear-perceived
+    /// delay, not RTT alone.
     private var delayColor: Color {
         guard let rttMs = self.rttMs else { return scheme.onSurfaceVariant }
-        if rttMs > 400 { return extras.riskHigh }
-        if rttMs > 200 { return extras.warning }
+        let total = rttMs + Double(bufMs ?? 0)
+        if total > 400 { return extras.riskHigh }
+        if total > 200 { return extras.warning }
         return extras.success
     }
 

@@ -30,6 +30,23 @@ public final class QAudionEngine: @unchecked Sendable {
     private var sessionInfo: SessionInfo?
     private var sessionStartTime: Date?
 
+    /// W-FECDECODE (2026-08-25) — forwards `audioProcessor.onFecRecoveredPcm`.
+    /// A stored closure rather than a passthrough to `audioProcessor` itself:
+    /// `initialize()`/`latchAudioProfile` REBUILD `audioProcessor`, and a
+    /// caller may set this before either has run (audioProcessor still nil).
+    /// Re-applied to the processor's own callback at every (re)construction
+    /// site below, so it survives rebuilds and an out-of-order set/call.
+    public var onFecRecoveredAudio: ((Data) -> Void)?
+
+    /// W-PLPFEEDBACK (2026-08-25) — measures OUR inbound loss from the wire
+    /// sequence numbers every successfully processed audio frame already
+    /// carries. Fed in `processIncomingAudio`, read via `rxLossSnapshot()` by
+    /// the periodic PLP: reporter (see `CallService`). Survives an
+    /// `audioProcessor` rebuild — unlike the codec's own per-decoder
+    /// counters, loss measurement is a property of the CALL, not of one
+    /// profile's encoder/decoder pair.
+    private let rxLossMeter = FrameLossMeter()
+
     // W479 — Android-compatible audio mode.
     // When `useAdaptivePadding` is true, processOutgoingAudio and
     // processIncomingAudio use the AdaptivePaddingController scheme
@@ -103,6 +120,8 @@ public final class QAudionEngine: @unchecked Sendable {
             codec: OpusCodec(config: OpusCodec.Config(profile: audioProfile)),
             jitterBufferMs: AudioConstants.jitterBufferMsWsRelay
         )
+        // W-FECDECODE — re-apply on every (re)construction; see the property's doc.
+        audioProcessor?.onFecRecoveredPcm = { [weak self] pcm in self?.onFecRecoveredAudio?(pcm) }
         // W479 — reset adaptive-padding state so each call starts clean.
         useAdaptivePadding = false
         sessionKey = nil
@@ -144,6 +163,8 @@ public final class QAudionEngine: @unchecked Sendable {
             codec: OpusCodec(config: OpusCodec.Config(profile: profile)),
             jitterBufferMs: AudioConstants.jitterBufferMsWsRelay
         )
+        // W-FECDECODE — re-apply on every (re)construction; see the property's doc.
+        audioProcessor?.onFecRecoveredPcm = { [weak self] pcm in self?.onFecRecoveredAudio?(pcm) }
         return true
     }
 
@@ -174,6 +195,16 @@ public final class QAudionEngine: @unchecked Sendable {
         sessionInfo = SessionInfo(sessionId: sessionState.sessionId, isActive: true)
         sessionStartTime = Date()
         stats = EngineStats()
+        // W-PLPFEEDBACK — deliberately NOT reset here. A re-key restarts the
+        // sender's wire sequence at 0 (see `txSeqAdaptive` below and
+        // W-RXREORDER), and `rxLossMeter` already treats a large backward
+        // jump as exactly that — a counter restart — folding the closed span
+        // into its cumulative totals and re-anchoring rather than losing
+        // history (see `FrameLossMeter`'s own doc). An external reset here
+        // would instead make `expected`/`lost` jump BACKWARD out from under
+        // the periodic reporter's windowed delta (`CallService`'s
+        // `plpPrevExpected`/`plpPrevLost`), which has no way to know a reset
+        // happened and would read the drop as a burst of negative loss.
         // W479 — store the raw session key and adaptive-padding flag.
         // Must be set atomically with state = .sessionActive so
         // processOutgoingAudio never reads a half-initialised flag.
@@ -335,6 +366,11 @@ public final class QAudionEngine: @unchecked Sendable {
             // straight into `AudioCapture.playFrame` and the playout buffer.
             guard len > 0 else {
                 stats.framesRx += 1
+                // W-PLPFEEDBACK — this packet DID arrive on the wire (it is
+                // the fleet's explicit "no audio this frame" marker, not a
+                // transit loss), so it counts toward the loss meter exactly
+                // like any other received frame.
+                rxLossMeter.onFrame(seq: Int64(frame.sequenceNumber))
                 // The `??` is unreachable in `.sessionActive` (initialize()
                 // always builds the processor); it returns one frame of silence
                 // rather than an empty buffer for exactly the reason above.
@@ -342,8 +378,10 @@ public final class QAudionEngine: @unchecked Sendable {
                     ?? Data(count: AudioConstants.bytesPerFrame)
             }
             let opusBytes = padded.subdata(in: Self.adaptiveHeader..<(Self.adaptiveHeader + len))
-            let pcm = audioProcessor?.processIncoming(opusFrame: opusBytes) ?? opusBytes
+            let pcm = audioProcessor?.processIncoming(opusFrame: opusBytes,
+                                                       sequenceNumber: frame.sequenceNumber) ?? opusBytes
             stats.framesRx += 1
+            rxLossMeter.onFrame(seq: Int64(frame.sequenceNumber))
             return pcm
         }
         guard let rxSm = rxSessionManager, let cipher = aeadCipher else {
@@ -443,8 +481,10 @@ public final class QAudionEngine: @unchecked Sendable {
         // Note: the W469 comment "no AAD" above is stale (pre-W473). AAD IS used.
         let opus = try cipher.decrypt(cipherOutput: cipherOutput, key: frameKey,
                                       associatedData: Self.frameAAD(frame.sequenceNumber))
-        let pcm = audioProcessor?.processIncoming(opusFrame: opus) ?? opus
+        let pcm = audioProcessor?.processIncoming(opusFrame: opus,
+                                                   sequenceNumber: frame.sequenceNumber) ?? opus
         stats.framesRx += 1
+        rxLossMeter.onFrame(seq: Int64(frame.sequenceNumber))
         return pcm
     }
 
@@ -605,6 +645,25 @@ public final class QAudionEngine: @unchecked Sendable {
         proc.codec.reconfigure(OpusCodec.Config(
             profile: profile, bitrate: clampedBr * 1000, complexity: 10, enableHpf: true))
         proc.codec.setPacketLossPct(max(0, min(plp, 100)))
+    }
+
+    /// W-FECDECODE — cumulative FEC recovery counters for the active
+    /// decoder, for the rate-limited diagnostic log
+    /// (`CallService`'s `fec_rec=<n> fec_fail=<n>`). Zero/zero before
+    /// `initialize()` has built a processor.
+    public func rxFecStats() -> (recovered: Int64, failed: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        guard let proc = audioProcessor else { return (0, 0) }
+        return (proc.codec.fecRecoveredFrames, proc.codec.fecFailedFrames)
+    }
+
+    /// W-PLPFEEDBACK — cumulative inbound-loss snapshot for the periodic
+    /// PLP: reporter. See `rxLossMeter`'s doc for why this is never reset
+    /// mid-call: the caller computes a WINDOWED delta between two snapshots,
+    /// and a monotonically non-decreasing pair is what makes that safe.
+    public func rxLossSnapshot() -> (expected: Int64, lost: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        return (rxLossMeter.expected, rxLossMeter.lost)
     }
 }
 

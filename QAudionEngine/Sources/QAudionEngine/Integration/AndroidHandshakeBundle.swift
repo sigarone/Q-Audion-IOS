@@ -317,6 +317,9 @@ public enum AndroidHandshakeEnvelope {
 ///     so its books close. Also EMITTED alongside every outbound
 ///     `call_hangup` envelope (hangup-opaque-piggyback — bcrypto-lite in
 ///     certain paths drops the envelope silently, the opaque survives).
+///   - `PLP:<int percent>` — W-PLPFEEDBACK (2026-08-25): sender's periodic
+///     measured inbound-audio loss, consumed to drive this receiver's own
+///     TX encoder loss-hint via `PlpPolicy`.
 ///   - `KCMAC:<payload>` — PSK-mix ship-step-2: reserved for a future
 ///     key-confirmation MAC tied to PSK mixing. Recognised-and-ignored
 ///     for now (logged, then dropped) — no handler logic yet. The point
@@ -372,6 +375,15 @@ public enum CallPiggyBack: Equatable {
     /// `WsCallSignaller.HANGUP_PAYLOAD_PREFIX` framing.
     case hangup(callId: String, reason: String)
 
+    /// `<callId>|PLP:<int percent>` — W-PLPFEEDBACK (2026-08-25): the
+    /// sender's periodic report of ITS OWN measured inbound-audio loss over
+    /// the last window, 0-100. Consumed to drive the RECEIVER's own TX
+    /// encoder's `OPUS_SET_PACKET_LOSS_PERC` knob (via `PlpPolicy`) so the
+    /// FEC redundancy budget tracks what the peer is actually experiencing
+    /// on this link, rather than a fixed provisioning constant. Mirrors
+    /// Android's `WsCallSignaller.PLP_PAYLOAD_PREFIX` byte for byte.
+    case plp(callId: String, percent: Int)
+
     /// `<callId>|EARBUDPDU:<base64>` — opaque earbud-firmware handshake
     /// PDU (earbud-relay-v1). The earbud-side phone relays HSRESP
     /// fragments from the firmware; iOS (always the SW counterparty)
@@ -407,6 +419,15 @@ public enum CallPiggyBack: Equatable {
     /// `frameId` is the fragmenter's 16-bit frame counter, `missing` the
     /// list of 0-based fragment indices not yet received.
     case vnack(callId: String, frameId: Int, missing: [Int])
+
+    /// `<callId>|VBWCAP:<int bps>` — W-BWCAP (2026-08-25) receiver-driven
+    /// video bitrate cap: the peer's OWN local downlink decision, reported
+    /// so THIS side can clamp its outbound video sender to it. Mirrors
+    /// Android's `WsCallSignaller.VBWCAP_PAYLOAD_PREFIX` /
+    /// `VideoBwCapReport` byte for byte. Event-driven (sent only on a
+    /// route-tier transition, never polled) — see
+    /// `QAudionWebRtcCallController.resolveAndApplyRouteTier`.
+    case videoBwCap(callId: String, bps: Int)
 
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
@@ -453,6 +474,15 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "HANGUP:") {
             return .hangup(callId: callId, reason: v)
         }
+        // PLP:<int percent> — malformed (non-numeric, out of range) drops
+        // the whole envelope fail-closed, same discipline as VNACK: a stale
+        // loss knob is harmless, a corrupt one applied blind is not.
+        if let v = stripPrefix(payload, "PLP:") {
+            guard let pct = Int(v.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  pct >= 0, pct <= 100
+            else { return nil }
+            return .plp(callId: callId, percent: pct)
+        }
         // EARBUDPDU:<base64> — earbud-relay-v1 handshake PDU. Malformed
         // base64 is dropped fail-closed (handshake simply won't complete),
         // mirroring the Android receive site.
@@ -488,6 +518,12 @@ public enum CallPiggyBack: Equatable {
             let missing = parts[1].split(separator: ",").compactMap { Int($0) }
             guard !missing.isEmpty else { return nil }
             return .vnack(callId: callId, frameId: frameId, missing: missing)
+        }
+        // VBWCAP:<int bps> — malformed (non-numeric, <= 0) drops the whole
+        // envelope, mirrors Android's `toIntOrNull()` + `bps > 0` receive guard.
+        if let v = stripPrefix(payload, "VBWCAP:") {
+            guard let bps = Int(v), bps > 0 else { return nil }
+            return .videoBwCap(callId: callId, bps: bps)
         }
         return nil
     }
@@ -531,6 +567,14 @@ public enum CallPiggyBack: Equatable {
         return "\(callId)|VNACK:\(frameId):\(missingCsv)"
     }
 
+    /// Build a wire string for a PLP announce — the inverse of the `.plp`
+    /// parse branch. `percent` is clamped to `0...100` here too, so a caller
+    /// that skips its own clamping still cannot ship an out-of-contract
+    /// value the PEER's parser would then have to reject.
+    public static func serializePlp(callId: String, percent: Int) -> String {
+        "\(callId)|PLP:\(min(max(percent, 0), 100))"
+    }
+
     /// Build a wire string for an OWNER_CONT announce — the inverse of the
     /// `.ownerContinuity` parse branch. `level` should already be one of
     /// `unknown`/`verified`/`uncertain`/`mismatch` (lowercased) — callers
@@ -554,6 +598,14 @@ public enum CallPiggyBack: Equatable {
     public static func serializeFpSet(callId: String, fpAdv: Data) -> String {
         precondition(fpAdv.count == 32, "fpAdv must be 32 bytes")
         return "\(callId)|FPSET:\(fpAdv.base64EncodedString())"
+    }
+
+    /// Build a wire string for a VBWCAP report — the inverse of the
+    /// `.videoBwCap` parse branch. Byte-for-byte matches Android's
+    /// `WsCallSignaller.VBWCAP_PAYLOAD_PREFIX + bps` (`CallController
+    /// .reportLocalVideoCapBps`).
+    public static func serializeVideoBwCap(callId: String, bps: Int) -> String {
+        return "\(callId)|VBWCAP:\(bps)"
     }
 
     /// W-KCMAC (ship step 5) — build the wire string for a key-confirmation MAC:

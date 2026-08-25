@@ -275,8 +275,9 @@ public final class OpusCodec {
                     //
                     // Real FEC recovery is a DIFFERENT operation: on a detected gap,
                     // recover frame N from packet N+1 with decode_fec=1, then decode
-                    // N+1 normally with 0. That needs sequence-gap detection, which
-                    // arrives with the playout jitter buffer (W-IOSJITTER).
+                    // N+1 normally with 0. That is `decodeFEC` below, driven by the
+                    // wire sequence-number gap check in
+                    // `QAudionAudioProcessor.processIncoming` (W-FECDECODE, 2026-08-25).
                     0)
             }
         }
@@ -336,6 +337,117 @@ public final class OpusCodec {
                 Int32(samples), 0)
         }
         return pcm
+    }
+
+    /// W-FECDECODE (2026-08-25) — frames whose audio was RECOVERED via
+    /// in-band FEC (the LBRR redundancy carried by the packet that followed
+    /// them), rather than concealed. Distinct from `framesDecoded`: the
+    /// recovered frame was never itself the primary payload of any packet
+    /// that reached this decoder — mirrors Android's `rxFecRecovered`
+    /// counter, which is deliberately folded into neither `framesDecoded`
+    /// nor a PLC counter for the same reason.
+    public private(set) var fecRecoveredFrames: Int64 = 0
+
+    /// A single-frame gap was detected and `decodeFEC` was attempted, but
+    /// libopus could not produce audio from the LBRR side-data (absent —
+    /// the peer's encoder had FEC off or this was the very first packet of
+    /// a burst — or corrupt). The caller falls back to `decodePLC` when
+    /// this happens; see `QAudionAudioProcessor.processIncoming`.
+    public private(set) var fecFailedFrames: Int64 = 0
+
+    /// W-FECDECODE (2026-08-25) — reconstruct a LOST frame from the in-band
+    /// FEC (LBRR) redundancy carried by the packet that FOLLOWED it.
+    ///
+    /// The encoder side of this has been paid for since this file's `init`
+    /// turned on `opus_helper_set_inband_fec` + a 30 % loss hint: every CBR
+    /// frame this codec (and a symmetric peer) sends already carries a
+    /// low-bitrate copy of the frame before it. Until this method existed,
+    /// nothing on the receive side spent it — `decode` always passes
+    /// `decode_fec: 0` (see the W-IOSFECFLAG note there), so a genuinely lost
+    /// frame was always synthesised by `decodePLC` even when the very next
+    /// packet held a real copy of it.
+    ///
+    /// ## Call-order contract — decoder state is ONE serial stream
+    ///
+    /// This call and `decode` advance the SAME native decoder state, in call
+    /// order. On a single-frame gap (frame N lost, frame N+1 just arrived),
+    /// the caller MUST:
+    ///   1. `decodeFEC(frameN1)` → PCM for frame N. Play it FIRST.
+    ///   2. `decode(frameN1)`    → PCM for frame N+1, decoded normally.
+    ///
+    /// For a gap of two or more frames, LBRR can only ever recover the LAST
+    /// lost frame (each packet's redundancy covers exactly its immediate
+    /// predecessor) — conceal any earlier holes with `decodePLC` first, then
+    /// steps 1 and 2 above. NEVER call this for a frame that was not
+    /// actually lost: the reconstruction is a real frame of audio, so a
+    /// spurious call inserts `lostMs` of duplicated time and shifts playout
+    /// against the sender — exactly the corruption `decode`'s own
+    /// W-IOSFECFLAG note documents `decode_fec: 1` causing when it ran on
+    /// every frame instead of only a genuine gap.
+    ///
+    /// ## Duration
+    ///
+    /// `lostMs` must be the duration of the LOST frame, not of `nextFrame`.
+    /// libopus does not error on a mismatch, it silently degrades: shorter
+    /// than the packet's own duration takes the pure-PLC branch (no FEC at
+    /// all); longer prepends PLC for the excess (opus_decoder.c). On this
+    /// fixed-cadence CBR stream the lost frame's duration equals the
+    /// carrying packet's, so the default is `observedInboundFrameMs` — the
+    /// same value `decodePLC` falls back to, and deliberately NOT the
+    /// negotiated profile, for the same reason `decodePLC`'s doc gives: this
+    /// must be correct on an endpoint holding no negotiation state at all.
+    ///
+    /// Same output conventions as `decode`: a freshly allocated buffer per
+    /// call, sized by the returned sample count. On any failure — decoder
+    /// unavailable, empty `nextFrame`, no LBRR present, a decode error —
+    /// returns silence of exactly `lostMs` so the playout clock stays
+    /// aligned no matter what, and counts the attempt in `fecFailedFrames`
+    /// rather than `fecRecoveredFrames`.
+    ///
+    /// - Parameters:
+    ///   - nextFrame: the Opus packet AFTER the lost one (frame N+1).
+    ///   - lostMs: duration of the lost frame, in ms. `nil` (the default)
+    ///     uses `observedInboundFrameMs`, falling back to
+    ///     `AudioConstants.frameDurationMs` before any frame has been seen.
+    /// - Returns: PCM for the lost frame — real LBRR reconstruction when
+    ///   present, silence of the same duration otherwise.
+    public func decodeFEC(_ nextFrame: Data, lostMs: Int? = nil) -> Data {
+        let requested = lostMs ?? (lastDecodedDurationMs > 0 ? lastDecodedDurationMs : AudioConstants.frameDurationMs)
+        // Same clamp `concealmentSamples()` applies: a nonsensical duration
+        // must not be able to size an allocation or a native call.
+        let clampedMs = max(1, min(requested, AudioConstants.maxFrameDurationMs))
+        let lostSamples = AudioConstants.sampleRate / 1000 * clampedMs
+        let bytes = lostSamples * (AudioConstants.bitsPerSample / 8) * AudioConstants.channels
+        guard let dec = decoder, !nextFrame.isEmpty else {
+            fecFailedFrames &+= 1
+            return Data(count: bytes)
+        }
+        var pcm = Data(count: bytes)
+        // force-unwraps below are safe: nextFrame is checked non-empty above,
+        // pcm was just allocated with a fixed non-zero `bytes` — baseAddress
+        // is only nil for an empty buffer.
+        let result = nextFrame.withUnsafeBytes { inBuf in
+            pcm.withUnsafeMutableBytes { outBuf in
+                opus_decode(dec,
+                    // swiftlint:disable:next force_unwrapping
+                    inBuf.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                    Int32(nextFrame.count),
+                    // swiftlint:disable:next force_unwrapping
+                    outBuf.baseAddress!.assumingMemoryBound(to: Int16.self),
+                    Int32(lostSamples),
+                    // decode_fec: 1 — the one and only legitimate use of this
+                    // flag in this file (contrast `decode`'s permanent 0):
+                    // read nextFrame's LBRR side-data, which is a low-bitrate
+                    // copy of the frame BEFORE it, not the primary payload.
+                    1)
+            }
+        }
+        guard result > 0 else {
+            fecFailedFrames &+= 1
+            return Data(count: bytes)
+        }
+        fecRecoveredFrames &+= 1
+        return pcm.prefix(Int(result) * AudioConstants.channels * (AudioConstants.bitsPerSample / 8))
     }
 
     /// Samples of concealment to generate — the §2.5 priority order above.

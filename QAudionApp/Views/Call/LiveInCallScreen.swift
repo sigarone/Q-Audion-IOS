@@ -277,6 +277,12 @@ struct LiveInCallScreen: View {
                 // RITARDO label it would be undetectably wrong. It stays where
                 // it is honest — the diagnostics overlay's "LATENZA RELAY" row.
                 rttMs: appState.callService.mediaRttMs,
+                // W-DELAYSPLIT (IOS-E6) — windowed audio jitter-buffer delay
+                // in ms, paired with rttMs above so RITARDO can show
+                // "<rtt>+<buf>ms" the same way Android's InCallScreen.kt
+                // does (InCallScreen.kt:1170-1176). nil renders as today
+                // (RTT alone) — see `CallService.mediaJitterBufferMs` kdoc.
+                bufMs: appState.callService.mediaJitterBufferMs,
                 // W-TRUSTBAR-FIX: backendType is one of "p2p"/"turn"/"relay"
                 // (see AppState.swift ~line 267) — it is NEVER the literal
                 // "PQC". The PQC handshake is a SEPARATE layer from the

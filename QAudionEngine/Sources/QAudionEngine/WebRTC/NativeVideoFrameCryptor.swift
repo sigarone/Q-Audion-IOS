@@ -25,7 +25,14 @@ import WebRTC
 ///
 /// CLAUDE.md §16: this is a new file but takes ONLY RTC* + Data/String params —
 /// never `AppState` — so it does not trip the Sendable-inference build break.
-public final class NativeVideoFrameCryptor: @unchecked Sendable {
+///
+/// W-KFFAST (2026-08-25) — inherits `NSObject` (was a bare final class)
+/// solely so it can conform to `RTCFrameCryptorDelegate` below and be
+/// assigned as the receiver cryptor's `delegate` — the same pattern
+/// `QAudionWebRtcCallController` already uses to conform to
+/// `QAudionPeerConnection.Delegate` (`NSObject, ...Delegate, @unchecked
+/// Sendable`). No behavior change to the existing lock-guarded state.
+public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     public let keyProvider: RTCFrameCryptorKeyProvider
     private let factory: RTCPeerConnectionFactory
     private let participantId: String
@@ -33,6 +40,18 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
     private var receiverCryptor: RTCFrameCryptor?
     private var hasKey = false
     private let lock = NSLock()
+
+    /// W-KFFAST (2026-08-25) — fired when the RECEIVER cryptor's native
+    /// state callback reports DECRYPTIONFAILED / MISSINGKEY / INTERNALERROR
+    /// (rekey skew, a storm of failing frames, ratchet gap). Mirrors
+    /// Android's `FrameCryptor.setObserver` hook in
+    /// `PeerConnectionHolder.enableVideoFrameCryptorOnReceiver`
+    /// (PeerConnectionHolder.kt:1551-1562) exactly: healthy states
+    /// (NEW/OK/KEYRATCHETED) do not trigger. Set by
+    /// `QAudionWebRtcCallController` at receiver-attach time; may fire
+    /// from the WebRTC/native cryptor callback thread — consumers hop to
+    /// @MainActor themselves.
+    public var onDecryptFailure: (() -> Void)?
 
     public init(factory: RTCPeerConnectionFactory, participantId: String) {
         self.factory = factory
@@ -60,6 +79,7 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
             // swiftlint:disable:next force_unwrapping
             keyDerivationAlgorithm: RTCKeyDerivationAlgorithm(rawValue: 1)!
         )
+        super.init()
     }
 
     public var keyIsSet: Bool {
@@ -128,6 +148,12 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         }
         c.keyIndex = 0
         c.enabled = true
+        // W-KFFAST (2026-08-25) — receiver-only (mirrors Android: only
+        // `enableVideoFrameCryptorOnReceiver` calls `setObserver`, never
+        // the sender side). `self` conforms to `RTCFrameCryptorDelegate`
+        // below; the delegate property is weak on the native side so this
+        // creates no retain cycle.
+        c.delegate = self
         receiverCryptor = c
         print("[NativeVideoFrameCryptor] receiver cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
         return true
@@ -194,6 +220,41 @@ public final class NativeVideoFrameCryptor: @unchecked Sendable {
         receiverCryptor?.enabled = false
         senderCryptor = nil
         receiverCryptor = nil
+    }
+}
+
+// MARK: - W-KFFAST state callback
+
+/// VERIFICATION GAP (no Swift toolchain / no local `WebRTC.xcframework`
+/// header on this box — the framework is a remote binaryTarget, see
+/// `QAudionEngine/Package.swift`): `RTCFrameCryptorDelegate` and the
+/// `RTCFrameCryptionState` case names below are asserted from the public
+/// webrtc-sdk/LiveKit-fork ObjC SDK this vendored build is patched from
+/// (`webrtc-sdk/webrtc.git@m144_release`, commit `df1011be` — the SAME
+/// upstream commit the Android AES256 patch is built against, per
+/// `Package.swift`'s binaryTarget comment) — NOT grep-verified against the
+/// actual header. Unlike a guessed `RTCPeerConnectionDelegate` override
+/// (see `QAudionWebRtcCallController.resolveAndApplyRouteTier`'s doc for
+/// why that one was deliberately avoided), a WRONG protocol requirement
+/// here fails LOUDLY: `RTCFrameCryptor` is created via the SAME
+/// `RTCFrameCryptor(factory:rtpReceiver:...)` initializer this file
+/// already uses successfully (proven call site above), so if
+/// `RTCFrameCryptorDelegate`/`RTCFrameCryptionState` did not exist under
+/// these exact names the file would already fail to compile at `c.delegate
+/// = self` in `attachReceiver` — a compile error, not a silent no-op.
+/// First real Xcode build must still confirm this compiles; report to
+/// orchestrator either way.
+extension NativeVideoFrameCryptor: RTCFrameCryptorDelegate {
+    public func frameCryptor(_ frameCryptor: RTCFrameCryptor,
+                             didStateChangeWithParticipantId participantId: String,
+                             with state: RTCFrameCryptionState) {
+        switch state {
+        case .decryptionFailed, .missingKey, .internalError:
+            print("[NativeVideoFrameCryptor] W-KFFAST: receiver cryptor state=\(state.rawValue) participantId=\(participantId) — requesting peer keyframe")
+            onDecryptFailure?()
+        default:
+            break
+        }
     }
 }
 #endif
