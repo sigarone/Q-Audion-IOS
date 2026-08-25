@@ -102,17 +102,33 @@ public final class GroupRegistry: ObservableObject {
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
-              let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
+        if let sealed = UserDefaults.standard.string(forKey: Self.storageKey),
+           let json = LocalStoreCipher.open(sealed),
+           let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) {
+            entries = decoded
+        } else if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+                  let decoded = try? JSONDecoder().decode([Entry].self, from: data) {
+            entries = decoded
+            // Legacy plaintext blob just read — convert it now rather than
+            // waiting for the next mutation.
+            persist()
+        } else {
             entries = []
-            return
         }
-        entries = decoded
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        guard let data = try? JSONEncoder().encode(entries),
+              let json = String(data: data, encoding: .utf8) else { return }
+        // Fail closed: if the key is unreachable the blob is NOT written in
+        // the clear. The previous (sealed) value stays on disk and the next
+        // persist retries.
+        let attempt: String?? = try? LocalStoreCipher.seal(json)
+        guard let unwrapped = attempt, let sealed = unwrapped else {
+            RTLog.warn("group", "registry persist deferred sealed=0")
+            return
+        }
+        UserDefaults.standard.set(sealed, forKey: Self.storageKey)
     }
 
     // MARK: - Public API
