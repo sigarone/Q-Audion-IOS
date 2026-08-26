@@ -83,6 +83,29 @@ public final class QAudionPeerConnection: NSObject {
         /// too, once that machinery exists). Default no-op below.
         func peerConnection(_ pc: QAudionPeerConnection,
                             didCompleteIceGatheringWithRelayCandidates count: Int)
+
+        /// W-ROUTETIEREVENT (2026-08-26, P2 audit item 4) — libwebrtc's ICE
+        /// agent just selected a new candidate pair. Sourced from the
+        /// `RTCPeerConnectionDelegate` OPTIONAL method
+        /// `didChangeLocalCandidate:remoteCandidate:lastReceivedMs:
+        /// changeReason:` — confirmed present on the pinned webrtc-sdk/webrtc
+        /// `m144_release` tag this app's vendored `WebRTC.xcframework` is
+        /// built from (fetched and grepped the real header before wiring
+        /// this; see `QAudionWebRtcCallController
+        /// .resolveAndApplyRouteTier`'s own prior "VERIFICATION GAP" note,
+        /// now closed with real evidence instead of a guess).
+        ///
+        /// Deliberately carries only the WebRTC-reported change reason, not
+        /// the candidate objects themselves: every conformer that cares
+        /// (route-tier classification, W-ROUTECLAMP) already re-derives the
+        /// committed pair from a fresh `RTCStatisticsReport` — the SAME
+        /// `pc.statistics` call the existing 3s poll uses — so this is
+        /// purely a trigger to run that resolution on-demand instead of
+        /// waiting up to 3s for the next timer tick. Default no-op below so
+        /// conformers that only need the belt-and-braces poll (unchanged,
+        /// still running) need not implement it.
+        func peerConnection(_ pc: QAudionPeerConnection,
+                            didChangeSelectedCandidatePairChangeReason reason: String)
     }
 
     public weak var delegate: Delegate?
@@ -1286,6 +1309,33 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
                                  sdpMLineIndex: candidate.sdpMLineIndex)
     }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+
+    /// W-ROUTETIEREVENT (2026-08-26, P2 audit item 4) — the OPTIONAL
+    /// `RTCPeerConnectionDelegate` "selected candidate pair changed" event.
+    /// Bound via an EXPLICIT `@objc` selector rather than relying on
+    /// Swift's automatic Objective-C name-import (which strips a trailing
+    /// piece of the selector matching the parameter's type name and is not
+    /// something to guess at for a 5-argument selector — a wrong guess
+    /// compiles clean and is just silently never called, the same trap
+    /// already documented on `resolveAndApplyRouteTier`). The literal
+    /// selector string below was fetched and grepped from the real
+    /// `sdk/objc/api/peerconnection/RTCPeerConnection.h` at the pinned
+    /// webrtc-sdk/webrtc `m144_release` tag, byte-for-byte:
+    ///   `peerConnection:didChangeLocalCandidate:remoteCandidate:
+    ///    lastReceivedMs:changeReason:`
+    /// Parameter types matter for ABI, not just the selector name — the
+    /// header declares `lastReceivedMs:(int)`, so this uses `Int32`
+    /// (Swift's plain `Int` bridges to the WIDER `NSInteger`/`long` and
+    /// would not match the 4-byte `int` the real caller passes).
+    @objc(peerConnection:didChangeLocalCandidate:remoteCandidate:lastReceivedMs:changeReason:)
+    public func peerConnection(_ peerConnection: RTCPeerConnection,
+                                didChangeLocalCandidate local: RTCIceCandidate,
+                                remoteCandidate remote: RTCIceCandidate,
+                                lastReceivedMs: Int32,
+                                changeReason reason: String) {
+        delegate?.peerConnection(self, didChangeSelectedCandidatePairChangeReason: reason)
+    }
+
     public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         // W-DCAUDIO — CALLEE side: the caller created the sealed-audio DataChannel;
         // capture it and start receiving sealed frames. The label must match the
@@ -1456,6 +1506,11 @@ public extension QAudionPeerConnection.Delegate {
 
     func peerConnection(_ pc: QAudionPeerConnection,
                         didCompleteIceGatheringWithRelayCandidates count: Int) {}
+
+    // W-ROUTETIEREVENT — default no-op so conformers that only need the
+    // existing 3s poll need not implement the event-driven trigger.
+    func peerConnection(_ pc: QAudionPeerConnection,
+                        didChangeSelectedCandidatePairChangeReason reason: String) {}
 }
 
 // MARK: - RTCDataChannelDelegate (W-DCAUDIO sealed-audio channel)

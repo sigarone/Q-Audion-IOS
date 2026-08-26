@@ -2849,7 +2849,32 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // endpoint, presenting libwebrtc with a standard
         // turn:127.0.0.1:<port>?transport=udp entry.
         // Mirrors Android WssTurnBridge.kt and Desktop WssTurnBridge.ts.
-        if let wssUrlStr = bundle.wssTurnUrl,
+        //
+        // W-RELAYGATE (2026-08-26, P2 audit item 3) — this used to allocate
+        // and insert the bridge UNCONDITIONALLY on every call that had TURN
+        // credentials, ahead of the plain STUN/TURN entries `servers`
+        // already carries. That is backwards for a "last-resort bypass":
+        // the bridge was never actually gated behind any evidence the
+        // direct UDP path needed bypassing.
+        //
+        // `relayRttByUrl` above is exactly that evidence, already paid for:
+        // it is the real UDP STUN Binding round trip (`StunClient
+        // .measureRttMs`, RFC 5389) to every relay's `turn:`/`stun:` URL,
+        // run two lines up for latency ORDERING. A non-empty result means
+        // at least one relay in OUR OWN fleet answered a raw UDP packet on
+        // its STUN/TURN port — i.e. outbound UDP to this exact service
+        // class is not blocked on this network, so the corporate-firewall
+        // scenario the bridge exists for is, on this call's own measured
+        // evidence, not what's happening. An EMPTY result — every probe in
+        // the round timed out or the round itself hit its own overall
+        // budget (`RelayLatencyProbe.measureAll`'s doc) — is the
+        // "connectivity-check failure signal" the bridge should actually be
+        // gated behind: no positive evidence direct UDP works, so fail
+        // toward allocating the bypass exactly like before this change.
+        // This adds no new network round trip and never makes call setup
+        // slower than the ordering probe already made it.
+        if relayRttByUrl.isEmpty,
+           let wssUrlStr = bundle.wssTurnUrl,
            let wssUrl = URL(string: wssUrlStr),
            // Skip if bundle has no TURN entry with credentials — libwebrtc
            // needs real credentials inside the TURN ALLOCATE request.
@@ -2946,6 +2971,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         Task {
             _ = try? await provider.credentials(forceRefresh: true)
         }
+    }
+
+    /// W-ROUTETIEREVENT (2026-08-26, P2 audit item 4) — react to a real
+    /// libwebrtc "selected candidate pair changed" event instead of waiting
+    /// for the next 3s `pollVideoStatsOnce` tick. `resolveAndApplyRouteTier`
+    /// already de-duplicates internally (`_routeTierDwell.observe`, plus its
+    /// own `pc.statistics` re-derivation of the actually-committed pair), so
+    /// calling it early/often here is safe — worst case it repeats work the
+    /// poll would have done anyway a little sooner. The 3s poll itself is
+    /// UNCHANGED and keeps running for the whole call: this is additive
+    /// belt-and-braces, not a replacement, matching how
+    /// `didChangeIceConnectionState` below already triggers the same
+    /// resolution once on connect.
+    public func peerConnection(_ pc: QAudionPeerConnection,
+                               didChangeSelectedCandidatePairChangeReason reason: String) {
+        resolveAndApplyRouteTier()
     }
 
     public func peerConnection(_ pc: QAudionPeerConnection,
@@ -3092,29 +3133,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// poll, `PeerConnectionHolder.onSelectedCandidatePairChanged` +
     /// `startPairPolling`): once per ICE connect/reconnect from
     /// `didChangeIceConnectionState` (cheap — the common "settled on the
-    /// first pair" case), AND every 3s from `pollVideoStatsOnce` for the
-    /// WHOLE call (Android's own poll is capped to a 30s post-connect
-    /// window because it ALSO has the `onSelectedCandidatePairChanged`
-    /// event covering the rest of the call; iOS keeps polling for the
-    /// whole call instead — see the verification-gap note below).
+    /// first pair" case), on every real libwebrtc pair-selection event via
+    /// `didChangeSelectedCandidatePairChangeReason` (see below — closes the
+    /// gap this kdoc used to flag), AND every 3s from `pollVideoStatsOnce`
+    /// for the WHOLE call as a belt-and-braces fallback (kept running,
+    /// unshortened, unlike Android's 30s-post-connect-then-event-only cap —
+    /// see the CPU-backpressure note below for why the poll cannot simply be
+    /// narrowed to route-tier's own needs).
     ///
-    /// VERIFICATION GAP (no Swift toolchain / no local xcframework header
-    /// on this box): Android's event source is `PeerConnection.Observer
-    /// .onSelectedCandidatePairChanged`, a real public API on the Android
-    /// WebRTC binding. Whether this vendored iOS `WebRTC.xcframework`
-    /// (remote binaryTarget, not present in this build environment)
-    /// exposes an equivalent `RTCPeerConnectionDelegate` callback (some
-    /// WebRTC ObjC SDK versions add `didChangeLocalCandidate:remote
-    /// Candidate:lastReceivedMs:reason:`) could NOT be grep-verified. A
-    /// wrong guess at that selector would NOT fail to compile (an
-    /// unmatched method in a protocol-conforming extension is just dead,
-    /// silently-never-called code in Swift) — a worse failure mode than a
-    /// compile error, since it would look correct in review. Rather than
-    /// risk that silent gap, this ships on the ALREADY-VERIFIED
-    /// `pc.statistics` polling path only, for the whole call, at the same
-    /// 3s cadence the video-stats telemetry already uses. Report to
-    /// orchestrator: confirm on a real build whether the delegate event
-    /// exists and wire it for sub-3s reaction time if so.
+    /// VERIFICATION GAP — CLOSED (2026-08-26, P2 audit item 4). This kdoc
+    /// used to say the equivalent of Android's `PeerConnection.Observer
+    /// .onSelectedCandidatePairChanged` "could NOT be grep-verified" because
+    /// no local xcframework header existed on this box to check against. It
+    /// does now, verified for real rather than guessed: the pinned
+    /// webrtc-sdk/webrtc `m144_release` tag's
+    /// `sdk/objc/api/peerconnection/RTCPeerConnection.h` (fetched and
+    /// grepped, not assumed) declares exactly the speculated selector,
+    /// `@optional`, on `RTCPeerConnectionDelegate`:
+    ///   `peerConnection:didChangeLocalCandidate:remoteCandidate:
+    ///    lastReceivedMs:changeReason:`
+    /// Wired in `QAudionPeerConnection` via an explicit `@objc(selector)`
+    /// (see that method's own kdoc for why — the "wrong guess is silently
+    /// never called" risk this comment used to warn about is sidestepped by
+    /// pinning the literal selector string instead of trusting Swift's
+    /// automatic Objective-C name import to guess it), forwarded here as
+    /// `didChangeSelectedCandidatePairChangeReason`.
+    ///
+    /// The 3s poll stays, for a signal this event does NOT cover: outbound
+    /// RTP `qualityLimitationReason` (the CPU-backpressure input to
+    /// `evaluateBackpressure`) has no equivalent push event anywhere in the
+    /// fetched `RTCPeerConnectionDelegate` header — only the stats API
+    /// exposes it — so that half of this poll has no event-driven
+    /// replacement and stays on the timer.
     private func resolveAndApplyRouteTier() {
         guard let pc = peerConnection?.peerConnection else { return }
         pc.statistics { [weak self] report in
