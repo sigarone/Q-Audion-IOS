@@ -44,7 +44,7 @@ packages:
     # whole graph unresolvable (v1.0.815 CI failure: xcodebuild
     # -showBuildSettings died at project load when Package.swift moved to
     # 2.13.1-aes256-raw and this line still said 2.13.0-aes256-livekit).
-    exactVersion: "2.16.0-aes256-raw4"
+    exactVersion: "2.16.0-aes256-raw6"
 
 targets:
   QAudionApp:
