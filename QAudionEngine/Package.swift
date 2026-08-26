@@ -198,24 +198,44 @@ let package = Package(
         // 2026-08-26: tried bumping to raw5 (webrtc-xcframework@
         // 144.7559.10-aes256-livekit-native-pli, same native-pli.patch as the
         // direct-call WebRTC binaryTarget below) to close the group-call
-        // native-PLI parity gap — REVERTED, stays on raw4/144.7559.10-
-        // aes256-livekit. The native-pli rebuild of LiveKitWebRTC.xcframework
-        // is MISSING `RTCAudioProcessingState.h` (confirmed: downloaded both
-        // release zips and diffed the actual Headers/ file listing under
-        // ios-arm64 — that one file is the only difference), which
-        // client-sdk-swift's own AudioProcessingModes.swift/
-        // AudioProcessingOptions.swift/RTC.swift/AudioManager.swift/
-        // LocalAudioTrack.swift reference — real CI compile failure (`gh run
-        // 32964484046`), not a hypothetical. native-pli.patch itself only
-        // touches api/crypto/frame_crypto_transformer.h/.cc, so this is most
-        // likely a source-pin drift in build-livekit-ios.yml between the
-        // raw4-era build and this one, not something the patch caused
-        // directly — root cause NOT YET FOUND, needs investigating
-        // sigarone/webrtc-aes256-build's build-livekit-ios.yml pinned-commit
-        // handling before retrying. The direct-call WebRTC binaryTarget
-        // below is UNAFFECTED (separate build, no LiveKit-source errors in
-        // the same CI run) and stays on the native-pli version.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw4"),
+        // native-PLI parity gap — REVERTED same day, stayed on raw4/
+        // 144.7559.10-aes256-livekit. The native-pli rebuild of
+        // LiveKitWebRTC.xcframework was MISSING `RTCAudioProcessingState.h`
+        // (confirmed: downloaded both release zips and diffed the actual
+        // Headers/ file listing under ios-arm64 — that one file was the only
+        // difference), which client-sdk-swift's own
+        // AudioProcessingModes.swift/AudioProcessingOptions.swift/
+        // RTC.swift/AudioManager.swift/LocalAudioTrack.swift reference —
+        // real CI compile failure (`gh run 32964484046`), not a
+        // hypothetical.
+        //
+        // ROOT-CAUSED AND FIXED, same day: build-livekit-ios.yml's
+        // `webrtc_ref` workflow_dispatch default had gone stale. It read a
+        // tag pinned to a sigarone/webrtc commit dated 2026-03-30, but the
+        // known-good 144.7559.10-aes256-livekit build (and every other
+        // -aes256-livekit build referenced in this file's history above) was
+        // actually produced by manually overriding that input to
+        // f47af7bc9658-livekit-aes256-7559.10 (2026-06-15) — the YAML
+        // default was never updated to match. `RTCAudioProcessingState.h`
+        // does not exist anywhere in sigarone/webrtc's tree at the March
+        // commit (confirmed via the GitHub Trees API, non-truncated) but
+        // does exist at the June commit — genuine upstream content drift
+        // between the two pins, not a build-script or patch bug; native-
+        // pli.patch itself never touched this file, as suspected. Fixed at
+        // the source (sigarone/webrtc-aes256-build@506c59d re-pins the
+        // default to f47af7bc9658-livekit-aes256-7559.10 itself), rebuilt as
+        // release tag webrtc-ios-aes256-livekit-m144-native-pli-2, and
+        // VERIFIED by downloading the new zip and diffing its Headers/
+        // listing against the known-good build: 112/112 files match,
+        // RTCAudioProcessingState.h present — not just a green CI check.
+        // webrtc-xcframework re-tagged 144.7559.10-aes256-livekit-native-
+        // pli-2 (checksum b7a999c1ceb087dc818b28f9d65923e62e7d7b17bfcb8e78
+        // ed497eed9e14e96e for the underlying LiveKitWebRTC.xcframework.zip)
+        // and client-sdk-swift rebased onto it as 2.16.0-aes256-raw6 (raw5
+        // is the broken tag above, left as-is/unused rather than reused).
+        // Group-call native-PLI parity now shipped: this pin closes the gap
+        // the direct-call WebRTC binaryTarget below already had.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw6"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
