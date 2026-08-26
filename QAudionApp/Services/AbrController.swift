@@ -92,6 +92,15 @@ public final class AbrController {
     /// is held at whatever tier it was on when the share started.
     public var isScreenSharing: Bool = false
 
+    /// W-BACKPRESSURE-RES (2026-08-26) — the 1:1 WebRTC leg's own CPU-
+    /// overuse step count (`QAudionWebRtcCallController.evaluateBackpressure`
+    /// via `onCpuBackpressureStepsChanged`, wired by AppState). That ladder
+    /// already carries its own hysteresis (6s sustain to engage, 9s to
+    /// recover); this class does NOT add a second debounce on top of it —
+    /// see `applyCpuBackpressure`'s kdoc for why a step-down applies
+    /// immediately but a step-up never forces one.
+    private var cpuBackpressureSteps: Int = 0
+
     // MARK: - Lifecycle
 
     public init(pipeline: VideoCallPipeline) {
@@ -233,7 +242,7 @@ public final class AbrController {
         //   lat > 300 && loss > 15 % → 10 fps
         //   lat > 200 || loss > 10 % → 15 fps
         //   else → defaultVideoFps (24)
-        let newFps: Int
+        var newFps: Int
         if avgLatencyMs > 300 && lossPct > 0.15 {
             newFps = 10
         } else if avgLatencyMs > 200 || lossPct > 0.10 {
@@ -241,6 +250,12 @@ public final class AbrController {
         } else {
             newFps = VideoConstants.defaultVideoFps
         }
+        // W-BACKPRESSURE-RES — the CPU ceiling is an ONGOING constraint,
+        // not a one-shot nudge: without this clamp, a healthy network
+        // reading on THIS tick would let the network ladder above pick a
+        // higher fps than `applyCpuBackpressure` last allowed, silently
+        // undoing it until the next backpressure step transition fires.
+        newFps = min(newFps, Self.fpsCeiling(forCpuBackpressureSteps: cpuBackpressureSteps))
         if newFps != currentFps {
             currentFps = newFps
             pipeline.setEncoderFps(newFps)
@@ -314,7 +329,14 @@ public final class AbrController {
             // Android requires 2× sustain for an up-step (more
             // conservative than down) to avoid resolution oscillation.
             if now - highBitrateSustainedSince > sustainSec * 2 {
-                if let next = stepUp(from: currentResolution) {
+                // W-BACKPRESSURE-RES — same ongoing-constraint reasoning as
+                // the fps clamp in `tick()`: a healthy bitrate trend must
+                // not step PAST what CPU backpressure currently permits.
+                // `rawValue` is HIGHER for a MORE constrained tier (hd720=0
+                // < sd480=1 < low360=2), so "no higher quality than the
+                // ceiling allows" is `next.rawValue >= ceiling.rawValue`.
+                let cpuCeiling = Self.resolutionCeiling(forCpuBackpressureSteps: cpuBackpressureSteps)
+                if let next = stepUp(from: currentResolution), next.rawValue >= cpuCeiling.rawValue {
                     currentResolution = next
                     highBitrateSustainedSince = now
                     pipeline.setEncoderResolution(width: next.width, height: next.height)
@@ -343,6 +365,74 @@ public final class AbrController {
         }
     }
 
+    // MARK: - W-BACKPRESSURE-RES — CPU-overuse resolution/fps ceiling
+
+    /// Apply (or lift) the CPU-backpressure ceiling. `steps` is the 1:1
+    /// WebRTC leg's own `_backpressureSteps` (0...`backpressureMaxSteps`,
+    /// currently 3) — see that class's `evaluateBackpressure` kdoc.
+    ///
+    /// A HIGHER step count only ever pulls resolution/fps DOWN, applied
+    /// right away (CPU overuse is the whole point — waiting for the next
+    /// `tick()` would keep the encoder doing the expensive work for up to
+    /// another `abrSampleIntervalMs`). Recovery (`steps` decreasing) never
+    /// forces a step UP here: it only lifts the ceiling, letting the NEXT
+    /// scheduled `tick()`'s own network-driven ladder (`updateResolution`
+    /// / the fps block) decide whether conditions actually support more —
+    /// composing the two ladders any other way would mean this method's
+    /// CPU-recovery timing fights the network ladder's OWN sustain/dead-band
+    /// hysteresis for the same knobs.
+    public func applyCpuBackpressure(steps: Int) {
+        cpuBackpressureSteps = max(0, steps)
+        guard let pipeline = pipeline else { return }
+
+        // W-SCREENPROFILE parity: resolution ladder is held during a
+        // screen share (see `updateResolution`'s own gate + kdoc) — CPU
+        // backpressure must respect the same rule, for the same reason
+        // (stepping resolution would visibly blur shared text). FPS stays
+        // adjustable during a share, matching that same precedent.
+        if !isScreenSharing {
+            let resCeiling = Self.resolutionCeiling(forCpuBackpressureSteps: cpuBackpressureSteps)
+            if resCeiling.rawValue > currentResolution.rawValue {
+                currentResolution = resCeiling
+                pipeline.setEncoderResolution(width: resCeiling.width, height: resCeiling.height)
+                print("[AbrController] resolution ↓ (CPU backpressure) \(resCeiling.width)x\(resCeiling.height)")
+            }
+        }
+
+        let fpsCeiling = Self.fpsCeiling(forCpuBackpressureSteps: cpuBackpressureSteps)
+        if fpsCeiling < currentFps {
+            currentFps = fpsCeiling
+            pipeline.setEncoderFps(fpsCeiling)
+            print("[AbrController] FPS → (CPU backpressure) \(fpsCeiling)")
+        }
+    }
+
+    /// Pure — testable without a live `VideoCallPipeline`. `steps < 1`
+    /// (0, or a defensively-clamped negative) leaves resolution
+    /// unconstrained; each step beyond that steps the ceiling down one
+    /// `ResolutionTier`, capped at the lowest tier once `steps >= 2` (the
+    /// 1:1 ladder's `backpressureMaxSteps` is 3, one more level than this
+    /// controller has resolution tiers for — the extra step just holds at
+    /// the floor rather than having nowhere to go).
+    static func resolutionCeiling(forCpuBackpressureSteps steps: Int) -> ResolutionTier {
+        switch steps {
+        case ..<1: return .hd720
+        case 1:    return .sd480
+        default:   return .low360
+        }
+    }
+
+    /// Pure — same step shape as `resolutionCeiling(forCpuBackpressureSteps:)`,
+    /// mirrored against this controller's OWN network-driven fps ladder in
+    /// `tick()` (10/15/`defaultVideoFps`) rather than inventing new numbers.
+    static func fpsCeiling(forCpuBackpressureSteps steps: Int) -> Int {
+        switch steps {
+        case ..<1: return VideoConstants.defaultVideoFps
+        case 1:    return 15
+        default:   return 10
+        }
+    }
+
     // MARK: - Reset
 
     /// Reset to baseline values. Call when starting a new call so the
@@ -357,5 +447,6 @@ public final class AbrController {
         sustainedLowLossCount = 0
         lowBitrateSustainedSince = 0
         highBitrateSustainedSince = 0
+        cpuBackpressureSteps = 0
     }
 }

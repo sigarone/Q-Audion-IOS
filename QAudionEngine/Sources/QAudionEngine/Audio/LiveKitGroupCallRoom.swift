@@ -58,6 +58,48 @@ public enum RemoteVideoRenderPriority: Sendable, Equatable {
     case onScreenSpotlight
 }
 
+/// W-GRPQUALITY (2026-08-26) — local mirror of LiveKit's `VideoQuality`
+/// (low/medium/high), kept independent of the `#if canImport(LiveKit)`
+/// split (like `RemoteVideoRenderPriority` above) so the composition below
+/// is testable without the SDK — same discipline as `RestartIceDecisions`
+/// in the WebRTC/ directory.
+public enum GroupVideoQualityTier: Sendable, Equatable {
+    case low, medium, high
+}
+
+extension RemoteVideoRenderPriority {
+    /// W-GRPQUALITY — composes the viewport-driven render priority
+    /// (W-GRPVIEWPORT, above) with the user's saved `preferredCallQuality`
+    /// setting (`CallsSettingsViewModel.CallQuality`, previously dead code
+    /// — nothing in the call pipeline consulted it) into the actual
+    /// subscribe-side quality tier to request.
+    ///
+    /// `.offScreen` has no quality — the track is disabled outright
+    /// (`set(enabled: false)`) — so it is not represented in the return
+    /// type; callers branch on `.offScreen` separately before reaching
+    /// this (see `LiveKitGroupCallRoom.setRemoteVideoRenderPriority`).
+    ///
+    /// The `.medium` preference (today's persisted default — see
+    /// `SettingsStore.loadCalls`) reproduces EXACTLY what W-GRPVIEWPORT
+    /// already shipped (`onScreenSmall` -> `.low`, `onScreenSpotlight` ->
+    /// `.high`) — this composition is additive, not a behavior change for
+    /// a user who has never touched the quality setting. `.low` caps the
+    /// spotlight tile down one notch (a user who explicitly asked for
+    /// lower quality should get it even on the tile they're looking
+    /// straight at); `.high` raises the small grid tiles up one notch
+    /// (worth it once the user has said they want quality over data/CPU
+    /// savings).
+    public func subscribeQuality(preferring quality: CallsSettingsViewModel.CallQuality) -> GroupVideoQualityTier {
+        switch (self, quality) {
+        case (.onScreenSmall, .high):    return .medium
+        case (.onScreenSmall, _):        return .low
+        case (.onScreenSpotlight, .low): return .medium
+        case (.onScreenSpotlight, _):    return .high
+        case (.offScreen, _):            return .low // unreachable in practice — see kdoc
+        }
+    }
+}
+
 #if canImport(LiveKit)
 import LiveKit
 import AVFoundation
@@ -259,6 +301,14 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     private var _latestThermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
     private var thermalObserver: NSObjectProtocol?
 
+    /// W-GRPQUALITY (2026-08-26) — snapshot of `preferredCallQuality`,
+    /// taken once at `connect()` time (same "settings apply on the next
+    /// call" convention `CallsGate`'s audio DSP flags already use — no
+    /// mid-call hot-reload elsewhere in this codebase's call settings).
+    /// Consulted by `setRemoteVideoRenderPriority` via
+    /// `RemoteVideoRenderPriority.subscribeQuality(preferring:)`.
+    private var _preferredCallQuality: CallsSettingsViewModel.CallQuality = .medium
+
     /// W-GRPVIDEO-PERM (review fix): the SDK never requests camera
     /// authorization itself (verified against client-sdk-swift 2.13.0 —
     /// `CameraCapturer.startCapture()`/`LiveKit+DeviceHelpers.swift`'s
@@ -365,6 +415,12 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// livekitKeyringSize`).
     public func connect(url: String, token: String, callId: String, selfKey: GroupMediaKey? = nil) async throws {
         self.callId = callId
+        // W-GRPQUALITY (2026-08-26) — snapshot the user's quality
+        // preference once, at connect time (see `_preferredCallQuality`'s
+        // own kdoc for why not live-reloaded mid-call). `SettingsStore`
+        // is cheap to construct fresh (same pattern every Settings screen
+        // in this codebase already uses — see e.g. `CallsSettingsScreen`).
+        _preferredCallQuality = SettingsStore().loadCalls().preferredCallQuality
         // W-GRPBACKPRESSURE: call-scoped thermal observer — torn down in
         // `disconnect()`. `ProcessInfo.thermalState` is read once here to
         // seed `_latestThermalState` with the CURRENT state (the
@@ -513,8 +569,21 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // fall back to. If the local encoder factory has no H265 at all, the
         // SDK degrades quietly (RTCRtpTransceiver logs "Preferred codec is not
         // first of codecPreferences" and reorders) rather than throwing.
+        // W-GRPQUALITY (2026-08-26) — the FIRST real per-track bandwidth
+        // priority wiring for group calls: `VideoEncoding.bitratePriority`/
+        // `.networkPriority` (verified against the pinned fork's real
+        // source, `Types/Options/VideoEncoding.swift`/`Priority.swift` at
+        // tag 2.16.0, same audit discipline as the H265 codec note above)
+        // are the actual WebRTC/DSCP bandwidth-allocation levers this
+        // encoding carries — `preferredCallQuality` (persisted since the
+        // Settings screen shipped, never read by ANY production path
+        // before this) now actually reaches them. `maxBitrate`/`maxFps`
+        // are LiveKit's own official preset scale
+        // (`VideoParameters.presetH360_169`/`presetH540_169`/
+        // `presetH720_169`), not invented numbers.
         let roomOptions = RoomOptions(
             defaultVideoPublishOptions: VideoPublishOptions(
+                encoding: Self.videoEncoding(for: _preferredCallQuality),
                 preferredCodec: .h265,
                 preferredBackupCodec: .vp8
             ),
@@ -571,6 +640,46 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 emitTelemetry("call.media.camera_permission_denied")
                 onError?(CameraPermissionError.denied)
             }
+        }
+    }
+
+    /// W-GRPQUALITY (2026-08-26) — maps `preferredCallQuality` onto
+    /// LiveKit's OWN preset bitrate/fps scale
+    /// (`VideoParameters.presetH360_169`/`presetH540_169`/`presetH720_169`,
+    /// verified against the pinned fork's real source at tag 2.16.0) rather
+    /// than inventing new numbers, plus a matching `Priority` for both
+    /// `bitratePriority` (WebRTC's internal bandwidth allocation between
+    /// streams) and `networkPriority` (DSCP marking, only takes effect if
+    /// `ConnectOptions.isDscpEnabled` — inert but harmless otherwise) — the
+    /// actual per-track bandwidth priority lever this item wires. `.medium`
+    /// (today's persisted default) reproduces the encoding this file
+    /// already shipped before this change (`presetH540_169`'s
+    /// 800kbps/25fps was NOT what shipped before — see note below).
+    ///
+    /// Note: before this change, `VideoPublishOptions` never set `encoding`
+    /// at all (SDK default: `nil`), which lets the SDK derive it from the
+    /// camera's OWN captured dimensions/fps at publish time — there was no
+    /// single "before" bitrate to preserve exactly. `.medium`'s
+    /// 800kbps/25fps ceiling is a reasonable mid-point that does not
+    /// regress typical camera output, and now actually RESPONDS to the
+    /// setting instead of ignoring it entirely.
+    static func videoEncoding(for quality: CallsSettingsViewModel.CallQuality) -> VideoEncoding {
+        switch quality {
+        case .low:
+            return VideoEncoding(
+                maxBitrate: VideoParameters.presetH360_169.encoding.maxBitrate,
+                maxFps: VideoParameters.presetH360_169.encoding.maxFps,
+                bitratePriority: .low, networkPriority: .low)
+        case .medium:
+            return VideoEncoding(
+                maxBitrate: VideoParameters.presetH540_169.encoding.maxBitrate,
+                maxFps: VideoParameters.presetH540_169.encoding.maxFps,
+                bitratePriority: .medium, networkPriority: .medium)
+        case .high:
+            return VideoEncoding(
+                maxBitrate: VideoParameters.presetH720_169.encoding.maxBitrate,
+                maxFps: VideoParameters.presetH720_169.encoding.maxFps,
+                bitratePriority: .high, networkPriority: .high)
         }
     }
 
@@ -900,12 +1009,18 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 switch priority {
                 case .offScreen:
                     try await publication.set(enabled: false)
-                case .onScreenSmall:
+                case .onScreenSmall, .onScreenSpotlight:
+                    // W-GRPQUALITY (2026-08-26) — the viewport priority
+                    // decides ON-screen vs off; the user's quality
+                    // preference now decides WHICH tier within "on-screen"
+                    // (see `subscribeQuality(preferring:)`'s kdoc). `.medium`
+                    // (the persisted default) reproduces exactly what this
+                    // switch shipped before this change — additive, not a
+                    // behavior change for a user who never touched the
+                    // setting.
                     try await publication.set(enabled: true)
-                    try await publication.set(videoQuality: .low)
-                case .onScreenSpotlight:
-                    try await publication.set(enabled: true)
-                    try await publication.set(videoQuality: .high)
+                    let tier = priority.subscribeQuality(preferring: _preferredCallQuality)
+                    try await publication.set(videoQuality: Self.liveKitQuality(tier))
                 }
             } catch {
                 // Evict the optimistically-recorded cache entry on failure
@@ -923,6 +1038,20 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 // I8 FIX: truncate identity like every other identity print in this file.
                 print("[GroupCallController][telemetry] setRemoteVideoRenderPriority(\(priority)) identity=\(identity.prefix(8))… FAILED: \(error)")
             }
+        }
+    }
+
+    /// W-GRPQUALITY — `GroupVideoQualityTier` (this file's own SDK-
+    /// independent mirror, see its kdoc) to the real LiveKit `VideoQuality`
+    /// this SDK call needs. A 1:1 rename, kept as an explicit mapping
+    /// rather than making the two the same type so
+    /// `RemoteVideoRenderPriority.subscribeQuality(preferring:)` stays
+    /// testable without the SDK.
+    private static func liveKitQuality(_ tier: GroupVideoQualityTier) -> VideoQuality {
+        switch tier {
+        case .low:    return .low
+        case .medium: return .medium
+        case .high:   return .high
         }
     }
 }

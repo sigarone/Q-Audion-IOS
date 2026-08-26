@@ -5846,6 +5846,16 @@ final class AppState: ObservableObject {
         controller.onLocalVideoCapBpsChanged = { [weak self] bps in
             Task { @MainActor [weak self] in self?.announceVideoBwCap(bps: bps) }
         }
+        // W-PLPBWTIER (2026-08-26) — feed the same route classification
+        // into the audio loss-hint policy's floor (see PlpPolicy.minPct(for:)).
+        controller.onRouteTierChanged = { [weak self] tier in
+            Task { @MainActor [weak self] in self?.callService.updateRouteTier(tier) }
+        }
+        // W-BACKPRESSURE-RES (2026-08-26) — sustained CPU overuse now also
+        // steps down capture resolution/fps, not just the bitrate ceiling.
+        controller.onCpuBackpressureStepsChanged = { [weak self] steps in
+            Task { @MainActor [weak self] in self?.abrController?.applyCpuBackpressure(steps: steps) }
+        }
         controller.videoTelemetry = { [weak self] kind, attrs in
             TelemetryService.shared.emit(kind: kind, attrs: attrs)
             // VIDEODIAG — feed the arrived/decoded counters off the
@@ -13471,6 +13481,16 @@ final class AppState: ObservableObject {
                         self?.announceVideoBwCap(bps: bps)
                     }
                 }
+                // W-PLPBWTIER (2026-08-26) — feed route classification into
+                // the audio loss-hint policy's floor.
+                controller.onRouteTierChanged = { [weak self] tier in
+                    Task { @MainActor [weak self] in self?.callService.updateRouteTier(tier) }
+                }
+                // W-BACKPRESSURE-RES (2026-08-26) — sustained CPU overuse
+                // also steps down capture resolution/fps.
+                controller.onCpuBackpressureStepsChanged = { [weak self] steps in
+                    Task { @MainActor [weak self] in self?.abrController?.applyCpuBackpressure(steps: steps) }
+                }
                 // Remote-readable video diagnostics (mirrors Android). Ships
                 // outbound/inbound video RTP stats + remote-track arrival to
                 // the server so an iOS→Android video failure is diagnosable
@@ -19721,6 +19741,16 @@ extension AppState {
             Task { @MainActor [weak self] in
                 self?.announceVideoBwCap(bps: bps)
             }
+        }
+        // W-PLPBWTIER (2026-08-26) — feed route classification into the
+        // audio loss-hint policy's floor (responder side, mirrors caller).
+        controller.onRouteTierChanged = { [weak self] tier in
+            Task { @MainActor [weak self] in self?.callService.updateRouteTier(tier) }
+        }
+        // W-BACKPRESSURE-RES (2026-08-26) — sustained CPU overuse also
+        // steps down capture resolution/fps (responder side, mirrors caller).
+        controller.onCpuBackpressureStepsChanged = { [weak self] steps in
+            Task { @MainActor [weak self] in self?.abrController?.applyCpuBackpressure(steps: steps) }
         }
         // Remote-readable video diagnostics (responder side, mirrors caller).
         controller.videoTelemetry = { [weak self] kind, attrs in

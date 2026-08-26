@@ -150,4 +150,55 @@ final class PlpPolicyTests: XCTestCase {
     func testNonFiniteObservedHoldsTheCurrentValue() {
         XCTAssertEqual(PlpPolicy.next(currentPct: 17, observedLossPct: .nan), 17)
     }
+
+    // MARK: - W-PLPBWTIER (2026-08-26) — route-tier-aware floor
+
+    func testMinPctForRouteTier_relayRaisesTheFloor_directAndUnknownDoNot() {
+        XCTAssertEqual(PlpPolicy.minPct(for: .relay), 10)
+        XCTAssertEqual(PlpPolicy.minPct(for: .direct), PlpPolicy.minPct)
+        XCTAssertEqual(PlpPolicy.minPct(for: .unknown), PlpPolicy.minPct)
+    }
+
+    /// The route-tier overload with `.direct`/`.unknown` must behave
+    /// BYTE-IDENTICALLY to the base overload — no behavior change for the
+    /// common (non-relay) case.
+    func testRouteTierOverload_matchesBaseOverload_onDirectAndUnknown() {
+        for tier: RouteTier in [.direct, .unknown] {
+            XCTAssertEqual(
+                PlpPolicy.next(currentPct: 10, observedLossPct: 25, routeTier: tier),
+                PlpPolicy.next(currentPct: 10, observedLossPct: 25))
+            XCTAssertEqual(
+                PlpPolicy.next(currentPct: 30, observedLossPct: 1, routeTier: tier),
+                PlpPolicy.next(currentPct: 30, observedLossPct: 1))
+        }
+    }
+
+    /// The whole point: on a relay call, a clean report (0% loss) must not
+    /// decay below the RAISED floor (10), even though the base policy would
+    /// happily decay all the way to its own floor (5) on the same input.
+    func testRelayTier_neverDecaysBelowTheRaisedFloor() {
+        let next = PlpPolicy.next(currentPct: 20, observedLossPct: 0, routeTier: .relay)
+        XCTAssertEqual(next, 10)
+        XCTAssertLessThan(PlpPolicy.next(currentPct: 20, observedLossPct: 0), 10, "sanity: base policy WOULD have gone lower")
+    }
+
+    /// A caller arriving with a value below the relay floor (e.g. the
+    /// compile-time default, or a value the base policy produced before the
+    /// route resolved) is coerced UP to the relay floor on entry, same
+    /// coercion discipline as the base overload's own `currentPct` clamp.
+    func testRelayTier_coercesASubFloorCurrentValueUpOnEntry() {
+        let next = PlpPolicy.next(currentPct: 0, observedLossPct: 0, routeTier: .relay)
+        XCTAssertEqual(next, 10)
+    }
+
+    /// Fast-up and the ceiling are UNCHANGED by route tier — only the floor
+    /// moves.
+    func testRelayTier_doesNotChangeFastUpOrTheCeiling() {
+        XCTAssertEqual(
+            PlpPolicy.next(currentPct: 10, observedLossPct: 25, routeTier: .relay),
+            25 + PlpPolicy.upHeadroomPct)
+        XCTAssertEqual(
+            PlpPolicy.next(currentPct: 10, observedLossPct: 95, routeTier: .relay),
+            PlpPolicy.maxPct)
+    }
 }

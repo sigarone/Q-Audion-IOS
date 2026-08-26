@@ -1068,6 +1068,24 @@ final class CallService: @unchecked Sendable {
     /// was already called with at call setup.
     private var currentAppliedPlpPct: Int = AudioCodecPrefs.plp
 
+    /// W-PLPBWTIER (2026-08-26) — this call's route classification, fed by
+    /// `QAudionWebRtcCallController.onRouteTierChanged` (wired in AppState,
+    /// caller AND responder side). `.unknown` until the peer connection's
+    /// ICE first resolves a candidate pair — `PlpPolicy.minPct(for:)`
+    /// treats `.unknown` the same as `.direct` (today's floor, unchanged),
+    /// so a call that never gets a route classification (or one still
+    /// mid-connect) behaves exactly as it did before this feature existed.
+    /// Same informal single-writer discipline as `currentAppliedPlpPct`
+    /// right above (this whole PLP-feedback subsystem is driven from one
+    /// consistent call site, not genuinely concurrent) — no separate lock.
+    private var currentRouteTier: RouteTier = .unknown
+
+    /// Called by AppState whenever the active call's route tier resolves or
+    /// changes. See `currentRouteTier`'s kdoc.
+    func updateRouteTier(_ tier: RouteTier) {
+        currentRouteTier = tier
+    }
+
     /// W-PLPFEEDBACK — consume the PEER's `PLP:<percent>` report: drive our
     /// TX encoder's expected-loss knob via `PlpPolicy`, so LBRR redundancy
     /// tracks what the PEER is actually experiencing on our uplink instead of
@@ -1075,9 +1093,14 @@ final class CallService: @unchecked Sendable {
     /// loss, which is all `AudioCodecPrefs.plp`'s post-call tuner can see).
     /// Called from `AppState.routeInboundCallPiggyBack`'s `.plp` case, the
     /// same consumption site every other opaque-message control tag uses.
+    ///
+    /// W-PLPBWTIER (2026-08-26): the route-tier-aware overload raises the
+    /// floor this decays to (never the ceiling) when `currentRouteTier` is
+    /// `.relay` — see `PlpPolicy.minPct(for:)`'s kdoc for why a relay route
+    /// is a real, pre-report signal worth provisioning for proactively.
     func applyPeerPacketLossReport(_ observedPct: Int) {
         let clamped = min(max(observedPct, 0), 100)
-        let next = PlpPolicy.next(currentPct: currentAppliedPlpPct, observedLossPct: Double(clamped))
+        let next = PlpPolicy.next(currentPct: currentAppliedPlpPct, observedLossPct: Double(clamped), routeTier: currentRouteTier)
         guard next != currentAppliedPlpPct else { return }
         currentAppliedPlpPct = next
         callIntegration?.reconfigureAudioCodec(bitrateKbps: AudioCodecPrefs.bitrateKbps, plp: next)

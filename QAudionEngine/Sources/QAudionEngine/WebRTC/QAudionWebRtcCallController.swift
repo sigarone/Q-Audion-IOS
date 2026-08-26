@@ -459,6 +459,41 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// callback thread — consumers hop to @MainActor themselves.
     public var onLocalVideoCapBpsChanged: ((Int) -> Void)?
 
+    /// W-PLPBWTIER (2026-08-25) — fired the same instant `_routeTier`
+    /// actually changes (same guard as `onLocalVideoCapBpsChanged` right
+    /// above, fired from `resolveAndApplyRouteTier`), carrying the raw
+    /// tier rather than a derived bps number. AppState wires this to
+    /// `CallService.updateRouteTier`, which feeds `PlpPolicy`'s route-
+    /// tier-aware floor — see that overload's kdoc. Unlike
+    /// `onLocalVideoCapBpsChanged` this is NOT video-gated: the resolve
+    /// call fires on every call's ICE `.connected`/`.completed` (see the
+    /// switch above), audio-only calls included — only the PERIODIC
+    /// re-poll (inside `pollVideoStatsOnce`) is video-telemetry-gated, so
+    /// an audio-only call still gets one real classification near call
+    /// start, just not a live-updating one. May fire from the WebRTC
+    /// stats callback thread — consumers hop to @MainActor themselves.
+    public var onRouteTierChanged: ((RouteTier) -> Void)?
+
+    /// W-BACKPRESSURE-RES (2026-08-26) — fired whenever `_backpressureSteps`
+    /// actually changes (both the engage-side step-down and the recover-
+    /// side step-up branches in `evaluateBackpressure`), carrying the new
+    /// step count (`0...backpressureMaxSteps`). Before this, sustained CPU
+    /// overuse only tightened the RTP sender's bitrate CEILING
+    /// (`applyComposedVideoSenderClamp`) — the encoder kept doing the same
+    /// per-frame work at the same source resolution/fps, just told to spend
+    /// fewer bits on it. AppState wires this to `AbrController
+    /// .applyCpuBackpressure(steps:)`, which composes it with that
+    /// controller's own network-driven resolution/fps ladder (whichever
+    /// wants the LOWER quality wins) and, when it's the binding constraint,
+    /// actually calls `VideoCallPipeline.setEncoderResolution`/
+    /// `setEncoderFps` — real work reduction, not just a bitrate number.
+    /// This controller cannot make that call itself: `VideoCallPipeline`
+    /// lives in the QAudionApp target, which this QAudionEngine-target
+    /// class cannot import (same layering reason `onLocalVideoCapBpsChanged`
+    /// is a callback rather than a direct call). May fire from the WebRTC
+    /// stats callback thread — consumers hop to @MainActor themselves.
+    public var onCpuBackpressureStepsChanged: ((Int) -> Void)?
+
     /// R-4 (vkey-v1 / sovereign-only) — injectable policy hook consulted
     /// when a remote VIDEO track arrives. When it returns `true` the
     /// controller REJECTS the incoming video: it disables the track and
@@ -3133,6 +3168,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if let ceiling = committed.senderMaxBitrateBps {
                 self.onLocalVideoCapBpsChanged?(ceiling)
             }
+            self.onRouteTierChanged?(tier)
         }
     }
 
@@ -3191,6 +3227,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("[WebRtcCallController] W-BACKPRESSURE: CPU-limited -> step DOWN to level \(_backpressureSteps)")
             log?("backpressure step=\(_backpressureSteps) dir=0")
             applyComposedVideoSenderClamp()
+            onCpuBackpressureStepsChanged?(_backpressureSteps)
         } else {
             _cpuLimitedPolls = 0
             guard _backpressureSteps > 0 else { return }
@@ -3201,6 +3238,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("[WebRtcCallController] W-BACKPRESSURE: recovered -> step UP to level \(_backpressureSteps)")
             log?("backpressure step=\(_backpressureSteps) dir=1")
             applyComposedVideoSenderClamp()
+            onCpuBackpressureStepsChanged?(_backpressureSteps)
         }
     }
 
