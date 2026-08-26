@@ -1,5 +1,4 @@
 import Foundation
-import QAudionEngine
 
 /// W399 — persisted local registry of joined groups.
 ///
@@ -103,25 +102,17 @@ public final class GroupRegistry: ObservableObject {
     }
 
     private func load() {
-        if let sealed = UserDefaults.standard.string(forKey: Self.storageKey),
-           let json = LocalStoreCipher.open(sealed),
-           let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) {
-            entries = decoded
-        } else if let data = UserDefaults.standard.data(forKey: Self.storageKey),
-                  let decoded = try? JSONDecoder().decode([Entry].self, from: data) {
-            entries = decoded
-            persist() // inline migration
-        } else {
+        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
+              let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
             entries = []
+            return
         }
+        entries = decoded
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(entries),
-              let json = String(data: data, encoding: .utf8) else { return }
-        let attempt: String?? = try? LocalStoreCipher.seal(json)
-        guard let unwrapped = attempt, let sealed = unwrapped else { return }
-        UserDefaults.standard.set(sealed, forKey: Self.storageKey)
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(data, forKey: Self.storageKey)
     }
 
     // MARK: - Public API
