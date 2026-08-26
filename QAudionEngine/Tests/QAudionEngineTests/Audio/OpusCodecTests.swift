@@ -206,4 +206,95 @@ final class OpusCodecTests: XCTestCase {
         let result = codec.decodeFEC(Data(), lostMs: 60)
         XCTAssertEqual(result.count, 5760)
     }
+
+    // MARK: - TEMPORARY DIAGNOSTIC (debug/opus-fec-instrumentation, remove before merge)
+    //
+    // Source reading of the vendored silk/decode_frame.c + silk/decode_core.c
+    // shows the state-mutation tail of silk_decode_frame (outBuf write,
+    // silk_PLC(...,lost:0), lossCnt=0, prevSignalType, first_frame_after_reset,
+    // lagPrev) and decode_core's sLPC_Q14_buf save/restore run IDENTICALLY
+    // whether lostFlag is FLAG_DECODE_NORMAL or FLAG_DECODE_LBRR (as long as
+    // the LBRR flag is set) — nothing in decode_frame.c or decode_core.c
+    // distinguishes "this was a genuine primary-payload decode" from "this
+    // was an LBRR/FEC recovery" once it decides to actually run silk_decode_core.
+    // That means decodeFEC(B) leaves the LPC synthesis filter's persistent
+    // memory (sLPC_Q14_buf), prev_gain_Q16, outBuf and lagPrev set from the
+    // recovered LOUD content, and the immediately-following decode(B) inherits
+    // that filter memory as its initial state even though B's own bits are
+    // genuinely silent.
+    //
+    // Open question static reading can't answer: is this ORDINARY LPC/LTP
+    // filter-memory continuity (the same mechanism the PASSING sibling test
+    // `testASilentFrameDecodesQuiet` explicitly grants 4 frames of decay
+    // margin for, checking only the LAST one) that just needs a decay grace
+    // period the failing test never gives it — or genuine unbounded state
+    // corruption that never converges. This prints/fails with real numbers
+    // from an actual simulator run to answer that with evidence, not guesswork.
+    func testDIAGNOSTIC_FecStateContinuity() {
+        let silence = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
+        let loud = tone()
+
+        // Scenario 1: exact repro of testDecodeFECRecoversAKnownSingleFrameLoss,
+        // extended with 6 more normal-decoded silence frames to see the decay curve.
+        let codec1 = OpusCodec()
+        for _ in 0..<2 {
+            guard let enc = codec1.encode(silence) else { return XCTFail("DIAG warmup1 encode failed") }
+            _ = codec1.decode(enc)
+        }
+        guard let packetA = codec1.encode(loud) else { return XCTFail("DIAG encA failed") }
+        guard let packetB = codec1.encode(silence) else { return XCTFail("DIAG encB failed") }
+        _ = packetA
+        var scenario1: [Double] = [rms(codec1.decodeFEC(packetB))]
+        guard let decodedB = codec1.decode(packetB) else { return XCTFail("DIAG decB failed") }
+        scenario1.append(rms(decodedB))
+        for _ in 0..<6 {
+            guard let enc = codec1.encode(silence), let dec = codec1.decode(enc) else {
+                return XCTFail("DIAG scenario1 continuation failed")
+            }
+            scenario1.append(rms(dec))
+        }
+
+        // Scenario 2 (control): identical packet stream, but decodeFEC is
+        // NEVER called — decode(packetB) runs directly. Isolates whether
+        // decodeFEC's state write is what makes B loud, vs. something that
+        // would happen anyway from the undecoded-loss transition alone.
+        let codec2 = OpusCodec()
+        for _ in 0..<2 {
+            guard let enc = codec2.encode(silence) else { return XCTFail("DIAG warmup2 encode failed") }
+            _ = codec2.decode(enc)
+        }
+        guard let packetA2 = codec2.encode(loud) else { return XCTFail("DIAG encA2 failed") }
+        guard let packetB2 = codec2.encode(silence) else { return XCTFail("DIAG encB2 failed") }
+        _ = packetA2
+        guard let decodedB2 = codec2.decode(packetB2) else { return XCTFail("DIAG decB2 failed") }
+        var scenario2: [Double] = [rms(decodedB2)]
+        for _ in 0..<6 {
+            guard let enc = codec2.encode(silence), let dec = codec2.decode(enc) else {
+                return XCTFail("DIAG scenario2 continuation failed")
+            }
+            scenario2.append(rms(dec))
+        }
+
+        // Scenario 3: the PASSING sibling's own pattern (4x loud then silence
+        // via plain NORMAL decode only, never touching FEC), but tracking
+        // EVERY frame instead of only the 4th/last — the known-good decay curve.
+        let codec3 = OpusCodec()
+        for _ in 0..<4 {
+            guard let enc = codec3.encode(loud) else { return XCTFail("DIAG warmup3 encode failed") }
+            _ = codec3.decode(enc)
+        }
+        var scenario3: [Double] = []
+        for _ in 0..<6 {
+            guard let enc = codec3.encode(silence), let dec = codec3.decode(enc) else {
+                return XCTFail("DIAG scenario3 continuation failed")
+            }
+            scenario3.append(rms(dec))
+        }
+
+        XCTFail("""
+        DIAGNOSTIC-OPUS-FEC scenario1(decodeFEC-recovered, then decode(B), then 6x normal silence)=\(scenario1)
+        DIAGNOSTIC-OPUS-FEC scenario2(NO decodeFEC call, decode(B) direct, then 6x normal silence)=\(scenario2)
+        DIAGNOSTIC-OPUS-FEC scenario3(sibling pattern: 4x loud normal-decode then 6x silence, all frames)=\(scenario3)
+        """)
+    }
 }
