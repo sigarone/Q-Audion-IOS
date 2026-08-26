@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1035",
+              date: "2026-08-26",
+              title: "v1.0.1035",
+              bullets: [
+                "fix(deps): re-sync LiveKitBroadcast pin to raw6, matching QAudionEngine's own client-sdk-swift pin",
+              ]),
         .init(id: "v1.0.1034",
               date: "2026-08-26",
               title: "v1.0.1034",
               bullets: [
+                "chore: regenerate changelog for v1.0.1034",
                 "fix(call): gate WSS-TURN bridge, event-driven route-tier, pin simulcast (P2)",
                 "fix(test): correct PlpFeedbackTests's relay-floor assertion to match the real decay step",
                 "fix(call): add missing public init() to StunClient",
@@ -191,13 +198,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1016",
                 "fix(deepfake): stop feeding the confidence EMA a fabricated placeholder",
                 "fix(tests): skip TusResumeStateTests store round-trips when Keychain is unusable",
-              ]),
-        .init(id: "v1.0.1015",
-              date: "2026-08-21",
-              title: "v1.0.1015",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1015",
-                "fix(ios): sessionKeyRetryMaxAttempts needs public, not just internal",
               ]),
     ]
 }
