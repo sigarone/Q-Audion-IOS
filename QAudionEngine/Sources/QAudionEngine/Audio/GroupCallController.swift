@@ -56,6 +56,21 @@ public final class GroupCallController: @unchecked Sendable {
     private var perSenderDecoders: [String: OpusCodec] = [:]
     private let encoder: OpusCodec = OpusCodec()
 
+    /// W-GRPMEMPRESSURE (2026-08-26) — last time each currently-held
+    /// per-sender decoder actually decoded a frame. Guarded by `lock` like
+    /// `perSenderDecoders` itself, kept in lockstep with it (one entry per
+    /// decoder, set/updated on every `handleIncomingFrame` touch, cleared
+    /// together at `teardown`) — the only signal this class has for
+    /// "recently active" (this is audio-only frame decode; there is no
+    /// separate speaking-activity callback the way the SFU/LiveKit path
+    /// has). Feeds `GroupDecoderMemoryPressureDecisions.decodersToEvict`.
+    private var perSenderDecoderLastActive: [String: Date] = [:]
+    /// System memory-pressure source — see `handleMemoryPressure`'s kdoc.
+    /// Started in `bootstrapGroupSession` (fires for every call regardless
+    /// of SFU vs WS-relay-mesh transport, unlike `nackRetryTimer` which
+    /// only starts on a successful SFU connect), cancelled in `teardown`.
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
     // ─── W-GRPSENDERKEY: per-sender group keying ───────────────────────
 
     private let groupSession = GroupSession()
@@ -1273,6 +1288,9 @@ public final class GroupCallController: @unchecked Sendable {
             decoder = OpusCodec()
             perSenderDecoders[senderId] = decoder
         }
+        // W-GRPMEMPRESSURE: kept in lockstep with `perSenderDecoders` — see
+        // that field's own kdoc.
+        perSenderDecoderLastActive[senderId] = Date()
         let opus = groupSession.decryptFromGroup(state: gs, senderId: senderId, wire: sealed)
         lock.unlock()
         guard let decoder = decoder else { return }
@@ -1312,6 +1330,12 @@ public final class GroupCallController: @unchecked Sendable {
         groupState = newState
         wantsVideo = video
         lock.unlock()
+        // W-GRPMEMPRESSURE — started HERE (not `handleSfuToken`) so it
+        // covers every call regardless of transport: the WS-relay-mesh
+        // path (this file's own `perSenderDecoders`) is exactly what this
+        // feature protects, and that path runs whether or not the SFU ever
+        // connects.
+        startMemoryPressureMonitor()
     }
 
     /// Seal `plaintext` (an Opus frame) under our own send chain.
@@ -1406,6 +1430,48 @@ public final class GroupCallController: @unchecked Sendable {
         timer.resume()
     }
 
+    // MARK: - W-GRPMEMPRESSURE (2026-08-26) — memory-pressure decoder eviction
+
+    /// Idempotent (mirrors `startNackRetryTimer`'s exact
+    /// lock/cancel/reassign/unlock/resume shape). `.warning` fires well
+    /// before `.critical` — jettisoning idle native decoder handles at
+    /// `.warning` is what keeps a `.critical` (imminent jetsam kill) from
+    /// ever being reached on a busy multi-participant call.
+    private func startMemoryPressureMonitor() {
+        lock.lock()
+        memoryPressureSource?.cancel()
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical], queue: DispatchQueue.global(qos: .utility))
+        source.setEventHandler { [weak self] in self?.handleMemoryPressure() }
+        memoryPressureSource = source
+        lock.unlock()
+        source.resume()
+    }
+
+    /// The actual eviction. Only ever DROPS entries — never touches
+    /// `groupState`/`groupSession` (the crypto ratchet state is cheap and
+    /// must survive a decoder eviction; only the native Opus decoder + its
+    /// Deep PLC model are expensive enough to be worth reclaiming here). A
+    /// sender whose decoder gets evicted is not otherwise affected:
+    /// `handleIncomingFrame` re-creates a fresh `OpusCodec()` on their NEXT
+    /// frame exactly like a first-ever frame from them — the same one-time
+    /// reset cost a brand-new joiner already pays, not a new failure mode.
+    private func handleMemoryPressure() {
+        lock.lock()
+        let toEvict = GroupDecoderMemoryPressureDecisions.decodersToEvict(
+            lastActive: perSenderDecoderLastActive,
+            floor: GroupDecoderMemoryPressureDecisions.decoderFloor)
+        for senderId in toEvict {
+            perSenderDecoders.removeValue(forKey: senderId)
+            perSenderDecoderLastActive.removeValue(forKey: senderId)
+        }
+        let cid = activeCallId
+        lock.unlock()
+        guard !toEvict.isEmpty else { return }
+        print("[GroupCallController][telemetry] W-GRPMEMPRESSURE: evicted \(toEvict.count) idle per-sender decoder(s), kept \(GroupDecoderMemoryPressureDecisions.decoderFloor) most recently active")
+        groupTelemetry?("call.audio.memory_pressure_evict", cid, ["evicted": toEvict.count])
+    }
+
     private func stopNackRetryTimer() {
         lock.lock()
         let timer = nackRetryTimer
@@ -1483,6 +1549,9 @@ public final class GroupCallController: @unchecked Sendable {
         lock.lock()
         let endedCallId = activeCallId
         perSenderDecoders.removeAll()
+        perSenderDecoderLastActive.removeAll()
+        let memoryPressureSourceToCancel = memoryPressureSource
+        memoryPressureSource = nil
         muted = false
         groupState = nil
         activeCallId = nil
@@ -1502,6 +1571,7 @@ public final class GroupCallController: @unchecked Sendable {
         nackRetryTimer = nil
         lock.unlock()
         retryTimer?.cancel()
+        memoryPressureSourceToCancel?.cancel()
         if let cid = endedCallId {
             groupTelemetry?("call.media.ended", cid, ["reason": reason])
         }
