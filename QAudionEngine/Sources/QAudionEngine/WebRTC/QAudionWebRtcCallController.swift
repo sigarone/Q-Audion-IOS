@@ -3262,6 +3262,44 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     inFps = (s.values["framesPerSecond"] as? NSNumber)?.intValue ?? inFps
                 }
             }
+            // Audit item 1 (2026-08-26, best-practices audit) —
+            // OBSERVABILITY FIRST per the audit's own suggested approach
+            // ("read GoogCC's own exposed stats into the existing 3s
+            // pollVideoStatsOnce loop as observability first, then adapt
+            // the WS-relay path's AbrController rule engine for the native
+            // SRTP path too"). This reads the SAME `candidate-pair
+            // .availableOutgoingBitrate` field (bits/sec) that already
+            // ships in the standard, non-Google-prefixed webrtc-stats
+            // surface — libwebrtc's GoogCC congestion controller is the
+            // ONLY writer of this field; it is unmodified upstream BWE
+            // output, not a Q-Audion invention. Distinct lookup from the
+            // `outbound-rtp`/`inbound-rtp` loop above: a `candidate-pair`
+            // stats row carries no `kind` field, so the `kind == "video"`
+            // guard above would silently skip it — mirrors the identical
+            // succeeded-pair search `resolveAndApplyRouteTier` already
+            // does for route-tier classification, kept separate here
+            // rather than threaded through that method so this stays a
+            // pure read with zero effect on route-tier/backpressure
+            // behavior.
+            //
+            // Read-only: nothing downstream of `pc.statistics` reacts to
+            // this value yet — no app-level congestion response is wired
+            // to it (that remains the real-libwebrtc GoogCC, unmodified,
+            // exactly as before this change). The audit's suggested phase
+            // 2 ("adapt AbrController... for the native SRTP path too")
+            // is a real behavior change to the send path and is NOT
+            // attempted here — it needs live-device numbers from THIS
+            // observability phase first, which this box (no Swift
+            // toolchain, see repo CLAUDE.md) cannot produce.
+            var bweAvailableOutgoingBps = -1.0
+            if let activePair = report.statistics.values.first(where: { s in
+                    s.type == "candidate-pair" &&
+                        ((s.values["state"] as? String) == "succeeded" ||
+                            (s.values["nominated"] as? NSNumber)?.boolValue == true)
+                }) {
+                bweAvailableOutgoingBps = (activePair.values["availableOutgoingBitrate"] as? NSNumber)?.doubleValue
+                    ?? bweAvailableOutgoingBps
+            }
             // Resolve codec mimeType + the ACTIVE sdpFmtpLine from the
             // referenced codec stats object — the fmtp Chromium/libwebrtc
             // actually negotiated (profile-id/tier-flag/level-id for H265),
@@ -3310,6 +3348,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // W-VIDTELFPS — real measured fps on both directions (was never read).
                 "out_fps": outFps,
                 "in_fps": inFps,
+                // Audit item 1 — GoogCC's own live send-bandwidth estimate,
+                // read-only (see the extraction site above for why this is
+                // a separate lookup from the rtp rows above it). -1 = no
+                // succeeded pair yet / field absent, never a fabricated 0.
+                "bwe_available_outgoing_bps": bweAvailableOutgoingBps,
             ]
             let cid = self.pqcCallId
             if !cid.isEmpty { statsAttrs["call_id"] = cid }

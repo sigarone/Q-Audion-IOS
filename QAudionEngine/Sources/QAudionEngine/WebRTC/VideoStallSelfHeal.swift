@@ -149,6 +149,20 @@ public final class VideoStallEscalationEngine {
     /// Monotonic ms timestamp of stall detection; -1 = not stalled.
     public private(set) var stallStartMs: Int64 = -1
 
+    /// Audit item 2 (2026-08-26, best-practices audit) — cumulative count
+    /// of each rung firing across the WHOLE call, index-aligned with
+    /// `VideoStallSelfHeal.escalationLadder` (0=keyframeRequest,
+    /// 1=sinkReattach, 2=mediaReadyReannounce). UNLIKE `stage`, this is
+    /// NOT reset by `noteRecovered()`/a fresh `noteStalled()` — it survives
+    /// across every stall-recover cycle of one call so the caller can log
+    /// "how often did the ladder escalate this call" (the audit's own
+    /// suggested first step towards deciding whether video FEC/LTR is
+    /// justified — see `AppState.emitVideoStallEscalationTelemetry`). Reset
+    /// only by `reset()` (full per-call teardown), same lifecycle as
+    /// `stage`/`stallStartMs` there.
+    public private(set) var totalRungFireCounts: [Int] =
+        [Int](repeating: 0, count: VideoStallSelfHeal.escalationLadder.count)
+
     public var isStalled: Bool { return stallStartMs >= 0 }
 
     public init() {}
@@ -170,14 +184,20 @@ public final class VideoStallEscalationEngine {
         stage = 0
     }
 
-    /// Full per-call reset (hangup / video-leg rollback).
+    /// Full per-call reset (hangup / video-leg rollback). ALSO clears
+    /// `totalRungFireCounts` — a fresh call must not inherit the previous
+    /// call's escalation history, same "must not bleed into next call"
+    /// discipline `QAudionWebRtcCallController` applies to its own per-call
+    /// state (`_routeTierDwell.reset()` et al.).
     public func reset() {
         noteRecovered()
+        totalRungFireCounts = [Int](repeating: 0, count: VideoStallSelfHeal.escalationLadder.count)
     }
 
     /// Consume every rung due at `nowMs`, IN ORDER (rungs fire in ladder
     /// order even across a large clock jump — desktop parity). Empty when
-    /// not stalled or nothing is due.
+    /// not stalled or nothing is due. Bumps `totalRungFireCounts[stage]`
+    /// for every rung actually fired here (audit item 2).
     public func dueActions(nowMs: Int64) -> [VideoStallSelfHeal.EscalationAction] {
         guard isStalled else { return [] }
         var fired: [VideoStallSelfHeal.EscalationAction] = []
@@ -185,6 +205,7 @@ public final class VideoStallEscalationEngine {
               VideoStallSelfHeal.stallEscalationDue(
                 stallStartMs: stallStartMs, stage: stage, nowMs: nowMs) {
             fired.append(VideoStallSelfHeal.escalationLadder[stage])
+            totalRungFireCounts[stage] += 1
             stage += 1
         }
         return fired
