@@ -61,6 +61,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// it look like the setting "did nothing" (Pavel, live device test).
     public var onActiveCandidatePairType: ((String) -> Void)?
 
+    /// W-VPNCALLGATE (2026-08-26) — the selected candidate pair's REMOTE
+    /// address (not the type — `onActiveCandidatePairType` above already
+    /// covers that), for the VPN call-media gate: `AppState`/`VpnService`
+    /// punch this one destination out of the WireGuard tunnel's `allowedIPs`
+    /// for the call's duration (see `CidrExclusion` kdoc — mirrors Android's
+    /// `07c517b9a` `CallController`-state gate, which iOS has no per-app
+    /// exclusion API to replicate directly). `nil` when no pair has resolved
+    /// yet or the resolved remote candidate's stat carries no address field.
+    /// Fires from the SAME `resolveAndApplyRouteTier` poll as
+    /// `onActiveCandidatePairType`, so it shares that method's cadence and
+    /// the same "no confirmed delegate event, stats-polling only" gap noted
+    /// in that method's doc.
+    public var onActiveCandidatePairRemoteHost: ((String?) -> Void)?
+
     /// W419/W-ICEVIS — this engine target cannot reach `RTLog` (app-target
     /// only, same constraint `CallKitProvider.log` was added for earlier).
     /// Every `print("[WebRTC] ...")` in this file was therefore invisible
@@ -412,6 +426,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // method's doc for the event-driven verification gap) and
     // `evaluateBackpressure` (called every 3s from `pollVideoStatsOnce`).
     private var _routeTier: RouteTier = .unknown
+    /// W-VPNCALLGATE — de-dupe guard for `onActiveCandidatePairRemoteHost`,
+    /// same reset-at-teardown discipline as `_routeTier` right above.
+    private var _lastReportedRemoteHost: String?
     private var _cpuLimitedPolls: Int = 0
     private var _healthyPolls: Int = 0
     private var _backpressureSteps: Int = 0
@@ -1736,6 +1753,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // bleed into the next call (mirrors Android's
         // `PeerBitrateCap.reset()` at call teardown).
         _routeTier = .unknown
+        if _lastReportedRemoteHost != nil {
+            _lastReportedRemoteHost = nil
+            onActiveCandidatePairRemoteHost?(nil)
+        }
         _cpuLimitedPolls = 0
         _healthyPolls = 0
         _backpressureSteps = 0
@@ -2911,6 +2932,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if let remoteId = pair.values["remoteCandidateId"] as? String,
                let remoteStat = report.statistics[remoteId] {
                 remoteType = (remoteStat.values["candidateType"] as? String) ?? ""
+                // W-VPNCALLGATE — `address` is the current W3C webrtc-stats
+                // field name for a candidate's IP; `ip` is the deprecated
+                // alias some older/ObjC-bridged stats dictionaries still use.
+                // Same "no local xcframework header to confirm the exact
+                // field this vendored build exposes" gap as the rest of this
+                // method — try both rather than assert one, so a real
+                // mismatch degrades to "gate never engages" (safe: call
+                // media just stays tunneled, same as before this feature)
+                // instead of crashing or silently reading garbage.
+                let remoteHost = (remoteStat.values["address"] as? String)
+                    ?? (remoteStat.values["ip"] as? String)
+                if remoteHost != self._lastReportedRemoteHost {
+                    self._lastReportedRemoteHost = remoteHost
+                    self.onActiveCandidatePairRemoteHost?(remoteHost)
+                }
             }
             let tier = RouteTier.classify(localType: localType, remoteType: remoteType)
             guard tier != .unknown, tier != self._routeTier else { return }

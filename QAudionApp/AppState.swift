@@ -473,6 +473,18 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != callState else { return }
             updateProximityMonitoring()
+            // W-VPNCALLGATE — belt-and-suspenders clear: the controller's own
+            // teardown already fires `onActiveCandidatePairRemoteHost(nil)`
+            // on every call-end path it owns, but this is the ONE chokepoint
+            // every call path (hangup, remote hangup, error, CallKit-driven
+            // end) already flows through for other per-call cleanup
+            // (`updateProximityMonitoring` above, `isInCall`'s didSet). A
+            // VPN exclusion lingering past call-end would silently route a
+            // stale destination outside the tunnel indefinitely — worth a
+            // second, cheap (no-op when already nil) guaranteed clear here.
+            if callState == .idle || callState == .ended {
+                vpnService.setCallMediaHost(nil)
+            }
         }
     }
     @Published var callContactId: String?
@@ -5892,6 +5904,9 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.backendType = (pairType == "relay") ? "turn" : "p2p"
             }
+        }
+        controller.onActiveCandidatePairRemoteHost = { [weak self] host in
+            Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
         }
         // K_video parity (v1.0.700): the native video FrameCryptor needs the
         // call's session key + the sovereign/KMS PSK salt BEFORE the answer.
@@ -13554,6 +13569,9 @@ final class AppState: ObservableObject {
                         self?.backendType = (pairType == "relay") ? "turn" : "p2p"
                     }
                 }
+                controller.onActiveCandidatePairRemoteHost = { [weak self] host in
+                    Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
+                }
                 // Same caller-id substitution as the legacy path —
                 // both rails ship the same `caller_display` so the
                 // peer doesn't pick a different label depending on
@@ -19777,6 +19795,9 @@ extension AppState {
             Task { @MainActor [weak self] in
                 self?.backendType = (pairType == "relay") ? "turn" : "p2p"
             }
+        }
+        controller.onActiveCandidatePairRemoteHost = { [weak self] host in
+            Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
         }
         let cid = callerId
         Task { @MainActor [weak self] in

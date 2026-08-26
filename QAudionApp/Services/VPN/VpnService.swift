@@ -153,7 +153,40 @@ final class VpnService: ObservableObject {
     func disconnect() {
         manager?.connection.stopVPNTunnel()
         state = .disconnected
+        lastSentExcludedHost = nil
     }
+
+    /// Call-media VPN gate (mirrors Android's `07c517b9a` `CallController`-state
+    /// gate — see `QAudionPacketTunnel/PacketTunnelProvider.swift`'s
+    /// `handleAppMessage` kdoc for the full mechanism and why iOS needs a
+    /// destination-based punch instead of Android's per-app exclusion).
+    ///
+    /// - Parameter host: the active call's resolved media destination (the
+    ///   selected ICE candidate pair's remote IPv4 address — set once ICE
+    ///   settles, mirrors `QAudionWebRtcCallController.onActiveCandidatePairRemoteHost`),
+    ///   or `nil` to clear the gate (call ended, or ICE has no resolved pair
+    ///   yet). A no-op when the VPN tunnel isn't connected — nothing to
+    ///   exclude from a tunnel that isn't routing anything — and a no-op when
+    ///   `host` hasn't actually changed since the last call, so a call that
+    ///   re-polls the same settled pair doesn't re-trigger the extension IPC
+    ///   + WireGuard config reload on every stats tick.
+    func setCallMediaHost(_ host: String?) {
+        guard state.isConnected else { return }
+        guard host != lastSentExcludedHost else { return }
+        lastSentExcludedHost = host
+
+        guard let session = manager?.connection as? NETunnelProviderSession else { return }
+        let body: [String: String] = host.map { ["excludedHost": $0] } ?? [:]
+        guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return }
+        do {
+            try session.sendProviderMessage(payload) { _ in }
+        } catch {
+            print("[VpnService] setCallMediaHost sendProviderMessage failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// De-dupes `setCallMediaHost` calls — see that method's kdoc.
+    private var lastSentExcludedHost: String?
 
     // MARK: - Private helpers
 
