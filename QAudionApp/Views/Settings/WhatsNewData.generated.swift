@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1033",
+              date: "2026-08-26",
+              title: "v1.0.1033",
+              bullets: [
+                "fix(call): AVAudioConverter never produced output for the native-audio-srtp PCM tap",
+              ]),
         .init(id: "v1.0.1032",
               date: "2026-08-26",
               title: "v1.0.1032",
               bullets: [
+                "chore: regenerate changelog for v1.0.1032",
                 "fix(call): stop sending video over WS-relay once native RTP is confirmed healthy",
                 "fix(call): PlayoutJitterBuffer time-stretch band unreachable at default cadence",
                 "fix(ci): disable explicit module builds for ios-simulator-tests — retry didn't survive a whole-tree kill",
@@ -171,13 +178,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1014",
                 "fix(ios): sessionKeyRetryMaxAttempts must not be private for use as a public default arg",
-              ]),
-        .init(id: "v1.0.1013",
-              date: "2026-08-21",
-              title: "v1.0.1013",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1013",
-                "fix(call): SAS never appears + call times out — callContactId race",
               ]),
     ]
 }
