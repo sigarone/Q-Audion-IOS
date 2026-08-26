@@ -659,10 +659,37 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// default — see `RestartIceDecisions.selfRepairWindowMs`.
     private var lastExternalNetworkChangeAt: Date?
 
+    /// W-PROACTIVEHANDOFF (2026-08-26) — the dominant interface type as of
+    /// the LAST `armRestartPathMonitor` callback, so that handler can tell
+    /// "the active interface actually changed" (wifi<->cellular<->wired,
+    /// a real handover) apart from "some other path property changed on
+    /// the SAME interface" (IP renewal, DNS change, etc. — `NWPathMonitor`
+    /// fires its handler for any of these, not just interface swaps).
+    /// `nil` until the first callback — deliberately not treated as a
+    /// "change" (see `armRestartPathMonitor`'s kdoc: the very first
+    /// callback on monitor start always looks like a transition from
+    /// nothing and must not trigger a restart on a call that hasn't even
+    /// connected yet).
+    private var lastActiveInterfaceType: NWInterface.InterfaceType?
+
     /// Debounce guard mirroring Android's `lastIceRestartAtMs` +
     /// `ICE_RESTART_DEBOUNCE_MS` — a flapping interface must not spam
     /// fresh CallOffer frames.
     private var lastIceRestartAt: Date?
+    /// Independent-review fix (nim.ps1 security pass, W-PROACTIVEHANDOFF/
+    /// W-RESPONDERRESTART): `restartIce` now has THREE independent call
+    /// sites that can race each other (the reactive ICE-failure watchdog,
+    /// the new interface-change trigger, and any future caller) — before
+    /// this lock, two concurrent invocations could both read
+    /// `lastIceRestartAt` as "old enough" before either wrote a fresh
+    /// timestamp, defeating the debounce exactly the flapping-interface
+    /// case it exists for. Held ONLY for the synchronous
+    /// check-then-set below, released BEFORE the `await pc.createOffer`
+    /// that follows — same discipline this file already uses for
+    /// `answerLock`/`shutdownLock` (see those properties' own kdoc): a
+    /// lock spanning an `await` is a bug class this codebase deliberately
+    /// avoids, not introduces.
+    private let restartIceDebounceLock = NSLock()
 
     /// The recovery watchdog: armed the moment ICE first enters a bad
     /// state, cancelled the moment it genuinely recovers (`.connected`/
@@ -1813,18 +1840,52 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // pure decision logic (self-repair window sizing, glare verdicts) —
     // this section is the imperative wiring around it.
 
+    /// W-PROACTIVEHANDOFF: numeric-safe encoding of an interface type for
+    /// `log?(...)` lines (this repo's redactor rule — see
+    /// `reference_ios_log_pipeline_limits` — blobs any non-numeric free
+    /// text token, so a raw `\(type)` interpolation would be silently
+    /// dropped before it ever reaches Loki; every other log line in this
+    /// file already encodes enum/bool state as an Int for the same
+    /// reason, e.g. `route tier=\(tier == .relay ? 1 : 0)` above).
+    private static func interfaceTypeCode(_ type: NWInterface.InterfaceType?) -> Int {
+        switch type {
+        case .none: return 0
+        case .some(.wifi): return 1
+        case .some(.cellular): return 2
+        case .some(.wiredEthernet): return 3
+        case .some(.loopback): return 4
+        case .some: return 5 // .other, or any future case
+        }
+    }
+
+    /// W-PROACTIVEHANDOFF: best-effort "which interface is actually
+    /// carrying this path" classification — `NWPath` can report several
+    /// interfaces simultaneously usable, so this picks ONE in the same
+    /// wifi > cellular > wired > loopback > other priority order most iOS
+    /// networking code uses for display purposes. Good enough for "did the
+    /// ACTIVE interface change" purposes, not meant as a precise routing
+    /// decision.
+    private static func dominantInterfaceType(of path: NWPath) -> NWInterface.InterfaceType? {
+        if path.usesInterfaceType(.wifi) { return .wifi }
+        if path.usesInterfaceType(.cellular) { return .cellular }
+        if path.usesInterfaceType(.wiredEthernet) { return .wiredEthernet }
+        if path.usesInterfaceType(.loopback) { return .loopback }
+        if path.usesInterfaceType(.other) { return .other }
+        return nil
+    }
+
     /// Start the call-scoped OS network-change signal. Idempotent — a
     /// second call (e.g. a defensive re-invocation) is a no-op.
     private func armRestartPathMonitor() {
         guard restartPathMonitor == nil else { return }
         let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] _ in
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
             // ANY path callback is an external, OS-driven network signal
             // (interface up/down, transport switch). Mirrors Android's
             // `NetworkChangeReactor` -> `CallController
-            // .notifyNetworkChanged`: this does NOT itself trigger a
-            // restart — it only timestamps the signal so the recovery
-            // watchdog below can size its self-repair window
+            // .notifyNetworkChanged`: timestamps the signal so the
+            // recovery watchdog below can size its self-repair window
             // (W-SILENTPATHDEATH: a bad ICE state shortly after a real
             // OS event gets the FULL self-repair window because fresh
             // candidates are probably already arriving; a bad ICE state
@@ -1836,7 +1897,73 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // independent of any OS event at all — that native
             // consent-freshness/STUN-check detection, not this monitor,
             // is what covers the silent case.
-            self?.lastExternalNetworkChangeAt = Date()
+            self.lastExternalNetworkChangeAt = Date()
+
+            // W-PROACTIVEHANDOFF (2026-08-26) — a SECOND, PROACTIVE
+            // trigger on top of the reactive watchdog above: a genuine
+            // active-interface change (wifi<->cellular<->wired) on an
+            // ALREADY-connected call is near-certain to invalidate the
+            // existing ICE candidate pair's local IP (the old candidates
+            // are bound to an interface that's no longer the one
+            // carrying traffic) — restart preemptively instead of only
+            // waiting for ICE to independently degrade and the reactive
+            // watchdog to notice. Gated on:
+            //   - `path.status == .satisfied` — a new USABLE path exists
+            //     to move onto; `.unsatisfied`/`.requiresConnection`
+            //     means the interface just went DOWN with nothing to
+            //     restart onto yet — the reactive watchdog (ICE will
+            //     independently go bad) already covers that half.
+            //   - the resolved interface actually DIFFERS from last
+            //     time, AND there WAS a last time (`previous != nil`) —
+            //     the very first callback on monitor start always looks
+            //     like a transition from nothing and must not fire on a
+            //     call that hasn't even connected yet.
+            //   - `hasEverConnectedIce` — only an already-connected call
+            //     benefits from a preemptive refresh.
+            //   - `!isIceStateBad(lastIceConnectionState)` (independent-
+            //     review fix, nim.ps1 security pass) — if ICE is ALREADY
+            //     in a bad state, the reactive watchdog above is already
+            //     the one driving recovery; this trigger's whole value is
+            //     getting AHEAD of a failure that hasn't happened yet, not
+            //     firing a second, redundant restart attempt into a
+            //     recovery the watchdog is already running.
+            // `restartIce`'s own `iceRestartDebounceMs` (3s), now made
+            // race-safe against concurrent callers by
+            // `restartIceDebounceLock` (independent-review fix — this
+            // trigger and the reactive watchdog can now genuinely fire
+            // concurrently, which the plain unguarded debounce read+write
+            // wasn't safe against), is the
+            // safety net against a flapping interface spamming restart
+            // offers — the SAME mechanism its own kdoc already documents
+            // for exactly this case, not a new debounce invented here.
+            // Known, accepted trade-off (not solvable without live-device
+            // tuning this pass didn't have): a bearer-type flag CAN flip
+            // for reasons that aren't a real handover (radio-technology
+            // renegotiation, a VPN adapter re-registering), so this can
+            // occasionally fire a restart offer for a link that didn't
+            // actually need one. That is a harmless extra renegotiation,
+            // not a correctness risk: `RestartIceDecisions`' existing
+            // glare tiebreak (reachable from either role as of this same
+            // change — see `restartIce` below) resolves any resulting
+            // race safely either way.
+            let interfaceType = Self.dominantInterfaceType(of: path)
+            let previous = self.lastActiveInterfaceType
+            self.lastActiveInterfaceType = interfaceType
+            if path.status == .satisfied,
+               let interfaceType, let previous, interfaceType != previous,
+               self.hasEverConnectedIce,
+               !self.isIceStateBad(self.lastIceConnectionState) {
+                self.log?("restart_ice trigger=1 from_if=\(Self.interfaceTypeCode(previous)) to_if=\(Self.interfaceTypeCode(interfaceType))")
+                // `[weak self]` again here even though `self` is already a
+                // strongly-unwrapped local in this scope (from the `guard
+                // let self` above) — capturing that strong local directly
+                // would keep the controller alive for this Task's whole
+                // duration (bounded by `restartIce`'s own ~45s worst-case
+                // park budget, but still an avoidable extension past
+                // teardown) — same discipline `iceRecoveryWatchdogTask`
+                // already uses for its own `restartIce` call.
+                Task { [weak self] in await self?.restartIce(reason: "interface-change") }
+            }
         }
         monitor.start(queue: restartPathMonitorQueue)
         restartPathMonitor = monitor
@@ -1969,50 +2096,73 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         return Self.nowMs() - since >= debounceMs
     }
 
-    /// Trigger an ICE restart. Only the ORIGINAL call initiator ships a
-    /// fresh offer — mirrors Android's `restartIce`: "if both sides offer
-    /// at once we hit SDP glare". The responder side has no ACTION here:
-    /// Android proactively calls the native `pc.restartIce()` to prime
-    /// local candidate re-gathering slightly before the initiator's
-    /// restart offer even lands; that specific call was deliberately NOT
-    /// ported (see the responder-branch comment below for why) — the
-    /// CORRECTNESS guarantee (fresh local ICE credentials + re-gather on
-    /// this side too) is unaffected: applying the initiator's restart
-    /// offer (which carries fresh remote ice-ufrag/pwd) via
-    /// `setRemoteOffer` + `createAnswer` is a JSEP-MANDATED trigger for
-    /// the LOCAL ICE agent to restart and re-gather regardless of any
-    /// proactive priming; only the head start (candidates already
-    /// gathering the moment the offer arrives, instead of starting then)
-    /// is not reproduced.
+    /// Trigger an ICE restart by sending a fresh restart offer.
+    ///
+    /// W-RESPONDERRESTART (2026-08-26): BOTH roles ship a fresh offer now
+    /// — previously only the ORIGINAL call initiator did, with the
+    /// responder side a documented no-op (Android's own
+    /// `pc.restartIce()` proactive-priming call for the responder side
+    /// was never ported, for lack of toolchain to grep-verify that native
+    /// symbol against this app's vendored webrtc-sdk binary). That left a
+    /// real gap: a mid-call network change on the RESPONDER's own device
+    /// had no fast recovery path of its own — only the initiator's
+    /// independent ICE-bad detection eventually re-offering, strictly
+    /// sequential and only as fast as the SLOWER side's own watchdog.
+    ///
+    /// This is safe to lift, verified against the real call graph rather
+    /// than assumed:
+    ///   - `sendIceRestartOffer` (`BCryptoCallingApiImpl.swift`) is
+    ///     already role-agnostic — a plain `call_offer` envelope keyed by
+    ///     `call_id`/`recipient_id`, nothing initiator-specific.
+    ///   - `AppState`'s `call_incoming` restart-offer ROUTING (the check
+    ///     that recognizes "this is a mid-call restart for my live call,
+    ///     not a fresh call") is also role-agnostic — it matches on
+    ///     `call_id`/sender/call-state alone, never `isInitiator`.
+    ///   - `applyRemoteRestartOffer` already documents that its
+    ///     `.responderRollbackThenApply` branch "can be reached by
+    ///     either role" and was only unreachable for the initiator
+    ///     because the responder never used to offer — i.e. the
+    ///     receiving side was ALREADY built to expect this.
+    ///   - `RestartIceDecisions.resolveIncomingOffer`'s glare tiebreak is
+    ///     keyed on the call's FIXED original role (`isInitiator`), never
+    ///     on who sent the offer that raced — so a responder's own offer
+    ///     racing the initiator's still correctly loses under the exact
+    ///     same, already-unit-tested politeness rule, no new conflict
+    ///     resolution needed.
+    /// The one thing genuinely NOT reproduced from Android's responder
+    /// path is the proactive-priming HEAD START (local candidates already
+    /// gathering the instant the network changes, before any offer is
+    /// even built) — this responder-side call still goes through the
+    /// same `createOffer(iceRestart: true)` + send path the initiator
+    /// uses, so the correctness guarantee holds but the responder's own
+    /// restart is exactly as fast as the initiator's, not faster.
     ///
     /// Debounced by `RestartIceDecisions.iceRestartDebounceMs` — a
-    /// flapping interface must not spam fresh CallOffer frames.
+    /// flapping interface must not spam fresh CallOffer frames. This is
+    /// also what protects the new `W-PROACTIVEHANDOFF` interface-change
+    /// trigger (`armRestartPathMonitor` above) from spamming on a bearer
+    /// flag that flips without a real handover.
     public func restartIce(reason: String) async {
         guard peerConnection != nil, !intentionalShutdown else { return }
         guard let rid = recipientId else { return }
-        guard isInitiator else {
-            // NOT PORTED (documented, not silently skipped — see the kdoc
-            // above): Android's `pc.restartIce()` bare call on the
-            // responder side. No toolchain is available in this repo to
-            // grep-verify an `RTCPeerConnection.restartIce()` method
-            // symbol on the exact custom webrtc-sdk M144 binary this app
-            // links (Windows dev box, no vendored headers, no cached
-            // xcframework — confirmed absent by search). Calling an
-            // unverified native API surface risked shipping code that
-            // fails to compile/link; the constraint-string mechanism used
-            // for the INITIATOR's offer below ("IceRestart":"true") is a
-            // core-libwebrtc constraint name shared by every binding and
-            // needed no such verification.
-            log?("restart_ice role=responder noop=1 reason=\(reason)")
-            return
-        }
+        // Atomic check-then-set — see `restartIceDebounceLock`'s own kdoc
+        // for why this can no longer be a plain unguarded read+write now
+        // that more than one trigger can call this method concurrently.
         let now = Date()
+        restartIceDebounceLock.lock()
+        let debounced: Bool
         if let last = lastIceRestartAt,
            now.timeIntervalSince(last) * 1000 < Double(RestartIceDecisions.iceRestartDebounceMs) {
+            debounced = true
+        } else {
+            lastIceRestartAt = now
+            debounced = false
+        }
+        restartIceDebounceLock.unlock()
+        guard !debounced else {
             log?("restart_ice debounced=1 reason=\(reason)")
             return
         }
-        lastIceRestartAt = now
         onRestartAttemptStarted?()
         guard let pc = peerConnection else { return }
         // `audioOnly: true` here does NOT mean "drop video on restart" —
