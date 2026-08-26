@@ -65,7 +65,21 @@ public final class BCryptoRestClient {
     private let netLock = NSLock()
     private var _networkGeneration: Int = 0
     private var _isOffline: Bool = false
-    private var _lastPathSatisfied: Bool = false
+    // `nil` = no path observation yet (distinct from "was previously
+    // unsatisfied"). BUGFIX (2026-08-26): this used to default to `false`,
+    // so a fresh client's very FIRST NWPathMonitor callback — which fires
+    // shortly after `.start()` reporting the CURRENT path, not a change —
+    // read as satisfied(true) != _lastPathSatisfied(false) on the common
+    // case (device already has network), triggering a gratuitous pool
+    // evict + in-flight-request cancel before the client had done
+    // anything. Real symptom: 4 of the WireFormatTests suite's requests,
+    // issued immediately after construction, raced this synthetic
+    // "change" and were cancelled with NSURLErrorDomain -999 in CI even
+    // after the DEBUG-gate fix (b141949) — confirmed via the
+    // "[BCryptoRest] netchange satisfied=1 gen=1 cancelled=1" log line
+    // printed at the moment of failure. See `handlePathUpdate` below for
+    // the fix (first observation is recorded, not treated as a change).
+    private var _lastPathSatisfied: Bool?
     private var _lastTransport: NWInterface.InterfaceType?
 
     /// W-INFLIGHTCANCEL — in-flight request cancellers, keyed by a per-call
@@ -190,7 +204,21 @@ public final class BCryptoRestClient {
             : nil
 
         netLock.lock()
-        let changed = (satisfied != _lastPathSatisfied) || (transport != _lastTransport)
+        // First-ever observation: NWPathMonitor.start() always delivers one
+        // callback reporting the CURRENT path, which is not a "change" —
+        // there is nothing to evict a pool for or cancel in-flight
+        // requests against yet. Record the baseline and stop; only a
+        // REAL subsequent transition (satisfied/transport actually
+        // flipping from a KNOWN prior state) reaches the evict+cancel path
+        // below.
+        guard let lastSatisfied = _lastPathSatisfied else {
+            _lastPathSatisfied = satisfied
+            _lastTransport = transport
+            _isOffline = !satisfied
+            netLock.unlock()
+            return
+        }
+        let changed = (satisfied != lastSatisfied) || (transport != _lastTransport)
         _lastPathSatisfied = satisfied
         _lastTransport = transport
         _isOffline = !satisfied
