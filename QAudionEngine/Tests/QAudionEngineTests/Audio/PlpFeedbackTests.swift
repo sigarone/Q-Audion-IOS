@@ -174,12 +174,17 @@ final class PlpPolicyTests: XCTestCase {
     }
 
     /// The whole point: on a relay call, a clean report (0% loss) must not
-    /// decay below the RAISED floor (10), even though the base policy would
-    /// happily decay all the way to its own floor (5) on the same input.
+    /// decay below the RAISED floor (10), even where the base policy would
+    /// happily decay to its own lower floor (5) on the same input. Starts
+    /// one decayStepPct (2) above the RAISED floor: a plain decay step
+    /// (currentPct - 2) would undershoot BOTH floors here (6 - 2 = 4), so
+    /// this isolates the clamp itself rather than the ordinary decay-step
+    /// arithmetic (which a much larger starting value, and its own bare
+    /// decayStepPct subtraction, already covers elsewhere in this file).
     func testRelayTier_neverDecaysBelowTheRaisedFloor() {
-        let next = PlpPolicy.next(currentPct: 20, observedLossPct: 0, routeTier: .relay)
+        let next = PlpPolicy.next(currentPct: 6, observedLossPct: 0, routeTier: .relay)
         XCTAssertEqual(next, 10)
-        XCTAssertLessThan(PlpPolicy.next(currentPct: 20, observedLossPct: 0), 10, "sanity: base policy WOULD have gone lower")
+        XCTAssertEqual(PlpPolicy.next(currentPct: 6, observedLossPct: 0), 5, "sanity: base policy floors at its own lower value on the same input")
     }
 
     /// A caller arriving with a value below the relay floor (e.g. the
