@@ -12,8 +12,3 @@
 **Vulnerability:** The profile structs `UserProfile` and `PublicUser` did not override default reflection, risking exposure of sensitive PII (`phoneHash` and `phoneNumber`) in logs.
 **Learning:** Default reflection in Swift struct descriptions can leak sensitive PII just as it can leak authentication tokens. Any struct containing potentially identifying or sensitive data must explicitly handle its string representation.
 **Prevention:** Ensured `CustomStringConvertible` and `CustomDebugStringConvertible` implementations were added to redact `phoneHash` and `phoneNumber` within profile-related structs in `AccountApi.swift`.
-
-## 2026-08-25 - Unencrypted Group Membership PII in UserDefaults
-**Vulnerability:** `GroupRegistry` was storing group member arrays (which can be used to link users together) as unencrypted JSON in `UserDefaults`. `UserDefaults` data is stored in unencrypted plists and is easily readable by anyone with access to the device file system (or jailbroken).
-**Learning:** Any persistent local storage containing PII (like group membership lists) should not be stored in unencrypted forms like UserDefaults, even if it does not contain highly sensitive keys. Use standard encryption patterns that exist in the codebase like `LocalStoreCipher`.
-**Prevention:** For JSON structures in `UserDefaults` holding user identifiers or memberships, seal them using `LocalStoreCipher.seal()` before storing and `LocalStoreCipher.open()` upon reading to provide AES-256-GCM at-rest encryption.
