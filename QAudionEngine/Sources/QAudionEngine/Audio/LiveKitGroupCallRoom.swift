@@ -814,7 +814,9 @@ extension LiveKitGroupCallRoom: RoomDelegate {
             }
         }
         guard publication.source == .screenShareVideo else { return }
-        let identity = participant.identity?.stringValue ?? ""
+        // W-GRPVIEWPORT: `identity` is already computed above (this method
+        // now needs it unconditionally, not just on the screen-share path)
+        // — no re-declaration here.
         // I8 FIX: truncate identity like every other identity print in this file.
         print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity.prefix(8))…")
         onRemoteScreenShareTrack?(identity, nil)
