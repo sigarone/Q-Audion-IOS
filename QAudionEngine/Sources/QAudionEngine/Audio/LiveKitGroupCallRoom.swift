@@ -581,9 +581,28 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // are LiveKit's own official preset scale
         // (`VideoParameters.presetH360_169`/`presetH540_169`/
         // `presetH720_169`), not invented numbers.
+        // W-SIMULCASTPIN (2026-08-26, P2 audit item 5) — `simulcast` was the
+        // one field on this initializer left unset, riding the pinned
+        // fork's SDK default rather than a code-level statement of intent.
+        // Verified against the real upstream source at the pinned tag's
+        // lineage (livekit/client-sdk-swift 2.16.0,
+        // Types/Options/VideoPublishOptions.swift — this fork's own audit
+        // trail above confirms it touches E2EE/broadcast files only, not
+        // this one): `public let simulcast: Bool` with `simulcast: Bool =
+        // true` as the initializer default, matching the value pinned here.
+        // No behavior change today — this makes explicit exactly what the
+        // SDK already does, so a future SDK upgrade that changes that
+        // default can no longer silently change group-call quality behavior
+        // out from under this call site. `simulcast` must be spelled here
+        // BETWEEN `encoding` and `preferredCodec` — Swift resolves a
+        // memberwise-style initializer's keyword arguments by matching each
+        // label to the NEXT unconsumed parameter in DECLARATION order, not
+        // by label alone, so an out-of-order argument list is a compile
+        // error here rather than a silent mismatch.
         let roomOptions = RoomOptions(
             defaultVideoPublishOptions: VideoPublishOptions(
                 encoding: Self.videoEncoding(for: _preferredCallQuality),
+                simulcast: true,
                 preferredCodec: .h265,
                 preferredBackupCodec: .vp8
             ),
@@ -1327,9 +1346,11 @@ extension LiveKitGroupCallRoom: TrackDelegate {
         switch track.kind {
         case .video:
             // W-GRPTELEM-SIMULCAST (2026-07-20, call 694147de leg e1f5690b):
-            // `VideoPublishOptions.simulcast` defaults TRUE in the pinned SDK
-            // (verified in the fork source: `simulcast: Bool = true`), so
-            // `outboundRtpStream` carries one entry PER simulcast layer and
+            // `VideoPublishOptions.simulcast` is `true` — explicitly pinned
+            // in `connect()`'s `RoomOptions` as of W-SIMULCASTPIN (2026-08-26,
+            // P2 audit item 5; before that it rode the pinned SDK's own
+            // `simulcast: Bool = true` default unstated in this app's code),
+            // so `outboundRtpStream` carries one entry PER simulcast layer and
             // the array order is arbitrary — `.first` regularly lands on a
             // suspended/bandwidth-starved layer, which reports
             // frameWidth/Height nil (rendered as 0x0) and framesPerSecond
