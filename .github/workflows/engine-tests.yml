@@ -317,23 +317,42 @@ jobs:
           # cleanup) never populates the cache for the NEXT run either --
           # so a cold run stays stuck cold forever without the retry below.
           #
-          # RETRY: up to 2 attempts of the SAME xcodebuild invocation, in
-          # the SAME job. This is not "try again and hope" -- it exploits a
-          # specific, confirmed fact: DerivedData/ModuleCache.noindex and
-          # .../SwiftExplicitPrecompiledModules are written to LOCAL DISK
-          # incrementally as each framework's .pcm finishes, and that local
-          # disk state survives an OOM kill (only the actions/cache SAVE
-          # step, which runs in job cleanup, is what a mid-job kill loses).
-          # The confirmed death point is LATE in the precompile phase --
-          # dozens of frameworks (SwiftUI, Vision, CoreML, AVFoundation,
-          # ~30 total) had ALREADY finished and were sitting on disk before
-          # the kill, with only the heaviest few (WebRTC, LiveKitWebRTC,
-          # Reality) left unfinished. A same-job retry starts against that
-          # now-mostly-warm local DerivedData, so it only needs to finish
-          # precompiling the few frameworks attempt 1 didn't reach -- a much
-          # smaller peak-memory burst than attempt 1's fully-cold start.
-          # -resultBundlePath must be unique per attempt (xcodebuild refuses
-          # to write into an already-existing bundle).
+          # SWIFT_ENABLE_EXPLICIT_MODULES=NO (2026-08-26, THIRD attempt):
+          # the retry loop below (added for the SECOND attempt, run
+          # 32940815497) did NOT help either -- its own "::group::attempt
+          # 1/2" line opened and never closed, meaning the whole script's
+          # process tree died mid-attempt-1, not just the xcodebuild child.
+          # That rules out "OOM kills xcodebuild, shell survives to retry"
+          # as the only failure mode here -- some kills take the whole job
+          # step down at once (consistent with GitHub's own low-memory
+          # runner abort, not just the kernel OOM-killer picking a single
+          # victim PID), which no in-script retry can survive by
+          # construction. Real lever instead: explicit module builds
+          # (Xcode 16+ default, what SwiftExplicitDependencyGeneratePcm --
+          # the exact step every failing run dies inside -- IS) precompile
+          # every imported framework into a standalone .pcm up front, all
+          # at once, before any of our own source compiles; the OLDER
+          # implicit-module mechanism resolves modules lazily per
+          # translation unit via clang's traditional module cache, with a
+          # materially smaller peak burst (real, documented Xcode build
+          # setting -- confirmed via Apple's own explicit-modules doc and a
+          # live report of the exact same setting/symptom on Bitrise's
+          # forum, not guessed). Trades some incremental-build speed for a
+          # much lower peak RSS; on a CI job that runs cold every time
+          # anyway, that trade is free.
+          #
+          # RETRY: kept as a second, independent, low-cost safety margin --
+          # up to 2 attempts of the SAME xcodebuild invocation in the SAME
+          # job. Still correct reasoning for the failure mode it DOES cover
+          # (a plain SIGKILL of just the xcodebuild PID, which the FIRST
+          # failing run after the module-cache fix showed: DerivedData
+          # survives on local disk, so a same-job retry only needs to
+          # finish precompiling whatever attempt 1 didn't reach). Harmless
+          # no-op on the whole-tree-killed failure mode above -- nothing
+          # survives to retry there either way, so this loop costs nothing
+          # extra beyond one skipped iteration. -resultBundlePath must be
+          # unique per attempt (xcodebuild refuses to write into an
+          # already-existing bundle).
           ATTEMPT=1
           MAX_ATTEMPTS=2
           EXIT_CODE=1
@@ -345,6 +364,7 @@ jobs:
               -jobs 2 \
               SWIFT_ENABLE_TESTABILITY=YES \
               COMPILER_INDEX_STORE_ENABLE=NO \
+              SWIFT_ENABLE_EXPLICIT_MODULES=NO \
               OTHER_LDFLAGS="\$(inherited) -lresolv" \
               -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
               -derivedDataPath /tmp/dd-ios-sim \
