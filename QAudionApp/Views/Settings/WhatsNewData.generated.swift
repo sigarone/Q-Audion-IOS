@@ -9,10 +9,23 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1032",
+              date: "2026-08-26",
+              title: "v1.0.1032",
+              bullets: [
+                "fix(call): stop sending video over WS-relay once native RTP is confirmed healthy",
+                "fix(call): PlayoutJitterBuffer time-stretch band unreachable at default cadence",
+                "fix(ci): disable explicit module builds for ios-simulator-tests — retry didn't survive a whole-tree kill",
+                "fix(ci): same-job retry for ios-simulator-tests — cache-only fix confirmed insufficient",
+                "fix(call): iOS callee heard nothing — peer capabilities applied after setRemoteOffer",
+                "fix(ci): root-cause + fix ios-simulator-tests OOM kill (macos-latest, 7GB RAM)",
+                "fix(security): cherry-pick + fix verified hunk from Jules PR #90",
+              ]),
         .init(id: "v1.0.1031",
               date: "2026-08-26",
               title: "v1.0.1031",
               bullets: [
+                "chore: regenerate changelog for v1.0.1031",
                 "fix(call): first real CI compile surfaces 2 real errors — RTCFrameCryptorState typo, addRenderer Swift rename",
               ]),
         .init(id: "v1.0.1030",
@@ -165,13 +178,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1013",
                 "fix(call): SAS never appears + call times out — callContactId race",
-              ]),
-        .init(id: "v1.0.1012",
-              date: "2026-08-21",
-              title: "v1.0.1012",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1012",
-                "fix(security): revert app-lock default-on, no escape from a mandatory Face ID prompt",
               ]),
     ]
 }
