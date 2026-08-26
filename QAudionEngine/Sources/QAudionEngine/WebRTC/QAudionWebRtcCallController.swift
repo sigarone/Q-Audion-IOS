@@ -676,6 +676,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// after the fact.
     private var srtpFallbackTask: Task<Void, Never>?
 
+    // ── W-VIDEOSENDGATE (2026-08-26) ──────────────────────────────────────
+    //
+    // Same shape as the audio pair above, inverted: audio debounces
+    // ENGAGING a second capture path (the risky edge — opening a redundant
+    // path). Here the risky edge is the OPPOSITE action — SKIPPING the
+    // always-on WS-relay video send — so the debounce guards that instead,
+    // and falling back to the relay (the safe direction) stays instant.
+    // See `AppState`'s `onOutboundFragment` wiring and
+    // reference_transport_fallback_audit_2026_08_26.md.
+
+    /// Monotonic ms timestamp the CURRENT good-ICE streak started
+    /// (`.connected`/`.completed`), or `nil` when ICE is not currently in a
+    /// confirmed-good state. Feeds `isVideoSendConfirmedHealthy`'s debounce.
+    /// Reset to `nil` the instant ICE leaves `.connected`/`.completed` —
+    /// deliberately ungated, so a caller reading this after a bad-ICE edge
+    /// falls back to the WS-relay safety net on the very next frame.
+    private var iceGoodSinceMs: Int64?
+
     private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     /// `true` once ICE has connected at least once THIS call. Gates the
@@ -1683,6 +1701,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         lastAppliedRemoteRestartSdp = nil
         lastIceConnectionState = .new
         hasEverConnectedIce = false
+        iceGoodSinceMs = nil
         guard peerConnection != nil else {
             state = .disconnected
             return
@@ -1908,6 +1927,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         srtpFallbackEngaged = false
         log?("audiosrtp_fallback recover=1")
         onAudioSrtpFallbackRecover?()
+    }
+
+    /// W-VIDEOSENDGATE (2026-08-26) — true only once ICE has stayed in a
+    /// confirmed-good state (`.connected`/`.completed`) for at least
+    /// `debounceMs`. `AppState`'s video WS-relay send leg
+    /// (`onOutboundFragment`) reads this — alongside confirming
+    /// `webrtcPixelBufferCapturer` is actually wired — before treating the
+    /// custom relay as redundant with native RTP for this frame. `false`
+    /// covers every other case exactly like today's unconditional send did:
+    /// not yet negotiated (this call never reached `.connected`), an
+    /// in-progress ICE restart, or ICE genuinely down. Debounce defaults to
+    /// `SrtpFallbackDecisions.fallbackEngageDebounceMs` — same 1 s constant,
+    /// reused rather than forked, for the same risky-edge reasoning
+    /// documented on `iceGoodSinceMs` above.
+    public func isVideoSendConfirmedHealthy(
+        debounceMs: Int64 = SrtpFallbackDecisions.fallbackEngageDebounceMs
+    ) -> Bool {
+        guard let since = iceGoodSinceMs else { return false }
+        return Self.nowMs() - since >= debounceMs
     }
 
     /// Trigger an ICE restart. Only the ORIGINAL call initiator ships a
@@ -2731,6 +2769,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             disarmIceRecoveryWatchdog()
             // W-SRTPFALLBACK — same recovery instant, independent gate.
             disarmSrtpFallbackIfRecovered()
+            // W-VIDEOSENDGATE — start (or leave running) the good-ICE
+            // streak `isVideoSendConfirmedHealthy` debounces against.
+            if iceGoodSinceMs == nil { iceGoodSinceMs = Self.nowMs() }
         case .failed, .disconnected:
             if s == .failed { state = .failed("ICE failed") }
             else { state = .disconnected; stopVideoStatsTelemetry() }
@@ -2742,12 +2783,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             armIceRecoveryWatchdogIfNeeded()
             // W-SRTPFALLBACK — same bad-ICE instant, independent debounce.
             armSrtpFallbackIfNeeded()
+            // W-VIDEOSENDGATE — ungated: the video WS-relay send leg must
+            // resume on the very next frame, not after any debounce.
+            iceGoodSinceMs = nil
         case .closed:
             state = .disconnected
             stopVideoStatsTelemetry()
             disarmIceRecoveryWatchdog()
             srtpFallbackTask?.cancel()
             srtpFallbackTask = nil
+            iceGoodSinceMs = nil
         default:
             break
         }

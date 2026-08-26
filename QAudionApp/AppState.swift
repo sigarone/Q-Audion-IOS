@@ -18745,6 +18745,33 @@ extension AppState {
                 RTLog.warn("call", "W-STALEPIPE onOutboundFragment fired for a pipeline that is no longer self.videoPipeline — dropping frame (would have been rejected server-side anyway)")
                 return
             }
+            #if canImport(WebRTC)
+            // W-VIDEOSENDGATE (2026-08-26) — skip the redundant WS-relay
+            // copy once THIS call's video-carrying ICE has been confirmed
+            // connected for the full debounce window AND our local WebRTC
+            // video send path is actually wired: native RTP is already
+            // carrying this frame to any peer whose client negotiated
+            // video, so shipping the same NAL again over the custom relay
+            // is pure waste. Every other case (not yet negotiated, ICE
+            // still converging/restarting, ICE bad, no WebRTC controller
+            // at all) falls straight through to the unconditional send
+            // below, unchanged from before this gate existed — recovery
+            // back to the relay is instant, no debounce, the moment ICE
+            // leaves .connected/.completed (see `iceGoodSinceMs`).
+            // Deliberately NOT peer-platform-aware: no such signal exists
+            // on the wire today on any of the three clients (verified — no
+            // `platform`/device field travels in call_offer/call_answer),
+            // so an iOS peer whose own client also treats WS-HEVC as
+            // primary gets the same treatment as an Android/desktop peer
+            // once ICE is this healthy; see
+            // reference_transport_fallback_audit_2026_08_26.md for why a
+            // full peer-platform gate could not be added here.
+            if let controller = self?.webRtcController as? QAudionWebRtcCallController,
+               controller.webrtcPixelBufferCapturer != nil,
+               controller.isVideoSendConfirmedHealthy() {
+                return
+            }
+            #endif
             let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
             let cid = callingImpl?.getActiveCallId()
             let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
