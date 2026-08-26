@@ -70,14 +70,58 @@ public enum PlpPolicy {
     /// - Returns: the value to hand to `OpusCodec.setPacketLossPct`. Always
     ///   within `[minPct, maxPct]`.
     public static func next(currentPct: Int, observedLossPct: Double) -> Int {
-        let cur = min(max(currentPct, minPct), maxPct)
+        next(currentPct: currentPct, observedLossPct: observedLossPct, floorPct: minPct)
+    }
+
+    /// W-PLPBWTIER (2026-08-26) — route-tier-aware variant. A TURN-relayed
+    /// route (`RouteTier.relay`, already computed for video's own bandwidth
+    /// clamp — see `VideoBandwidthCap.swift`) is a real, KNOWN-WORSE
+    /// structural signal, available the MOMENT the route resolves
+    /// (`QAudionWebRtcCallController.resolveAndApplyRouteTier`, fired on
+    /// every call's ICE `.connected`, audio-only calls included — not
+    /// gated behind video telemetry) — an extra relay hop, historically
+    /// higher loss/jitter than a direct P2P path, and known BEFORE the
+    /// first peer `PLP:` report even exists. `minPct`'s own kdoc already
+    /// explains why a non-zero standing floor exists at all ("insurance
+    /// against the first loss after a long clean stretch — the report that
+    /// would raise the knob arrives only AFTER that loss is already
+    /// audible"): this raises that same floor specifically for calls
+    /// already known to be on the worse-case transport, closing the exact
+    /// gap the purely-reactive base `next(currentPct:observedLossPct:)`
+    /// cannot close by construction — there is no report to react to yet
+    /// on a route that just resolved to relay.
+    ///
+    /// Deliberately does NOT touch `maxPct`/`upHeadroomPct`/`decayStepPct`,
+    /// or the CBR packet size itself (`OpusCodec.Config`'s fixed block
+    /// budget) — this only changes how much of the SAME fixed-size
+    /// packet's existing redundancy budget the policy is willing to reach
+    /// for on a relay call. The wire bitrate stays the locked
+    /// constant-32kbps-on-every-network contract.
+    public static func next(currentPct: Int, observedLossPct: Double, routeTier: RouteTier) -> Int {
+        next(currentPct: currentPct, observedLossPct: observedLossPct, floorPct: minPct(for: routeTier))
+    }
+
+    /// The floor `next(...)` will never decay below, and the coercion bound
+    /// applied to `currentPct` on entry. `.relay` raises it above the
+    /// unconditional `minPct` — see the route-tier overload's kdoc for why;
+    /// `.direct`/`.unknown` keep today's floor unchanged.
+    public static func minPct(for routeTier: RouteTier) -> Int {
+        switch routeTier {
+        case .relay:            return 10
+        case .direct, .unknown: return minPct
+        }
+    }
+
+    private static func next(currentPct: Int, observedLossPct: Double, floorPct: Int) -> Int {
+        let floor = min(max(floorPct, minPct), maxPct)
+        let cur = min(max(currentPct, floor), maxPct)
         guard observedLossPct.isFinite else { return cur }
         // ceil, not round: 0.2% observed loss is real loss, and the branch
         // decision below must see it as "at least 1", never as clean.
         let obs = Int(min(max(observedLossPct, 0), 100).rounded(.up))
         if obs > cur {
-            return min(max(obs + upHeadroomPct, minPct), maxPct)
+            return min(max(obs + upHeadroomPct, floor), maxPct)
         }
-        return max(max(cur - decayStepPct, obs), minPct)
+        return max(max(cur - decayStepPct, obs), floor)
     }
 }
