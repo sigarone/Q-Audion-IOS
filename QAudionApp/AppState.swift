@@ -19766,7 +19766,14 @@ extension AppState {
             do {
                 try await controller.acceptIncomingCall(callerId: cid,
                                                          offerSdp: sdp,
-                                                         audioOnly: audioOnly)
+                                                         audioOnly: audioOnly,
+                                                         peerCapabilities: caps)
+                // Kept as a harmless idempotent re-application (see
+                // `acceptPeerCapabilities`'s own doc) — the real fix moved
+                // the FIRST application inside `acceptIncomingCall`, before
+                // `setRemoteOffer`, so `didAdd rtpReceiver` sees the
+                // negotiated capabilities instead of nil. See that call
+                // site's comment for the full root-cause trace.
                 controller.acceptPeerCapabilities(caps)
                 // I8 FIX: cid is a full userId — truncate to match this
                 // file's established identifier convention.

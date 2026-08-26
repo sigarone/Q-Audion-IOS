@@ -934,7 +934,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     // MARK: - Incoming
 
-    public func acceptIncomingCall(callerId: String, offerSdp: String, audioOnly: Bool = true) async throws {
+    public func acceptIncomingCall(callerId: String, offerSdp: String, audioOnly: Bool = true,
+                                    peerCapabilities: [String]? = nil) async throws {
         guard state == .idle || state == .disconnected else {
             throw ControllerError.wrongState(String(describing: state))
         }
@@ -974,6 +975,30 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
         peerConnection = pc
+        // IOS-C4b BUGFIX (2026-08-26) — apply the peer's capabilities BEFORE
+        // `setRemoteOffer` below, mirroring the caller-side fix already in
+        // place at `AppState.handleIncomingWebRtcAnswer` ("Cache them before
+        // applying the SDP so the pipeline pick has the right negotiation
+        // state"). Root-caused from a real cross-platform call
+        // (d7e7ece6..., Android caller -> iOS callee, 2026-08-26): the
+        // caller previously applied `acceptPeerCapabilities` only AFTER this
+        // whole function returned (AppState.swift, right after the
+        // `acceptIncomingCall` await). `setRemoteOffer` is what fires
+        // `didAdd rtpReceiver` for the inbound m=audio track, and
+        // `QAudionPeerConnection`'s W574d hardening branch reads
+        // `peerCallCapabilities` AT THAT EXACT MOMENT to decide whether the
+        // inbound SRTP audio track is the real call audio (audioSrtpV1) or
+        // must be disabled (`audio.isEnabled = false`, permanently — nothing
+        // downstream ever re-enables it). With capabilities applied too
+        // late, `peerCallCapabilities` was always nil at that moment, so
+        // every incoming call answered by THIS device took the disable
+        // branch even when both peers had negotiated audioSrtpV1 —
+        // confirmed live: mic capture (TX, driven by the separately-timed
+        // `activateNativeAudioSrtp`/`installLiveMediaKeys` path) worked, the
+        // peer heard this device fine, but this device heard nothing at all
+        // from the peer. Applying capabilities here, before `setRemoteOffer`,
+        // closes the same race the caller path already closed.
+        pc.acceptPeerCapabilities(peerCapabilities)
         pc.addLocalAudioTrack()
         // W-DCAUDIO — CALLEE side: wire inbound DataChannel audio to the app. The
         // caller created the sealed-audio DataChannel; we receive it via the PC's
