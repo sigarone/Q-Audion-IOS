@@ -7,6 +7,15 @@ import os
 /// P2P connection establishment.
 public final class StunClient: @unchecked Sendable {
 
+    // MARK: - Init
+
+    /// The class is `public` but had no explicit initializer — the
+    /// compiler-synthesized default init for a class is always `internal`
+    /// regardless of the class's own access level, so any public-surface
+    /// caller (e.g. `RelayLatencyProbe`'s default argument) needs this
+    /// declared explicitly.
+    public init() {}
+
     // MARK: - Public types
 
     public struct StunResult: Sendable {
