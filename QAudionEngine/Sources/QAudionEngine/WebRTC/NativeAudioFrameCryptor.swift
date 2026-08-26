@@ -24,7 +24,7 @@ import WebRTC
 ///
 /// Symbol provenance: `RTCFrameCryptor`/`RTCFrameCryptorKeyProvider`/
 /// `RTCKeyDerivationAlgorithm`/`RTCFrameCryptorDelegate`/
-/// `RTCFrameCryptionState` are the EXACT symbols `NativeVideoFrameCryptor`
+/// `RTCFrameCryptorState` are the EXACT symbols `NativeVideoFrameCryptor`
 /// already uses successfully in this repo's own `WebRTC` binaryTarget (not
 /// `LiveKitWebRTC` — that is a separate, prefixed dependency used only for
 /// group calls) — this file is a structural sibling, not a new API surface.
@@ -151,7 +151,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
 extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
     public func frameCryptor(_ frameCryptor: RTCFrameCryptor,
                              didStateChangeWithParticipantId participantId: String,
-                             with state: RTCFrameCryptionState) {
+                             with state: RTCFrameCryptorState) {
         switch state {
         case .decryptionFailed, .missingKey, .internalError:
             print("[NativeAudioFrameCryptor] receiver cryptor state=\(state.rawValue) participantId=\(participantId)")

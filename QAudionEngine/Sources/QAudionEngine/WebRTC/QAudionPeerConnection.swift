@@ -753,7 +753,7 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioSender = transceiver.sender
             print("[WebRTC] IOS-C4b: mic track attached to native audio transceiver muted=\(pendingAudioSrtpMuted)")
             let txTap = NativeAudioPcmTap(sink: txSink)
-            track.addRenderer(txTap)
+            track.add(txTap)
             audioTxTap = txTap
         }
         cryptor.attachSender(transceiver.sender)
@@ -778,7 +778,7 @@ public final class QAudionPeerConnection: NSObject {
         let attached = cryptor.attachReceiver(receiver)
         if let track = receiver.track as? RTCAudioTrack, audioRxTap == nil {
             let tap = NativeAudioPcmTap(sink: rxSink)
-            track.addRenderer(tap)
+            track.add(tap)
             audioRxTap = tap
         }
         return attached

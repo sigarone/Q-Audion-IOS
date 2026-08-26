@@ -28,7 +28,7 @@ import WebRTC
 /// `QAudionCallIntegration.analyze(_:)`, which is reached ONLY from
 /// `processIncomingAudio`.
 ///
-/// `RTCAudioTrack.addRenderer(_:)` / `RTCAudioRenderer.render(pcmBuffer:)`
+/// `RTCAudioTrack.add(_:)` / `RTCAudioRenderer.render(pcmBuffer:)`
 /// are grep-verified against the REAL header at the exact pinned commit this
 /// vendored `WebRTC` binaryTarget builds from (`webrtc-sdk/webrtc.git`,
 /// branch `m144_release` — same commit family `Package.swift`'s comment
@@ -38,7 +38,13 @@ import WebRTC
 /// method `-(void)renderPCMBuffer:(AVAudioPCMBuffer *)pcmBuffer
 /// NS_SWIFT_NAME(render(pcmBuffer:));` — fetched and read in full via `gh api`
 /// against that exact branch during this task, not assumed from memory (same
-/// discipline C4a used for `LKRTCFrameCryptor`). `addRenderer`/
+/// discipline C4a used for `LKRTCFrameCryptor`). CORRECTION (2026-08-26,
+/// first real CI compile): the ObjC selector is `addRenderer:`, but Swift's
+/// automatic API-name importer drops "Renderer" from the Swift-visible name
+/// because it matches the parameter type (`RTCAudioRenderer`) — the actual
+/// Swift call is `track.add(_:)`, confirmed by the compiler's own rename
+/// diagnostic on the first CI build, not by re-reading the header (a plain
+/// header grep cannot show Swift's importer-side renaming). `addRenderer`/
 /// `removeRenderer` are declared on the base `RTCAudioTrack` class (shared by
 /// local and remote tracks), so the SAME renderer type attaches to either a
 /// local (TX/mic) or remote (RX/peer) track — mirroring Android's TX/RX sink

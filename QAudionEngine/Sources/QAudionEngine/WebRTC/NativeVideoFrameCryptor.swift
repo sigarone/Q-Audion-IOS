@@ -228,7 +228,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 /// VERIFICATION GAP (no Swift toolchain / no local `WebRTC.xcframework`
 /// header on this box — the framework is a remote binaryTarget, see
 /// `QAudionEngine/Package.swift`): `RTCFrameCryptorDelegate` and the
-/// `RTCFrameCryptionState` case names below are asserted from the public
+/// `RTCFrameCryptorState` case names below are asserted from the public
 /// webrtc-sdk/LiveKit-fork ObjC SDK this vendored build is patched from
 /// (`webrtc-sdk/webrtc.git@m144_release`, commit `df1011be` — the SAME
 /// upstream commit the Android AES256 patch is built against, per
@@ -239,7 +239,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 /// here fails LOUDLY: `RTCFrameCryptor` is created via the SAME
 /// `RTCFrameCryptor(factory:rtpReceiver:...)` initializer this file
 /// already uses successfully (proven call site above), so if
-/// `RTCFrameCryptorDelegate`/`RTCFrameCryptionState` did not exist under
+/// `RTCFrameCryptorDelegate`/`RTCFrameCryptorState` did not exist under
 /// these exact names the file would already fail to compile at `c.delegate
 /// = self` in `attachReceiver` — a compile error, not a silent no-op.
 /// First real Xcode build must still confirm this compiles; report to
@@ -247,7 +247,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 extension NativeVideoFrameCryptor: RTCFrameCryptorDelegate {
     public func frameCryptor(_ frameCryptor: RTCFrameCryptor,
                              didStateChangeWithParticipantId participantId: String,
-                             with state: RTCFrameCryptionState) {
+                             with state: RTCFrameCryptorState) {
         switch state {
         case .decryptionFailed, .missingKey, .internalError:
             print("[NativeVideoFrameCryptor] W-KFFAST: receiver cryptor state=\(state.rawValue) participantId=\(participantId) — requesting peer keyframe")
