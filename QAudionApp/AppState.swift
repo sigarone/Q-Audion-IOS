@@ -6599,6 +6599,36 @@ final class AppState: ObservableObject {
             RTLog.warn("VIDEODIAG", "selfheal ev=heal3")
             reannounceCallMediaReadyForSelfHeal()
         }
+        emitVideoStallEscalationTelemetry(action: action)
+    }
+
+    /// Audit item 2 (2026-08-26, best-practices audit) — structured
+    /// counterpart to the `selfheal ev=heal1/2/3` RTLog lines right above:
+    /// makes "how often does the keyframe-ladder escalation fire" queryable
+    /// through the SAME `TelemetryService` pipeline every other video.*
+    /// event already uses (`video.stats` / `video.stall`), instead of only
+    /// visible as raw log text a human has to grep and count by hand.
+    ///
+    /// Pure observability — decides nothing and changes no call behavior.
+    /// The audit's own suggested next step ("decide if a redundancy scheme
+    /// [FEC/LTR] is justified") is a follow-up data-driven call once this
+    /// has shipped and accumulated real-world counts, not made here.
+    @MainActor
+    private func emitVideoStallEscalationTelemetry(action: VideoStallSelfHeal.EscalationAction) {
+        let rung: String
+        switch action {
+        case .keyframeRequest:      rung = "keyframe_request"
+        case .sinkReattach:         rung = "sink_reattach"
+        case .mediaReadyReannounce: rung = "media_ready_reannounce"
+        }
+        let counts = videoStallLadder.totalRungFireCounts
+        let attrs: [String: Any] = [
+            "rung": rung,
+            "total_keyframe_request": counts[0],
+            "total_sink_reattach": counts[1],
+            "total_media_ready_reannounce": counts[2],
+        ]
+        TelemetryService.shared.emit(kind: "video.stall_escalation", attrs: attrs)
     }
 
     /// One VIDEODIAG line per stall tick with all counters + state so the

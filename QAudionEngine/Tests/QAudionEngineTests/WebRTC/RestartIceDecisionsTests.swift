@@ -18,6 +18,41 @@ final class RestartIceDecisionsTests: XCTestCase {
         XCTAssertEqual(RestartIceDecisions.recoverySettleMaxMs, 20_000)
         XCTAssertEqual(RestartIceDecisions.restartOfferMaxInlineAttempts, 5)
         XCTAssertEqual(RestartIceDecisions.restartOfferParkBudgetMs, 45_000)
+        XCTAssertEqual(RestartIceDecisions.restartOfferFastPathTimeoutSec, 5)
+        XCTAssertEqual(RestartIceDecisions.restartOfferParkTimeoutSec, 40)
+    }
+
+    // MARK: - Audit item 4 (2026-08-26) — live send-path timing vs. the
+    // tested-but-unwired inline ladder.
+
+    /// Pins the invariant `BCryptoCallingApiImpl.sendIceRestartOffer` relies
+    /// on implicitly: its two `ws.ensureAuthenticated(timeoutSec:)` waits
+    /// (fast path, then detached park) must sum to exactly the documented
+    /// `restartOfferParkBudgetMs` (45s) — the number the "under the
+    /// server's 60s disconnect-grace ceiling" reasoning in that method's
+    /// kdoc, and `AppState.iceDisconnectGraceExtendedMs`'s own comment, both
+    /// depend on staying true.
+    func test_liveParkTiming_sumsToParkBudget() {
+        let sumSec = RestartIceDecisions.restartOfferFastPathTimeoutSec
+            + RestartIceDecisions.restartOfferParkTimeoutSec
+        XCTAssertEqual(sumSec * 1000, Double(RestartIceDecisions.restartOfferParkBudgetMs))
+    }
+
+    /// Documents (and pins, so a future edit cannot silently reintroduce
+    /// it) that the live send path's real worst-case timing is ~6x the
+    /// tested-but-unwired `restartOfferMaxInlineAttempts` ladder's ~7.75s
+    /// total — the exact discrepancy the audit flagged. This test exists so
+    /// the gap stays visible in the test suite rather than only in a
+    /// comment: if `restartOfferMaxInlineAttempts`'s ladder is ever
+    /// actually wired into the live path, this ratio assertion should be
+    /// the first thing to fail and prompt updating/removing it.
+    func test_liveParkTiming_stillDeviatesFromUnwiredInlineLadder() {
+        let inlineLadderTotalMs = 250 + 500 + 1_000 + 2_000 + 4_000 // 7.75s
+        XCTAssertEqual(inlineLadderTotalMs, 7_750)
+        let liveWorstCaseMs = (RestartIceDecisions.restartOfferFastPathTimeoutSec
+            + RestartIceDecisions.restartOfferParkTimeoutSec) * 1000
+        XCTAssertGreaterThan(liveWorstCaseMs, Double(inlineLadderTotalMs) * 5,
+            "live path is documented as ~6x the unwired ladder — if this shrinks, the ladder may now be wired in")
     }
 
     // MARK: - W-SILENTPATHDEATH self-repair window sizing

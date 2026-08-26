@@ -425,9 +425,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // ICE-connect AND every 3s from `pollVideoStatsOnce` — see that
     // method's doc for the event-driven verification gap) and
     // `evaluateBackpressure` (called every 3s from `pollVideoStatsOnce`).
-    private var _routeTier: RouteTier = .unknown
+    /// W-ROUTETIERDWELL (2026-08-26) — was a bare `RouteTier`, committing a
+    /// Direct↔Relay reclassification (and its 4.5x ceiling swing) on a
+    /// single poll. Now routed through `RouteTierDwell`, which requires the
+    /// same multi-poll dwell agreement `evaluateBackpressure` already
+    /// applies to the CPU-backpressure knob before committing a transition —
+    /// see that type's doc (Item 3, best-practices audit 2026-08-26).
+    private var _routeTierDwell = RouteTierDwell()
     /// W-VPNCALLGATE — de-dupe guard for `onActiveCandidatePairRemoteHost`,
-    /// same reset-at-teardown discipline as `_routeTier` right above.
+    /// same reset-at-teardown discipline as `_routeTierDwell` right above.
     private var _lastReportedRemoteHost: String?
     private var _cpuLimitedPolls: Int = 0
     private var _healthyPolls: Int = 0
@@ -1779,7 +1785,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-ROUTECLAMP / W-BWCAP / W-BACKPRESSURE — per-call state must not
         // bleed into the next call (mirrors Android's
         // `PeerBitrateCap.reset()` at call teardown).
-        _routeTier = .unknown
+        _routeTierDwell.reset()
         if _lastReportedRemoteHost != nil {
             _lastReportedRemoteHost = nil
             onActiveCandidatePairRemoteHost?(nil)
@@ -2787,7 +2793,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard let provider = relayProvider else { return [] }
         guard let bundle = await provider.currentOrRefresh() else { return [] }
 
-        var servers = QAudionPeerConnectionFactory.iceServers(from: bundle.servers)
+        // W-RELAYGEO (2026-08-26, audit item 5) — order the relay list by
+        // a lightweight client-measured RTT probe before handing it to
+        // libwebrtc, so the nearest-measured relay(s) start ICE gathering
+        // first. Bounded to ~1.2s worst case (`RelayOrderingConstants
+        // .overallBudgetSec`) and never throws — a probe round that times
+        // out, or a bundle with nothing probeable, degrades to the
+        // server's original order exactly like before this change (see
+        // `RelayOrdering.order`'s empty-map short-circuit). Does not
+        // change which relay ICE ultimately SELECTS, only which candidates
+        // it tries first.
+        let relayRttByUrl = await RelayLatencyProbe().measureAll(bundle.servers)
+        let orderedRelays = RelayOrdering.order(bundle.servers, rttMsByFirstUrl: relayRttByUrl)
+        var servers = QAudionPeerConnectionFactory.iceServers(from: orderedRelays)
 
         // WSS-TURN bridge — last-resort bypass for corporate firewalls
         // that block UDP 3478, TCP 3478, and TURNS 5349. The server
@@ -3099,14 +3117,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             let tier = RouteTier.classify(localType: localType, remoteType: remoteType)
-            guard tier != .unknown, tier != self._routeTier else { return }
-            self._routeTier = tier
-            print("[WebRtcCallController] W-ROUTECLAMP: route tier -> \(tier) (local=\(localType) remote=\(remoteType))")
+            guard tier != .unknown else { return }
+            // W-ROUTETIERDWELL — only a COMMITTED change (dwell-confirmed,
+            // or the call's first-ever resolution) re-applies the sender
+            // clamp / fires the ceiling-changed callback; a poll that
+            // merely extends or resets an in-flight dwell returns `false`
+            // and changes nothing observable yet.
+            guard self._routeTierDwell.observe(tier) else { return }
+            let committed = self._routeTierDwell.committed
+            print("[WebRtcCallController] W-ROUTECLAMP: route tier -> \(committed) (local=\(localType) remote=\(remoteType))")
             // Numeric tail for the redactor, same reason as the ICE/DTLS
             // state lines above (relay=1/direct=0, never the word itself).
-            self.log?("route tier=\(tier == .relay ? 1 : 0)")
+            self.log?("route tier=\(committed == .relay ? 1 : 0)")
             self.applyComposedVideoSenderClamp()
-            if let ceiling = tier.senderMaxBitrateBps {
+            if let ceiling = committed.senderMaxBitrateBps {
                 self.onLocalVideoCapBpsChanged?(ceiling)
             }
         }
@@ -3121,7 +3145,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// (`AdaptiveQualityRuntime.localCapBps` doc). No-op before the route
     /// tier has resolved at least once.
     private func applyComposedVideoSenderClamp() {
-        guard let routeCeiling = _routeTier.senderMaxBitrateBps else { return }
+        guard let routeCeiling = _routeTierDwell.committed.senderMaxBitrateBps else { return }
         let backpressureFactor = pow(backpressureStepFactor, Double(_backpressureSteps))
         let localMax = max(VideoConstants.minVideoBitrateBps,
                            Int(Double(routeCeiling) * backpressureFactor))
@@ -3156,7 +3180,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// clamp on every step. No-op before the route tier has resolved
     /// (nothing to step down FROM yet).
     private func evaluateBackpressure(qualityLimitationReason: String) {
-        guard _routeTier != .unknown else { return }
+        guard _routeTierDwell.committed != .unknown else { return }
         if qualityLimitationReason == "cpu" {
             _healthyPolls = 0
             _cpuLimitedPolls += 1
@@ -3238,6 +3262,44 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     inFps = (s.values["framesPerSecond"] as? NSNumber)?.intValue ?? inFps
                 }
             }
+            // Audit item 1 (2026-08-26, best-practices audit) —
+            // OBSERVABILITY FIRST per the audit's own suggested approach
+            // ("read GoogCC's own exposed stats into the existing 3s
+            // pollVideoStatsOnce loop as observability first, then adapt
+            // the WS-relay path's AbrController rule engine for the native
+            // SRTP path too"). This reads the SAME `candidate-pair
+            // .availableOutgoingBitrate` field (bits/sec) that already
+            // ships in the standard, non-Google-prefixed webrtc-stats
+            // surface — libwebrtc's GoogCC congestion controller is the
+            // ONLY writer of this field; it is unmodified upstream BWE
+            // output, not a Q-Audion invention. Distinct lookup from the
+            // `outbound-rtp`/`inbound-rtp` loop above: a `candidate-pair`
+            // stats row carries no `kind` field, so the `kind == "video"`
+            // guard above would silently skip it — mirrors the identical
+            // succeeded-pair search `resolveAndApplyRouteTier` already
+            // does for route-tier classification, kept separate here
+            // rather than threaded through that method so this stays a
+            // pure read with zero effect on route-tier/backpressure
+            // behavior.
+            //
+            // Read-only: nothing downstream of `pc.statistics` reacts to
+            // this value yet — no app-level congestion response is wired
+            // to it (that remains the real-libwebrtc GoogCC, unmodified,
+            // exactly as before this change). The audit's suggested phase
+            // 2 ("adapt AbrController... for the native SRTP path too")
+            // is a real behavior change to the send path and is NOT
+            // attempted here — it needs live-device numbers from THIS
+            // observability phase first, which this box (no Swift
+            // toolchain, see repo CLAUDE.md) cannot produce.
+            var bweAvailableOutgoingBps = -1.0
+            if let activePair = report.statistics.values.first(where: { s in
+                    s.type == "candidate-pair" &&
+                        ((s.values["state"] as? String) == "succeeded" ||
+                            (s.values["nominated"] as? NSNumber)?.boolValue == true)
+                }) {
+                bweAvailableOutgoingBps = (activePair.values["availableOutgoingBitrate"] as? NSNumber)?.doubleValue
+                    ?? bweAvailableOutgoingBps
+            }
             // Resolve codec mimeType + the ACTIVE sdpFmtpLine from the
             // referenced codec stats object — the fmtp Chromium/libwebrtc
             // actually negotiated (profile-id/tier-flag/level-id for H265),
@@ -3286,6 +3348,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // W-VIDTELFPS — real measured fps on both directions (was never read).
                 "out_fps": outFps,
                 "in_fps": inFps,
+                // Audit item 1 — GoogCC's own live send-bandwidth estimate,
+                // read-only (see the extraction site above for why this is
+                // a separate lookup from the rtp rows above it). -1 = no
+                // succeeded pair yet / field absent, never a fabricated 0.
+                "bwe_available_outgoing_bps": bweAvailableOutgoingBps,
             ]
             let cid = self.pqcCallId
             if !cid.isEmpty { statsAttrs["call_id"] = cid }

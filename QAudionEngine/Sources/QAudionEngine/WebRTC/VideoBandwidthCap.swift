@@ -99,3 +99,107 @@ public enum RouteTier: Equatable {
         return (localType == "relay" || remoteType == "relay") ? .relay : .direct
     }
 }
+
+/// W-ROUTETIERDWELL (2026-08-26, best-practices audit item 3) — pure
+/// decision helper adding multi-poll dwell confirmation to a route-tier
+/// reclassification, mirroring the asymmetric hysteresis
+/// `QAudionWebRtcCallController.evaluateBackpressure` already applies to the
+/// CPU-backpressure knob (`backpressureSustainPolls` / `backpressureRecover
+/// Polls`) in the SAME controller. Before this, `resolveAndApplyRouteTier`
+/// committed a Direct↔Relay reclassification — and therefore the 4.5x sender
+/// ceiling swing (`RouteTier.senderMaxBitrateBps`: 4_500_000 vs 1_000_000) —
+/// on a single poll's classification, unlike the other two adaptive video
+/// knobs in the same controller (backpressure above; `AbrController`'s AIMD
+/// sustain counters on the WS-relay path), both of which require sustained
+/// agreement before acting. A single noisy/transient candidate-pair stat
+/// (e.g. a momentary `prflx`→`relay` blip during continual ICE gathering,
+/// see `resolveAndApplyRouteTier`'s own "belt-and-braces poll for the whole
+/// call" doc) could previously slam outgoing video to a quarter of its
+/// ceiling and back for no real network reason.
+///
+/// Extracted as pure state (no PeerConnection/WebRTC types) so the
+/// transition logic can be pinned by unit tests without a live stats
+/// callback — same discipline `RestartIceDecisions` / `MediaDeadDecisions` /
+/// `UpgradeFlowDecisions` already use elsewhere in this directory.
+public struct RouteTierDwell: Equatable {
+
+    /// Consecutive polls agreeing on a DIRECT→RELAY reclassification
+    /// (ceiling DEGRADING) required before it commits. Matches
+    /// `QAudionWebRtcCallController.backpressureSustainPolls` (2 polls ×
+    /// 3s cadence ≈ 6s) — same speed as trusting "you're CPU-limited".
+    public static let sustainPolls = 2
+
+    /// Consecutive polls agreeing on a RELAY→DIRECT reclassification
+    /// (ceiling RECOVERING) required before it commits. Matches
+    /// `QAudionWebRtcCallController.backpressureRecoverPolls` (3 polls ×
+    /// 3s cadence ≈ 9s) — deliberately slower to trust a recovery than a
+    /// degradation, same asymmetry as W-BACKPRESSURE and the WS-relay
+    /// `AbrController`'s AIMD increase path.
+    public static let recoverPolls = 3
+
+    /// The currently-committed tier — what `senderMaxBitrateBps` should be
+    /// derived from right now. `.unknown` until the first poll resolves.
+    public private(set) var committed: RouteTier
+
+    private var pending: RouteTier = .unknown
+    private var dwellPolls: Int = 0
+
+    public init(committed: RouteTier = .unknown) {
+        self.committed = committed
+    }
+
+    /// Feed one poll's freshly classified tier. Callers must not pass
+    /// `.unknown` (mirrors `resolveAndApplyRouteTier`'s existing
+    /// `tier != .unknown` guard on the raw classification — there is
+    /// nothing to dwell-confirm about "no succeeded pair yet").
+    ///
+    /// Returns `true` exactly when `committed` changed as a result of this
+    /// observation — the caller should re-apply the composed sender clamp
+    /// and fire its "ceiling changed" callback ONLY on a `true` return, same
+    /// as the pre-dwell code did on every raw tier change.
+    @discardableResult
+    public mutating func observe(_ tier: RouteTier) -> Bool {
+        precondition(tier != .unknown, "RouteTierDwell.observe must not be called with .unknown")
+        guard tier != committed else {
+            // Poll agrees with what's already committed — nothing pending,
+            // whether or not a competing tier was mid-dwell a moment ago.
+            pending = .unknown
+            dwellPolls = 0
+            return false
+        }
+        // First-ever resolution this call (coming from `.unknown`): commit
+        // immediately. There is no previous ceiling being swung AWAY FROM —
+        // this is establishing the call's starting ceiling, not a
+        // reclassification, so hysteresis would only delay applying the
+        // correct starting value (matches the pre-dwell behavior for this
+        // one case, and mirrors why `resolveAndApplyRouteTier` is also
+        // called eagerly once on ICE-connect).
+        guard committed != .unknown else {
+            committed = tier
+            pending = .unknown
+            dwellPolls = 0
+            return true
+        }
+        if tier == pending {
+            dwellPolls += 1
+        } else {
+            pending = tier
+            dwellPolls = 1
+        }
+        let required = (tier == .relay) ? Self.sustainPolls : Self.recoverPolls
+        guard dwellPolls >= required else { return false }
+        committed = tier
+        pending = .unknown
+        dwellPolls = 0
+        return true
+    }
+
+    /// Per-call teardown reset — mirrors `VideoBandwidthCap.reset()` /
+    /// `QAudionWebRtcCallController`'s own per-call state clear so a
+    /// previous call's dwell counters never bleed into the next one.
+    public mutating func reset() {
+        committed = .unknown
+        pending = .unknown
+        dwellPolls = 0
+    }
+}
