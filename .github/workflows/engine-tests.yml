@@ -41,6 +41,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Select Xcode
+        id: select-xcode
         run: |
           set -e
           PIN="${XCODE_VERSION}"
@@ -53,6 +54,15 @@ jobs:
           echo "Selecting: $MATCH"
           sudo xcode-select -s "$MATCH"
           xcodebuild -version
+          # Exact toolchain build number (e.g. "Build version 17A400"), not
+          # just the ${XCODE_VERSION} major pin -- the explicit-module cache
+          # below is keyed on this because a .pcm built by one Xcode build
+          # is not guaranteed compatible with another (same major, different
+          # point release/build on a runner-image bump), and a stale/
+          # incompatible module cache produces confusing compiler errors
+          # that look nothing like the OOM this cache is meant to fix.
+          BUILD=$(xcodebuild -version | grep '^Build version' | awk '{print $3}')
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------
       # Build Reality.xcframework -- VLESS+REALITY-over-xray-core transport
@@ -120,6 +130,61 @@ jobs:
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      # Cache the Swift explicit-module cache across runs. Two distinct
+      # DerivedData subdirectories hold generated .pcm files and both are
+      # cached: ModuleCache.noindex (system frameworks -- SwiftUI, Vision,
+      # CoreML, AVFoundation, ...) and Build/Intermediates.noindex/
+      # SwiftExplicitPrecompiledModules (this package's own binaryTargets --
+      # WebRTC, LiveKitWebRTC, LKObjCHelpers, Reality). The latter is not
+      # optional: in every failing run's log, the LAST module line before
+      # output went silent (the OOM kill point) was always one of exactly
+      # these four -- WebRTC/LiveKitWebRTC/LKObjCHelpers/Reality are the
+      # heaviest ObjC++ module builds this target does, so leaving that
+      # directory uncached would still force a cold rebuild of precisely the
+      # frameworks most implicated in the crash.
+      #
+      # Root cause (2026-08-26): this job runs on macos-latest,
+      # which is 3 vCPU / 7 GB RAM (confirmed against GitHub's own runner
+      # spec table, not assumed) -- and until this cache existed, EVERY push
+      # cold-rebuilt the explicit-module graph for the entire system-
+      # framework set this target touches (SwiftUI, Vision, CoreML,
+      # AVFoundation, WebRTC, LiveKitWebRTC, Reality, ~30 frameworks total,
+      # confirmed by grepping a failing run's log for
+      # SwiftExplicitDependencyGeneratePcm) from scratch, with xcodebuild's
+      # default (unthrottled) build concurrency. That cold burst is the
+      # dominant memory cost of this job. Bisecting CI history (`gh run
+      # list`) found the job green through commit 534e804c and failing on
+      # every run from 00e38574 onward (+2262 lines / 22 files, incl. 4 new
+      # XCTest files) -- the added compile-graph size tipped peak RSS over
+      # the 7 GB ceiling. Every failing run's log shows the SAME signature:
+      # output stops mid-module-list with NO xcodebuild error text and NO
+      # "::error::...watchdog" line (that only prints on OUR 15-min kill,
+      # line ~257 below) at a VARYING point (5m36s to 15min+) -- consistent
+      # with an external SIGKILL from the kernel OOM killer, not a hang or a
+      # real compile/test failure. Caching the module cache removes the cold
+      # full-framework-graph rebuild on every run, which should keep steady-
+      # state peak RSS well under the ceiling; -jobs 2 below is a second,
+      # independent safety margin in case a cache-miss run (Xcode bump,
+      # first run after this change) still spikes.
+      #
+      # Keyed on the exact Xcode BUILD number (not just the ${XCODE_VERSION}
+      # major pin) because a .pcm from one Xcode build is not guaranteed
+      # compatible with another -- restoring a stale/incompatible module
+      # cache would produce confusing compiler errors, not the OOM this is
+      # meant to fix. restore-keys falls back to any cache for the same
+      # Xcode build even if Package.swift changed, since most of the cache's
+      # value is the ~30 SYSTEM framework .pcm files, which don't depend on
+      # our own package's dependency graph at all.
+      - name: Cache explicit-module cache (iOS Simulator)
+        uses: actions/cache@v5
+        with:
+          path: |
+            /tmp/dd-ios-sim/ModuleCache.noindex
+            /tmp/dd-ios-sim/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+          key: ios-sim-modulecache-v1-${{ runner.os }}-${{ steps.select-xcode.outputs.build }}-${{ hashFiles('QAudionEngine/Package.swift') }}
+          restore-keys: |
+            ios-sim-modulecache-v1-${{ runner.os }}-${{ steps.select-xcode.outputs.build }}-
 
       - name: Resolve dependencies
         if: steps.cache-spm-ios.outputs.cache-hit != 'true'
@@ -231,10 +296,23 @@ jobs:
           # under its own key) rather than byte-equality CryptoKit was
           # never going to satisfy. Un-skipping now that it asserts the
           # right thing.
+          # -jobs 2 / COMPILER_INDEX_STORE_ENABLE=NO (2026-08-26): safety
+          # margin on top of the ModuleCache.noindex cache added above --
+          # macos-latest is 3 vCPU / 7 GB RAM, and even with a warm module
+          # cache the FIRST run after any cache-key change (Xcode bump,
+          # Package.swift change) still pays the full cold explicit-module
+          # rebuild this job was getting OOM-killed during (see the cache
+          # step's comment for the full root-cause trace). Capping build
+          # concurrency directly reduces peak concurrent swift-frontend/
+          # clang worker RSS at the cost of wall-clock time; disabling the
+          # index store (never consumed here -- no Xcode UI navigates this
+          # CI-only DerivedData) removes a purely-additive memory/disk cost.
           xcodebuild test \
             -scheme "QAudionEngine" \
             -configuration Release \
+            -jobs 2 \
             SWIFT_ENABLE_TESTABILITY=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             OTHER_LDFLAGS="\$(inherited) -lresolv" \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
             -derivedDataPath /tmp/dd-ios-sim \
