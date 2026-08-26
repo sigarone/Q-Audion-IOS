@@ -219,6 +219,25 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// ladder's non-emergency span (140 ms trim floor to 300 ms emergency
     /// watermark).
     static let timeStretchCeilingMs = 200
+    /// `timeStretchCeilingMs` resolved to frames at the reference 20 ms
+    /// cadence — same pattern as `trimWatermark`/`highWatermark`/
+    /// `emergencyWatermark` just below. BUGFIX (2026-08-26): the instance
+    /// property `timeStretchWatermark` used to default to
+    /// `nominalWatermark` (a copy-paste of the line above it) instead of
+    /// this constant. `nominalWatermark` (4 frames) sits BELOW `trim` (7),
+    /// so the "try compression first" band (`depth > trim`, `<=
+    /// timeStretchWatermark`) was empty from construction until
+    /// `recomputeTierGeometry()` ran — which `setInboundFrameDurationMs`
+    /// only does when the new value actually DIFFERS from the current one
+    /// (`guard ms != frameMs else { return }`), so calling it with the
+    /// already-default 20 ms cadence was a no-op. Confirmed live: every
+    /// `PlayoutJitterBufferTimeStretchTests` case that never explicitly
+    /// changed cadence away from and back to 20 ms saw `timeStretchFrames`
+    /// stay 0 forever — the feature this whole file exists to test was
+    /// unreachable on a freshly-constructed buffer at the shipped default
+    /// cadence, which is every real call for its first
+    /// `Self.adaptMinSamples` (64) arrivals too.
+    static let timeStretchWatermark = AudioConstants.framesForMs(timeStretchCeilingMs, frameDurationMs: 20)
 
     // MARK: - State
 
@@ -248,7 +267,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
 
     /// W-JBSTRETCH — the ceiling of the "try time-compression first" band,
     /// in frames at the CURRENT cadence. See `timeStretchCeilingMs`'s kdoc.
-    private var timeStretchWatermark: Int = PlayoutJitterBuffer.nominalWatermark
+    private var timeStretchWatermark: Int = PlayoutJitterBuffer.timeStretchWatermark
 
     // MARK: - W-JBADAPT (2026-08-25): inter-arrival tracker
     //
