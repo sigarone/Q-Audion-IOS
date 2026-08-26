@@ -99,9 +99,29 @@ public final class GroupTombstoneStore: ObservableObject {
     private init() { load() }
 
     private func load() {
+        if let sealed = UserDefaults.standard.string(forKey: Self.storageKey) {
+            guard let json = LocalStoreCipher.open(sealed),
+                  let decoded = try? JSONDecoder().decode([String: Record].self, from: Data(json.utf8)) else {
+                // Never silent: a sealed blob that fails to open (e.g. a
+                // device restore, since the Keychain key does not migrate
+                // across devices) falling through to legacy/empty state has
+                // to be greppable — a quiet fall-through here is exactly the
+                // "group resurrection" bug class this store exists to
+                // prevent (see file header).
+                RTLog.error("groupdel", "tombstone load failed to decrypt sealed blob — falling back to legacy/empty state")
+                entries = Self.migrateLegacyV1()
+                if !entries.isEmpty { persist() }
+                return
+            }
+            entries = decoded
+            return
+        }
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([String: Record].self, from: data) {
             entries = decoded
+            // Legacy plaintext v2 blob just read — convert it now rather than
+            // waiting for the next mutation.
+            persist()
             return
         }
         entries = Self.migrateLegacyV1()
@@ -135,7 +155,8 @@ public final class GroupTombstoneStore: ObservableObject {
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(entries) else {
+        guard let data = try? JSONEncoder().encode(entries),
+              let json = String(data: data, encoding: .utf8) else {
             // Never silent: a tombstone that failed to persist means the
             // group comes back on the next launch, and that has to be
             // greppable when it happens.
@@ -143,7 +164,15 @@ public final class GroupTombstoneStore: ObservableObject {
             RTLog.error("groupdel", "tombstone persist failed count=" + n)
             return
         }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+
+        let attempt: String?? = try? LocalStoreCipher.seal(json)
+        guard let unwrapped = attempt, let sealed = unwrapped else {
+            let n: String = String(describing: entries.count)
+            RTLog.error("groupdel", "tombstone persist deferred sealed=0 count=" + n)
+            return
+        }
+
+        UserDefaults.standard.set(sealed, forKey: Self.storageKey)
     }
 
     /// SWIFT6_PATTERNS rules 1/3 — a single-overload, single-segment way to
