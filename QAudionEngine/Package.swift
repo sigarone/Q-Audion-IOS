@@ -195,13 +195,27 @@ let package = Package(
         // client-sdk-swift 2.16.0 is untouched — same-tag-shape fork, not a
         // rewrite.
         //
-        // 2026-08-26 -> raw5: webrtc-xcframework redirect above bumped to
-        // 144.7559.10-aes256-livekit-native-pli (adds native-pli.patch,
-        // W-NATIVEPLI — ports Android's 2026-08-25 AAR native decrypt-fail
-        // signal to group calls, closing the parity gap found this session,
-        // project_aar_ios_parity_audit_2026_08_26). No other change; same
-        // 144.7559.10 WebRTC source, same reasoning above still holds.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw5"),
+        // 2026-08-26: tried bumping to raw5 (webrtc-xcframework@
+        // 144.7559.10-aes256-livekit-native-pli, same native-pli.patch as the
+        // direct-call WebRTC binaryTarget below) to close the group-call
+        // native-PLI parity gap — REVERTED, stays on raw4/144.7559.10-
+        // aes256-livekit. The native-pli rebuild of LiveKitWebRTC.xcframework
+        // is MISSING `RTCAudioProcessingState.h` (confirmed: downloaded both
+        // release zips and diffed the actual Headers/ file listing under
+        // ios-arm64 — that one file is the only difference), which
+        // client-sdk-swift's own AudioProcessingModes.swift/
+        // AudioProcessingOptions.swift/RTC.swift/AudioManager.swift/
+        // LocalAudioTrack.swift reference — real CI compile failure (`gh run
+        // 32964484046`), not a hypothetical. native-pli.patch itself only
+        // touches api/crypto/frame_crypto_transformer.h/.cc, so this is most
+        // likely a source-pin drift in build-livekit-ios.yml between the
+        // raw4-era build and this one, not something the patch caused
+        // directly — root cause NOT YET FOUND, needs investigating
+        // sigarone/webrtc-aes256-build's build-livekit-ios.yml pinned-commit
+        // handling before retrying. The direct-call WebRTC binaryTarget
+        // below is UNAFFECTED (separate build, no LiveKit-source errors in
+        // the same CI run) and stays on the native-pli version.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw4"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
