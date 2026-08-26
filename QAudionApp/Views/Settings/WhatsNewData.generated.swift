@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1031",
+              date: "2026-08-26",
+              title: "v1.0.1031",
+              bullets: [
+                "fix(call): first real CI compile surfaces 2 real errors — RTCFrameCryptorState typo, addRenderer Swift rename",
+              ]),
         .init(id: "v1.0.1030",
               date: "2026-08-26",
               title: "v1.0.1030",
               bullets: [
+                "chore: regenerate changelog for v1.0.1030",
                 "feat(call): native SRTP audio (IOS-C4b, audio-srtp-v1) — PCM-tap parity closed, enabled on explicit sign-off",
                 "feat(call): parity batch — jitter-buffer time-stretch, screenshare quality profile, ICE restart machine",
                 "feat(call): parity Fase C/D batch — FEC decode, PLP feedback loop, keyframe fast-recovery, bandwidth cap, route clamp, backpressure, transport hygiene",
@@ -165,13 +172,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1012",
                 "fix(security): revert app-lock default-on, no escape from a mandatory Face ID prompt",
-              ]),
-        .init(id: "v1.0.1011",
-              date: "2026-08-21",
-              title: "v1.0.1011",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1011",
-                "fix(build): TestFlight v1.0.1010 compile failures",
               ]),
     ]
 }
