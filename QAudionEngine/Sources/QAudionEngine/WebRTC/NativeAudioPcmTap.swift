@@ -144,24 +144,45 @@ public final class NativeAudioPcmTap: NSObject, RTCAudioRenderer, @unchecked Sen
 
         guard let activeConverter else { return nil }
 
-        // VERIFICATION GAP (no Xcode/Swift toolchain on this box): the
-        // `AVAudioConverter.convert(to:error:withInputFrom:)` push-style API
-        // and `AVAudioConverterInputStatus`/`AVAudioConverterOutputStatus`
-        // are stable public Foundation/AVFoundation API (not part of the
-        // vendored WebRTC binary, so no framework-pinning risk the way
-        // `RTCFrameCryptor` has), used here in its standard documented
-        // "one-shot single input buffer" shape — but this exact call could
-        // not be compiled/exercised in this session. First real Xcode build
-        // must confirm; report to orchestrator either way.
+        // BUGFIX (2026-08-26, first real live call) — this converter is
+        // CACHED and reused across every buffer for the call's whole life
+        // (see `needsNewConverter` above), so `.reset()` before each
+        // one-shot `convert()` is required — without it, `.endOfStream`
+        // (below) leaves the converter permanently terminal after its
+        // first successful use, and every later call in the SAME
+        // steady-state cadence this tap runs at (RENDER-callback rate, so
+        // effectively every buffer) returns empty. Confirmed against a
+        // real, independent report of the identical failure mode (a
+        // converter reused without reset(), .endOfStream terminal state):
+        // "produced output on the first call, then returned empty buffers
+        // forever after" — same root cause, same fix.
+        activeConverter.reset()
+
         let ratio = targetSampleRate / inFormat.sampleRate
         let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
         guard let outBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else { return nil }
 
+        // BUGFIX (2026-08-26) — was `.noDataNow` on every call after the
+        // first, which per Apple's own contract for
+        // `AVAudioConverterInputStatus` means "no data available right
+        // now, but check back later" — a retry hint for a genuinely
+        // streaming source, not a valid way to say "this is the end, I am
+        // handing you nothing more." For a true one-shot single-buffer
+        // conversion (this function's whole contract — see the doc above),
+        // the input block's terminal reply must be `.endOfStream`: "no
+        // more data will ever be provided." Confirmed live: this call
+        // never actually produced audio for the analysis pipeline (no
+        // deepfake/vitals curve updating) despite native SRTP playback
+        // itself working fine (a completely separate WebRTC-owned path,
+        // unaffected by this tap) — `.noDataNow` here was silently
+        // starving `convert()` of a real completion signal on every single
+        // buffer, so `outBuffer.frameLength` never became > 0 and the
+        // guard below always returned nil.
         var delivered = false
         var conversionError: NSError?
         activeConverter.convert(to: outBuffer, error: &conversionError) { _, outStatus in
             if delivered {
-                outStatus.pointee = .noDataNow
+                outStatus.pointee = .endOfStream
                 return nil
             }
             delivered = true
