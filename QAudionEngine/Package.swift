@@ -194,7 +194,14 @@ let package = Package(
         // `UIButton.sendActions` instead. Every other file/line in
         // client-sdk-swift 2.16.0 is untouched — same-tag-shape fork, not a
         // rewrite.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw4"),
+        //
+        // 2026-08-26 -> raw5: webrtc-xcframework redirect above bumped to
+        // 144.7559.10-aes256-livekit-native-pli (adds native-pli.patch,
+        // W-NATIVEPLI — ports Android's 2026-08-25 AAR native decrypt-fail
+        // signal to group calls, closing the parity gap found this session,
+        // project_aar_ios_parity_audit_2026_08_26). No other change; same
+        // 144.7559.10 WebRTC source, same reasoning above still holds.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw5"),
         // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
         // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
         // GitHub Actions — the repo does not exist at that path. Dependency
@@ -289,15 +296,24 @@ let package = Package(
             ]
         ),
         // WebRTC with H265/HEVC + AES-256-GCM FrameCryptor — patched build of
-        // webrtc-sdk M144 (same RTC* API as 144.7559.10). Single-hunk patch:
-        // DeriveKeys(..., password.size()==32?256:128) forces AES-256-GCM when
-        // a 32-byte K_video is set (stock binary hardcodes 128). H265 enabled
-        // (rtc_use_h265=true). Built via sigarone/webrtc-aes256-build@webrtc-ios-aes256-m144.
-        // Checksum = SHA256(WebRTC.xcframework.zip).
+        // webrtc-sdk M144 (same RTC* API as 144.7559.10). Two patches applied
+        // in sequence: (1) DeriveKeys(..., password.size()==32?256:128) forces
+        // AES-256-GCM when a 32-byte K_video is set (stock binary hardcodes
+        // 128); (2) native-pli.patch (W-NATIVEPLI, 2026-08-26) adds an
+        // unconditional, rate-limited FrameCryptionState.kDecryptionFailed
+        // notification on a real decrypt-tag-mismatch — the native signal
+        // Android's AAR rebuild added the same day (`project_aar_rebuild_
+        // 2026_08_25` memory), ported here to close the iOS/Android parity
+        // gap found `project_aar_ios_parity_audit_2026_08_26`. H265 enabled
+        // (rtc_use_h265=true). Built via
+        // sigarone/webrtc-aes256-build@webrtc-ios-aes256-m144-native-pli.
+        // Checksum = SHA256(WebRTC.xcframework.zip), independently verified
+        // against the GitHub release asset digest before this edit, not
+        // just copied from the build log.
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144/WebRTC.xcframework.zip",
-            checksum: "44f0779e18e86c9b65e03592ee8d28d667d8bc3218fc401f4c7f393353fbb410"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144-native-pli/WebRTC.xcframework.zip",
+            checksum: "dbaefe2aff6eabff29320bea00c1f85b6cab774457721bc8c509e896f95701b9"
         ),
         .target(
             name: "QAudionEngine",
