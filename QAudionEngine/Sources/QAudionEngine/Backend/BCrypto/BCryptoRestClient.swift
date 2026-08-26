@@ -88,17 +88,20 @@ public final class BCryptoRestClient {
         return _isOffline
     }
 
-    /// - Parameter testURLProtocolClasses: DEBUG-only test hook. Since IOS-E2
-    ///   below made this client always build its own dedicated `URLSession`
-    ///   instead of falling back to `.shared`, a request-stubbing
-    ///   `URLProtocol` subclass registered process-wide via
-    ///   `URLProtocol.registerClass()` is no longer reliably picked up —
-    ///   that global mechanism is guaranteed for `.shared`, not for a
-    ///   freshly-constructed session. Passing the stub class here installs
-    ///   it directly on THIS instance's `sessionConfig.protocolClasses`.
-    ///   `nil` for every real caller; honoured only in DEBUG (see SECURITY
-    ///   H-1 below for the same DEBUG-only trade-off already established
-    ///   in this initializer).
+    /// - Parameter testURLProtocolClasses: test-only hook, honoured in EVERY
+    ///   build configuration (not DEBUG-gated — CI runs tests with
+    ///   `-configuration Release`, so a DEBUG-only version of this would be
+    ///   silently inert there). Since IOS-E2 below made this client always
+    ///   build its own dedicated `URLSession` instead of falling back to
+    ///   `.shared`, a request-stubbing `URLProtocol` subclass registered
+    ///   process-wide via `URLProtocol.registerClass()` is no longer
+    ///   reliably picked up — that global mechanism is guaranteed for
+    ///   `.shared`, not for a freshly-constructed session. Passing the stub
+    ///   class here installs it directly on THIS instance's
+    ///   `sessionConfig.protocolClasses`. `nil` for every real caller in
+    ///   every configuration, so this has no production effect (unlike
+    ///   `acceptSelfSignedCerts` below, which IS a real DEBUG-only security
+    ///   trade-off — SECURITY H-1 — and stays gated).
     public init(config: BackendConfig, testURLProtocolClasses: [AnyClass]? = nil) {
         self.config = config
         // SECURITY H-1 — `acceptSelfSignedCerts` is honoured ONLY in
@@ -124,10 +127,23 @@ public final class BCryptoRestClient {
         // that let Android's identity-key fetch hang 47.7 s on a zombie
         // pooled connection before the PING probe existed.
         sessionConfig.timeoutIntervalForRequest = 15
-        #if DEBUG
+        // Applied UNCONDITIONALLY (not inside the #if DEBUG below): CI runs
+        // `xcodebuild test` with `-configuration Release` (forced there for
+        // an unrelated OOM fix — see engine-tests.yml's own comment on that
+        // flag), so a DEBUG-gated stub install is silently inert in exactly
+        // the environment these tests run in, and every WireFormatTests call
+        // site hit the real network against https://test.local instead of
+        // the stub (confirmed: this was live-broken in CI even after the
+        // stub-wiring fix landed, traced to this exact gate). Safe to hoist
+        // out: `testURLProtocolClasses` is nil for every real caller in both
+        // configurations, so this has zero effect outside tests either way.
+        // The self-signed-cert/cert-pinning delegate choice below stays
+        // Release-gated as originally intended (SECURITY H-1) — this only
+        // moves the unrelated test-injection hook, not that security logic.
         if let testProtocols = testURLProtocolClasses {
             sessionConfig.protocolClasses = testProtocols
         }
+        #if DEBUG
         if config.acceptSelfSignedCerts {
             self.session = URLSession(configuration: sessionConfig, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
         } else if let pin = config.certPinSha256B64 {
