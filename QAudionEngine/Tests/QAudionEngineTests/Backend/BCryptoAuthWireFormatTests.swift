@@ -26,7 +26,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterSendsHashUnderPhoneNumberKey() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        let rest = BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"))
+        let rest = BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self])
         let api = BCryptoAccountApiImpl(rest: rest)
 
         let userId = try await api.register(
@@ -56,7 +56,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterOmitsOptionalFieldsWhenNil() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self]))
 
         _ = try await api.register(phoneNumber: "+14155552671", password: "pw", inviteCode: nil, displayName: nil)
 
@@ -68,7 +68,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterIncludesInviteCodeAndDisplayNameWhenProvided() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self]))
 
         _ = try await api.register(
             phoneNumber: "+14155552671",
@@ -89,7 +89,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         {"access_token":"a","refresh_token":"r","expires_in":900,"user_id":"u","device_id":"d"}
         """#
         StubURLProtocol.stubResponse = (200, Data(credsJson.utf8))
-        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self]))
 
         let hash = try PhoneHash.hash("+14155552671")
         let creds = try await api.login(phoneHash: hash, password: "pw", deviceName: "iPhone")

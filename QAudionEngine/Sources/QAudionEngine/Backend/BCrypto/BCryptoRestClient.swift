@@ -88,7 +88,18 @@ public final class BCryptoRestClient {
         return _isOffline
     }
 
-    public init(config: BackendConfig) {
+    /// - Parameter testURLProtocolClasses: DEBUG-only test hook. Since IOS-E2
+    ///   below made this client always build its own dedicated `URLSession`
+    ///   instead of falling back to `.shared`, a request-stubbing
+    ///   `URLProtocol` subclass registered process-wide via
+    ///   `URLProtocol.registerClass()` is no longer reliably picked up —
+    ///   that global mechanism is guaranteed for `.shared`, not for a
+    ///   freshly-constructed session. Passing the stub class here installs
+    ///   it directly on THIS instance's `sessionConfig.protocolClasses`.
+    ///   `nil` for every real caller; honoured only in DEBUG (see SECURITY
+    ///   H-1 below for the same DEBUG-only trade-off already established
+    ///   in this initializer).
+    public init(config: BackendConfig, testURLProtocolClasses: [AnyClass]? = nil) {
         self.config = config
         // SECURITY H-1 — `acceptSelfSignedCerts` is honoured ONLY in
         // DEBUG builds (local dev / unit tests against a self-signed
@@ -114,6 +125,9 @@ public final class BCryptoRestClient {
         // pooled connection before the PING probe existed.
         sessionConfig.timeoutIntervalForRequest = 15
         #if DEBUG
+        if let testProtocols = testURLProtocolClasses {
+            sessionConfig.protocolClasses = testProtocols
+        }
         if config.acceptSelfSignedCerts {
             self.session = URLSession(configuration: sessionConfig, delegate: SelfSignedCertDelegate(), delegateQueue: nil)
         } else if let pin = config.certPinSha256B64 {

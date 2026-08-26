@@ -24,7 +24,7 @@ final class BCryptoContactsWireFormatTests: XCTestCase {
 
     func testSyncContactsSendsContactsArrayUnderContactsKey() async throws {
         ContactsStubURLProtocol.stubResponse = (200, Data("{}".utf8))
-        let api = BCryptoContactsApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let api = BCryptoContactsApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [ContactsStubURLProtocol.self]))
 
         try await api.syncContacts(entries: [
             SyncContactEntry(contactUserId: "u-1", displayName: "Alice", localAlias: "Al"),
@@ -55,7 +55,7 @@ final class BCryptoContactsWireFormatTests: XCTestCase {
         {"blocked":[{"user_id":"u-42","blocked_at":"2026-04-20T10:00:00Z"},{"user_id":"u-77"}]}
         """#
         ContactsStubURLProtocol.stubResponse = (200, Data(payload.utf8))
-        let api = BCryptoContactsApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let api = BCryptoContactsApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [ContactsStubURLProtocol.self]))
 
         let result = try await api.getBlockedContacts()
         XCTAssertEqual(result.count, 2)
