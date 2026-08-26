@@ -74,6 +74,38 @@ public final class StunClient: @unchecked Sendable {
         return nil
     }
 
+    /// W-RELAYGEO (2026-08-26, best-practices audit item 5) — lightweight
+    /// round-trip-latency probe for relay-list ordering
+    /// (`RelayLatencyProbe`). Sends the SAME STUN Binding Request this
+    /// client already builds for public-IP discovery and times the
+    /// wall-clock gap until ANY UDP response arrives — deliberately looser
+    /// than `discoverPublicEndpoint`, which additionally requires the reply
+    /// to parse as a valid XOR-MAPPED-ADDRESS/MAPPED-ADDRESS. A relay/TURN
+    /// server that answers a plain STUN Binding Request with something this
+    /// client can't parse (e.g. a TURN-specific error response) still just
+    /// answered — that round trip is a real, valid RTT sample for ordering
+    /// purposes, even though it would (correctly) fail
+    /// `discoverPublicEndpoint`'s stricter contract.
+    ///
+    /// Returns `nil` on any failure (timeout, connection error, unreachable
+    /// host) — callers must treat `nil` as "no signal", not as "infinite
+    /// latency" (see `RelayOrdering`).
+    public func measureRttMs(
+        host: String,
+        port: UInt16,
+        timeoutSec: TimeInterval
+    ) async -> Double? {
+        let request = buildBindingRequest()
+        let start = DispatchTime.now()
+        do {
+            _ = try await sendUDP(data: request, host: host, port: port, timeoutSec: timeoutSec)
+        } catch {
+            return nil
+        }
+        let elapsedNs = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+        return Double(elapsedNs) / 1_000_000.0
+    }
+
     // MARK: - STUN protocol
 
     /// Build a STUN Binding Request (20 bytes).
@@ -174,7 +206,12 @@ public final class StunClient: @unchecked Sendable {
 
     // MARK: - UDP transport
 
-    private func sendUDP(data: Data, host: String, port: UInt16) async throws -> Data {
+    private func sendUDP(
+        data: Data,
+        host: String,
+        port: UInt16,
+        timeoutSec: TimeInterval = StunClient.timeoutSeconds
+    ) async throws -> Data {
         // `port` ultimately traces back to `discoverPublicEndpoint`'s public
         // `port` parameter — today's only caller (`discoverFromAnyServer`)
         // always passes a fixed non-zero value, but nothing stops a future
@@ -195,8 +232,10 @@ public final class StunClient: @unchecked Sendable {
             let completedBox = Box(false)
             let lock = OSAllocatedUnfairLock<Void>(initialState: ())
 
-            // Timeout
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.timeoutSeconds) {
+            // Timeout — W-RELAYGEO: parameterized so `measureRttMs` can use
+            // a much shorter budget than the 5s default public-IP-discovery
+            // timeout (`Self.timeoutSeconds`, still this method's default).
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSec) {
                 let didComplete: Bool = lock.withLock {
                     if !completedBox.value { completedBox.value = true; return true }
                     return false

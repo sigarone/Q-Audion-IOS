@@ -361,12 +361,25 @@ public struct RelayServer: Decodable, Equatable {
     public let username: String?
     public let credential: String?
     public let ttl: Int
+    /// W-RELAYGEO (2026-08-26, best-practices audit item 5) — optional
+    /// region/geo hint (e.g. `"eu-west"`, `"fi"`), matching whatever label
+    /// the relay-fleet operator assigns server-side. `nil` on every
+    /// deployment today: as of this change the server's relay-list model
+    /// (`bcrypto-server`) does NOT populate or even define this field yet —
+    /// this is the client's forward-compatible READ side only, added so
+    /// nothing breaks (and `RelayOrdering` can start using it for free) the
+    /// moment the server starts sending one, without a second client
+    /// release. Until then, `RelayOrdering` falls back entirely to the
+    /// client-measured RTT probe (`RelayLatencyProbe`) — a real ordering
+    /// signal on its own, independent of this field ever landing.
+    public let region: String?
 
-    public init(urls: [String], username: String? = nil, credential: String? = nil, ttl: Int = 3600) {
+    public init(urls: [String], username: String? = nil, credential: String? = nil, ttl: Int = 3600, region: String? = nil) {
         self.urls = urls
         self.username = username
         self.credential = credential
         self.ttl = ttl
+        self.region = region
     }
 
     /// Tolerant init: Android may serialize `ttl` as `ttlSeconds` /
@@ -381,12 +394,20 @@ public struct RelayServer: Decodable, Equatable {
             ?? c.decodeIfPresent(Int.self, forKey: .ttlSecondsSnake)
             ?? 3600
         self.ttl = ttl
+        // W-RELAYGEO — tolerate either casing the server might eventually
+        // ship (`region`/`geo` — Android's DTO naming for this hint hasn't
+        // been decided server-side yet either, so accept both rather than
+        // guess wrong and silently read nothing).
+        self.region = try c.decodeIfPresent(String.self, forKey: .region)
+            ?? c.decodeIfPresent(String.self, forKey: .geo)
     }
 
     private enum CodingKeys: String, CodingKey {
         case urls, username, credential, ttl
         case ttlSeconds
         case ttlSecondsSnake = "ttl_seconds"
+        case region
+        case geo
     }
 }
 

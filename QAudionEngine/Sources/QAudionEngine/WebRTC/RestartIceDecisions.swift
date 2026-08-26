@@ -64,6 +64,24 @@ public enum RestartIceDecisions {
     /// falling back to the park (250ms/500ms/1s/2s/4s backoff, ≈7.75s
     /// total — comfortably under the old fixed budget, matches Android's
     /// `RESTART_OFFER_MAX_RETRIES`).
+    ///
+    /// ⚠️ NOT CURRENTLY WIRED TO THE LIVE iOS SEND PATH (audit item 4,
+    /// best-practices audit 2026-08-26). This constant — and the specific
+    /// 250ms/500ms/1s/2s/4s ladder it implies — exists only as a ported,
+    /// unit-tested reference of Android's `RESTART_OFFER_MAX_RETRIES`
+    /// shape; `BCryptoCallingApiImpl.sendIceRestartOffer` (the actual live
+    /// send path) never calls into it and never retries inline at all — it
+    /// makes exactly ONE send attempt (bounded by `ws.ensureAuthenticated
+    /// (timeoutSec:)`, an event-driven wait, not a retry loop) before
+    /// falling back to the park. See that method's kdoc for the deliberate
+    /// reasoning (the ladder exists on Android to race a `WsDispatcher
+    /// .awaitSendReady` primitive this iOS WS client has no equivalent of;
+    /// `ensureAuthenticated` already subsumes what the ladder is for here).
+    /// Kept as a pinned reference value rather than deleted so a future
+    /// port of that Android primitive has an already-tested target to wire
+    /// against — but do not assume it governs today's live retry timing;
+    /// `restartOfferFastPathTimeoutSec` / `restartOfferParkTimeoutSec`
+    /// below are what actually ships.
     public static let restartOfferMaxInlineAttempts: Int = 5
 
     /// W-RESTARTOFFERPARK — how long a restart offer that exhausted the
@@ -72,7 +90,33 @@ public enum RestartIceDecisions {
     /// server's 60s disconnect-grace ceiling so a resend landing inside
     /// this window still renews the server-side grace. Android
     /// `RESTART_OFFER_PARK_BUDGET_MS`.
+    ///
+    /// On iOS this total IS what ships, decomposed into the two constants
+    /// immediately below (`restartOfferFastPathTimeoutSec` +
+    /// `restartOfferParkTimeoutSec` == `restartOfferParkBudgetMs` / 1000) —
+    /// unlike `restartOfferMaxInlineAttempts` above, whose specific ladder
+    /// is not reused.
     public static let restartOfferParkBudgetMs: Int64 = 45_000
+
+    /// W-RESTARTOFFERPARK / audit item 4 (2026-08-26) — the live iOS send
+    /// path's actual FIRST-phase wait: how long `sendIceRestartOffer` waits
+    /// for an authenticated socket before falling back to the detached
+    /// park. Single source of truth for that literal (previously hardcoded
+    /// inline in `BCryptoCallingApiImpl.sendIceRestartOffer` as `timeoutSec:
+    /// 5`, untested and undocumented as a value anyone could pin) — pulled
+    /// out here so the number the live path actually uses is unit-tested
+    /// and cross-referenced from the same file as every other restart-ice
+    /// timing constant, closing the "tested ladder vs. shipped behavior"
+    /// gap the audit flagged.
+    public static let restartOfferFastPathTimeoutSec: TimeInterval = 5
+
+    /// W-RESTARTOFFERPARK / audit item 4 — the live path's SECOND-phase
+    /// wait: how much longer the detached park task waits for the socket
+    /// once the fast path above has already spent its budget.
+    /// `restartOfferFastPathTimeoutSec + restartOfferParkTimeoutSec` equals
+    /// `restartOfferParkBudgetMs / 1000` (45s) by construction — pinned by
+    /// `RestartIceDecisionsTests.test_liveParkTiming_sumsToParkBudget`.
+    public static let restartOfferParkTimeoutSec: TimeInterval = 40
 
     // MARK: - W-SILENTPATHDEATH — self-repair window sizing
 

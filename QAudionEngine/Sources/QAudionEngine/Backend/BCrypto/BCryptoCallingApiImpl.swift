@@ -524,7 +524,15 @@ public final class BCryptoCallingApiImpl: CallingApi {
             "call_type": "audio",
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
-        let ready = await ws.ensureAuthenticated(timeoutSec: 5)
+        // Audit item 4 (2026-08-26) — these two waits used to be the bare
+        // literals `5` / `40`, untested and undocumented anywhere as the
+        // live path's real timing. Now sourced from `RestartIceDecisions`,
+        // the same pinned-and-unit-tested file every other restart-ice
+        // constant lives in (see that file's kdoc on
+        // `restartOfferMaxInlineAttempts` for why the 5-attempt ladder
+        // itself is NOT reused here — this is not that ladder, just its
+        // sibling constants for the timing that actually ships).
+        let ready = await ws.ensureAuthenticated(timeoutSec: RestartIceDecisions.restartOfferFastPathTimeoutSec)
         if ready {
             ws.send(type: "call_offer", data: data)
             return true
@@ -536,7 +544,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
         print("[BCryptoCalling] restart offer park armed call_id=\(cid.prefix(8))… (WS not ready)")
         let wsRef = ws
         Task.detached(priority: .utility) {
-            let late = await wsRef.ensureAuthenticated(timeoutSec: 40)
+            let late = await wsRef.ensureAuthenticated(timeoutSec: RestartIceDecisions.restartOfferParkTimeoutSec)
             guard late else {
                 print("[BCryptoCalling] restart offer park expired call_id=\(cid.prefix(8))…")
                 return
