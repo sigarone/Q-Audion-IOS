@@ -33,6 +33,31 @@ public struct GroupMediaKey {
     }
 }
 
+/// W-GRPVIEWPORT (2026-08-26): the safe, additive half of closing
+/// W-GRPADAPTIVEDEADLOCK's gap (see that tag's kdoc at `RoomOptions`
+/// below for the starvation bug that forced `adaptiveStream`/`dynacast`
+/// off). With both SDK-driven mechanisms off, nothing else in the SDK
+/// ever asks the SFU to stop sending a layer this app isn't rendering —
+/// this is the manual per-participant equivalent, driven from the app's
+/// OWN visibility signal (`GroupCallView`'s existing grid-pagination
+/// state) instead of the SDK's disabled auto-detection. Shared above the
+/// `#if canImport(LiveKit)` split (like `GroupMediaKey`) so callers that
+/// only import QAudionEngine — not LiveKit directly — can use it, and so
+/// the type is identical across the real/stub build configurations.
+public enum RemoteVideoRenderPriority: Sendable, Equatable {
+    /// Not on the current grid page (and not the `.speaker`-mode
+    /// spotlight tile) — stop the SFU from forwarding this track's
+    /// bytes to us at all (`RemoteTrackPublication.set(enabled: false)`,
+    /// real bandwidth savings, not just a local render skip).
+    case offScreen
+    /// On the current grid page as a regular (non-spotlight) tile —
+    /// tiles are small (`gridMinTileWidth` floor is 110pt), so the
+    /// lowest simulcast layer is legible and cheapest.
+    case onScreenSmall
+    /// The enlarged `.speaker`-mode pinned tile — worth the top layer.
+    case onScreenSpotlight
+}
+
 #if canImport(LiveKit)
 import LiveKit
 import AVFoundation
@@ -160,6 +185,30 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     // loop) — a `Timer` scheduled there would silently never fire (Timer
     // needs an actively-pumped RunLoop; a plain GCD queue doesn't run one).
     private var graceWorkItems: [DispatchWorkItem] = []
+    /// W-GRPVIEWPORT: one entry per identity with an actively subscribed
+    /// CAMERA video track (never screen-share — see `didSubscribeTrack`'s
+    /// `else` branch below, the same split `onRemoteVideoTrack` already
+    /// uses). Guarded by `lock` like every other mutable field on this
+    /// class touched from both `RoomDelegate` callbacks (SDK's own queue,
+    /// "not guaranteed to be the main thread" per that protocol's own doc)
+    /// and `setRemoteVideoRenderPriority` (called from the app/main
+    /// thread).
+    private var remoteVideoPublications: [String: RemoteTrackPublication] = [:]
+    /// W-GRPVIEWPORT (independent-review fix, nim.ps1 security pass): the
+    /// LAST priority actually requested per identity, so
+    /// `setRemoteVideoRenderPriority` can skip re-sending an unchanged
+    /// value. `updateVideoViewport` calls this for EVERY participant on
+    /// EVERY visibility change (page swipe, roster update), not just the
+    /// ones whose priority actually moved — without this dedup, a rapid
+    /// swipe through several pages fires one `set(enabled:)`/
+    /// `set(videoQuality:)` round trip per participant per swipe, an
+    /// unbounded, uncoalesced burst of independent `Task{}`s against the
+    /// SFU's signaling client (flagged in review: SwiftUI's `.task(id:)`
+    /// cancels the OUTER view task on the next id change, but the inner
+    /// per-participant `Task{}`s it already spawned are unstructured and
+    /// NOT children of it, so cancellation doesn't reach them). Guarded by
+    /// the same `lock` as `remoteVideoPublications`.
+    private var lastAppliedVideoPriority: [String: RemoteVideoRenderPriority] = [:]
 
     /// W-GRPVIDEO-PERM (review fix): the SDK never requests camera
     /// authorization itself (verified against client-sdk-swift 2.13.0 —
@@ -611,10 +660,75 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         lock.withLock {
             for w in graceWorkItems { w.cancel() }
             graceWorkItems.removeAll()
+            // W-GRPVIEWPORT: drop every cached publication (and its
+            // last-applied-priority dedup entry) with the room — a
+            // call-scoped cache, never meant to outlive `room` itself.
+            remoteVideoPublications.removeAll()
+            lastAppliedVideoPriority.removeAll()
         }
         await room?.disconnect()
         room = nil
         keyProvider = nil
+    }
+
+    /// W-GRPVIEWPORT: manual per-participant remote video render priority —
+    /// the additive, safe half of closing W-GRPADAPTIVEDEADLOCK's gap (see
+    /// that tag's kdoc at `RoomOptions` above, in `connect()`, and
+    /// `RemoteVideoRenderPriority`'s own kdoc above the `#if
+    /// canImport(LiveKit)` split). This is the SAME per-publication API
+    /// `adaptiveStream`'s own internal timer would be driving automatically
+    /// if it were on — verified against the pinned fork's real source
+    /// (2.16.0-aes256-raw6, byte-identical to upstream client-sdk-swift
+    /// 2.16.0 for this file per `Package.swift`'s own audit comment):
+    /// `RemoteTrackPublication.set(enabled:)` and `.set(videoQuality:)`
+    /// both gate on `checkUserCanModifyTrackSettings()`, which requires
+    /// `adaptiveStream` OFF (it already is, see `RoomOptions` above) AND
+    /// the track already subscribed — both hold here. Driven
+    /// instead by `GroupCallView`'s own existing grid-pagination state
+    /// (`gridPages`/`currentGridPage`), which already knows exactly which
+    /// tiles are on-screen — no new plumbing needed on that side.
+    ///
+    /// No-op (logged, never thrown) if this identity has no cached camera
+    /// publication yet/anymore — a page-visibility change racing a
+    /// participant join/leave/camera-toggle is an expected, not
+    /// exceptional, race with `didSubscribeTrack`/`didUnsubscribeTrack`
+    /// above.
+    public func setRemoteVideoRenderPriority(identity: String, priority: RemoteVideoRenderPriority) {
+        let publication: RemoteTrackPublication? = lock.withLock {
+            guard let pub = remoteVideoPublications[identity], lastAppliedVideoPriority[identity] != priority else { return nil }
+            lastAppliedVideoPriority[identity] = priority
+            return pub
+        }
+        guard let publication else { return }
+        Task {
+            do {
+                switch priority {
+                case .offScreen:
+                    try await publication.set(enabled: false)
+                case .onScreenSmall:
+                    try await publication.set(enabled: true)
+                    try await publication.set(videoQuality: .low)
+                case .onScreenSpotlight:
+                    try await publication.set(enabled: true)
+                    try await publication.set(videoQuality: .high)
+                }
+            } catch {
+                // Evict the optimistically-recorded cache entry on failure
+                // so a LATER identical request retries instead of being
+                // dedup'd against a value that never actually applied —
+                // only clear it if nothing else already moved it on again
+                // in the meantime (a fast page-swipe-back racing this
+                // failure), matching the reference-identity discipline
+                // `didUnsubscribeTrack` already uses above.
+                lock.withLock {
+                    if lastAppliedVideoPriority[identity] == priority {
+                        lastAppliedVideoPriority.removeValue(forKey: identity)
+                    }
+                }
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] setRemoteVideoRenderPriority(\(priority)) identity=\(identity.prefix(8))… FAILED: \(error)")
+            }
+        }
     }
 }
 
@@ -653,6 +767,11 @@ extension LiveKitGroupCallRoom: RoomDelegate {
                 // I8 FIX: truncate identity like every other identity print in this file.
                 print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity.prefix(8))…")
                 emitTelemetry("video.remote_track", ["identity": identity, "kind": "camera", "track_sid": publication.sid.stringValue])
+                // W-GRPVIEWPORT: cache the publication (not just the track)
+                // so `setRemoteVideoRenderPriority` can call `set(enabled:)`/
+                // `set(videoQuality:)` on it later — those live on
+                // `RemoteTrackPublication`, not `RemoteVideoTrack`.
+                lock.withLock { remoteVideoPublications[identity] = publication }
                 onRemoteVideoTrack?(identity, videoTrack)
             }
         }
@@ -674,6 +793,26 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // leave a camera/mic track's SDK-internal 1s poll running after
         // it's gone.
         detachStatsReporting(from: publication.track)
+        // W-GRPVIEWPORT: drop the cached publication reference regardless
+        // of source, independent of the screen-share-only UI gate right
+        // below (pre-existing scope, untouched). Matched by REFERENCE
+        // (`===`), not by re-deriving the track kind — by the time this
+        // delegate fires, `publication.track` is already nil (`set(track:)`
+        // in the SDK notifies `didUnsubscribeTrack` only after clearing its
+        // own track to nil), and keying only off `identity` would risk an
+        // unrelated audio-track unsubscribe for the same identity wiping a
+        // still-live video entry.
+        let identity = participant.identity?.stringValue ?? ""
+        lock.withLock {
+            if remoteVideoPublications[identity] === publication {
+                remoteVideoPublications.removeValue(forKey: identity)
+                // Same publication really is gone — its dedup entry must
+                // go with it, or a future re-subscribe (new publication,
+                // fresh state) could be wrongly skipped as "already
+                // applied" against the OLD publication's last value.
+                lastAppliedVideoPriority.removeValue(forKey: identity)
+            }
+        }
         guard publication.source == .screenShareVideo else { return }
         let identity = participant.identity?.stringValue ?? ""
         // I8 FIX: truncate identity like every other identity print in this file.
@@ -1013,6 +1152,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public func setScreenShareEnabled(_ enabled: Bool) async throws {
         throw LiveKitUnavailableError.notAvailable
     }
+
+    /// W-GRPVIEWPORT — stub counterpart of the real class's same-named
+    /// method (see this stub's own doc comment above). No room, no cached
+    /// publications, so always a no-op.
+    public func setRemoteVideoRenderPriority(identity: String, priority: RemoteVideoRenderPriority) { /* no-op */ }
 
     public func disconnect() async { /* no-op */ }
 }

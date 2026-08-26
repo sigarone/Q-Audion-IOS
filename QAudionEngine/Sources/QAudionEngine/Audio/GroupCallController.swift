@@ -1040,6 +1040,21 @@ public final class GroupCallController: @unchecked Sendable {
         }
     }
 
+    /// W-GRPVIEWPORT: passthrough of `LiveKitGroupCallRoom.
+    /// setRemoteVideoRenderPriority` — same "no-op unless the call is
+    /// actually riding the LiveKit SFU" shape as `setVideoEnabled`/
+    /// `setMicrophoneEnabled`/`setScreenShareEnabled` above (the WS-relay
+    /// mesh fallback has no per-track subscription control to drive here).
+    /// Fire-and-forget like the app-layer callers of the other setters
+    /// treat these — the real work happens off-thread inside
+    /// `LiveKitGroupCallRoom` itself, this call site never blocks the
+    /// caller (`GroupCallViewModel.updateVideoViewport`, driven from
+    /// SwiftUI's `.task(id:)`) on network round trips.
+    public func setRemoteVideoRenderPriority(identity: String, priority: RemoteVideoRenderPriority) {
+        let room = lock.withLock { sfuRoom }
+        room?.setRemoteVideoRenderPriority(identity: identity, priority: priority)
+    }
+
     /// W-GRPKEYPIN: compute our OWN current LiveKit media key WITHOUT
     /// applying it — used to pre-seed `LiveKitGroupCallRoom.connect` BEFORE
     /// the mic/camera publish (see that method's kdoc for the full
