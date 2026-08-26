@@ -210,6 +210,55 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// the same `lock` as `remoteVideoPublications`.
     private var lastAppliedVideoPriority: [String: RemoteVideoRenderPriority] = [:]
 
+    // W-GRPBACKPRESSURE (2026-08-26) — group-call CPU/thermal backpressure
+    // state. `_cpuLimitedPolls` counts CONSECUTIVE `qualityLimitationReason
+    // == "cpu"` outbound-stats polls (this file's own 1s cadence, see
+    // `attachStatsReporting`'s kdoc — scaled from the 1:1 controller's
+    // 3s-cadence "2 consecutive polls" so the real-world ~6s sustain window
+    // matches, not a blind copy of the raw poll count). `_videoBackpressureEngaged`
+    // / `_videoBackpressureEngagedAt` track whether the outgoing CAMERA
+    // track is currently paused by this mechanism and since when — see
+    // `evaluateGroupVideoBackpressure`'s kdoc for why recovery is time+
+    // thermal gated instead of poll-counted like the engage side.
+    private var _cpuLimitedPolls: Int = 0
+    private var _videoBackpressureEngaged = false
+    private var _videoBackpressureEngagedAt: Date?
+    /// Consecutive CPU-limited 1s polls before engaging (1s cadence × 6 ≈
+    /// 6s) — same real-world timing as `QAudionWebRtcCallController
+    /// .backpressureSustainPolls` (3s × 2 ≈ 6s), rescaled for this file's
+    /// actual per-track stats cadence.
+    private let groupBackpressureSustainPolls: Int = 6
+    /// Minimum time the camera stays paused before a recovery PROBE
+    /// (unmute) is attempted — order-of-magnitude match to
+    /// `QAudionWebRtcCallController.backpressureRecoverPolls` (3s × 3 ≈
+    /// 9s), not poll-counted for the same reason recovery isn't poll-based
+    /// here (see kdoc below).
+    private let groupBackpressureCooldownSeconds: TimeInterval = 9
+    /// Independent-review fix (nim.ps1 security pass): a device that's
+    /// borderline CPU-limited (right at the edge, not sustained-overloaded)
+    /// would otherwise flap on a tight ~15s cycle — cooldown expires, probe
+    /// unmutes, CPU is still marginal, `groupBackpressureSustainPolls`
+    /// re-engages within another ~6s, repeat forever. `_backpressureEngageStreak`
+    /// counts CONSECUTIVE engage->probe->still-limited cycles (reset the
+    /// moment a poll while disengaged is genuinely healthy — see the
+    /// `cpuLimited == false` branch below) and stretches the cooldown by
+    /// `groupBackpressureCooldownStepSeconds` per streak step, capped at
+    /// `groupBackpressureMaxCooldownSeconds` — same "gets less eager to
+    /// retry after repeated failures" shape as this app's other backoff
+    /// ladders (`RestartIceDecisions`'s restart backoff, `AbrController`'s
+    /// AIMD), not a peculiar one-off.
+    private var _backpressureEngageStreak: Int = 0
+    private let groupBackpressureCooldownStepSeconds: TimeInterval = 9
+    private let groupBackpressureMaxCooldownSeconds: TimeInterval = 60
+    /// W-GRPBACKPRESSURE: latest `ProcessInfo.thermalState`, kept current
+    /// by `thermalObserver` below rather than read live on each poll — the
+    /// plan calls for a real notification subscription ("feed
+    /// thermalStateDidChangeNotification into the same clamp"), not a
+    /// poll-time `ProcessInfo.processInfo.thermalState` read that would
+    /// happen to work but not actually be the described mechanism.
+    private var _latestThermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
+    private var thermalObserver: NSObjectProtocol?
+
     /// W-GRPVIDEO-PERM (review fix): the SDK never requests camera
     /// authorization itself (verified against client-sdk-swift 2.13.0 —
     /// `CameraCapturer.startCapture()`/`LiveKit+DeviceHelpers.swift`'s
@@ -316,6 +365,23 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// livekitKeyringSize`).
     public func connect(url: String, token: String, callId: String, selfKey: GroupMediaKey? = nil) async throws {
         self.callId = callId
+        // W-GRPBACKPRESSURE: call-scoped thermal observer — torn down in
+        // `disconnect()`. `ProcessInfo.thermalState` is read once here to
+        // seed `_latestThermalState` with the CURRENT state (the
+        // notification only fires on a CHANGE, so a call starting on an
+        // already-hot device would otherwise read `.nominal` — the
+        // property's own default — until the next transition).
+        _latestThermalState = ProcessInfo.processInfo.thermalState
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            let state = ProcessInfo.processInfo.thermalState
+            self.lock.withLock { self._latestThermalState = state }
+            self.emitTelemetry("call.video.thermal_state", ["state": String(describing: state)])
+        }
         // Options set EXPLICITLY — SDK defaults diverge across platforms
         // (the JS SDK defaults `sharedKey: true`; we need per-participant
         // keys, so this must never rely on a default).
@@ -665,10 +731,139 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
             // call-scoped cache, never meant to outlive `room` itself.
             remoteVideoPublications.removeAll()
             lastAppliedVideoPriority.removeAll()
+            // W-GRPBACKPRESSURE: call-scoped, reset with everything else.
+            _cpuLimitedPolls = 0
+            _videoBackpressureEngaged = false
+            _videoBackpressureEngagedAt = nil
+            _backpressureEngageStreak = 0
+        }
+        if let thermalObserver {
+            NotificationCenter.default.removeObserver(thermalObserver)
+            self.thermalObserver = nil
         }
         await room?.disconnect()
         room = nil
         keyProvider = nil
+    }
+
+    private enum VideoBackpressureAction { case none, engage, disengage }
+
+    /// W-GRPBACKPRESSURE (2026-08-26): the group-call counterpart of
+    /// `QAudionWebRtcCallController.evaluateBackpressure` — same
+    /// CPU-sustained-polls TRIGGER shape (rescaled to this file's real 1s
+    /// stats cadence, see `groupBackpressureSustainPolls`'s kdoc), plus
+    /// `thermalStateDidChangeNotification` folded in as a second,
+    /// immediate-engage input (a `.serious`/`.critical` reading needs no
+    /// poll-sustain of its own — the OS already debounces its own thermal
+    /// state transitions).
+    ///
+    /// The ACTION differs from the 1:1 path, and had to change after
+    /// checking the real SDK source rather than assuming a straight port:
+    /// `applyComposedVideoSenderClamp` mutates `RTCRtpSender.parameters
+    /// .encodings[0].maxBitrateBps` directly on `peerConnection.videoSender`
+    /// — a graduated ladder. LiveKit's `LocalVideoTrack` keeps that same
+    /// kind of sender in `_state.rtpSender`, and `LocalTrackPublication
+    /// .recomputeSenderParameters()`'s read of it — both verified
+    /// module-internal against the pinned fork's real source
+    /// (client-sdk-swift 2.16.0, byte-identical to this file's
+    /// 2.16.0-aes256-raw6 tag) — so there is no safe PUBLIC lever to
+    /// graduate an already-published group video track's bitrate the way
+    /// the 1:1 path does. Unpublish+republish with a lower
+    /// `VideoPublishOptions` would fake one, but at the cost of a new track
+    /// SID and a full re-negotiation visible to every OTHER subscriber —
+    /// exactly the kind of change this pass was told not to force onto
+    /// main without live-device verification. The lever that IS verified
+    /// public and safe: `LocalTrackPublication.mute()`/`.unmute()` — a
+    /// coarser, binary pause/resume of the outgoing CAMERA track (never
+    /// screen-share — see the call site) instead of a graduated ladder,
+    /// but real, working degradation where today group calls do nothing at
+    /// all under sustained CPU/thermal pressure.
+    ///
+    /// RECOVERY is deliberately NOT poll-counted the way engage is: once
+    /// paused, the camera stops encoding, so this same track's own
+    /// `qualityLimitationReason` stops being a meaningful signal (an idle
+    /// encoder is never "cpu-limited") — counting "healthy" polls against a
+    /// muted track would make it look permanently healthy and cause an
+    /// immediate flap right back to engaged. Instead: after
+    /// `groupBackpressureCooldownSeconds` of staying paused, AND the device
+    /// is not currently thermal-critical, unmute as a PROBE. If CPU
+    /// pressure is still real, `qualityLimitationReason` starts reporting
+    /// "cpu" again the moment encoding resumes and this method re-engages
+    /// within `groupBackpressureSustainPolls` — bounded, self-correcting,
+    /// no permanent silent mute.
+    ///
+    /// Also self-heals against an EXTERNAL mute-state change this instance
+    /// didn't cause — e.g. the user manually toggling their own camera off
+    /// then back on (`GroupCallController.setVideoEnabled` also rides
+    /// `LocalTrackPublication.mute()`/`.unmute()`) would otherwise leave
+    /// `_videoBackpressureEngaged` stale-true, silently blocking fresh CPU
+    /// detection until the cooldown elapsed.
+    private func evaluateGroupVideoBackpressure(cpuLimited: Bool, videoPublication: LocalTrackPublication) {
+        let action: VideoBackpressureAction = lock.withLock {
+            if _videoBackpressureEngaged, !videoPublication.isMuted {
+                _videoBackpressureEngaged = false
+                _videoBackpressureEngagedAt = nil
+            }
+            let thermalCritical = _latestThermalState == .serious || _latestThermalState == .critical
+            if _videoBackpressureEngaged {
+                // Independent-review fix: cooldown GROWS with consecutive
+                // failed probes (`_backpressureEngageStreak`) instead of a
+                // fixed 9s, so a borderline-CPU device that keeps
+                // re-triggering doesn't flap on a tight ~15s cycle.
+                let cooldown = min(groupBackpressureCooldownSeconds + Double(_backpressureEngageStreak) * groupBackpressureCooldownStepSeconds,
+                                    groupBackpressureMaxCooldownSeconds)
+                guard !thermalCritical, let engagedAt = _videoBackpressureEngagedAt,
+                      Date().timeIntervalSince(engagedAt) >= cooldown else { return .none }
+                _videoBackpressureEngaged = false
+                _videoBackpressureEngagedAt = nil
+                return .disengage
+            }
+            if thermalCritical {
+                _cpuLimitedPolls = 0
+                _videoBackpressureEngaged = true
+                _videoBackpressureEngagedAt = Date()
+                _backpressureEngageStreak += 1
+                return .engage
+            }
+            guard cpuLimited else {
+                _cpuLimitedPolls = 0
+                // A genuinely healthy poll while disengaged — the streak's
+                // reset condition (see its own kdoc above).
+                _backpressureEngageStreak = 0
+                return .none
+            }
+            _cpuLimitedPolls += 1
+            guard _cpuLimitedPolls >= groupBackpressureSustainPolls else { return .none }
+            _cpuLimitedPolls = 0
+            _videoBackpressureEngaged = true
+            _videoBackpressureEngagedAt = Date()
+            _backpressureEngageStreak += 1
+            return .engage
+        }
+        switch action {
+        case .none:
+            return
+        case .engage:
+            print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: engaging -> pausing outgoing camera")
+            emitTelemetry("call.video.group_backpressure", ["engaged": true])
+            Task {
+                do {
+                    try await videoPublication.mute()
+                } catch {
+                    print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: mute FAILED: \(error)")
+                }
+            }
+        case .disengage:
+            print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: disengaging -> resuming outgoing camera")
+            emitTelemetry("call.video.group_backpressure", ["engaged": false])
+            Task {
+                do {
+                    try await videoPublication.unmute()
+                } catch {
+                    print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: unmute FAILED: \(error)")
+                }
+            }
+        }
     }
 
     /// W-GRPVIEWPORT: manual per-participant remote video render priority —
@@ -1029,6 +1224,22 @@ extension LiveKitGroupCallRoom: TrackDelegate {
                     "out_encoder_impl": out.encoderImplementation ?? "?",
                     "out_quality_limit": out.qualityLimitationReason?.rawValue ?? "?"
                 ])
+                // W-GRPBACKPRESSURE: `out_quality_limit` above used to be
+                // logged only — this is where it actually gets ACTED on.
+                // Scoped to the CAMERA publication only (never
+                // screen-share, deliberately — pausing a screen share the
+                // user just explicitly started would be a far more
+                // surprising interruption than pausing camera video, and
+                // the plan only asks to close the "camera video" gap).
+                // `track` here is exactly the `Track` this delegate call
+                // is reporting on, so matching by reference identity finds
+                // the right publication even with multiple local tracks
+                // published (mirrors `resolveIdentity(forTrack:in:)`'s own
+                // matching style below).
+                if let localPub = room.localParticipant.trackPublications.values.first(where: { $0.track === track }) as? LocalTrackPublication,
+                   localPub.source == .camera {
+                    evaluateGroupVideoBackpressure(cpuLimited: out.qualityLimitationReason?.rawValue == "cpu", videoPublication: localPub)
+                }
             } else if let inb = statistics.inboundRtpStream.first {
                 emitTelemetry("video.stats", [
                     "identity": identity,
