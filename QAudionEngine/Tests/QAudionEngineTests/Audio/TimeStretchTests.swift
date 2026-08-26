@@ -185,4 +185,85 @@ final class TimeStretchTests: XCTestCase {
             XCTAssertEqual((samples - shave) * 2, written, "cadence with \(samples) samples")
         }
     }
+
+    // MARK: - W-JBSTRETCH-WSOLA (2026-08-26) correlation search
+
+    /// Regression test for a real defect caught and fixed BEFORE shipping
+    /// (see `TimeStretch`'s own "Scoring" kdoc): a first design scored
+    /// candidates by similarity to `tail` ALONE, which let the search
+    /// prefer an offset whose read window straddled the region/tail value
+    /// boundary — producing a NEW, larger mid-crossfade jump than the
+    /// fixed-offset splice ever could, exactly the class of artifact the
+    /// "no hard-cut jump" bound above exists to catch. Uses the SAME
+    /// extreme region/tail values as
+    /// `test_crossfade_boundsTheSampleToSampleDeltaAtTheSplice_unlikeAHardCut`
+    /// specifically because hand-deriving those exact numbers is what
+    /// exposed the bug (a ~3667 step against a ~115 bound) — this test
+    /// pins the fixed behavior so it cannot silently regress again.
+    func test_wsolaSearch_neverPicksACandidateThatStraddlesTheRegionTailBoundary() {
+        let n = 960, shave = 144
+        let region: Int16 = 8000, tail: Int16 = -8000
+        let headSamples = n - 2 * shave
+        let input = regionFrame(samples: n, head: 0, region: region, tail: tail, shave: shave)
+        var out = Data(count: (n - shave) * 2)
+        let written = TimeStretch.compress(input: input, inputSamples: n, shaveSamples: shave, out: &out)
+        XCTAssertEqual((n - shave) * 2, written)
+
+        let hardCutDelta = abs(Int(tail) - Int(region))
+        let maxAllowedStep = hardCutDelta / shave + 4 // same generous slack as the sibling test
+        var maxObservedStep = 0
+        for i in headSamples..<((n - shave) - 1) {
+            let delta = abs(Int(readSample(out, i + 1)) - Int(readSample(out, i)))
+            if delta > maxObservedStep { maxObservedStep = delta }
+        }
+        XCTAssertLessThanOrEqual(
+            maxObservedStep, maxAllowedStep,
+            "the correlation search must never introduce a jump the fixed-offset splice didn't already have " +
+            "(observed \(maxObservedStep), bound \(maxAllowedStep))")
+    }
+
+    /// Positive case: when a genuinely better-aligned offset EXISTS within
+    /// the search radius, the search must find it. Builds a frame with ONE
+    /// real content transition (`valueA` -> `valueB`) positioned `t`
+    /// samples INTO the nominal region window (well within the search
+    /// radius): the nominal offset straddles that transition (a real
+    /// internal jump in the crossfade), while shifting forward by exactly
+    /// `t` samples reads a window that is ENTIRELY `valueB` — a perfect,
+    /// zero-discontinuity match against `tail` (also `valueB`, since the
+    /// transition happens before `tail`'s own window starts). The search
+    /// must find that zero-variation alignment: every crossfade output
+    /// sample should read exactly `valueB`.
+    func test_wsolaSearch_findsAGenuinelyBetterAlignmentWhenOneExists() {
+        let n = 960, shave = 144, t = 10 // t well within the search radius (min(shave/2, 32) = 32)
+        let valueA: Int16 = 2000, valueB: Int16 = -1000
+        let headSamples = n - 2 * shave
+        var input = Data(count: n * 2)
+        input.withUnsafeMutableBytes { raw in
+            let p = raw.bindMemory(to: Int16.self)
+            for i in 0..<(headSamples + t) { p[i] = valueA }
+            for i in (headSamples + t)..<n { p[i] = valueB }
+        }
+        var out = Data(count: (n - shave) * 2)
+        let written = TimeStretch.compress(input: input, inputSamples: n, shaveSamples: shave, out: &out)
+        XCTAssertEqual((n - shave) * 2, written)
+
+        for i in headSamples..<(n - shave) {
+            XCTAssertEqual(valueB, readSample(out, i), "sample \(i) — search should have found the flat alignment")
+        }
+    }
+
+    /// A fully flat signal ties every candidate at score zero — the
+    /// nominal offset (scored first) must win, so a splice with nothing to
+    /// gain from the search produces BYTE-IDENTICAL output to before this
+    /// feature existed.
+    func test_wsolaSearch_tiesOnFlatSignal_keepTheNominalSplicePoint() {
+        let n = 960, shave = 144
+        let input = constantFrame(samples: n, value: 777)
+        var out = Data(count: (n - shave) * 2)
+        let written = TimeStretch.compress(input: input, inputSamples: n, shaveSamples: shave, out: &out)
+        XCTAssertEqual((n - shave) * 2, written)
+        for i in 0..<(n - shave) {
+            XCTAssertEqual(777, readSample(out, i), "sample \(i)")
+        }
+    }
 }
