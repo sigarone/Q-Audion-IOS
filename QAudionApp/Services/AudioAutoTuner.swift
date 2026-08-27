@@ -50,10 +50,11 @@ public final class AudioAutoTuner {
     }
 
     /// What the retired per-call bitrate ratchet would have chosen from THIS
-    /// call's loss alone, evaluated fresh each time against the fixed 32 kbps
-    /// baseline (not a multi-call trajectory — that concept no longer applies
-    /// once bitrate doesn't persist). Reported for visibility only; never
-    /// fed back into `AudioCodecPrefs`.
+    /// call's loss alone, evaluated fresh each time against the fixed
+    /// baseline (`AudioConstants.opusBitrate` — 40 kbps as of W-OPUSHEADROOM,
+    /// 2026-08-27; was 32) — not a multi-call trajectory, that concept no
+    /// longer applies once bitrate doesn't persist. Reported for visibility
+    /// only; never fed back into `AudioCodecPrefs`.
     private static func hypotheticalBitrateKbps(lossRate: Float) -> Int {
         if lossRate > 0.25 { return 24 }
         if lossRate > 0.10 { return 28 }

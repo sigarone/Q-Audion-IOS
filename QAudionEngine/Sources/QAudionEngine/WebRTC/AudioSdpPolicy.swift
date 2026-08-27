@@ -11,8 +11,16 @@ import Foundation
 ///  - `useinbandfec=1`          — in-band FEC: each packet carries a
 ///                                low-rate redundant copy of the previous
 ///                                frame, so a single loss is concealed.
-///  - `maxaveragebitrate=32000` — the same 32 kbps the sealed-DataChannel
-///                                path's fixed profile uses.
+///  - `maxaveragebitrate=32000` — this codec's OWN literal, independent of
+///                                `AudioConstants.opusBitrate` (raised to 40
+///                                kbps by W-OPUSHEADROOM, 2026-08-27): the
+///                                sealed-DataChannel path's fleet-default
+///                                profile still clamps that base down to
+///                                exactly this same 32 kbps (zero headroom),
+///                                so the two paths stay aligned in practice,
+///                                but nothing here derives from that constant
+///                                and a future DataChannel-side change would
+///                                not automatically follow here.
 ///  - `usedtx` REMOVED          — discontinuous transmission both leaks
 ///                                speech-activity timing (breaks the CBR
 ///                                posture) and adds resume-lag artifacts.
