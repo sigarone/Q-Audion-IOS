@@ -12,4 +12,6 @@
 
 ## 2026-08-20 - [Accessibility on custom tappable views (Image/Error states)]
 **Learning:** Custom interactive components like images with `onTapGesture` (e.g. to open full screen) or error state boxes (e.g. tap to retry) are not inherently identified as buttons by VoiceOver. Screen reader users won't know they are interactive.
-**Action:** Always add `.accessibilityAddTraits(.isButton)`, an `.accessibilityLabel()`, and an `.accessibilityHint()` explaining the action to any `Image`, `Rectangle`, or custom view modifier that uses an `onTapGesture` to trigger logic. For composite error boxes, group with `.accessibilityElement(children: .combine)`.
+**Action:** Always add `.accessibilityAddTraits(.isButton)`, an `.accessibilityLabel()`, and an `.accessibilityHint()` explaining the action to any `Image`, `Rectangle`, or custom view modifier that uses an `onTapGesture` to trigger logic. For composite error boxes, group with `.accessibilityElement(children: .combine)`.## 2026-08-25 - [Accessibility on compact headers/rows]
+**Learning:** For compact headers like `SecurityIconHeaderView` which consist of an icon and text, putting the `.onTapGesture` just on the icon creates a very small tap target and fails to announce the interactive area correctly for VoiceOver.
+**Action:** When evaluating headers or rows with an icon, make sure to add `.onTapGesture` to the entire row using `.contentShape(Rectangle())` and apply `.accessibilityElement(children: .combine)`, `.accessibilityAddTraits(.isButton)` and `.accessibilityHint` explaining the action.
