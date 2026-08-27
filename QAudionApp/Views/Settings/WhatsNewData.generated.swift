@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1037",
+              date: "2026-08-27",
+              title: "v1.0.1037",
+              bullets: [
+                "fix(call): restore nonisolated on ScreenShareController.onFrame after lock refactor",
+                "fix(voice-analysis): gate VoiceAnalysisEngine on a 100ms time budget, not frame count",
+              ]),
         .init(id: "v1.0.1036",
               date: "2026-08-27",
               title: "v1.0.1036",
               bullets: [
+                "chore: regenerate changelog for v1.0.1036",
                 "fix(call): native-audio-srtp PCM tap still silent on 2nd live call - AVAudioConverter needs continuous-stream usage, not one-shot reset+endOfStream",
                 "fix(security): 2 real findings from Jules Suggestions triage",
               ]),
@@ -190,14 +198,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1018",
                 "fix(deps): GRDB exact pin + fix Package.resolved CI collection (MASVS I5)",
-              ]),
-        .init(id: "v1.0.1017",
-              date: "2026-08-21",
-              title: "v1.0.1017",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1017",
-                "fix(security): I8 redaction audit — fix 37 genuine print() findings",
-                "ci(ios): publish Package.resolved as a build artifact (MASVS I5)",
               ]),
     ]
 }
