@@ -4,6 +4,7 @@ import ReplayKit
 import CoreMedia
 import CoreVideo
 import QAudionEngine
+import os
 
 /// W533 — In-app screen capture via ReplayKit's `RPScreenRecorder`,
 /// piped into the existing WebRTC video sender used by camera calls.
@@ -87,10 +88,23 @@ public final class ScreenShareController {
     /// media-consent v1 — secondary frame sink for the WS-HEVC transport
     /// (iOS↔iOS peers receive video as `video_frame` envelopes, not WebRTC
     /// RTP). AppState points this at `VideoCallPipeline.submitExternalFrame`
-    /// so an audio-only screen share reaches iOS peers too. Invoked on
-    /// RPScreenRecorder's private queue — the pipeline entry point is
-    /// nonisolated and thread-safe.
-    public nonisolated(unsafe) var onFrame: ((CVPixelBuffer, Int64) -> Void)?
+    /// so an audio-only screen share reaches iOS peers too.
+    ///
+    /// AppState assigns/clears this from MainActor (`startScreenShare` /
+    /// `stopScreenShare` / the start-failure path), while `dispatchVideoSample`
+    /// reads it from RPScreenRecorder's private capture queue — a genuine
+    /// cross-context race on the property itself (the pipeline entry point
+    /// being thread-safe only covers the closure *body*, not this storage).
+    /// An `OSAllocatedUnfairLock`-backed accessor serialises get/set instead
+    /// of relying on ReplayKit's stop-ordering, matching the
+    /// `refreshLock`/`OSAllocatedUnfairLock` pattern used elsewhere
+    /// (e.g. `BCryptoRestClient`).
+    private let onFrameLock = OSAllocatedUnfairLock<((CVPixelBuffer, Int64) -> Void)?>(initialState: nil)
+
+    public var onFrame: ((CVPixelBuffer, Int64) -> Void)? {
+        get { onFrameLock.withLock { $0 } }
+        set { onFrameLock.withLock { $0 = newValue } }
+    }
 
     /// First sample timestamp anchor — used to produce monotonically
     /// increasing nanosecond timestamps relative to the start of the
@@ -191,7 +205,8 @@ public final class ScreenShareController {
         else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         let nanos: Int64 = Int64(CMTimeGetSeconds(pts) * 1_000_000_000)
-        // WS-HEVC sink first (no actor hop needed — see onFrame docs).
+        // WS-HEVC sink first — `onFrame` is lock-guarded (see its docs
+        // above) so this cross-context read is safe without an actor hop.
         onFrame?(pixelBuffer, nanos)
         // Hop a read of `targetCapturer` through the actor — this is
         // safe because the property is set only on MainActor and only

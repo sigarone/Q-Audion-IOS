@@ -186,8 +186,23 @@ public final class ThreatReportLogStore {
 
     /// Fetch (or lazily create) the 32-byte AES key from the
     /// Keychain. Service `com.qaudion.threatlog`,
-    /// AfterFirstUnlockThisDeviceOnly so background list refreshes
-    /// work but the key never leaves the device / iCloud backup.
+    /// WhenUnlockedThisDeviceOnly — the key never leaves the device /
+    /// iCloud backup, and traced call sites (`ChatListScreen`'s admin
+    /// banner `.task`, `ThreatReportListView`/`SecurityDashboardScreen`
+    /// `.onAppear`, `ThreatReportContainer.submit`) all run from
+    /// SwiftUI view lifecycle hooks that require the app to be
+    /// foregrounded and the device unlocked. `LocalCryptoWipe.wipeAll()`
+    /// (reachable from the `remote_wipe` WS handler, which CAN fire in
+    /// the background off a VoIP wake) only clears the UserDefaults
+    /// blob via `wipeAll()` — it never touches this Keychain key — so
+    /// there is no genuine background/locked-device reader of this
+    /// item. AfterFirstUnlockThisDeviceOnly's wider window bought
+    /// nothing real; tightened per SECURITY audit. NOTE: this only
+    /// affects newly-created items — `SecItemAdd`'s accessibility
+    /// attribute is immutable post-creation, so an already-installed
+    /// key keeps its old (looser) protection until the item is deleted
+    /// and regenerated (e.g. a future `wipeAll()` fix that also purges
+    /// the Keychain key, or a reinstall after keychain data is cleared).
     private static let keychainService = "com.qaudion.threatlog"
     private static let keychainAccount = "details-aes-256"
 
@@ -224,7 +239,7 @@ public final class ThreatReportLogStore {
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: keychainAccount,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         let status = SecItemAdd(q as CFDictionary, nil)
         return status == errSecSuccess || status == errSecDuplicateItem
