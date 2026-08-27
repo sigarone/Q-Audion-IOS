@@ -19,7 +19,11 @@ final class AudioProfileTests: XCTestCase {
         XCTAssertEqual(p.blockBytes, 120)
         XCTAssertEqual(p.samplesPerFrame, 960)
         XCTAssertEqual(p.bytesPerFrame, 1920)
-        XCTAssertEqual(p.opusBytes(), 80)
+        // W-OPUSHEADROOM (2026-08-27): opusBitrate raised 32000->40000 for this
+        // profile (real headroom under the 41,600 ceiling below, zero
+        // wire-size change - see AudioConstants.opusBitrate's own kdoc). 100
+        // bytes at 40 kbps / 20 ms, was 80 at 32 kbps.
+        XCTAssertEqual(p.opusBytes(), 100)
         XCTAssertEqual(p.maxBitrateBps, 41600)
     }
 
@@ -29,17 +33,24 @@ final class AudioProfileTests: XCTestCase {
         XCTAssertEqual(p.blockBytes, 256)
         XCTAssertEqual(p.samplesPerFrame, 2880)
         XCTAssertEqual(p.bytesPerFrame, 5760)
-        XCTAssertEqual(p.opusBytes(), 240)
+        // W-OPUSHEADROOM (2026-08-27): this profile has ZERO headroom (its own
+        // maxBitrateBps below is already 32,000) and stays clamped there in
+        // real usage — unlike the standard profile above, opusBytes() must be
+        // called with the CLAMPED rate explicitly, not the raised global
+        // default (which would compute an over-block 300 bytes and was
+        // exactly the overflow-to-silence hazard this file exists to catch).
+        XCTAssertEqual(p.opusBytes(bitrateBps: 32000), 240)
         XCTAssertEqual(p.maxBitrateBps, 32000)
     }
 
     /// The block is exactly `2 + opus + filler`, and the filler is what is left.
-    /// 38 spare bytes at 120/20; 14 at 256/60 — and those 14 are
-    /// `blockSafetyBytes`, i.e. NOT budget.
+    /// 18 spare bytes at 120/20 (40 kbps, W-OPUSHEADROOM); 14 at 256/60 (still
+    /// 32 kbps, zero headroom) — and those 14 are `blockSafetyBytes`, i.e. NOT
+    /// budget.
     func test_blockAccounting_addsUp() {
-        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.standard.opusBytes() + 38,
+        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.standard.opusBytes() + 18,
                        AudioProfile.standard.blockBytes)
-        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.long60x256.opusBytes() + 14,
+        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.long60x256.opusBytes(bitrateBps: 32000) + 14,
                        AudioProfile.long60x256.blockBytes)
         XCTAssertEqual(AudioConstants.blockSafetyBytes, 14)
     }
