@@ -1,62 +1,61 @@
 import Foundation
 
-/// W-GRPFALLBACKAUDIO-IOS (2026-08-27) — AES-256-GCM seal/open for one
-/// directed leg of the group-call SFU-outage fallback audio path.
+/// W-GRPFALLBACKAUDIO-IOS (2026-08-27, rewired to W-GRPAUDIOKEY) — AES-256-GCM
+/// seal/open for the group-call SFU-outage fallback audio path (QUAD
+/// `AUDIO_DATA`, opcode 0x06).
 ///
-/// This is a standalone extraction of the EXACT byte scheme
-/// `QAudionEngine.processOutgoingAudio`/`processIncomingAudio` already run
-/// under `useAdaptivePadding = true` (the "AdaptivePaddingController-
-/// compatible" mode that path uses for Android-peer 1:1 calls — see that
-/// file's W479 comments) — same raw-session-key AES-256-GCM, same 2-byte
-/// big-endian length header, same fixed-size random-tail padding, same
-/// `AeadCipher`/`FrameEncoder` building blocks. It does NOT reuse
-/// `QAudionEngine` itself: that class carries a full ratchet/session-manager
-/// state machine (`SessionManager`, `.initialized`/`.sessionActive`
-/// transitions, CallKit-oriented lifecycle) that has nothing to do with a
-/// group-call peer's fallback slot, and instantiating one per roster member
-/// just to reach one private branch would be a much larger, harder-to-audit
-/// surface than the ~40 lines of framing logic this class actually needs.
-/// `AeadCipher` (raw AES-256-GCM) and `FrameEncoder` (the wire frame
-/// serializer already proven byte-compatible with Android's relay format,
-/// see `QAudionEngine.processIncomingAudio`'s `FrameEncoder.isValid` /
-/// `WireRelayFrameCodec.decode` dual-detection) ARE reused directly — no
-/// crypto primitive here is hand-rolled.
+/// Originally sealed under a raw pairwise ML-KEM-1024 session key
+/// (`GroupCallController.deriveFallbackSessionKey`, one handshake per peer).
+/// That mesh is retired: keys now come from `GroupSenderKey`'s W-GRPAUDIOKEY
+/// derivations (`deriveAudioSessionKey`/`deriveAudioFrameKey`), a pure local
+/// HKDF over the SAME `SK_0`/`CK_0` this codebase already redistributes to
+/// every group member for the pre-existing WS-relay-mesh path and the
+/// LiveKit SFU media key — see that extension's own kdoc for the full
+/// rationale and the cross-platform KAT vectors this matches byte-for-byte
+/// (`group-audio-kat.json` / `GroupAudioSessionKeyKatTests`). Establishing a
+/// session now costs zero handshake round-trips and zero new network
+/// messages, and seals to ONE broadcast ciphertext per frame instead of one
+/// independent ciphertext per peer.
 ///
-/// **Cross-platform contract** — mirrors Desktop's `AdaptivePaddingController`
-/// (`qaudion-desktop/src/main/calling/AdaptivePaddingController.ts`, itself a
-/// TypeScript port of Android's `AdaptivePaddingController.kt`):
-///   - Plaintext, always exactly `blockBytes` (120 standard / 256 long):
-///     `[0..1] uint16 BE true-Opus-length` + `[2..2+L] Opus frame` +
-///     `[2+L..blockBytes] CSPRNG padding`.
-///   - AES-256-GCM(plaintext, key = RAW 32-byte pairwise session key, nonce,
-///     aad = none). The raw key is used directly — no HKDF layer — because
-///     that is what the sender (Desktop's `GroupFallbackAudioSession.sendPcm`
-///     → `AdaptivePaddingController.sealAudio(opus, sessionKey)`) does.
-///   - A declared length of ZERO is the sender's own block-overflow sentinel
-///     (`W-PADOVERFLOW` on every platform this scheme ships on) — route to
-///     PLC concealment, never to the Opus decoder.
+/// **What stays the same as before**: the plaintext padded-block envelope
+/// (`[0..1] uint16 BE true-Opus-length` + `[2..2+L] Opus frame` +
+/// `[2+L..blockBytes] CSPRNG padding`, W-PADOVERFLOW zero-length sentinel on
+/// overflow) — this is the EXACT byte scheme `QAudionEngine.processOutgoingAudio`/
+/// `processIncomingAudio` already run under `useAdaptivePadding = true`, and
+/// is reused here verbatim, unchanged by the key-derivation swap.
 ///
-/// **What is NOT byte-identical to Desktop, and why it doesn't need to be**:
-/// Desktop derives its outgoing nonce as `[4B random session prefix || 8B
-/// seq BE]`; `AeadCipher.encrypt` instead lets CryptoKit generate a fully
-/// random 96-bit nonce per call. AES-GCM only requires the (key, nonce) pair
-/// never repeat for a given key — both schemes satisfy that — and the nonce
-/// travels on the wire as an explicit field either way (`FrameEncoder`
-/// serializes it), so the receiver never has to reconstruct it from a
-/// convention. Nothing about this difference affects interop.
+/// **What changed**: the AEAD call now goes through `GroupSenderKey
+/// .aesGcmEncrypt`/`aesGcmDecrypt` (already-reused, already-cross-platform-
+/// verified AES-256-GCM helpers) under a per-FRAME key (`frame_key_n`, cheap
+/// forward-secrecy hardening — no ordering dependency, a good fit for lossy/
+/// out-of-order real-time audio) with a deterministic nonce
+/// (`random(4) || BE64(frame_counter)`, fixed random prefix per epoch) and an
+/// explicit binary AAD binding `(sender_id, epoch_id)` — see
+/// `GroupSenderKey`'s W-GRPAUDIOKEY section for the exact layouts. The wire
+/// frame itself also changed shape (`GroupSenderKey.packAudioWire`/
+/// `unpackAudioWire`, tag 0x04 + explicit `epoch_id` + nonce + length-prefixed
+/// ciphertext) — no longer the generic `FrameEncoder`/`WireRelayFrameCodec`
+/// 1:1-relay wire this class used before, since `epoch_id` and the
+/// (sender_id-bound) frame counter now travel on the wire instead of being
+/// implicit in a shared pairwise session.
 ///
-/// **Sequencing**: one instance is TX-only or RX-only, matching
-/// `PqcRtpFrameSealer`'s own documented discipline — sharing one instance's
-/// counter across both directions of a pairwise leg would let two
-/// independent frame streams collide on the same (key, nonce) space. A
-/// `GroupCallController` fallback slot owns one instance per (peer,
-/// direction).
+/// **Sequencing**: `sealAudio` is TX-only and stateful (owns the monotonic
+/// `frame_counter` for whichever epoch it is currently sealing under —
+/// `GroupCallController` calls `resetFrameCounter()` whenever it (re)derives
+/// a fresh `audio_key` for a new epoch, per the "never resets except on a
+/// fresh audio_key" rule). `openAudio` is RX-side and stateless: the sender's
+/// `frame_counter` for THIS frame travels on the wire (packed into the
+/// nonce's own trailing 8 bytes), so opening never needs per-sender sealer
+/// instance state — the caller resolves which `audio_key` to open under
+/// (current epoch, or the previous epoch within its grace window) and this
+/// class just runs the derivation + AEAD.
 public final class GroupFallbackAudioSealer: @unchecked Sendable {
 
     public enum SealError: Error, Equatable {
         case wrongKeyLength(Int)
         case malformedFrame(String)
         case openFailed
+        case keyUnavailable
     }
 
     /// The zero-length W-PADOVERFLOW sentinel, decoded. `openAudio` returns
@@ -71,30 +70,90 @@ public final class GroupFallbackAudioSealer: @unchecked Sendable {
         public let opus: Data?
     }
 
-    private let cipher = AeadCipher()
     private let blockBytes: Int
-    private var sequenceNumber: UInt32 = 0
+    /// TX-only: this sealer's own per-epoch monotonic frame counter. Reset
+    /// via `resetFrameCounter()` whenever the caller (re)derives a fresh
+    /// `audio_key` — see this class's own kdoc.
+    private var frameCounter: UInt64 = 0
 
     /// - Parameter blockBytes: the fixed plaintext block size both ends
     ///   negotiated for this call. `AudioConstants.blockBytesStandard` (120)
     ///   unless the long-audio profile was negotiated — see
     ///   `AudioConstants.blockBytesLong` (256). Group-call fallback audio has
     ///   no profile negotiation path of its own (there is no per-call
-    ///   capability exchange for the pairwise QUAD leg beyond the bare OFFER/
-    ///   ACCEPT), so this always seals/opens at the STANDARD block — matching
-    ///   Desktop's `GroupFallbackAudioSession` constructor, which likewise
-    ///   takes no explicit profile override at its own call site and so
-    ///   defaults to the platform's standard block.
+    ///   capability exchange for the QUAD leg beyond the bare AUDIO_DATA
+    ///   opcode), so this always seals/opens at the STANDARD block.
     public init(blockBytes: Int = AudioConstants.blockBytesStandard) {
         self.blockBytes = blockBytes
     }
 
-    /// Seal one Opus frame for the wire. `sessionKey` is the RAW 32-byte
-    /// pairwise secret (no HKDF) — see the class kdoc.
-    public func sealAudio(opus: Data, sessionKey: Data) throws -> Data {
-        guard sessionKey.count == CryptoConstants.keySizeBytes else {
-            throw SealError.wrongKeyLength(sessionKey.count)
+    /// Reset the TX frame counter to 0. Call whenever a fresh `audio_key` is
+    /// derived for a new epoch — never otherwise (the counter must stay
+    /// monotonic within one audio_key's lifetime, see `deriveAudioFrameKey`'s
+    /// kdoc).
+    public func resetFrameCounter() {
+        frameCounter = 0
+    }
+
+    /// Seal one Opus frame for the wire under `audioKey` (this epoch's
+    /// `GroupSenderKey.deriveAudioSessionKey` output), using and advancing
+    /// this sealer's own TX frame counter. `noncePrefix` is the 4-byte
+    /// random value fixed for `audioKey`'s epoch lifetime.
+    public func sealAudio(opus: Data, audioKey: Data, noncePrefix: Data, epochId: UInt32, senderId: String) throws -> Data {
+        guard audioKey.count == GroupSenderKey.audioKeyLen else {
+            throw SealError.wrongKeyLength(audioKey.count)
         }
+        guard noncePrefix.count == GroupSenderKey.audioNonceRandomLen else {
+            throw SealError.malformedFrame("nonce random prefix must be \(GroupSenderKey.audioNonceRandomLen) bytes")
+        }
+        let counter = frameCounter
+        frameCounter &+= 1
+        let padded = try Self.pad(opus: opus, blockBytes: blockBytes)
+        let frameKey = GroupSenderKey.deriveAudioFrameKey(audioKey: audioKey, frameCounter: counter)
+        let nonce = GroupSenderKey.buildAudioNonce(randomPrefix: noncePrefix, frameCounter: counter)
+        let aad = GroupSenderKey.buildAudioAd(senderId: senderId, epochId: epochId)
+        let ctWithTag = try GroupSenderKey.aesGcmEncrypt(key: frameKey, nonce: nonce, plaintext: padded, aad: aad)
+        return try GroupSenderKey.packAudioWire(epochId: epochId, nonce: nonce, ciphertextWithTag: ctWithTag)
+    }
+
+    /// Open one sealed wire frame from `senderId`. `resolveAudioKey` is
+    /// invoked with the wire's OWN `epoch_id` (never trust a caller-supplied
+    /// epoch — always the value actually on the wire, so the AAD the
+    /// receiver reconstructs always matches what the sender authenticated)
+    /// and must return the `audio_key` to open under for that epoch — the
+    /// CURRENT local epoch, or the immediately-previous one while still
+    /// within its grace window — or `nil` to reject outright (closes the
+    /// replay/downgrade risk an external security review flagged: an older
+    /// epoch, or one for which no key is cached, is never accepted). Throws
+    /// on a malformed/truncated frame, a rejected epoch
+    /// (`.keyUnavailable`), or an AEAD auth failure (wrong key, corrupted/
+    /// forged ciphertext, mismatched `sender_id`/`epoch_id` AAD binding —
+    /// all indistinguishable to the caller, matching `PqcRtpFrameSealer
+    /// .open`'s posture); returns normally (never throws) for the
+    /// W-PADOVERFLOW zero-length sentinel — see `OpenResult`.
+    public static func openAudio(wire: Data, senderId: String, resolveAudioKey: (UInt32) -> Data?) throws -> OpenResult {
+        let parsed = try GroupSenderKey.unpackAudioWire(wire)
+        guard let audioKey = resolveAudioKey(parsed.epochId) else {
+            throw SealError.keyUnavailable
+        }
+        guard audioKey.count == GroupSenderKey.audioKeyLen else {
+            throw SealError.wrongKeyLength(audioKey.count)
+        }
+        let frameKey = GroupSenderKey.deriveAudioFrameKey(audioKey: audioKey, frameCounter: parsed.frameCounter)
+        let aad = GroupSenderKey.buildAudioAd(senderId: senderId, epochId: parsed.epochId)
+        let padded: Data
+        do {
+            padded = try GroupSenderKey.aesGcmDecrypt(
+                key: frameKey, nonce: parsed.nonce, ciphertextWithTag: parsed.ciphertextWithTag, aad: aad)
+        } catch {
+            throw SealError.openFailed
+        }
+        return OpenResult(opus: try Self.unpad(padded: padded))
+    }
+
+    // MARK: - Padded-block plaintext envelope (unchanged primitive — see class kdoc)
+
+    private static func pad(opus: Data, blockBytes: Int) throws -> Data {
         let headerBytes = AudioConstants.lengthHeaderBytes
         let budget = blockBytes - headerBytes
         // W-PADOVERFLOW parity — an oversized frame degrades to ONE frame of
@@ -113,42 +172,10 @@ public final class GroupFallbackAudioSealer: @unchecked Sendable {
             var rng = SystemRandomNumberGenerator()
             padded.append(contentsOf: (0..<tailLen).map { _ in UInt8.random(in: .min ... .max, using: &rng) })
         }
-
-        let encrypted = try cipher.encrypt(plaintext: padded, key: sessionKey, associatedData: nil)
-        let seq = sequenceNumber
-        sequenceNumber &+= 1
-        let frame = EncryptedFrame(
-            sequenceNumber: seq,
-            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
-            nonce: encrypted.nonce,
-            payload: encrypted.ciphertext,
-            tag: encrypted.tag
-        )
-        return FrameEncoder.serialize(frame)
+        return padded
     }
 
-    /// Open one sealed wire frame. Throws on a truncated/undecodable frame
-    /// or an AEAD auth failure (wrong key, corrupted/forged ciphertext,
-    /// mismatched session — all indistinguishable to the caller, matching
-    /// `PqcRtpFrameSealer.open`'s posture); returns normally (never throws)
-    /// for the W-PADOVERFLOW zero-length sentinel — see `OpenResult`.
-    public func openAudio(wire: Data, sessionKey: Data) throws -> OpenResult {
-        guard sessionKey.count == CryptoConstants.keySizeBytes else {
-            throw SealError.wrongKeyLength(sessionKey.count)
-        }
-        let frame: EncryptedFrame
-        if FrameEncoder.isValid(wire) {
-            frame = try FrameEncoder.deserialize(wire)
-        } else {
-            frame = try WireRelayFrameCodec.decode(wire).frame
-        }
-        let cipherOutput = AeadCipher.CipherOutput(nonce: frame.nonce, ciphertext: frame.payload, tag: frame.tag)
-        let padded: Data
-        do {
-            padded = try cipher.decrypt(cipherOutput: cipherOutput, key: sessionKey, associatedData: nil)
-        } catch {
-            throw SealError.openFailed
-        }
+    private static func unpad(padded: Data) throws -> Data? {
         let headerBytes = AudioConstants.lengthHeaderBytes
         guard padded.count >= headerBytes else {
             throw SealError.malformedFrame("padded body shorter than length header: \(padded.count)")
@@ -159,9 +186,8 @@ public final class GroupFallbackAudioSealer: @unchecked Sendable {
             throw SealError.malformedFrame("declared length \(len) exceeds padded capacity \(padded.count)")
         }
         guard len > 0 else {
-            return OpenResult(opus: nil)
+            return nil
         }
-        let opusBytes = padded.subdata(in: (base + headerBytes)..<(base + headerBytes + len))
-        return OpenResult(opus: opusBytes)
+        return padded.subdata(in: (base + headerBytes)..<(base + headerBytes + len))
     }
 }
