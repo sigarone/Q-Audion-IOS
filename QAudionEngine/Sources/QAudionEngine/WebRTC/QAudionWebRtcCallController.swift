@@ -414,17 +414,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private let videoStallPollThreshold: Int = 2
 
     // W-ROUTECLAMP (2026-08-25) / W-BWCAP (2026-08-25) / W-BACKPRESSURE
-    // (2026-08-25) — sender-side video bitrate ceiling state. The
-    // effective ceiling is composed as
+    // (2026-08-25) / W-BWECOMPOSE (2026-08-27) — sender-side video bitrate
+    // ceiling state. The effective ceiling is composed as
     //   effectiveMaxBps = routeTier.senderMaxBitrateBps × backpressureFactor
     // then intersected with the peer's reported VBWCAP via
-    // `VideoBandwidthCap.clamp` — mirrors Android's documented
-    // `cap = min(local, remote-requested, relay)` composition
-    // (`AdaptiveQualityRuntime.localCapBps` doc, PeerConnectionHolder.kt
-    // W-ROUTECLAMP). Driven off `resolveAndApplyRouteTier` (called once on
-    // ICE-connect AND every 3s from `pollVideoStatsOnce` — see that
-    // method's doc for the event-driven verification gap) and
-    // `evaluateBackpressure` (called every 3s from `pollVideoStatsOnce`).
+    // `VideoBandwidthCap.clamp`, then intersected with the locally-measured
+    // GoogCC BWE ceiling (`BweSenderCeiling`, best-practices audit item 1) —
+    // mirrors Android's documented `cap = min(local, remote-requested,
+    // relay)` composition (`AdaptiveQualityRuntime.localCapBps` doc,
+    // PeerConnectionHolder.kt W-ROUTECLAMP), now with a real local-BWE term
+    // instead of just the two static ceilings. Driven off
+    // `resolveAndApplyRouteTier` (called once on ICE-connect AND every 3s
+    // from `pollVideoStatsOnce` — see that method's doc for the
+    // event-driven verification gap), `evaluateBackpressure` (called every
+    // 3s from `pollVideoStatsOnce`), and `_bweSenderCeiling.observe` (fed
+    // every 3s poll from the SAME `pollVideoStatsOnce` stats callback that
+    // already read `availableOutgoingBitrate` for telemetry — see that read
+    // site's own kdoc).
     /// W-ROUTETIERDWELL (2026-08-26) — was a bare `RouteTier`, committing a
     /// Direct↔Relay reclassification (and its 4.5x ceiling swing) on a
     /// single poll. Now routed through `RouteTierDwell`, which requires the
@@ -432,6 +438,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// applies to the CPU-backpressure knob before committing a transition —
     /// see that type's doc (Item 3, best-practices audit 2026-08-26).
     private var _routeTierDwell = RouteTierDwell()
+    /// W-BWECOMPOSE (2026-08-27, best-practices audit item 1) — GoogCC's own
+    /// `availableOutgoingBitrate` congestion estimate, composed as one more
+    /// narrowing clamp in the same chain. See `BweSenderCeiling`'s own kdoc
+    /// for the full rationale and the asymmetric-hysteresis shape it
+    /// mirrors from `AbrController`/`evaluateBackpressure`.
+    private var _bweSenderCeiling = BweSenderCeiling()
     /// W-VPNCALLGATE — de-dupe guard for `onActiveCandidatePairRemoteHost`,
     /// same reset-at-teardown discipline as `_routeTierDwell` right above.
     private var _lastReportedRemoteHost: String?
@@ -1829,6 +1841,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _healthyPolls = 0
         _backpressureSteps = 0
         VideoBandwidthCap.reset()
+        // W-BWECOMPOSE — same per-call reset discipline as the other three
+        // clamp-chain state holders right above.
+        _bweSenderCeiling.reset()
         // WIRE_SPEC §8.7 — drop any armed TX-hold (endCall funnels through
         // here via sendHangupAndClose): cancel the 2s watchdog and clear
         // the one-shot latch so the next call/upgrade starts clean. The
@@ -3232,6 +3247,56 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// fetched `RTCPeerConnectionDelegate` header — only the stats API
     /// exposes it — so that half of this poll has no event-driven
     /// replacement and stays on the timer.
+    ///
+    /// RE-VERIFIED (2026-08-27, best-practices audit item 3) — the prior
+    /// conclusion right above was checked ONLY against
+    /// `RTCPeerConnectionDelegate`. This pass re-fetched and grepped the
+    /// pinned `webrtc-sdk/webrtc` `m144_release` tag's ENTIRE ObjC SDK
+    /// surface a CPU/encoder-load push event could plausibly live on, not
+    /// just that one protocol:
+    ///   - `sdk/objc/api/peerconnection/RTCPeerConnection.h` — the complete
+    ///     `RTCPeerConnectionDelegate` protocol (both the `@required` block
+    ///     and the `@optional` block) has exactly 14 methods: signaling
+    ///     state, add/remove stream, renegotiation-needed, ICE connection/
+    ///     gathering state, ICE candidate generate/remove, data channel
+    ///     open, standardized ICE state, overall connection state,
+    ///     start-receiving-on-transceiver, add/remove receiver, the
+    ///     candidate-pair-changed one already wired above, and ICE-gather
+    ///     failure. None carry an encoder-load/quality-limitation payload.
+    ///   - `sdk/objc/api/peerconnection/RTCRtpSender.h` +
+    ///     `RTCRtpSender+Native.h` — the sender is a plain property bag
+    ///     (`parameters`, `track`, `streamIds`, `dtmfSender`) plus one
+    ///     native-only method (`setFrameEncryptor:`). No delegate protocol,
+    ///     no observer registration API of any kind.
+    ///   - `sdk/objc/api/peerconnection/RTCPeerConnection+Stats.mm` — the
+    ///     ACTUAL implementation backing every stats entry point
+    ///     (`statisticsForSender:`, `statisticsForReceiver:`,
+    ///     `statisticsWithCompletionHandler:`, `statsForTrack:...`) shows
+    ///     they all route through `nativePeerConnection->GetStats(...)`
+    ///     with a `StatsCollectorCallbackAdapter`/`StatsObserverAdapter`
+    ///     whose `OnStatsDelivered`/`OnComplete` fires its Obj-C completion
+    ///     handler EXACTLY ONCE per `GetStats()` call, then nils the
+    ///     handler out (`completion_handler_ = nil`). There is no
+    ///     persistent-subscription variant anywhere in this file — every
+    ///     stats read, including `qualityLimitationReason`, is a one-shot
+    ///     pull, confirmed from the adapter code itself rather than
+    ///     inferred from the header alone.
+    ///   - `sdk/objc/base/RTCVideoEncoder.h` — the protocol a CUSTOM
+    ///     encoder implementation conforms TO (`setCallback:`,
+    ///     `startEncodeWithSettings:...`, `encode:...`, `setBitrate:...`,
+    ///     `scalingSettings`) — the app-facing direction is backwards from
+    ///     what would be needed (this app doesn't implement a custom
+    ///     encoder; it uses the SDK's built-in hardware H264/H265 path),
+    ///     and even the QP-scaling hook here (`scalingSettings`) is a
+    ///     THRESHOLD the app can SET, not an event the app RECEIVES.
+    /// CONCLUSION UNCHANGED from `0aa6865`'s own: no event-driven
+    /// replacement for the CPU-backpressure poll half exists in this SDK
+    /// surface. This is not "not yet found" — it is "checked the surfaces
+    /// where such a hook would have to live, and it is not there." The 3s
+    /// poll (`evaluateBackpressure`, fed from `pollVideoStatsOnce`) stays
+    /// exactly as-is; a tighter poll interval was considered and
+    /// deliberately NOT applied — that would be re-labeling polling as
+    /// "event-driven," not actually closing the gap.
     private func resolveAndApplyRouteTier() {
         guard let pc = peerConnection?.peerConnection else { return }
         pc.statistics { [weak self] report in
@@ -3289,20 +3354,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
-    /// Compose ALL THREE clamp layers into one effective sender ceiling
-    /// and apply it: route tier (W-ROUTECLAMP) x CPU-backpressure step
-    /// factor (W-BACKPRESSURE), floored at `VideoConstants
-    /// .minVideoBitrateBps`, then intersected with the peer's reported
-    /// VBWCAP (W-BWCAP) via `VideoBandwidthCap.clamp`. Mirrors Android's
-    /// documented `cap = min(local, remote-requested, relay)` composition
-    /// (`AdaptiveQualityRuntime.localCapBps` doc). No-op before the route
-    /// tier has resolved at least once.
+    /// Compose ALL FOUR clamp layers into one effective sender ceiling and
+    /// apply it: route tier (W-ROUTECLAMP) x CPU-backpressure step factor
+    /// (W-BACKPRESSURE), floored at `VideoConstants.minVideoBitrateBps`,
+    /// then intersected with the peer's reported VBWCAP (W-BWCAP) via
+    /// `VideoBandwidthCap.clamp`, then intersected with the locally-measured
+    /// GoogCC BWE ceiling (W-BWECOMPOSE, best-practices audit item 1) via
+    /// `_bweSenderCeiling.ceilingBps` — re-floored afterward since
+    /// intersecting four independent signals can in principle land below
+    /// the same floor `localMax` was already clamped to above. Mirrors
+    /// Android's documented `cap = min(local, remote-requested, relay)`
+    /// composition (`AdaptiveQualityRuntime.localCapBps` doc), now with a
+    /// real local-BWE term. No-op before the route tier has resolved at
+    /// least once.
     private func applyComposedVideoSenderClamp() {
         guard let routeCeiling = _routeTierDwell.committed.senderMaxBitrateBps else { return }
         let backpressureFactor = pow(backpressureStepFactor, Double(_backpressureSteps))
         let localMax = max(VideoConstants.minVideoBitrateBps,
                            Int(Double(routeCeiling) * backpressureFactor))
-        let finalMax = VideoBandwidthCap.clamp(localMax)
+        let peerClamped = VideoBandwidthCap.clamp(localMax)
+        let finalMax = max(VideoConstants.minVideoBitrateBps,
+                           min(peerClamped, _bweSenderCeiling.ceilingBps))
         applyVideoSenderMaxBitrate(finalMax)
     }
 
@@ -3437,15 +3509,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // pure read with zero effect on route-tier/backpressure
             // behavior.
             //
-            // Read-only: nothing downstream of `pc.statistics` reacts to
-            // this value yet — no app-level congestion response is wired
-            // to it (that remains the real-libwebrtc GoogCC, unmodified,
-            // exactly as before this change). The audit's suggested phase
-            // 2 ("adapt AbrController... for the native SRTP path too")
-            // is a real behavior change to the send path and is NOT
-            // attempted here — it needs live-device numbers from THIS
-            // observability phase first, which this box (no Swift
-            // toolchain, see repo CLAUDE.md) cannot produce.
+            // PHASE 2 — W-BWECOMPOSE (2026-08-27, best-practices audit item
+            // 1). This used to be read-only ("no app-level congestion
+            // response is wired to it yet"). It now is: right below,
+            // `_bweSenderCeiling.observe` folds this same sample into the
+            // pure `BweSenderCeiling` decision helper (see its own kdoc for
+            // the AIMD-mirroring shape and the composition into
+            // `applyComposedVideoSenderClamp`), on a `true` return
+            // (ceiling actually changed) re-applying the composed sender
+            // clamp. The real-libwebrtc GoogCC computation this value comes
+            // from is still untouched — this only ever narrows what the
+            // RTP sender's `maxBitrateBps` is set to, one more min() term
+            // alongside route-tier/backpressure/VBWCAP.
             var bweAvailableOutgoingBps = -1.0
             if let activePair = report.statistics.values.first(where: { s in
                     s.type == "candidate-pair" &&
@@ -3454,6 +3529,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }) {
                 bweAvailableOutgoingBps = (activePair.values["availableOutgoingBitrate"] as? NSNumber)?.doubleValue
                     ?? bweAvailableOutgoingBps
+            }
+            if self._bweSenderCeiling.observe(rawAvailableOutgoingBps: bweAvailableOutgoingBps) {
+                self.applyComposedVideoSenderClamp()
             }
             // Resolve codec mimeType + the ACTIVE sdpFmtpLine from the
             // referenced codec stats object — the fmtp Chromium/libwebrtc

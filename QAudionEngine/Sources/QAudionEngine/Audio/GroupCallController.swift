@@ -860,6 +860,14 @@ public final class GroupCallController: @unchecked Sendable {
         room.onLocalScreenShareChanged = { [weak self] active in self?.onLocalScreenShareChanged?(active) }
         room.onParticipant = { [weak self] id, present in self?.onSfuParticipant?(id, present) }
         room.onError = { [weak self] err in self?.onSfuError?(err) }
+        // W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) —
+        // fires only for a GENUINE mid-call SFU disconnect (the SFU was
+        // previously healthy and connected) — see `LiveKitGroupCallRoom
+        // .onSfuDisconnectedMidCall`'s own kdoc for how that is
+        // distinguished from an app-initiated disconnect.
+        room.onSfuDisconnectedMidCall = { [weak self] error in
+            self?.handleSfuDisconnectedMidCall(callId: callId, error: error)
+        }
         // Tier-1 layout toggle (item 5) — passthrough, see
         // `onActiveSpeakersChanged`'s kdoc.
         room.onSpeakingParticipantsChanged = { [weak self] identities in self?.onActiveSpeakersChanged?(identities) }
@@ -990,6 +998,49 @@ public final class GroupCallController: @unchecked Sendable {
         lock.unlock()
         print("[GroupCallController] SFU unavailable (\(reason)) — using WS-relay mesh")
         do { try startAudioPipeline() } catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
+    }
+
+    /// W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) — a
+    /// mid-call SFU disconnect (the SFU was previously healthy and
+    /// connected, unlike `handleSfuUnavailable`'s and `handleSfuToken`'s
+    /// own catch block's setup-time TOTAL failure to ever connect) now
+    /// degrades the call to the SAME WS-relay mesh path those two failure
+    /// cases already use, instead of just surfacing the error and leaving
+    /// the call with no media transport at all. Wired from
+    /// `LiveKitGroupCallRoom.onSfuDisconnectedMidCall`, itself fired from
+    /// that class's `room(_:didDisconnectWithError:)` RoomDelegate method
+    /// ONLY when the disconnect was NOT this app's own `disconnect()` call
+    /// (see that flag's kdoc) — so an ordinary call-end or a fast SFU
+    /// rejoin's own teardown never mistakenly triggers this fallback.
+    ///
+    /// `callId == activeCallId` guard mirrors `handleSfuUnavailable`;
+    /// binding `room` off `sfuRoom` (rather than just checking `!= nil`)
+    /// additionally guards against a redelivered/late callback firing after
+    /// this same fallback (or a normal teardown, which clears `sfuRoom`
+    /// under the same lock) has already run for this call — same
+    /// "only once" discipline as `handleSfuToken`'s `stillCurrent` check.
+    private func handleSfuDisconnectedMidCall(callId: String, error: Error?) {
+        lock.lock()
+        let shouldFallBack = SfuDisconnectFallbackDecision.shouldFallBack(
+            eventCallId: callId, activeCallId: activeCallId, hasSfuRoom: sfuRoom != nil
+        )
+        guard shouldFallBack, let room = sfuRoom else { lock.unlock(); return }
+        usingSfu = false
+        sfuRoom = nil
+        lock.unlock()
+        let errDesc = error.map { "\($0)" } ?? "no error"
+        print("[GroupCallController] SFU disconnected mid-call (\(errDesc)) — falling back to WS-relay mesh")
+        // W-GRPSFUDISCONNECTRACE parity — same pattern as `teardown()`: a
+        // fast SFU rejoin's `handleSfuToken` awaits this exact cleanup
+        // before activating a new room's shared audio session, and the
+        // wrapper's own `disconnect()` still runs its real cleanup (grace
+        // timers, viewport caches, thermal observer) even though the SDK
+        // connection is already gone — see that method's kdoc.
+        let disconnectTask = Task { await room.disconnect() }
+        lock.withLock { pendingSfuDisconnect = disconnectTask }
+        do { try startAudioPipeline() } catch {
+            print("[GroupCallController] mid-call fallback startAudioPipeline failed: \(error)")
+        }
     }
 
     /// W-GRPVIDEO: mid-call camera on/off. No-op unless the call is
