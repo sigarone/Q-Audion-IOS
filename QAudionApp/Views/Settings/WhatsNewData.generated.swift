@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1040",
+              date: "2026-08-27",
+              title: "v1.0.1040",
+              bullets: [
+                "feat(call): group-call SFU-outage fallback audio, receive-side (QUAD AUDIO_DATA)",
+                "fix(test): update AudioProfileTests literals for the 40kbps standard-block rate",
+                "fix(call): raise Opus preferred bitrate 32->40 kbps within existing block headroom",
+                "fix(call): BWE-composed video ceiling + mid-call SFU disconnect fallback (P3 batch)",
+              ]),
         .init(id: "v1.0.1039",
               date: "2026-08-27",
               title: "v1.0.1039",
               bullets: [
+                "chore: regenerate changelog for v1.0.1039",
                 "fix(call): video WS-relay gate must confirm real cryptor attach, not just ICE (W-VIDEOSENDHEALTH)",
                 "fix(call): group video publish forces VP8 simulcast, unconditionally",
               ]),
@@ -192,13 +202,6 @@ extension ReleaseNote {
                 "fix(livekit): rebase AES-256 fork onto 2.15.3, fixes ITMS-90338",
                 "revert(call): dcMuxAdvertiseEnabled back to true — was on for a reason",
                 "revert(call): dcMuxAdvertiseEnabled back to false — flipped without evidence",
-              ]),
-        .init(id: "v1.0.1020",
-              date: "2026-08-21",
-              title: "v1.0.1020",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1020",
-                "fix(security): I8 full follow-up sweep — remaining ~679 print() sites read, 14 files fixed",
               ]),
     ]
 }
