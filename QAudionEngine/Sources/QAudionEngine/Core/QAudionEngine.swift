@@ -617,8 +617,17 @@ public final class QAudionEngine: @unchecked Sendable {
         // (the Opus wideband speech plateau, see `AudioCodecPrefs`);
         // `clampToBlock` is the wire gate underneath it, so raising that cap
         // later can never silently push a frame past what the block holds.
-        // Today the derived ceiling is the looser of the two (41 kbps at 120 B
-        // / 20 ms), so nothing about the current operating point changes.
+        //
+        // W-OPUSHEADROOM (2026-08-27) — the base preferred bitrate
+        // (`AudioConstants.opusBitrate`, hence `AudioCodecPrefs.bitrateKbps`)
+        // moved from 32 to 40 kbps, i.e. exactly up to the product cap. The
+        // standard-profile ceiling (41 kbps at 120 B / 20 ms) is still the
+        // looser of the two, so a standard-profile call's operating point DOES
+        // change now (32 → 40 kbps) and still fits with headroom to spare.
+        // The long-profile ceiling (32 kbps, zero headroom) is the tighter one
+        // and clamps this same 40 kbps input straight back down to 32 — see
+        // `profile.clamp` below, which is the reason raising the base constant
+        // needed no change here at all.
         //
         // W-LONGAUDIO (2026-08-10) — clamp with the ACTIVE profile's block and
         // frame duration, and rebuild the config from the profile.
