@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Drives an N-way audio-only group call over the server-side SFU.
 /// Direct port of Android's `feature/feature-call/.../domain/GroupCallController.kt`,
@@ -124,58 +123,87 @@ public final class GroupCallController: @unchecked Sendable {
     private static let nackRetryCooldown: TimeInterval = 5.0
     private static let nackRetryMaxAttempts = 4
 
-    // ─── W-GRPFALLBACKAUDIO-IOS (2026-08-27): pairwise QUAD PQC handshake +
-    // sealed fallback audio, RECEIVE-side priority, for SFU-outage group
-    // calls. Mirrors Desktop's `GroupCallController.ts` (`handshake`,
-    // `sessionKeys`, `pendingOffers`, `startAudioFallback`,
-    // `GroupFallbackAudioSession`) — see that file's own kdoc for the full
-    // design this ports. UNLIKE Desktop, this mesh handshake is deliberately
-    // NOT run eagerly on every roster join: Desktop's copy also feeds a
-    // crypto-pin shield-icon fingerprint UI (`GroupCryptoProfileBody.svelte`)
-    // that has no iOS counterpart (`GroupSecuritySheet.swift` documents that
-    // group calls have no in-call SAS/crypto-pin ceremony on this platform),
-    // so running ML-KEM-1024 handshakes against every member of every call
-    // regardless of SFU health would spend real CPU/battery for zero benefit
-    // here. iOS only starts this mesh when the SFU is confirmed unreachable
-    // — see `startFallbackHandshakeMesh()`, called from the SAME two sites
-    // (`handleSfuUnavailable`, `handleSfuDisconnectedMidCall`) that already
-    // gate the WS-relay-mesh `startAudioPipeline()` fallback.
+    // ─── W-GRPFALLBACKAUDIO-IOS (2026-08-27, rewired same day to
+    // W-GRPAUDIOKEY): sealed fallback audio, RECEIVE-side priority, for
+    // SFU-outage group calls. Originally ran a pairwise ML-KEM-1024
+    // handshake mesh per peer (mirroring Desktop's OLD `GroupCallController
+    // .ts` `handshake`/`sessionKeys`/`pendingOffers`/`startAudioFallback`
+    // design) before a full cross-repo investigation found this codebase
+    // ALREADY ships a complete, live, production-proven, cross-platform-
+    // KAT-verified Signal-style group sender-key ratchet
+    // (`GroupSenderKey`/`GroupSession`, magic 0xE4) whose `SK_0`/`CK_0` is
+    // already redistributed to every group member on every membership
+    // change (`sender_key_init`/`sender_key_rotate`) and already reused as
+    // the LiveKit SFU media key (`GroupSession.currentSendKey`/
+    // `currentRecvKey`). This section now derives its own key from that
+    // SAME primitive instead — see `GroupSenderKey`'s W-GRPAUDIOKEY
+    // extension for the exact derivation and the KAT vectors this matches
+    // byte-for-byte with Desktop/Android. Zero handshake, zero new network
+    // messages: `activateFallbackAudio()` (called from the same SFU-
+    // unreachable sites that already gate the WS-relay-mesh
+    // `startAudioPipeline()` fallback) just starts deriving/caching
+    // `audio_key`s locally.
     //
-    // SEND-SIDE SCOPE: this pass wires RECEIVE only (unseal inbound
-    // AUDIO_DATA, feed decoded PCM into the existing `onIncomingPcmFrame`
-    // playback sink) plus the handshake BOTH directions need regardless of
-    // which side ever sends audio (a session key cannot exist without a
-    // completed OFFER/ACCEPT, whichever end initiates). iOS publishing its
-    // OWN mic audio via AUDIO_DATA (the Desktop-side `sendPcm`/
-    // `sendFallbackPcm` counterpart) is NOT implemented — see the commit
-    // message / task report for why this was the deliberate stopping point.
-    private let fallbackPqc = PqcKeyExchange()
-    /// True only once `startFallbackHandshakeMesh()` has actually engaged
-    /// for the CURRENT call — the single gate `handleQuadFallbackEnvelope`
-    /// checks before doing ANY handshake or AUDIO_DATA work, so a QUAD
-    /// envelope arriving while the SFU is healthy (a peer whose OWN SFU
-    /// connection dropped before ours, or a stray/replayed message) is a
-    /// silent no-op, never a resource sink.
+    // SEND-SIDE SCOPE: unchanged from the original pass — RECEIVE only
+    // (unseal inbound AUDIO_DATA, feed decoded PCM into the existing
+    // `onIncomingPcmFrame` playback sink) is wired end-to-end.
+    // `sealFallbackAudioFrame(_:)` below provides the TX-side crypto
+    // primitive (so a future mic-capture integration can call it directly)
+    // but nothing in this codebase invokes it yet — iOS publishing its OWN
+    // mic audio via AUDIO_DATA remains NOT implemented, same deliberate
+    // stopping point as before.
+    /// True only once `activateFallbackAudio()` has actually engaged for
+    /// the CURRENT call — the single gate `handleQuadFallbackEnvelope`
+    /// checks before doing ANY AUDIO_DATA work, so a QUAD envelope arriving
+    /// while the SFU is healthy (a peer whose OWN SFU connection dropped
+    /// before ours, or a stray/replayed message) is a silent no-op, never a
+    /// resource sink.
     private var fallbackAudioActive = false
-    /// Our own ephemeral ML-KEM-1024 keypair for an OFFER we sent and are
-    /// still awaiting the ACCEPT for. Cleared the moment the ACCEPT lands
-    /// (success) or the peer departs (`onUpdate`'s existing departure loop).
-    private var fallbackPendingOffers: [String: PqcKeyExchange.KeyPair] = [:]
-    /// Established pairwise session keys — 32B, HKDF-derived from the raw
-    /// ML-KEM-1024 shared secret AND both parties' identities (see
-    /// `deriveFallbackSessionKey`'s kdoc), one per peer, symmetric (same
-    /// value on both ends regardless of which side was role A). This is
-    /// the SAME key `GroupFallbackAudioSealer.sealAudio/openAudio` seals/
-    /// opens under.
-    private var fallbackSessionKeys: [String: Data] = [:]
-    /// RX-direction sealer + Opus decoder per peer. Deliberately a SEPARATE
-    /// namespace from `perSenderDecoders` (the `GroupSenderKey` broadcast
-    /// path's own per-sender decoders): these two mechanisms seal under
-    /// completely different keys or the SAME sender, and sharing Opus
-    /// decoder state between two independent frame streams for one sender
-    /// would desync exactly the way W477's split TX/RX SessionManagers
-    /// (`QAudionEngine.swift`) exist to prevent for the 1:1 path.
-    private var fallbackRxSealers: [String: GroupFallbackAudioSealer] = [:]
+    /// Our own current-epoch fallback-audio TX key context (`audio_key` +
+    /// the epoch-fixed nonce random prefix), derived from `groupSession
+    /// .currentSendKey` — see `ensureFallbackAudioEpochKey()`. `nil` until
+    /// first derived (on activation, or lazily re-derived after a local
+    /// epoch bump clears it — see `promoteFallbackAudioEpoch`).
+    private struct FallbackAudioTxEpochKey {
+        let epochId: UInt32
+        let audioKey: Data
+        let noncePrefix: Data
+    }
+    private var fallbackTxEpochKey: FallbackAudioTxEpochKey?
+    /// TX-only sealer instance — owns the monotonic per-epoch frame counter
+    /// `sealFallbackAudioFrame` advances. `openAudio` (RX) is stateless
+    /// (static) precisely so RX never needs one of these per sender — see
+    /// `GroupFallbackAudioSealer`'s own kdoc.
+    private let fallbackTxSealer = GroupFallbackAudioSealer()
+    /// Per-sender CURRENT-epoch `audio_key` cache — lazily populated from
+    /// `groupSession.currentRecvKey` the first time a frame from that
+    /// sender needs opening this epoch (avoids re-deriving on every single
+    /// frame). Cleared wholesale (not per-sender) on a local epoch bump —
+    /// see `promoteFallbackAudioEpoch`.
+    private var fallbackRxAudioKeys: [String: GroupAudioEpochKeyResolver.CachedKey] = [:]
+    /// Per-sender GRACE-window `audio_key` — snapshotted from
+    /// `fallbackRxAudioKeys` the moment the local epoch bumps, so frames
+    /// already in flight from peers who haven't rotated onto the new epoch
+    /// yet still decode for `Self.fallbackAudioEpochGraceWindow` after the
+    /// bump. Expired entries are treated as absent by
+    /// `GroupAudioEpochKeyResolver` (checked lazily on read, never swept
+    /// proactively).
+    private var fallbackRxAudioKeysGrace: [String: GroupAudioEpochKeyResolver.CachedKey] = [:]
+    private var fallbackRxAudioKeysGraceExpiresAt: [String: Date] = [:]
+    /// W-GRPAUDIOKEY §7 — retain the previous epoch's `audio_key` this long
+    /// after a local epoch bump so frames already in flight from peers who
+    /// haven't rotated yet still decode. Named per the spec's "1.5-2
+    /// seconds" grace window.
+    private static let fallbackAudioEpochGraceWindow: TimeInterval = 2.0
+    /// Per-sender Opus decoder for the fallback-audio RX path. Deliberately
+    /// a SEPARATE namespace from `perSenderDecoders` (the `GroupSenderKey`
+    /// broadcast path's own per-sender decoders): these two mechanisms
+    /// decode independent frame streams for potentially the SAME sender
+    /// (whichever transport — SFU, WS-relay-mesh, or this QUAD fallback —
+    /// is actually carrying their audio right now), and sharing Opus
+    /// decoder state between two independent streams would desync exactly
+    /// the way W477's split TX/RX SessionManagers (`QAudionEngine.swift`)
+    /// exist to prevent for the 1:1 path.
     private var fallbackDecoders: [String: OpusCodec] = [:]
 
     // ─── W-GRPLIVEKIT: LiveKit SFU media transport (capability-gated) ──
@@ -839,7 +867,7 @@ public final class GroupCallController: @unchecked Sendable {
                         // bug in `handleSfuUnavailable` crashed a live 5-way
                         // call in `AVAudioPlayerNode.play()`.
                         do { try self.startAudioPipeline() } catch { print("[GroupCallController] startAudioPipeline failed: \(error)") }
-                        self.startFallbackHandshakeMesh()
+                        self.activateFallbackAudio()
                     }
                 }
             case .ended:
@@ -1034,7 +1062,7 @@ public final class GroupCallController: @unchecked Sendable {
                 }
                 await room.disconnect()
                 do { try self.startAudioPipeline() } catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
-                self.startFallbackHandshakeMesh()
+                self.activateFallbackAudio()
             }
         }
     }
@@ -1066,7 +1094,7 @@ public final class GroupCallController: @unchecked Sendable {
         lock.unlock()
         print("[GroupCallController] SFU unavailable (\(reason)) — using WS-relay mesh")
         do { try startAudioPipeline() } catch { print("[GroupCallController] fallback startAudioPipeline failed: \(error)") }
-        startFallbackHandshakeMesh()
+        activateFallbackAudio()
     }
 
     /// W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) — a
@@ -1110,67 +1138,82 @@ public final class GroupCallController: @unchecked Sendable {
         do { try startAudioPipeline() } catch {
             print("[GroupCallController] mid-call fallback startAudioPipeline failed: \(error)")
         }
-        startFallbackHandshakeMesh()
+        activateFallbackAudio()
     }
 
-    // ─── W-GRPFALLBACKAUDIO-IOS: pairwise QUAD handshake + fallback audio ──
+    // ─── W-GRPFALLBACKAUDIO-IOS / W-GRPAUDIOKEY: sender-key-derived fallback audio ──
 
-    /// Engage the SFU-outage fallback mesh for the CURRENT roster. Called
+    /// Engage the SFU-outage fallback path for the CURRENT call. Called
     /// from every genuine SFU-unreachable site (see the field group's own
     /// kdoc for the full list) — idempotent and safe to call repeatedly
     /// (e.g. `handleSfuUnavailable` then later a mid-call
     /// `handleSfuDisconnectedMidCall` for the same call): `fallbackAudioActive`
-    /// just latches true again, and `initiateFallbackHandshake` no-ops for
-    /// any peer already pending or established.
+    /// just latches true again, and `ensureFallbackAudioEpochKey` no-ops
+    /// once already derived for the current epoch.
     ///
-    /// Role assignment mirrors Desktop's W-GRPHSGLARE rule EXACTLY —
-    /// `PqcRtpFrameSealer.selfIsRoleA`, the SAME cross-platform tie-break
-    /// primitive already shared with the 1:1 video/SRTP sealer — so self
-    /// only ever INITIATES toward a peer whose userId compares
-    /// lexicographically larger; the reverse-role peer is expected to send
-    /// US an OFFER instead (`handleFallbackOffer`).
-    private func startFallbackHandshakeMesh() {
+    /// W-GRPAUDIOKEY (2026-08-27): no handshake, no network message —
+    /// `audio_key` is a pure local HKDF derivation from `SK_0`/`CK_0`, data
+    /// every group member already has for the LiveKit media key and the
+    /// WS-relay-mesh path (see `GroupSenderKey`'s W-GRPAUDIOKEY section).
+    /// Replaces the ML-KEM-1024 pairwise mesh this used to run here.
+    private func activateFallbackAudio() {
         lock.lock()
         fallbackAudioActive = true
-        let selfId = manager.selfUserId
-        let roster = groupState?.members ?? []
         lock.unlock()
-        for peerId in roster where peerId != selfId {
-            if PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) {
-                initiateFallbackHandshake(peerId: peerId)
-            }
-        }
+        ensureFallbackAudioEpochKey()
     }
 
-    /// Send a pairwise QUAD OFFER to `peerId` over the SAME broadcast
-    /// `group_call_forward` channel `manager.forwardAudioFrame` already
-    /// uses for `GroupSenderKey` audio — see `isQuadEnvelope`'s kdoc for why
-    /// sharing the channel is safe. No-op if a handshake with this peer is
-    /// already pending or already established.
-    private func initiateFallbackHandshake(peerId: String) {
+    /// (Re-)derive `fallbackTxEpochKey` for `groupState`'s CURRENT epoch if
+    /// not already cached for that epoch — no-op if there is no
+    /// bootstrapped `groupState` yet (fallback activated before the session
+    /// bootstrapped; `onUpdate`'s epoch-bump handling clears the cached key
+    /// so the NEXT call here re-derives against the new epoch) or if our
+    /// own send chain has no key yet (should not happen for a bootstrapped
+    /// state — see `GroupSession.currentSendKey`'s kdoc).
+    private func ensureFallbackAudioEpochKey() {
         lock.lock()
-        guard fallbackPendingOffers[peerId] == nil, fallbackSessionKeys[peerId] == nil else {
+        guard let gs = groupState else { lock.unlock(); return }
+        if let existing = fallbackTxEpochKey, existing.epochId == gs.groupEpoch {
             lock.unlock()
             return
         }
-        let kp: PqcKeyExchange.KeyPair
-        do {
-            kp = try fallbackPqc.generateKeyPair()
-        } catch {
-            lock.unlock()
-            print("[GroupCallController][fallback-audio] OFFER keypair generation failed for \(peerId.prefix(8))…: \(error)")
-            return
-        }
-        fallbackPendingOffers[peerId] = kp
+        guard let ck0 = groupSession.currentSendKey(state: gs) else { lock.unlock(); return }
+        let audioKey = GroupSenderKey.deriveAudioSessionKey(ck0: ck0)
+        let noncePrefix = Self.randomNoncePrefix()
+        fallbackTxEpochKey = FallbackAudioTxEpochKey(epochId: gs.groupEpoch, audioKey: audioKey, noncePrefix: noncePrefix)
         lock.unlock()
-        // W-QUADADVERT parity — mirrors Desktop's `initiateHandshakeWith`
-        // (and the 1:1 `CallController.ts` fix it cites): this OFFER
-        // advertises NO PSK fingerprints. There is no per-contact PSK
-        // catalogue reachable from a group-call roster entry on iOS today
-        // (unlike the 1:1 `QAudionCallIntegration` path), so there is
-        // nothing to advertise even if the wire format allowed it.
-        let offerWire = QAudionCapabilityExchange.createOffer(publicKey: kp.publicKey)
-        manager.forwardAudioFrame(offerWire)
+        fallbackTxSealer.resetFrameCounter()
+    }
+
+    private static func randomNoncePrefix() -> Data {
+        var rng = SystemRandomNumberGenerator()
+        var bytes = Data(capacity: GroupSenderKey.audioNonceRandomLen)
+        for _ in 0..<GroupSenderKey.audioNonceRandomLen {
+            bytes.append(UInt8.random(in: .min ... .max, using: &rng))
+        }
+        return bytes
+    }
+
+    /// Seal one Opus frame for outbound SFU-outage fallback audio under the
+    /// current epoch's `audio_key` — the TX counterpart to
+    /// `handleFallbackAudioData`'s receive path. Actual mic-capture→network
+    /// wiring for this path remains out of scope for this pass (unchanged
+    /// from the original W-GRPFALLBACKAUDIO-IOS receive-side-priority
+    /// scope, see this section's own kdoc); this method exists so the
+    /// crypto side is complete and ready for that future integration.
+    public func sealFallbackAudioFrame(_ opus: Data) -> Data? {
+        ensureFallbackAudioEpochKey()
+        lock.lock()
+        guard fallbackAudioActive, let ctx = fallbackTxEpochKey else { lock.unlock(); return nil }
+        let selfId = manager.selfUserId
+        lock.unlock()
+        do {
+            return try fallbackTxSealer.sealAudio(
+                opus: opus, audioKey: ctx.audioKey, noncePrefix: ctx.noncePrefix, epochId: ctx.epochId, senderId: selfId)
+        } catch {
+            print("[GroupCallController][fallback-audio] seal failed: \(error)")
+            return nil
+        }
     }
 
     /// Dispatch an inbound QUAD-wrapped envelope from `senderId`, already
@@ -1189,157 +1232,21 @@ public final class GroupCallController: @unchecked Sendable {
         guard active else { return }
         guard let message = QAudionCapabilityExchange.parse(wire) else { return }
         switch message {
-        case .offer(let peerPublicKey, _, _):
-            handleFallbackOffer(senderId: senderId, peerPublicKey: peerPublicKey)
-        case .accept(let ciphertext, _):
-            handleFallbackAccept(senderId: senderId, ciphertext: ciphertext)
         case .audioData(let frames):
             handleFallbackAudioData(senderId: senderId, frames: frames)
-        case .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce, .callHangup, .keyExchangeOffer, .keyExchangeAccept:
-            // Not applicable to the group-call fallback mesh — this channel
-            // only ever carries OFFER/ACCEPT/AUDIO_DATA (mirrors Desktop's
-            // `handleForwarded`, which only switches on those three types).
+        case .offer, .accept, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce, .callHangup, .keyExchangeOffer, .keyExchangeAccept:
+            // W-GRPAUDIOKEY (2026-08-27) — OFFER/ACCEPT are dead on this
+            // channel now that fallback-audio keys are pure local HKDF
+            // derivations from the pre-existing GroupSenderKey/GroupSession
+            // ratchet (see this section's kdoc): nothing on this or any
+            // interoperating platform sends them anymore. A stray OFFER/
+            // ACCEPT here (e.g. a mixed-version rollout peer still running
+            // the old mesh code, or a stale/replayed message on this
+            // unauthenticated-at-the-relay broadcast channel — see this
+            // function's own kdoc) is a silent no-op, same posture as every
+            // other not-applicable type here.
             break
         }
-    }
-
-    /// Responder side of the pairwise handshake.
-    ///
-    /// HARDENING BEYOND DESKTOP'S OWN CHECK (documented honestly, not
-    /// silently): Desktop's `handleForwarded` OFFER branch only drops a
-    /// competing inbound OFFER when self is role A AND already has a
-    /// pending offer of its own for that exact sender (`W-GRPHSGLARE`) — it
-    /// does NOT verify that self is even the LEGITIMATE role-B recipient of
-    /// an arbitrary broadcast OFFER before processing it. Because
-    /// `group_call_forward` fans out to every participant with no per-
-    /// recipient targeting, a THIRD roster member who was never the
-    /// intended recipient of A's OFFER-to-B still sees that broadcast and,
-    /// on Desktop's logic, would complete a spurious "handshake" with A
-    /// under `sessionKeys[A]`. In a call with only 2 participants (the only
-    /// configuration Desktop's own W-GRPFALLBACKAUDIO commit says it
-    /// verified — "two real controller instances") this can't arise; it is
-    /// a latent gap for 3+-party calls that this session found by reading
-    /// Desktop's source, not something introduced here. iOS adds one cheap,
-    /// wire-format-compatible guard that Desktop's protocol doesn't
-    /// preclude: only process an inbound OFFER when self is legitimately
-    /// role B relative to THIS sender (`!selfIsRoleA`) — i.e. only from a
-    /// peer the tie-break rule says should be initiating toward us at all.
-    /// This narrows, but on its own does not fully eliminate, the
-    /// multi-party cross-talk window (a bystander who IS legitimately
-    /// role B relative to the same sender can still process an OFFER
-    /// meant for someone else — this gate can't fully close that without a
-    /// wire-level target field Desktop's `AUDIO_DATA`/OFFER framing doesn't
-    /// carry, which this task was told not to invent). What actually closes
-    /// the resulting key-confusion risk is `deriveFallbackSessionKey`
-    /// (added after an external security review of this exact scenario):
-    /// even if a bystander completes a spurious encapsulation here, the
-    /// raw ML-KEM secret gets HKDF'd with THIS sender's id and OUR OWN id
-    /// baked into the KDF info string, so the resulting key can never match
-    /// what the real intended recipient derives — see that function's kdoc.
-    private func handleFallbackOffer(senderId: String, peerPublicKey: Data) {
-        lock.lock()
-        let selfId = manager.selfUserId
-        lock.unlock()
-        guard !PqcRtpFrameSealer.selfIsRoleA(selfId, senderId) else {
-            print("[GroupCallController][fallback-audio] dropping OFFER from \(senderId.prefix(8))… — self is role A relative to this sender, not a legitimate recipient")
-            return
-        }
-        let result: PqcKeyExchange.EncapsulationResult
-        do {
-            result = try fallbackPqc.encapsulate(remotePublicKey: peerPublicKey)
-        } catch {
-            print("[GroupCallController][fallback-audio] encapsulate failed for OFFER from \(senderId.prefix(8))…: \(error)")
-            return
-        }
-        let sessionKey = deriveFallbackSessionKey(rawSharedSecret: result.sharedSecret, selfId: selfId, peerId: senderId)
-        registerFallbackPeer(senderId, sessionKey: sessionKey)
-        let acceptWire = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext)
-        manager.forwardAudioFrame(acceptWire)
-        print("[GroupCallController][fallback-audio] pairwise session established (responder) with \(senderId.prefix(8))…")
-    }
-
-    /// Initiator side of the pairwise handshake — completes the ML-KEM
-    /// decapsulation against the ACCEPT's ciphertext using the ephemeral
-    /// keypair `initiateFallbackHandshake` stashed. Correlated by
-    /// `fallbackPendingOffers[senderId]` — an ACCEPT from anyone we never
-    /// sent a pending OFFER to (including a bystander's own spurious ACCEPT
-    /// to an OFFER that wasn't meant for them, see `handleFallbackOffer`'s
-    /// kdoc) is silently dropped here, exactly like Desktop's own
-    /// `pendingOffers.get(r.sender_id)` gate.
-    private func handleFallbackAccept(senderId: String, ciphertext: Data) {
-        lock.lock()
-        guard let kp = fallbackPendingOffers[senderId] else {
-            lock.unlock()
-            return
-        }
-        let selfId = manager.selfUserId
-        lock.unlock()
-        let sharedSecret: Data
-        do {
-            sharedSecret = try fallbackPqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
-        } catch {
-            print("[GroupCallController][fallback-audio] decapsulate failed for ACCEPT from \(senderId.prefix(8))…: \(error)")
-            return
-        }
-        lock.lock()
-        fallbackPendingOffers.removeValue(forKey: senderId)
-        lock.unlock()
-        let sessionKey = deriveFallbackSessionKey(rawSharedSecret: sharedSecret, selfId: selfId, peerId: senderId)
-        registerFallbackPeer(senderId, sessionKey: sessionKey)
-        print("[GroupCallController][fallback-audio] pairwise session established (initiator) with \(senderId.prefix(8))…")
-    }
-
-    /// W-GRPFALLBACKAUDIO-IOS — binds the raw ML-KEM shared secret to BOTH
-    /// parties' identities before it is ever used to seal/open audio.
-    ///
-    /// Added after an external second-opinion review (mandatory per
-    /// CLAUDE.md Rule 3/8 for crypto-protocol code) of the bystander
-    /// cross-talk gap documented on `handleFallbackOffer`: on a broadcast-
-    /// only relay, a third participant C can encapsulate against role-A
-    /// peer A's public OFFER-to-B key and derive A VALID (from C's point of
-    /// view) raw ML-KEM secret with A — even though A never intended that
-    /// exchange. Left un-derived, that raw secret is 32 symmetric bytes
-    /// with no identity binding at all, so nothing about it "knows" it
-    /// wasn't the B-A key. This derivation closes that gap without any
-    /// wire-format change (the review's recommendation): both ends run the
-    /// SAME KDF with `info` built from the pair's ROLE-CANONICAL id order
-    /// (role-A id first, role-B id second — computed the same way on both
-    /// ends via `PqcRtpFrameSealer.selfIsRoleA`, independent of which of
-    /// the two literal peerIds is "self" vs "peer" here). A bystander's
-    /// spurious raw secret gets HKDF'd under a DIFFERENT info string
-    /// (C's own id in the role-B slot, not B's) than what the genuine
-    /// A-B pair derives, so the two are cryptographically unrelated — the
-    /// bystander can never produce a key A will ever accept an AES-GCM tag
-    /// under, closing the confusion at the FIRST use of the secret rather
-    /// than relying on it merely being an inert, uncorrelated 32 bytes.
-    private func deriveFallbackSessionKey(rawSharedSecret: Data, selfId: String, peerId: String) -> Data {
-        let (roleAId, roleBId) = PqcRtpFrameSealer.selfIsRoleA(selfId, peerId)
-            ? (selfId, peerId) : (peerId, selfId)
-        let info = Data("qaudion-group-fallback-audio-v1:\(roleAId.lowercased())|\(roleBId.lowercased())".utf8)
-        let derived = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: rawSharedSecret),
-            salt: Data("qaudion-group-fallback-audio-salt-v1".utf8),
-            info: info,
-            outputByteCount: 32
-        )
-        return derived.withUnsafeBytes { Data($0) }
-    }
-
-    private func registerFallbackPeer(_ peerId: String, sessionKey: Data) {
-        lock.lock()
-        fallbackSessionKeys[peerId] = sessionKey
-        fallbackRxSealers[peerId] = GroupFallbackAudioSealer()
-        fallbackDecoders[peerId] = OpusCodec()
-        lock.unlock()
-    }
-
-    private func clearFallbackPeerState(_ peerId: String) {
-        lock.lock()
-        fallbackPendingOffers.removeValue(forKey: peerId)
-        fallbackSessionKeys.removeValue(forKey: peerId)
-        fallbackRxSealers.removeValue(forKey: peerId)
-        fallbackDecoders.removeValue(forKey: peerId)
-        lock.unlock()
     }
 
     /// Unseal + decode an inbound AUDIO_DATA batch and feed every decoded
@@ -1351,22 +1258,20 @@ public final class GroupCallController: @unchecked Sendable {
     /// know or care which one it was.
     private func handleFallbackAudioData(senderId: String, frames: [Data]) {
         lock.lock()
-        guard fallbackAudioActive, let key = fallbackSessionKeys[senderId] else {
-            lock.unlock()
-            return
-        }
-        let sealer = fallbackRxSealers[senderId]
+        guard fallbackAudioActive else { lock.unlock(); return }
         var decoder = fallbackDecoders[senderId]
         if decoder == nil {
             decoder = OpusCodec()
             fallbackDecoders[senderId] = decoder
         }
         lock.unlock()
-        guard let sealer = sealer, let decoder = decoder else { return }
+        guard let decoder = decoder else { return }
         for raw in frames {
             let opened: GroupFallbackAudioSealer.OpenResult
             do {
-                opened = try sealer.openAudio(wire: raw, sessionKey: key)
+                opened = try GroupFallbackAudioSealer.openAudio(wire: raw, senderId: senderId) { [weak self] epochId in
+                    self?.resolveFallbackRxAudioKey(senderId: senderId, epochId: epochId)
+                }
             } catch {
                 print("[GroupCallController][fallback-audio] open failed sender=\(senderId.prefix(8))…: \(error)")
                 continue
@@ -1384,6 +1289,51 @@ public final class GroupCallController: @unchecked Sendable {
             }
             onIncomingPcmFrame?(senderId, pcm)
         }
+    }
+
+    /// W-GRPAUDIOKEY §7 — resolve the `audio_key` to open a frame claiming
+    /// `epochId` from `senderId`: lazily derive+cache it from
+    /// `groupSession.currentRecvKey` if it is for the CURRENT epoch and not
+    /// cached yet, otherwise defer to `GroupAudioEpochKeyResolver` for the
+    /// current-vs-grace-window accept/reject decision (see that type's own
+    /// kdoc for the full rationale — this is the function-boundary split
+    /// that keeps the accept/reject logic itself unit-testable without a
+    /// live `GroupCallController`).
+    private func resolveFallbackRxAudioKey(senderId: String, epochId: UInt32) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let gs = groupState else { return nil }
+        if epochId == gs.groupEpoch, fallbackRxAudioKeys[senderId] == nil,
+           let ck0 = groupSession.currentRecvKey(state: gs, senderId: senderId) {
+            let audioKey = GroupSenderKey.deriveAudioSessionKey(ck0: ck0)
+            fallbackRxAudioKeys[senderId] = GroupAudioEpochKeyResolver.CachedKey(epochId: epochId, audioKey: audioKey)
+        }
+        return GroupAudioEpochKeyResolver.resolve(
+            wireEpochId: epochId,
+            currentEpochId: gs.groupEpoch,
+            current: fallbackRxAudioKeys[senderId],
+            grace: fallbackRxAudioKeysGrace[senderId],
+            graceExpiresAt: fallbackRxAudioKeysGraceExpiresAt[senderId],
+            now: Date()
+        )
+    }
+
+    /// W-GRPAUDIOKEY §7 — called under `lock`, immediately after
+    /// `groupState.groupEpoch` bumps (`onUpdate`'s departure-rekey block):
+    /// snapshots every currently-cached per-sender `audio_key` for the OLD
+    /// epoch into the grace slot (expiring
+    /// `Self.fallbackAudioEpochGraceWindow` from now) so in-flight frames
+    /// from peers who haven't rotated onto the new epoch yet still decode,
+    /// then clears the live cache and this controller's own TX epoch key so
+    /// both re-derive lazily against the new epoch on next use.
+    private func promoteFallbackAudioEpoch(from oldEpoch: UInt32) {
+        let expiresAt = Date().addingTimeInterval(Self.fallbackAudioEpochGraceWindow)
+        for (sender, entry) in fallbackRxAudioKeys where entry.epochId == oldEpoch {
+            fallbackRxAudioKeysGrace[sender] = entry
+            fallbackRxAudioKeysGraceExpiresAt[sender] = expiresAt
+        }
+        fallbackRxAudioKeys.removeAll()
+        fallbackTxEpochKey = nil
     }
 
     /// W-GRPVIDEO: mid-call camera on/off. No-op unless the call is
@@ -1566,33 +1516,9 @@ public final class GroupCallController: @unchecked Sendable {
         let selfId = manager.selfUserId
         var initsToSend: [(peer: String, env: SenderKeyInitEnvelope)] = []
         var rotatesToSend: [(peer: String, env: SenderKeyRotateEnvelope)] = []
-        // W-GRPFALLBACKAUDIO-IOS — peers who join the roster AFTER the mesh
-        // already engaged (SFU outage discovered mid-call, then someone
-        // else joins) still need their own pairwise handshake; peers who
-        // LEAVE need their fallback session key/sealer/decoder state wiped
-        // (forward-secrecy parity with the existing `GroupSenderKey`
-        // departure rekey a few lines below, and prevents a stale key from
-        // ever being reused if the same userId rejoins later in the call).
-        var newFallbackPeers: [String] = []
-        var departedFallbackPeers: [String] = []
 
         lock.lock()
         if callId == activeCallId {
-            if fallbackAudioActive {
-                let rosterSet = Set(participants)
-                for peer in participants where peer != selfId {
-                    if PqcRtpFrameSealer.selfIsRoleA(selfId, peer),
-                       fallbackPendingOffers[peer] == nil, fallbackSessionKeys[peer] == nil {
-                        newFallbackPeers.append(peer)
-                    }
-                }
-                // Independent of the GroupSenderKey `departed`/`senderKeyEpoch`
-                // gate below — the fallback mesh has no epoch concept, so a
-                // peer with ANY fallback state (pending or established) who
-                // dropped out of the fresh roster is unconditionally stale.
-                let knownFallbackPeers = Set(fallbackPendingOffers.keys).union(fallbackSessionKeys.keys)
-                departedFallbackPeers = knownFallbackPeers.subtracting(rosterSet).filter { $0 != selfId }
-            }
             if let gs = groupState {
                 for peer in senderKeysCapable where peer != selfId {
                     if !gs.members.contains(peer) {
@@ -1645,12 +1571,34 @@ public final class GroupCallController: @unchecked Sendable {
                     : Set<String>()
                 if !departed.isEmpty {
                     var lastPkg: GroupRotatePackage?
+                    // W-GRPAUDIOKEY §7 — snapshot the epoch BEFORE the bump so
+                    // the (possibly multi-removal) loop below still promotes
+                    // fallback-audio's per-sender key cache exactly once,
+                    // against the epoch value it actually started at.
+                    let epochBeforeDeparture = gs.groupEpoch
                     for removed in departed where gs.members.contains(removed) {
                         let target = UInt32(truncatingIfNeeded: senderKeyEpoch - 1)
                         gs.groupEpoch = target
                         if let pkg = try? groupSession.handleMemberRemoved(state: gs, removed: removed) {
                             lastPkg = pkg
                         }
+                    }
+                    if fallbackAudioActive, gs.groupEpoch != epochBeforeDeparture {
+                        promoteFallbackAudioEpoch(from: epochBeforeDeparture)
+                    }
+                    // W-GRPFALLBACKAUDIO-IOS — a departed peer's fallback-audio
+                    // decoder is real stateful Opus-decode resource hygiene
+                    // (unrelated to the epoch/key promotion above, which
+                    // deliberately still honors a departing peer's LAST
+                    // in-flight frame during the grace window). Their
+                    // current-epoch key cache entry is stale the moment they
+                    // leave — the roster is gone, so nothing will legitimately
+                    // re-derive it — so evict it too; the GRACE entry (if any)
+                    // is left alone so a genuinely-in-flight final frame from
+                    // them still decodes.
+                    for removed in departed {
+                        fallbackRxAudioKeys.removeValue(forKey: removed)
+                        fallbackDecoders.removeValue(forKey: removed)
                     }
                     if let pkg = lastPkg {
                         for peer in gs.members where peer != selfId {
@@ -1661,13 +1609,6 @@ public final class GroupCallController: @unchecked Sendable {
             }
         }
         lock.unlock()
-
-        for peer in newFallbackPeers {
-            initiateFallbackHandshake(peerId: peer)
-        }
-        for peer in departedFallbackPeers {
-            clearFallbackPeerState(peer)
-        }
 
         for item in initsToSend {
             sendSenderKeyEnvelope(peer: item.peer, selfId: selfId, env: item.env)
@@ -1984,16 +1925,18 @@ public final class GroupCallController: @unchecked Sendable {
         nackedPeers.removeAll()
         lastKnownE2eeState.removeAll()
         wantsVideo = false
-        // W-GRPFALLBACKAUDIO-IOS — this controller is long-lived across
-        // calls (see the Tier-1 comment below for the same rationale on
-        // reactions/raised-hands), so every piece of fallback-mesh state
-        // must be wiped here or it leaks into the NEXT call: a stale
-        // `fallbackSessionKeys` entry under a reused userId would silently
-        // decrypt/encrypt under the WRONG call's key.
+        // W-GRPFALLBACKAUDIO-IOS / W-GRPAUDIOKEY — this controller is
+        // long-lived across calls (see the Tier-1 comment below for the
+        // same rationale on reactions/raised-hands), so every piece of
+        // fallback-audio state must be wiped here or it leaks into the NEXT
+        // call: a stale `fallbackRxAudioKeys`/`fallbackTxEpochKey` entry
+        // under a reused userId or epoch number would silently decrypt/
+        // encrypt under the WRONG call's key.
         fallbackAudioActive = false
-        fallbackPendingOffers.removeAll()
-        fallbackSessionKeys.removeAll()
-        fallbackRxSealers.removeAll()
+        fallbackTxEpochKey = nil
+        fallbackRxAudioKeys.removeAll()
+        fallbackRxAudioKeysGrace.removeAll()
+        fallbackRxAudioKeysGraceExpiresAt.removeAll()
         fallbackDecoders.removeAll()
         // Tier-1: reset per-call transient state so a subsequent call
         // (this controller is long-lived across calls) never leaks the

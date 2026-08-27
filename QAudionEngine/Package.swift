@@ -411,6 +411,12 @@ let package = Package(
                 .copy("Video/Resources/sframe-video-kat.json"),
                 .copy("Crypto/Resources/handshake-sig-kat.json"),
                 .copy("Crypto/Resources/psk-mix-v1-kat.json"),
+                // W-GRPAUDIOKEY (2026-08-27) — group-call SFU-outage
+                // fallback-audio session/frame-key derivation, byte-for-byte
+                // shared cross-platform with Desktop/Android (see
+                // GroupAudioSessionKeyKatTests.swift + GroupSenderKey's
+                // W-GRPAUDIOKEY extension).
+                .copy("Crypto/Resources/group-audio-kat.json"),
                 // WIRE_SPEC §3.3.1 blinded PSK advertisement. Written here by
                 // bcrypto-server/tools/kat/gen_psk_advert_v3_kat.py, which emits all
                 // six fleet copies in one run so they cannot drift apart.
