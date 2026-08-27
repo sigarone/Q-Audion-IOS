@@ -1278,8 +1278,10 @@ final class CallService: @unchecked Sendable {
         // the wiring inert automatically if/when the app switches profiles,
         // without adding a second gate that could drift from the engine's
         // own config. VoiceAnalysisEngine.processFrame() ALSO internally
-        // downsamples via analysisRate (default every 5th frame), so this
-        // wiring does not run the full analysis pipeline unconditionally.
+        // throttles itself to a ~100ms time budget (2026-08-27 fix — was a
+        // frame-count gate that drifted with frame size, see
+        // VoiceAnalysisEngine.analysisIntervalMs), so this wiring does not
+        // run the full analysis pipeline unconditionally.
         if EngineConfig.production().enableVoiceAnalysis {
             integration.getVoiceAnalysis().onResult = { [weak self] result in
                 self?.recordVoiceAnalysisSample(result)
