@@ -72,4 +72,57 @@ final class GroupVideoQualityCompositionTests: XCTestCase {
         XCTAssertLessThan(low.maxBitrate, medium.maxBitrate)
         XCTAssertLessThan(medium.maxBitrate, high.maxBitrate)
     }
+
+    // MARK: - W-GRPVP8SIMULCAST (2026-08-27) — group-call video publish
+    // must force VP8 with simulcast on, unconditionally, on every device.
+    // Mobile hardware H265 encoders are commonly single-instance per chip
+    // and cannot produce the concurrent multi-resolution encode streams
+    // simulcast needs; VP8's software (libvpx) path can. Supersedes
+    // W-GRPH265, which had flipped the primary codec to `.h265` (with
+    // `.vp8` as a decode-compatibility backup) on the grounds that E2EE and
+    // the SFU could carry it — true, but orthogonal to whether the local
+    // encoder can actually produce 3 concurrent H265 streams.
+
+    func testDefaultVideoPublishOptions_forcesVP8UnconditionallyForEveryQualityTier() {
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let options = LiveKitGroupCallRoom.defaultVideoPublishOptions(for: quality)
+            XCTAssertEqual(
+                options.preferredCodec, .vp8,
+                "group video publish must be VP8 regardless of device capability — quality=\(quality)"
+            )
+        }
+    }
+
+    func testDefaultVideoPublishOptions_simulcastIsAlwaysOn() {
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let options = LiveKitGroupCallRoom.defaultVideoPublishOptions(for: quality)
+            XCTAssertTrue(
+                options.simulcast,
+                "group calls must always publish simulcast layers — quality=\(quality)"
+            )
+        }
+    }
+
+    func testDefaultVideoPublishOptions_declaresNoBackupCodec() {
+        // VP8 already has universal decode support across every
+        // LiveKit-participating platform this app talks to — unlike the
+        // old H265-primary configuration, there is nothing to fall back
+        // FROM, so `preferredBackupCodec` must stay unset.
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let options = LiveKitGroupCallRoom.defaultVideoPublishOptions(for: quality)
+            XCTAssertNil(options.preferredBackupCodec, "quality=\(quality)")
+        }
+    }
+
+    func testDefaultVideoPublishOptions_encodingMatchesVideoEncodingForSameQuality() {
+        // The extracted function must not silently diverge from the
+        // already-pinned `videoEncoding(for:)` bitrate/fps ladder — it only
+        // adds the codec/simulcast decision on top of it.
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let options = LiveKitGroupCallRoom.defaultVideoPublishOptions(for: quality)
+            let standaloneEncoding = LiveKitGroupCallRoom.videoEncoding(for: quality)
+            XCTAssertEqual(options.encoding?.maxBitrate, standaloneEncoding.maxBitrate, "quality=\(quality)")
+            XCTAssertEqual(options.encoding?.maxFps, standaloneEncoding.maxFps, "quality=\(quality)")
+        }
+    }
 }

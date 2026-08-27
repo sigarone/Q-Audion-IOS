@@ -569,6 +569,23 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // fall back to. If the local encoder factory has no H265 at all, the
         // SDK degrades quietly (RTCRtpTransceiver logs "Preferred codec is not
         // first of codecPreferences" and reorders) rather than throwing.
+        // SUPERSEDED 2026-08-27 by W-GRPVP8SIMULCAST (see `connect()`'s
+        // `RoomOptions` construction below, and `defaultVideoPublishOptions
+        // (for:)` next to `videoEncoding(for:)`). Everything above this line
+        // is still factually accurate — H265 genuinely IS carried correctly
+        // end-to-end by the E2EE transform and the SFU — but none of it
+        // checked whether the LOCAL encoder can actually produce 3
+        // CONCURRENT H265 streams for simulcast, which is a separate,
+        // narrower question than "can this codec be carried at all". Mobile
+        // hardware H265 encoders are commonly single-instance per chip, so
+        // asking for H265 simulcast either silently collapses to one layer
+        // or starves the others — an encoder-capability gap, not a
+        // transport/decode-compatibility one. VP8's software (libvpx)
+        // encode path has no such single-instance limit, which is why this
+        // app (matching qaudion-android-new and qaudion-desktop's
+        // `GroupCallRoom.ts`) now forces VP8, unconditionally, for every
+        // group-call video publish; H265 stays for 1:1 calls, where a
+        // single encode stream is always enough.
         // W-GRPQUALITY (2026-08-26) — the FIRST real per-track bandwidth
         // priority wiring for group calls: `VideoEncoding.bitratePriority`/
         // `.networkPriority` (verified against the pinned fork's real
@@ -598,14 +615,36 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // memberwise-style initializer's keyword arguments by matching each
         // label to the NEXT unconsumed parameter in DECLARATION order, not
         // by label alone, so an out-of-order argument list is a compile
-        // error here rather than a silent mismatch.
+        // error here rather than a silent mismatch. (Still true after
+        // W-GRPVP8SIMULCAST moved this literal into
+        // `defaultVideoPublishOptions(for:)` below — same initializer, same
+        // argument-order rule.)
+        //
+        // W-GRPVP8SIMULCAST (2026-08-27): the construction itself now lives
+        // in `defaultVideoPublishOptions(for:)` (next to `videoEncoding
+        // (for:)`, which it calls) so the codec/simulcast decision is a
+        // pure, directly-testable function instead of an inline literal
+        // here — see that function's doc comment for why `preferredCodec`
+        // is `.vp8` with no backup. Layer COUNT is deliberately left to the
+        // SDK's own simulcast default rather than pinned to a literal
+        // array: this fork's `VideoPublishOptions` has no explicit
+        // layer-count/resolution-list field (only `encoding` + `simulcast`
+        // + codec, per the full field audit in W-SIMULCASTPIN/W-GRPQUALITY
+        // above) — `simulcast: true` plus a top `encoding` is what drives
+        // the SDK's normal scale-down ladder, the same mechanism every
+        // other publish path in this SDK already relies on. That happens to
+        // net out to the same 3-layer shape qaudion-desktop pins explicitly
+        // (`GroupCallRoom.ts`, widths [320,640,1280]), without hardcoding
+        // Desktop's literal numbers into a platform whose SDK doesn't
+        // expose that knob the same way. iOS has no existing device-tier
+        // gating on group-call layer count to preserve here (checked —
+        // there is none), and VP8 is a software (libvpx) encode path, so
+        // the single-hardware-instance ceiling that rules out H265
+        // simulcast doesn't apply to layer count: 3 CPU-bound software
+        // layers is the same cost class Android's own simulcast reasoning
+        // accepts, not a mobile-specific reason to cap it lower.
         let roomOptions = RoomOptions(
-            defaultVideoPublishOptions: VideoPublishOptions(
-                encoding: Self.videoEncoding(for: _preferredCallQuality),
-                simulcast: true,
-                preferredCodec: .h265,
-                preferredBackupCodec: .vp8
-            ),
+            defaultVideoPublishOptions: Self.defaultVideoPublishOptions(for: _preferredCallQuality),
             defaultAudioPublishOptions: AudioPublishOptions(red: false),
             adaptiveStream: false,
             dynacast: false,
@@ -700,6 +739,46 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 maxFps: VideoParameters.presetH720_169.encoding.maxFps,
                 bitratePriority: .high, networkPriority: .high)
         }
+    }
+
+    /// W-GRPVP8SIMULCAST (2026-08-27) — SUPERSEDES W-GRPH265 (see the
+    /// long-form audit trail in `connect()`, where this used to be an
+    /// inline `VideoPublishOptions(...)` literal). Forces VP8 as the ONLY
+    /// codec for group-call video publish, on EVERY device, unconditionally
+    /// — a cross-platform best-practices decision mirrored from
+    /// qaudion-android-new and qaudion-desktop's `GroupCallRoom.ts`, both of
+    /// which already ship VP8-only simulcast for group video and reserve
+    /// H265/HEVC for 1:1 calls only (a single encode stream, which is
+    /// always sufficient there).
+    ///
+    /// The reason is encoder CAPABILITY, not decode compatibility: real
+    /// LiveKit simulcast needs 3 CONCURRENT encoder instances at different
+    /// resolutions from the same source track, and mobile hardware H265
+    /// encoders are commonly single-instance per chip — they physically
+    /// cannot produce that, regardless of whether every other link in the
+    /// chain (E2EE FrameCryptor, the SFU) can carry H265 correctly, which
+    /// W-GRPH265's own audit already confirmed they can. VP8's mature
+    /// software (libvpx) encode path has no such single-instance ceiling,
+    /// which is exactly why every LiveKit-based client treats it as the
+    /// universal simulcast codec.
+    ///
+    /// `preferredBackupCodec` is intentionally omitted (unlike the old H265
+    /// configuration, which needed `.vp8` as a decode-compatibility
+    /// fallback for participants that couldn't decode HEVC): VP8 already
+    /// has universal decode support across every LiveKit-participating
+    /// platform this app talks to, so there is nothing to fall back FROM.
+    ///
+    /// This function does not force a specific simulcast layer COUNT —
+    /// `simulcast: true` plus a single top-level `encoding` lets the SDK
+    /// derive its own scale-down ladder, the same mechanism every other
+    /// publish path in this SDK relies on (this fork's `VideoPublishOptions`
+    /// has no separate explicit layer-count/resolution-list field to pin).
+    static func defaultVideoPublishOptions(for quality: CallsSettingsViewModel.CallQuality) -> VideoPublishOptions {
+        VideoPublishOptions(
+            encoding: videoEncoding(for: quality),
+            simulcast: true,
+            preferredCodec: .vp8
+        )
     }
 
     /// W-GRPVIDEO: mid-call camera on/off. Publishing a NEW video track
