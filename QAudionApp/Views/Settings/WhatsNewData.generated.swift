@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1036",
+              date: "2026-08-27",
+              title: "v1.0.1036",
+              bullets: [
+                "fix(call): native-audio-srtp PCM tap still silent on 2nd live call - AVAudioConverter needs continuous-stream usage, not one-shot reset+endOfStream",
+                "fix(security): 2 real findings from Jules Suggestions triage",
+              ]),
         .init(id: "v1.0.1035",
               date: "2026-08-26",
               title: "v1.0.1035",
               bullets: [
+                "chore: regenerate changelog for v1.0.1035",
                 "fix(deps): re-sync LiveKitBroadcast pin to raw6, matching QAudionEngine's own client-sdk-swift pin",
               ]),
         .init(id: "v1.0.1034",
@@ -190,14 +198,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1017",
                 "fix(security): I8 redaction audit — fix 37 genuine print() findings",
                 "ci(ios): publish Package.resolved as a build artifact (MASVS I5)",
-              ]),
-        .init(id: "v1.0.1016",
-              date: "2026-08-21",
-              title: "v1.0.1016",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1016",
-                "fix(deepfake): stop feeding the confidence EMA a fabricated placeholder",
-                "fix(tests): skip TusResumeStateTests store round-trips when Keychain is unusable",
               ]),
     ]
 }
