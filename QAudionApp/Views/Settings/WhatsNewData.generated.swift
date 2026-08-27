@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1041",
+              date: "2026-08-27",
+              title: "v1.0.1041",
+              bullets: [
+                "fix(call): rewire group-call fallback audio to sender-key-derived W-GRPAUDIOKEY",
+              ]),
         .init(id: "v1.0.1040",
               date: "2026-08-27",
               title: "v1.0.1040",
               bullets: [
+                "chore: regenerate changelog for v1.0.1040",
                 "feat(call): group-call SFU-outage fallback audio, receive-side (QUAD AUDIO_DATA)",
                 "fix(test): update AudioProfileTests literals for the 40kbps standard-block rate",
                 "fix(call): raise Opus preferred bitrate 32->40 kbps within existing block headroom",
@@ -191,17 +198,6 @@ extension ReleaseNote {
                 "docs(security): identify + verify liboqs's real upstream provenance",
                 "docs(security): correct liboqs provenance claims, add Aikido SAST placeholder",
                 "chore: gitignore stale agent-runner scratch, commit orphaned handover doc",
-              ]),
-        .init(id: "v1.0.1021",
-              date: "2026-08-21",
-              title: "v1.0.1021",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1021",
-                "fix(livekit): bump AES-256 fork pin to 2.16.0 rebase (raw4)",
-                "docs(security): point to CERTIFICATION_STATUS.md for cert-closed checks",
-                "fix(livekit): rebase AES-256 fork onto 2.15.3, fixes ITMS-90338",
-                "revert(call): dcMuxAdvertiseEnabled back to true — was on for a reason",
-                "revert(call): dcMuxAdvertiseEnabled back to false — flipped without evidence",
               ]),
     ]
 }
