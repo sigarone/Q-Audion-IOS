@@ -203,3 +203,102 @@ public struct RouteTierDwell: Equatable {
         dwellPolls = 0
     }
 }
+
+/// W-BWECOMPOSE (2026-08-27, best-practices audit item 1) — pure decision
+/// helper composing GoogCC's own `availableOutgoingBitrate` congestion
+/// estimate — already read, read-only, by `QAudionWebRtcCallController
+/// .pollVideoStatsOnce` since `3967cc7` but never wired to any behavior —
+/// into the sender-ceiling chain `applyComposedVideoSenderClamp` already
+/// composes (route tier x CPU backpressure, intersected with the peer's
+/// reported VBWCAP via `VideoBandwidthCap.clamp`). Mirrors the AIMD
+/// threshold-rule SHAPE this package's app-target sibling `AbrController`
+/// already uses on the WS-relay path — decrease immediately on a bad
+/// reading, require several consecutive healthy readings before trusting a
+/// recovery — per the best-practices audit's own suggested approach,
+/// rather than inventing a new algorithm. The hysteresis here is one-sided
+/// (decrease-fast / increase-slow) over a CONTINUOUS bps value, unlike
+/// `RouteTierDwell`'s symmetric N-polls-either-way dwell over a discrete
+/// state — closer in shape to `QAudionWebRtcCallController
+/// .evaluateBackpressure`'s own `backpressureRecoverPolls` (3 consecutive
+/// healthy 3s polls to recover) than to `RouteTierDwell`.
+///
+/// This is purely an ADDITIONAL narrowing clamp: `applyComposedVideoSenderClamp`
+/// intersects it via `min()` with what route-tier x backpressure x VBWCAP
+/// already computed — it can only ever LOWER that ceiling further, never
+/// raise it above what those already allow. A single noisy or absent
+/// GoogCC sample therefore cannot regress today's behavior beyond "one more
+/// min() term"; `.max` (no constraint) is the safe default before the
+/// first real sample this call and after `reset()`.
+public struct BweSenderCeiling: Equatable {
+
+    /// Headroom kept below GoogCC's own reported ceiling. GoogCC's
+    /// `availableOutgoingBitrate` is a probe-based, continuously
+    /// re-estimated filter output (delay-based + loss-based detectors), not
+    /// a hard measured maximum — sending flat AT its reported value leaves
+    /// no margin for the estimate's own next downward correction and risks
+    /// immediately re-triggering the congestion it just resolved. 15%
+    /// headroom is a conservative, DOCUMENTED starting choice (not a
+    /// measured/tuned constant — this box has no live-device numbers to
+    /// tune against, matching the read site's own now-superseded
+    /// "read-only, needs live-device numbers first" caveat); revisit with
+    /// real call telemetry once available.
+    public static let marginFactor: Double = 0.85
+
+    /// Consecutive healthy (BWE-implied ceiling >= currently-held ceiling)
+    /// polls required before the BWE-side ceiling is allowed to rise.
+    /// Matches `QAudionWebRtcCallController.backpressureRecoverPolls`.
+    public static let recoverPolls = 3
+
+    /// The currently-held BWE-side ceiling, bps. `.max` = no constraint
+    /// applied yet (no valid sample observed this call, or every sample so
+    /// far has been invalid/absent) — `applyComposedVideoSenderClamp`'s
+    /// `min()` with this value is then a no-op: exactly today's
+    /// pre-this-change behavior.
+    public private(set) var ceilingBps: Int = .max
+
+    private var healthyPolls: Int = 0
+
+    public init() {}
+
+    /// Feed one poll's raw `availableOutgoingBitrate` sample (bps). `<= 0`
+    /// (the read site's own "absent" sentinel — see `bweAvailableOutgoingBps`)
+    /// means "no information this poll": the held ceiling is left exactly
+    /// as it was rather than reset to `.max` — a single missed poll must
+    /// not suddenly remove a real, recently-observed constraint.
+    ///
+    /// Returns `true` exactly when `ceilingBps` changed as a result of this
+    /// observation — callers should re-apply the composed sender clamp only
+    /// on a `true` return, same discipline `RouteTierDwell.observe`
+    /// establishes for the route-tier clamp above.
+    @discardableResult
+    public mutating func observe(rawAvailableOutgoingBps: Double) -> Bool {
+        guard rawAvailableOutgoingBps > 0 else { return false }
+        let candidate = Int(rawAvailableOutgoingBps * Self.marginFactor)
+        if candidate < ceilingBps {
+            // Congestion (or the first-ever sample this call): apply
+            // immediately — same "no dwell on the way down" urgency as
+            // `evaluateBackpressure`'s CPU-limited branch and the AIMD
+            // decrease paths in `AbrController`.
+            ceilingBps = candidate
+            healthyPolls = 0
+            return true
+        } else if candidate > ceilingBps {
+            healthyPolls += 1
+            guard healthyPolls >= Self.recoverPolls else { return false }
+            healthyPolls = 0
+            ceilingBps = candidate
+            return true
+        } else {
+            healthyPolls = 0
+            return false
+        }
+    }
+
+    /// Per-call teardown reset — same discipline as `VideoBandwidthCap
+    /// .reset()` / `RouteTierDwell.reset()` so a previous call's BWE
+    /// history never bleeds into the next one.
+    public mutating func reset() {
+        ceilingBps = .max
+        healthyPolls = 0
+    }
+}

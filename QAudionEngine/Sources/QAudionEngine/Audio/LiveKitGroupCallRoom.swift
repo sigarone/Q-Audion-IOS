@@ -190,6 +190,21 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// telemetry emit in that delegate method below. `state` is the raw
     /// `.toString()` value ("missing_key" / "decryption_failed" / ...).
     public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
+    /// W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) — fires
+    /// from `room(_:didDisconnectWithError:)` ONLY when the SFU disconnected
+    /// on its own (network drop, SFU node failover/health-check, server-
+    /// initiated close) rather than as a result of THIS app calling
+    /// `disconnect()` itself — see `isIntentionalDisconnect`'s kdoc for how
+    /// that distinction is made. Before this signal existed, a mid-call SFU
+    /// disconnect (the SFU was previously healthy and connected, unlike the
+    /// setup-time TOTAL-failure-to-ever-connect case `GroupCallController
+    /// .handleSfuToken`'s own catch block and `handleSfuUnavailable` already
+    /// cover) just surfaced as an error with no fallback — see the git blame
+    /// on `room(_:didDisconnectWithError:)` for the 2026-07-14 comment this
+    /// closure closes out. `GroupCallController` wires this to the SAME
+    /// WS-relay mesh fallback (`startAudioPipeline()`) those two setup-time
+    /// cases already use, rather than a second fallback mechanism.
+    public var onSfuDisconnectedMidCall: ((_ error: Error?) -> Void)?
 
     /// W-GRPSFUGHOST follow-up (2026-07-20): a point-in-time snapshot of
     /// every remote identity LiveKit currently considers connected to this
@@ -220,6 +235,17 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// RoomDelegate/TrackDelegate callback fired afterwards (they don't
     /// otherwise carry the call id) can attach it to its telemetry event.
     private var callId: String?
+    /// W-GRPSFUMIDFALLBACK — set right before this class's OWN
+    /// `disconnect()` calls into the SDK's `room?.disconnect()`, cleared at
+    /// the top of `connect()` for the next room. Lets `room(_:
+    /// didDisconnectWithError:)` tell "the SDK connection died on its own"
+    /// (this flag still `false` — a genuine mid-call SFU failure) apart
+    /// from "the app asked to disconnect" (a normal call-end, a fast
+    /// SFU rejoin, or `handleSfuToken`'s own connect-failure cleanup) —
+    /// only the former should trigger the WS-relay mesh fallback. Guarded
+    /// by `lock` like every other field this class touches from both
+    /// `RoomDelegate` callbacks and app/main-thread call sites.
+    private var isIntentionalDisconnect = false
     private let lock = NSLock()
     // NOTE: deliberately `DispatchWorkItem` + `asyncAfter`, NOT `Timer`.
     // `applyKey` is invoked from `GroupCallController`, itself driven off
@@ -415,6 +441,10 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// livekitKeyringSize`).
     public func connect(url: String, token: String, callId: String, selfKey: GroupMediaKey? = nil) async throws {
         self.callId = callId
+        // W-GRPSFUMIDFALLBACK — a fresh room for a fresh call/rejoin must
+        // not inherit a previous room's "we asked for this" flag — see
+        // `isIntentionalDisconnect`'s own kdoc.
+        lock.withLock { isIntentionalDisconnect = false }
         // W-GRPQUALITY (2026-08-26) — snapshot the user's quality
         // preference once, at connect time (see `_preferredCallQuality`'s
         // own kdoc for why not live-reloaded mid-call). `SettingsStore`
@@ -931,6 +961,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
 
     public func disconnect() async {
         lock.withLock {
+            // W-GRPSFUMIDFALLBACK — set BEFORE `room?.disconnect()` below
+            // so the `RoomDelegate` callback it may synchronously or
+            // asynchronously trigger sees the flag already flipped; see
+            // `isIntentionalDisconnect`'s own kdoc.
+            isIntentionalDisconnect = true
             for w in graceWorkItems { w.cancel() }
             graceWorkItems.removeAll()
             // W-GRPVIEWPORT: drop every cached publication (and its
@@ -1299,13 +1334,23 @@ extension LiveKitGroupCallRoom: RoomDelegate {
     }
 
     public func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
-        // NOTE: a mid-call SFU disconnect does NOT currently auto-fall-back
-        // to the WS-relay mesh (that fallback today only covers the INITIAL
-        // connect attempt — see `GroupCallController.handleSfuToken`). This
-        // just surfaces the error; resuming the mesh mid-call is a known
-        // follow-up, not silently claimed as handled here.
+        // W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) —
+        // was, up to 2026-07-14, just a surfaced error with a documented
+        // "resuming the mesh mid-call is a known follow-up" comment right
+        // here. Now: `isIntentionalDisconnect` (set by THIS class's own
+        // `disconnect()`, right before it calls into the SDK) distinguishes
+        // a genuine SFU failure from an app-initiated disconnect (call end,
+        // fast SFU rejoin, `handleSfuToken`'s own connect-failure cleanup) —
+        // only the former fires `onSfuDisconnectedMidCall`, which
+        // `GroupCallController` wires to the SAME WS-relay mesh fallback
+        // (`startAudioPipeline()`) the setup-time total-failure cases
+        // already use. `onError` still fires unconditionally either way —
+        // this is additive, not a replacement for that existing signal.
         emitTelemetry("call.media.sfu_disconnected", ["error": error.map { "\($0)" } ?? "none"])
         if let error = error { onError?(error) }
+        let intentional = lock.withLock { isIntentionalDisconnect }
+        guard !intentional else { return }
+        onSfuDisconnectedMidCall?(error)
     }
 
     /// W-GRPTELEM (item b) — ongoing SFU connection-state telemetry, the
@@ -1568,6 +1613,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// W-GRPSENDERKEY-NACK — stub counterpart of the real class's same-named
     /// property (see this stub's own doc comment above). Never fires here.
     public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
+    /// W-GRPSFUMIDFALLBACK — stub counterpart of the real class's same-named
+    /// property (see this stub's own doc comment above). Never fires here:
+    /// `connect` always throws immediately, so there is never a live SFU
+    /// connection that could disconnect mid-call.
+    public var onSfuDisconnectedMidCall: ((_ error: Error?) -> Void)?
     /// W-GRPSFUGHOST — stub counterpart of the real class's same-named
     /// property (see this stub's own doc comment above). No room ever
     /// connects here, so always empty.
