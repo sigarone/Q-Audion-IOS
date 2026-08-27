@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1039",
+              date: "2026-08-27",
+              title: "v1.0.1039",
+              bullets: [
+                "fix(call): video WS-relay gate must confirm real cryptor attach, not just ICE (W-VIDEOSENDHEALTH)",
+                "fix(call): group video publish forces VP8 simulcast, unconditionally",
+              ]),
         .init(id: "v1.0.1038",
               date: "2026-08-27",
               title: "v1.0.1038",
               bullets: [
+                "chore: regenerate changelog for v1.0.1038",
                 "fix(call): fail-closed native-audio-srtp sender attach + bounded retry (W-AUDIOSENDERGATE)",
               ]),
         .init(id: "v1.0.1037",
@@ -191,13 +199,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1020",
                 "fix(security): I8 full follow-up sweep — remaining ~679 print() sites read, 14 files fixed",
-              ]),
-        .init(id: "v1.0.1019",
-              date: "2026-08-21",
-              title: "v1.0.1019",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1019",
-                "feat(call): enable dc-mux-v1 advertisement on iOS",
               ]),
     ]
 }
