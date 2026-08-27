@@ -101,7 +101,10 @@ public final class ScreenShareController {
     /// (e.g. `BCryptoRestClient`).
     private let onFrameLock = OSAllocatedUnfairLock<((CVPixelBuffer, Int64) -> Void)?>(initialState: nil)
 
-    public var onFrame: ((CVPixelBuffer, Int64) -> Void)? {
+    /// `nonisolated` because the lock above is the actual synchronization
+    /// mechanism now — `dispatchVideoSample` reads this from RPScreenRecorder's
+    /// private capture queue and must not be forced through a MainActor hop.
+    public nonisolated var onFrame: ((CVPixelBuffer, Int64) -> Void)? {
         get { onFrameLock.withLock { $0 } }
         set { onFrameLock.withLock { $0 = newValue } }
     }
