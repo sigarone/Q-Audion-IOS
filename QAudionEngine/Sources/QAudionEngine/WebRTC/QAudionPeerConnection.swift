@@ -770,17 +770,36 @@ public final class QAudionPeerConnection: NSObject {
         if transceiver.sender.track == nil {
             let source = factory.audioSource(with: nil)
             let track = factory.audioTrack(with: source, trackId: audioTrackId)
-            track.isEnabled = !pendingAudioSrtpMuted
+            // W-AUDIOSENDERGATE (2026-08-27) — fail-closed: the track used to
+            // be enabled here unconditionally, before the cryptor below was
+            // confirmed attached. `attachSender`'s return value was then
+            // discarded entirely and this function always returned `true`
+            // regardless of whether the native RTCFrameCryptor actually
+            // constructed — the same unguarded sender-attach race already
+            // root-caused and fixed for video (W-SENDERCRYPTORSTUCK) on
+            // Android, but here with no bounded wait and no honest failure
+            // signal at all. If `RTCFrameCryptor` init failed for any reason
+            // (timing/threading), the mic sent plaintext audio for the whole
+            // call while every log line claimed success — the peer's own
+            // receiver cryptor discards anything that doesn't decrypt,
+            // producing exactly "I hear nothing from them" with zero error
+            // anywhere. Start disabled; only enable once attach is confirmed.
+            track.isEnabled = false
             localAudioSrtpTrack = track
             transceiver.sender.track = track
             nativeAudioSender = transceiver.sender
-            print("[WebRTC] IOS-C4b: mic track attached to native audio transceiver muted=\(pendingAudioSrtpMuted)")
+            print("[WebRTC] IOS-C4b: mic track attached to native audio transceiver (disabled pending cryptor confirm)")
             let txTap = NativeAudioPcmTap(sink: txSink)
             track.add(txTap)
             audioTxTap = txTap
         }
-        cryptor.attachSender(transceiver.sender)
-        return true
+        let attached = cryptor.attachSender(transceiver.sender)
+        if attached {
+            localAudioSrtpTrack?.isEnabled = !pendingAudioSrtpMuted
+        } else {
+            print("[WebRTC] IOS-C4b: activateNativeAudioSrtp — sender cryptor attach FAILED, mic stays muted (caller should retry)")
+        }
+        return attached
     }
 
     /// Attach + enable the native AUDIO cryptor on an inbound SRTP audio

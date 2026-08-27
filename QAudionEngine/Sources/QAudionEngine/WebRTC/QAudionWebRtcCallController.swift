@@ -2449,7 +2449,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Idempotent: `QAudionPeerConnection.activateNativeAudioSrtp` only
     /// creates the mic track/cryptor once; repeat calls (rekey) just
     /// re-publish the key.
-    private func installAudioSrtpIfPossible() {
+    ///
+    /// W-AUDIOSENDERGATE (2026-08-27) — `activateNativeAudioSrtp` now
+    /// honestly reports whether the native FrameCryptor actually attached
+    /// (it used to silently claim success and enable the mic regardless —
+    /// see its own doc for the live-call symptom that produced). The three
+    /// opportunistic trigger sites above cover the common "not ready yet"
+    /// case, but none of them specifically retries a genuine attach
+    /// *failure* (a transient RTCFrameCryptor construction race) — this
+    /// bounded retry closes that gap without inventing new call-state:
+    /// `installAudioSrtpIfPossible` already re-checks every precondition
+    /// and is safe to call from any thread (NativeAudioFrameCryptor's own
+    /// NSLock, RTCRtpTransceiver access unchanged from the existing
+    /// multi-trigger design).
+    private func installAudioSrtpIfPossible(retriesRemaining: Int = 5) {
         guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else { return }
         guard let key = pqcSessionKey, key.count == 32 else { return }
         let participant = recipientId ?? "peer"
@@ -2467,6 +2480,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if installed {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")
             print("audiosrtp tx=1")
+        } else if retriesRemaining > 0 {
+            print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.installAudioSrtpIfPossible(retriesRemaining: retriesRemaining - 1)
+            }
+        } else {
+            print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach exhausted retries — mic stays muted this call")
         }
     }
 
