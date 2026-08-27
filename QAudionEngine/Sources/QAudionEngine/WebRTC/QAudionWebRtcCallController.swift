@@ -2133,6 +2133,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public func isVideoSendConfirmedHealthy(
         debounceMs: Int64 = SrtpFallbackDecisions.fallbackEngageDebounceMs
     ) -> Bool {
+        // W-VIDEOSENDHEALTH (2026-08-27) — ICE being connected proves the
+        // TRANSPORT is healthy, not that THIS call's video sender cryptor
+        // ever actually attached. `attachVideoSenderCryptor()`'s own Bool
+        // result was discarded at both its call sites — a transient
+        // RTCFrameCryptor init failure left native RTP video silently
+        // sending nothing (or nothing the peer's own cryptor would accept)
+        // while this gate, keyed only on ICE timing, still declared native
+        // video "confirmed healthy" and shut off the one working transport
+        // (WS-relay) covering it. Live-call evidence (2026-08-27, two
+        // consecutive iOS-iOS calls): video_frame relay traffic stopped
+        // dead almost exactly at the 1s debounce mark every time, and no
+        // video reached either peer for the rest of either call.
+        guard let cryptor = peerConnection?.nativeVideoCryptor,
+              cryptor.senderIsAttached, cryptor.keyIsSet else { return false }
         guard let since = iceGoodSinceMs else { return false }
         return Self.nowMs() - since >= debounceMs
     }
@@ -2723,7 +2737,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             let participant = recipientId ?? "peer"
             let cryptor = peerConnection?.ensureNativeVideoCryptor(participantId: participant)
             cryptor?.setKey(kVideo)
-            peerConnection?.attachVideoSenderCryptor()
+            // W-VIDEOSENDHEALTH (2026-08-27) — attachVideoSenderCryptor()'s
+            // Bool result used to be discarded here, and videoSealer is set
+            // to .native unconditionally right below regardless of whether
+            // the attach actually succeeded — the early-return guard above
+            // (`if let existing = videoSealer { return existing }`) then
+            // means this install branch never runs again for the rest of
+            // the call, so the ONLY other retry was an incidental future
+            // rekey (not guaranteed to ever happen). isVideoSendConfirmedHealthy
+            // now honestly reflects real attach state either way, but a
+            // bounded retry here gets native RTP video actually working
+            // again instead of leaving the call stuck on WS-relay for its
+            // whole duration.
+            retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: 5)
             videoSealer = .native
             videoKeyIsPhoneLevel = negotiated.useVideoKey
             let aes256Active = CallCapabilities.v4SFrameAes256Enabled && negotiated.useSFrameAes256
@@ -2740,6 +2766,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         videoSealer = .legacy
         print("[WebRtcCallController] video pipeline → FAIL-CLOSED (unreachable fallthrough, peerCaps=\(negotiated.agreedTags))")
         return videoSealer
+    }
+
+    /// W-VIDEOSENDHEALTH (2026-08-27) — bounded retry for a transient
+    /// `attachVideoSenderCryptor()` failure (RTCFrameCryptor init race,
+    /// same class already fixed for native-audio-srtp today). Safe to call
+    /// unconditionally: `attachSender` is idempotent (no-ops once already
+    /// attached), so a retry after a success just confirms the same state.
+    private func retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: Int) {
+        guard let pc = peerConnection, let cryptor = pc.nativeVideoCryptor else { return }
+        if cryptor.senderIsAttached { return }
+        let attached = pc.attachVideoSenderCryptor()
+        if attached {
+            print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach succeeded")
+        } else if retriesRemaining > 0 {
+            print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach failed, retrying (\(retriesRemaining) left)")
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: retriesRemaining - 1)
+            }
+        } else {
+            print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach exhausted retries — staying on WS-relay this call")
+        }
     }
 
     // MARK: - Camera capture

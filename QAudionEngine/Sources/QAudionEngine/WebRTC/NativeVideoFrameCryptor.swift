@@ -95,6 +95,21 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
         return receiverCryptor != nil
     }
 
+    /// W-VIDEOSENDHEALTH (2026-08-27) — true once `attachSender` succeeded.
+    /// Combined with `keyIsSet` this is the real "outbound native RTP video
+    /// is actually able to leave this device" predicate — `attachSender`'s
+    /// own Bool result was being discarded at both of its call sites in
+    /// `QAudionWebRtcCallController`, so a transient `RTCFrameCryptor` init
+    /// failure (the exact same class of unguarded sender-attach race fixed
+    /// today for native-audio-srtp, W-AUDIOSENDERGATE) left this device
+    /// silently sending nothing over native RTP while nothing downstream
+    /// could tell. See `isVideoSendConfirmedHealthy` in
+    /// `QAudionWebRtcCallController` for the consumer.
+    public var senderIsAttached: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return senderCryptor != nil
+    }
+
     /// Publish / rotate the 32-byte K_video at index 0 (Android setSharedKey(0,key)).
     /// Safe to call before OR after the cryptors are attached — the native
     /// KeyProvider drops inbound frames until a key is present
