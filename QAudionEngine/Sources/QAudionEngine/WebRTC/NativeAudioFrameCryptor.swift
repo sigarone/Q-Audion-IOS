@@ -131,6 +131,45 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
         return true
     }
 
+    /// Re-bind the receiver cryptor to the audio transceiver's CURRENT
+    /// `RTCRtpReceiver`, after the SDP negotiation that made it live has
+    /// actually completed. `attachReceiver` is write-once by design; this
+    /// disposes the stale cryptor FIRST so the guard doesn't silently no-op
+    /// against a cryptor still bound to a pre-negotiation receiver object.
+    ///
+    /// W-AUDIORXPOSTNEG (2026-08-28) — exact audio mirror of
+    /// `NativeVideoFrameCryptor.rebindReceiver` / `QAudionPeerConnection.
+    /// rebindVideoReceiverCryptorPostNegotiation`, for the identical bug
+    /// class the 2026-07-05 "OFFERER-UPGRADE DECODE FIX" already found and
+    /// fixed on the video receive side: `didAdd rtpReceiver` fires and
+    /// `attachAudioReceiverCryptor` runs the FIRST time the audio receiver
+    /// appears, which for a call negotiating `audioSrtpV1` from the very
+    /// first SDP round can be before that round's answer/accept has
+    /// actually landed. The native frame transformer then stays bound to
+    /// that pre-negotiation state even once the RTP channel goes live:
+    /// inbound audio bypasses the decryptor and never reaches the app as
+    /// real PCM — `framesDecoded`-equivalent pinned at zero, permanently,
+    /// for the whole call. This is exactly the failure shape of a real call
+    /// (9b542759, Android<->iOS, 2026-08-28) that negotiated audio-srtp-v1
+    /// and was ended by iOS's own W-MEDIADEAD watchdog after ~90s of zero
+    /// decoded inbound audio — and it is also why the live Guardian voice-
+    /// confidence graph never had anything to plot: `NativeAudioPcmTap`
+    /// only ever sees real samples once the receiver cryptor actually
+    /// decrypts, so a cryptor stuck on the pre-negotiation receiver starves
+    /// `VoiceAnalysisEngine`/Guardian of real audio the same way it starves
+    /// playback. The shared `keyProvider` already holds the key — no re-key
+    /// needed, mirrors Android's own dispose+recreate for this exact class
+    /// of bug (`PeerConnectionHolder.kt`, `enableAudioFrameCryptorOnSender`/
+    /// receiver defer-and-flush pattern).
+    @discardableResult
+    public func rebindReceiver(_ receiver: RTCRtpReceiver) -> Bool {
+        lock.lock()
+        receiverCryptor?.enabled = false
+        receiverCryptor = nil
+        lock.unlock()
+        return attachReceiver(receiver)
+    }
+
     public func setEnabled(_ on: Bool) {
         lock.lock(); defer { lock.unlock() }
         senderCryptor?.enabled = on

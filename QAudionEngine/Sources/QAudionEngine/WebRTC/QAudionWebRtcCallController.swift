@@ -2494,6 +2494,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private func installAudioSrtpIfPossible(retriesRemaining: Int = 5) {
         guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else { return }
         guard let key = pqcSessionKey, key.count == 32 else { return }
+        // W-AUDIORXPOSTNEG (2026-08-28) — this call site is reached only
+        // once `negotiated.useAudioSrtp` is confirmed, which means the SDP
+        // round that negotiated it has completed — the same "safe to
+        // rebind" point the video path's post-negotiation rebind calls run
+        // from. `didReceiveNativeAudioSrtpReceiver`'s own attach (fired
+        // earlier, the moment the receiver track first appears) may have
+        // bound against a pre-negotiation receiver object; re-binding here
+        // is a no-op when it didn't (same receiver, cryptor already live)
+        // and a real fix when it did. See NativeAudioFrameCryptor.
+        // rebindReceiver's own doc for the live-call failure this closes.
+        _ = peerConnection?.rebindAudioReceiverCryptorPostNegotiation()
         let participant = recipientId ?? "peer"
         let installed = peerConnection?.activateNativeAudioSrtp(
             key: key,

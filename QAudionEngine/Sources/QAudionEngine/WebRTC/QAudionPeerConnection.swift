@@ -868,6 +868,29 @@ public final class QAudionPeerConnection: NSObject {
         localAudioSrtpTrack?.isEnabled = !muted
     }
 
+    /// W-AUDIORXPOSTNEG (2026-08-28) — audio mirror of
+    /// ``rebindVideoReceiverCryptorPostNegotiation()``. Re-resolves the live
+    /// audio transceiver (mediaType match, safe for a 1:1 call — see
+    /// ``activateNativeAudioSrtp(key:participantId:txSink:)``'s own W-
+    /// AUDIOSRTPSENDERCARRYOVER comment for why identity comparison against
+    /// a cached reference is not reliable here) and re-binds the receiver
+    /// cryptor onto its CURRENT receiver. Call after the SDP round that
+    /// negotiated `audioSrtpV1` has actually completed (mirrors the video
+    /// call sites — see ``QAudionWebRtcCallController``'s
+    /// ``installAudioSrtpIfPossible`` caller). No-op (`false`) if no audio
+    /// transceiver or no audio cryptor exists yet.
+    @discardableResult
+    public func rebindAudioReceiverCryptorPostNegotiation() -> Bool {
+        guard let pc = peerConnection, let cryptor = nativeAudioCryptor else { return false }
+        guard let transceiver = pc.transceivers.first(where: { $0.mediaType == .audio }) else {
+            return false
+        }
+        audioTransceiver = transceiver
+        let ok = cryptor.rebindReceiver(transceiver.receiver)
+        print("[WebRTC] IOS-C4b: post-negotiation audio receiver cryptor rebound ok=\(ok)")
+        return ok
+    }
+
     /// OFFERER-UPGRADE DECODE FIX (2026-07-05) — dispose + re-create the
     /// receiver cryptor against the video transceiver's CURRENT receiver,
     /// AFTER a renegotiation answer has been applied.
