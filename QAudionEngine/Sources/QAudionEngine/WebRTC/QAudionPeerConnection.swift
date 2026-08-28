@@ -745,7 +745,37 @@ public final class QAudionPeerConnection: NSObject {
         participantId: String,
         txSink: @escaping (Data) -> Void
     ) -> Bool {
-        guard let transceiver = audioTransceiver, peerConnection != nil else { return false }
+        guard let pc = peerConnection else { return false }
+        // W-AUDIOSRTPSENDERCARRYOVER (2026-08-28, port of the equivalent
+        // Android/qaudion-android-new fix) — `audioTransceiver` is cached
+        // ONCE at `init()`, before any SDP round-trip. libwebrtc M144's JSEP
+        // can silently replace the pre-created transceiver object during
+        // `setRemoteDescription`/`setLocalDescription` — this repo's own
+        // VIDEO path already documents and handles that exact behavior (see
+        // `didAdd rtpReceiver`'s `.relatch` branch above), but the AUDIO
+        // sender path never re-resolved its cached reference, so a rewire
+        // here would silently attach the mic track to a dead transceiver
+        // while the live one (the one libwebrtc actually sends RTP for)
+        // stayed track-less — indistinguishable from "audio works" in every
+        // log this function emits, and exactly the shape of a live call
+        // (9b542759, Android<->iOS, 2026-08-28) that negotiated audio-srtp-v1
+        // and died to iOS's own W-MEDIADEAD watchdog with reason=media-lost
+        // after ~90s of zero decoded inbound audio on the Android side.
+        // Fix: never trust the cached reference — always re-resolve the live
+        // audio transceiver from the peer connection's current transceiver
+        // list (ObjC wrapper objects are not identity-stable across a
+        // rewire, per the video path's own `.relatch` comment, so `mid`/
+        // object-identity comparison against the cache would be unreliable;
+        // a 1:1 call has at most one audio transceiver, so `mediaType`
+        // alone is a safe, unambiguous match). Cache is refreshed so any
+        // other call site reading `audioTransceiver` sees the live object too.
+        guard let transceiver = pc.transceivers.first(where: { $0.mediaType == .audio }) else {
+            return false
+        }
+        if audioTransceiver !== transceiver {
+            print("[WebRTC] IOS-C4b: audio transceiver was rewired by JSEP — re-resolved to the live object")
+            audioTransceiver = transceiver
+        }
         guard key.count == 32 else {
             print("[WebRTC] IOS-C4b: activateNativeAudioSrtp refused — key is \(key.count) bytes, expected 32")
             return false
