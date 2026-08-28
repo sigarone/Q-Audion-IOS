@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1042",
+              date: "2026-08-28",
+              title: "v1.0.1042",
+              bullets: [
+                "fix(call): audio-srtp receiver cryptor bound before negotiation completed, same class as the 2026-07-05 video decode fix (W-AUDIORXPOSTNEG)",
+                "fix(call): audio-srtp sender used a stale pre-created transceiver after JSEP rewire (W-AUDIOSRTPSENDERCARRYOVER)",
+                "🎨 Palette: Add accessibility attributes to CircularAction (#96)",
+              ]),
         .init(id: "v1.0.1041",
               date: "2026-08-27",
               title: "v1.0.1041",
               bullets: [
+                "chore: regenerate changelog for v1.0.1041",
                 "fix(call): rewire group-call fallback audio to sender-key-derived W-GRPAUDIOKEY",
               ]),
         .init(id: "v1.0.1040",
@@ -188,16 +197,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1023",
                 "feat(links): handle the email-verify Universal Link end to end",
                 "feat(links): declare associated-domains for Universal Links",
-              ]),
-        .init(id: "v1.0.1022",
-              date: "2026-08-21",
-              title: "v1.0.1022",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1022",
-                "fix(diag): surface the real error reason in livelog upload failures",
-                "docs(security): identify + verify liboqs's real upstream provenance",
-                "docs(security): correct liboqs provenance claims, add Aikido SAST placeholder",
-                "chore: gitignore stale agent-runner scratch, commit orphaned handover doc",
               ]),
     ]
 }
