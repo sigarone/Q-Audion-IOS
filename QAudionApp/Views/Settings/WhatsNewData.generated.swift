@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1044",
+              date: "2026-08-29",
+              title: "v1.0.1044",
+              bullets: [
+                "fix(logs): iOS remote-log pipeline died on the first expired token and never recovered (W-TUSAUTHREFRESH)",
+                "fix(call): iOS voice curve and liveness analysis saw zero audio for the whole call (W-AUDIORXTAPCARRYOVER)",
+              ]),
         .init(id: "v1.0.1043",
               date: "2026-08-29",
               title: "v1.0.1043",
               bullets: [
+                "chore: regenerate changelog for v1.0.1043",
                 "fix(call): PQC session key could never reach the WebRTC controller on an iOS<->iOS call (W-SRTPKEYFWDRACE)",
               ]),
         .init(id: "v1.0.1042",
@@ -189,13 +197,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1025",
                 "fix(security,perf,a11y): cherry-pick verified hunks from Jules PRs #81/#82/#80",
                 "fix(security): GitHub Actions template injection via workflow_dispatch inputs",
-              ]),
-        .init(id: "v1.0.1024",
-              date: "2026-08-22",
-              title: "v1.0.1024",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1024",
-                "fix(ci): enable Associated Domains capability on the main app Bundle ID",
               ]),
     ]
 }
