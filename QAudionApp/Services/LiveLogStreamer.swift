@@ -120,6 +120,18 @@ public final class LiveLogStreamer {
     private var inflight: Bool = false
     private var lastUploadStartedAt: Date = Date.distantPast
     private let minSecondsBetweenUploads: TimeInterval = 2.0
+    // W-LIVELOG429 (2026-08-29): flushOnce() used to retry every fixed
+    // flushIntervalSeconds (3s) regardless of WHY the previous attempt
+    // failed. Against a server-side rate limit (HTTP 429) that just
+    // re-triggers the same 429 every 3s forever, confirmed live — a
+    // device logged 20+ consecutive "TUS create failed: HTTP 429" lines
+    // three seconds apart. Exponential backoff (with jitter, capped)
+    // only on 429/5xx so a transient network blip doesn't get penalized
+    // the same as sustained rate-limiting.
+    private var backoffUntil: Date = Date.distantPast
+    private var consecutiveThrottleFailures: Int = 0
+    private static let backoffBaseSeconds: TimeInterval = 3.0
+    private static let backoffMaxSeconds: TimeInterval = 60.0
     private var isStarted: Bool = false
     
     private let pathMonitor = NWPathMonitor()
@@ -200,6 +212,7 @@ public final class LiveLogStreamer {
         let now: Date = Date()
         let elapsed: TimeInterval = now.timeIntervalSince(lastUploadStartedAt)
         if elapsed < minSecondsBetweenUploads { return }
+        if now < backoffUntil { return }
 
         guard let serverUrlLocal = serverUrl,
               let getToken = tokenProvider,
@@ -317,6 +330,21 @@ public final class LiveLogStreamer {
     /// Bound for the watchdog above — see its comment for why it exists.
     private static let uploadTimeoutSeconds: UInt64 = 12
 
+    /// W-LIVELOG429 — true for a rate-limited (429) or server-error (5xx)
+    /// TUS response, the cases worth backing off from. A create/patch/head
+    /// failure with any other status (network drop, 401, 404, ...) is left
+    /// on the normal flushIntervalSeconds cadence instead.
+    private static func isThrottleStatus(_ error: Error) -> Bool {
+        let code: Int
+        switch error {
+        case TusUploadClient.TusError.createFailed(let c): code = c
+        case TusUploadClient.TusError.patchFailed(let c): code = c
+        case TusUploadClient.TusError.headFailed(let c): code = c
+        default: return false
+        }
+        return code == 429 || (500...599).contains(code)
+    }
+
     private func uploadChunk(serverUrl: String,
                              token: String,
                              filename: String,
@@ -346,6 +374,7 @@ public final class LiveLogStreamer {
             // instead of retrying it on the next tick.
             lastSeq = highestSeqInChunk
             inflight = false
+            consecutiveThrottleFailures = 0
             let shouldLog: Bool = totalUploadedChunks <= 3 || (totalUploadedChunks % 50) == 0
             if shouldLog {
                 let seqStr: String = String(seq)
@@ -362,6 +391,16 @@ public final class LiveLogStreamer {
             guard chunkSeq == seq else { return }
             failedUploads += 1
             inflight = false
+            if LiveLogStreamer.isThrottleStatus(error) {
+                consecutiveThrottleFailures += 1
+                let exponent: Int = min(consecutiveThrottleFailures, 5)
+                let raw: TimeInterval = LiveLogStreamer.backoffBaseSeconds * pow(2.0, Double(exponent - 1))
+                let capped: TimeInterval = min(raw, LiveLogStreamer.backoffMaxSeconds)
+                let jitter: TimeInterval = TimeInterval.random(in: 0...(capped * 0.2))
+                backoffUntil = Date().addingTimeInterval(capped + jitter)
+            } else {
+                consecutiveThrottleFailures = 0
+            }
             // W-LIVELOGHANG — the OLD catch block was silent (no RTLog at
             // all), so a run of failures was indistinguishable from the
             // pump never having started. "net" (not "livelog") so this
