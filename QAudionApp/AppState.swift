@@ -1738,6 +1738,16 @@ final class AppState: ObservableObject {
     /// was fixed 2026-07-04. nil until the first analysis result arrives.
     /// Reset in endCall().
     @Published var voiceAnalysis: VoiceAnalysisResult?
+    /// W-VOICEUISMOOTH (2026-08-29) — raw samples collected since the last
+    /// publish of ``voiceAnalysis``. Never read by anything but the
+    /// once-per-second averaging hop that owns it; see that call site for why
+    /// only the display is smoothed. Cleared on every publish and in
+    /// `endCall()`.
+    var voiceAnalysisWindow: [VoiceAnalysisResult] = []
+    /// Unix seconds of the last ``voiceAnalysis`` publish. 0 = never, so the
+    /// first sample of a call publishes immediately instead of making the
+    /// user wait a second for the ribbon to come alive.
+    var voiceAnalysisLastPublishAt: TimeInterval = 0
 
     /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
     /// (0..1), the actual FFT magnitude of the decoded RX PCM computed by
@@ -2931,9 +2941,30 @@ final class AppState: ObservableObject {
         // onDeepfakeScore subscription immediately above: hop to MainActor,
         // publish the result. This does NOT touch/invert deepfakeAlert —
         // it is a separate @Published field driven by a separate closure.
+        // W-VOICEUISMOOTH (2026-08-29) — publish ONE averaged value per
+        // second instead of every raw sample. The engine emits several per
+        // second, which made the Guardian ribbon's numbers unreadable on a
+        // live call even though each individual value was correct.
+        //
+        // Only the DISPLAY is averaged. Guardian verdicts, the deepfake
+        // monitor, the per-contact verifier and voice learning all continue
+        // to receive every raw sample on their own paths — smoothing a
+        // security signal would mask the brief anomaly it exists to catch.
+        //
+        // The buffer is flushed on the same MainActor hop that publishes, so
+        // it can never grow beyond one second of samples, and it is dropped
+        // wholesale in `endCall()` alongside the published value.
         callService.onVoiceAnalysis = { [weak self] result in
             Task { @MainActor in
-                self?.voiceAnalysis = result
+                guard let self else { return }
+                self.voiceAnalysisWindow.append(result)
+                let now = Date().timeIntervalSince1970
+                guard now - self.voiceAnalysisLastPublishAt >= 1.0 else { return }
+                self.voiceAnalysisLastPublishAt = now
+                if let averaged = VoiceAnalysisSmoothing.average(of: self.voiceAnalysisWindow) {
+                    self.voiceAnalysis = averaged
+                }
+                self.voiceAnalysisWindow.removeAll(keepingCapacity: true)
             }
         }
 
@@ -14747,6 +14778,10 @@ extension AppState {
         // it doesn't leak into the next call's security sheet before the
         // first analysis result of that new call arrives.
         voiceAnalysis = nil
+        // W-VOICEUISMOOTH — drop the averaging window with the value it feeds,
+        // so the next call never averages across a call boundary.
+        voiceAnalysisWindow.removeAll(keepingCapacity: false)
+        voiceAnalysisLastPublishAt = 0
         // Unified call UI — drop the last spectrum frame too, so the ribbon
         // bars decay to rest between calls (mirrors the reset above).
         voiceSpectrum = nil
