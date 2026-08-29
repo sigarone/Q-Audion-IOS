@@ -89,4 +89,65 @@ final class MediaDeadDecisionsTests: XCTestCase {
         // 7 ticks × 15 s = 105 s silent ≥ 90 s → dead.
         XCTAssertEqual(verdictAtEnd, .dead)
     }
+
+    // MARK: - W-MEDIADEADSRTP (2026-08-29)
+
+    /// The regression that produced this source. On an `audio-srtp-v1` call
+    /// the decode stamp is never written (that RX site belongs to the sealed
+    /// DataChannel path, which such a call never uses), so the ONLY thing
+    /// keeping the call alive is RTP byte growth. Live: call 50d86a9f ended
+    /// at 95 s with `reason=media-lost` while audio worked both ways.
+    func test_srtpCall_rtpGrowthKeepsCallAlive_withNoDecodeStampEver() {
+        var lastAlive: Int64 = 0
+        var verdictAtEnd: MediaDeadDecisions.Verdict = .counting
+        for tick in 1...20 {
+            let now = Int64(tick) * poll
+            let v = MediaDeadDecisions.evaluate(
+                nowMs: now,
+                lastAliveAtMs: lastAlive,
+                lastRealDecodeAtMs: 0,   // never — this is the srtp path
+                rtpBytesGrew: true       // bytes kept arriving every tick
+            )
+            if v == .alive { lastAlive = now }
+            verdictAtEnd = v
+        }
+        // 300 s well past the 90 s threshold, yet alive throughout.
+        XCTAssertEqual(verdictAtEnd, .alive)
+    }
+
+    /// The backstop must still fire when the RTP leg exists but goes silent —
+    /// otherwise the new source would simply disable the watchdog.
+    func test_srtpCall_rtpStopsGrowing_stillDies() {
+        var lastAlive: Int64 = 0
+        var verdictAtEnd: MediaDeadDecisions.Verdict = .counting
+        for tick in 1...10 {
+            let now = Int64(tick) * poll
+            // Alive for the first two ticks, then the peer goes away.
+            let v = MediaDeadDecisions.evaluate(
+                nowMs: now,
+                lastAliveAtMs: lastAlive,
+                lastRealDecodeAtMs: 0,
+                rtpBytesGrew: tick <= 2
+            )
+            if v == .alive { lastAlive = now }
+            verdictAtEnd = v
+        }
+        XCTAssertEqual(verdictAtEnd, .dead)
+    }
+
+    /// A sealed-DataChannel call has no audio inbound-rtp row, so the caller
+    /// passes `rtpBytesGrew: false` forever — behavior must be byte-for-byte
+    /// what it was before this parameter existed.
+    func test_dataChannelCall_unaffectedByNewSource() {
+        let now: Int64 = 200_000
+        XCTAssertEqual(
+            MediaDeadDecisions.evaluate(nowMs: now, lastAliveAtMs: now - 200_000,
+                                        lastRealDecodeAtMs: 0, rtpBytesGrew: false),
+            MediaDeadDecisions.evaluate(nowMs: now, lastAliveAtMs: now - 200_000,
+                                        lastRealDecodeAtMs: 0))
+        XCTAssertEqual(
+            MediaDeadDecisions.evaluate(nowMs: now, lastAliveAtMs: now - 200_000,
+                                        lastRealDecodeAtMs: now - 1_000, rtpBytesGrew: false),
+            .alive)
+    }
 }

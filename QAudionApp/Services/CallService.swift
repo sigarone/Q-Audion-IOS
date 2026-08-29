@@ -548,6 +548,13 @@ final class CallService: @unchecked Sendable {
     /// existed, and every call whose kill switch is off) makes
     /// `startAudioIOIfReady` byte-for-byte what it was before.
     public var getUsesNativeAudioSrtp: (() -> Bool)?
+    /// W-MEDIADEADSRTP (2026-08-29) — current audio `inbound-rtp.bytesReceived`
+    /// from the live PeerConnection, or -1 when there is no audio RTP leg.
+    /// Wired once at login by AppState, same live-getter pattern as
+    /// ``getUsesNativeAudioSrtp`` above, so it stays correct across every
+    /// call. `nil` (no wiring, e.g. a test double) leaves the media-dead
+    /// watchdog on its original single source — byte-for-byte prior behavior.
+    public var getAudioRtpBytesReceived: (() -> Int64)?
     /// W-SRTPFALLBACK — true while the manual capture/decode path has been
     /// explicitly RE-ENGAGED during a native-audio-srtp call's ICE outage
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
@@ -1861,6 +1868,12 @@ final class CallService: @unchecked Sendable {
     private func armMediaDeadWatchdog() {
         guard mediaDeadWatchdogTask == nil else { return }
         var lastAliveAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        // W-MEDIADEADSRTP (2026-08-29) — previous tick's audio RX byte count,
+        // -1 until the first reading. See `MediaDeadDecisions.evaluate`'s
+        // `rtpBytesGrew` for why this second source had to exist: without it
+        // every `audio-srtp-v1` call was killed at the timeout with
+        // `media-lost` while its audio was working perfectly.
+        var lastAudioRxBytes: Int64 = -1
         mediaDeadWatchdogTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(
@@ -1884,10 +1897,18 @@ final class CallService: @unchecked Sendable {
                     lastAliveAtMs = now
                     continue
                 }
+                // W-MEDIADEADSRTP — growth, not absolute value: a counter
+                // that stands still means nothing arrived since the last
+                // tick. -1 (no audio inbound-rtp row) can never register as
+                // growth, so a sealed-DataChannel call is unaffected.
+                let audioRxBytes = self.getAudioRtpBytesReceived?() ?? -1
+                let rtpGrew = audioRxBytes >= 0 && audioRxBytes != lastAudioRxBytes
+                if audioRxBytes >= 0 { lastAudioRxBytes = audioRxBytes }
                 switch MediaDeadDecisions.evaluate(
                     nowMs: now,
                     lastAliveAtMs: lastAliveAtMs,
-                    lastRealDecodeAtMs: self.lastRealInboundDecodeAtMs
+                    lastRealDecodeAtMs: self.lastRealInboundDecodeAtMs,
+                    rtpBytesGrew: rtpGrew
                 ) {
                 case .alive:
                     lastAliveAtMs = now
@@ -1898,7 +1919,11 @@ final class CallService: @unchecked Sendable {
                     print("[CallService] W-MEDIADEAD: no real inbound audio for \(silentMs) ms — ending phantom call")
                     // Numeric tail per the iOS log-pipeline rule; token stays
                     // under the shipper's 12-char blob scrub for any real span.
-                    RTLog.error("call", "mediadead ms=" + String(silentMs))
+                    // W-MEDIADEADSRTP — `rtp` distinguishes "no RTP leg at
+                    // all" (-1, sealed-DC call) from "RTP leg present but
+                    // silent", which are very different failures.
+                    RTLog.error("call", "mediadead ms=" + String(silentMs)
+                        + " rtp=" + String(audioRxBytes))
                     self.mediaDeadWatchdogTask = nil
                     self.onMediaDead?(silentMs)
                     return

@@ -18,6 +18,12 @@ import Foundation
 /// that sits BEHIND the AEAD open + Opus decode (`CallService
 /// .noteRealInboundDecode`), which PLC can never reach.
 ///
+/// W-MEDIADEADSRTP (2026-08-29) — that decode stamp is now only HALF the
+/// picture, and relying on it alone was a real, call-ending bug: an
+/// `audio-srtp-v1` call never reaches that decode site at all. See
+/// `rtpBytesGrew` on `evaluate` for the second source, and for why byte
+/// growth honours the same no-concealment caveat.
+///
 /// ## Constants
 ///
 /// Byte-for-byte Android's (`CallController` companion): poll 15 s, timeout
@@ -55,11 +61,36 @@ public enum MediaDeadDecisions {
     ///     call alive (or the moment the watchdog armed / the gate reopened).
     ///   - lastRealDecodeAtMs: wall clock of the last REALLY-decoded inbound
     ///     frame; 0 = never this call.
+    ///   - rtpBytesGrew: W-MEDIADEADSRTP (2026-08-29) — the audio
+    ///     `inbound-rtp.bytesReceived` counter INCREASED since the previous
+    ///     tick. The second liveness source, and the one that matters on an
+    ///     `audio-srtp-v1` call: there the peer's audio arrives as real SRTP
+    ///     and `processIncomingAudio` — the only writer of
+    ///     `lastRealDecodeAtMs` — is never called for the whole call, so that
+    ///     stamp stays 0 forever and this watchdog killed a perfectly healthy
+    ///     call at exactly `timeoutMs`. Confirmed live 2026-08-29 (call
+    ///     50d86a9f, iOS<->Android): audio working in both directions, call
+    ///     ended at 95 s with `reason=media-lost`.
+    ///
+    ///     Byte growth is the right signal rather than the PCM tap, and that
+    ///     is exactly why the caveat above is not violated: NetEQ concealment
+    ///     keeps producing samples from a dead peer, but it cannot invent
+    ///     RECEIVED BYTES. No growth means nothing arrived from the network,
+    ///     whatever the speaker happens to be playing. Mirrors Android's
+    ///     `rtpAlive` (`CallController` mediaDeadWatchdogJob), which reads the
+    ///     same counter for the same reason.
+    ///
+    ///     Defaults to `false`, so a caller with no RTP leg — and every
+    ///     existing test — behaves exactly as before.
     public static func evaluate(
         nowMs: Int64,
         lastAliveAtMs: Int64,
-        lastRealDecodeAtMs: Int64
+        lastRealDecodeAtMs: Int64,
+        rtpBytesGrew: Bool = false
     ) -> Verdict {
+        if rtpBytesGrew {
+            return .alive
+        }
         if lastRealDecodeAtMs > 0 && nowMs - lastRealDecodeAtMs < pollMs * 2 {
             return .alive
         }

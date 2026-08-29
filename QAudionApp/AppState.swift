@@ -3880,6 +3880,15 @@ final class AppState: ObservableObject {
         callService.getUsesNativeAudioSrtp = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true
         }
+        // W-MEDIADEADSRTP (2026-08-29) — same live-getter pattern: hand the
+        // media-dead watchdog the audio RX byte counter so an `audio-srtp-v1`
+        // call has a liveness source at all. Without this it saw only the
+        // sealed-DataChannel decode stamp, which such a call never writes,
+        // and ended every one of them at the 90 s threshold with
+        // `media-lost` (live: call 50d86a9f, 2026-08-29).
+        callService.getAudioRtpBytesReceived = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpBytesReceived ?? -1
+        }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
         // stashed by the `call_incoming` handler (responder side) and by the
