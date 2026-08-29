@@ -87,6 +87,26 @@ public final class TusUploadClient {
     private let session: URLSession
     private let serverUrl: String
     private let getToken: () -> String?
+    /// W-TUSAUTHREFRESH (2026-08-29) — ask the owning REST client to run its
+    /// token-refresh cascade, exactly as it does for its own requests, and
+    /// report whether a fresh access token is now available.
+    ///
+    /// This client deliberately builds its requests by hand (tus needs raw
+    /// header/offset control the JSON helpers do not give) and therefore
+    /// never went through `BCryptoRestClient`'s 401 refresh-and-retry. On a
+    /// short-lived upload that was invisible: some other REST call had
+    /// almost always refreshed the token first. On `LiveLogStreamer`, which
+    /// uploads on a timer for the whole life of the app, it was fatal — the
+    /// first upload attempted after expiry got 401, gave up with no refresh,
+    /// and every later attempt repeated it. Live evidence 2026-08-29:
+    /// "livelog upload error ... reason=TUS create failed: HTTP 401",
+    /// totalfail climbing, and NO iOS log line reaching the server for the
+    /// rest of the session — which is exactly the remote-diagnosis blackout
+    /// that made every iOS call this session undebuggable from the outside.
+    ///
+    /// Optional: `nil` keeps the previous behavior (surface the 401), so a
+    /// test double or any caller that has no refresher is unaffected.
+    private let refreshToken: (() async throws -> Bool)?
     let chunkSize: Int
 
     static let defaultChunkSize = 512 * 1024   // 512 KB
@@ -109,12 +129,36 @@ public final class TusUploadClient {
         session: URLSession,
         serverUrl: String,
         getToken: @escaping () -> String?,
+        refreshToken: (() async throws -> Bool)? = nil,
         chunkSize: Int = TusUploadClient.defaultChunkSize
     ) {
         self.session = session
         self.serverUrl = serverUrl
         self.getToken = getToken
+        self.refreshToken = refreshToken
         self.chunkSize = chunkSize
+    }
+
+    /// W-TUSAUTHREFRESH — run one request, and on HTTP 401 refresh the
+    /// access token once and run it again with the fresh one. Mirrors
+    /// `BCryptoRestClient.requestUncancellable`'s own single refresh-and-
+    /// retry cycle, including its "retry once, then surface" bound: the
+    /// refresher itself coalesces concurrent callers, so a burst of chunk
+    /// PATCHes hitting 401 together triggers one cascade, not N.
+    ///
+    /// `build` is called again for the retry rather than reusing the first
+    /// `URLRequest`, so the Authorization header carries the NEW token —
+    /// re-sending the original request would repeat the expired one.
+    private func sendAuthed(_ build: () -> URLRequest?) async throws -> (Data, HTTPURLResponse)? {
+        guard let req = build() else { return nil }
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { return nil }
+        guard http.statusCode == 401, let refreshToken else { return (data, http) }
+        guard try await refreshToken() else { return (data, http) }
+        guard let retryReq = build() else { return (data, http) }
+        let (retryData, retryResponse) = try await session.data(for: retryReq)
+        guard let retryHttp = retryResponse as? HTTPURLResponse else { return (data, http) }
+        return (retryData, retryHttp)
     }
 
     // MARK: - Public API
@@ -207,14 +251,16 @@ public final class TusUploadClient {
         guard let url = URL(string: urlStr) else {
             throw TusError.headFailed(0)
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "HEAD"
-        req.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-        if let tok = getToken() {
-            req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
-        }
-        let (_, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
+        // W-TUSAUTHREFRESH — see `sendAuthed`.
+        guard let (_, http) = try await sendAuthed({
+            var req = URLRequest(url: url)
+            req.httpMethod = "HEAD"
+            req.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+            if let tok = self.getToken() {
+                req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
+            }
+            return req
+        }) else {
             throw TusError.headFailed(0)
         }
         if http.statusCode == 404 {
@@ -240,16 +286,19 @@ public final class TusUploadClient {
         guard let url = URL(string: urlStr) else {
             throw TusError.createFailed(0)
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-        req.setValue(String(describing: totalBytes), forHTTPHeaderField: "Upload-Length")
-        req.setValue("0", forHTTPHeaderField: "Content-Length")
-        if let tok = getToken() {
-            req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
-        }
-        let (_, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
+        // W-TUSAUTHREFRESH — see `sendAuthed`. Rebuilt per attempt so the
+        // retry carries the refreshed token.
+        guard let (_, http) = try await sendAuthed({
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+            req.setValue(String(describing: totalBytes), forHTTPHeaderField: "Upload-Length")
+            req.setValue("0", forHTTPHeaderField: "Content-Length")
+            if let tok = self.getToken() {
+                req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
+            }
+            return req
+        }) else {
             throw TusError.createFailed(0)
         }
         guard http.statusCode == 201 || http.statusCode == 200 else {
@@ -326,17 +375,21 @@ public final class TusUploadClient {
         guard let url = URL(string: urlStr) else {
             throw TusError.patchFailed(0)
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "PATCH"
-        req.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
-        req.setValue(String(describing: offset), forHTTPHeaderField: "Upload-Offset")
-        req.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
-        req.httpBody = bytes
-        if let tok = getToken() {
-            req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
-        }
-        let (_, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
+        // W-TUSAUTHREFRESH — see `sendAuthed`. A long upload can cross the
+        // token expiry mid-transfer, so the chunk PATCHes need the same
+        // refresh-and-retry as create/head, not just the first request.
+        guard let (_, http) = try await sendAuthed({
+            var req = URLRequest(url: url)
+            req.httpMethod = "PATCH"
+            req.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+            req.setValue(String(describing: offset), forHTTPHeaderField: "Upload-Offset")
+            req.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+            req.httpBody = bytes
+            if let tok = self.getToken() {
+                req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
+            }
+            return req
+        }) else {
             throw TusError.patchFailed(0)
         }
         if http.statusCode == 404 {

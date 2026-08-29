@@ -103,7 +103,12 @@ public final class BCryptoStorageApiImpl: StorageApi {
         let tusClient = TusUploadClient(
             session: capturedRest.urlSession,
             serverUrl: capturedRest.serverUrl,
-            getToken: { capturedRest.accessToken }
+            getToken: { capturedRest.accessToken },
+            // W-TUSAUTHREFRESH (2026-08-29) — without this the tus client
+            // had no way to recover from an expired token: it surfaced the
+            // 401 and every later attempt repeated it. See the property's
+            // own doc for the live log-pipeline blackout this caused.
+            refreshToken: { try await capturedRest.refreshAccessTokenForExternalClient() }
         )
         return try await tusClient.upload(
             data: data,
@@ -145,7 +150,9 @@ public final class BCryptoStorageApiImpl: StorageApi {
         return TusUploadClient(
             session: capturedRest.urlSession,
             serverUrl: capturedRest.serverUrl,
-            getToken: { capturedRest.accessToken }
+            getToken: { capturedRest.accessToken },
+            // W-TUSAUTHREFRESH — same wiring as `uploadFile` above.
+            refreshToken: { try await capturedRest.refreshAccessTokenForExternalClient() }
         )
     }
 

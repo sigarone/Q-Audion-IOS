@@ -490,6 +490,20 @@ public final class BCryptoRestClient {
     /// reads the freshest token without holding a config reference.
     public var accessToken: String? { config.accessToken }
 
+    /// W-TUSAUTHREFRESH (2026-08-29) — run this client's own token-refresh
+    /// cascade on behalf of a component that builds its requests by hand
+    /// and therefore cannot go through `requestUncancellable`'s built-in
+    /// 401 refresh-and-retry (today: `TusUploadClient`, whose tus PATCH/
+    /// HEAD semantics need raw header and offset control the JSON helpers
+    /// do not expose).
+    ///
+    /// Same cascade, same coalescing, same `config.accessToken` update as
+    /// the internal path — this only widens WHO may ask, never what
+    /// happens. Returns `true` when a fresh access token is available.
+    public func refreshAccessTokenForExternalClient() async throws -> Bool {
+        try await tryRefreshToken()
+    }
+
     /// Current refresh token — used by the WS auth-recovery bridge so the
     /// provider can re-broadcast the post-recovery pair to every transport
     /// (the cascade writes the fresh tokens into THIS client's config only).
