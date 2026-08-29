@@ -78,4 +78,54 @@ final class VoiceAnalysisSmoothingTests: XCTestCase {
         ])
         XCTAssertEqual(out?.pitch.voiced, false)
     }
+
+    // ─── W-VOICEMEANVOICED (2026-08-29) ──────────────────────────────────
+    //
+    // The regression this file itself introduced. `ConfidenceIndicator`
+    // returns exactly 0 for an unvoiced frame, so averaging silence in made
+    // the readout report "what fraction of the second was speech" instead of
+    // "how trustworthy is the voice": half silence + a confident 0.8 showed
+    // 0.4. Reported live 2026-08-29.
+
+    func test_confidence_ignoresSilentFramesRatherThanAveragingTheirZeros() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            sample(f0: 0, voiced: false, conf: 0),
+            sample(f0: 0, voiced: false, conf: 0),
+            sample(f0: 200, voiced: true, conf: 0.8),
+            sample(f0: 200, voiced: true, conf: 0.8),
+        ])
+        XCTAssertEqual(out?.confidence ?? 0, 0.8, accuracy: 0.001)
+    }
+
+    /// Pitch is undefined during silence too — averaging its zeros in halved
+    /// the reported f0 for the same reason.
+    func test_pitch_isAveragedOverVoicedFramesOnly() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            sample(f0: 0, voiced: false, conf: 0),
+            sample(f0: 220, voiced: true, conf: 0.9),
+        ])
+        XCTAssertEqual(out?.pitch.f0Hz ?? 0, 220, accuracy: 0.001)
+    }
+
+    /// A level IS meaningful across silence, so rms keeps the full window —
+    /// restricting it would over-report loudness on a quiet second.
+    func test_rms_stillAveragesTheWholeWindow() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            sample(f0: 0, voiced: false, conf: 0),      // rms 0
+            sample(f0: 1000, voiced: true, conf: 0.9),  // rms 1.0
+        ])
+        XCTAssertEqual(out?.pitch.rms ?? 0, 0.5, accuracy: 0.001)
+    }
+
+    /// An entirely silent second must still report 0, not nil and not a
+    /// carried-over value: that is the honest answer, and it matches what the
+    /// analysis itself produced for every frame in it.
+    func test_fullySilentWindow_reportsZeroConfidence() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            sample(f0: 0, voiced: false, conf: 0),
+            sample(f0: 0, voiced: false, conf: 0),
+        ])
+        XCTAssertEqual(out?.confidence ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(out?.pitch.voiced, false)
+    }
 }

@@ -652,8 +652,21 @@ struct LiveInCallScreen: View {
     /// `.active` handler immediately before `reconfigureAudioCodec`
     /// (CallService.swift L834-856). Before that the encoder is still on its
     /// construction default and reporting the tuned rate would be a guess.
+    ///
+    /// W-SRTPWIREMETRICS (2026-08-29) — the gate below accepts EITHER kind of
+    /// evidence that this call is really encoding and sending. It used to
+    /// require `framesEncryptedTx > 0`, which counts frames sealed for the
+    /// DataChannel/WS relay; on an `audio-srtp-v1` call nothing ever rides
+    /// that path, so the counter stayed at 0 and the CODEC column showed "—"
+    /// for the entire call while audio was plainly flowing. Reported live
+    /// 2026-08-29 ("su iOS non funziona ancora il contatore del codec").
+    /// Outbound RTP bytes are the same proof for the native path, and the
+    /// reasoning behind the gate is unchanged: report the tuned rate only
+    /// once the encoder has actually been reconfigured, never before.
     private var liveCodecKbps: Int {
-        guard appState.callService.framesEncryptedTx > 0,
+        let sealedFrames = appState.callService.framesEncryptedTx > 0
+        let rtpSent = (appState.callService.getAudioRtpBytesSent?() ?? -1) > 0
+        guard sealedFrames || rtpSent,
               let profile = appState.callService.callIntegration?.activeAudioProfile
         else { return 0 }
         return profile.clamp(kbps: min(max(AudioCodecPrefs.bitrateKbps, 8), 40))

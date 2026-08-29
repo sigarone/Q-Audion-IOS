@@ -359,6 +359,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// arrived from the network, which NetEQ concealment cannot fake.
     public private(set) var audioRtpBytesReceived: Int64 = -1
 
+    /// W-SRTPWIREMETRICS (2026-08-29) — latest audio `outbound-rtp.bytesSent`
+    /// seen by ``pollMediaRttOnce()``, or -1 when the report carries no audio
+    /// `outbound-rtp` row (every call whose audio rides the sealed
+    /// DataChannel/WS relay, where the app's own wire counters are the real
+    /// measurement). Paired with ``audioRtpBytesReceived`` to drive the call
+    /// UI's throughput readout on a native-SRTP call.
+    public private(set) var audioRtpBytesSent: Int64 = -1
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -391,11 +399,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // the watchdog treats that as "no opinion" and keeps using the
             // decode stamp exactly as before.
             var audioRxBytes: Int64 = -1
+            // W-SRTPWIREMETRICS (2026-08-29) — the outbound twin, for the same
+            // reason: on an `audio-srtp-v1` call the app's own wire counters
+            // never move (nothing rides the sealed DataChannel), so the UI's
+            // CODEC and FLUSSO columns read zero while real audio is flowing.
+            var audioTxBytes: Int64 = -1
             for (_, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
                     jbEmitted = (s.values["jitterBufferEmittedCount"] as? NSNumber)?.int64Value ?? 0
                     audioRxBytes = (s.values["bytesReceived"] as? NSNumber)?.int64Value ?? -1
+                }
+                if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
+                    audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                 }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
@@ -417,6 +433,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self.setMediaRttMs(seconds.map { $0 * 1000.0 })
             // W-MEDIADEADSRTP — see `audioRxBytes` above.
             self.audioRtpBytesReceived = audioRxBytes
+            // W-SRTPWIREMETRICS — see `audioTxBytes` above.
+            self.audioRtpBytesSent = audioTxBytes
             self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
         }
     }

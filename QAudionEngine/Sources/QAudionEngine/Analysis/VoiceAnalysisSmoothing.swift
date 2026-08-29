@@ -30,11 +30,36 @@ public enum VoiceAnalysisSmoothing {
 
     /// Mean of `samples`, or `nil` when there is nothing to average — the
     /// caller keeps showing its previous value rather than blanking the UI.
+    ///
+    /// W-VOICEMEANVOICED (2026-08-29) — the voice-dependent fields are
+    /// averaged over the VOICED samples only, and that distinction is not a
+    /// refinement, it is a correctness fix for a real regression this file
+    /// introduced. `ConfidenceIndicator.analyze` returns exactly 0 for an
+    /// unvoiced frame, and the same holds for pitch, stress, health and
+    /// formants: they are undefined during silence, not zero-valued. Averaging
+    /// those zeros in turns the readout into "what fraction of the second was
+    /// speech" rather than "how trustworthy is the voice" — a second that is
+    /// half silence and half a confident 0.8 displayed 0.4. Reported live
+    /// 2026-08-29 ("il confidence è sempre molto basso a 0,4").
+    ///
+    /// `rms` and the speech-rate fields are deliberately NOT restricted: a
+    /// level and a pause ratio are meaningful across silence, and averaging
+    /// them over the whole window is what makes them mean what they say.
     public static func average(of samples: [VoiceAnalysisResult]) -> VoiceAnalysisResult? {
         guard !samples.isEmpty else { return nil }
         let n = Float(samples.count)
         func mean(_ pick: (VoiceAnalysisResult) -> Float) -> Float {
             samples.reduce(Float(0)) { $0 + pick($1) } / n
+        }
+        // Voice-dependent fields: see the note above. Falls back to the full
+        // window when nothing in it was voiced, which then averages the zeros
+        // the analysis itself produced — the honest answer for a silent
+        // second, and identical to the previous behavior in that case.
+        let voiced = samples.filter { $0.pitch.voiced }
+        let voicedN = Float(voiced.count)
+        func voicedMean(_ pick: (VoiceAnalysisResult) -> Float) -> Float {
+            guard !voiced.isEmpty else { return mean(pick) }
+            return voiced.reduce(Float(0)) { $0 + pick($1) } / voicedN
         }
         // Majority, not any/last — see the type's own doc.
         func majority(_ pick: (VoiceAnalysisResult) -> Bool) -> Bool {
@@ -42,31 +67,33 @@ public enum VoiceAnalysisSmoothing {
         }
         return VoiceAnalysisResult(
             pitch: .init(
-                f0Hz: mean { $0.pitch.f0Hz },
+                f0Hz: voicedMean { $0.pitch.f0Hz },
                 voiced: majority { $0.pitch.voiced },
+                // A level is meaningful across silence — full window.
                 rms: mean { $0.pitch.rms }
             ),
             stress: .init(
-                score: mean { $0.stress.score },
-                jitter: mean { $0.stress.jitter },
-                shimmer: mean { $0.stress.shimmer }
+                score: voicedMean { $0.stress.score },
+                jitter: voicedMean { $0.stress.jitter },
+                shimmer: voicedMean { $0.stress.shimmer }
             ),
             voiceHealth: .init(
-                hnr: mean { $0.voiceHealth.hnr },
-                breathiness: mean { $0.voiceHealth.breathiness }
+                hnr: voicedMean { $0.voiceHealth.hnr },
+                breathiness: voicedMean { $0.voiceHealth.breathiness }
             ),
             speechRate: .init(
+                // Rate and pause ratio describe the WINDOW, silence included.
                 syllablesPerSec: mean { $0.speechRate.syllablesPerSec },
                 pauseRatio: mean { $0.speechRate.pauseRatio },
                 isSpeaking: majority { $0.speechRate.isSpeaking }
             ),
             formants: .init(
-                f1: mean { $0.formants.f1 },
-                f2: mean { $0.formants.f2 },
-                f3: mean { $0.formants.f3 },
-                f4: mean { $0.formants.f4 }
+                f1: voicedMean { $0.formants.f1 },
+                f2: voicedMean { $0.formants.f2 },
+                f3: voicedMean { $0.formants.f3 },
+                f4: voicedMean { $0.formants.f4 }
             ),
-            confidence: mean { $0.confidence }
+            confidence: voicedMean { $0.confidence }
         )
     }
 }

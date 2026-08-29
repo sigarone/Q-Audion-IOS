@@ -3920,6 +3920,12 @@ final class AppState: ObservableObject {
         callService.getAudioRtpBytesReceived = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpBytesReceived ?? -1
         }
+        // W-SRTPWIREMETRICS (2026-08-29) — the outbound twin; see
+        // `CallService.sampleWireThroughput` for why the UI needs both on an
+        // `audio-srtp-v1` call.
+        callService.getAudioRtpBytesSent = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpBytesSent ?? -1
+        }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
         // stashed by the `call_incoming` handler (responder side) and by the

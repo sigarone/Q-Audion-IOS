@@ -327,8 +327,23 @@ final class CallService: @unchecked Sendable {
         // Monotonic: a wall-clock step (NTP, timezone) must not manufacture a
         // spike or a negative dt.
         let nowSec = ProcessInfo.processInfo.systemUptime
-        let tx = wireTxBytes
-        let rx = wireRxBytes
+        // W-SRTPWIREMETRICS (2026-08-29) — on an `audio-srtp-v1` call the
+        // audio never touches the sealed DataChannel/WS relay, so
+        // `wireTxBytes`/`wireRxBytes` stay at whatever they were and the
+        // FLUSSO column reads 0 for the whole call while the user is plainly
+        // hearing voice. Reported live 2026-08-29 ("il flusso è sempre a 0
+        // anche se si sente voce").
+        //
+        // When the PeerConnection reports audio RTP rows, THEY are the real
+        // measurement of this call's wire traffic, so read the rate from
+        // them. -1 means no such row (sealed-DataChannel call), and then the
+        // app's own counters are the correct source exactly as before — this
+        // never overrides a measurement that was already right.
+        let rtpTx = getAudioRtpBytesSent?() ?? -1
+        let rtpRx = getAudioRtpBytesReceived?() ?? -1
+        let useRtp = rtpTx >= 0 || rtpRx >= 0
+        let tx = useRtp ? max(rtpTx, 0) : wireTxBytes
+        let rx = useRtp ? max(rtpRx, 0) : wireRxBytes
         if let prev = lastThroughputSample {
             let dtSec = nowSec - prev.atSec
             if dtSec > 0.2, tx >= prev.tx, rx >= prev.rx {
@@ -555,6 +570,13 @@ final class CallService: @unchecked Sendable {
     /// call. `nil` (no wiring, e.g. a test double) leaves the media-dead
     /// watchdog on its original single source — byte-for-byte prior behavior.
     public var getAudioRtpBytesReceived: (() -> Int64)?
+    /// W-SRTPWIREMETRICS (2026-08-29) — audio `outbound-rtp.bytesSent` from
+    /// the live PeerConnection, or -1 when there is no audio RTP leg. Same
+    /// live-getter pattern and same wiring site as
+    /// ``getAudioRtpBytesReceived``; together they are what makes the call
+    /// UI's throughput readout truthful on a native-SRTP call, where the
+    /// app's own wire counters legitimately never move.
+    public var getAudioRtpBytesSent: (() -> Int64)?
     /// W-SRTPFALLBACK — true while the manual capture/decode path has been
     /// explicitly RE-ENGAGED during a native-audio-srtp call's ICE outage
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
