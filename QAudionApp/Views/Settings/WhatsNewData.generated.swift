@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1046",
+              date: "2026-08-29",
+              title: "v1.0.1046",
+              bullets: [
+                "fix(diagnostics): back off livelog upload on HTTP 429/5xx instead of hammering every 3s",
+                "fix(call): iOS never answered a peer's ICE-restart request, so every iOS<->Android handoff died (W-RESTARTICEREQ)",
+              ]),
         .init(id: "v1.0.1045",
               date: "2026-08-29",
               title: "v1.0.1045",
               bullets: [
+                "chore: regenerate changelog for v1.0.1045",
                 "feat(call): average the live voice metrics over one second so they can be read (W-VOICEUISMOOTH)",
                 "a11y(security-icon): expand tap target on SecurityIconHeaderView, add VoiceOver traits",
                 "fix(call): iOS killed every audio-srtp call at 90s with \"media-lost\" while audio worked (W-MEDIADEADSRTP)",
@@ -191,13 +199,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1027",
                 "fix(contacts): reject self-referencing contact rows from QR scan",
-              ]),
-        .init(id: "v1.0.1026",
-              date: "2026-08-22",
-              title: "v1.0.1026",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1026",
-                "revert(call): dcMuxAdvertiseEnabled back to false — test window closed",
               ]),
     ]
 }
