@@ -364,6 +364,29 @@ public enum CallPiggyBack: Equatable {
     /// `OwnerContinuityAnnounce` byte for byte.
     case ownerContinuity(callId: String, level: String)
 
+    /// `<callId>|SPKCHG:<0|1>` — "interlocutore cambiato" live cross-device
+    /// signal (2026-08-29). Carries the SENDER's own receive-side verdict
+    /// that the voice it is hearing — which is THIS device's user — is no
+    /// longer the voice the call started with. Sent only on a real
+    /// transition of that verdict, like `.ownerContinuity` and for the same
+    /// reason, so the wire cost is zero on the overwhelming majority of
+    /// calls.
+    ///
+    /// It exists for the half of the scenario a receive-only design cannot
+    /// see: the device whose user just handed their handset over hears no
+    /// change, because the new voice is on its microphone rather than in its
+    /// received audio, so without this message that user's screen would stay
+    /// silent while the other side's lit up.
+    ///
+    /// The receiver treats it as an input to its display and never as proof
+    /// — a claim from across the trust boundary can raise that side's state
+    /// to "suspected" but never to "confirmed". `1`/`true`/`on` parse as
+    /// true, anything else as false, so a malformed payload can only ever
+    /// clear an alert rather than raise one. Mirrors Android's
+    /// `WsCallSignaller.SPEAKER_CHANGE_PAYLOAD_PREFIX` /
+    /// `SpeakerChangeAnnounce` byte for byte.
+    case speakerChange(callId: String, changed: Bool)
+
     /// `<callId>|HANGUP:<reason>` — secondary hangup signal. Exists because
     /// bcrypto-lite in certain paths drops `call_hangup` envelopes silently
     /// while forwarding opaques — so this is NOT redundancy theatre: it is
@@ -470,6 +493,15 @@ public enum CallPiggyBack: Equatable {
             let lower = v.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let level = ["unknown", "verified", "uncertain", "mismatch"].contains(lower) ? lower : "unknown"
             return .ownerContinuity(callId: callId, level: level)
+        }
+        // SPKCHG:<0|1> — the peer's receive-side "the voice changed" verdict
+        // about US. Permissive boolean parse, deliberately one-directional:
+        // anything that is not an explicit affirmative clears the flag, so a
+        // truncated or corrupted payload can only ever remove an alert.
+        if let v = stripPrefix(payload, "SPKCHG:") {
+            let lower = v.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let changed = (lower == "1" || lower == "true" || lower == "on")
+            return .speakerChange(callId: callId, changed: changed)
         }
         if let v = stripPrefix(payload, "HANGUP:") {
             return .hangup(callId: callId, reason: v)
@@ -582,6 +614,13 @@ public enum CallPiggyBack: Equatable {
     /// `AppState`'s send-side wiring.
     public static func serializeOwnerContinuity(callId: String, level: String) -> String {
         return "\(callId)|OWNER_CONT:\(level)"
+    }
+
+    /// Build a wire string for a SPKCHG announce — the inverse of the
+    /// `.speakerChange` parse branch. Byte-identical framing to Android's
+    /// `WsCallSignaller.sendSpeakerChangeAnnounce`.
+    public static func serializeSpeakerChange(callId: String, changed: Bool) -> String {
+        return "\(callId)|SPKCHG:\(changed ? "1" : "0")"
     }
 
     /// Build a wire string for an earbud handshake PDU — the inverse of

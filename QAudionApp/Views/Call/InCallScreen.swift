@@ -405,6 +405,17 @@ struct InCallScreen: View {
     /// hidden in that case too.
     let contactVoiceLevel: ContactVoiceContinuityGate.Level
 
+    /// "Interlocutore cambiato" — is the voice arriving now still the voice
+    /// this call started with, published as `AppState.speakerChangeVerdict`.
+    ///
+    /// Its own shield rather than a colour change on the one next to it:
+    /// "the voice changed during this call" and "the voice does not match
+    /// the template I stored for this contact" are different claims resting
+    /// on different evidence, and collapsing them into one indicator would
+    /// make a strong, self-referential measurement inherit the credibility
+    /// of an absolute threshold never validated against a real impostor.
+    let speakerChange: RemoteSpeakerChangeMonitor.Verdict
+
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
          durationSeconds: Int = 0,
@@ -460,7 +471,8 @@ struct InCallScreen: View {
          onStartVoiceLearning: @escaping () -> Void = {},
          voiceConfidenceHistory: [Float] = [],
          peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown,
-         contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown) {
+         contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown,
+         speakerChange: RemoteSpeakerChangeMonitor.Verdict = .init(level: .unknown)) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
@@ -517,6 +529,7 @@ struct InCallScreen: View {
         self.voiceConfidenceHistory = voiceConfidenceHistory
         self.peerOwnerContinuityLevel = peerOwnerContinuityLevel
         self.contactVoiceLevel = contactVoiceLevel
+        self.speakerChange = speakerChange
     }
 
     // MARK: - Body
@@ -1341,6 +1354,27 @@ struct InCallScreen: View {
                         : (contactVoiceLevel == .mismatch
                             ? "Attenzione: la voce del contatto non corrisponde a quella già conosciuta"
                             : "Verifica della voce del contatto in corso")
+                )
+            }
+            // "Interlocutore cambiato" — shown only once there is something
+            // to say. Amber while evidence builds, red once sustained. The
+            // three labels distinguish the cases the user needs told apart:
+            // this device heard the change, both devices agree, or only the
+            // far end reports it — which is what the person who just handed
+            // their own phone over sees, since their device hears nothing
+            // unusual in its received audio.
+            if speakerChange.level != .unknown && speakerChange.level != .steady {
+                trustShield(
+                    tint: speakerChange.level == .changed ? extras.riskHigh : extras.warning,
+                    icon: "arrow.left.arrow.right",
+                    info: .contactVoice,
+                    accessibilityLabel: speakerChange.peerReportedOnly
+                        ? "L'altro dispositivo segnala che la voce da questo lato è cambiata"
+                        : (speakerChange.level == .changed
+                            ? (speakerChange.corroborated
+                                ? "Entrambi i dispositivi rilevano che chi parla è cambiato"
+                                : "Chi parla ora non è la persona con cui è iniziata questa chiamata")
+                            : "La voce che stai ascoltando sta cambiando rispetto a quella di questa chiamata")
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with

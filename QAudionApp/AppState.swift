@@ -1808,6 +1808,22 @@ final class AppState: ObservableObject {
     /// endCall().
     @Published var contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown
 
+    /// "Interlocutore cambiato" — is the voice arriving now still the voice
+    /// this call started with. Distinct from `contactVoiceLevel`, which asks
+    /// whether it matches the stored template for this contact: this one
+    /// measures against the call's own opening audio, so it is unaffected by
+    /// codec, room or handset, and it is the signal that actually catches a
+    /// handset being passed to somebody else. Informational only.
+    @Published var speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
+
+    /// Dedup guard for the `SPKCHG` announce — mirrors
+    /// `lastSentOwnerContinuityLevel`. Only ever carries what THIS device
+    /// observed for itself; a verdict that exists solely because the peer
+    /// said so is never echoed back, since two devices bouncing the same
+    /// unverified claim would look like independent corroboration and would
+    /// not be.
+    private var lastSentSpeakerChange: Bool?
+
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW (un-smoothed) per-analyzed-frame Guardian confidence scores
     /// for the live wave that replaces the old manual voice-learning CTA
@@ -3004,6 +3020,13 @@ final class AppState: ObservableObject {
         callService.onContactVoiceLevelChanged = { [weak self] level in
             Task { @MainActor in
                 self?.contactVoiceLevel = level
+            }
+        }
+        callService.onSpeakerChangeVerdict = { [weak self] verdict in
+            Task { @MainActor in
+                guard let self else { return }
+                self.speakerChangeVerdict = verdict
+                self.maybeAnnounceSpeakerChange(verdict)
             }
         }
         // MASVS-CRYPTO remediation (2026-08-20/21) — feed the raw
@@ -10984,6 +11007,18 @@ final class AppState: ObservableObject {
             }
             peerOwnerContinuityLevel = mapped
             print("[AppState] OWNER_CONT received callId=\(callId.prefix(8))… level=\(level) from=\(senderId.prefix(8))…")
+        case .speakerChange(let callId, let changed):
+            // "Interlocutore cambiato" — the peer's own receive-side verdict
+            // about OUR user. Same sender guard as VOICE_KEY/OWNER_CONT:
+            // only the current call's peer may set it. The engine caps what
+            // this can do — a claim from across the trust boundary raises
+            // the local state to "suspected" and never to "confirmed".
+            guard callContactId == senderId else {
+                print("[AppState] SPKCHG dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            callService.peerReportedSpeakerChange(changed)
+            print("[AppState] SPKCHG received callId=\(callId.prefix(8))… changed=\(changed) from=\(senderId.prefix(8))…")
         case .vnack(let callId, let frameId, let missing):
             // W-VNACK — peer is missing fragments of a frame WE sent;
             // resend the exact cached sealed bytes for every cache hit. A
@@ -14638,6 +14673,42 @@ extension AppState {
         Task { await sendOwnerContinuityAnnounce(level: level, peerId: peerId) }
     }
 
+    /// Announce a locally observed speaker change to the peer, on
+    /// transitions only — same cadence discipline as
+    /// `maybeAnnounceOwnerContinuity`, so the wire cost is zero on the
+    /// overwhelming majority of calls.
+    ///
+    /// Only what this device observed for itself is announced. A verdict
+    /// that exists solely because the peer reported it is deliberately not
+    /// echoed back.
+    @MainActor
+    private func maybeAnnounceSpeakerChange(_ verdict: RemoteSpeakerChangeMonitor.Verdict) {
+        let locallyObserved = verdict.level == .changed && !verdict.peerReportedOnly
+        guard locallyObserved != lastSentSpeakerChange else { return }
+        lastSentSpeakerChange = locallyObserved
+        guard let peerId = callContactId else { return }
+        Task { await sendSpeakerChangeAnnounce(changed: locallyObserved, peerId: peerId) }
+    }
+
+    /// Ship a single SPKCHG announce — mirrors `sendOwnerContinuityAnnounce`'s
+    /// shape exactly (same active-call guard, same fire-and-forget error
+    /// handling, same self-echo guard).
+    @MainActor
+    private func sendSpeakerChangeAnnounce(changed: Bool, peerId: String) async {
+        guard callContactId == peerId else { return }
+        guard let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty
+        else { return }
+        let wire = CallPiggyBack.serializeSpeakerChange(callId: callId, changed: changed)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        do {
+            try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+        } catch {
+            print("[AppState] SPKCHG announce failed: \(error)")
+        }
+    }
+
     /// Ship a single OWNER_CONT announce — mirrors `announceVoiceKeyEnrollment`'s
     /// shape exactly (same `getActiveCallId()` guard, same fire-and-forget
     /// error handling, same `OpaqueSelfEchoFilter` self-echo guard).
@@ -14864,6 +14935,8 @@ extension AppState {
         lastSentOwnerContinuityLevel = nil
         peerOwnerContinuityLevel = .unknown
         contactVoiceLevel = .unknown
+        speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
+        lastSentSpeakerChange = nil
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).

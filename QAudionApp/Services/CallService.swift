@@ -110,6 +110,16 @@ final class CallService: @unchecked Sendable {
     /// Same wiring/threading contract as `onOwnerContinuityStateChanged`
     /// above.
     var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
+
+    /// "Interlocutore cambiato" — pass-through of
+    /// `QAudionCallIntegration.onSpeakerChangeVerdict` to AppState.
+    var onSpeakerChangeVerdict: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
+
+    /// Hand the peer's `SPKCHG` claim to the engine. No-op when no call is
+    /// live, same best-effort contract as every other control pass-through.
+    func peerReportedSpeakerChange(_ changed: Bool) {
+        callIntegration?.peerReportedSpeakerChange(changed)
+    }
     /// MASVS-CRYPTO remediation (2026-08-20/21) — see
     /// `QAudionCallIntegration.onContactVoiceScoreUpdated` kdoc. Feeds
     /// `ReKeyScheduler` in `AppState`.
@@ -1370,6 +1380,9 @@ final class CallService: @unchecked Sendable {
         integration.onOwnerContinuityStateChanged = { [weak self] state in
             self?.onOwnerContinuityStateChanged?(state)
         }
+        integration.onSpeakerChangeVerdict = { [weak self] verdict in
+            self?.onSpeakerChangeVerdict?(verdict)
+        }
         integration.onContactVoiceLevelChanged = { [weak self] level in
             self?.onContactVoiceLevelChanged?(level)
         }
@@ -1604,6 +1617,9 @@ final class CallService: @unchecked Sendable {
         // reasoning as `onVoiceLearningStateChanged` immediately above.
         integration.onOwnerContinuityStateChanged = { [weak self] state in
             self?.onOwnerContinuityStateChanged?(state)
+        }
+        integration.onSpeakerChangeVerdict = { [weak self] verdict in
+            self?.onSpeakerChangeVerdict?(verdict)
         }
         integration.onContactVoiceLevelChanged = { [weak self] level in
             self?.onContactVoiceLevelChanged?(level)

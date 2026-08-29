@@ -350,6 +350,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `onOwnerContinuityStateChanged` above (fires on
     /// `ContactVoiceVerifier`'s own private queue).
     public var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
+
+    /// "Interlocutore cambiato" — fires when the receive-side change verdict
+    /// actually changes. Informational: no muting, no teardown, no key
+    /// action follows from it.
+    public var onSpeakerChangeVerdict: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
+
+    /// Record the far end's own receive-side verdict about this device's
+    /// user, as delivered over the `SPKCHG` control piggy-back.
+    public func peerReportedSpeakerChange(_ changed: Bool) {
+        contactVoiceVerifier.peerReportedSpeakerChange(changed)
+    }
+
+    /// Re-anchor the change detector after a media-path switch — see
+    /// `ContactVoiceVerifier.acousticPathChanged` for why a path change must
+    /// not be reported as a person walking in.
+    public func acousticPathChanged() {
+        contactVoiceVerifier.acousticPathChanged()
+    }
     /// MASVS-CRYPTO remediation (2026-08-20/21) — see
     /// `ContactVoiceVerifier.onScoreUpdated` kdoc. Feeds `ReKeyScheduler`.
     public var onContactVoiceScoreUpdated: ((Float) -> Void)?
@@ -833,6 +851,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
         contactVoiceVerifier.onLevelChanged = { [weak self] level in self?.onContactVoiceLevelChanged?(level) }
+        contactVoiceVerifier.onSpeakerChanged = { [weak self] verdict in self?.onSpeakerChangeVerdict?(verdict) }
         // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score
         // alongside the level, same pattern. See ContactVoiceVerifier's
         // `onScoreUpdated` kdoc.

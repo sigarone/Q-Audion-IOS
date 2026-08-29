@@ -417,7 +417,8 @@ struct LiveInCallScreen: View {
                 // `peerVoiceKeyEnrolled` fact in that case, see
                 // InCallScreen's own gating.
                 peerOwnerContinuityLevel: appState.peerOwnerContinuityLevel,
-                contactVoiceLevel: appState.contactVoiceLevel
+                contactVoiceLevel: appState.contactVoiceLevel,
+                speakerChange: appState.speakerChangeVerdict
             )
     }
 

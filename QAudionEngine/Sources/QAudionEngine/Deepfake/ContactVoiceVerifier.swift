@@ -33,6 +33,19 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private let store: VoiceprintStore
     private let gate = ContactVoiceContinuityGate()
 
+    /// "Interlocutore cambiato" — relative change detection over the SAME
+    /// score stream `gate` consumes. A second consumer, never a second
+    /// embedding pass: the expensive work is the CAM++ inference the timer
+    /// below already triggers, and this adds only arithmetic on its result.
+    ///
+    /// Both signals are worth showing and they answer different questions.
+    /// The gate asks whether the voice matches the stored template for this
+    /// contact, an absolute judgement resting on thresholds never validated
+    /// against a real impostor. This asks only whether the voice changed
+    /// during the call, measured against the call's own audio and therefore
+    /// unaffected by codec, room or handset.
+    private let speakerChange = RemoteSpeakerChangeMonitor()
+
     private let scoreQueue = DispatchQueue(label: "com.bcrypto.qaudion.contactVoiceScore", qos: .utility)
     private let lock = NSLock()
     private var loadedContactId: String?
@@ -53,9 +66,41 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// change any existing consumer's behavior.
     public var onScoreUpdated: ((Float) -> Void)?
 
+    /// Fires on `scoreQueue` whenever the speaker-change verdict actually
+    /// changes. Informational: the app layer shows it and does nothing else
+    /// with it — no muting, no teardown, no key action.
+    public var onSpeakerChanged: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
+
+    /// Current speaker-change verdict for the trust badges.
+    public var speakerChangeVerdict: RemoteSpeakerChangeMonitor.Verdict { speakerChange.verdict }
+
+    /// Record the far end's own receive-side verdict about this device's
+    /// user, as delivered over the in-call control channel.
+    public func peerReportedSpeakerChange(_ changed: Bool) {
+        speakerChange.onPeerReportedChange(changed)
+    }
+
+    /// Discard the change detector's reference and rebuild it on whoever is
+    /// speaking now.
+    ///
+    /// Call this on a media-path switch. A change of path — direct to relay
+    /// and back, or an ICE recovery — changes what the received audio sounds
+    /// like: different loss, different concealment, more of the far end's
+    /// speech reconstructed rather than transmitted. The detector measures
+    /// against a reference built earlier in this call, so a path switch
+    /// invalidates it, and a detector that did not know would report the
+    /// network event as a person walking in. Re-anchoring costs the warm-up
+    /// again and is the honest answer.
+    public func acousticPathChanged() {
+        speakerChange.reanchor()
+    }
+
     public init(embedder: CamPlusSpeakerEmbedder = .shared, store: VoiceprintStore = VoiceprintStore()) {
         self.verifier = SpeakerVerifier(embedder: embedder)
         self.store = store
+        speakerChange.onVerdictChanged = { [weak self] verdict in
+            self?.onSpeakerChanged?(verdict)
+        }
     }
 
     /// Switch the active contact (`nil` when the call ends / no peer is
@@ -71,6 +116,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         lock.unlock()
 
         gate.reset()
+        speakerChange.reset()
         guard let contactId else {
             verifier.reset()
             return
@@ -114,6 +160,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             let score = self.verifier.computeVerificationScore()
             self.gate.feed(score)
             self.onLevelChanged?(self.gate.level)
+            // Second consumer of the SAME score — no extra inference.
+            self.speakerChange.feed(score)
             // score is nil when there's not yet enough audio for a real
             // verification result (SpeakerVerifier's own gate) — nothing
             // meaningful to report to the re-key confidence signal in that
