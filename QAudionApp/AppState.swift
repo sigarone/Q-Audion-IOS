@@ -13441,6 +13441,16 @@ final class AppState: ObservableObject {
                 // don't conflict. The video m=video SDP section still
                 // exists so Android negotiates video correctly.
                 if video { controller.useExternalVideoSource = true }
+                // W-SRTPKEYFWDRACE (2026-08-29) — same pull-seed as the
+                // incoming-call path (`handleIncomingWebRtcOffer`); see that
+                // site's comment for the live-call evidence and root cause.
+                // Usually a no-op here (the PQC key typically isn't derived
+                // until the callee's ACCEPT arrives, well after this point),
+                // but safe and correct whenever it IS already held —
+                // idempotent, mirrors Android's `applyAudioRekey` pulling
+                // from a durable store rather than depending solely on the
+                // async NotificationCenter forward.
+                if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
                 webRtcController = controller
                 flushPendingIceCandidates(to: controller)
                 // Android↔iOS remote video: Android sends video via WebRTC
@@ -15732,23 +15742,37 @@ extension AppState {
                 // are post-quantum authenticated from this point on.
                 self.callSasKeySource = .mlKem
                 #if canImport(WebRTC)
-                if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
-                    // M-15: bind the derived key to this call session so the
-                    // HKDF info string is "q-audion-srtp-master-v1:<callId>".
-                    // Set pqcCallId BEFORE pqcSessionKey (didSet calls
-                    // applyPqcSealerIfPossible which reads pqcCallId).
-                    // M-15: canonical callId = lowercase wire call_id.
-                    // UUID.uuidString is UPPERCASE — lowercased() normalises to
-                    // the same string the other party received from the wire
-                    // (all platforms send the callId lowercase in call_offer).
-                    ctrl.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
-                    // vkey-v1: set the K_video salt PSK before the session key so
-                    // the first ensureVideoSealer derives the Android-matching
-                    // K_video (salt = psk, not the default string).
-                    ctrl.videoContactPsk = self.callVideoPsk
-                    ctrl.pqcSessionKey = key
-                    print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId.prefix(8))…)")
-                }
+                // W-SRTPKEYFWDRACE (2026-08-29) — live evidence (calls
+                // 27f4fb2a/3b184c12, iOS<->iOS): audio-srtp negotiated
+                // (both `getUsesNativeAudioSrtp` and this call's own
+                // `useAudioSrtp` read true) but `installAudioSrtpIfPossible`
+                // never fired successfully — no "audiosrtp tx=1", no retry,
+                // no exhaustion log; total silence on both legs. Root cause:
+                // this notification fires asynchronously, independent of
+                // `webRtcController`'s own lifecycle. If it lands in the
+                // narrow window between the PQC handshake completing and
+                // `AppState.webRtcController` being assigned the fresh
+                // controller for THIS call (a real window, not
+                // hypothetical, on back-to-back calls seconds apart — the
+                // same class of hazard already documented at
+                // `peerCapabilityBinding`/`CallCapabilities.peerCapabilities
+                // (forCallId:)` in this same file), the `as?` cast below
+                // failed and the key was DROPPED — no retry, no log on that
+                // branch. Every other install site in this engine
+                // (`pqcSessionKey` didSet, `acceptPeerCapabilities`,
+                // `didReceiveNativeAudioSrtpReceiver`) is a "whichever
+                // fires last" retry lattice specifically BECAUSE ordering
+                // between PQC completion and controller creation is not
+                // guaranteed; this was the one delivery path that assumed
+                // synchronous readiness and silently gave up instead.
+                // Mirrors Android's `applyAudioRekey`, which is called
+                // directly from the handshake-completion site with the
+                // live controller already in hand — never through an
+                // async broadcast that can miss its target. Bounded retry
+                // (5 x 300 ms, matching `installAudioSrtpIfPossible`'s own
+                // budget) closes the same gap here without inventing a new
+                // policy.
+                self.forwardPqcSessionKeyToController(key, retriesRemaining: 5)
                 #endif
                 // W394 + Task 10: rotate the video pipeline's sealer with
                 // the new ML-KEM secret. From this moment forward, every
@@ -15848,6 +15872,54 @@ extension AppState {
             }
         }
     }
+
+    #if canImport(WebRTC)
+    /// W-SRTPKEYFWDRACE (2026-08-29) — deliver the PQC session key to the
+    /// live WebRTC controller for THIS call, retrying instead of silently
+    /// dropping it when the controller isn't ready yet (or isn't the
+    /// WebRTC-backed type). See `wireSasReadyToController`'s call site for
+    /// the live-call evidence and root cause. Bounded to 5 attempts, 300 ms
+    /// apart — matches `QAudionWebRtcCallController.installAudioSrtpIfPossible`'s
+    /// own retry budget, so a normal call setup has ample margin and a
+    /// truly abandoned/superseded call gives up in 1.5 s instead of
+    /// leaking a retry chain forever.
+    private func forwardPqcSessionKeyToController(_ key: Data, retriesRemaining: Int) {
+        guard let ctrl = self.webRtcController as? QAudionWebRtcCallController else {
+            guard retriesRemaining > 0 else {
+                // RTLog (not print) — this is the line that proves the race
+                // was real on a live call, so it has to survive the remote
+                // redactor: numeric-only fields, same discipline as
+                // `CallService.startAudioIOIfReady`'s `gate=N`.
+                RTLog.warn("call", "srtpkeyfwd exhausted=1")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.forwardPqcSessionKeyToController(key, retriesRemaining: retriesRemaining - 1)
+            }
+            return
+        }
+        // M-15: bind the derived key to this call session so the
+        // HKDF info string is "q-audion-srtp-master-v1:<callId>".
+        // Set pqcCallId BEFORE pqcSessionKey (didSet calls
+        // applyPqcSealerIfPossible which reads pqcCallId).
+        // M-15: canonical callId = lowercase wire call_id.
+        // UUID.uuidString is UPPERCASE — lowercased() normalises to
+        // the same string the other party received from the wire
+        // (all platforms send the callId lowercase in call_offer).
+        ctrl.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
+        // vkey-v1: set the K_video salt PSK before the session key so
+        // the first ensureVideoSealer derives the Android-matching
+        // K_video (salt = psk, not the default string).
+        ctrl.videoContactPsk = self.callVideoPsk
+        ctrl.pqcSessionKey = key
+        print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId.prefix(8))…)")
+        // Remote-visible counterpart of the print above: `attempt` is how
+        // many retries it took (0 = landed first try, i.e. no race), which
+        // is the one number that says whether W-SRTPKEYFWDRACE is actually
+        // being hit in the field or was a one-off.
+        RTLog.info("call", "srtpkeyfwd ok=1 attempt=\(5 - retriesRemaining)")
+    }
+    #endif
 }
 
 // MARK: - W372: group chat fan-out
@@ -19704,6 +19776,24 @@ extension AppState {
         // pickup time; iOS mirrors that contract.
         let caps = peerCapabilities ?? pendingPeerCapabilities
         let audioOnly = !hasVideo
+        // W-SRTPKEYFWDRACE (2026-08-29) — pull-seed from the durable
+        // `callPqcSessionKey` store at controller-creation time, exactly
+        // like the video-upgrade-only controller already does two call
+        // sites above (`makeUpgradeResponderController`, "K_video parity"
+        // — line ~5925). This MAIN call path never had that safety net:
+        // the only delivery mechanism was `wireSasReadyToController`'s
+        // async NotificationCenter forward, a one-shot push that silently
+        // dropped the key if it fired before this controller existed (live
+        // evidence: calls 27f4fb2a/3b184c12, iOS<->iOS, audio-srtp
+        // negotiated true on both legs, `installAudioSrtpIfPossible` never
+        // fired once — total silence). `pqcSessionKey`'s own didSet
+        // re-triggers `installAudioSrtpIfPossible()` unconditionally, so
+        // seeding it here is a safe, idempotent no-op whenever the
+        // notification path already won the race, and the fix whenever it
+        // didn't. Mirrors Android's `applyAudioRekey`, which reads
+        // `activeKey.get()` — a durable store, pulled fresh at the point
+        // of use — rather than depending on a broadcast landing.
+        if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
         webRtcController = controller
         flushPendingIceCandidates(to: controller)
         // Mirror of the caller-side wiring: Android sends remote video via

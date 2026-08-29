@@ -2492,8 +2492,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// NSLock, RTCRtpTransceiver access unchanged from the existing
     /// multi-trigger design).
     private func installAudioSrtpIfPossible(retriesRemaining: Int = 5) {
-        guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else { return }
-        guard let key = pqcSessionKey, key.count == 32 else { return }
+        // W-SRTPKEYFWDRACE (2026-08-29) — these two guards used to return
+        // completely silently. Live evidence (calls 27f4fb2a/3b184c12,
+        // iOS<->iOS): audio-srtp negotiated true on both legs yet this
+        // function never produced a single "audiosrtp tx=1", nor a retry
+        // line, nor an exhaustion line — proof it was bailing HERE, at one
+        // of these two guards, every single time it was invoked, with zero
+        // way to tell which one without exactly this kind of archaeology.
+        // Mirrors Android's loud PQC_DIAG-style logging at every such gate.
+        // Numeric-only fields (see `startAudioIOIfReady`'s gate=N precedent
+        // in CallService.swift): the remote-log redactor drops any
+        // word=word field or compound word that isn't a bare number.
+        guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else {
+            print("audiosrtp install skip=1 reason=1")
+            return
+        }
+        guard let key = pqcSessionKey, key.count == 32 else {
+            print("audiosrtp install skip=1 reason=2")
+            return
+        }
         // W-AUDIORXPOSTNEG (2026-08-28) — this call site is reached only
         // once `negotiated.useAudioSrtp` is confirmed, which means the SDP
         // round that negotiated it has completed — the same "safe to
