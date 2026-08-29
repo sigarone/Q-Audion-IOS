@@ -2238,16 +2238,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // for why this can no longer be a plain unguarded read+write now
         // that more than one trigger can call this method concurrently.
         let now = Date()
-        restartIceDebounceLock.lock()
-        let debounced: Bool
-        if let last = lastIceRestartAt,
-           now.timeIntervalSince(last) * 1000 < Double(RestartIceDecisions.iceRestartDebounceMs) {
-            debounced = true
-        } else {
+        // W-ASYNCLOCK (2026-08-29) — scoped `withLock` instead of a bare
+        // `lock()`/`unlock()` pair: this method is `async`, where manual
+        // lock/unlock is unavailable (a hard error under the Swift 6
+        // language mode) because the two calls can land on different threads
+        // and a suspension between them would hold the lock across an await.
+        // The check-then-set stays exactly as atomic as before — that
+        // atomicity is the whole point of this lock, and the scoped form
+        // preserves it while making the no-suspension-inside guarantee
+        // structural rather than a thing to remember.
+        let debounced: Bool = restartIceDebounceLock.withLock {
+            if let last = lastIceRestartAt,
+               now.timeIntervalSince(last) * 1000 < Double(RestartIceDecisions.iceRestartDebounceMs) {
+                return true
+            }
             lastIceRestartAt = now
-            debounced = false
+            return false
         }
-        restartIceDebounceLock.unlock()
         guard !debounced else {
             log?("restart_ice debounced=1 reason=\(reason)")
             return

@@ -335,19 +335,24 @@ public final class BCryptoRestClient {
     /// closes that gap.
     private func request(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> Data {
         let id = UUID()
-        netLock.lock()
-        let generation = _networkGeneration
-        netLock.unlock()
+        // W-ASYNCLOCK (2026-08-29) — scoped `withLock` rather than a bare
+        // `lock()`/`unlock()` pair. This function is `async`, and manual
+        // lock/unlock around a suspension point is unavailable from an
+        // asynchronous context (a hard error in the Swift 6 language mode):
+        // the two calls can land on different threads, and a suspension
+        // between them would hold the lock across an await. The scoped form
+        // is non-async and cannot span a suspension by construction, which
+        // is the property that makes it safe. Same semantics as before —
+        // the critical sections were already suspension-free.
+        let generation = netLock.withLock { _networkGeneration }
         let task = Task<Data, Error> {
             try await self.requestUncancellable(method, path: path, body: body, headers: headers)
         }
-        inFlightLock.lock()
-        inFlightCancellers[id] = (cancel: { task.cancel() }, generation: generation)
-        inFlightLock.unlock()
+        inFlightLock.withLock {
+            inFlightCancellers[id] = (cancel: { task.cancel() }, generation: generation)
+        }
         defer {
-            inFlightLock.lock()
-            inFlightCancellers.removeValue(forKey: id)
-            inFlightLock.unlock()
+            inFlightLock.withLock { _ = inFlightCancellers.removeValue(forKey: id) }
         }
         return try await task.value
     }
