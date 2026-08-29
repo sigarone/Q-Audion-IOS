@@ -92,7 +92,23 @@ public final class LiveLogStreamer {
         UserDefaults.standard.set(enabled, forKey: consentKey)
         if !enabled {
             LiveLogStreamer.shared.stop()
+            return
         }
+        // W-CONSENTLATESTART (2026-08-29) — turning consent ON must actually
+        // START the pump. It used to write the preference and nothing else,
+        // and `start(serverUrl:getToken:getUserId:)` runs exactly once per
+        // launch (from `AppState`), where it returns immediately if consent
+        // was off at that moment. So the only way to ever begin shipping was
+        // to enable the toggle and then RELAUNCH the app — which nobody
+        // knows to do, and which made the feature look silently broken:
+        // reported live 2026-08-29 ("il toggle è acceso ma i log non
+        // salgono"), with the server confirming the device never even
+        // attempted an upload.
+        //
+        // Safe because `startIfConfigured` re-checks consent itself and does
+        // nothing at all until `start` has supplied the endpoint and the
+        // providers.
+        LiveLogStreamer.shared.startIfConfigured()
     }
 
     public let bootSessionId: String = UUID().uuidString.lowercased()
@@ -144,15 +160,26 @@ public final class LiveLogStreamer {
     public func start(serverUrl: String,
                       getToken: @escaping TokenProvider,
                       getUserId: @escaping UserIdProvider) {
+        // W-CONSENTLATESTART (2026-08-29) — retain the endpoint and the two
+        // provider closures BEFORE the consent gate, so consent granted
+        // later in the same launch can start the pump without waiting for a
+        // relaunch. This is deliberately not a weakening of SECURITY C-10:
+        // the gate below still returns before ANY observable side effect —
+        // no tee, no timer, no path monitor, no upload, no network of any
+        // kind. What is kept is three references already held elsewhere in
+        // this process (the server URL the app is talking to anyway, and two
+        // closures reading state AppState owns), which produce nothing on
+        // their own. Without them `setEnabled(true)` has no endpoint to ship
+        // to and the toggle stays inert for the rest of the launch.
+        self.serverUrl = serverUrl
+        self.tokenProvider = getToken
+        self.userIdProvider = getUserId
         // SECURITY C-10 — consent gate. No consent ⇒ no tee, no
         // upload, no timer, no path monitor. Returns BEFORE any
         // side effect. Default is false (key absent ⇒ false).
         guard LiveLogStreamer.isEnabled else { return }
         if isStarted { return }
         isStarted = true
-        self.serverUrl = serverUrl
-        self.tokenProvider = getToken
-        self.userIdProvider = getUserId
         
         pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
@@ -165,6 +192,23 @@ public final class LiveLogStreamer {
         let session: String = bootSessionId
         let line: String = "LiveLogStreamer started session=" + session
         RTLog.info("livelog", line)
+    }
+
+    /// W-CONSENTLATESTART (2026-08-29) — begin shipping if, and only if,
+    /// consent is granted AND `start` has already supplied the endpoint and
+    /// providers for this launch. Called when the user grants consent from
+    /// Settings, so the toggle takes effect immediately rather than at the
+    /// next launch.
+    ///
+    /// Idempotent (`isStarted` short-circuits) and inert before `start`:
+    /// with no `serverUrl` there is nothing to ship to, and returning here
+    /// leaves the process exactly as it was.
+    public func startIfConfigured() {
+        guard LiveLogStreamer.isEnabled, !isStarted else { return }
+        guard let url = serverUrl,
+              let token = tokenProvider,
+              let user = userIdProvider else { return }
+        start(serverUrl: url, getToken: token, getUserId: user)
     }
 
     /// Fully tear down the pump. Safe to call when not started.
