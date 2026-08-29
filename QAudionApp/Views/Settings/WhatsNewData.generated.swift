@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1047",
+              date: "2026-08-29",
+              title: "v1.0.1047",
+              bullets: [
+                "fix(call): align the last legacy-path readouts to the native SRTP counters (W-SRTPCOUNTERS)",
+                "fix(call): codec and throughput read dead counters on an SRTP call, and confidence was averaging silence (W-SRTPWIREMETRICS, W-VOICEMEANVOICED)",
+                "refactor(engine): scoped locking in async contexts, clearing the Swift 6 hard errors (W-ASYNCLOCK)",
+              ]),
         .init(id: "v1.0.1046",
               date: "2026-08-29",
               title: "v1.0.1046",
               bullets: [
+                "chore: regenerate changelog for v1.0.1046",
                 "fix(diagnostics): back off livelog upload on HTTP 429/5xx instead of hammering every 3s",
                 "fix(call): iOS never answered a peer's ICE-restart request, so every iOS<->Android handoff died (W-RESTARTICEREQ)",
               ]),
@@ -192,13 +201,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1028",
                 "fix(call): observe AVCaptureSession interruption/runtime-error notifications (W-CAPSESSIONWATCH)",
                 "fix(security): cherry-pick verified token-redaction hunk from Jules PR #83",
-              ]),
-        .init(id: "v1.0.1027",
-              date: "2026-08-22",
-              title: "v1.0.1027",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1027",
-                "fix(contacts): reject self-referencing contact rows from QR scan",
               ]),
     ]
 }
