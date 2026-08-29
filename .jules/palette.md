@@ -16,3 +16,7 @@
 ## 2026-11-04 - [Accessibility on custom icon-centric action buttons]
 **Learning:** Custom icon-centric action buttons (like `CircularAction`) need explicitly mapped accessibility labels because VoiceOver relies on these to announce the button's purpose if an image is the primary interactive element. Additionally, providing explicit feedback ("Non disponibile") for disabled states gives crucial context to screen reader users when a button is present but inactive.
 **Action:** When implementing custom action buttons that may or may not have a caption, conditionally map the caption (or a fallback like "Azione chiamata") to `.accessibilityLabel`. Also use `.accessibilityHint` to announce disabled states to make the interaction bounds clear.
+
+## 2026-08-25 - [Accessibility on compact headers/rows]
+**Learning:** For compact headers like `SecurityIconHeaderView` which consist of an icon and text, putting the `.onTapGesture` just on the icon creates a very small tap target and fails to announce the interactive area correctly for VoiceOver.
+**Action:** When evaluating headers or rows with an icon, make sure to add `.onTapGesture` to the entire row using `.contentShape(Rectangle())` and apply `.accessibilityElement(children: .combine)`, `.accessibilityAddTraits(.isButton)` and `.accessibilityHint` explaining the action.
