@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1045",
+              date: "2026-08-29",
+              title: "v1.0.1045",
+              bullets: [
+                "feat(call): average the live voice metrics over one second so they can be read (W-VOICEUISMOOTH)",
+                "a11y(security-icon): expand tap target on SecurityIconHeaderView, add VoiceOver traits",
+                "fix(call): iOS killed every audio-srtp call at 90s with \"media-lost\" while audio worked (W-MEDIADEADSRTP)",
+              ]),
         .init(id: "v1.0.1044",
               date: "2026-08-29",
               title: "v1.0.1044",
               bullets: [
+                "chore: regenerate changelog for v1.0.1044",
                 "fix(logs): iOS remote-log pipeline died on the first expired token and never recovered (W-TUSAUTHREFRESH)",
                 "fix(call): iOS voice curve and liveness analysis saw zero audio for the whole call (W-AUDIORXTAPCARRYOVER)",
               ]),
@@ -189,14 +198,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1026",
                 "revert(call): dcMuxAdvertiseEnabled back to false — test window closed",
-              ]),
-        .init(id: "v1.0.1025",
-              date: "2026-08-22",
-              title: "v1.0.1025",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1025",
-                "fix(security,perf,a11y): cherry-pick verified hunks from Jules PRs #81/#82/#80",
-                "fix(security): GitHub Actions template injection via workflow_dispatch inputs",
               ]),
     ]
 }
