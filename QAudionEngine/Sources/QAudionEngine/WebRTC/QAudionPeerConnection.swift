@@ -177,6 +177,12 @@ public final class QAudionPeerConnection: NSObject {
     /// OwnerContinuity consumers the sealed-DataChannel decode path already
     /// feeds. See ``NativeAudioPcmTap``'s own doc for why this exists.
     private var audioRxTap: NativeAudioPcmTap?
+    /// W-AUDIORXTAPCARRYOVER (2026-08-29) — the track ``audioRxTap`` is
+    /// currently attached to. Needed because a renderer is registered ON A
+    /// TRACK, so moving the tap after a post-negotiation receiver rebind
+    /// requires detaching it from the exact track it was added to; there is
+    /// no "which track am I on" query on the renderer itself.
+    private var audioRxTapTrack: RTCAudioTrack?
     private var audioTxTap: NativeAudioPcmTap?
     /// Mute state requested BEFORE the real mic track exists (mirrors
     /// Android's `pendingAudioSrtpMuted`) — latched here and applied the
@@ -852,6 +858,7 @@ public final class QAudionPeerConnection: NSObject {
             let tap = NativeAudioPcmTap(sink: rxSink)
             track.add(tap)
             audioRxTap = tap
+            audioRxTapTrack = track
         }
         return attached
     }
@@ -887,6 +894,28 @@ public final class QAudionPeerConnection: NSObject {
         }
         audioTransceiver = transceiver
         let ok = cryptor.rebindReceiver(transceiver.receiver)
+        // W-AUDIORXTAPCARRYOVER (2026-08-29) — the rebind above moves the
+        // CRYPTOR to the live receiver, but the PCM tap is a renderer
+        // registered on a TRACK, and it was added to whichever track the
+        // first `attachAudioReceiverCryptor` saw. When JSEP replaced the
+        // receiver during negotiation (the very case this rebind exists
+        // for), the tap stayed on the OLD, now-dead track: audio played
+        // fine in both directions — the cryptor was on the right receiver
+        // and libwebrtc renders the new track itself — while every
+        // consumer fed by the tap (VoiceAnalysisEngine's live waveform,
+        // GuardianMode liveness, ContactVoiceVerifier, VoiceLearningSession)
+        // saw zero frames for the whole call. Live report 2026-08-29,
+        // iOS<->Android: "audio fine both ways, no voice curve, no liveness
+        // analysis on iOS". Move the tap onto the current track whenever it
+        // changed; no-op when the receiver was already the right one.
+        if let newTrack = transceiver.receiver.track as? RTCAudioTrack,
+           let tap = audioRxTap,
+           newTrack !== audioRxTapTrack {
+            audioRxTapTrack?.remove(tap)
+            newTrack.add(tap)
+            audioRxTapTrack = newTrack
+            print("audiosrtp rxtap moved=1")
+        }
         print("[WebRTC] IOS-C4b: post-negotiation audio receiver cryptor rebound ok=\(ok)")
         return ok
     }
@@ -1305,6 +1334,9 @@ public final class QAudionPeerConnection: NSObject {
         nativeAudioCryptor?.dispose()
         nativeAudioCryptor = nil
         audioRxTap = nil
+        // W-AUDIORXTAPCARRYOVER — drop the track reference alongside the tap
+        // it points at, same reasoning as the comment above.
+        audioRxTapTrack = nil
         audioTxTap = nil
         audioTransceiver = nil
         nativeAudioSender = nil
