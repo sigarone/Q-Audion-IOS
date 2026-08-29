@@ -577,6 +577,39 @@ final class CallService: @unchecked Sendable {
     /// UI's throughput readout truthful on a native-SRTP call, where the
     /// app's own wire counters legitimately never move.
     public var getAudioRtpBytesSent: (() -> Int64)?
+    /// W-SRTPCOUNTERS (2026-08-29) — audio RTP packet counts from the live
+    /// PeerConnection, or -1 when there is no audio RTP leg. Same live-getter
+    /// pattern and wiring site as the byte pair above.
+    public var getAudioRtpPacketsSent: (() -> Int64)?
+    public var getAudioRtpPacketsReceived: (() -> Int64)?
+
+    /// W-SRTPCOUNTERS (2026-08-29) — "how much audio has this call actually
+    /// protected and moved", answered from whichever path is really carrying
+    /// it.
+    ///
+    /// ``framesEncryptedTx``/``framesDecryptedRx`` count seals and opens
+    /// performed BY THIS APP for the sealed DataChannel/WS relay. On an
+    /// `audio-srtp-v1` call the protection happens inside libwebrtc's native
+    /// FrameCryptor instead, so those counters sit at 0 for the whole call —
+    /// and every readout built on them (the crypto activity meter, the TX/RX
+    /// diagnostic rows) reported "nothing is happening" on a call that was
+    /// encrypting and moving audio the entire time. That is worse than no
+    /// indicator: a security readout must never be confidently wrong.
+    ///
+    /// RTP packet counts are the native path's equivalent unit. -1 means no
+    /// such row exists — a genuine sealed-DataChannel call — and there the
+    /// app's own frame counters are the correct answer, unchanged.
+    @MainActor
+    public var effectiveAudioTxCount: Int64 {
+        let rtp = getAudioRtpPacketsSent?() ?? -1
+        return rtp >= 0 ? rtp : framesEncryptedTx
+    }
+
+    @MainActor
+    public var effectiveAudioRxCount: Int64 {
+        let rtp = getAudioRtpPacketsReceived?() ?? -1
+        return rtp >= 0 ? rtp : framesDecryptedRx
+    }
     /// W-SRTPFALLBACK — true while the manual capture/decode path has been
     /// explicitly RE-ENGAGED during a native-audio-srtp call's ICE outage
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s

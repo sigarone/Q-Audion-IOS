@@ -571,10 +571,15 @@ struct LiveInCallScreen: View {
         return ms.description + " ms"
     }
 
+    /// W-SRTPCOUNTERS (2026-08-29) — the effective counters, so these rows
+    /// count the units the call is really protecting: sealed frames on the
+    /// DataChannel path, RTP packets on the native-SRTP one, where this app
+    /// seals nothing and the raw counters would read 0 all call.
+    /// See `CallService.effectiveAudioTxCount`.
     @ViewBuilder
     private var diagPanelFrameCounters: some View {
-        let txVal = appState.callService.framesEncryptedTx.description
-        let rxVal = appState.callService.framesDecryptedRx.description
+        let txVal = appState.callService.effectiveAudioTxCount.description
+        let rxVal = appState.callService.effectiveAudioRxCount.description
         let rekeyVal = appState.rekeyCount.description
         let latencyVal = Self.latencyString(appState.latencyMs)
         diagRow("TX FRAME CIFRATI",   txVal)

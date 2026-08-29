@@ -367,6 +367,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// UI's throughput readout on a native-SRTP call.
     public private(set) var audioRtpBytesSent: Int64 = -1
 
+    /// W-SRTPCOUNTERS (2026-08-29) — audio RTP packet counts from
+    /// ``pollMediaRttOnce()``, or -1 when the report carries no such row.
+    /// These are the native path's answer to "how many units of audio has
+    /// this call actually protected and moved", which is what the crypto
+    /// activity meter and the TX/RX diagnostic rows are really asking —
+    /// their own frame counters only ever count sealed DataChannel frames.
+    public private(set) var audioRtpPacketsReceived: Int64 = -1
+    public private(set) var audioRtpPacketsSent: Int64 = -1
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -404,14 +413,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // never move (nothing rides the sealed DataChannel), so the UI's
             // CODEC and FLUSSO columns read zero while real audio is flowing.
             var audioTxBytes: Int64 = -1
+            // W-SRTPCOUNTERS (2026-08-29) — packet counts, the native-path
+            // equivalent of the app's own sealed/opened FRAME counters. Every
+            // remaining readout that counted frames (crypto activity meter,
+            // the TX/RX diagnostic rows) reported zero on an `audio-srtp-v1`
+            // call for the same reason the byte counters did: nothing rides
+            // the sealed DataChannel there.
+            var audioRxPackets: Int64 = -1
+            var audioTxPackets: Int64 = -1
             for (_, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
                     jbEmitted = (s.values["jitterBufferEmittedCount"] as? NSNumber)?.int64Value ?? 0
                     audioRxBytes = (s.values["bytesReceived"] as? NSNumber)?.int64Value ?? -1
+                    audioRxPackets = (s.values["packetsReceived"] as? NSNumber)?.int64Value ?? -1
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
+                    audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
                 }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
@@ -435,6 +454,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self.audioRtpBytesReceived = audioRxBytes
             // W-SRTPWIREMETRICS — see `audioTxBytes` above.
             self.audioRtpBytesSent = audioTxBytes
+            // W-SRTPCOUNTERS — see `audioRxPackets` above.
+            self.audioRtpPacketsReceived = audioRxPackets
+            self.audioRtpPacketsSent = audioTxPackets
             self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
         }
     }

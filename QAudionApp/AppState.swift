@@ -3926,6 +3926,16 @@ final class AppState: ObservableObject {
         callService.getAudioRtpBytesSent = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpBytesSent ?? -1
         }
+        // W-SRTPCOUNTERS (2026-08-29) — packet counts for the crypto activity
+        // meter and the TX/RX diagnostic rows; see
+        // `CallService.effectiveAudioTxCount` for why those readouts needed a
+        // native-path source at all.
+        callService.getAudioRtpPacketsSent = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpPacketsSent ?? -1
+        }
+        callService.getAudioRtpPacketsReceived = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpPacketsReceived ?? -1
+        }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
         // stashed by the `call_incoming` handler (responder side) and by the
@@ -14283,11 +14293,18 @@ extension AppState {
     /// `@Published` write happens on the main actor.
     private func startCryptoMeter() {
         cryptoMeterTimer?.invalidate()
-        cryptoMeterLastTotal = callService.framesEncryptedTx &+ callService.framesDecryptedRx
+        // W-SRTPCOUNTERS (2026-08-29) — read through the effective counters,
+        // not the raw frame ones. On an `audio-srtp-v1` call the protection
+        // runs inside libwebrtc's native FrameCryptor and this app seals
+        // nothing, so the raw counters stay at 0 and this meter reported "no
+        // crypto activity" for the whole of a fully encrypted call. A
+        // security indicator that is confidently wrong is worse than none.
+        // See `CallService.effectiveAudioTxCount`.
+        cryptoMeterLastTotal = callService.effectiveAudioTxCount &+ callService.effectiveAudioRxCount
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let total = self.callService.framesEncryptedTx &+ self.callService.framesDecryptedRx
+                let total = self.callService.effectiveAudioTxCount &+ self.callService.effectiveAudioRxCount
                 let delta = total &- self.cryptoMeterLastTotal
                 self.cryptoMeterLastTotal = total
                 self.cryptoOpsPerSec = delta > 0 ? Int(delta) : 0

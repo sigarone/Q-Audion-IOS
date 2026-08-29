@@ -626,8 +626,11 @@ struct VideoCallView: View {
         let codec = appState.videoCodecLabel
         let path = codec + " · AES-256-GCM"
         videoDiagRow("CODEC / CIFRA", path)
-        videoDiagRow("AUDIO TX",  appState.callService.framesEncryptedTx.description)
-        videoDiagRow("AUDIO RX",  appState.callService.framesDecryptedRx.description)
+        // W-SRTPCOUNTERS (2026-08-29) — effective counters: RTP packets on a
+        // native-SRTP call, sealed frames on the DataChannel path. The raw
+        // frame counters read 0 for the whole of an `audio-srtp-v1` call.
+        videoDiagRow("AUDIO TX",  appState.callService.effectiveAudioTxCount.description)
+        videoDiagRow("AUDIO RX",  appState.callService.effectiveAudioRxCount.description)
     }
 
     // Helpers — build strings outside @ViewBuilder to avoid String(Int)
