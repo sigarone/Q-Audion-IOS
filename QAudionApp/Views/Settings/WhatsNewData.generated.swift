@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1043",
+              date: "2026-08-29",
+              title: "v1.0.1043",
+              bullets: [
+                "fix(call): PQC session key could never reach the WebRTC controller on an iOS<->iOS call (W-SRTPKEYFWDRACE)",
+              ]),
         .init(id: "v1.0.1042",
               date: "2026-08-28",
               title: "v1.0.1042",
               bullets: [
+                "chore: regenerate changelog for v1.0.1042",
                 "fix(call): audio-srtp receiver cryptor bound before negotiation completed, same class as the 2026-07-05 video decode fix (W-AUDIORXPOSTNEG)",
                 "fix(call): audio-srtp sender used a stale pre-created transceiver after JSEP rewire (W-AUDIOSRTPSENDERCARRYOVER)",
                 "🎨 Palette: Add accessibility attributes to CircularAction (#96)",
@@ -189,14 +196,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1024",
                 "fix(ci): enable Associated Domains capability on the main app Bundle ID",
-              ]),
-        .init(id: "v1.0.1023",
-              date: "2026-08-22",
-              title: "v1.0.1023",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1023",
-                "feat(links): handle the email-verify Universal Link end to end",
-                "feat(links): declare associated-domains for Universal Links",
               ]),
     ]
 }
