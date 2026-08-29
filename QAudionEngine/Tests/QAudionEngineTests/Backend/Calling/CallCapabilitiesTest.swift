@@ -102,4 +102,38 @@ final class CallCapabilitiesTest: XCTestCase {
         XCTAssertEqual(CallCapabilities.dcHangupV1, "dc-hangup-v1")
         XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.dcHangupV1))
     }
+
+    // W-RESTARTICEREQ (2026-08-29) — RX support shipped with this tag (the
+    // `restart_ice_request` handler runs a real full ICE restart), so
+    // advertising it is honest. The string must stay byte-identical to
+    // Android's `RESTART_ICE_REQUEST_V1`: this is compared with plain string
+    // equality on both platforms, and a mismatch here is exactly the silent
+    // interop failure that left every iOS<->Android handoff pinned to the
+    // relay (call fa7d0ee5, 2026-08-29 — Android logged
+    // `useRestartIceRequest=false` and could never ask).
+    func test_LOCAL_containsRestartIceReqV1() {
+        XCTAssertEqual(CallCapabilities.restartIceReqV1, "restart-ice-req-v1")
+        XCTAssertTrue(CallCapabilities.local.contains(CallCapabilities.restartIceReqV1))
+    }
+
+    /// The tag is transport recovery, unrelated to key custody: an earbud or
+    /// sovereign-only call must keep it, unlike the audio/video tags those
+    /// gates deliberately strip.
+    func test_restartIceReqV1_survivesEarbudAndSovereignGates() {
+        let earbud = CallCapabilities.localCaps(earbudActive: true, sovereignOnly: true,
+                                                earbudPaired: true)
+        XCTAssertTrue(earbud.contains(CallCapabilities.restartIceReqV1))
+    }
+
+    /// Send is gated on the intersection; receiving is not. A peer that does
+    /// not advertise it must resolve `useRestartIceRequest == false` so we
+    /// never send into the void.
+    func test_useRestartIceRequest_requiresBothSides() {
+        let both = CallCapabilities.negotiate(peer: [CallCapabilities.restartIceReqV1])
+        XCTAssertTrue(both.useRestartIceRequest)
+        let legacy = CallCapabilities.negotiate(peer: ["sframe-v1"])
+        XCTAssertFalse(legacy.useRestartIceRequest)
+        let none = CallCapabilities.negotiate(peer: nil)
+        XCTAssertFalse(none.useRestartIceRequest)
+    }
 }

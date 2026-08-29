@@ -190,6 +190,38 @@ public enum CallCapabilities {
     /// construction.
     public static let audioSrtpV1: String = "audio-srtp-v1"
 
+    // ── W-RESTARTICEREQ (2026-08-29): peer-requested full ICE restart ──────
+
+    /// Peer-requested ICE restart v1 (`restart-ice-req-v1`). Mirrors Android
+    /// `RESTART_ICE_REQUEST_V1` (`CallCapabilities.kt:330`). Byte-exact,
+    /// plain ASCII — string equality on every platform, so a rename or a
+    /// re-case is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE a `restart_ice_request`
+    /// envelope for the current call and answer it by running its OWN ICE
+    /// restart. That distinction is the whole point. Only the leg that
+    /// OFFERS can produce a fresh host candidate for a network that just
+    /// appeared: the other leg's local `restartIce()` merely primes
+    /// gathering, and libwebrtc has been observed re-using a pooled socket
+    /// still bound to the network that went away, so the new interface's
+    /// address is never advertised and no direct pair can form.
+    ///
+    /// Without this tag the non-offering leg has no way to ask, and a
+    /// mid-call handoff pins the call to the TURN relay for the rest of its
+    /// life even when both devices sit on the same LAN. Confirmed live
+    /// 2026-08-29 on iOS<->Android (call fa7d0ee5): Android was the
+    /// responder, logged `useRestartIceRequest=false` because iOS did not
+    /// advertise this, could only prime locally, and the call went ICE-fail
+    /// -> WS relay -> relay abandoned -> dead. iOS-to-iOS and
+    /// Android-to-Android were unaffected precisely because both ends there
+    /// speak the same set.
+    ///
+    /// Symmetric intersection, so this is safe to ship alone: the request is
+    /// SENT only when both peers advertise the tag, and RECEIVE support is
+    /// unconditional — an older peer simply never sends one and the call
+    /// behaves exactly as it does today.
+    public static let restartIceReqV1: String = "restart-ice-req-v1"
+
     /// Kill switch for the native-RTP-audio path (``audioSrtpV1``). Ships
     /// `false`. Compile-time only, exactly like ``longAudioSendEnabled``: no
     /// runtime toggle, no remote config, no debug-menu entry reachable on a
@@ -453,6 +485,12 @@ public enum CallCapabilities {
         // earbud call regardless (see applyAdvertisementGates), exactly like
         // Android's `if (AUDIO_SRTP_SEND_ENABLED) add(AUDIO_SRTP_V1)`.
         if audioSrtpSendEnabled { caps.append(audioSrtpV1) }
+        // W-RESTARTICEREQ — RX support ships with this tag (the
+        // `restart_ice_request` handler runs a real full ICE restart), so
+        // advertising is honest. Ungated and never stripped: it is pure
+        // transport recovery, orthogonal to earbud/sovereign key custody —
+        // matching Android, which also registers it with no kill switch.
+        caps.append(restartIceReqV1)
         return caps
     }()
 
@@ -598,6 +636,16 @@ public enum CallCapabilities {
         /// earbud-paired. Derived — no wire/ctor change. Mirrors Android
         /// `Negotiated.useAudioSrtp` (`CallCapabilities.kt:551`).
         public var useAudioSrtp: Bool { agreedTags.contains(CallCapabilities.audioSrtpV1) }
+
+        /// W-RESTARTICEREQ — true iff BOTH sides advertised
+        /// ``CallCapabilities/restartIceReqV1``, i.e. it is worth asking the
+        /// peer to run its own ICE restart after a local network change.
+        /// Receiving is unconditional; only the SEND is gated on this, which
+        /// is what keeps the rollout symmetric. Mirrors Android
+        /// `Negotiated.useRestartIceRequest`.
+        public var useRestartIceRequest: Bool {
+            agreedTags.contains(CallCapabilities.restartIceReqV1)
+        }
     }
 
     /// W-LONGAUDIO (2026-08-10) — the audio profile to SEND on this call.

@@ -7476,6 +7476,51 @@ final class AppState: ObservableObject {
                 }
             }
         }
+        // W-RESTARTICEREQ (2026-08-29) — the peer's network changed and it is
+        // the NON-offering leg, so its own local `restartIce()` can only
+        // prime gathering: libwebrtc has been seen re-using a pooled socket
+        // still bound to the interface that went away, so the new address is
+        // never advertised and no direct pair can form. Only the OFFERING leg
+        // can fix that, by producing a fresh full offer — which is exactly
+        // what `restartIce(reason:)` below does.
+        //
+        // Live root cause this closes (call fa7d0ee5, iOS<->Android,
+        // 2026-08-29): Android was the responder and logged
+        // `useRestartIceRequest=false` because iOS advertised no such
+        // capability at all, so it could never ask. The handoff went ICE-fail
+        // -> WS relay -> relay abandoned -> call dead.
+        //
+        // RX is unconditional (no capability check here): a request only
+        // arrives from a peer that has one to send, and honoring it is always
+        // the right move. `restartIce` is itself debounced, so a flapping
+        // interface on the peer cannot turn this into an offer storm. The
+        // server rate-limits these too.
+        ws.registerHandler(type: "restart_ice_request") { [weak self] _, data in
+            guard let self = self else { return }
+            let envelopeCallId = (data["call_id"] as? String) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Bind to THIS call: a late request for a previous call must
+                // never restart the current one. An empty id is treated as
+                // "for the bound call", matching how the other call_* handlers
+                // in this file fall back.
+                let activeId = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?
+                    .getActiveCallId() ?? ""
+                if !envelopeCallId.isEmpty, !activeId.isEmpty,
+                   envelopeCallId.caseInsensitiveCompare(activeId) != .orderedSame {
+                    RTLog.info("call", "restarticereq ignored=1 stale=1")
+                    return
+                }
+                #if canImport(WebRTC)
+                guard let ctrl = self.webRtcController as? QAudionWebRtcCallController else {
+                    RTLog.info("call", "restarticereq ignored=1 noctrl=1")
+                    return
+                }
+                RTLog.info("call", "restarticereq accepted=1")
+                await ctrl.restartIce(reason: "peer-requested-ice-restart")
+                #endif
+            }
+        }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
             guard let self = self else { return }
             // W-ICEBATCH (2026-08-25) — batch form (`ice-batch-v1`): a
