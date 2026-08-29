@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1048",
+              date: "2026-08-29",
+              title: "v1.0.1048",
+              bullets: [
+                "fix(logs): turning the diagnostics toggle ON never started the log pump (W-CONSENTLATESTART)",
+              ]),
         .init(id: "v1.0.1047",
               date: "2026-08-29",
               title: "v1.0.1047",
               bullets: [
+                "chore: regenerate changelog for v1.0.1047",
                 "fix(call): align the last legacy-path readouts to the native SRTP counters (W-SRTPCOUNTERS)",
                 "fix(call): codec and throughput read dead counters on an SRTP call, and confidence was averaging silence (W-SRTPWIREMETRICS, W-VOICEMEANVOICED)",
                 "refactor(engine): scoped locking in async contexts, clearing the Swift 6 hard errors (W-ASYNCLOCK)",
@@ -193,14 +200,6 @@ extension ReleaseNote {
                 "fix(call): anchor upgrade-responder ICE watchdog to setRemoteOffer success",
                 "fix(crypto): widen video M-14 anti-replay window 512->1024 (W-VNACK-REPLAY)",
                 "fix(messaging): stop chat-message v3 decrypt from poisoning the session on a wrong PSK guess",
-              ]),
-        .init(id: "v1.0.1028",
-              date: "2026-08-23",
-              title: "v1.0.1028",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1028",
-                "fix(call): observe AVCaptureSession interruption/runtime-error notifications (W-CAPSESSIONWATCH)",
-                "fix(security): cherry-pick verified token-redaction hunk from Jules PR #83",
               ]),
     ]
 }
