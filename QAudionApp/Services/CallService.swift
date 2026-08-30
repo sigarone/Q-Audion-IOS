@@ -389,14 +389,31 @@ final class CallService: @unchecked Sendable {
         // the wrong-transceiver failure shape, whatever its next disguise.
         // One WARN per call, so the remote log names the failure instead of
         // leaving another silent-call archaeology session.
-        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true, rtpTx < 0 {
+        // W-DEADTXNET (2026-08-30) — the sentinel now also catches the
+        // "outbound row EXISTS but zero packets ever leave" shape (ptx
+        // frozen at 0 with ICE up — the 1053/1054 dead-audio-unit
+        // regression logged exactly this while the original `rtpTx < 0`
+        // test stayed silent), gates on peerAnswered+session-active so
+        // ringing time no longer pre-charges the counter, and above all
+        // ACTS: at the threshold it engages the srtp relay fallback
+        // instead of only logging. A native pipeline that has moved zero
+        // packets 15 s into an answered call is not going to start on its
+        // own, and the relay path needs none of WebRTC's audio unit — one
+        // direction of audio restored beats a silent call while the
+        // root cause is diagnosed from the deadtx line it still emits.
+        let ptxNow = getAudioRtpPacketsSent?() ?? -1
+        let txDead = rtpTx < 0 || (ptxNow >= 0 && ptxNow == srtpLastPtxSample && ptxNow == 0)
+        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true,
+           peerAnswered, audioSessionActive, !audioSrtpFallbackActive, txDead {
             srtpDeadTxBeats &+= 1
             if srtpDeadTxBeats == 15 {
-                RTLog.warn("call", "audiosrtp deadtx=1")
+                RTLog.warn("call", "audiosrtp deadtx=\(rtpTx < 0 ? 1 : 2)")
+                engageAudioSrtpFallback()
             }
         } else {
             srtpDeadTxBeats = 0
         }
+        srtpLastPtxSample = ptxNow
     }
 
     // MARK: - W466 — audio-pipeline diagnostics
@@ -411,6 +428,9 @@ final class CallService: @unchecked Sendable {
     /// W-AUDIOSENDPICK — consecutive throughput samples with no
     /// outbound-rtp row on an armed native audio-srtp call.
     private var srtpDeadTxBeats: Int = 0
+    /// W-DEADTXNET — previous sample of the outbound audio RTP packet
+    /// counter, for the frozen-at-zero test above.
+    private var srtpLastPtxSample: Int = -1
 
     /// W-SRTPRXDIAG — sample counter for the ~5 s RTP heartbeat above.
     private var srtpHbSampleCounter: Int = 0
@@ -3024,6 +3044,11 @@ final class CallService: @unchecked Sendable {
     /// `CallKitProvider.onAudioSessionActivated`. Runs on the main thread.
     public func handleAudioSessionActivated() {
         audioSessionActive = true
+        // W-ADMACTIVATE — relay CallKit's activation into RTCAudioSession's
+        // manual-mode bookkeeping BEFORE the gate=4 chokepoint can enable
+        // the unit; without this the unit never starts (1053/1054
+        // regression, see NativeAudioSessionGate.handleCallKitActivation).
+        NativeAudioSessionGate.handleCallKitActivation(true)
         startAudioIOIfReady()
         // EARPIECE is the default route for an encrypted phone call (user
         // requirement: "gestire il volume della capsula telefonica; lo speaker
@@ -3039,6 +3064,10 @@ final class CallService: @unchecked Sendable {
     /// `didActivate`. Wired from `CallKitProvider.onAudioSessionDeactivated`.
     public func handleAudioSessionDeactivated() {
         audioSessionActive = false
+        // W-ADMACTIVATE — canonical de-activation order (mirrors the
+        // documented activate order relay-then-enable): relay
+        // didDeactivate FIRST, then drop isAudioEnabled.
+        NativeAudioSessionGate.handleCallKitActivation(false)
         // W-ADMMANUAL — CallKit released the session; the WebRTC audio unit
         // must not outlive it (its next start waits for the next didActivate
         // → startAudioIOIfReady → gate=4).

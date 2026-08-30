@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import WebRTC
 
@@ -48,6 +49,33 @@ public enum NativeAudioSessionGate {
         session.useManualAudio = true
         session.isAudioEnabled = false
         print("[WebRTC] W-ADMMANUAL: manual audio armed (WebRTC audio unit gated on isAudioEnabled)")
+    }
+
+    /// W-ADMACTIVATE (2026-08-30) — the HALF of the manual-audio contract
+    /// the first W-ADMMANUAL cut missed, and the cause of the 1.0.1053/4
+    /// regression where `isAudioEnabled = true` alone left the unit dead
+    /// (`hb tx=0` with ICE connected, inbound counted but silent — calls
+    /// bae3d5b4/f999b973). Verbatim from this build's own
+    /// RTCAudioSession.h: `RTCAudioSessionActivationDelegate` exists "to
+    /// inform RTCAudioSession when the audio session activation state has
+    /// changed OUTSIDE of RTCAudioSession. The current known use case of
+    /// this is when CallKit activates the audio session for the
+    /// application" — and `isAudioEnabled` only starts the unit "when it
+    /// is needed", a decision keyed on the session-active bookkeeping that
+    /// ONLY these delegate calls update once manual mode is armed. Wired
+    /// from CallService's `handleAudioSessionActivated` /
+    /// `handleAudioSessionDeactivated` (the CallKit didActivate /
+    /// didDeactivate funnels, self-activation fallback included).
+    public static func handleCallKitActivation(_ active: Bool) {
+        guard CallCapabilities.audioSrtpSendEnabled else { return }
+        let session = RTCAudioSession.sharedInstance()
+        guard session.useManualAudio else { return }
+        if active {
+            session.audioSessionDidActivate(AVAudioSession.sharedInstance())
+        } else {
+            session.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
+        }
+        print("[WebRTC] W-ADMACTIVATE: session activation relayed active=\(active)")
     }
 
     /// Start (`true`) or stop (`false`) WebRTC's audio unit. Safe to call

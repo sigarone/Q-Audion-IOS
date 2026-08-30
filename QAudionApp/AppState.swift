@@ -13592,6 +13592,12 @@ final class AppState: ObservableObject {
                 // async NotificationCenter forward.
                 if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
                 webRtcController = controller
+                // W-CTRLBUILDDIAG — caller-path twin of the responder line
+                // (out=1 marks the outgoing build). Added after call
+                // f999b973 shipped an offer with no usable audio m-line and
+                // there was no remote evidence of whether this path built a
+                // FRESH controller or reused the previous call's.
+                RTLog.info("call", "callctrl build=1 out=1 key=\(self.callPqcSessionKey != nil ? 1 : 0)")
                 flushPendingIceCandidates(to: controller)
                 // Android↔iOS remote video: Android sends video via WebRTC
                 // RTP (not WS video_frame envelopes). Wire the track callback
