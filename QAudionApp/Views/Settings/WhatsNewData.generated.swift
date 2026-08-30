@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1058",
+              date: "2026-08-30",
+              title: "v1.0.1058",
+              bullets: [
+                "fix(call): remote ICE candidates were silently dropped before the remote description — cross-network calls never left CHECKING (W-ICELATEQUEUE)",
+              ]),
         .init(id: "v1.0.1057",
               date: "2026-08-30",
               title: "v1.0.1057",
               bullets: [
+                "chore: regenerate changelog for v1.0.1057",
                 "fix(app): resolve the four future-error Swift 6 isolation warnings",
               ]),
         .init(id: "v1.0.1056",
@@ -154,13 +161,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1039",
                 "fix(call): video WS-relay gate must confirm real cryptor attach, not just ICE (W-VIDEOSENDHEALTH)",
                 "fix(call): group video publish forces VP8 simulcast, unconditionally",
-              ]),
-        .init(id: "v1.0.1038",
-              date: "2026-08-27",
-              title: "v1.0.1038",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1038",
-                "fix(call): fail-closed native-audio-srtp sender attach + bounded retry (W-AUDIOSENDERGATE)",
               ]),
     ]
 }
