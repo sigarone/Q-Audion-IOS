@@ -430,7 +430,7 @@ final class CallService: @unchecked Sendable {
     private var srtpDeadTxBeats: Int = 0
     /// W-DEADTXNET — previous sample of the outbound audio RTP packet
     /// counter, for the frozen-at-zero test above.
-    private var srtpLastPtxSample: Int = -1
+    private var srtpLastPtxSample: Int64 = -1
 
     /// W-SRTPRXDIAG — sample counter for the ~5 s RTP heartbeat above.
     private var srtpHbSampleCounter: Int = 0
