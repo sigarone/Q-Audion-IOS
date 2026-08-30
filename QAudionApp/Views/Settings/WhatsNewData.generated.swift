@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1049",
+              date: "2026-08-30",
+              title: "v1.0.1049",
+              bullets: [
+                "fix(call): audio TX kept writing into an ICE-dead DataChannel for the whole outage (W-DCTXICEGATE +3)",
+                "feat(call): detect mid-call speaker change from the call's own audio (SPKCHG)",
+              ]),
         .init(id: "v1.0.1048",
               date: "2026-08-29",
               title: "v1.0.1048",
               bullets: [
+                "chore: regenerate changelog for v1.0.1048",
                 "fix(logs): turning the diagnostics toggle ON never started the log pump (W-CONSENTLATESTART)",
               ]),
         .init(id: "v1.0.1047",
@@ -191,15 +199,6 @@ extension ReleaseNote {
                 "fix(security,perf): cherry-pick verified hunks from Jules PRs #86/#88",
                 "fix(call): close the WS-branch reportIncomingCall/state-set race + test noCallInFlight",
                 "fix(call): an out-of-order audio frame is late, not stale — and a ringing CallKit call is not an orphan",
-              ]),
-        .init(id: "v1.0.1029",
-              date: "2026-08-24",
-              title: "v1.0.1029",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1029",
-                "fix(call): anchor upgrade-responder ICE watchdog to setRemoteOffer success",
-                "fix(crypto): widen video M-14 anti-replay window 512->1024 (W-VNACK-REPLAY)",
-                "fix(messaging): stop chat-message v3 decrypt from poisoning the session on a wrong PSK guess",
               ]),
     ]
 }
