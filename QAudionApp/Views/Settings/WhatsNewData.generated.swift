@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1054",
+              date: "2026-08-30",
+              title: "v1.0.1054",
+              bullets: [
+                "fix(call): responder asks the initiator to restart ICE instead of offering into a peer that discards it (W-RESPONDERREQFIRST)",
+              ]),
         .init(id: "v1.0.1053",
               date: "2026-08-30",
               title: "v1.0.1053",
               bullets: [
+                "chore: regenerate changelog for v1.0.1053",
                 "fix(call): three-way silent-call teardown — pre-attached mic track, manual WebRTC audio unit, key-forward hardening (W-PREATTACHMIC, W-ADMMANUAL, W-CTRLBUILDDIAG)",
               ]),
         .init(id: "v1.0.1052",
@@ -156,33 +163,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1035",
                 "fix(deps): re-sync LiveKitBroadcast pin to raw6, matching QAudionEngine's own client-sdk-swift pin",
-              ]),
-        .init(id: "v1.0.1034",
-              date: "2026-08-26",
-              title: "v1.0.1034",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1034",
-                "fix(call): gate WSS-TURN bridge, event-driven route-tier, pin simulcast (P2)",
-                "fix(test): correct PlpFeedbackTests's relay-floor assertion to match the real decay step",
-                "fix(call): add missing public init() to StunClient",
-                "feat(groupcall): evict idle per-sender Opus decoders under memory pressure (P1)",
-                "feat(groupcall): wire the previously dead-code call-quality setting into LiveKit publish/subscribe (P1)",
-                "feat(audio): bounded WSOLA correlation search for the jitter-buffer time-stretch splice (P1)",
-                "feat(call): route-tier-aware FEC floor + CPU backpressure now steps resolution/fps (P1 audio-quality)",
-                "feat(call): item 1+2 observability groundwork — GoogCC BWE readout + escalation-fire telemetry (P1)",
-                "wip(call): P1 video-network recovery batch, recovered after session crash",
-                "feat(call): responder-side ICE restart + proactive interface-change trigger (P0 item 3)",
-                "feat(call): CPU + thermal backpressure for group-call video (P0 item 2)",
-                "fix(call): remove duplicate identity declaration in didUnsubscribeTrack",
-                "feat(call): viewport-driven remote video render priority for group calls (P0 item 1)",
-                "fix(ios): re-enable group-call native-PLI parity — raw4 -> raw6",
-                "fix(test): OpusCodecTests FEC-decode assertion checked the wrong frame",
-                "fix(net): don't cancel in-flight requests on NWPathMonitor's first callback",
-                "fix(test): hoist testURLProtocolClasses out of #if DEBUG — CI runs Release",
-                "revert(deps): group-call native-pli repoint broke LiveKit — back to raw4",
-                "fix(test): inject StubURLProtocol directly instead of global registerClass",
-                "build(deps): repoint iOS WebRTC + client-sdk-swift to the native-pli builds",
-                "feat(vpn): gate WireGuard tunnel routing on active call media (iOS port of AND-2)",
               ]),
     ]
 }
