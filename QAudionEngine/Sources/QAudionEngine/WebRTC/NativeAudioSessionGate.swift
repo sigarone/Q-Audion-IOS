@@ -1,0 +1,64 @@
+import Foundation
+import WebRTC
+
+/// W-ADMMANUAL (2026-08-30) — explicit lifecycle control of WebRTC's own
+/// audio unit (VoiceProcessingIO) for native-audio-srtp calls.
+///
+/// Root cause this exists for, measured on TestFlight 1.0.1052 with the
+/// W-SRTPRXDIAG heartbeat: a caller-side srtp call had its mic track wired
+/// into the negotiated m-line (`act=1 n=1 dir=0`, outbound-rtp row present)
+/// and STILL sent zero packets forever (`tx=0 ptx=0`), while inbound RTP
+/// arrived at stats level (`rx` growing) but nothing ever played. Capture
+/// dead AND playout dead together means WebRTC's audio device module never
+/// ran. In a CallKit app that is the canonical automatic-mode failure: the
+/// SDK tries to start its audio unit the moment the transport goes live,
+/// which is BEFORE CallKit activates the shared `AVAudioSession` — the start
+/// fails, and the SDK does not retry when `didActivate` finally lands.
+/// (This app's legacy sealed-DataChannel voice path never noticed, because
+/// it does its own capture/playout with `AVAudioEngine` and the WebRTC audio
+/// unit was never needed until native srtp audio existed.)
+///
+/// The documented contract for CallKit apps is manual mode:
+/// `RTCAudioSession.useManualAudio = true` makes the SDK keep its audio unit
+/// OFF until the app flips `isAudioEnabled = true`, and with manual mode on
+/// the SDK also stops configuring/activating the AVAudioSession itself — the
+/// app's existing `.voiceChat` configuration and earpiece-route policy stay
+/// the sole owner of the session, exactly as they are today.
+///
+/// Scoping: everything here is gated on the audio-srtp kill switch, and
+/// `setNativeAudioActive(true)` is only ever called from the one CallService
+/// chokepoint that already decides "native WebRTC owns this call's audio"
+/// (the gate=4 branch of `startAudioIOIfReady`), which runs strictly after
+/// CallKit's `didActivate` (gate=2) and after the peer answered (gate=3).
+/// Legacy DataChannel calls never enable it, so their behavior is
+/// byte-for-byte unchanged. Group calls run on LiveKit's own fork of the
+/// SDK (`LKRTCAudioSession`, a distinct class with a distinct shared
+/// instance — see Package.swift's symbol-namespace note), so arming manual
+/// mode on the direct-call SDK's session cannot affect them.
+public enum NativeAudioSessionGate {
+
+    /// Arm manual-audio mode. Idempotent; called from
+    /// `QAudionPeerConnection.init` so it is guaranteed to run before the
+    /// first srtp-capable transport ever starts. No-op when the audio-srtp
+    /// kill switch is off — automatic mode (today's behavior) stays.
+    public static func armManualMode() {
+        guard CallCapabilities.audioSrtpSendEnabled else { return }
+        let session = RTCAudioSession.sharedInstance()
+        guard !session.useManualAudio else { return }
+        session.useManualAudio = true
+        session.isAudioEnabled = false
+        print("[WebRTC] W-ADMMANUAL: manual audio armed (WebRTC audio unit gated on isAudioEnabled)")
+    }
+
+    /// Start (`true`) or stop (`false`) WebRTC's audio unit. Safe to call
+    /// redundantly. The `true` edge must only ever fire while CallKit's
+    /// audio session is active — the CallService chokepoint guarantees it.
+    public static func setNativeAudioActive(_ active: Bool) {
+        guard CallCapabilities.audioSrtpSendEnabled else { return }
+        let session = RTCAudioSession.sharedInstance()
+        guard session.useManualAudio else { return }
+        guard session.isAudioEnabled != active else { return }
+        session.isAudioEnabled = active
+        print("[WebRTC] W-ADMMANUAL: native audio unit \(active ? "enabled" : "disabled")")
+    }
+}

@@ -15969,7 +15969,13 @@ extension AppState {
                 // (5 x 300 ms, matching `installAudioSrtpIfPossible`'s own
                 // budget) closes the same gap here without inventing a new
                 // policy.
-                self.forwardPqcSessionKeyToController(key, retriesRemaining: 5)
+                // W-CTRLBUILDDIAG (2026-08-30) — budget raised 5 → 20
+                // (6 s): call 4f2a6d98 exhausted the 1.5 s budget while the
+                // responder controller was still being built (`callctrl
+                // build=1` now timestamps that moment). The stash +
+                // seed-at-creation remains the primary delivery; this
+                // retry chain is the belt for the reverse ordering.
+                self.forwardPqcSessionKeyToController(key, retriesRemaining: 20)
                 #endif
                 // W394 + Task 10: rotate the video pipeline's sealer with
                 // the new ML-KEM secret. From this moment forward, every
@@ -19932,8 +19938,17 @@ extension AppState {
         hasVideo: Bool = false
     ) {
         print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: caller=\(callerId.prefix(8)) sdpLen=\(sdp.count) hasVideo=\(hasVideo) — building WebRTC controller")
+        // W-CTRLBUILDDIAG (2026-08-30) — the prints in this function are
+        // multi-word free-form English, which the remote-log redactor drops
+        // whole (verified against redact_body, same story as W-AUDIOGATEDIAG).
+        // Call 4f2a6d98 ran its full 96 s with NO WebRTC controller on this
+        // leg (`dcmux txfall why=noctl`, `srtpkeyfwd exhausted=1`) and there
+        // was no way to tell from Loki whether this function was never
+        // invoked, bailed on the guard below, or built late. Numeric-only:
+        // build=0 reason=1 → liveProvider nil; build=1 → controller assigned.
         guard let provider = liveProvider else {
             print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: liveProvider nil — NO controller built")
+            RTLog.warn("call", "callctrl build=0 reason=1")
             return
         }
         // Spawn a controller bound to the live CallingApi + relay provider.
@@ -19992,6 +20007,11 @@ extension AppState {
         // of use — rather than depending on a broadcast landing.
         if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
         webRtcController = controller
+        // W-CTRLBUILDDIAG — remote-visible confirmation the responder
+        // controller exists and was seeded (key=1 when the PQC key was
+        // already held and delivered above; key=0 when it must still
+        // arrive via sasReady → forwardPqcSessionKeyToController).
+        RTLog.info("call", "callctrl build=1 key=\(self.callPqcSessionKey != nil ? 1 : 0)")
         flushPendingIceCandidates(to: controller)
         // Mirror of the caller-side wiring: Android sends remote video via
         // WebRTC RTP so the callee also needs this callback.

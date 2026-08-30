@@ -327,12 +327,41 @@ public final class QAudionPeerConnection: NSObject {
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
         if CallCapabilities.audioSrtpSendEnabled {
-            let audioInit = RTCRtpTransceiverInit()
-            audioInit.direction = .sendRecv
-            audioInit.streamIds = [stableStreamId]
-            let tx = pc.addTransceiver(of: .audio, init: audioInit)
-            audioTransceiver = tx
-            print("[WebRTC] IOS-C4b: pre-created audio transceiver (kill switch on) sender=\(String(describing: tx?.sender))")
+            // W-ADMMANUAL — must be armed before the first transport start
+            // ever tries to spin up WebRTC's audio unit; init is the
+            // earliest common point for both call roles.
+            NativeAudioSessionGate.armManualMode()
+            // W-PREATTACHMIC (2026-08-30) — pre-attach the REAL (muted) mic
+            // track here, instead of pre-creating a bare transceiver via
+            // `addTransceiver`. Measured failure the bare transceiver caused
+            // (TestFlight 1.0.1052, call ca37be9a, `act=1 n=2 sel=1 dir=2`):
+            // per JSEP §5.10 a transceiver created by addTransceiver is NOT
+            // eligible for association with a REMOTE offer's m-line — it
+            // reserves a slot for an offer WE make. So on the callee,
+            // setRemoteDescription added a SECOND audio transceiver for the
+            // peer's m-line with local direction recvOnly, the answer went
+            // out announcing no outbound audio, and no addTrack promotion
+            // AFTER that answer can fix it without a renegotiation this SDK
+            // cannot drive (`direction` is READONLY here — see W-RECVONLYPIN).
+            // A track added via `pc.add` IS eligible for both: the caller's
+            // offer carries it sendRecv, and on the callee JSEP recycles this
+            // transceiver for the remote m-line and the answer negotiates
+            // sendRecv. This mirrors Android's shipping shape exactly
+            // (`PeerConnectionHolder`: "open: mic track pre-attached (muted,
+            // codec binds on this SDP round)"). The track stays disabled
+            // until `activateNativeAudioSrtp` confirms the sender cryptor
+            // (W-AUDIOSENDERGATE), so a call that never negotiates
+            // audio-srtp-v1 carries a silent, cryptor-less, disabled track —
+            // the same inert m-line legacy peers have tolerated since
+            // IOS-C4b, now with a=sendrecv like Android's.
+            let source = factory.audioSource(with: nil)
+            let track = factory.audioTrack(with: source, trackId: audioTrackId)
+            track.isEnabled = false
+            localAudioSrtpTrack = track
+            pc.add(track, streamIds: [stableStreamId])
+            nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
+            audioTransceiver = pc.transceivers.first { $0.mediaType == .audio }
+            print("[WebRTC] W-PREATTACHMIC: pre-attached muted mic track (kill switch on) senderResolved=\(nativeAudioSender != nil)")
         }
     }
 
@@ -907,6 +936,16 @@ public final class QAudionPeerConnection: NSObject {
             print("[WebRTC] IOS-C4b: mic track attached to native audio transceiver (disabled pending cryptor confirm)")
             let txTap = NativeAudioPcmTap(sink: txSink)
             track.add(txTap)
+            audioTxTap = txTap
+        }
+        // W-PREATTACHMIC — the mic track now pre-exists from `init()` (so
+        // the FIRST SDP round negotiates sendRecv on both roles); its PCM
+        // tap could not be installed there because the tx sink only arrives
+        // here. Install it on first activation. The br=2/3 branches above
+        // set `audioTxTap` themselves, so this is a no-op for them.
+        if audioTxTap == nil, let preTrack = localAudioSrtpTrack {
+            let txTap = NativeAudioPcmTap(sink: txSink)
+            preTrack.add(txTap)
             audioTxTap = txTap
         }
         // W-AUDIOSENDPICK — attach to the sender that actually carries the
