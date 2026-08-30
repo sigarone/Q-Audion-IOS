@@ -1143,6 +1143,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             hasAppliedRemoteAnswer = false
             throw error
         }
+        // W-ICELATEQUEUE — caller side: the peer's candidates raced this
+        // answer over the WS; hand the queued ones to ICE now.
+        drainPendingRemoteIce()
     }
 
     // MARK: - Incoming
@@ -1154,6 +1157,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         hasAppliedRemoteAnswer = false   // W418 — fresh call, reset idempotency flag
         intentionalShutdown = false      // Bug-C guard — fresh call, clear any prior teardown latch
+        pendingIceLock.withLock { remoteDescriptionApplied = false }  // W-ICELATEQUEUE
         state = .incomingAnswering
         self.recipientId = callerId
         // W-SILENTPATHDEATH — this device answered: the original
@@ -1241,6 +1245,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if let err = err { cont.resume(throwing: err) } else { cont.resume() }
             }
         }
+        // W-ICELATEQUEUE — responder side: the caller's candidates arrived
+        // with (or before) the offer and were queued; ICE can take them now.
+        drainPendingRemoteIce()
         // 2. Build local answer — mirror the peer's video intent.
         let answerSdp: String = try await withCheckedThrowingContinuation { cont in
             pc.createAnswer(hasVideo: !audioOnly) { result in
@@ -1340,6 +1347,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if let err = err { cont.resume(throwing: err) } else { cont.resume() }
             }
         }
+        // W-ICELATEQUEUE — fresh upgrade PC: drain candidates queued while
+        // it was being built.
+        drainPendingRemoteIce()
         // W-UPGRADEICEWATCHDOG-ANCHOR — remote description is applied; ICE
         // can genuinely start now. Fire before any further await (createAnswer
         // etc.) so a caller-armed give-up watchdog gets the full budget.
@@ -1834,8 +1844,56 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     // MARK: - ICE
 
+    // W-ICELATEQUEUE (2026-08-30) — remote candidates that arrive before
+    // this controller's peer connection exists AND has its remote
+    // description applied. Two silent drops used to stack here: AppState's
+    // W-ICEQUEUE flush runs the moment the controller is BUILT — before
+    // `acceptIncomingCall`/`startOutgoingCall` has even created the
+    // RTCPeerConnection — so `peerConnection?.` swallowed the whole batch;
+    // and even with a PC, `pc.add(candidate)` before setRemoteDescription
+    // fails with an error the completion discarded. Measured live (call
+    // 19638b21, 2026-08-30): "ice candidate flush n=7" on the iOS leg,
+    // then ZERO connectivity checks ever sent — on a LAN the peer's
+    // direct pings still rescued the pair via triggered checks, which is
+    // why same-WiFi calls connected all day while EVERY cross-network
+    // call sat in CHECKING forever (no outbound ping ⇒ no NAT hole toward
+    // srflx, no TURN permission toward the peer's relay — both paths need
+    // OUR first packet). Android buffers and pumps candidates after open;
+    // this queue is that same discipline.
+    private let pendingIceLock = NSLock()
+    private var pendingRemoteIceQueue: [(sdp: String, mid: String?, mline: Int32)] = []
+    private var remoteDescriptionApplied = false
+
     public func handleRemoteIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+        let queued: Int? = pendingIceLock.withLock {
+            guard peerConnection != nil, remoteDescriptionApplied else {
+                pendingRemoteIceQueue.append((candidate, sdpMid, sdpMLineIndex))
+                return pendingRemoteIceQueue.count
+            }
+            return nil
+        }
+        if let n = queued {
+            log?("ice queued_pc=1 n=\(n)")
+            return
+        }
         peerConnection?.addRemoteIce(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
+    }
+
+    /// W-ICELATEQUEUE — mark the remote description applied and hand every
+    /// queued candidate to the ICE agent. Called from the three SRD
+    /// success sites (incoming offer, caller answer, restart offer).
+    private func drainPendingRemoteIce() {
+        let toApply: [(sdp: String, mid: String?, mline: Int32)] = pendingIceLock.withLock {
+            remoteDescriptionApplied = true
+            let q = pendingRemoteIceQueue
+            pendingRemoteIceQueue.removeAll()
+            return q
+        }
+        guard !toApply.isEmpty else { return }
+        log?("ice drain n=\(toApply.count)")
+        for c in toApply {
+            peerConnection?.addRemoteIce(candidate: c.sdp, sdpMid: c.mid, sdpMLineIndex: c.mline)
+        }
     }
 
     /// W-ICEBATCH (2026-08-25) — batch-form candidate removal (`removed:
@@ -2546,6 +2604,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("restart_offer_apply set_remote_failed=1")
             return
         }
+        // W-ICELATEQUEUE — the restart offer's fresh candidates may have
+        // raced it over the WS; drain whatever queued during the SRD.
+        drainPendingRemoteIce()
         lastAppliedRemoteRestartSdp = sdp
         let answerSdp: String? = await withCheckedContinuation { cont in
             pc.createAnswer(hasVideo: true) { result in
