@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1062",
+              date: "2026-08-30",
+              title: "v1.0.1062",
+              bullets: [
+                "fix(call): rekey-epoch counter read a stale .mlKem flag — second call of a session tagged epoch 0 as slot 1 again (W-KEYSLOTROTATE v3)",
+              ]),
         .init(id: "v1.0.1061",
               date: "2026-08-30",
               title: "v1.0.1061",
               bullets: [
+                "chore: regenerate changelog for v1.0.1061",
                 "fix(call): RTCAudioSession gate deadlocked its callers — all gate ops now async on one serial queue (W-ADMASYNC)",
               ]),
         .init(id: "v1.0.1060",
@@ -148,15 +155,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1043",
                 "fix(call): PQC session key could never reach the WebRTC controller on an iOS<->iOS call (W-SRTPKEYFWDRACE)",
-              ]),
-        .init(id: "v1.0.1042",
-              date: "2026-08-28",
-              title: "v1.0.1042",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1042",
-                "fix(call): audio-srtp receiver cryptor bound before negotiation completed, same class as the 2026-07-05 video decode fix (W-AUDIORXPOSTNEG)",
-                "fix(call): audio-srtp sender used a stale pre-created transceiver after JSEP rewire (W-AUDIOSRTPSENDERCARRYOVER)",
-                "🎨 Palette: Add accessibility attributes to CircularAction (#96)",
               ]),
     ]
 }
