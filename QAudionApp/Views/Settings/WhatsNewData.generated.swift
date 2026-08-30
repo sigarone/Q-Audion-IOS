@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1050",
+              date: "2026-08-30",
+              title: "v1.0.1050",
+              bullets: [
+                "diag(call): remote heartbeat for native audio RTP — the silent-call blind spot (W-SRTPRXDIAG)",
+              ]),
         .init(id: "v1.0.1049",
               date: "2026-08-30",
               title: "v1.0.1049",
               bullets: [
+                "chore: regenerate changelog for v1.0.1049",
                 "fix(call): audio TX kept writing into an ICE-dead DataChannel for the whole outage (W-DCTXICEGATE +3)",
                 "feat(call): detect mid-call speaker change from the call's own audio (SPKCHG)",
               ]),
@@ -181,24 +188,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1031",
                 "fix(call): first real CI compile surfaces 2 real errors — RTCFrameCryptorState typo, addRenderer Swift rename",
-              ]),
-        .init(id: "v1.0.1030",
-              date: "2026-08-26",
-              title: "v1.0.1030",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1030",
-                "feat(call): native SRTP audio (IOS-C4b, audio-srtp-v1) — PCM-tap parity closed, enabled on explicit sign-off",
-                "feat(call): parity batch — jitter-buffer time-stretch, screenshare quality profile, ICE restart machine",
-                "feat(call): parity Fase C/D batch — FEC decode, PLP feedback loop, keyframe fast-recovery, bandwidth cap, route clamp, backpressure, transport hygiene",
-                "feat(call): resolve dc-mux-v1 kill-switch condition (b), advertise ON",
-                "feat(call): parity Fase B — setup retry, glare tiebreak, hangup echo/park, dc-hangup-v1, media-dead watchdog, durable missed-call replay",
-                "feat(call): parity Fase A — active_call_id assert, ice-batch-v1 RX, hangup id-gate, offer age gate, fleet-relay decode pin",
-                "docs(interop): cross-platform parity plan — iOS+desktop alignment to the Android call-stack baseline",
-                "⚡ Bolt: Fix main-thread bottleneck in ChatListScreen by moving heavy crypto/IO out of computed properties (#89)",
-                "docs(comments): rephrase design-rationale comments to avoid naming competing products",
-                "fix(security,perf): cherry-pick verified hunks from Jules PRs #86/#88",
-                "fix(call): close the WS-branch reportIncomingCall/state-set race + test noCallInFlight",
-                "fix(call): an out-of-order audio frame is late, not stale — and a ringing CallKit call is not an orphan",
               ]),
     ]
 }
