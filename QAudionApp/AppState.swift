@@ -1053,6 +1053,9 @@ final class AppState: ObservableObject {
     /// controller BEFORE every pqcSessionKey delivery so the FrameCryptor
     /// ring slot (epoch % 16) matches Android's.
     var callPqcRekeyEpoch: Int = -1
+    /// W-KEYSLOTROTATE v3 — the last key VALUE the epoch counter charged;
+    /// dedupes sasReady's many re-firings per call.
+    var lastCountedPqcKey: Data?
     /// Task 10 — the video PQC sealer's `(callId, selfIsRoleA)` identity,
     /// pinned ONCE at `startVideoPipeline` and reused verbatim by the later
     /// `wireSasReadyToController` rotate. Two independently-computed
@@ -15038,6 +15041,7 @@ extension AppState {
         // next, unverified call.
         callPqcSessionKey = nil
         callPqcRekeyEpoch = -1
+        lastCountedPqcKey = nil
         // Task 10: drop the pinned video sealer identity alongside the
         // session key so a stale (callId, selfIsRoleA) can't leak into the
         // next call's video pipeline.
@@ -15962,13 +15966,19 @@ extension AppState {
                 // advance it — the poison that put the first real key at
                 // ring slot 1 while Android held slot 0 (live 2026-08-30
                 // 21:16, `key_index[1] out of range` on the peer).
-                // v2: unconditional increment from a -1 floor. The first
-                // cut keyed on callSasKeySource == .mlKem, but that flag is
-                // NOT reset between calls — a fresh call after any completed
-                // PQC call read the stale .mlKem and counted its FIRST real
-                // key as a rekey, tagging epoch-0 frames slot 1 again
-                // (live 22:12, key_index[1] out of range on the peer).
-                self.callPqcRekeyEpoch += 1
+                // v3: count DISTINCT key values, not firings. v2's
+                // unconditional increment assumed one sasReady per key; the
+                // notification actually re-fires many times per call (live
+                // 22:31: the peer logging key_index[13] out of range as the
+                // slot climbed mid-call). A repeat firing with the SAME key
+                // must not advance the epoch; only a genuinely new key — the
+                // first real one (from the -1 floor) or a completed rekey —
+                // does. The transitional SAS key never reaches this handler,
+                // and lastCountedPqcKey resets with the call.
+                if self.lastCountedPqcKey != key {
+                    self.callPqcRekeyEpoch += 1
+                    self.lastCountedPqcKey = key
+                }
                 // M-10: the broker has now overwritten callPqcSessionKey
                 // with the REAL ML-KEM-1024 session key — the SAS words
                 // are post-quantum authenticated from this point on.
