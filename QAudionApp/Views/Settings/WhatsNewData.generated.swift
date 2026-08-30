@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1057",
+              date: "2026-08-30",
+              title: "v1.0.1057",
+              bullets: [
+                "fix(app): resolve the four future-error Swift 6 isolation warnings",
+              ]),
         .init(id: "v1.0.1056",
               date: "2026-08-30",
               title: "v1.0.1056",
               bullets: [
+                "chore: regenerate changelog for v1.0.1056",
                 "fix(call): W-DEADTXNET sentinel sample is Int64 — 1055 CI compile error",
               ]),
         .init(id: "v1.0.1055",
@@ -154,14 +161,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1038",
                 "fix(call): fail-closed native-audio-srtp sender attach + bounded retry (W-AUDIOSENDERGATE)",
-              ]),
-        .init(id: "v1.0.1037",
-              date: "2026-08-27",
-              title: "v1.0.1037",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1037",
-                "fix(call): restore nonisolated on ScreenShareController.onFrame after lock refactor",
-                "fix(voice-analysis): gate VoiceAnalysisEngine on a 100ms time budget, not frame count",
               ]),
     ]
 }
