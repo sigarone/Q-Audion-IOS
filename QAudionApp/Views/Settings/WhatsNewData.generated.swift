@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1064",
+              date: "2026-08-30",
+              title: "v1.0.1064",
+              bullets: [
+                "fix(call): the VoIP session config never reached the live session — no input in the route, so BOTH capture engines were silent (W-SESSIONLOCK)",
+              ]),
         .init(id: "v1.0.1063",
               date: "2026-08-30",
               title: "v1.0.1063",
               bullets: [
+                "chore: regenerate changelog for v1.0.1063",
                 "fix(call): epoch counter charged every sasReady re-firing — slot climbed mid-call to 13 (W-KEYSLOTROTATE v4)",
               ]),
         .init(id: "v1.0.1062",
@@ -147,14 +154,6 @@ extension ReleaseNote {
                 "feat(call): average the live voice metrics over one second so they can be read (W-VOICEUISMOOTH)",
                 "a11y(security-icon): expand tap target on SecurityIconHeaderView, add VoiceOver traits",
                 "fix(call): iOS killed every audio-srtp call at 90s with \"media-lost\" while audio worked (W-MEDIADEADSRTP)",
-              ]),
-        .init(id: "v1.0.1044",
-              date: "2026-08-29",
-              title: "v1.0.1044",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1044",
-                "fix(logs): iOS remote-log pipeline died on the first expired token and never recovered (W-TUSAUTHREFRESH)",
-                "fix(call): iOS voice curve and liveness analysis saw zero audio for the whole call (W-AUDIORXTAPCARRYOVER)",
               ]),
     ]
 }
