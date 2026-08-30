@@ -9,6 +9,13 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1060",
+              date: "2026-08-30",
+              title: "v1.0.1060",
+              bullets: [
+                "fix(call): key-ring slot is now the explicit crypto epoch — distinct-key counting was poisoned by the transitional SAS key (W-KEYSLOTROTATE v2)",
+                "chore: regenerate changelog for v1.0.1059",
+              ]),
         .init(id: "v1.0.1059",
               date: "2026-08-30",
               title: "v1.0.1059",
@@ -150,16 +157,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1041",
                 "fix(call): rewire group-call fallback audio to sender-key-derived W-GRPAUDIOKEY",
-              ]),
-        .init(id: "v1.0.1040",
-              date: "2026-08-27",
-              title: "v1.0.1040",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1040",
-                "feat(call): group-call SFU-outage fallback audio, receive-side (QUAD AUDIO_DATA)",
-                "fix(test): update AudioProfileTests literals for the 40kbps standard-block rate",
-                "fix(call): raise Opus preferred bitrate 32->40 kbps within existing block headroom",
-                "fix(call): BWE-composed video ceiling + mid-call SFU disconnect fallback (P3 batch)",
               ]),
     ]
 }
