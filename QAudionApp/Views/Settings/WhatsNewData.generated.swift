@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1061",
+              date: "2026-08-30",
+              title: "v1.0.1061",
+              bullets: [
+                "fix(call): RTCAudioSession gate deadlocked its callers — all gate ops now async on one serial queue (W-ADMASYNC)",
+              ]),
         .init(id: "v1.0.1060",
               date: "2026-08-30",
               title: "v1.0.1060",
               bullets: [
+                "chore: regenerate changelog for v1.0.1060",
                 "fix(call): key-ring slot is now the explicit crypto epoch — distinct-key counting was poisoned by the transitional SAS key (W-KEYSLOTROTATE v2)",
                 "chore: regenerate changelog for v1.0.1059",
               ]),
@@ -150,13 +157,6 @@ extension ReleaseNote {
                 "fix(call): audio-srtp receiver cryptor bound before negotiation completed, same class as the 2026-07-05 video decode fix (W-AUDIORXPOSTNEG)",
                 "fix(call): audio-srtp sender used a stale pre-created transceiver after JSEP rewire (W-AUDIOSRTPSENDERCARRYOVER)",
                 "🎨 Palette: Add accessibility attributes to CircularAction (#96)",
-              ]),
-        .init(id: "v1.0.1041",
-              date: "2026-08-27",
-              title: "v1.0.1041",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1041",
-                "fix(call): rewire group-call fallback audio to sender-key-derived W-GRPAUDIOKEY",
               ]),
     ]
 }
