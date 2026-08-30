@@ -2389,6 +2389,28 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return
         }
         onRestartAttemptStarted?()
+        // W-RESPONDERREQFIRST (2026-08-30) — the RESPONDER asks the
+        // offering leg to drive the fresh offer (`restart_ice_request`)
+        // whenever the peer negotiated `restart-ice-req-v1`, instead of
+        // shipping an offer of its own. W-RESPONDERRESTART's "both roles
+        // offer" held only against iOS's own receive path: Android's
+        // mid-call offer pump applies a crossing offer ONLY on the
+        // responder (`!activeAsInitiator`) and its ring layer suppresses
+        // the same call_incoming as a stale replay — so a responder offer
+        // toward an Android initiator is discarded on arrival, and a
+        // simultaneous two-sided handoff becomes offer-glare where BOTH
+        // offers die (live: call 9df47801, 2026-08-30 — initiator stuck
+        // CHECKING for minutes, responder convinced it recovered).
+        // Request-first also removes the glare by construction: exactly
+        // one leg ever authors restart offers. The fresh-offer path below
+        // remains as the fallback for peers that never advertised the
+        // request capability (old builds), where the receive paths that
+        // DO accept responder offers are the only recovery there is.
+        if !isInitiator, peerNegotiated()?.useRestartIceRequest == true {
+            let reqSent = await callingApi.sendRestartIceRequest(recipientId: rid)
+            log?("restart_ice req_sent=\(reqSent ? 1 : 0) reason=\(reason)")
+            return
+        }
         guard let pc = peerConnection else { return }
         // `audioOnly: true` here does NOT mean "drop video on restart" —
         // it only gates `createOffer`'s BUG2 pre-allocation of an EMPTY

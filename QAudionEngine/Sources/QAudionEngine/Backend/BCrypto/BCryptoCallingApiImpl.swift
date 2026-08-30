@@ -555,6 +555,41 @@ public final class BCryptoCallingApiImpl: CallingApi {
         return false
     }
 
+    /// W-RESPONDERREQFIRST (2026-08-30) — see the protocol kdoc. Same
+    /// two-phase delivery shape as `sendIceRestartOffer` (fast-path
+    /// authenticated send, then a detached park up to the server's
+    /// disconnect-grace ceiling), because this request races the very WS
+    /// reconnect the network change that triggered it caused — exactly the
+    /// race Android closed with its own request-retry (W-RESTARTICEREQRETRY).
+    public func sendRestartIceRequest(recipientId: String) async -> Bool {
+        guard let cid = activeCallIdOrNil() else {
+            print("[BCryptoCalling] sendRestartIceRequest DROPPED — no active call_id bound")
+            return false
+        }
+        let data: [String: Any] = [
+            "recipient_id": recipientId,
+            "call_id": cid,
+        ]
+        let ready = await ws.ensureAuthenticated(timeoutSec: RestartIceDecisions.restartOfferFastPathTimeoutSec)
+        if ready {
+            ws.send(type: "restart_ice_request", data: data)
+            return true
+        }
+        ws.send(type: "restart_ice_request", data: data)
+        print("[BCryptoCalling] restart request park armed call_id=\(cid.prefix(8))… (WS not ready)")
+        let wsRef = ws
+        Task.detached(priority: .utility) {
+            let late = await wsRef.ensureAuthenticated(timeoutSec: RestartIceDecisions.restartOfferParkTimeoutSec)
+            guard late else {
+                print("[BCryptoCalling] restart request park expired call_id=\(cid.prefix(8))…")
+                return
+            }
+            wsRef.send(type: "restart_ice_request", data: data)
+            print("[BCryptoCalling] restart request park delivered call_id=\(cid.prefix(8))…")
+        }
+        return false
+    }
+
     // MARK: - Pre-negotiation (Android/Desktop interop)
 
     /// Acknowledge to the caller that this device received the call_offer and is

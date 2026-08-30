@@ -167,6 +167,22 @@ public protocol CallingApi {
         capabilities: [String]
     ) async -> Bool
 
+    /// W-RESPONDERREQFIRST (2026-08-30) — ask the OFFERING leg to drive a
+    /// fresh ICE-restart offer (`restart_ice_request` wire envelope),
+    /// instead of this responder shipping an offer of its own.
+    ///
+    /// Exists because W-RESPONDERRESTART's "both roles offer" model was
+    /// verified only against iOS's OWN receive path: Android's mid-call
+    /// offer pump applies a crossing offer ONLY on the responder
+    /// (`!activeAsInitiator`), and its ring layer suppresses the same
+    /// envelope as a stale replay — so an iOS responder's fresh offer to
+    /// an Android initiator is discarded on arrival. Measured live (call
+    /// 9df47801, 2026-08-30): simultaneous handoff restarts crossed, both
+    /// offers died, the initiator sat in CHECKING for minutes.
+    /// Default impl returns `false` (no-op); only BCryptoCallingApiImpl
+    /// overrides.
+    func sendRestartIceRequest(recipientId: String) async -> Bool
+
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
@@ -345,6 +361,12 @@ public extension CallingApi {
         sdp: String,
         capabilities: [String]
     ) async -> Bool {
+        return false
+    }
+
+    /// Default impl — no-op, `false`. See the protocol kdoc
+    /// (W-RESPONDERREQFIRST); only BCryptoCallingApiImpl overrides.
+    func sendRestartIceRequest(recipientId: String) async -> Bool {
         return false
     }
 }
