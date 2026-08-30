@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1066",
+              date: "2026-08-30",
+              title: "v1.0.1066",
+              bullets: [
+                "fix(call): remove the CallKit activation relay — it was what killed microphone capture (revert W-ADMACTIVATE)",
+                "docs: mandatory gate before any audio/session/crypto build",
+              ]),
         .init(id: "v1.0.1065",
               date: "2026-08-30",
               title: "v1.0.1065",
               bullets: [
+                "chore: regenerate changelog for v1.0.1065",
                 "fix(audio): six screens changed the shared session category and none restored it — a played voice note silenced every later call (W-SESSIONCATLEAK)",
               ]),
         .init(id: "v1.0.1064",
@@ -144,14 +152,6 @@ extension ReleaseNote {
                 "fix(call): align the last legacy-path readouts to the native SRTP counters (W-SRTPCOUNTERS)",
                 "fix(call): codec and throughput read dead counters on an SRTP call, and confidence was averaging silence (W-SRTPWIREMETRICS, W-VOICEMEANVOICED)",
                 "refactor(engine): scoped locking in async contexts, clearing the Swift 6 hard errors (W-ASYNCLOCK)",
-              ]),
-        .init(id: "v1.0.1046",
-              date: "2026-08-29",
-              title: "v1.0.1046",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1046",
-                "fix(diagnostics): back off livelog upload on HTTP 429/5xx instead of hammering every 3s",
-                "fix(call): iOS never answered a peer's ICE-restart request, so every iOS<->Android handoff died (W-RESTARTICEREQ)",
               ]),
     ]
 }
