@@ -545,3 +545,20 @@ the same pattern is what triggers it.
 **Reference:** see `LiveLogStreamer.swift` (W417) for the canonical
 shape. The bisect commit chain is v1.0.386→v1.0.397 if this happens
 again — `git log --oneline v1.0.385..v1.0.398` reads like a story.
+
+## Audio / call-path changes — mandatory gate (added 2026-08-30 after a 13-build regression spiral)
+
+Before ANY build that touches the audio, session or crypto path:
+
+1. Pull the FULL telemetry corpus (not greps) and lay the key metrics out build
+   by build. First question is always "did my own last change break this?".
+2. Name the log line or file:line that PROVES the cause. No proof, no build.
+3. Android is the specification. Read its implementation and port its exact
+   rule, ordering and constants — never invent an iOS mechanism to match.
+4. Adopting an SDK mechanism means reading every related class in the
+   xcframework headers first, not one property.
+5. One hypothesis-driven build maximum. If it misses, stop shipping and run the
+   systematic cross-platform analysis instead.
+
+Full rationale and the incident that produced this: memory
+`feedback_no_blind_ship_regression_discipline`.
