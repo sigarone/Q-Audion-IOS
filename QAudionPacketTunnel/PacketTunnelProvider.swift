@@ -133,24 +133,34 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// Full-tunnel `allowedIPs` (`0.0.0.0/0` + `::/0`), minus `excludedHost`
     /// when one is set — see `CidrExclusion` for why this punch-hole approach
     /// is what WireGuard's model actually supports (no native "exclude"
-    /// primitive). Only ever punches the IPv4 block: every real call-media
-    /// host observed in this project is IPv4 (checked this session — the
-    /// relay fleet, TURN bridge, and every live-verified ICE candidate pair
-    /// so far are all v4); an IPv6 call-media host would currently stay
-    /// tunneled, same as before this feature existed — disclosed gap, not
-    /// silently assumed away.
+    /// primitive).
+    ///
+    /// W-VPNV6PUNCH (2026-08-30) — punches WHICHEVER family the host names.
+    /// The old "only ever punches the IPv4 block" stance rested on every
+    /// observed call-media host being v4; turn.bcrypto.com publishes an
+    /// AAAA now, so an ICE pair can legitimately select an IPv6 address —
+    /// and before this change that call's media silently stayed inside the
+    /// tunnel for its whole life, the exact latency this gate exists to
+    /// remove. The failure direction is unchanged and safe: any parse
+    /// problem falls back to the full tunnel, never a wider hole.
     private func allowedIPs(excludingHost host: String?) -> [IPAddressRange] {
-        let ipv6 = IPAddressRange(from: "::/0")!
-        guard let host, host.contains(".") else {
-            return [IPAddressRange(from: "0.0.0.0/0")!, ipv6]
+        let fullV4 = IPAddressRange(from: "0.0.0.0/0")!
+        let fullV6 = IPAddressRange(from: "::/0")!
+        guard let host else { return [fullV4, fullV6] }
+        if host.contains(":") {
+            let punchedIPv6 = CidrExclusion.excludingIPv6Host(from: "::/0", excludedHost: host)
+                .compactMap { IPAddressRange(from: $0) }
+            guard !punchedIPv6.isEmpty else { return [fullV4, fullV6] }
+            return [fullV4] + punchedIPv6
         }
+        guard host.contains(".") else { return [fullV4, fullV6] }
         let punchedIPv4 = CidrExclusion.excludingHost(from: "0.0.0.0/0", excludedHost: host)
             .compactMap { IPAddressRange(from: $0) }
         guard !punchedIPv4.isEmpty else {
             // Punch failed (bad/unparseable host) — safe fallback: full tunnel.
-            return [IPAddressRange(from: "0.0.0.0/0")!, ipv6]
+            return [fullV4, fullV6]
         }
-        return punchedIPv4 + [ipv6]
+        return punchedIPv4 + [fullV6]
     }
 
     /// IPC from `VpnService` (main app process) — the only channel available

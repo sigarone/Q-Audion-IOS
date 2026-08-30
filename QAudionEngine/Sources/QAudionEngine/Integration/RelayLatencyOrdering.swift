@@ -173,6 +173,32 @@ public struct RelayLatencyProbe: Sendable {
             rest = String(rest[rest.startIndex..<queryIndex])
         }
         guard !rest.isEmpty else { return nil }
+        // W-STUNDUALSTACK (2026-08-30) — splitting on the FIRST colon
+        // mangles an IPv6 literal: `[2a02:…]:3478` became host "[2a02" and
+        // a bare literal lost everything past its first group. Take the
+        // port from the LAST colon, and only when it follows the closing
+        // bracket of a bracketed literal; a bare unbracketed IPv6 literal
+        // (several colons, no bracket) is all address, default port. Same
+        // rule Android's NodePicker.splitHostPort applies. Inert for every
+        // URL the server emits today (hostnames and v4 literals) — this is
+        // the trap that would have sprung the moment an IPv6-literal relay
+        // URL appeared in a bundle.
+        if rest.hasPrefix("[") {
+            guard let closing = rest.firstIndex(of: "]") else { return nil }
+            let host = String(rest[rest.index(after: rest.startIndex)..<closing])
+            guard !host.isEmpty else { return nil }
+            let after = rest.index(after: closing)
+            if after < rest.endIndex, rest[after] == ":",
+               let parsedPort = UInt16(rest[rest.index(after: after)...]) {
+                return (host, parsedPort)
+            }
+            return (host, 3478)
+        }
+        let colonCount = rest.filter { $0 == ":" }.count
+        if colonCount > 1 {
+            // Bare IPv6 literal — every colon belongs to the address.
+            return (rest, 3478)
+        }
         let parts = rest.split(separator: ":", maxSplits: 1)
         guard let hostPart = parts.first, !hostPart.isEmpty else { return nil }
         let host = String(hostPart)

@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import QAudionEngine
 
@@ -104,5 +105,63 @@ final class CidrExclusionTests: XCTestCase {
     func test_excluding_the_entire_slash32_block_itself_yields_nothing() {
         let result = CidrExclusion.excludingHost(from: "1.2.3.4/32", excludedHost: "1.2.3.4")
         XCTAssertEqual(result, [])
+    }
+
+    // ─── W-VPNV6PUNCH (2026-08-30) ───────────────────────────────────────
+
+    func test_v6_fullCoverExclusionYields128Blocks() {
+        let blocks = CidrExclusion.excludingIPv6Host(from: "::/0", excludedHost: "2a02:2479:c9:b500::1")
+        XCTAssertEqual(blocks.count, 128)
+    }
+
+    func test_v6_noBlockContainsTheExcludedHost() {
+        let hostBytes = [UInt8](IPv6Address("2a02:2479:c9:b500::1")!.rawValue)
+        let blocks = CidrExclusion.punch6(
+            network: [UInt8](repeating: 0, count: 16),
+            prefixLength: 0,
+            excludedHost: hostBytes
+        )
+        for (net, plen) in blocks {
+            XCTAssertFalse(
+                CidrExclusion.ipv6HasPrefix(hostBytes, network: net, prefixLength: plen),
+                "block \(net)/\(plen) contains the excluded host — the hole is not a hole"
+            )
+        }
+    }
+
+    func test_v6_blocksAreDisjointAndCoverEverythingElse() {
+        // Complementary-halves construction: prefix lengths must be exactly
+        // 1...128 each used once, which together with the no-host property
+        // above proves exact coverage of (::/0 minus host).
+        let hostBytes = [UInt8](IPv6Address("::1")!.rawValue)
+        let blocks = CidrExclusion.punch6(
+            network: [UInt8](repeating: 0, count: 16),
+            prefixLength: 0,
+            excludedHost: hostBytes
+        )
+        XCTAssertEqual(blocks.map { $0.1 }.sorted(), Array(1...128))
+    }
+
+    func test_v6_knownEdgeBlocksForLowHost() {
+        // Excluding ::1 from ::/0: the very first kept sibling is the upper
+        // half 8000::/1, and the very last is ::/128 (the all-zero /128).
+        let blocks = CidrExclusion.excludingIPv6Host(from: "::/0", excludedHost: "::1")
+        XCTAssertEqual(blocks.first, "8000::/1")
+        XCTAssertEqual(blocks.last, "::/128")
+    }
+
+    func test_v6_hostOutsideCoveringBlockIsSafeNoop() {
+        let blocks = CidrExclusion.excludingIPv6Host(from: "2a02::/16", excludedHost: "2a03::1")
+        XCTAssertEqual(blocks, ["2a02::/16"])
+    }
+
+    func test_v6_garbageInputsAreSafeNoops() {
+        XCTAssertEqual(CidrExclusion.excludingIPv6Host(from: "::/0", excludedHost: "nonsense"), ["::/0"])
+        XCTAssertEqual(CidrExclusion.excludingIPv6Host(from: "not-a-cidr", excludedHost: "::1"), ["not-a-cidr"])
+        XCTAssertEqual(CidrExclusion.excludingIPv6Host(from: "::/129", excludedHost: "::1"), ["::/129"])
+    }
+
+    func test_v6_v4HostNeverPunchesTheV6Block() {
+        XCTAssertEqual(CidrExclusion.excludingIPv6Host(from: "::/0", excludedHost: "217.160.65.35"), ["::/0"])
     }
 }

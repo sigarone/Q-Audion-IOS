@@ -150,4 +150,44 @@ final class RelayLatencyOrderingTests: XCTestCase {
         let decoded = try JSONDecoder().decode(RelayServer.self, from: json)
         XCTAssertNil(decoded.region)
     }
+
+    // ─── W-STUNDUALSTACK (2026-08-30) ────────────────────────────────────
+
+    func test_parseHostPort_bracketedIPv6LiteralKeepsAddressAndPort() {
+        let r = RelayLatencyProbe.parseHostPort(fromRelayUrl: "turn:[2a02:2479:c9:b500::1]:3479?transport=udp")
+        XCTAssertEqual(r?.host, "2a02:2479:c9:b500::1")
+        XCTAssertEqual(r?.port, 3479)
+    }
+
+    func test_parseHostPort_bracketedIPv6WithoutPortDefaults() {
+        let r = RelayLatencyProbe.parseHostPort(fromRelayUrl: "stun:[2a02:2479:c9:b500::1]")
+        XCTAssertEqual(r?.host, "2a02:2479:c9:b500::1")
+        XCTAssertEqual(r?.port, 3478)
+    }
+
+    func test_parseHostPort_bareIPv6LiteralIsAllAddress() {
+        // The pre-fix behaviour split on the first colon and produced the
+        // unresolvable host "2a02" with a garbage port parse.
+        let r = RelayLatencyProbe.parseHostPort(fromRelayUrl: "turn:2a02:2479:c9:b500::1")
+        XCTAssertEqual(r?.host, "2a02:2479:c9:b500::1")
+        XCTAssertEqual(r?.port, 3478)
+    }
+
+    func test_parseHostPort_hostnameAndV4LiteralUnchanged() {
+        // Regression guard: everything the server emits today.
+        let a = RelayLatencyProbe.parseHostPort(fromRelayUrl: "turn:turn.bcrypto.com:3478?transport=udp")
+        XCTAssertEqual(a?.host, "turn.bcrypto.com")
+        XCTAssertEqual(a?.port, 3478)
+        let b = RelayLatencyProbe.parseHostPort(fromRelayUrl: "stun:77.42.121.13:3479")
+        XCTAssertEqual(b?.host, "77.42.121.13")
+        XCTAssertEqual(b?.port, 3479)
+    }
+
+    func test_isIPLiteral_decidesTheRaceCorrectly() {
+        // A literal names its family — no race; a hostname races both.
+        XCTAssertTrue(StunClient.isIPLiteral("217.160.65.35"))
+        XCTAssertTrue(StunClient.isIPLiteral("2a02:2479:c9:b500::1"))
+        XCTAssertFalse(StunClient.isIPLiteral("turn.bcrypto.com"))
+        XCTAssertFalse(StunClient.isIPLiteral("999.1.2.3.4"))
+    }
 }

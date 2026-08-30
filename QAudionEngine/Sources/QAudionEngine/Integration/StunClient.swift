@@ -104,15 +104,57 @@ public final class StunClient: @unchecked Sendable {
         port: UInt16,
         timeoutSec: TimeInterval
     ) async -> Double? {
+        // W-STUNDUALSTACK — for a HOSTNAME, race one family-pinned socket
+        // per family and take the first STUN reply; the loser is cancelled
+        // by the group. On a healthy network the preferred family answers
+        // first and the race costs one extra idle socket; on a broken-IPv6
+        // network the v4 leg answers while the v6 leg is still timing out —
+        // instead of the whole probe failing and W-RELAYGATE concluding the
+        // network blocks UDP (and preferring the WSS-TURN bridge over a
+        // relay that plain UDP reaches fine). An IP LITERAL names one
+        // family already: single attempt, exactly as before.
+        if Self.isIPLiteral(host) {
+            return await singleProbeRttMs(host: host, port: port, timeoutSec: timeoutSec, ipVersion: .any)
+        }
+        return await withTaskGroup(of: Double?.self) { group in
+            for version in [ProbeIPVersion.v6, .v4] {
+                group.addTask {
+                    await self.singleProbeRttMs(host: host, port: port, timeoutSec: timeoutSec, ipVersion: version)
+                }
+            }
+            defer { group.cancelAll() }
+            for await rtt in group where rtt != nil {
+                return rtt
+            }
+            return nil
+        }
+    }
+
+    private func singleProbeRttMs(
+        host: String,
+        port: UInt16,
+        timeoutSec: TimeInterval,
+        ipVersion: ProbeIPVersion
+    ) async -> Double? {
         let request = buildBindingRequest()
         let start = DispatchTime.now()
         do {
-            _ = try await sendUDP(data: request, host: host, port: port, timeoutSec: timeoutSec)
+            _ = try await sendUDP(data: request, host: host, port: port, timeoutSec: timeoutSec, ipVersion: ipVersion)
         } catch {
             return nil
         }
         let elapsedNs = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
         return Double(elapsedNs) / 1_000_000.0
+    }
+
+    /// W-STUNDUALSTACK — a bare IPv4 dotted quad or an IPv6 literal (any
+    /// colon) already names its family; racing families for it is
+    /// meaningless. Pure so it can be pinned by tests.
+    static func isIPLiteral(_ host: String) -> Bool {
+        if host.contains(":") { return true } // IPv6 literal (hostnames cannot contain ':')
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { UInt8($0) != nil }
     }
 
     // MARK: - STUN protocol
@@ -215,11 +257,33 @@ public final class StunClient: @unchecked Sendable {
 
     // MARK: - UDP transport
 
+    /// W-STUNDUALSTACK (2026-08-30) — which IP family a probe socket may
+    /// use. UDP gets NO Happy Eyeballs from Network.framework (there is no
+    /// handshake to race), so a probe to a dual-stack hostname silently
+    /// binds one family — the wrong one on a network whose IPv6 route is
+    /// advertised but black-holed, where the probe then times out against
+    /// a server that answers on IPv4 in milliseconds. Same defect class
+    /// Android fixed as W-DUALSTACKPROBE, one layer down: here the race
+    /// has to be on the STUN reply, so the caller races two family-pinned
+    /// sockets instead of trusting the resolver's first answer.
+    enum ProbeIPVersion: Sendable {
+        case any, v4, v6
+
+        var nwVersion: NWProtocolIP.Options.Version? {
+            switch self {
+            case .any: return nil
+            case .v4: return .v4
+            case .v6: return .v6
+            }
+        }
+    }
+
     private func sendUDP(
         data: Data,
         host: String,
         port: UInt16,
-        timeoutSec: TimeInterval = StunClient.timeoutSeconds
+        timeoutSec: TimeInterval = StunClient.timeoutSeconds,
+        ipVersion: ProbeIPVersion = .any
     ) async throws -> Data {
         // `port` ultimately traces back to `discoverPublicEndpoint`'s public
         // `port` parameter — today's only caller (`discoverFromAnyServer`)
@@ -235,7 +299,15 @@ public final class StunClient: @unchecked Sendable {
                 host: NWEndpoint.Host(host),
                 port: nwPort
             )
-            let connection = NWConnection(to: endpoint, using: .udp)
+            // W-STUNDUALSTACK — pin the socket's family when asked. `.udp`
+            // is a fresh NWParameters instance each access, so mutating its
+            // IP options here cannot leak into any other connection.
+            let params: NWParameters = .udp
+            if let pinned = ipVersion.nwVersion,
+               let ipOpts = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+                ipOpts.version = pinned
+            }
+            let connection = NWConnection(to: endpoint, using: params)
 
             final class Box<T>: @unchecked Sendable { var value: T; init(_ v: T) { value = v } }
             let completedBox = Box(false)

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// CANONICAL, TESTED COPY: `QAudionEngine/Sources/QAudionEngine/Utils/CidrExclusion.swift`
 /// (see that file's kdoc for the full rationale and `CidrExclusionTests.swift`
@@ -72,4 +73,90 @@ enum CidrExclusion {
     static func formatIPv4(_ value: UInt32) -> String {
         "\((value >> 24) & 0xFF).\((value >> 16) & 0xFF).\((value >> 8) & 0xFF).\(value & 0xFF)"
     }
+
+    // MARK: - W-VPNV6PUNCH (2026-08-30) — IPv6 hole punching
+
+    /// IPv6 twin of ``excludingHost(from:excludedHost:)``: splits an IPv6
+    /// CIDR block into the minimal set of blocks covering everything except
+    /// one /128 host. Same safe-fallback contract — any parse failure, or a
+    /// host outside the covering block, returns `[coveringCidr]` unchanged
+    /// (the host stays tunneled; never a wider hole than intended).
+    ///
+    /// Exists because the call-media punch was IPv4-only while
+    /// turn.bcrypto.com now publishes an AAAA: an ICE pair that selects the
+    /// IPv6 address under the WireGuard VPN silently kept the call media
+    /// inside the tunnel — the exact latency the punch feature was built to
+    /// remove. Parsing and formatting go through Network.framework's
+    /// `IPv6Address` (canonical compressed text both ways); only the block
+    /// arithmetic is done by hand, on the 16 raw bytes.
+    public static func excludingIPv6Host(from coveringCidr: String, excludedHost: String) -> [String] {
+        guard
+            let (network, prefixLength) = parseIPv6Cidr(coveringCidr),
+            let hostAddr = IPv6Address(excludedHost)
+        else { return [coveringCidr] }
+        let host = [UInt8](hostAddr.rawValue)
+        guard ipv6HasPrefix(host, network: network, prefixLength: prefixLength) else {
+            return [coveringCidr]
+        }
+        return punch6(network: network, prefixLength: prefixLength, excludedHost: host)
+            .compactMap { block, len in
+                guard let text = IPv6Address(Data(block))?.debugDescription else { return nil }
+                return "\(text)/\(len)"
+            }
+    }
+
+    /// Core split, IPv6 flavour: walk from `prefixLength` toward /128; at
+    /// each level keep the half that does NOT contain the excluded host and
+    /// descend into the half that does. Yields exactly `128 - prefixLength`
+    /// blocks (128 for a `::/0` covering block) — well inside what
+    /// WireGuard's allowedIPs and NEPacketTunnel's includedRoutes handle.
+    static func punch6(network: [UInt8], prefixLength: Int, excludedHost: [UInt8]) -> [([UInt8], Int)] {
+        var blocks: [([UInt8], Int)] = []
+        var net = network
+        var bit = prefixLength
+        while bit < 128 {
+            let byteIndex = bit / 8
+            let mask: UInt8 = 0x80 >> UInt8(bit % 8)
+            if (excludedHost[byteIndex] & mask) != 0 {
+                // Host descends into the 1-half; the 0-half (current net,
+                // deciding bit clear) is the kept sibling.
+                blocks.append((net, bit + 1))
+                net[byteIndex] |= mask
+            } else {
+                var sibling = net
+                sibling[byteIndex] |= mask
+                blocks.append((sibling, bit + 1))
+            }
+            bit += 1
+        }
+        return blocks
+    }
+
+    static func parseIPv6Cidr(_ text: String) -> (network: [UInt8], prefixLength: Int)? {
+        let halves = text.split(separator: "/", maxSplits: 1)
+        guard halves.count == 2,
+              let addr = IPv6Address(String(halves[0])),
+              let prefixLength = Int(halves[1]),
+              (0...128).contains(prefixLength)
+        else { return nil }
+        var bytes = [UInt8](addr.rawValue)
+        guard bytes.count == 16 else { return nil }
+        // Canonicalize: zero every bit past the prefix, so a sloppy input
+        // like "2a02::1/64" behaves as its network address.
+        for bit in prefixLength..<128 {
+            bytes[bit / 8] &= ~(0x80 >> UInt8(bit % 8))
+        }
+        return (bytes, prefixLength)
+    }
+
+    static func ipv6HasPrefix(_ host: [UInt8], network: [UInt8], prefixLength: Int) -> Bool {
+        guard host.count == 16, network.count == 16 else { return false }
+        for bit in 0..<prefixLength {
+            let byteIndex = bit / 8
+            let mask: UInt8 = 0x80 >> UInt8(bit % 8)
+            if (host[byteIndex] & mask) != (network[byteIndex] & mask) { return false }
+        }
+        return true
+    }
+
 }
