@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1059",
+              date: "2026-08-30",
+              title: "v1.0.1059",
+              bullets: [
+                "fix(call): FrameCryptor key ring pinned to slot 0 — every mid-call rekey killed audio AND video both ways (W-KEYSLOTROTATE)",
+              ]),
         .init(id: "v1.0.1058",
               date: "2026-08-30",
               title: "v1.0.1058",
               bullets: [
+                "chore: regenerate changelog for v1.0.1058",
                 "fix(call): remote ICE candidates were silently dropped before the remote description — cross-network calls never left CHECKING (W-ICELATEQUEUE)",
               ]),
         .init(id: "v1.0.1057",
@@ -153,14 +160,6 @@ extension ReleaseNote {
                 "fix(test): update AudioProfileTests literals for the 40kbps standard-block rate",
                 "fix(call): raise Opus preferred bitrate 32->40 kbps within existing block headroom",
                 "fix(call): BWE-composed video ceiling + mid-call SFU disconnect fallback (P3 batch)",
-              ]),
-        .init(id: "v1.0.1039",
-              date: "2026-08-27",
-              title: "v1.0.1039",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1039",
-                "fix(call): video WS-relay gate must confirm real cryptor attach, not just ICE (W-VIDEOSENDHEALTH)",
-                "fix(call): group video publish forces VP8 simulcast, unconditionally",
               ]),
     ]
 }
