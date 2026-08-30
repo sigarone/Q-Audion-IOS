@@ -38,17 +38,32 @@ import WebRTC
 /// mode on the direct-call SDK's session cannot affect them.
 public enum NativeAudioSessionGate {
 
+    /// W-ADMASYNC (2026-08-30) — every RTCAudioSession touch goes through
+    /// this ONE serial background queue, asynchronously. Evidence: on live
+    /// call fceeb84f BOTH paths that enter this gate stalled at exactly
+    /// their first gate call — handleAudioSessionActivated never reached
+    /// startAudioIOIfReady (zero gate= lines all call), and
+    /// engageAudioSrtpFallback logged engage=1 and then nothing — the
+    /// classic shape of a lock-order deadlock inside RTCAudioSession's own
+    /// locking against WebRTC's audio/signaling threads. It also froze the
+    /// call UI at ring time (main thread parked in the gate). Async on a
+    /// serial queue keeps the relay->enable ordering (callers enqueue in
+    /// order) while making it impossible for ANY app thread to block here.
+    private static let gateQueue = DispatchQueue(label: "com.bcrypto.qaudion.admgate", qos: .userInitiated)
+
     /// Arm manual-audio mode. Idempotent; called from
     /// `QAudionPeerConnection.init` so it is guaranteed to run before the
     /// first srtp-capable transport ever starts. No-op when the audio-srtp
     /// kill switch is off — automatic mode (today's behavior) stays.
     public static func armManualMode() {
         guard CallCapabilities.audioSrtpSendEnabled else { return }
-        let session = RTCAudioSession.sharedInstance()
-        guard !session.useManualAudio else { return }
-        session.useManualAudio = true
-        session.isAudioEnabled = false
-        print("[WebRTC] W-ADMMANUAL: manual audio armed (WebRTC audio unit gated on isAudioEnabled)")
+        gateQueue.async {
+            let session = RTCAudioSession.sharedInstance()
+            guard !session.useManualAudio else { return }
+            session.useManualAudio = true
+            session.isAudioEnabled = false
+            print("[WebRTC] W-ADMMANUAL: manual audio armed (WebRTC audio unit gated on isAudioEnabled)")
+        }
     }
 
     /// W-ADMACTIVATE (2026-08-30) — the HALF of the manual-audio contract
@@ -68,14 +83,16 @@ public enum NativeAudioSessionGate {
     /// didDeactivate funnels, self-activation fallback included).
     public static func handleCallKitActivation(_ active: Bool) {
         guard CallCapabilities.audioSrtpSendEnabled else { return }
-        let session = RTCAudioSession.sharedInstance()
-        guard session.useManualAudio else { return }
-        if active {
-            session.audioSessionDidActivate(AVAudioSession.sharedInstance())
-        } else {
-            session.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
+        gateQueue.async {
+            let session = RTCAudioSession.sharedInstance()
+            guard session.useManualAudio else { return }
+            if active {
+                session.audioSessionDidActivate(AVAudioSession.sharedInstance())
+            } else {
+                session.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
+            }
+            print("[WebRTC] W-ADMACTIVATE: session activation relayed active=\(active)")
         }
-        print("[WebRTC] W-ADMACTIVATE: session activation relayed active=\(active)")
     }
 
     /// Start (`true`) or stop (`false`) WebRTC's audio unit. Safe to call
@@ -83,10 +100,12 @@ public enum NativeAudioSessionGate {
     /// audio session is active — the CallService chokepoint guarantees it.
     public static func setNativeAudioActive(_ active: Bool) {
         guard CallCapabilities.audioSrtpSendEnabled else { return }
-        let session = RTCAudioSession.sharedInstance()
-        guard session.useManualAudio else { return }
-        guard session.isAudioEnabled != active else { return }
-        session.isAudioEnabled = active
-        print("[WebRTC] W-ADMMANUAL: native audio unit \(active ? "enabled" : "disabled")")
+        gateQueue.async {
+            let session = RTCAudioSession.sharedInstance()
+            guard session.useManualAudio else { return }
+            guard session.isAudioEnabled != active else { return }
+            session.isAudioEnabled = active
+            print("[WebRTC] W-ADMMANUAL: native audio unit \(active ? "enabled" : "disabled")")
+        }
     }
 }
