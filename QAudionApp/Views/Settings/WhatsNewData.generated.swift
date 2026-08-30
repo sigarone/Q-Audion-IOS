@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1065",
+              date: "2026-08-30",
+              title: "v1.0.1065",
+              bullets: [
+                "fix(audio): six screens changed the shared session category and none restored it — a played voice note silenced every later call (W-SESSIONCATLEAK)",
+              ]),
         .init(id: "v1.0.1064",
               date: "2026-08-30",
               title: "v1.0.1064",
               bullets: [
+                "chore: regenerate changelog for v1.0.1064",
                 "fix(call): the VoIP session config never reached the live session — no input in the route, so BOTH capture engines were silent (W-SESSIONLOCK)",
               ]),
         .init(id: "v1.0.1063",
@@ -145,15 +152,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1046",
                 "fix(diagnostics): back off livelog upload on HTTP 429/5xx instead of hammering every 3s",
                 "fix(call): iOS never answered a peer's ICE-restart request, so every iOS<->Android handoff died (W-RESTARTICEREQ)",
-              ]),
-        .init(id: "v1.0.1045",
-              date: "2026-08-29",
-              title: "v1.0.1045",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1045",
-                "feat(call): average the live voice metrics over one second so they can be read (W-VOICEUISMOOTH)",
-                "a11y(security-icon): expand tap target on SecurityIconHeaderView, add VoiceOver traits",
-                "fix(call): iOS killed every audio-srtp call at 90s with \"media-lost\" while audio worked (W-MEDIADEADSRTP)",
               ]),
     ]
 }
