@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1053",
+              date: "2026-08-30",
+              title: "v1.0.1053",
+              bullets: [
+                "fix(call): three-way silent-call teardown — pre-attached mic track, manual WebRTC audio unit, key-forward hardening (W-PREATTACHMIC, W-ADMMANUAL, W-CTRLBUILDDIAG)",
+              ]),
         .init(id: "v1.0.1052",
               date: "2026-08-30",
               title: "v1.0.1052",
               bullets: [
+                "chore: regenerate changelog for v1.0.1052",
                 "diag(call): make activateNativeAudioSrtp's decisions remote-visible (W-AUDIOSENDDIAG)",
               ]),
         .init(id: "v1.0.1051",
@@ -176,13 +183,6 @@ extension ReleaseNote {
                 "fix(test): inject StubURLProtocol directly instead of global registerClass",
                 "build(deps): repoint iOS WebRTC + client-sdk-swift to the native-pli builds",
                 "feat(vpn): gate WireGuard tunnel routing on active call media (iOS port of AND-2)",
-              ]),
-        .init(id: "v1.0.1033",
-              date: "2026-08-26",
-              title: "v1.0.1033",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1033",
-                "fix(call): AVAudioConverter never produced output for the native-audio-srtp PCM tap",
               ]),
     ]
 }
