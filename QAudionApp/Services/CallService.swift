@@ -384,6 +384,19 @@ final class CallService: @unchecked Sendable {
             let prx = getAudioRtpPacketsReceived?() ?? -1
             RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx)")
         }
+        // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
+        // outbound-rtp row still does not exist after ~15 s of samples is
+        // the wrong-transceiver failure shape, whatever its next disguise.
+        // One WARN per call, so the remote log names the failure instead of
+        // leaving another silent-call archaeology session.
+        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true, rtpTx < 0 {
+            srtpDeadTxBeats &+= 1
+            if srtpDeadTxBeats == 15 {
+                RTLog.warn("call", "audiosrtp deadtx=1")
+            }
+        } else {
+            srtpDeadTxBeats = 0
+        }
     }
 
     // MARK: - W466 — audio-pipeline diagnostics
@@ -395,6 +408,10 @@ final class CallService: @unchecked Sendable {
     // of each milestone, plus a periodic heartbeat every 250 frames
     // (~5 s). The previously-silent encrypt catch is now surfaced too —
     // it used to hide every Opus/AEAD failure.
+    /// W-AUDIOSENDPICK — consecutive throughput samples with no
+    /// outbound-rtp row on an armed native audio-srtp call.
+    private var srtpDeadTxBeats: Int = 0
+
     /// W-SRTPRXDIAG — sample counter for the ~5 s RTP heartbeat above.
     private var srtpHbSampleCounter: Int = 0
 

@@ -775,8 +775,31 @@ public final class QAudionPeerConnection: NSObject {
         // a 1:1 call has at most one audio transceiver, so `mediaType`
         // alone is a safe, unambiguous match). Cache is refreshed so any
         // other call site reading `audioTransceiver` sees the live object too.
-        guard let transceiver = pc.transceivers.first(where: { $0.mediaType == .audio }) else {
+        // W-AUDIOSENDPICK (2026-08-30, iOS<->iOS call at 10:23, TestFlight
+        // 1050) — `.first(where: audio)` is only correct while there is
+        // exactly ONE audio transceiver. When JSEP cannot recycle the
+        // pre-created one it ADDS a second for the remote m-line ("Adding
+        // audio transceiver in response to the remote description"), and
+        // `.first` then keeps picking the PRE-CREATED, never-associated
+        // object: the mic track lands on a transceiver libwebrtc does not
+        // send for, `attachSender` succeeds, the controller logs
+        // `audiosrtp tx=1` — and the outbound-rtp stats row never exists.
+        // The W-SRTPRXDIAG heartbeat measured exactly that: the callee ran
+        // the whole call with `tx=-1` while logging a successful arm, the
+        // caller (whose answer consequently announced no inbound audio)
+        // never got a receiver (`rxc` absent, `rx=-1`), and W-MEDIADEAD
+        // eventually ended the call for want of data.
+        //
+        // The live transceiver is the ASSOCIATED one — non-empty `mid`.
+        // Pre-negotiation nothing has a mid yet and there is only the
+        // pre-created object, so the fallback keeps the original behavior.
+        let audioTransceivers = pc.transceivers.filter { $0.mediaType == .audio }
+        guard let transceiver = audioTransceivers.first(where: { !$0.mid.isEmpty })
+            ?? audioTransceivers.first else {
             return false
+        }
+        if audioTransceivers.count > 1 {
+            print("[WebRTC] W-AUDIOSENDPICK: \(audioTransceivers.count) audio transceivers — picked mid=\(transceiver.mid)")
         }
         if audioTransceiver !== transceiver {
             print("[WebRTC] IOS-C4b: audio transceiver was rewired by JSEP — re-resolved to the live object")
@@ -803,7 +826,44 @@ public final class QAudionPeerConnection: NSObject {
         }()
         cryptor.setKey(key)
 
-        if transceiver.sender.track == nil {
+        // W-AUDIOSENDPICK — carry an already-created mic track onto the live
+        // sender instead of minting a second one: the track (with its PCM
+        // tap) may sit on a transceiver JSEP has since orphaned. Same
+        // carry-over the DataChannel-era onTrack path does on Android.
+        if transceiver.sender.track == nil,
+           let existingTrack = localAudioSrtpTrack,
+           let previousSender = nativeAudioSender,
+           previousSender !== transceiver.sender {
+            previousSender.track = nil
+            transceiver.sender.track = existingTrack
+            nativeAudioSender = transceiver.sender
+            print("[WebRTC] W-AUDIOSENDPICK: carried existing mic track onto the live sender")
+        }
+        // W-AUDIOSENDPICK — a transceiver that cannot send is not fixable by
+        // assigning `sender.track`: on this WebRTC build
+        // `RTCRtpTransceiver.direction` is READONLY (no `setDirection:` —
+        // see W-RECVONLYPIN in attachLocalVideo, which hit the identical
+        // wall). A JSEP-added transceiver for a remote m-line starts
+        // recvonly, so the callee's answer advertises no outbound audio and
+        // libwebrtc never sends. `pc.add(track:streamIds:)` is the one API
+        // that promotes (JSEP: AddTrack reuses a recvonly transceiver whose
+        // sender has no track and sets it to sendrecv) — exactly the video
+        // path's fallback, mirrored here. The direction change reaches the
+        // wire on the NEXT negotiation this call performs; the pre-answer
+        // call sites run before createAnswer, where it lands immediately.
+        let canSend = transceiver.direction == .sendRecv || transceiver.direction == .sendOnly
+        if transceiver.sender.track == nil, !canSend {
+            let source = factory.audioSource(with: nil)
+            let track = factory.audioTrack(with: source, trackId: audioTrackId)
+            track.isEnabled = false
+            localAudioSrtpTrack = track
+            pc.add(track, streamIds: [stableStreamId])
+            nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
+            print("[WebRTC] W-AUDIOSENDPICK: transceiver direction=\(transceiver.direction.rawValue) cannot send — promoted via addTrack")
+            let txTap = NativeAudioPcmTap(sink: txSink)
+            track.add(txTap)
+            audioTxTap = txTap
+        } else if transceiver.sender.track == nil {
             let source = factory.audioSource(with: nil)
             let track = factory.audioTrack(with: source, trackId: audioTrackId)
             // W-AUDIOSENDERGATE (2026-08-27) — fail-closed: the track used to
@@ -829,7 +889,12 @@ public final class QAudionPeerConnection: NSObject {
             track.add(txTap)
             audioTxTap = txTap
         }
-        let attached = cryptor.attachSender(transceiver.sender)
+        // W-AUDIOSENDPICK — attach to the sender that actually carries the
+        // track: after an addTrack promotion that can differ from
+        // `transceiver.sender` (AddTrack may have created a new transceiver
+        // when none was reusable).
+        let effectiveSender = nativeAudioSender ?? transceiver.sender
+        let attached = cryptor.attachSender(effectiveSender)
         if attached {
             localAudioSrtpTrack?.isEnabled = !pendingAudioSrtpMuted
         } else {
