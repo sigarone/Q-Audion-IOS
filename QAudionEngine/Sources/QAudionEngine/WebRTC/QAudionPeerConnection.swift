@@ -778,6 +778,7 @@ public final class QAudionPeerConnection: NSObject {
     public func activateNativeAudioSrtp(
         key: Data,
         participantId: String,
+        slot: Int32 = 0,
         txSink: @escaping (Data) -> Void,
         diag: ((String) -> Void)? = nil
     ) -> Bool {
@@ -870,7 +871,7 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioCryptor = c
             return c
         }()
-        cryptor.setKey(key)
+        cryptor.setKey(key, slot: slot)
 
         // W-AUDIOSENDPICK — carry an already-created mic track onto the live
         // sender instead of minting a second one: the track (with its PCM

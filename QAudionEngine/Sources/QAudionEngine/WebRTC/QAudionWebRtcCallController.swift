@@ -642,6 +642,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// PqcFrameDecryptor on every sender + receiver via
     /// `QAudionPeerConnection.installPqcSealer` (W382). Mid-call
     /// updates re-install the sealer on next set.
+    /// W-KEYSLOTROTATE — the call-crypto epoch for the CURRENT
+    /// `pqcSessionKey` (0 = first real key, +1 per completed rekey).
+    /// Set by AppState BEFORE `pqcSessionKey` at every delivery site; the
+    /// slot handed to the FrameCryptors is `epoch % 16`, matching
+    /// Android's ring exactly.
+    public var pqcSessionKeyEpoch: Int32 = 0
+
     public var pqcSessionKey: Data? {
         didSet {
             applyPqcSealerIfPossible()
@@ -2764,6 +2771,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let installed = peerConnection?.activateNativeAudioSrtp(
             key: key,
             participantId: participant,
+            slot: pqcSessionKeyEpoch % 16,
             txSink: { [weak self] pcm in
                 // PCM-TAP PARITY (TX/local mic) — mirrors Android's
                 // `feedOwnerContinuity` wiring on `audioSrtpTxSink`. Tier 1
@@ -2944,7 +2952,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if case .native = videoSealer {
             let k = pqcSessionKeyProvider()
             if k.count == 32, let c = peerConnection?.nativeVideoCryptor {
-                c.setKey(k)
+                c.setKey(k, slot: pqcSessionKeyEpoch % 16)
                 peerConnection?.attachVideoSenderCryptor()  // idempotent
                 print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
             }
@@ -3020,7 +3028,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // codec-layer LiveKit decorator is NO LONGER used (it broke H265).
             let participant = recipientId ?? "peer"
             let cryptor = peerConnection?.ensureNativeVideoCryptor(participantId: participant)
-            cryptor?.setKey(kVideo)
+            cryptor?.setKey(kVideo, slot: pqcSessionKeyEpoch % 16)
             // W-VIDEOSENDHEALTH (2026-08-27) — attachVideoSenderCryptor()'s
             // Bool result used to be discarded here, and videoSealer is set
             // to .native unconditionally right below regardless of whether

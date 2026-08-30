@@ -114,20 +114,17 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     /// Safe to call before OR after the cryptors are attached — the native
     /// KeyProvider drops inbound frames until a key is present
     /// (discardFrameWhenCryptorNotReady), so attach-before-key is fine.
-    public func setKey(_ kVideo: Data) {
+    public func setKey(_ kVideo: Data, slot: Int32 = 0) {
         guard kVideo.count == 32 else {
             print("[NativeVideoFrameCryptor] setKey ignored — key is \(kVideo.count) bytes, expected 32")
             return
         }
         lock.lock(); defer { lock.unlock() }
-        if let prev = lastKeyValue, prev != kVideo {
-            currentKeyIndex = (currentKeyIndex + 1) % 16
-        }
-        lastKeyValue = kVideo
-        keyProvider.setSharedKey(kVideo, with: Int32(currentKeyIndex))
-        senderCryptor?.keyIndex = Int32(currentKeyIndex)
+        currentKeyIndex = Int(slot)
+        keyProvider.setSharedKey(kVideo, with: slot)
+        senderCryptor?.keyIndex = slot
         hasKey = true
-        print("[NativeVideoFrameCryptor] key installed at slot \(currentKeyIndex)")
+        print("[NativeVideoFrameCryptor] key installed at slot \(slot)")
     }
 
     // W-KEYSLOTROTATE (2026-08-30) — Android rotates the FrameCryptor key
@@ -140,13 +137,10 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     // here, and our slot-0-tagged frames hit the peer's RETIRED epoch-0 key
     // (live: call c8416eab, 2026-08-30 — flawless RTP flow at 16.6 pkt/s
     // for 20 minutes, audio silent from rekey epoch 1 at 20:22 on).
-    // The epoch is not on the iOS wire, and does not need to be: a rekey is
-    // a full PQC re-handshake that either completes on both legs or on
-    // neither, so counting DISTINCT keys locally reproduces Android's epoch
-    // exactly (repeat setKey calls with the SAME key — the activation path
-    // runs several per epoch — must not bump the slot).
+    // Slot is EXPLICIT — see NativeAudioFrameCryptor's identical note: the
+    // distinct-key count was poisoned by the transitional SAS key; the epoch
+    // flows from AppState's sasReady accounting instead.
     private var currentKeyIndex: Int = 0
-    private var lastKeyValue: Data?
 
     /// Create + enable the sender cryptor. Idempotent. Does NOT require the key
     /// to be set yet (the shared KeyProvider holds it; frames are discarded

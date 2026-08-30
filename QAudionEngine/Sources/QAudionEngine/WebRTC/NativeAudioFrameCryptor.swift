@@ -78,20 +78,17 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
 
     /// Publish / rotate the 32-byte raw PQC session key at index 0. Safe to
     /// call before OR after the cryptors are attached.
-    public func setKey(_ key: Data) {
+    public func setKey(_ key: Data, slot: Int32 = 0) {
         guard key.count == 32 else {
             print("[NativeAudioFrameCryptor] setKey ignored — key is \(key.count) bytes, expected 32")
             return
         }
         lock.lock(); defer { lock.unlock() }
-        if let prev = lastKeyValue, prev != key {
-            currentKeyIndex = (currentKeyIndex + 1) % 16
-        }
-        lastKeyValue = key
-        keyProvider.setSharedKey(key, with: Int32(currentKeyIndex))
-        senderCryptor?.keyIndex = Int32(currentKeyIndex)
+        currentKeyIndex = Int(slot)
+        keyProvider.setSharedKey(key, with: slot)
+        senderCryptor?.keyIndex = slot
         hasKey = true
-        print("[NativeAudioFrameCryptor] key installed at slot \(currentKeyIndex)")
+        print("[NativeAudioFrameCryptor] key installed at slot \(slot)")
     }
 
     // W-KEYSLOTROTATE (2026-08-30) — Android rotates the FrameCryptor key
@@ -104,13 +101,14 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     // here, and our slot-0-tagged frames hit the peer's RETIRED epoch-0 key
     // (live: call c8416eab, 2026-08-30 — flawless RTP flow at 16.6 pkt/s
     // for 20 minutes, audio silent from rekey epoch 1 at 20:22 on).
-    // The epoch is not on the iOS wire, and does not need to be: a rekey is
-    // a full PQC re-handshake that either completes on both legs or on
-    // neither, so counting DISTINCT keys locally reproduces Android's epoch
-    // exactly (repeat setKey calls with the SAME key — the activation path
-    // runs several per epoch — must not bump the slot).
+    // The slot is EXPLICIT (not inferred by counting distinct keys): the
+    // first cut counted keys, and the TRANSITIONAL SAS key that precedes
+    // the real ML-KEM key on iOS poisoned the count — the real key landed
+    // at slot 1 while Android held it at slot 0, killing epoch 0 outright
+    // (live: 2026-08-30 21:16, S26 logging `key_index[1] out of range`).
+    // The epoch now flows from AppState's sasReady accounting, which is the
+    // one place that can tell transitional / real / rekey apart.
     private var currentKeyIndex: Int = 0
-    private var lastKeyValue: Data?
 
     /// Create + enable the sender cryptor. Idempotent. Must run on the
     /// WebRTC signalling thread / a WebRTC callback, same constraint as

@@ -1047,6 +1047,12 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// W-KEYSLOTROTATE — completed-rekey count for THIS call's session key
+    /// (0 = first real ML-KEM key; +1 each time sasReady re-fires for a
+    /// rekey). The transitional SAS key never advances it. Forwarded to the
+    /// controller BEFORE every pqcSessionKey delivery so the FrameCryptor
+    /// ring slot (epoch % 16) matches Android's.
+    var callPqcRekeyEpoch: Int = 0
     /// Task 10 — the video PQC sealer's `(callId, selfIsRoleA)` identity,
     /// pinned ONCE at `startVideoPipeline` and reused verbatim by the later
     /// `wireSasReadyToController` rotate. Two independently-computed
@@ -6005,7 +6011,10 @@ final class AppState: ObservableObject {
         // call's session key + the sovereign/KMS PSK salt BEFORE the answer.
         controller.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
         controller.videoContactPsk = self.callVideoPsk
-        if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
+        if let key = self.callPqcSessionKey {
+            controller.pqcSessionKeyEpoch = Int32(self.callPqcRekeyEpoch)  // W-KEYSLOTROTATE
+            controller.pqcSessionKey = key
+        }
         self.webRtcController = controller
         self.flushPendingIceCandidates(to: controller)
         // Keep the proven WS-relay audio leg untouched — this controller exists
@@ -6335,6 +6344,7 @@ final class AppState: ObservableObject {
                 // crossed a rekey boundary. Idempotent.
                 if let key = self.callPqcSessionKey {
                     controller.videoContactPsk = self.callVideoPsk
+                    controller.pqcSessionKeyEpoch = Int32(self.callPqcRekeyEpoch)  // W-KEYSLOTROTATE
                     controller.pqcSessionKey = key
                 }
             } catch {
@@ -13102,6 +13112,7 @@ final class AppState: ObservableObject {
         // PQC handshake plumbing surfaces it. Until then the SAS is
         // still a meaningful authentication primitive: identical on
         // both ends if and only if the PSK ladder agrees.
+        callPqcRekeyEpoch = 0  // W-KEYSLOTROTATE — transitional phase is pre-epoch-0
         callPqcSessionKey = Self.deriveTransitionalSasKey(
             selfId: currentUserId ?? "",
             peerId: contactId)
@@ -13590,7 +13601,10 @@ final class AppState: ObservableObject {
                 // idempotent, mirrors Android's `applyAudioRekey` pulling
                 // from a durable store rather than depending solely on the
                 // async NotificationCenter forward.
-                if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
+                if let key = self.callPqcSessionKey {
+            controller.pqcSessionKeyEpoch = Int32(self.callPqcRekeyEpoch)  // W-KEYSLOTROTATE
+            controller.pqcSessionKey = key
+        }
                 webRtcController = controller
                 // W-CTRLBUILDDIAG — caller-path twin of the responder line
                 // (out=1 marks the outgoing build). Added after call
@@ -15023,6 +15037,7 @@ extension AppState {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
+        callPqcRekeyEpoch = 0
         // Task 10: drop the pinned video sealer identity alongside the
         // session key so a stale (callId, selfIsRoleA) can't leak into the
         // next call's video pipeline.
@@ -15940,6 +15955,18 @@ extension AppState {
             Task { @MainActor [weak self] in
                 guard let self = self,
                       let key = self.callPqcSessionKey else { return }
+                // W-KEYSLOTROTATE — epoch accounting: the FIRST sasReady of
+                // a call carries the initial real key (epoch 0); every
+                // subsequent firing is a completed rekey (+1). Keyed on the
+                // .mlKem transition so the transitional-SAS phase can never
+                // advance it — the poison that put the first real key at
+                // ring slot 1 while Android held slot 0 (live 2026-08-30
+                // 21:16, `key_index[1] out of range` on the peer).
+                if self.callSasKeySource == .mlKem {
+                    self.callPqcRekeyEpoch += 1
+                } else {
+                    self.callPqcRekeyEpoch = 0
+                }
                 // M-10: the broker has now overwritten callPqcSessionKey
                 // with the REAL ML-KEM-1024 session key — the SAS words
                 // are post-quantum authenticated from this point on.
@@ -16120,6 +16147,7 @@ extension AppState {
         // the first ensureVideoSealer derives the Android-matching
         // K_video (salt = psk, not the default string).
         ctrl.videoContactPsk = self.callVideoPsk
+        ctrl.pqcSessionKeyEpoch = Int32(self.callPqcRekeyEpoch)  // W-KEYSLOTROTATE — before the key (didSet reads it)
         ctrl.pqcSessionKey = key
         print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId.prefix(8))…)")
         // Remote-visible counterpart of the print above: `attempt` is how
@@ -20011,7 +20039,10 @@ extension AppState {
         // didn't. Mirrors Android's `applyAudioRekey`, which reads
         // `activeKey.get()` — a durable store, pulled fresh at the point
         // of use — rather than depending on a broadcast landing.
-        if let key = self.callPqcSessionKey { controller.pqcSessionKey = key }
+        if let key = self.callPqcSessionKey {
+            controller.pqcSessionKeyEpoch = Int32(self.callPqcRekeyEpoch)  // W-KEYSLOTROTATE
+            controller.pqcSessionKey = key
+        }
         webRtcController = controller
         // W-CTRLBUILDDIAG — remote-visible confirmation the responder
         // controller exists and was seeded (key=1 when the PQC key was
