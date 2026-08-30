@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1063",
+              date: "2026-08-30",
+              title: "v1.0.1063",
+              bullets: [
+                "fix(call): epoch counter charged every sasReady re-firing — slot climbed mid-call to 13 (W-KEYSLOTROTATE v4)",
+              ]),
         .init(id: "v1.0.1062",
               date: "2026-08-30",
               title: "v1.0.1062",
               bullets: [
+                "chore: regenerate changelog for v1.0.1062",
                 "fix(call): rekey-epoch counter read a stale .mlKem flag — second call of a session tagged epoch 0 as slot 1 again (W-KEYSLOTROTATE v3)",
               ]),
         .init(id: "v1.0.1061",
@@ -148,13 +155,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1044",
                 "fix(logs): iOS remote-log pipeline died on the first expired token and never recovered (W-TUSAUTHREFRESH)",
                 "fix(call): iOS voice curve and liveness analysis saw zero audio for the whole call (W-AUDIORXTAPCARRYOVER)",
-              ]),
-        .init(id: "v1.0.1043",
-              date: "2026-08-29",
-              title: "v1.0.1043",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1043",
-                "fix(call): PQC session key could never reach the WebRTC controller on an iOS<->iOS call (W-SRTPKEYFWDRACE)",
               ]),
     ]
 }
