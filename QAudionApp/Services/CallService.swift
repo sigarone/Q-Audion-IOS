@@ -3058,11 +3058,20 @@ final class CallService: @unchecked Sendable {
     /// `CallKitProvider.onAudioSessionActivated`. Runs on the main thread.
     public func handleAudioSessionActivated() {
         audioSessionActive = true
-        // W-ADMACTIVATE — relay CallKit's activation into RTCAudioSession's
-        // manual-mode bookkeeping BEFORE the gate=4 chokepoint can enable
-        // the unit; without this the unit never starts (1053/1054
-        // regression, see NativeAudioSessionGate.handleCallKitActivation).
-        NativeAudioSessionGate.handleCallKitActivation(true)
+        // W-ADMACTIVATE REMOVED (2026-08-30) — relaying CallKit's activation
+        // into RTCAudioSession is what KILLED microphone capture. Proof, from
+        // two live calls whose only difference was whether the relay was
+        // delivered at all:
+        //   1.0.1061  gate=3 (session already active when the PC was built,
+        //             so the relay hit `guard useManualAudio` and was
+        //             DROPPED)  ->  hb tx=540 ptx=2, capture alive
+        //   1.0.1063  gate=2 (PC built first, manual mode armed first, relay
+        //             DELIVERED)                ->  hb tx=0 ptx=0, capture dead
+        // and the build-by-build census agrees: `audioIO capfail=1` first
+        // appears in 1.0.1056, the build that introduced this relay, and in
+        // every build after it. Manual audio mode plus `isAudioEnabled` is
+        // sufficient on its own; the relay hands the session to the SDK's own
+        // configuration and the input leaves the route (`in=` empty).
         startAudioIOIfReady()
         // EARPIECE is the default route for an encrypted phone call (user
         // requirement: "gestire il volume della capsula telefonica; lo speaker
@@ -3078,10 +3087,6 @@ final class CallService: @unchecked Sendable {
     /// `didActivate`. Wired from `CallKitProvider.onAudioSessionDeactivated`.
     public func handleAudioSessionDeactivated() {
         audioSessionActive = false
-        // W-ADMACTIVATE — canonical de-activation order (mirrors the
-        // documented activate order relay-then-enable): relay
-        // didDeactivate FIRST, then drop isAudioEnabled.
-        NativeAudioSessionGate.handleCallKitActivation(false)
         // W-ADMMANUAL — CallKit released the session; the WebRTC audio unit
         // must not outlive it (its next start waits for the next didActivate
         // → startAudioIOIfReady → gate=4).

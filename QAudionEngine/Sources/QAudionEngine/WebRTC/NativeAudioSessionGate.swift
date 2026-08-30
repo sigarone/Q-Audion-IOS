@@ -21,10 +21,11 @@ import WebRTC
 ///
 /// The documented contract for CallKit apps is manual mode:
 /// `RTCAudioSession.useManualAudio = true` makes the SDK keep its audio unit
-/// OFF until the app flips `isAudioEnabled = true`, and with manual mode on
-/// the SDK also stops configuring/activating the AVAudioSession itself — the
-/// app's existing `.voiceChat` configuration and earpiece-route policy stay
-/// the sole owner of the session, exactly as they are today.
+/// OFF until the app flips `isAudioEnabled = true`. Note (corrected
+/// 2026-08-30): manual mode gates only whether the audio UNIT may start — the
+/// SDK still configures the AVAudioSession once the unit comes up, so the app
+/// is NOT the sole owner of the session while a native call runs. An earlier
+/// version of this comment claimed otherwise and that claim was wrong.
 ///
 /// Scoping: everything here is gated on the audio-srtp kill switch, and
 /// `setNativeAudioActive(true)` is only ever called from the one CallService
@@ -66,85 +67,11 @@ public enum NativeAudioSessionGate {
         }
     }
 
-    /// W-ADMACTIVATE (2026-08-30) — the HALF of the manual-audio contract
-    /// the first W-ADMMANUAL cut missed, and the cause of the 1.0.1053/4
-    /// regression where `isAudioEnabled = true` alone left the unit dead
-    /// (`hb tx=0` with ICE connected, inbound counted but silent — calls
-    /// bae3d5b4/f999b973). Verbatim from this build's own
-    /// RTCAudioSession.h: `RTCAudioSessionActivationDelegate` exists "to
-    /// inform RTCAudioSession when the audio session activation state has
-    /// changed OUTSIDE of RTCAudioSession. The current known use case of
-    /// this is when CallKit activates the audio session for the
-    /// application" — and `isAudioEnabled` only starts the unit "when it
-    /// is needed", a decision keyed on the session-active bookkeeping that
-    /// ONLY these delegate calls update once manual mode is armed. Wired
-    /// from CallService's `handleAudioSessionActivated` /
-    /// `handleAudioSessionDeactivated` (the CallKit didActivate /
-    /// didDeactivate funnels, self-activation fallback included).
-    public static func handleCallKitActivation(_ active: Bool) {
-        guard CallCapabilities.audioSrtpSendEnabled else { return }
-        gateQueue.async {
-            let session = RTCAudioSession.sharedInstance()
-            guard session.useManualAudio else { return }
-            if active {
-                session.audioSessionDidActivate(AVAudioSession.sharedInstance())
-                applyVoipSessionConfigurationLocked()  // W-SESSIONLOCK
-            } else {
-                session.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
-            }
-            print("[WebRTC] W-ADMACTIVATE: session activation relayed active=\(active)")
-        }
-    }
-
-    /// W-SESSIONLOCK (2026-08-30) — apply the VoIP session configuration
-    /// THROUGH `RTCAudioSession`, under its own lock, instead of poking
-    /// `AVAudioSession.sharedInstance()` directly.
-    ///
-    /// This is the contract this build's own RTCAudioSession.h states in
-    /// one line: it is a "Proxy class for AVAudioSession that adds a
-    /// locking mechanism ... so that interleaving configurations between
-    /// WebRTC and the application layer are avoided", and "Callers should
-    /// not call setters on AVAudioSession directly". The app has always
-    /// violated it (AudioProcessingPipeline.configureForVoIP), which was
-    /// harmless while WebRTC owned no audio here — until manual-audio mode
-    /// made the two layers configure the same session in earnest.
-    ///
-    /// Measured consequence (live call, 1.0.1063, 22:57): the app asked for
-    /// `.playAndRecord` + `.voiceChat` + 5 ms buffers, and the session that
-    /// actually ran had `in=` EMPTY (no input in the route at all),
-    /// `out=Speaker` instead of the earpiece and `buf=0.02` — the app's
-    /// configuration was simply not the one in force. With no input in the
-    /// route BOTH capture engines are silent by construction: WebRTC's VPIO
-    /// unit produced `tx=0 ptx=0` all call, and the AVAudioEngine fallback
-    /// threw on `start()` (`audioIO capfail=1`). One cause, both symptoms.
-    ///
-    /// Applied right before the audio unit is enabled (and re-applied on
-    /// every CallKit activation, since the route can change with it), on
-    /// the same serial queue as every other gate operation.
-    private static func applyVoipSessionConfigurationLocked() {
-        let session = RTCAudioSession.sharedInstance()
-        session.lockForConfiguration()
-        defer { session.unlockForConfiguration() }
-        #if os(iOS) && !targetEnvironment(simulator)
-        let opts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
-        #else
-        let opts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
-        #endif
-        do {
-            // Same category/mode/options AudioProcessingPipeline asks for —
-            // deliberately duplicated rather than shared, because this must
-            // run inside the lock and that type has no WebRTC dependency.
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
-            try session.setPreferredSampleRate(48_000)
-            try session.setPreferredIOBufferDuration(0.005)
-            // Do NOT setActive here: under CallKit the system activates the
-            // session and `handleCallKitActivation` relays that fact. An app
-            // -side activation would fight it.
-            print("[WebRTC] W-SESSIONLOCK: VoIP session configuration applied under lock")
-        } catch {
-            print("[WebRTC] W-SESSIONLOCK: configuration failed — \(error.localizedDescription)")
-        }
-    }
+    // W-ADMACTIVATE was here and is deliberately GONE (2026-08-30). See
+    // CallService.handleAudioSessionActivated for the two-call proof that
+    // relaying CallKit's activation into RTCAudioSession is what stopped the
+    // microphone. Do not reintroduce it without live evidence that capture
+    // survives it: `audiosrtp hb=1` must show ptx climbing, not tx=0.
 
     /// Start (`true`) or stop (`false`) WebRTC's audio unit. Safe to call
     /// redundantly. The `true` edge must only ever fire while CallKit's
@@ -155,7 +82,6 @@ public enum NativeAudioSessionGate {
             let session = RTCAudioSession.sharedInstance()
             guard session.useManualAudio else { return }
             guard session.isAudioEnabled != active else { return }
-            if active { applyVoipSessionConfigurationLocked() }  // W-SESSIONLOCK
             session.isAudioEnabled = active
             print("[WebRTC] W-ADMMANUAL: native audio unit \(active ? "enabled" : "disabled")")
         }
