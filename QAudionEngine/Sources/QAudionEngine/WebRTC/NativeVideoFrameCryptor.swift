@@ -120,9 +120,33 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
             return
         }
         lock.lock(); defer { lock.unlock() }
-        keyProvider.setSharedKey(kVideo, with: 0)   // ObjC -setSharedKey:withIndex:
+        if let prev = lastKeyValue, prev != kVideo {
+            currentKeyIndex = (currentKeyIndex + 1) % 16
+        }
+        lastKeyValue = kVideo
+        keyProvider.setSharedKey(kVideo, with: Int32(currentKeyIndex))
+        senderCryptor?.keyIndex = Int32(currentKeyIndex)
         hasKey = true
+        print("[NativeVideoFrameCryptor] key installed at slot \(currentKeyIndex)")
     }
+
+    // W-KEYSLOTROTATE (2026-08-30) — Android rotates the FrameCryptor key
+    // RING with each rekey: the new key lands at slot = epoch % 16, outbound
+    // frames are TAGGED with that slot, and the previous slots stay in the
+    // ring as the decrypt grace window ("prev slot kept for grace"). iOS
+    // pinned everything to slot 0: setKey overwrote index 0 and the sender
+    // kept keyIndex 0, so from the FIRST mid-call rekey both directions
+    // died at once — the peer's slot-N-tagged frames found an empty slot N
+    // here, and our slot-0-tagged frames hit the peer's RETIRED epoch-0 key
+    // (live: call c8416eab, 2026-08-30 — flawless RTP flow at 16.6 pkt/s
+    // for 20 minutes, audio silent from rekey epoch 1 at 20:22 on).
+    // The epoch is not on the iOS wire, and does not need to be: a rekey is
+    // a full PQC re-handshake that either completes on both legs or on
+    // neither, so counting DISTINCT keys locally reproduces Android's epoch
+    // exactly (repeat setKey calls with the SAME key — the activation path
+    // runs several per epoch — must not bump the slot).
+    private var currentKeyIndex: Int = 0
+    private var lastKeyValue: Data?
 
     /// Create + enable the sender cryptor. Idempotent. Does NOT require the key
     /// to be set yet (the shared KeyProvider holds it; frames are discarded
@@ -140,7 +164,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
             print("[NativeVideoFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
             return false
         }
-        c.keyIndex = 0
+        c.keyIndex = Int32(currentKeyIndex)  // W-KEYSLOTROTATE
         c.enabled = true
         senderCryptor = c
         print("[NativeVideoFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
