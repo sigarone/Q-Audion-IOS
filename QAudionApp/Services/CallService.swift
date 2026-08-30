@@ -2911,7 +2911,21 @@ final class CallService: @unchecked Sendable {
             // the call is silent both ways: measured as `tx=0 ptx=0` with
             // `rx` growing at stats level on TestFlight 1.0.1052.
             NativeAudioSessionGate.setNativeAudioActive(true)
-            RTLog.info("call", "audioIO skip=1 gate=4 adm=1")
+            // W-SESSIONLOCK — the route the session actually ended up with,
+            // numerically, at the exact moment the native path takes over.
+            // `in=` empty here is the whole story of the 1.0.1063 silent
+            // call, and it was only visible because W556's line happened to
+            // fire from the fallback 15 s later; the native path had no such
+            // probe of its own.
+            let sess = AVAudioSession.sharedInstance()
+            RTLog.info(
+                "call",
+                "audioIO skip=1 gate=4 adm=1"
+                    + " inp=\(sess.currentRoute.inputs.count)"
+                    + " outp=\(sess.currentRoute.outputs.count)"
+                    + " rec=\(sess.isInputAvailable ? 1 : 0)"
+                    + " buf=\(Int(sess.ioBufferDuration * 1000))"
+            )
             return
         }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
