@@ -4078,10 +4078,14 @@ final class AppState: ObservableObject {
         //   0…3         raw RTCDataChannelState of a channel that is not open
         //               (2/3 = a channel that WAS alive and died — the case the
         //               Android WS-receive-fallback companion change exists for)
+        //   -5 icegate  controller and channel fine, but W-DCTXICEGATE is
+        //               diverting: ICE is not carrying, so frames go to the
+        //               WS relay even though the DC still reads `.open`
         callService.audioDataChannelDiag = { [weak self] in
             guard let self = self else { return -2 }
             if self.audioPinnedToWsRelay { return -3 }
             guard let controller = self.webRtcController as? QAudionWebRtcCallController else { return -2 }
+            if controller.audioTxIceGateClosed { return -5 }
             return controller.audioDataChannelStateRaw
         }
         #endif
@@ -13876,12 +13880,20 @@ final class AppState: ObservableObject {
     /// summary reports duration_ms=85098. Same wire event, opposite
     /// behavior — a pure platform-parity gap, live since 2026-05-18.
     ///
-    /// The WS-relay fallback this grace buys time for ALREADY exists on iOS
+    /// The WS-relay fallback this grace buys time for exists on iOS
     /// per-frame: `sendAudioOverDataChannel` (wired to
     /// `QAudionWebRtcCallController.sendAudioFrameData`) returns `false`
-    /// whenever the sealed DataChannel isn't open and `CallService` then
-    /// routes that frame over the WS relay. So the ONLY thing that was
-    /// missing is not killing the call while that fallback does its job.
+    /// when the sealed DataChannel cannot deliver, and `CallService` then
+    /// routes that frame over the WS relay.
+    ///
+    /// CORRECTION (2026-08-30, W-DCTXICEGATE): the paragraph above used to
+    /// say "whenever the sealed DataChannel isn't open" and claim nothing
+    /// else was missing. That was false in exactly the case this grace
+    /// exists for — during a mid-call ICE outage the channel STAYS `.open`
+    /// (the PC is repaired with `restartIce`, never rebuilt), so the
+    /// per-frame fallback never fired and every frame died in the dead
+    /// channel (`maxRetransmits = 0`) for the whole outage. The gate that
+    /// makes this comment true again lives in `sendAudioFrameData`.
     @MainActor
     private func handleIceTermination(iceIsTerminal: Bool) {
         // F-1 (2nd-pass regression): C-3 made `isInCall` stay false until

@@ -60,6 +60,23 @@ public enum RestartIceDecisions {
     /// `ICE_FAILED_RECOVERY_MAX_SETTLE_MS`.
     public static let recoverySettleMaxMs: Int64 = 20_000
 
+    /// W-WATCHDOGDEBOUNCE (2026-08-30) — the actual sleep between two
+    /// consecutive watchdog `restartIce` attempts: the proposed settle
+    /// window, floored at `iceRestartDebounceMs` plus a margin so the next
+    /// attempt can never land inside the debounce and be dropped unmade.
+    /// With the raw `recoverySettleInitialMs` (1.5 s) the second attempt
+    /// fell at T+1.5 s against a 3 s debounce and was ALWAYS discarded —
+    /// the effective ladder was one attempt at T+0 and the next real one
+    /// at T+4.5 s, with a logged-but-inert attempt in between. The margin
+    /// absorbs timer jitter; the backoff sequence itself is untouched, only
+    /// its floor.
+    public static func recoveryRetrySettleMs(
+        proposedMs: Int64,
+        debounceMs: Int64 = iceRestartDebounceMs
+    ) -> Int64 {
+        max(proposedMs, debounceMs + 500)
+    }
+
     /// Number of inline send attempts for a fresh restart offer before
     /// falling back to the park (250ms/500ms/1s/2s/4s backoff, ≈7.75s
     /// total — comfortably under the old fixed budget, matches Android's

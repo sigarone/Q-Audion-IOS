@@ -76,6 +76,22 @@ public enum SrtpFallbackDecisions {
     /// carrying audio again and the second capture path must stop promptly
     /// to bound the double-audio window, mirroring Android's stop-edge
     /// reasoning verbatim.
+    /// W-SRTPFALLBACKRETRY (2026-08-30) — whether the engage-evaluation
+    /// loop should run another round after a round that did not engage.
+    /// True while the bad-ICE streak is officially alive (the controller's
+    /// `iceBadSinceMs` is set; only genuine recovery clears it) and the
+    /// fallback has not engaged yet. The one-shot this replaces evaluated
+    /// once per outage: a `.checking` reading at the 1 s mark — common,
+    /// because the recovery watchdog fires `restartIce` on the same edge —
+    /// consumed the only attempt and left the entire outage without the
+    /// fallback TX.
+    public static func shouldKeepWaitingToEngage(
+        streakAlive: Bool,
+        fallbackAlreadyEngaged: Bool
+    ) -> Bool {
+        streakAlive && !fallbackAlreadyEngaged
+    }
+
     public static func shouldRecoverFromFallback(
         fallbackEngaged: Bool,
         iceBad: Bool

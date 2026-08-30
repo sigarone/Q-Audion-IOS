@@ -94,4 +94,27 @@ final class SrtpFallbackDecisionsTests: XCTestCase {
             "fallbackEngageDebounceMs must stay >= 1000 ms or a sub-second ICE blip can spin up a second capture path"
         )
     }
+
+    // MARK: - W-SRTPFALLBACKRETRY (2026-08-30)
+
+    /// The live gap: a `.checking` reading at the 1 s mark consumed the
+    /// one-shot's only evaluation and the whole outage passed with no
+    /// fallback TX. While the streak is alive and nothing has engaged, the
+    /// loop must keep evaluating.
+    func test_keepsWaitingWhileTheStreakIsAliveAndNothingEngaged() {
+        XCTAssertTrue(SrtpFallbackDecisions.shouldKeepWaitingToEngage(streakAlive: true, fallbackAlreadyEngaged: false))
+    }
+
+    /// Genuine recovery clears the streak (disarm nils `iceBadSinceMs`) —
+    /// the loop must exit rather than idle for the rest of the call.
+    func test_stopsWaitingOnceTheStreakIsCleared() {
+        XCTAssertFalse(SrtpFallbackDecisions.shouldKeepWaitingToEngage(streakAlive: false, fallbackAlreadyEngaged: false))
+    }
+
+    /// After an engage the loop has done its job; a second engage for the
+    /// same outage must be impossible from this path.
+    func test_stopsWaitingOnceEngaged() {
+        XCTAssertFalse(SrtpFallbackDecisions.shouldKeepWaitingToEngage(streakAlive: true, fallbackAlreadyEngaged: true))
+        XCTAssertFalse(SrtpFallbackDecisions.shouldKeepWaitingToEngage(streakAlive: false, fallbackAlreadyEngaged: true))
+    }
 }

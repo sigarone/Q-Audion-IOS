@@ -136,4 +136,32 @@ final class RestartIceDecisionsTests: XCTestCase {
         XCTAssertEqual(responderSide, .responderRollbackThenApply)
         XCTAssertNotEqual(initiatorSide, responderSide)
     }
+
+    // MARK: - W-WATCHDOGDEBOUNCE (2026-08-30)
+
+    /// The live incident: the watchdog's second `restartIce` fell at
+    /// T+1.5 s against the 3 s debounce and was ALWAYS discarded — a
+    /// logged-but-inert attempt. The retry sleep must clear the debounce.
+    func test_recoveryRetrySettle_floorsTheInitialSettlePastTheDebounce() {
+        XCTAssertEqual(
+            RestartIceDecisions.recoveryRetrySettleMs(proposedMs: RestartIceDecisions.recoverySettleInitialMs),
+            RestartIceDecisions.iceRestartDebounceMs + 500
+        )
+    }
+
+    /// Once the backoff has grown past the floor, the sleep is the backoff —
+    /// the floor must never slow the ladder down.
+    func test_recoveryRetrySettle_leavesLongerSettlesUntouched() {
+        XCTAssertEqual(RestartIceDecisions.recoveryRetrySettleMs(proposedMs: 4_000), 4_000)
+        XCTAssertEqual(
+            RestartIceDecisions.recoveryRetrySettleMs(proposedMs: RestartIceDecisions.recoverySettleMaxMs),
+            RestartIceDecisions.recoverySettleMaxMs
+        )
+    }
+
+    /// The floor tracks the debounce, not a copied constant: if the
+    /// debounce is ever retuned, retries keep clearing it by construction.
+    func test_recoveryRetrySettle_floorTracksTheDebounceParameter() {
+        XCTAssertEqual(RestartIceDecisions.recoveryRetrySettleMs(proposedMs: 100, debounceMs: 7_000), 7_500)
+    }
 }

@@ -201,9 +201,44 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// W-DCAUDIO — send a sealed audio frame over the DataChannel if it is open.
     /// Returns `true` if queued on the DC; `false` if the DC is not open, in which
     /// case the caller (CallService) falls back to the WS relay.
+    ///
+    /// W-DCTXICEGATE (2026-08-30) — ALSO returns `false` while ICE is not
+    /// actually carrying, because "the DataChannel is open" stops meaning
+    /// "the DataChannel can deliver" the moment ICE goes down mid-call.
+    /// This controller repairs a handoff with `restartIce` on the SAME
+    /// PeerConnection, so the SCTP association and the `qaudion-audio`
+    /// channel sit out an ICE `.disconnected`/`.failed`/`.checking`
+    /// episode in `.open` — and with `maxRetransmits = 0` every frame
+    /// written into it during the outage is simply gone. Before this gate,
+    /// that was the WHOLE outage: the W-DCAUDIO relay escape below never
+    /// fired, and the iOS leg was one-way silent for up to the full
+    /// restart budget. Android hit the same two-timers gap and fixed it
+    /// the same way (W-RELAYSENDWHILEGRACE,
+    /// CallTransportFactory.shouldDivertToRelayLeg): route THIS frame to
+    /// the leg that can deliver it, without touching the recovery machine.
+    /// The instant ICE reports `.connected`/`.completed` again, the very
+    /// next frame goes back to the DataChannel — no mode, no debounce.
     @discardableResult
     public func sendAudioFrameData(_ data: Data) -> Bool {
+        guard Self.iceIsCarrying(lastIceConnectionState) else { return false }
         return peerConnection?.sendAudioFrameData(data) ?? false
+    }
+
+    /// W-DCTXICEGATE — the single definition of "ICE is actually carrying
+    /// media". `.checking` is deliberately NOT carrying: during a mid-call
+    /// restart the pair is being rebuilt and frames sent there are lost.
+    /// On a fresh call this gate changes nothing — the DataChannel is not
+    /// `.open` before ICE first connects, so both predicates were already
+    /// `false` together.
+    static func iceIsCarrying(_ s: RTCIceConnectionState) -> Bool {
+        s == .connected || s == .completed
+    }
+
+    /// W-DCTXICEGATE — diagnostic twin for the W-DCMUX fallback-reason
+    /// closure in AppState: `true` when the gate above (and nothing else)
+    /// is what is diverting audio to the WS relay right now.
+    public var audioTxIceGateClosed: Bool {
+        !Self.iceIsCarrying(lastIceConnectionState)
     }
 
     /// W-DCMUX (2026-08-11) — the DataChannel's raw `RTCDataChannelState`, or
@@ -318,14 +353,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         return _mediaJitterBufferEmittedCount
     }
 
-    /// True while the sealed-audio DataChannel ("qaudion-audio") is open, i.e.
-    /// while voice is riding the P2P WebRTC leg rather than the WS relay. Same
-    /// predicate `sendAudioFrameData` itself tests (`QAudionPeerConnection
-    /// .isAudioDataChannelOpen`, QAudionPeerConnection.swift:274-277), so
+    /// True while the sealed-audio DataChannel ("qaudion-audio") is open AND
+    /// ICE is actually carrying, i.e. while voice is riding the P2P WebRTC
+    /// leg rather than the WS relay. Same predicate `sendAudioFrameData`
+    /// itself tests — the DC-open half via `QAudionPeerConnection
+    /// .isAudioDataChannelOpen` and the ICE half via W-DCTXICEGATE — so
     /// "is RTT meaningful" and "where does audio actually go" can never
-    /// disagree.
+    /// disagree. (Before W-DCTXICEGATE this was DC-open only, which during
+    /// an ICE outage reported a meaningful RTT for a leg delivering
+    /// nothing.)
     public var isAudioDataChannelOpen: Bool {
-        peerConnection?.isAudioDataChannelOpen() ?? false
+        Self.iceIsCarrying(lastIceConnectionState) &&
+            (peerConnection?.isAudioDataChannelOpen() ?? false)
     }
 
     private func setMediaRttMs(_ value: Double?) {
@@ -2063,7 +2102,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // race safely either way.
             let interfaceType = Self.dominantInterfaceType(of: path)
             let previous = self.lastActiveInterfaceType
-            self.lastActiveInterfaceType = interfaceType
+            // W-PATHMEMLOSS (2026-08-30) — remember only a REAL, satisfied
+            // interface. This used to assign unconditionally, so the
+            // transportless callback a handoff emits first (old interface
+            // gone, new one not up yet -> `nil`) erased the memory of WiFi,
+            // and the "cellular is up" callback ~2 s later found
+            // `previous == nil`, failed the `let previous` bind below, and
+            // the proactive restart was silently dropped — recovery then
+            // waited on the reactive watchdog instead (~5-10 s of dead P2P
+            // where this trigger fires in ~2 s). Same defect class Android
+            // fixed as W-RESTARTDEBOUNCEBURN (the useless network-loss
+            // event spending state the useful arrival event needs), and the
+            // same fix this repo already applied to three other
+            // NWPathMonitor consumers (see BCryptoRestClient's
+            // satisfied-sentinel). An unsatisfied callback now changes
+            // nothing at all.
+            if path.status == .satisfied, let realInterface = interfaceType {
+                self.lastActiveInterfaceType = realInterface
+            }
             if path.status == .satisfied,
                let interfaceType, let previous, interfaceType != previous,
                self.hasEverConnectedIce,
@@ -2130,7 +2186,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             while !Task.isCancelled && self.isIceStateBad(self.lastIceConnectionState) {
                 await self.restartIce(reason: "ice-failed-recovery-watchdog")
                 guard !Task.isCancelled else { return }
-                try? await Task.sleep(nanoseconds: UInt64(settleMs) * 1_000_000)
+                // W-WATCHDOGDEBOUNCE (2026-08-30) — sleep at least past
+                // `iceRestartDebounceMs` before the next attempt. The raw
+                // 1.5 s initial settle put the second `restartIce` inside
+                // the 3 s debounce, where it was ALWAYS dropped — so the
+                // real ladder was 0 s, then nothing until 4.5 s, with a
+                // wasted wakeup in between that logged an attempt it never
+                // made. The settle backoff itself is unchanged; only the
+                // floor is new. See RestartIceDecisions
+                // .recoveryRetrySettleMs for the pinned rule.
+                let sleepMs = RestartIceDecisions.recoveryRetrySettleMs(proposedMs: settleMs)
+                try? await Task.sleep(nanoseconds: UInt64(sleepMs) * 1_000_000)
                 guard !Task.isCancelled else { return }
                 if !self.isIceStateBad(self.lastIceConnectionState) { break }
                 settleMs = min(settleMs * 2, RestartIceDecisions.recoverySettleMaxMs)
@@ -2154,22 +2220,45 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let since = Self.nowMs()
         iceBadSinceMs = since
         guard srtpFallbackTask == nil else { return }
+        // W-SRTPFALLBACKRETRY (2026-08-30) — a LOOP, not a one-shot. The
+        // one-shot evaluated exactly once per outage: if ICE happened to sit
+        // in `.checking` at the 1 s mark (the recovery watchdog fires
+        // `restartIce` on the same edge, so it often does), `engage` came
+        // back false, the task nilled itself WITHOUT clearing
+        // `iceBadSinceMs`, and every later bad-ICE edge of the same outage
+        // bounced off the `guard iceBadSinceMs == nil` above — the whole
+        // outage passed with the fallback never engaging. Re-evaluate every
+        // debounce period for as long as the streak is officially alive
+        // (`iceBadSinceMs` set; only genuine recovery clears it via
+        // `disarmSrtpFallbackIfRecovered`, which also cancels this task).
+        // A `.checking` round simply keeps waiting; the next `.disconnected`
+        // round engages. `shouldEngageFallback` itself is unchanged.
         srtpFallbackTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: UInt64(SrtpFallbackDecisions.fallbackEngageDebounceMs) * 1_000_000)
-            guard !Task.isCancelled else { return }
-            let engage = SrtpFallbackDecisions.shouldEngageFallback(
-                usingNativeAudioSrtp: self.peerConnection?.usingNativeAudioSrtp == true,
-                iceBad: self.isIceStateBad(self.lastIceConnectionState),
-                iceBadSinceMs: self.iceBadSinceMs,
-                nowMs: Self.nowMs(),
-                fallbackAlreadyEngaged: self.srtpFallbackEngaged
-            )
-            self.srtpFallbackTask = nil
-            guard engage else { return }
-            self.srtpFallbackEngaged = true
-            self.log?("audiosrtp_fallback engage=1")
-            self.onAudioSrtpFallbackEngage?()
+            while true {
+                try? await Task.sleep(nanoseconds: UInt64(SrtpFallbackDecisions.fallbackEngageDebounceMs) * 1_000_000)
+                guard !Task.isCancelled, let self else { return }
+                let engage = SrtpFallbackDecisions.shouldEngageFallback(
+                    usingNativeAudioSrtp: self.peerConnection?.usingNativeAudioSrtp == true,
+                    iceBad: self.isIceStateBad(self.lastIceConnectionState),
+                    iceBadSinceMs: self.iceBadSinceMs,
+                    nowMs: Self.nowMs(),
+                    fallbackAlreadyEngaged: self.srtpFallbackEngaged
+                )
+                if engage {
+                    self.srtpFallbackTask = nil
+                    self.srtpFallbackEngaged = true
+                    self.log?("audiosrtp_fallback engage=1")
+                    self.onAudioSrtpFallbackEngage?()
+                    return
+                }
+                if !SrtpFallbackDecisions.shouldKeepWaitingToEngage(
+                    streakAlive: self.iceBadSinceMs != nil,
+                    fallbackAlreadyEngaged: self.srtpFallbackEngaged
+                ) {
+                    self.srtpFallbackTask = nil
+                    return
+                }
+            }
         }
     }
 
