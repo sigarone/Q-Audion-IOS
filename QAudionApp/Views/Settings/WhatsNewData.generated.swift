@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1051",
+              date: "2026-08-30",
+              title: "v1.0.1051",
+              bullets: [
+                "fix(call): callee mic track landed on a transceiver libwebrtc never sends for (W-AUDIOSENDPICK)",
+                "fix(net): dual-family STUN probe and an IPv6 call-media punch-hole (W-STUNDUALSTACK, W-VPNV6PUNCH)",
+              ]),
         .init(id: "v1.0.1050",
               date: "2026-08-30",
               title: "v1.0.1050",
               bullets: [
+                "chore: regenerate changelog for v1.0.1050",
                 "diag(call): remote heartbeat for native audio RTP — the silent-call blind spot (W-SRTPRXDIAG)",
               ]),
         .init(id: "v1.0.1049",
@@ -181,13 +189,6 @@ extension ReleaseNote {
                 "fix(call): iOS callee heard nothing — peer capabilities applied after setRemoteOffer",
                 "fix(ci): root-cause + fix ios-simulator-tests OOM kill (macos-latest, 7GB RAM)",
                 "fix(security): cherry-pick + fix verified hunk from Jules PR #90",
-              ]),
-        .init(id: "v1.0.1031",
-              date: "2026-08-26",
-              title: "v1.0.1031",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1031",
-                "fix(call): first real CI compile surfaces 2 real errors — RTCFrameCryptorState typo, addRenderer Swift rename",
               ]),
     ]
 }
