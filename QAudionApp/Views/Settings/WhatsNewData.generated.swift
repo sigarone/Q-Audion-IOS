@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1067",
+              date: "2026-08-31",
+              title: "v1.0.1067",
+              bullets: [
+                "fix(call): drop manual audio mode entirely — back to the session arrangement that shipped healthy (W-ADMNOMANUAL)",
+              ]),
         .init(id: "v1.0.1066",
               date: "2026-08-30",
               title: "v1.0.1066",
               bullets: [
+                "chore: regenerate changelog for v1.0.1066",
                 "fix(call): remove the CallKit activation relay — it was what killed microphone capture (revert W-ADMACTIVATE)",
                 "docs: mandatory gate before any audio/session/crypto build",
               ]),
@@ -143,15 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1048",
                 "fix(logs): turning the diagnostics toggle ON never started the log pump (W-CONSENTLATESTART)",
-              ]),
-        .init(id: "v1.0.1047",
-              date: "2026-08-29",
-              title: "v1.0.1047",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1047",
-                "fix(call): align the last legacy-path readouts to the native SRTP counters (W-SRTPCOUNTERS)",
-                "fix(call): codec and throughput read dead counters on an SRTP call, and confidence was averaging silence (W-SRTPWIREMETRICS, W-VOICEMEANVOICED)",
-                "refactor(engine): scoped locking in async contexts, clearing the Swift 6 hard errors (W-ASYNCLOCK)",
               ]),
     ]
 }
