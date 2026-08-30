@@ -14837,7 +14837,7 @@ extension AppState {
                 // `outstandingUUIDs` and is NOT stale — reaping it kills the
                 // incoming call the user is being shown. Re-read the app's own
                 // call state on the way out and stand down if a call appeared.
-                let stillIdle: Bool = await self?.noCallInFlight() ?? false
+                let stillIdle: Bool = self?.noCallInFlight() ?? false
                 if stillIdle, let provider = self?.callKit as? CallKitProvider {
                     _ = provider.endAllOutstanding()
                 }

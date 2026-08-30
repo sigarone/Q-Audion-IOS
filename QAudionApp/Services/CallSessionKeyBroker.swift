@@ -137,7 +137,10 @@ public final class CallSessionKeyBroker {
     // from outside this file's/module's visibility — public is what
     // actually satisfies the compiler, confirmed by the second real CI
     // failure this fixes.
-    public static let sessionKeyRetryMaxAttempts = 10
+    // Swift-6 readiness: referenced from nonisolated default-argument
+    // position at two call sites — an immutable Int is Sendable, so
+    // nonisolated is the correct isolation, not a workaround.
+    nonisolated public static let sessionKeyRetryMaxAttempts = 10
     private static let sessionKeyRetryIntervalNs: UInt64 = 200_000_000
 
     /// Call this from the PQC handshake completion path with the

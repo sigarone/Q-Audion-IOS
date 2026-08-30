@@ -267,7 +267,10 @@ struct ChatListScreen: View {
     /// W57: surface alert dalle ultime 24h come banner. Threat reports
     /// con severity == "alert" o "warning" hanno precedenza su
     /// "info"/"low". Restituisce nil se nessuna alert recente.
-    private func recentSecurityAlertBanner() -> AdminBannerData? {
+    // Swift-6 readiness (and the W57 offload made real): this reads only
+    // ThreatReportLogStore — deliberately not @MainActor, see its kdoc —
+    // and touches no view state, so nonisolated is its true isolation.
+    private nonisolated func recentSecurityAlertBanner() -> AdminBannerData? {
         let store = ThreatReportLogStore()
         let entries = store.load()
         let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
@@ -291,7 +294,7 @@ struct ChatListScreen: View {
 
     /// Compact "X min/h fa" formatter — evita di trascinare in
     /// dependency aggiuntive solo per questa label.
-    private func formatRelative(_ date: Date) -> String {
+    private nonisolated func formatRelative(_ date: Date) -> String {
         let delta = Int(Date().timeIntervalSince(date))
         if delta < 60 { return "ora" }
         if delta < 3600 { return "\(delta / 60) min fa" }

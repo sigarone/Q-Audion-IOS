@@ -115,7 +115,11 @@ public final class VideoCallPipeline: NSObject {
 
     /// Public accessor: SwiftUI bridge views (LocalCameraPreview)
     /// attach this to AVCaptureVideoPreviewLayer.
-    public let captureSession = AVCaptureSession()
+    // nonisolated(unsafe): AVCaptureSession is not Sendable, but every
+    // start/stop in this file already runs on `captureQueue` by the W565
+    // rule (never the main thread) — the manual discipline IS the safety
+    // contract, and this annotation states it instead of tripping Swift 6.
+    nonisolated(unsafe) public let captureSession = AVCaptureSession()
     private let captureQueue = DispatchQueue(label: "qaudion.video.capture")
     private let videoOutput = AVCaptureVideoDataOutput()
     private var captureInput: AVCaptureDeviceInput?
