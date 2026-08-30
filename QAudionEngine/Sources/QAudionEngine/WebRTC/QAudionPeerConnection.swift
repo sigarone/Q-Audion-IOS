@@ -327,10 +327,9 @@ public final class QAudionPeerConnection: NSObject {
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
         if CallCapabilities.audioSrtpSendEnabled {
-            // W-ADMMANUAL — must be armed before the first transport start
-            // ever tries to spin up WebRTC's audio unit; init is the
-            // earliest common point for both call roles.
-            NativeAudioSessionGate.armManualMode()
+            // W-ADMNOMANUAL (2026-08-31) — nothing to arm: WebRTC manages its
+            // own audio unit. See NativeAudioSessionGate for what was tried
+            // and what each attempt measured.
             // W-PREATTACHMIC (2026-08-30) — pre-attach the REAL (muted) mic
             // track here, instead of pre-creating a bare transceiver via
             // `addTransceiver`. Measured failure the bare transceiver caused

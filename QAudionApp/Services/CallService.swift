@@ -2462,11 +2462,6 @@ final class CallService: @unchecked Sendable {
     /// so stale frames arriving after teardown can't be decrypted with
     /// an old session key (they hit the W481 pre-buffer instead).
     private func teardownAudioStack() {
-        // W-ADMMANUAL — stop WebRTC's audio unit with the call, whatever the
-        // per-call flags say by now (unconditional on purpose: teardown must
-        // never leave the unit running into the next call's pre-activate
-        // window). No-op when manual mode was never armed.
-        NativeAudioSessionGate.setNativeAudioActive(false)
         // Diagnostic: emit the REAL audio frame counters BEFORE they reset.
         // call.media.summary's `suspect_silent` is a timer-only heuristic and
         // says nothing about audio — these counters are the ground truth that
@@ -2902,21 +2897,13 @@ final class CallService: @unchecked Sendable {
         // before this feature existed and every call whose kill switch is
         // off, so this guard is inert there — byte-for-byte prior behavior.
         if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
-            // W-ADMMANUAL (2026-08-30) — "native WebRTC owns capture+playout"
-            // is only true if its audio unit actually RUNS. This branch is
-            // the one place that decision is made, and it runs strictly
-            // after CallKit's `didActivate` (gate=2) and the peer's answer
-            // (gate=3) — the safe moment to start the unit. Without this,
-            // manual-audio mode (armed at PC init) keeps the unit off and
-            // the call is silent both ways: measured as `tx=0 ptx=0` with
-            // `rx` growing at stats level on TestFlight 1.0.1052.
-            NativeAudioSessionGate.setNativeAudioActive(true)
-            // W-SESSIONLOCK — the route the session actually ended up with,
-            // numerically, at the exact moment the native path takes over.
-            // `in=` empty here is the whole story of the 1.0.1063 silent
-            // call, and it was only visible because W556's line happened to
-            // fire from the fallback 15 s later; the native path had no such
-            // probe of its own.
+            // W-ADMNOMANUAL (2026-08-31) — in automatic mode WebRTC starts
+            // its own audio unit when the mic track is ready, so this
+            // branch's only job is keeping the legacy AVAudioEngine out of
+            // its way. The route probe stays: two of these lines one second
+            // apart are what caught the session losing its input on 1.0.1066
+            // (inp=1 buf=5, then inp=0 buf=20), and it costs one log line
+            // per call.
             let sess = AVAudioSession.sharedInstance()
             RTLog.info(
                 "call",
@@ -3028,11 +3015,12 @@ final class CallService: @unchecked Sendable {
         guard !audioSrtpFallbackActive else { return }
         audioSrtpFallbackActive = true
         RTLog.warn("call", "audiosrtpfb engage=1")
-        // W-ADMMANUAL — hand the mic/speaker back to the manual AVAudioEngine
-        // path for the outage: two capture stacks on one session is exactly
-        // the contention IOS-C4b exists to avoid, and ICE is down anyway so
-        // the native unit has nothing to carry.
-        NativeAudioSessionGate.setNativeAudioActive(false)
+        // Hand the mic/speaker back to the manual AVAudioEngine path for the
+        // outage: two capture stacks on one session is exactly the contention
+        // IOS-C4b exists to avoid, and ICE is down anyway so the native unit
+        // has nothing to carry. (W-ADMNOMANUAL: the unit is no longer stopped
+        // explicitly here — WebRTC owns its lifecycle — but the srtp track is
+        // dead for the duration of the outage regardless.)
         startAudioIOIfReady()
     }
 
@@ -3045,11 +3033,6 @@ final class CallService: @unchecked Sendable {
         RTLog.warn("call", "audiosrtpfb recover=1")
         audioCapture?.stop()
         audioEnginesStarted = false
-        // W-ADMMANUAL — mirror of the engage branch: native audio resumes as
-        // the sole owner, so its unit must run again.
-        if getUsesNativeAudioSrtp?() == true, audioSessionActive {
-            NativeAudioSessionGate.setNativeAudioActive(true)
-        }
     }
 
     /// W464 — CallKit activated the shared `AVAudioSession`. This is the
@@ -3058,20 +3041,11 @@ final class CallService: @unchecked Sendable {
     /// `CallKitProvider.onAudioSessionActivated`. Runs on the main thread.
     public func handleAudioSessionActivated() {
         audioSessionActive = true
-        // W-ADMACTIVATE REMOVED (2026-08-30) — relaying CallKit's activation
-        // into RTCAudioSession is what KILLED microphone capture. Proof, from
-        // two live calls whose only difference was whether the relay was
-        // delivered at all:
-        //   1.0.1061  gate=3 (session already active when the PC was built,
-        //             so the relay hit `guard useManualAudio` and was
-        //             DROPPED)  ->  hb tx=540 ptx=2, capture alive
-        //   1.0.1063  gate=2 (PC built first, manual mode armed first, relay
-        //             DELIVERED)                ->  hb tx=0 ptx=0, capture dead
-        // and the build-by-build census agrees: `audioIO capfail=1` first
-        // appears in 1.0.1056, the build that introduced this relay, and in
-        // every build after it. Manual audio mode plus `isAudioEnabled` is
-        // sufficient on its own; the relay hands the session to the SDK's own
-        // configuration and the input leaves the route (`in=` empty).
+        // W-ADMNOMANUAL (2026-08-31) — nothing is relayed to RTCAudioSession
+        // here any more; the app's own session config plus WebRTC's automatic
+        // audio-unit management is the arrangement that shipped with a healthy
+        // session. NativeAudioSessionGate documents every variant that was
+        // tried in between and what each one measured.
         startAudioIOIfReady()
         // EARPIECE is the default route for an encrypted phone call (user
         // requirement: "gestire il volume della capsula telefonica; lo speaker
@@ -3087,10 +3061,6 @@ final class CallService: @unchecked Sendable {
     /// `didActivate`. Wired from `CallKitProvider.onAudioSessionDeactivated`.
     public func handleAudioSessionDeactivated() {
         audioSessionActive = false
-        // W-ADMMANUAL — CallKit released the session; the WebRTC audio unit
-        // must not outlive it (its next start waits for the next didActivate
-        // → startAudioIOIfReady → gate=4).
-        NativeAudioSessionGate.setNativeAudioActive(false)
     }
 
     /// W574 — called by AppState when `call_answer` is received (callee has
