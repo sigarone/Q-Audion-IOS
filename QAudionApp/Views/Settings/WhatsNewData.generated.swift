@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1055",
+              date: "2026-08-30",
+              title: "v1.0.1055",
+              bullets: [
+                "fix(call): manual-audio was armed without the CallKit activation relay — audio unit never started (W-ADMACTIVATE, W-DEADTXNET)",
+              ]),
         .init(id: "v1.0.1054",
               date: "2026-08-30",
               title: "v1.0.1054",
               bullets: [
+                "chore: regenerate changelog for v1.0.1054",
                 "fix(call): responder asks the initiator to restart ICE instead of offering into a peer that discards it (W-RESPONDERREQFIRST)",
               ]),
         .init(id: "v1.0.1053",
@@ -156,13 +163,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1036",
                 "fix(call): native-audio-srtp PCM tap still silent on 2nd live call - AVAudioConverter needs continuous-stream usage, not one-shot reset+endOfStream",
                 "fix(security): 2 real findings from Jules Suggestions triage",
-              ]),
-        .init(id: "v1.0.1035",
-              date: "2026-08-26",
-              title: "v1.0.1035",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1035",
-                "fix(deps): re-sync LiveKitBroadcast pin to raw6, matching QAudionEngine's own client-sdk-swift pin",
               ]),
     ]
 }
