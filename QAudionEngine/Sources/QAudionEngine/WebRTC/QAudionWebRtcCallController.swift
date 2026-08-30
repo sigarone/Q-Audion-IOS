@@ -3910,6 +3910,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self?.onNativeAudioSrtpRxPcm?(pcm)
         }
         print("[WebRtcCallController] IOS-C4b: native audio receiver cryptor attached=\(attached) participant=\(participant)")
+        // W-SRTPRXDIAG (2026-08-30) — remote-visible twin of the print
+        // above. `rxc` is redactor-verified; "rxcryptor" is silently
+        // dropped by ship-ios-logs.py, which is exactly how the silent
+        // iOS<->iOS call on 1049 ended up with NO remote evidence of
+        // whether the receiver cryptor ever attached.
+        log?("audiosrtp rxc=\(attached ? 1 : 0)")
         // Publish the session key now if it's already held (idempotent —
         // same "opportunistic install" pattern as the video receiver
         // handler right above); the pqcSessionKey didSet / acceptPeerCapabilities

@@ -365,6 +365,25 @@ final class CallService: @unchecked Sendable {
             }
         }
         lastThroughputSample = (nowSec, tx, rx)
+        // W-SRTPRXDIAG (2026-08-30) — remote heartbeat of the native audio
+        // RTP counters, because a silent iOS<->iOS call on 1049 (83d3f6a6)
+        // was undiagnosable from Loki: both legs logged `audiosrtp tx=1`
+        // (sender cryptor armed), DC open, ICE up, PQC done — and every
+        // line that could say whether RTP actually FLOWED is a print().
+        // This one line splits the failure space in half remotely: tx
+        // growing on both legs = capture+encode+send alive, look at
+        // RX/decrypt; tx flat = the audio unit/capture never ran. -1 means
+        // the stats poll has no audio RTP row at all, which is its own
+        // answer. Every 5th sample (~5 s), calls only, and the exact
+        // string is verified against ship-ios-logs.py's redact_body — the
+        // obvious wordings (see W-AUDIOGATEDIAG above) get silently
+        // dropped by the shipper.
+        srtpHbSampleCounter &+= 1
+        if getCallId?() != nil, srtpHbSampleCounter % 5 == 0 {
+            let ptx = getAudioRtpPacketsSent?() ?? -1
+            let prx = getAudioRtpPacketsReceived?() ?? -1
+            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx)")
+        }
     }
 
     // MARK: - W466 — audio-pipeline diagnostics
@@ -376,6 +395,9 @@ final class CallService: @unchecked Sendable {
     // of each milestone, plus a periodic heartbeat every 250 frames
     // (~5 s). The previously-silent encrypt catch is now surfaced too —
     // it used to hide every Opus/AEAD failure.
+    /// W-SRTPRXDIAG — sample counter for the ~5 s RTP heartbeat above.
+    private var srtpHbSampleCounter: Int = 0
+
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
