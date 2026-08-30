@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1052",
+              date: "2026-08-30",
+              title: "v1.0.1052",
+              bullets: [
+                "diag(call): make activateNativeAudioSrtp's decisions remote-visible (W-AUDIOSENDDIAG)",
+              ]),
         .init(id: "v1.0.1051",
               date: "2026-08-30",
               title: "v1.0.1051",
               bullets: [
+                "chore: regenerate changelog for v1.0.1051",
                 "fix(call): callee mic track landed on a transceiver libwebrtc never sends for (W-AUDIOSENDPICK)",
                 "fix(net): dual-family STUN probe and an IPv6 call-media punch-hole (W-STUNDUALSTACK, W-VPNV6PUNCH)",
               ]),
@@ -176,19 +183,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1033",
                 "fix(call): AVAudioConverter never produced output for the native-audio-srtp PCM tap",
-              ]),
-        .init(id: "v1.0.1032",
-              date: "2026-08-26",
-              title: "v1.0.1032",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1032",
-                "fix(call): stop sending video over WS-relay once native RTP is confirmed healthy",
-                "fix(call): PlayoutJitterBuffer time-stretch band unreachable at default cadence",
-                "fix(ci): disable explicit module builds for ios-simulator-tests — retry didn't survive a whole-tree kill",
-                "fix(ci): same-job retry for ios-simulator-tests — cache-only fix confirmed insufficient",
-                "fix(call): iOS callee heard nothing — peer capabilities applied after setRemoteOffer",
-                "fix(ci): root-cause + fix ios-simulator-tests OOM kill (macos-latest, 7GB RAM)",
-                "fix(security): cherry-pick + fix verified hunk from Jules PR #90",
               ]),
     ]
 }
