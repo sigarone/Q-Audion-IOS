@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1056",
+              date: "2026-08-30",
+              title: "v1.0.1056",
+              bullets: [
+                "fix(call): W-DEADTXNET sentinel sample is Int64 — 1055 CI compile error",
+              ]),
         .init(id: "v1.0.1055",
               date: "2026-08-30",
               title: "v1.0.1055",
               bullets: [
+                "chore: regenerate changelog for v1.0.1055",
                 "fix(call): manual-audio was armed without the CallKit activation relay — audio unit never started (W-ADMACTIVATE, W-DEADTXNET)",
               ]),
         .init(id: "v1.0.1054",
@@ -155,14 +162,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1037",
                 "fix(call): restore nonisolated on ScreenShareController.onFrame after lock refactor",
                 "fix(voice-analysis): gate VoiceAnalysisEngine on a 100ms time budget, not frame count",
-              ]),
-        .init(id: "v1.0.1036",
-              date: "2026-08-27",
-              title: "v1.0.1036",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1036",
-                "fix(call): native-audio-srtp PCM tap still silent on 2nd live call - AVAudioConverter needs continuous-stream usage, not one-shot reset+endOfStream",
-                "fix(security): 2 real findings from Jules Suggestions triage",
               ]),
     ]
 }
