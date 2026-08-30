@@ -2687,7 +2687,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // ("voce come chiave") is the only TX-side consumer; RX has
                 // the larger consumer set (see the RX sink above).
                 self?.onNativeAudioSrtpTxPcm?(pcm)
-            }
+            },
+            // W-AUDIOSENDDIAG — route the engine's decision line to the
+            // remote log; the engine itself can only print().
+            diag: { [weak self] line in self?.log?(line) }
         ) ?? false
         if installed {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")

@@ -749,9 +749,22 @@ public final class QAudionPeerConnection: NSObject {
     public func activateNativeAudioSrtp(
         key: Data,
         participantId: String,
-        txSink: @escaping (Data) -> Void
+        txSink: @escaping (Data) -> Void,
+        diag: ((String) -> Void)? = nil
     ) -> Bool {
         guard let pc = peerConnection else { return false }
+        // W-AUDIOSENDDIAG (2026-08-30) — every decision this function takes,
+        // in ONE remote-visible line (the prints below never leave the
+        // device, which is how two silent-call incidents in a row could
+        // both end at "the controller logged success"). Codes:
+        //   n   = audio transceiver count
+        //   sel = 1 picked transceiver has a non-empty mid
+        //   dir = picked transceiver's direction rawValue
+        //   br  = branch: 0 track already present, 1 carried, 2 promoted
+        //         via addTrack, 3 created fresh
+        //   en  = local track isEnabled at exit
+        //   att = cryptor attachSender result
+        var diagN = 0, diagSel = 0, diagDir = -1, diagBr = 0
         // W-AUDIOSRTPSENDERCARRYOVER (2026-08-28, port of the equivalent
         // Android/qaudion-android-new fix) — `audioTransceiver` is cached
         // ONCE at `init()`, before any SDP round-trip. libwebrtc M144's JSEP
@@ -796,8 +809,12 @@ public final class QAudionPeerConnection: NSObject {
         let audioTransceivers = pc.transceivers.filter { $0.mediaType == .audio }
         guard let transceiver = audioTransceivers.first(where: { !$0.mid.isEmpty })
             ?? audioTransceivers.first else {
+            diag?("audiosrtp act=1 n=0 sel=0 dir=-1 br=0 en=0 att=0")
             return false
         }
+        diagN = audioTransceivers.count
+        diagSel = transceiver.mid.isEmpty ? 0 : 1
+        diagDir = transceiver.direction.rawValue
         if audioTransceivers.count > 1 {
             print("[WebRTC] W-AUDIOSENDPICK: \(audioTransceivers.count) audio transceivers — picked mid=\(transceiver.mid)")
         }
@@ -837,6 +854,7 @@ public final class QAudionPeerConnection: NSObject {
             previousSender.track = nil
             transceiver.sender.track = existingTrack
             nativeAudioSender = transceiver.sender
+            diagBr = 1
             print("[WebRTC] W-AUDIOSENDPICK: carried existing mic track onto the live sender")
         }
         // W-AUDIOSENDPICK — a transceiver that cannot send is not fixable by
@@ -859,6 +877,7 @@ public final class QAudionPeerConnection: NSObject {
             localAudioSrtpTrack = track
             pc.add(track, streamIds: [stableStreamId])
             nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
+            diagBr = 2
             print("[WebRTC] W-AUDIOSENDPICK: transceiver direction=\(transceiver.direction.rawValue) cannot send — promoted via addTrack")
             let txTap = NativeAudioPcmTap(sink: txSink)
             track.add(txTap)
@@ -884,6 +903,7 @@ public final class QAudionPeerConnection: NSObject {
             localAudioSrtpTrack = track
             transceiver.sender.track = track
             nativeAudioSender = transceiver.sender
+            diagBr = 3
             print("[WebRTC] IOS-C4b: mic track attached to native audio transceiver (disabled pending cryptor confirm)")
             let txTap = NativeAudioPcmTap(sink: txSink)
             track.add(txTap)
@@ -897,7 +917,9 @@ public final class QAudionPeerConnection: NSObject {
         let attached = cryptor.attachSender(effectiveSender)
         if attached {
             localAudioSrtpTrack?.isEnabled = !pendingAudioSrtpMuted
-        } else {
+        }
+        diag?("audiosrtp act=1 n=\(diagN) sel=\(diagSel) dir=\(diagDir) br=\(diagBr) en=\(localAudioSrtpTrack?.isEnabled == true ? 1 : 0) att=\(attached ? 1 : 0)")
+        if !attached {
             print("[WebRTC] IOS-C4b: activateNativeAudioSrtp — sender cryptor attach FAILED, mic stays muted (caller should retry)")
         }
         return attached
