@@ -7577,6 +7577,51 @@ final class AppState: ObservableObject {
                 #endif
             }
         }
+        // W-RELAYFLEET (2026-08-31) — a node advertising a TURN relay left the
+        // server's fresh set, and every user in a call was told. NOT filtered
+        // on the active call: the push carries no call_id, because the change
+        // is a property of the relay SET, not of one session.
+        //
+        // The bundle rides in the payload, but it is deliberately not read
+        // here: it is byte-identical to what `/calling/relays` returns, and
+        // decoding it in a second place would be a second parser free to
+        // drift from the one RelayCredentialsProvider already owns. Refetch
+        // instead, and let the provider stay the only reader.
+        //
+        // Then decide, rather than react. ICE consent checks already declare
+        // a dead relay's pair failed within ~30s with no server involved, so
+        // this only collapses that window; restarting a call that was never
+        // on the departed node would be strictly worse than the baseline it
+        // is trying to beat — and with a fleet-wide push, one flapping node
+        // would do exactly that to every call at once.
+        ws.registerHandler(type: "relays_updated") { [weak self] _, _ in
+            guard self != nil else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                #if canImport(WebRTC)
+                guard let ctrl = self.webRtcController as? QAudionWebRtcCallController else { return }
+                guard let provider = self.ensureRelayProvider() else { return }
+                await provider.invalidate()
+                guard let bundle = await provider.currentOrRefresh() else {
+                    // A failed refetch is not evidence that anything left.
+                    RTLog.info("call", "relaysupdated refetch=0")
+                    return
+                }
+                let hosts = RelayFleetReselection.relayHosts(
+                    from: bundle.servers.flatMap { $0.urls }
+                )
+                let inUse = await ctrl.selectedRelayAddress()
+                guard RelayFleetReselection.shouldRestartIce(
+                    selectedRelayAddress: inUse, freshRelayHosts: hosts
+                ) else {
+                    RTLog.info("call", "relaysupdated acted=0 fresh=\(hosts.count)")
+                    return
+                }
+                RTLog.info("call", "relaysupdated acted=1 gone=\(inUse ?? "-")")
+                await ctrl.restartIce(reason: "relay-fleet-changed")
+                #endif
+            }
+        }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
             guard let self = self else { return }
             // W-ICEBATCH (2026-08-25) — batch form (`ice-batch-v1`): a

@@ -2425,6 +2425,50 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// also what protects the new `W-PROACTIVEHANDOFF` interface-change
     /// trigger (`armRestartPathMonitor` above) from spamming on a bearer
     /// flag that flips without a real handover.
+    /// Address of the TURN relay this call's SELECTED candidate pair is
+    /// currently traversing, or nil when the pair is direct, none has been
+    /// nominated yet, or the stats could not be read.
+    ///
+    /// Only the LOCAL candidate is consulted. A remote relay candidate is the
+    /// peer's own allocation on the peer's relay: it is not ours to reason
+    /// about, and it would never appear in the bundle this server hands US, so
+    /// reading it would produce a permanent false "my relay vanished".
+    ///
+    /// Feeds the `relays_updated` gate — see `RelayFleetReselection`. Every
+    /// ambiguous outcome deliberately collapses to nil, because nil means
+    /// "leave this call alone".
+    public func selectedRelayAddress() async -> String? {
+        guard let pc = peerConnection?.peerConnection else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            pc.statistics { report in
+                // Same pair choice `pollMediaRttOnce` uses: a succeeded pair
+                // that is nominated or selected, else the first succeeded one.
+                var preferredLocalId: String?
+                var fallbackLocalId: String?
+                for (_, s) in report.statistics {
+                    guard s.type == "candidate-pair",
+                          (s.values["state"] as? String) == "succeeded" else { continue }
+                    let localId = s.values["localCandidateId"] as? String
+                    if fallbackLocalId == nil { fallbackLocalId = localId }
+                    let nominated = (s.values["nominated"] as? NSNumber)?.boolValue ?? false
+                    let selected = (s.values["selected"] as? NSNumber)?.boolValue ?? false
+                    if (nominated || selected), preferredLocalId == nil { preferredLocalId = localId }
+                }
+                guard let localId = preferredLocalId ?? fallbackLocalId,
+                      let local = report.statistics[localId],
+                      (local.values["candidateType"] as? String) == "relay" else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                // `address` is the current spelling; `ip` is what older builds
+                // report for the same value.
+                let address = (local.values["address"] as? String)
+                    ?? (local.values["ip"] as? String)
+                continuation.resume(returning: address)
+            }
+        }
+    }
+
     public func restartIce(reason: String) async {
         guard peerConnection != nil, !intentionalShutdown else { return }
         guard let rid = recipientId else { return }
