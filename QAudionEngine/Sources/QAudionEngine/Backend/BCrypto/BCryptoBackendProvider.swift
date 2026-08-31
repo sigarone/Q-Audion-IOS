@@ -155,12 +155,37 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// Used by ServerSelector after probing finds a lower-latency node.
     /// The currently connected WebSocket is disconnected — it will
     /// reconnect automatically (with backoff) to the new URL.
-    public func updateServerUrl(to newUrl: String) {
+    public func updateServerUrl(to newUrl: String, reconnectSocket: Bool = true) {
+        // Nothing to do when the selector re-affirms the node we are already on,
+        // which is most of what it does — the primary-snap check re-asserts the
+        // pinned host on every monitor tick.
+        guard config.serverUrl != newUrl else { return }
+
         config.serverUrl = newUrl
         // `_wsClient?` — a not-yet-created socket reads the new URL on first
         // connect; no need to force one into existence here.
         _wsClient?.updateConfig(config)
         restClient.updateConfig(config)
+
+        // updateConfig only STORES the value: a socket that is already open
+        // keeps talking to the node it dialled, indefinitely, while REST has
+        // already moved. That left the two halves of this client disagreeing
+        // about which node it was on for as long as the connection happened to
+        // survive — hours, in practice.
+        //
+        // Reconnecting costs a few seconds of signaling, which this client is
+        // built to absorb (it reconnects with backoff and surfaces a
+        // reconnecting state); media rides WebRTC and is not on this socket at
+        // all. An indefinite disagreement is the worse of the two.
+        //
+        // `reconnectSocket: false` exists for the caller that knows this is a
+        // bad moment — mid call-setup, offer and answer in flight. Wiring that
+        // signal in is the remaining refinement: the selector cannot see call
+        // state today, so nothing passes false yet.
+        if reconnectSocket, let ws = _wsClient {
+            ws.disconnect()
+            ws.connect()
+        }
     }
 
     public func initialize() async throws { wsClient.connect() }

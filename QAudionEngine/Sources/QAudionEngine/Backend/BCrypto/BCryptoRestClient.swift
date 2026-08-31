@@ -20,6 +20,15 @@ public final class BCryptoRestClient {
     public typealias DeviceRenewFallback = @Sendable () async throws -> (accessToken: String, refreshToken: String?)
 
     private var config: BackendConfig
+    /// The server this client was BUILT with — the certificate-pinned primary,
+    /// captured once at init and never reassigned by updateConfig.
+    ///
+    /// Only the primary holds the token-signing key, so anything that mints has
+    /// to reach it even after the node selector has moved everything else
+    /// somewhere nearer. Captured rather than read from a response on purpose: a
+    /// server naming the host to retry against is a redirect a client must never
+    /// learn to follow.
+    private let primaryServerUrl: String
     private let session: URLSession
     private var tokenRefresher: TokenRefresher?
     private var deviceRenewFallback: DeviceRenewFallback?
@@ -117,6 +126,7 @@ public final class BCryptoRestClient {
     ///   `acceptSelfSignedCerts` below, which IS a real DEBUG-only security
     ///   trade-off — SECURITY H-1 — and stays gated).
     public init(config: BackendConfig, testURLProtocolClasses: [AnyClass]? = nil) {
+        self.primaryServerUrl = config.serverUrl
         self.config = config
         // SECURITY H-1 — `acceptSelfSignedCerts` is honoured ONLY in
         // DEBUG builds (local dev / unit tests against a self-signed
@@ -387,12 +397,29 @@ public final class BCryptoRestClient {
             throw BCryptoError.unauthorized
         }
 
+        // 421 from a node that cannot issue tokens: the request reached the
+        // wrong address, not a broken server. Retry once against the pinned
+        // primary and leave config.serverUrl alone — this is a per-request
+        // redirect, not a decision to abandon the node the selector chose for
+        // everything else.
+        if status == 421, config.serverUrl != primaryServerUrl {
+            let (retryData, retryStatus) = try await performRequest(
+                method, path: path, body: body, headers: headers,
+                baseUrlOverride: primaryServerUrl)
+            if (200...299).contains(retryStatus) {
+                return retryData
+            }
+            if retryStatus == 401 { throw BCryptoError.unauthorized }
+            throw BCryptoError.httpError(retryStatus)
+        }
+
         if status == 401 { throw BCryptoError.unauthorized }
         throw BCryptoError.httpError(status)
     }
 
-    private func performRequest(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> (Data, Int) {
-        guard let url = URL(string: config.serverUrl + path) else { throw BCryptoError.invalidUrl }
+    private func performRequest(_ method: String, path: String, body: Data?, headers: [String: String],
+                                baseUrlOverride: String? = nil) async throws -> (Data, Int) {
+        guard let url = URL(string: (baseUrlOverride ?? config.serverUrl) + path) else { throw BCryptoError.invalidUrl }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.httpBody = body
