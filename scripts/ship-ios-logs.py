@@ -108,8 +108,12 @@ def _load_vps_creds():
     host = os.environ.get("QAUDION_VPS_HOST")
     user = os.environ.get("QAUDION_VPS_USER")
     password = os.environ.get("QAUDION_VPS_PASS")
-    if host and user and password:
-        return host, user, password
+    # W-VPSKEYAUTH (2026-09-02): the prod VPS accepts publickey only since
+    # the post-migration hardening (password auth disabled) — host+user are
+    # enough when a key is available (see _vps_key_path); password stays an
+    # optional fallback for any box that still allows it.
+    if host and user and (password or _vps_key_path()):
+        return host, user, password or ""
 
     candidates = [
         Path(__file__).parent.parent.parent / "bcrypto-server" / "VPS_ACCESS.md",
@@ -144,11 +148,33 @@ def _ensure_creds():
         VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
 
 
+def _vps_key_path():
+    """Private key for the prod VPS: env QAUDION_VPS_KEY / VPS_SSH_KEY, else
+    the dev-box default the other prod tools (phone-debug, deploy.py) use.
+    Returns None when no readable key exists so callers can fall back."""
+    for cand in (os.environ.get("QAUDION_VPS_KEY"), os.environ.get("VPS_SSH_KEY"),
+                 str(Path.home() / ".claude" / "bin" / "bcrypto_vps_ed25519")):
+        if cand:
+            p = Path(os.path.expanduser(cand))
+            if p.is_file():
+                return str(p)
+    return None
+
+
 def ssh_connect():
     _ensure_creds()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
+    # W-VPSKEYAUTH (2026-09-02): key first (the prod VPS is publickey-only
+    # after the migration hardening — password auth returned
+    # "Bad authentication type; allowed types: ['publickey']"), password only
+    # as a fallback when no key is present.
+    key = _vps_key_path()
+    if key:
+        client.connect(VPS_HOST, username=VPS_USER, key_filename=key,
+                       look_for_keys=False, allow_agent=False, timeout=15)
+    else:
+        client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
     return client
 
 
