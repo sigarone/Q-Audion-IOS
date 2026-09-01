@@ -834,6 +834,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `ICE_RESTART_DEBOUNCE_MS` — a flapping interface must not spam
     /// fresh CallOffer frames.
     private var lastIceRestartAt: Date?
+    /// W-ICERESTARTGATE — single-flight convergence gate (second layer on
+    /// top of the 3s debounce; see RestartIceDecisions). Guarded by the
+    /// same `restartIceDebounceLock`.
+    private var iceRestartGateUntil: Date?
     /// Independent-review fix (nim.ps1 security pass, W-PROACTIVEHANDOFF/
     /// W-RESPONDERRESTART): `restartIce` now has THREE independent call
     /// sites that can race each other (the reactive ICE-failure watchdog,
@@ -1958,6 +1962,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // already relies on for a hangup landing after the call is gone.
         lastExternalNetworkChangeAt = nil
         lastIceRestartAt = nil
+        iceRestartGateUntil = nil   // W-ICERESTARTGATE — fresh call, fresh gate
         lastAppliedRemoteRestartSdp = nil
         lastIceConnectionState = .new
         hasEverConnectedIce = false
@@ -2485,16 +2490,33 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // atomicity is the whole point of this lock, and the scoped form
         // preserves it while making the no-suspension-inside guarantee
         // structural rather than a thing to remember.
-        let debounced: Bool = restartIceDebounceLock.withLock {
+        // W-ICERESTARTGATE — a parked resend is the CONTINUATION of the
+        // attempt that armed the gate, never a new attempt: it bypasses
+        // both layers or the park would deadlock against itself.
+        let isParkedResend = reason.hasSuffix(RestartIceDecisions.parkedResendReasonSuffix)
+        let refusal: String? = restartIceDebounceLock.withLock {
+            if isParkedResend {
+                lastIceRestartAt = now
+                return nil
+            }
             if let last = lastIceRestartAt,
                now.timeIntervalSince(last) * 1000 < Double(RestartIceDecisions.iceRestartDebounceMs) {
-                return true
+                return "debounced"
+            }
+            // Single-flight convergence window (port of Android's
+            // IceRestartGate): while a prior attempt is still converging
+            // (~7s measured on a clean handoff), an overlapping offer
+            // resets the checklist and doubles the outage.
+            if let gate = iceRestartGateUntil, now < gate {
+                return "gated"
             }
             lastIceRestartAt = now
-            return false
+            iceRestartGateUntil = now.addingTimeInterval(
+                Double(RestartIceDecisions.iceRestartConvergenceWindowMs) / 1000.0)
+            return nil
         }
-        guard !debounced else {
-            log?("restart_ice debounced=1 reason=\(reason)")
+        if let refusal {
+            log?("restart_ice \(refusal)=1 reason=\(reason)")
             return
         }
         onRestartAttemptStarted?()
@@ -2544,7 +2566,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("restart_ice create_offer_failed=1 reason=\(reason)")
             return
         }
-        log?("restart_ice offer_created=1 reason=\(reason)")
+        // W-RESTARTANSWERLATCH — the W418 one-shot answer latch was armed by
+        // the ORIGINAL call_answer and, unlike the video-upgrade path (which
+        // resets it when it creates its renegotiation offer), nothing reset
+        // it here: the peer's answer to THIS restart offer was silently
+        // swallowed by tryAcquireAnswerSlot(), the PC stayed in
+        // have-local-offer forever, the peer's new-generation candidates
+        // could never pair, and the call died at the end of the ICE grace —
+        // the exact "peer changed network and the call never recovered"
+        // failure. Re-open the slot the moment a restart offer exists;
+        // duplicate dispatches of the restart answer itself are still
+        // deduped because the first apply re-arms the latch.
+        hasAppliedRemoteAnswer = false
+        log?("restart_ice offer_created=1 answer_slot_reopened=1 reason=\(reason)")
         // W-RESTARTOFFERPARK — `sendIceRestartOffer` owns the send+park
         // budget end to end (BCryptoCallingApiImpl, up to 45s under the
         // server's 60s disconnect-grace ceiling); this call does not block
@@ -2553,8 +2587,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let sent = await callingApi.sendIceRestartOffer(
             recipientId: rid,
             sdp: sdp,
-            capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps())
+            capabilities: advertisedCapabilitiesFilter(CallCapabilities.localCaps()),
+            // W-PARKFRESHOFFER — if the send parks, the delivery re-runs
+            // restartIce so the wire carries an offer minted at delivery
+            // time, never the (by then stale) `sdp` above. The suffix
+            // exempts the continuation from the debounce and the gate.
+            onParkDelivery: { [weak self] in
+                await self?.restartIce(
+                    reason: reason + RestartIceDecisions.parkedResendReasonSuffix)
+            }
         )
+        if !sent {
+            // W-ICERESTARTGATE — the attempt parked: extend the single-
+            // flight window across the whole park budget so no second
+            // attempt overlaps the deferred continuation (Android extends
+            // to RESTART_OFFER_PARK_BUDGET_MS the same way).
+            let parkUntil = Date().addingTimeInterval(
+                RestartIceDecisions.restartOfferParkTimeoutSec)
+            restartIceDebounceLock.withLock { iceRestartGateUntil = parkUntil }
+        }
         log?("restart_ice sent=\(sent ? 1 : 0) reason=\(reason)")
     }
 

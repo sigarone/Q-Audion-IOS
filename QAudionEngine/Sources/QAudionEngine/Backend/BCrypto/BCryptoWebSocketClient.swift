@@ -415,6 +415,20 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// or parsed binary packet). Compared against `_binLivenessArmedAt`.
     private var _binLivenessLastInboundAudioAt: TimeInterval = 0
 
+    /// W-RELAYFALLBACKARRIVAL (2026-09-01, port of Android's widened
+    /// arrival window in CallWireForm) — true once ANY inbound audio has
+    /// been seen on this socket's watch. Until then the liveness check uses
+    /// `binRelayArrivalWindowMs` instead of the tight window: the first
+    /// arming after a mid-call P2P→relay downgrade races the PEER's own
+    /// 10s disconnect grace — the peer is legitimately not on the relay yet
+    /// and no inbound audio is EXPECTED for many seconds, so tripping the
+    /// permanent text fallback at 4.8s mis-diagnoses the binary FORM for a
+    /// path that was never carrying anything (mirror of Android live call
+    /// fa7d0ee5, which abandoned binary at 5.06s against an innocent iOS
+    /// peer). After first arrival the tight window resumes: mid-stream
+    /// silence is a REAL form problem and must keep tripping fast.
+    private var _binLivenessFirstInboundSeen: Bool = false
+
     /// Latched once the fallback fires: this socket is on text for the rest of
     /// its life and no later `authenticated` echo may re-grant it. Cleared only
     /// by `connect()`, i.e. by a genuinely new socket.
@@ -529,6 +543,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     static let binRelayLivenessWindowMs: Int =
         BCryptoWebSocketClient.binRelayServerVetoWindowMs
         + PlayoutJitterBuffer.capacityMs * 3
+
+    /// W-RELAYFALLBACKARRIVAL — window used until the FIRST inbound audio
+    /// of the watch: sized to clear the peer's 10s disconnect grace plus
+    /// its own relay downgrade and first frame (Android:
+    /// RELAY_FALLBACK_ARRIVAL_WINDOW_MS = 15_000).
+    static let binRelayArrivalWindowMs: Int = 15_000
 
     /// Outbound audio frames required inside the window before its expiry means
     /// anything. Half of what the LONGEST supported frame duration
@@ -1324,13 +1344,20 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // works. Re-arm from now so the watch keeps covering the call rather
         // than being satisfied once and never looking again.
         if _binLivenessLastInboundAudioAt > _binLivenessArmedAt {
+            _binLivenessFirstInboundSeen = true   // W-RELAYFALLBACKARRIVAL
             _binLivenessArmedAt = now
             _binLivenessOutboundFrames = 1
             lock.unlock()
             return
         }
+        // W-RELAYFALLBACKARRIVAL — before the first arrival, the peer may
+        // still be inside its own disconnect grace: judge with the wide
+        // window; after it, the tight one.
+        let windowMs = _binLivenessFirstInboundSeen
+            ? Self.binRelayLivenessWindowMs
+            : Self.binRelayArrivalWindowMs
         let elapsedMs = (now - _binLivenessArmedAt) * 1000
-        guard elapsedMs >= Double(Self.binRelayLivenessWindowMs),
+        guard elapsedMs >= Double(windowMs),
               _binLivenessOutboundFrames >= Self.binRelayLivenessMinOutboundFrames,
               webSocketTask != nil else {
             lock.unlock()
@@ -1429,6 +1456,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         _binLivenessArmedAt = 0
         _binLivenessOutboundFrames = 0
         _binLivenessLastInboundAudioAt = 0
+        _binLivenessFirstInboundSeen = false   // W-RELAYFALLBACKARRIVAL
         _pendingBinaryFrames.removeAll(keepingCapacity: false)
         _pendingBinaryFirstHeldAt = 0
         _binRelayDowngradeReportPending = false

@@ -529,9 +529,13 @@ final class AppState: ObservableObject {
     /// only while a grace window is running; cancelled on ICE recovery, on a
     /// terminal ICE state, and on teardown.
     private var iceDisconnectGraceTask: Task<Void, Never>?
-    /// W-ICEGRACE — grace window length. Byte-for-byte the same 3000 ms
-    /// Android has used since its own fix; keep the two in lockstep.
-    private static let iceDisconnectGraceMs: Int = 3_000
+    /// W-ICEGRACE — grace window length. Android raised its
+    /// `DISCONNECT_GRACE_MS` from 3000 to 10_000 (TURN patience,
+    /// CallTransportFactory.kt:1441) and the fleet's cross-platform timing
+    /// math is sized off that value (e.g. the 15s bin-relay arrival window
+    /// exists to clear the PEER's 10s grace); iOS stayed at 3000 with a
+    /// stale "lockstep" note. Re-aligned 2026-09-01 — never shorten.
+    private static let iceDisconnectGraceMs: Int = 10_000
     /// W-SILENTPATHDEATH (2026-08-25) — `true` once the base 3s W-ICEGRACE
     /// countdown has been extended for a live restart-offer attempt THIS
     /// disconnect episode. Guards `extendIceDisconnectGraceForRestartAttempt`
@@ -687,7 +691,13 @@ final class AppState: ObservableObject {
     ///
     /// `isVideoCall` is "this call has video on at least one lane"; it is NOT
     /// a statement about our own camera. Both conditions are required.
-    var localCameraSending: Bool { isVideoCall && !localVideoPaused }
+    /// W-CAPINTERRUPTBEACON — true while AVFoundation reports the capture
+    /// session interrupted (backgrounding, camera taken by another app).
+    /// Folded into `localCameraSending` so the §8.9 beacon tells the peer
+    /// the truth instead of paused=false while zero frames leave the device
+    /// (measured live: 80 s of black video on the peer, call f882cbe9).
+    var captureInterrupted: Bool = false
+    var localCameraSending: Bool { isVideoCall && !localVideoPaused && !captureInterrupted }
 
     /// Mirror for the peer's lane, so a "peer is sending" badge never has to
     /// re-derive it either.
@@ -19066,6 +19076,24 @@ extension AppState {
         //  - startPaused = camera + local mirror preview run, but NOTHING
         //    leaves the device until the peer accepts the upgrade.
         pipeline.sourceMode = sourceMode
+        // W-CAPINTERRUPTBEACON — fresh pipeline, fresh interruption state
+        // (a call torn down mid-interruption must not poison the next one),
+        // then let OS capture interruptions drive the video-state beacon:
+        // the beacon is state-triggered + heartbeat-repeated, so flipping
+        // the input state is all that's needed for the peer to see
+        // paused=true within one announce. On resume, force an IDR so the
+        // peer's first frames after the gap decode immediately.
+        captureInterrupted = false
+        pipeline.onCaptureInterruptionChanged = { [weak self] interrupted in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.captureInterrupted = interrupted
+                self.announceVideoState(force: false)
+                if !interrupted {
+                    VideoKeyframeController.shared.requestKeyFrame()
+                }
+            }
+        }
         if startPaused { pipeline.setVideoPaused(true) }
 
         // Resolve transport (WS client). Reuse the already-authenticated

@@ -243,6 +243,18 @@ public final class VideoCallPipeline: NSObject {
     private var captureRuntimeErrorObserver: NSObjectProtocol?
     private var captureDidStopObserver: NSObjectProtocol?
 
+    /// W-CAPINTERRUPTBEACON — tells the owner (AppState) that the capture
+    /// session was interrupted / resumed by the OS, so the §8.9 video-state
+    /// beacon can report the truth. Measured live 2026-09-01 (iOS↔Android
+    /// call f882cbe9): app backgrounded → iOS kept beaconing paused=false
+    /// every 3s for 80 s while zero frames left the device, and the peer
+    /// burned its whole recovery ladder (keyframe requests, IDRs, a full
+    /// ICE restart) against a sender that had nothing to send. The beacon
+    /// machinery was already state-triggered and heartbeat-repeated — the
+    /// missing piece was only that its input state never learned about
+    /// capture interruption.
+    public var onCaptureInterruptionChanged: ((Bool) -> Void)?
+
     // MARK: - Lifecycle
 
     public override init() {
@@ -356,9 +368,10 @@ public final class VideoCallPipeline: NSObject {
             forName: AVCaptureSession.wasInterruptedNotification,
             object: session,
             queue: nil
-        ) { note in
+        ) { [weak self] note in
             let reasonValue = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
             RTLog.warn("call", "vcap session_interrupted reason=\(reasonValue)")
+            self?.onCaptureInterruptionChanged?(true)
         }
 
         captureInterruptionEndedObserver = center.addObserver(
@@ -368,6 +381,7 @@ public final class VideoCallPipeline: NSObject {
         ) { [weak self] _ in
             RTLog.info("call", "vcap session_interruption_ended")
             self?.restartSessionIfNeeded(reason: "interruption_ended")
+            self?.onCaptureInterruptionChanged?(false)
         }
 
         captureRuntimeErrorObserver = center.addObserver(

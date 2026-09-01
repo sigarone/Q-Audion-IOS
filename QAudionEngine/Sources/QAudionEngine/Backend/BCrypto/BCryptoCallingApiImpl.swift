@@ -36,6 +36,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// state machine routes them to the right peer. Cleared on hangup.
     private var activeCallId: String?
     private let callIdLock = NSLock()
+    /// W-PARKFRESHOFFER — the single in-flight restart-offer park (see
+    /// sendIceRestartOffer); a newer attempt cancels the older one.
+    private var pendingRestartPark: Task<Void, Never>?
+    private let pendingRestartParkLock = NSLock()
     /// Guard against sending call_answer more than once per call session.
     /// Reset alongside activeCallId in clearActiveCallId().
     private var _answerSent = false
@@ -504,7 +508,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
     public func sendIceRestartOffer(
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        onParkDelivery: (@Sendable () async -> Void)? = nil
     ) async -> Bool {
         guard let cid = activeCallIdOrNil() else {
             print("[BCryptoCalling] sendIceRestartOffer DROPPED — no active call_id bound")
@@ -542,16 +547,32 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // envelopes, and the readiness probe can be wrong).
         ws.send(type: "call_offer", data: data)
         print("[BCryptoCalling] restart offer park armed call_id=\(cid.prefix(8))… (WS not ready)")
+        // W-PARKFRESHOFFER — at most ONE park in flight: a newer restart
+        // attempt supersedes an older parked one (two detached parks used
+        // to both fire on WS recovery in arbitrary order, and the older
+        // carried an SDP whose local description no longer existed).
+        pendingRestartParkLock.withLock {
+            pendingRestartPark?.cancel()
+            pendingRestartPark = nil
+        }
         let wsRef = ws
-        Task.detached(priority: .utility) {
+        let park = Task.detached(priority: .utility) {
             let late = await wsRef.ensureAuthenticated(timeoutSec: RestartIceDecisions.restartOfferParkTimeoutSec)
-            guard late else {
-                print("[BCryptoCalling] restart offer park expired call_id=\(cid.prefix(8))…")
+            guard late, !Task.isCancelled else {
+                print("[BCryptoCalling] restart offer park expired/cancelled call_id=\(cid.prefix(8))…")
                 return
             }
-            wsRef.send(type: "call_offer", data: data)
-            print("[BCryptoCalling] restart offer park delivered call_id=\(cid.prefix(8))…")
+            if let onParkDelivery {
+                // Mint a FRESH offer at delivery time instead of resending
+                // the one captured up to 40s ago (see protocol kdoc).
+                print("[BCryptoCalling] restart offer park re-minting call_id=\(cid.prefix(8))…")
+                await onParkDelivery()
+            } else {
+                wsRef.send(type: "call_offer", data: data)
+                print("[BCryptoCalling] restart offer park delivered call_id=\(cid.prefix(8))…")
+            }
         }
+        pendingRestartParkLock.withLock { pendingRestartPark = park }
         return false
     }
 

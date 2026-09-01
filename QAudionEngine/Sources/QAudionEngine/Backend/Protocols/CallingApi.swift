@@ -161,10 +161,21 @@ public protocol CallingApi {
     /// send+park behavior (mirrors `deliverHangup`'s proven two-phase
     /// shape: best-effort immediate send, then a detached park up to the
     /// server's disconnect-grace ceiling).
+    /// `onParkDelivery`: W-PARKFRESHOFFER (2026-09-01) — when the offer
+    /// cannot go out now and the park later finds the socket back, the
+    /// impl calls THIS instead of resending the SDP captured at park time:
+    /// an ICE-restart offer parked for up to 40s carries the ufrag of a
+    /// local description the controller may have since replaced, and the
+    /// peer would answer an offer the initiator no longer holds. The
+    /// closure re-runs `restartIce` so the wire always carries an offer
+    /// minted at DELIVERY time (Android: park re-runs restartIce with
+    /// PARKED_SUFFIX). Pass nil to keep the legacy resend (non-restart
+    /// callers).
     func sendIceRestartOffer(
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        onParkDelivery: (@Sendable () async -> Void)?
     ) async -> Bool
 
     /// W-RESPONDERREQFIRST (2026-08-30) — ask the OFFERING leg to drive a
@@ -359,7 +370,8 @@ public extension CallingApi {
     func sendIceRestartOffer(
         recipientId: String,
         sdp: String,
-        capabilities: [String]
+        capabilities: [String],
+        onParkDelivery: (@Sendable () async -> Void)?
     ) async -> Bool {
         return false
     }

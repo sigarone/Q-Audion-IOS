@@ -125,6 +125,22 @@ public enum RestartIceDecisions {
     /// and cross-referenced from the same file as every other restart-ice
     /// timing constant, closing the "tested ladder vs. shipped behavior"
     /// gap the audit flagged.
+    /// W-ICERESTARTGATE (2026-09-01, port of Android's IceRestartGate) —
+    /// single-flight convergence window: once a restart attempt actually
+    /// starts, further callers are refused for this long, because a clean
+    /// restart measures ~7s to converge and an overlapping second offer
+    /// mid-convergence resets the checklist and doubles the outage
+    /// (Android live call cafc3f94: 5-6 overlapping restarts, 6 ICE pair
+    /// flips in 11s). The 3s debounce absorbs trigger flaps; this window
+    /// is the second, longer layer that protects the convergence itself.
+    public static let iceRestartConvergenceWindowMs: Int64 = 10_000
+
+    /// Reason-suffix marking a parked restart's deferred re-run. Exempt
+    /// from BOTH the debounce and the convergence gate: the gate was
+    /// extended for exactly this continuation, and gating it would
+    /// deadlock the park against itself.
+    public static let parkedResendReasonSuffix = ".parked-resend"
+
     public static let restartOfferFastPathTimeoutSec: TimeInterval = 5
 
     /// W-RESTARTOFFERPARK / audit item 4 — the live path's SECOND-phase
