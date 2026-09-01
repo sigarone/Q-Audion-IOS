@@ -95,8 +95,20 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         speakerChange.reanchor()
     }
 
-    public init(embedder: CamPlusSpeakerEmbedder = .shared, store: VoiceprintStore = VoiceprintStore()) {
-        self.verifier = SpeakerVerifier(embedder: embedder)
+    /// - Parameter cohortNormalizer: AS-Norm impostor-cohort back-end fed
+    ///   into the owned `SpeakerVerifier` — see `SpeakerCohortNormalizer`'s
+    ///   class kdoc and `SpeakerVerifier.computeAsNormScore()`'s kdoc.
+    ///   Defaults to the process-wide `.shared` instance; `ContactVoiceVerifier`
+    ///   is the ONLY `SpeakerVerifier` call site in this codebase that wants
+    ///   AS-Norm scoring (mirrors Android's `VoicePrintBridgeImpl`-only
+    ///   wiring — Tier 1's manual-enrollment-only verifiers stay on the
+    ///   `nil` default).
+    public init(
+        embedder: CamPlusSpeakerEmbedder = .shared,
+        store: VoiceprintStore = VoiceprintStore(),
+        cohortNormalizer: SpeakerCohortNormalizer = .shared
+    ) {
+        self.verifier = SpeakerVerifier(embedder: embedder, cohortNormalizer: cohortNormalizer)
         self.store = store
         speakerChange.onVerdictChanged = { [weak self] verdict in
             self?.onSpeakerChanged?(verdict)
@@ -160,8 +172,21 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             let score = self.verifier.computeVerificationScore()
             self.gate.feed(score)
             self.onLevelChanged?(self.gate.level)
-            // Second consumer of the SAME score — no extra inference.
-            self.speakerChange.feed(score)
+            // W-SPKASNORM (2026-09-02): speakerChange gets the AS-Norm-
+            // normalized score, NOT the same raw score `gate` reads — a
+            // population-scale offline measurement (see
+            // SpeakerCohortNormalizer's class kdoc) found this cuts the
+            // worst-decile speaker-pair confusion roughly 5x, with the SAME
+            // cohort-scoring pass costing no extra inference (must be read
+            // AFTER computeVerificationScore() on this same tick — see
+            // SpeakerVerifier.computeAsNormScore()'s kdoc). Falls back to
+            // the raw score (previous behaviour) whenever the cohort asset
+            // isn't available, rather than starving the detector. `gate`
+            // (the absolute-threshold continuity shield) is deliberately
+            // left untouched — still fed the raw score, zero behavior
+            // change there.
+            let asNormScore = self.verifier.computeAsNormScore()
+            self.speakerChange.feed(asNormScore ?? score)
             // score is nil when there's not yet enough audio for a real
             // verification result (SpeakerVerifier's own gate) — nothing
             // meaningful to report to the re-key confidence signal in that

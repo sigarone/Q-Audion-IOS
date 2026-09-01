@@ -376,6 +376,11 @@ let package = Package(
                 // (qaudion-engine/src/main/assets/models/campplus_sv_voxceleb_16k.onnx),
                 // SHA-256 pinned in CamPlusSpeakerEmbedder.swift.
                 .copy("Resources/campplus_sv_voxceleb_16k.onnx"),
+                // 2026-09-02: AS-Norm impostor cohort for SpeakerCohortNormalizer
+                // (RemoteSpeakerChangeMonitor's score feed) — SAME bytes Android
+                // ships at qaudion-engine/src/main/assets/models/speaker_cohort_v1.bin
+                // (80 x 512 float32 LE prototypes, no header). See that class's kdoc.
+                .copy("Resources/speaker_cohort_v1.bin"),
                 // Entitlement (EGT) signing pubkey pinned as a build asset,
                 // design doc §3.5 — SAME bytes Android ships at
                 // app/src/main/assets/bcrypto_entitlement_pubkey.pem.
