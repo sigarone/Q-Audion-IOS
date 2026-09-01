@@ -9,10 +9,21 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1068",
+              date: "2026-09-01",
+              title: "v1.0.1068",
+              bullets: [
+                "fix(call): six verified corner-case fixes for peer network-change resilience",
+                "fix(call): every call opened by announcing \"no change\" to the peer (W-SPKCHGSPURIOUS)",
+                "fix(net): node selection probed liveness and called it readiness",
+                "fix(transport): REST and the WebSocket stopped agreeing on which node we are on",
+                "feat(call): act on the server's relays_updated push instead of ignoring it",
+              ]),
         .init(id: "v1.0.1067",
               date: "2026-08-31",
               title: "v1.0.1067",
               bullets: [
+                "chore: regenerate changelog for v1.0.1067",
                 "fix(call): drop manual audio mode entirely — back to the session arrangement that shipped healthy (W-ADMNOMANUAL)",
               ]),
         .init(id: "v1.0.1066",
@@ -143,13 +154,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1049",
                 "fix(call): audio TX kept writing into an ICE-dead DataChannel for the whole outage (W-DCTXICEGATE +3)",
                 "feat(call): detect mid-call speaker change from the call's own audio (SPKCHG)",
-              ]),
-        .init(id: "v1.0.1048",
-              date: "2026-08-29",
-              title: "v1.0.1048",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1048",
-                "fix(logs): turning the diagnostics toggle ON never started the log pump (W-CONSENTLATESTART)",
               ]),
     ]
 }
