@@ -462,6 +462,10 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != isInCall else { return }
             if isInCall { startVideoBeacon() } else { stopVideoBeacon() }
+            // W-CALLAWAKE — same choke point, same reason as the beacon: the
+            // system auto-lock must be held off for exactly as long as a
+            // call lives, from whichever of the dozen sites flipped this.
+            updateIdleTimer()
         }
     }
     @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
@@ -1115,7 +1119,15 @@ final class AppState: ObservableObject {
     /// observed `@Published` (a nested ObservableObject's own `@Published`
     /// changes don't propagate through `appState.groupCallViewModel?.x`
     /// unless the view separately observes that nested object).
-    @Published var groupCallControllerState: GroupCallController.State = .idle
+    @Published var groupCallControllerState: GroupCallController.State = .idle {
+        didSet {
+            guard oldValue != groupCallControllerState else { return }
+            // W-CALLAWAKE — group calls never touch `isInCall` (parallel
+            // signal, see the busy-check), so the auto-lock hold has to be
+            // re-evaluated from here too.
+            updateIdleTimer()
+        }
+    }
 
     /// W561 — the callId of whatever call is active right now (group takes
     /// priority since `callState`/`BCryptoCallingApiImpl` don't expose a 1:1
@@ -3221,8 +3233,10 @@ final class AppState: ObservableObject {
                     // tapped the in-call speaker button — CallKit can refire
                     // didActivate mid-call (interruption-end, hold/resume,
                     // Bluetooth reactivation) without any speaker toggle from
-                    // the user, silently dropping the option that keeps the
-                    // route "sticky" against the proximity sensor. Re-assert
+                    // the user, silently dropping the `.defaultToSpeaker`
+                    // option the loudspeaker preference rides on (W-SOFTSPKR:
+                    // a preference the sensor may override at the ear, no
+                    // longer a lock). Re-assert
                     // via the same two-step setSpeaker(true) path (category +
                     // override) whenever the user's latched preference says
                     // speaker should be on; no-ops (harmless) if it's already
@@ -15336,15 +15350,25 @@ extension AppState {
         // intended end state.
         callSpeakerOn = enabled
         //
-        // Two-step approach required:
-        // 1. Reconfigure the category options: include .defaultToSpeaker only
-        //    when speaker is ON. Without it, overrideOutputAudioPort(.none)
-        //    correctly falls back to earpiece. With it, the proximity sensor
-        //    overrides earpiece anyway — so both must change together.
-        // 2. Call overrideOutputAudioPort to LOCK the route regardless of
-        //    the proximity sensor (which .voiceChat mode monitors by default).
-        //    Without this lock, holding the phone to your ear silently reverts
-        //    to earpiece even after the user explicitly tapped "speaker".
+        // W-SOFTSPKR (2026-09-01) — loudspeaker as a PREFERENCE, not a lock.
+        //
+        // Speaker ON = `.defaultToSpeaker` in the category options with the
+        // output override left at `.none`. In `.voiceChat` mode that is the
+        // native phone-call behaviour: the loudspeaker is the default route,
+        // and the proximity sensor moves the audio to the receiver while the
+        // phone is at the ear and back to the speaker when it is lowered.
+        // The previous two-step form added `overrideOutputAudioPort(.speaker)`
+        // precisely to DEFEAT that (the "sticky speaker" of 2026-07-20) — an
+        // explicit product decision on 2026-09-01 reverses it: the phone at
+        // the ear must go to the earpiece (screen off, touch off), the phone
+        // lowered must go back to the loudspeaker. Speaker OFF is unchanged:
+        // no `.defaultToSpeaker`, override `.none`, i.e. the receiver.
+        //
+        // Echo on the loudspeaker is handled where it always was — Apple's
+        // voice-processing I/O runs on every route (W-CANONICAL); nothing
+        // route-specific is needed here. The audio engine rebuilds itself on
+        // the real speaker<->receiver flip (AudioCapture's debounced route
+        // handler), same cost as a manual toggle today.
         let session = AVAudioSession.sharedInstance()
         do {
             #if !targetEnvironment(simulator)
@@ -15359,8 +15383,10 @@ extension AppState {
             #endif
             if enabled { opts.insert(.defaultToSpeaker) }
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
-            try session.overrideOutputAudioPort(enabled ? .speaker : .none)
-            RTLog.info("call", "setSpeaker(" + String(describing: enabled) + ") ok")
+            // W-SOFTSPKR — never `.speaker` here: an output override pins the
+            // route and silences the proximity-driven receiver hand-off.
+            try session.overrideOutputAudioPort(.none)
+            RTLog.info("call", "setSpeaker(" + String(describing: enabled) + ") ok (soft, proximity follows)")
         } catch {
             let msg: String = error.localizedDescription
             RTLog.warn("call", "setSpeaker failed: " + msg)
@@ -15372,9 +15398,10 @@ extension AppState {
     /// `ProximityScreenLock`/`ProximityScreenPolicy` (W-EARTOUCH there too):
     /// while a call is genuinely up (`.active`/`.encrypted` — never merely
     /// `.ringing`/`.connecting`, so an unanswered call can't blank the
-    /// screen) AND the live audio route is the built-in earpiece (not
-    /// speaker/Bluetooth/wired — same route-based rule Android uses),
-    /// enable `UIDevice.isProximityMonitoringEnabled`. iOS then handles the
+    /// screen) AND the live audio route is a handset route — built-in
+    /// receiver or built-in speaker, never Bluetooth/wired (W-EARTOUCH-V2
+    /// below; v1 was receiver-only), enable
+    /// `UIDevice.isProximityMonitoringEnabled`. iOS then handles the
     /// screen-off (and, as an inherent side effect, touch-suppression) and
     /// the automatic restore the moment the sensor clears — no separate
     /// notification observer needed for the base behavior, unlike Android's
@@ -15402,12 +15429,62 @@ extension AppState {
             }
             return
         }
-        let onEarpiece = AVAudioSession.sharedInstance().currentRoute.outputs.contains {
-            $0.portType == .builtInReceiver
+        // W-EARTOUCH-V2 (2026-09-01) — built-in receiver OR built-in speaker.
+        // The v1 rule (receiver only) meant a video call — which lives on the
+        // loudspeaker — never armed the sensor, so raising the phone to the
+        // ear left the touch screen live against the cheek, and nothing
+        // stopped the system auto-lock either (see W-CALLAWAKE below). Only
+        // external routes (Bluetooth / wired / AirPlay) stay excluded: with a
+        // headset there is no "held to the ear" gesture to protect, and the
+        // sensor would just black the screen in a pocket. The OS still does
+        // the actual work (screen off + touch suppressed while covered,
+        // restored the moment it clears). Together with W-CALLAWAKE this is a
+        // blank, never a lock: the app stays foreground, the camera keeps
+        // capturing, and with the soft loudspeaker route (`setSpeaker`) the
+        // audio itself follows the sensor — receiver at the ear, speaker
+        // away from it — exactly like a native phone call.
+        let onHandsetRoute = AVAudioSession.sharedInstance().currentRoute.outputs.contains {
+            $0.portType == .builtInReceiver || $0.portType == .builtInSpeaker
         }
-        if UIDevice.current.isProximityMonitoringEnabled != onEarpiece {
-            UIDevice.current.isProximityMonitoringEnabled = onEarpiece
-            RTLog.info("call", "W-EARTOUCH updateProximityMonitoring — onEarpiece=\(onEarpiece), isProximityMonitoringEnabled=\(onEarpiece)")
+        if UIDevice.current.isProximityMonitoringEnabled != onHandsetRoute {
+            UIDevice.current.isProximityMonitoringEnabled = onHandsetRoute
+            RTLog.info("call", "W-EARTOUCH updateProximityMonitoring — onHandsetRoute=\(onHandsetRoute), isProximityMonitoringEnabled=\(onHandsetRoute)")
+        }
+    }
+
+    /// W-CALLAWAKE (2026-09-01) — hold off the system auto-lock for as long
+    /// as any call is live (1:1 via `isInCall`, group via
+    /// `groupCallControllerState`), and release it the moment none is.
+    ///
+    /// `isIdleTimerDisabled` had never been set anywhere in this app's
+    /// history (repo grep + `git log -S` both empty), so a video call — on the
+    /// loudspeaker, hence outside W-EARTOUCH v1's receiver-only proximity
+    /// rule — simply followed the user's Auto-Lock timeout: real lock, app to
+    /// background, `AVCaptureSession` interrupted with
+    /// `videoDeviceNotAvailableInBackground` (a platform rule, not ours — see
+    /// VideoCallPipeline's W-CAPSESSIONWATCH, measured on call f882cbe9 the
+    /// same day: 80 s of beacons with zero frames leaving the device while
+    /// the peer burned its whole recovery ladder). The fix is to prevent the
+    /// LOCK, not to fight the camera rule: with the timer held the screen
+    /// only ever goes dark through the proximity sensor, which is a blank,
+    /// not a lock — foreground state, capture and audio all survive it.
+    ///
+    /// Reference for the pairing (idle timer off + proximity on) and for why
+    /// this must be released on every exit path: see the audit memory
+    /// `reference_ios_stability_audit_2026_09_01.md`. Idempotent; called
+    /// only from the two `didSet`s so a new call path can't forget it.
+    @MainActor
+    private func updateIdleTimer() {
+        let groupLive: Bool = {
+            switch groupCallControllerState {
+            case .connecting, .active: return true
+            case .idle, .failed: return false
+            }
+        }()
+        let wanted = isInCall || groupLive
+        if UIApplication.shared.isIdleTimerDisabled != wanted {
+            UIApplication.shared.isIdleTimerDisabled = wanted
+            RTLog.info("call", "W-CALLAWAKE isIdleTimerDisabled=\(wanted) (isInCall=\(isInCall), groupLive=\(groupLive))")
         }
     }
 
