@@ -1831,7 +1831,12 @@ final class AppState: ObservableObject {
     /// said so is never echoed back, since two devices bouncing the same
     /// unverified claim would look like independent corroboration and would
     /// not be.
-    private var lastSentSpeakerChange: Bool?
+    /// Last speaker-change value announced to the peer, seeded false rather
+    /// than left nil. W-SPKCHGSPURIOUS (2026-09-01) — a nil seed made the
+    /// first verdict of every call compare unequal and announce "no change"
+    /// to a peer never told otherwise, contradicting the transition-only
+    /// contract. Seeding false states the truth: no change is the known starting state of every call, so the first verdict cannot be mistaken for a transition.
+    private var lastSentSpeakerChange: Bool = false
 
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW (un-smoothed) per-analyzed-frame Guardian confidence scores
@@ -15016,7 +15021,7 @@ extension AppState {
         peerOwnerContinuityLevel = .unknown
         contactVoiceLevel = .unknown
         speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
-        lastSentSpeakerChange = nil
+        lastSentSpeakerChange = false
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).
