@@ -9,10 +9,35 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1069",
+              date: "2026-09-02",
+              title: "v1.0.1069",
+              bullets: [
+                "fix(call): transcript-bound session key/SAS + signed re-key round freshness (CALL-4/HSID-002, CALL-3)",
+                "fix(call): consolidated AppState.swift changes from tonight's P1/P2 remediation round 2",
+                "fix(call): CallKit work off the delegate's main queue, hold support, audio AEAD-fail recovery hook (W-CALLKITOFFLOAD, W-CALLHOLD, W-AUDIOAEADREKEY)",
+                "fix(security): pin the last 3 auxiliary clients on voip.bcrypto.com (W-AUXPIN2)",
+                "fix(chat): show a connection-status banner on the chat list (W-CONNBANNER)",
+                "fix(entitlements): typed 402 error instead of a generic HTTP failure (W-402TYPED)",
+                "fix(privacy): screenshot protection ON by default, detect active screen recording, encrypt drafts at rest (W-PRIVACYDEFAULT, W-SCREENCAP, W-DRAFTCIPHER)",
+                "fix(crash): guard the remaining video/backend force-unwraps and preconditions (W-CRASHHARDEN)",
+                "fix(security): sign file-attachment/voice-note announce envelopes with device Ed25519 identity (ATT-1, W-ANNOUNCESIG)",
+                "fix(ci): SpeakerCohortNormalizer default-argument access-level build break (W-CIFIX)",
+                "fix(chat): durable outbox with retry for 1:1 messages, dedup on receive (W-OUTBOX)",
+                "fix(call): degrade to relay instead of ending the call on ICE grace expiry; stop swallowing call-signaling errors; thread-safe CallKit ledger; identity self-heal (W-ICEGRACEDEGRADE, W-CALLSIGNALERR, W-CKLEDGER, W-IDSELFHEAL)",
+                "fix(security): telemetry/bug-report/feedback/self-test clients now use certificate pinning (W-AUXPIN)",
+                "fix(crypto): Keychain identity/PSK/ratchet items readable while the device is locked (W-KCAFTERUNLOCK)",
+                "fix(audio): resume/rebuild the call audio session after interruptions and mediaserverd resets (W-AUDIORESUME, W-AUDIOBEACON)",
+                "fix(db): recover from a corrupt/full sqlite file instead of crashing on launch (W-DBRECOVER)",
+                "feat(speaker-change): AS-Norm cohort scoring closes the hard-pair gap",
+                "tools(logs): ship-ios-logs.py authenticates with the SSH key (W-VPSKEYAUTH)",
+                "fix(call): keep the phone awake in a call, and make the loudspeaker follow the ear (W-CALLAWAKE, W-EARTOUCH-V2, W-SOFTSPKR)",
+              ]),
         .init(id: "v1.0.1068",
               date: "2026-09-01",
               title: "v1.0.1068",
               bullets: [
+                "chore: regenerate changelog for v1.0.1068",
                 "fix(call): six verified corner-case fixes for peer network-change resilience",
                 "fix(call): every call opened by announcing \"no change\" to the peer (W-SPKCHGSPURIOUS)",
                 "fix(net): node selection probed liveness and called it readiness",
@@ -146,14 +171,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1050",
                 "diag(call): remote heartbeat for native audio RTP — the silent-call blind spot (W-SRTPRXDIAG)",
-              ]),
-        .init(id: "v1.0.1049",
-              date: "2026-08-30",
-              title: "v1.0.1049",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1049",
-                "fix(call): audio TX kept writing into an ICE-dead DataChannel for the whole outage (W-DCTXICEGATE +3)",
-                "feat(call): detect mid-call speaker change from the call's own audio (SPKCHG)",
               ]),
     ]
 }
