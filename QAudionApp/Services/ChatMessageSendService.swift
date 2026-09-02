@@ -109,6 +109,82 @@ final class ChatMessageSendService {
         }
     }
 
+    /// W-MSGOUTBOX (2026-09-01) — outcome of the durable text send.
+    /// `queued` is the one case `Outcome` cannot express: the sealed bytes
+    /// are persisted in `ChatOutboxStore` and `ChatOutboxDrain` re-sends
+    /// them with the same `client_msg_id`; the row stays `.sending`.
+    enum DurableOutcome {
+        case delivered(serverMessageId: String)
+        case queued
+        case failed(reason: ChatContainer.SendFailureReason)
+    }
+
+    /// W-MSGOUTBOX (2026-09-01) — `sendEncrypted` for the 1:1 TEXT path
+    /// only (`ChatContainer.sendMessage`), with the transport failure
+    /// re-routed into the durable outbox instead of `.failed`.
+    ///
+    /// Same steps, same order, same crypto as `sendEncrypted` (auth gate →
+    /// `encryptForWire` → persistent WS → `messageApi.sendMessage`); the
+    /// happy path returns exactly what it returned before. The ONLY
+    /// difference is the catch: when the socket is not there in time
+    /// (`wsUnavailable`, no provider, send threw) the bytes we already
+    /// sealed are written to `chat_outbox` — attempt 1 counted, first
+    /// backoff armed — and the caller gets `.queued`. Crypto/PSK/auth
+    /// failures still return `.failed` (the key exchange / login those
+    /// trigger is the fix, not a retry). With `OutboxRetryPolicy.enabled
+    /// == false` this collapses to the old `.failed(.networkError)`.
+    ///
+    /// `sendEncrypted` itself is untouched — every other caller (control
+    /// envelopes, attachments, avatar announce, forwards) keeps today's
+    /// contract.
+    func sendEncryptedDurable(
+        messageId: UUID,
+        conversationId: UUID,
+        peerUserId: String,
+        plaintext: String
+    ) async -> DurableOutcome {
+        guard let token = appState.authService.loadToken(), !token.isEmpty else {
+            return .failed(reason: .notAuthenticated)
+        }
+        let wireBlob: Data
+        switch await encryptForWire(messageId: messageId, peerUserId: peerUserId, plaintext: plaintext) {
+        case .success(let blob):
+            wireBlob = blob
+        case .failure(let reason):
+            return .failed(reason: reason)
+        }
+        do {
+            guard let live = await appState.ensurePersistentProviderConnected() else {
+                throw BCryptoMessageError.wsUnavailable
+            }
+            let serverMsgId = try await live.messageApi.sendMessage(
+                recipientId: peerUserId,
+                content: wireBlob,
+                clientMsgId: messageId.uuidString
+            )
+            return .delivered(serverMessageId: serverMsgId)
+        } catch {
+            guard OutboxRetryPolicy.shouldQueue(isTransportFailure: true) else {
+                print("[ChatSend] WS send failed: \(error.localizedDescription)")
+                return .failed(reason: .networkError)
+            }
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let attempts = 1
+            ChatOutboxStore().enqueueMessage(
+                clientMsgId: messageId.uuidString,
+                messageId: messageId,
+                conversationId: conversationId,
+                peerUserId: peerUserId,
+                wireBlob: wireBlob,
+                attempts: attempts,
+                createdAtMs: nowMs,
+                nextAttemptAtMs: nowMs + OutboxRetryPolicy.backoffMs(afterFailedAttempts: attempts)
+            )
+            RTLog.warn("chat", "send queued=1 attempts=\(attempts) bytes=\(wireBlob.count)")
+            return .queued
+        }
+    }
+
     /// Encrypts `plaintext` the SAME way `sendEncrypted` does (v4 native
     /// ratchet -> v3.1 forward-secrecy ratchet -> legacy PSK-AEAD, chosen by
     /// per-peer capability) but stops short of the WebSocket network send.

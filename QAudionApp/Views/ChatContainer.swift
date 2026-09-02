@@ -232,6 +232,21 @@ final class ChatContainer: ObservableObject {
                 return from == peerId
             }()
             guard peerMatch else { return }
+            // W-MSGOUTBOX (2026-09-01) — a row the outbox drainer gave up
+            // on (`ChatOutboxDrain.fail`) arrives here with its id and
+            // reason, so the SAME "Riprova" snackbar the live path raises
+            // through `markFailed` shows for it. Extracted outside the Task
+            // for the same Sendable-capture reason as `peerMatch`.
+            let outboxFailedId: UUID? = {
+                guard let info = note.userInfo as? [String: Any],
+                      let idText = info[ChatOutboxDrain.failedMessageIdKey] as? String else { return nil }
+                return UUID(uuidString: idText)
+            }()
+            let outboxFailureReason: SendFailureReason? = {
+                guard let info = note.userInfo as? [String: Any],
+                      let raw = info[ChatOutboxDrain.failureReasonKey] as? String else { return nil }
+                return SendFailureReason(rawValue: raw)
+            }()
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 // W83: while the user is looking at this conversation,
@@ -240,6 +255,10 @@ final class ChatContainer: ObservableObject {
                 // navigates away.
                 self.store.markConversationRead(id: self.conversationId)
                 self.refreshFromStore()
+                if let failedId = outboxFailedId, let reason = outboxFailureReason {
+                    self.failedMessageId = failedId
+                    self.failureReason = reason
+                }
             }
         }
         center.addObserver(forName: AppState.screenshotRequestNotification,
@@ -353,13 +372,20 @@ final class ChatContainer: ObservableObject {
         // qaudion-desktop and qaudion-android-new. Fallback PSK kicks in
         // for unpaired contacts so the wire still flows.
         if let sender = sendService {
+            // W-MSGOUTBOX (2026-09-01) — claim the row for this live attempt
+            // so `ChatOutboxDrain` (kicked by any WS re-auth in the meantime)
+            // never seals and sends the same message a second time while
+            // this Task is still in flight. Released in the MainActor tail.
+            ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msg.id.uuidString)
             Task { [conversationId, peerUserId, msgId = msg.id, wireText] in
-                let outcome = await sender.sendEncrypted(
+                let outcome = await sender.sendEncryptedDurable(
                     messageId: msgId,
+                    conversationId: conversationId,
                     peerUserId: peerUserId,
                     plaintext: wireText
                 )
                 await MainActor.run {
+                    ChatOutboxDrain.shared.endLiveSend(clientMsgId: msgId.uuidString)
                     switch outcome {
                     case .delivered(let serverMessageId):
                         // W78: bind the server id to the local row so
@@ -374,11 +400,13 @@ final class ChatContainer: ObservableObject {
                             id: msgId, conversationId: conversationId,
                             newStatus: .delivered, deliveredAt: Date()
                         )
-                    case .sent:
-                        self.store.updateMessageStatus(
-                            id: msgId, conversationId: conversationId,
-                            newStatus: .delivered, deliveredAt: Date()
-                        )
+                    case .queued:
+                        // W-MSGOUTBOX — transport failure: the sealed bytes
+                        // are in `chat_outbox`, the row stays `.sending`
+                        // (clock icon) and the drainer owns it from here —
+                        // it re-sends with the same client_msg_id and only
+                        // flips to `.failed` past `OutboxRetryPolicy`'s caps.
+                        ChatOutboxDrain.shared.kick(reason: "live-send-queued")
                     case .failed(let reason):
                         self.markFailed(messageId: msgId, reason: reason)
                     }

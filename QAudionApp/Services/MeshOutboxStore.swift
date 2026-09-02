@@ -80,6 +80,18 @@ final class MeshOutboxStore {
         saveLocked(all)
     }
 
+    /// W-MSGOUTBOX (2026-09-01) — is this message waiting on the mesh? A
+    /// mesh-routed row stays `.sending` while it sits here (see
+    /// `ChatContainer.finishMeshSend`), which is the same status the
+    /// network outbox drainer (`ChatOutboxDrain`) looks for; this is how
+    /// that drainer knows to leave a mesh-owned row alone instead of
+    /// re-sending it over the WebSocket the user chose not to use.
+    func contains(messageId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadLocked().contains { $0.messageId == messageId }
+    }
+
     /// Entries whose target is currently reachable, oldest first — the
     /// order a drain pass should attempt them in.
     func pending(reachableNodeHexes: Set<String>) -> [MeshPendingSend] {

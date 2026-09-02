@@ -231,6 +231,69 @@ public final class ConversationStore {
         }
     }
 
+    /// W-MSGOUTBOX (2026-09-01) — the drainer's work list: every OUTGOING
+    /// TEXT row still at `.sending`, oldest first. Text only — attachment
+    /// rows (`mediaMimeType`/`mediaLocalPath` set) ride the TUS pipeline and
+    /// have their own resume path (`TusResumeState`); tombstoned rows are
+    /// never re-sent. `.failed` rows are deliberately NOT here: they stay
+    /// on manual retry exactly as before.
+    public func loadPendingOutboundTextMessages() -> [Message] {
+        do {
+            return try db.reader.read { db in
+                try Message
+                    .filter(Column("status") == Message.Status.sending.rawValue)
+                    .filter(Column("direction") == Message.Direction.outgoing.rawValue)
+                    .filter(Column("mediaMimeType") == nil)
+                    .filter(Column("mediaLocalPath") == nil)
+                    .filter(Column("deletedAt") == nil)
+                    .order(Column("sentAt").asc)
+                    .fetchAll(db)
+            }
+        } catch {
+            print("[ConversationStore] loadPendingOutboundTextMessages failed: \(error)")
+            return []
+        }
+    }
+
+    /// W-MSGDEDUP (2026-09-01) — is an INBOUND row with this server id
+    /// already persisted? The 1:1 mirror of
+    /// `GroupMessageStore.contains(groupHex:serverMessageId:)`; checked
+    /// before decrypt so a server re-delivery never reaches the ratchet as
+    /// a replay. Restricted to `.incoming` so an outbound row that later
+    /// bound the same id via the self-echo can never match a peer's frame.
+    public func hasInboundMessage(serverMessageId: String) -> Bool {
+        do {
+            return try db.reader.read { db in
+                try Message
+                    .filter(Column("direction") == Message.Direction.incoming.rawValue)
+                    .filter(Column("serverMessageId") == serverMessageId)
+                    .fetchCount(db) > 0
+            }
+        } catch {
+            print("[ConversationStore] hasInboundMessage(serverMessageId:) failed: \(error)")
+            return false
+        }
+    }
+
+    /// W-MSGDEDUP (2026-09-01) — is an INBOUND row from this sender with
+    /// this `client_msg_id` already persisted? Covers the case the server
+    /// stored a client resend twice (two server ids, one idempotency key).
+    /// Sender-scoped so two peers' UUIDs can never collide into a drop.
+    public func hasInboundMessage(clientMsgId: String, senderUserId: String) -> Bool {
+        do {
+            return try db.reader.read { db in
+                try Message
+                    .filter(Column("direction") == Message.Direction.incoming.rawValue)
+                    .filter(Column("clientMsgId") == clientMsgId)
+                    .filter(Column("senderUserId") == senderUserId)
+                    .fetchCount(db) > 0
+            }
+        } catch {
+            print("[ConversationStore] hasInboundMessage(clientMsgId:) failed: \(error)")
+            return false
+        }
+    }
+
     public func removeMessage(id: UUID, conversationId: UUID) {
         do {
             _ = try db.writer.write { db in
@@ -819,6 +882,11 @@ public final class ConversationStore {
         do {
             _ = try db.writer.write { db in
                 try Conversation.deleteAll(db)
+                // W-MSGOUTBOX (2026-09-01) — the outbox holds sealed wire
+                // bytes for rows that no longer exist after this; a wipe
+                // (logout / remote_wipe via LocalCryptoWipe) must not leave
+                // them behind to be re-sent under the next identity.
+                try ChatOutboxEntry.deleteAll(db)
             }
         } catch {
             print("[ConversationStore] wipeAll failed: \(error)")
