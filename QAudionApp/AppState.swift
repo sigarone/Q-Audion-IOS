@@ -19645,7 +19645,17 @@ extension AppState {
     /// restarts.
     @MainActor
     private func armGroupCallJoinTimeout(callId: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+        // W-GRPJOINRETRY retune (2026-09-03) — live evidence (call 0bcd14bf,
+        // iOS callee 7b86cad8): the CallKit-audio-session-suspends-the-socket
+        // window this retry schedule was built around (see W-GRPJOINRETRY's
+        // own doc, "reconnects within 1-4s") lasted the WHOLE 20s connecting
+        // window that night — all 5 attempts (original join + 4 retries at
+        // 3/6/10/14s) landed on a still-suspended socket, and this timeout
+        // killed the call ("group_call_join_timeout") 5s after the last
+        // retry, with no margin left for a late reply to land. Widened to
+        // 30s to match the extra retry mark added below — same mechanism,
+        // just more runway before giving up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) { [weak self] in
             guard let self = self,
                   case .connecting(let cid) = self.groupCallControllerState,
                   cid == callId else { return }
@@ -19886,14 +19896,21 @@ extension AppState {
             // while still connecting, so a retry landing after the socket
             // recovers gets the roster instead of relying on the one attempt
             // that raced the suspension window.
-            // Absolute offsets from join, all comfortably inside the 20s
+            // Absolute offsets from join, all comfortably inside the 30s
             // armGroupCallJoinTimeout above (which tears the call down and
             // would make any later retry a correctly-guarded no-op) — each
             // sleep is the DELTA from the previous mark, not the delay
-            // itself, so the retries land at ~3s/6s/10s/14s, not
-            // ~3s/9s/19s/33s.
+            // itself, so the retries land at ~3s/6s/10s/14s/20s, not
+            // ~3s/9s/19s/33s/53s.
+            //
+            // W-GRPJOINRETRY retune (2026-09-03) — added the 20s mark (was
+            // 3/6/10/14, matched to the old 20s timeout) after live evidence
+            // that the suspended-socket window this schedule targets can
+            // last the entire original window — see armGroupCallJoinTimeout's
+            // note above for the incident this schedule and the timeout are
+            // widened together for.
             var elapsedSec = 0.0
-            for markSec in [3.0, 6.0, 10.0, 14.0] {
+            for markSec in [3.0, 6.0, 10.0, 14.0, 20.0] {
                 let deltaSec = markSec - elapsedSec
                 elapsedSec = markSec
                 try? await Task.sleep(nanoseconds: UInt64(deltaSec * 1_000_000_000))
