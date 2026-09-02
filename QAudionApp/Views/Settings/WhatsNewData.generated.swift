@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1079",
+              date: "2026-09-03",
+              title: "v1.0.1079",
+              bullets: [
+                "fix(call): group-call join retries were resending onto the same suspended socket",
+              ]),
         .init(id: "v1.0.1078",
               date: "2026-09-03",
               title: "v1.0.1078",
               bullets: [
+                "chore: regenerate changelog for v1.0.1078",
                 "fix(call): group-call join retry/timeout was too tight for a long socket suspension",
               ]),
         .init(id: "v1.0.1077",
@@ -175,12 +182,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1060",
                 "fix(call): key-ring slot is now the explicit crypto epoch — distinct-key counting was poisoned by the transitional SAS key (W-KEYSLOTROTATE v2)",
                 "chore: regenerate changelog for v1.0.1059",
-              ]),
-        .init(id: "v1.0.1059",
-              date: "2026-08-30",
-              title: "v1.0.1059",
-              bullets: [
-                "fix(call): FrameCryptor key ring pinned to slot 0 — every mid-call rekey killed audio AND video both ways (W-KEYSLOTROTATE)",
               ]),
     ]
 }
