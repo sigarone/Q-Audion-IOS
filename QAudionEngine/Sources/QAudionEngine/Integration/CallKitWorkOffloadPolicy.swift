@@ -97,4 +97,50 @@ public enum CallKitWorkOffloadPolicy {
     ) -> AudioEngineDispatch {
         enabled ? .backgroundQueueFireAndForget : .inlineOnCallingThread
     }
+
+    /// W-CKMAINBLOCK-TEARDOWN (2026-09-02) — the STOP-side twin of
+    /// `audioEngineBackgroundQueueEnabled` above, found while investigating a
+    /// live report: iOS's own in-app UI (including its hangup button) froze
+    /// for the peer receiving a call end (Android hung up mid video-call,
+    /// callId 37c852e3, 13:32:27 UTC). Root cause traced through the EXACT
+    /// call chain a remote hangup drives: `AppState.handleRemoteCallHangup`
+    /// → `await MainActor.run { endCall() }` → `CallService.
+    /// teardownAudioStack()` → `AudioCapture.stop()` →
+    /// `AudioProcessingPipeline.disableVoiceProcessing(on:)`, which calls
+    /// `inputNode.setVoiceProcessingEnabled(false)` — the SAME blocking API
+    /// this file's header comment already names as "observed to block" —
+    /// synchronously, unconditionally, on the MainActor. No offload existed
+    /// on this path at all (unlike `stopRunningDispatch` above, which the
+    /// video side already got); this call runs inline every single hangup.
+    ///
+    /// Default OFF, same posture as `audioEngineBackgroundQueueEnabled` and
+    /// for the identical reason: `AudioCapture.stop()` mutates the same
+    /// `AVAudioEngine`/`AVAudioInputNode` immediately before and after this
+    /// call (`engine?.inputNode.removeTap`, `engine?.stop()`) with NO
+    /// existing serial queue funnelling every engine mutation through one
+    /// place — unlike `captureQueue` for the video fix, which is why THAT
+    /// one could default ON as a "no known risk" pure fix. Dispatching only
+    /// `setVoiceProcessingEnabled` onto a background queue while
+    /// `engine.stop()` keeps running inline on the caller's thread would be
+    /// a genuinely new data race on an Apple type with no documented
+    /// thread-safety guarantee, not merely a latency fix — needs on-device
+    /// verification (no Mac/Xcode in this environment) before flipping.
+    public static let voiceProcessingTeardownQueueEnabled: Bool = false
+
+    /// What `AudioProcessingPipeline.disableVoiceProcessing(on:)` should do
+    /// with `setVoiceProcessingEnabled(false)`.
+    public enum VoiceProcessingTeardownDispatch: Equatable {
+        /// Today's behaviour: block the caller (the MainActor, on the
+        /// remote-hangup teardown path) until the VP-IO unit finishes
+        /// tearing down.
+        case blockingSync
+        /// Queue the call and return immediately.
+        case fireAndForgetAsync
+    }
+
+    public static func voiceProcessingTeardownDispatch(
+        enabled: Bool = voiceProcessingTeardownQueueEnabled
+    ) -> VoiceProcessingTeardownDispatch {
+        enabled ? .fireAndForgetAsync : .blockingSync
+    }
 }

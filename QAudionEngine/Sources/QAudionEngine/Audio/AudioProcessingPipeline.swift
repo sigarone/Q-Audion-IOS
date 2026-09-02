@@ -287,6 +287,17 @@ public final class AudioProcessingPipeline {
     /// read `inputNode.isVoiceProcessingEnabled`.
     private var voiceProcessingActive = false
 
+    /// W-CKMAINBLOCK-TEARDOWN (2026-09-02) — serial queue `disableVoiceProcessing`
+    /// dispatches onto when `CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled`
+    /// is flipped on. See that flag's kdoc for why it stays off by default
+    /// (no on-device verification yet) and why this needs its own queue
+    /// rather than reusing the caller's — mirrors `VideoCallPipeline`'s
+    /// `captureQueue` role for the equivalent camera-stop fix, minus the
+    /// "already owns every mutation" guarantee that let that one default on.
+    private let voiceProcessingTeardownQueue = DispatchQueue(
+        label: "com.bcrypto.qaudion.audio.vpio-teardown"
+    )
+
     // AUDIO-DIAG (2026-07-10) — per-call audio-path snapshot. Two open
     // investigations, both needing REAL data instead of guesses:
     //
@@ -688,11 +699,24 @@ public final class AudioProcessingPipeline {
 
     /// Disable voice processing (call when the call ends).
     public func disableVoiceProcessing(on engine: AVAudioEngine) {
-        let inputNode = engine.inputNode
-        if #available(iOS 13.0, *) {
-            try? inputNode.setVoiceProcessingEnabled(false)
-        }
         voiceProcessingActive = false
+        guard #available(iOS 13.0, *) else { return }
+        let inputNode = engine.inputNode
+        // W-CKMAINBLOCK-TEARDOWN — see CallKitWorkOffloadPolicy's kdoc: this
+        // call is the audio-side twin of the camera's `stopRunning()` block,
+        // found on the remote-hangup path (AppState.handleRemoteCallHangup →
+        // MainActor.run → CallService.teardownAudioStack → AudioCapture.stop
+        // → here) that froze the app's own in-app UI when the PEER hung up.
+        // Default is blockingSync (today's exact behaviour) until the
+        // fireAndForgetAsync path is verified on a device.
+        switch CallKitWorkOffloadPolicy.voiceProcessingTeardownDispatch() {
+        case .blockingSync:
+            try? inputNode.setVoiceProcessingEnabled(false)
+        case .fireAndForgetAsync:
+            voiceProcessingTeardownQueue.async {
+                try? inputNode.setVoiceProcessingEnabled(false)
+            }
+        }
     }
 
     /// Deactivate the audio session when the call ends.

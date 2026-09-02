@@ -20,6 +20,7 @@ final class CallKitWorkOffloadPolicyTests: XCTestCase {
     func test_defaults_videoOnAudioOff() {
         XCTAssertTrue(Policy.asyncStopRunningEnabled)
         XCTAssertFalse(Policy.audioEngineBackgroundQueueEnabled)
+        XCTAssertFalse(Policy.voiceProcessingTeardownQueueEnabled)
     }
 
     // MARK: - stopRunningDispatch
@@ -45,5 +46,18 @@ final class CallKitWorkOffloadPolicyTests: XCTestCase {
     /// today's exact behaviour, byte-for-byte, until this is verified live).
     func test_audioEngineDispatch_defaultArgumentMatchesTheKillSwitch() {
         XCTAssertEqual(Policy.audioEngineDispatch(), .inlineOnCallingThread)
+    }
+
+    // MARK: - voiceProcessingTeardownDispatch
+
+    func test_voiceProcessingTeardownDispatch_followsTheSwitch() {
+        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(enabled: true), .fireAndForgetAsync)
+        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(enabled: false), .blockingSync)
+    }
+
+    /// Calling with no argument uses the shipped default (currently OFF —
+    /// today's exact behaviour, byte-for-byte, until this is verified live).
+    func test_voiceProcessingTeardownDispatch_defaultArgumentMatchesTheKillSwitch() {
+        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(), .blockingSync)
     }
 }
