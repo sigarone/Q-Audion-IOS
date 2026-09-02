@@ -55,7 +55,7 @@ import Foundation
 /// one and returns the FIRST failure reason, never a partial pass.
 public enum SigsumVerifier {
 
-    public enum FailureReason: Equatable {
+    public enum FailureReason: Error, Equatable {
         case malformedInput(String)
         /// The bundle's `log=` key hash does not match any log in `policy`.
         case unknownLog
