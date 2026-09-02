@@ -330,7 +330,11 @@ public final class TelemetryService {
         req.httpBody = wire
 
         do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
+            // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins
+            // as the REST client) instead of URLSession.shared — this
+            // bearer-token POST had no pin at all (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 6).
+            let (_, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
             if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                 // Drop the events we just shipped.
                 if batchEvents.count <= buffer.count {
@@ -372,7 +376,8 @@ public final class TelemetryService {
         req.timeoutInterval = 10
         req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            // W-AUXPIN (2026-09-01): pinned session, see flushOnce.
+            let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
             guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
             struct PubResp: Decodable { let pubkey: String; let alg: String? }
             let pr = try JSONDecoder().decode(PubResp.self, from: data)

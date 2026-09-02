@@ -252,8 +252,17 @@ public final class BugReporter: ObservableObject {
         guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return nil }
         var request = URLRequest(url: url)
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        // W-AUXPIN: keep the 60 s idle timeout this request always had under
+        // URLSession.shared — the pinned session's configuration carries the
+        // REST client's 15 s (IOS-E2), and a per-request value takes
+        // precedence over it. Behaviour-preserving, not a tuning change.
+        request.timeoutInterval = 60
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins
+            // as the REST client) instead of URLSession.shared — this
+            // bearer-token GET had no pin at all (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 6).
+            let (data, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 RTLog.warn("bugreport", "report-pubkey fetch failed")
                 return nil
@@ -370,9 +379,14 @@ public final class BugReporter: ObservableObject {
             body.append(closingData)
         }
         request.httpBody = body
+        // W-AUXPIN: same 60 s idle timeout as before (see fetchAdminPubKey) —
+        // this is the multi-MB encrypted upload, the one request here that
+        // must not inherit the pinned session's 15 s default.
+        request.timeoutInterval = 60
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            // W-AUXPIN (2026-09-01): pinned session, see fetchAdminPubKey.
+            let (_, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             if let http = response as? HTTPURLResponse {
                 RTLog.info("bugreport", "E2EE upload status=" + String(describing: http.statusCode))
             }

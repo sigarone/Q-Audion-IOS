@@ -222,7 +222,11 @@ public final class FeedbackService: ObservableObject {
         req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins as
+        // the REST client) instead of URLSession.shared — these bearer-token
+        // calls had no pin at all (audit memory
+        // reference_ios_stability_audit_2026_09_01, P1 item 6).
+        let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard status / 100 == 2 else {
             throw FeedbackError.http(status)
@@ -236,7 +240,8 @@ public final class FeedbackService: ObservableObject {
         req.timeoutInterval = 12
         let tok = try token()
         req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        // W-AUXPIN (2026-09-01): pinned session, see postJSON.
+        let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard status / 100 == 2 else {
             throw FeedbackError.http(status)

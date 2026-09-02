@@ -237,7 +237,13 @@ public final class SelfTestService {
         req.timeoutInterval = 8
         let t0 = DispatchTime.now()
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins
+            // as the REST client) instead of URLSession.shared, so the probe
+            // measures the SAME TLS path real traffic takes — and a pin
+            // rotation miss shows up here as ok=false instead of hiding
+            // behind an unpinned success (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 6).
+            let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
             let t1 = DispatchTime.now()
             let httpResp = resp as? HTTPURLResponse
             let status = httpResp?.statusCode ?? 0
