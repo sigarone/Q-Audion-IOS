@@ -74,7 +74,29 @@ public final class QAudionRingtonePlayer {
 
     private func ensureRunning() {
         if !connected {
-            engine.connect(player, to: engine.mainMixerNode, format: player.outputFormat(forBus: 0))
+            // W-VAULTLOCKNFC follow-up (2026-09-02, live crash reports —
+            // "si è schiantato in fase di connessione") — `player
+            // .outputFormat(forBus: 0)` on a freshly-attached
+            // AVAudioPlayerNode that has never scheduled a buffer is a
+            // documented AVAudioEngine footgun: before the node has ever
+            // played anything it can report a degenerate format (0
+            // channels / 0 Hz), and `AVAudioEngine.connect(_:to:format:)`
+            // is not a throwing function — an invalid format raises an
+            // uncatchable Objective-C NSException instead of a Swift
+            // error, crashing the process outright. This engine's first
+            // connect+start happens exactly when a call needs its first
+            // cue (onAudioSessionActivated / call_ready / call_answer),
+            // i.e. exactly "in fase di connessione" — matches the timing
+            // of the reports. Use the SAME explicit, always-valid format
+            // already computed for the PCM buffers instead of trusting
+            // the player's pre-connection format.
+            guard let format = AVAudioFormat(
+                standardFormatWithSampleRate: QAudionSynth.defaultSampleRate, channels: 1
+            ) else {
+                print("[QAudionRingtonePlayer] could not construct connect format")
+                return
+            }
+            engine.connect(player, to: engine.mainMixerNode, format: format)
             connected = true
         }
         guard !engine.isRunning else { return }
