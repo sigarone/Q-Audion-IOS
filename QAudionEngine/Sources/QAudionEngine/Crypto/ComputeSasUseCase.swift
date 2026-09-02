@@ -54,13 +54,36 @@ public enum ComputeSasUseCase {
     ///   - sessionKey: shared symmetric session key (typically 32 bytes).
     ///                 Must not be empty — an empty key disables the ceremony.
     ///   - initiator: reserved for future protocol transcripts; unused in v1.
-    public static func invoke(sessionKey: Data, initiator: Bool = false) throws -> Sas {
+    ///   - transcriptHash: CALL-4/HSID-002 (2026-09-02 protocol audit) — the
+    ///     32-byte SHA-256 of the call's v3 handshake transcript, supplied
+    ///     ONLY when both peers negotiated the `transcriptBindV1` capability
+    ///     and its signature verified. When non-nil, `info` becomes
+    ///     `HkdfLabels.sasTranscriptBindV1 || transcriptHash` INSTEAD of
+    ///     `SasConstants.infoWordsBytes` — a relay that strips a signed
+    ///     capability bit (or any other transcript field) from both bundles
+    ///     changes `transcriptHash`, which changes these 6 words on both
+    ///     ends, making the downgrade visible at SAS-verification time
+    ///     instead of silent (the transcript-independent SAS this function
+    ///     computed before this parameter existed). `nil` (default) is
+    ///     BYTE-IDENTICAL to every call site that predates this fix — the
+    ///     salt (`SasConstants.saltBytes`) is unchanged either way.
+    public static func invoke(sessionKey: Data, initiator: Bool = false, transcriptHash: Data? = nil) throws -> Sas {
         guard !sessionKey.isEmpty else { throw SasError.emptyKey }
+        let info: Data
+        if let transcriptHash {
+            precondition(transcriptHash.count == 32, "transcriptHash must be 32 bytes")
+            var i = Data(capacity: HkdfLabels.sasTranscriptBindV1.count + 32)
+            i.append(HkdfLabels.sasTranscriptBindV1)
+            i.append(transcriptHash)
+            info = i
+        } else {
+            info = SasConstants.infoWordsBytes
+        }
 
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: sessionKey),
             salt: SasConstants.saltBytes,
-            info: SasConstants.infoWordsBytes,
+            info: info,
             outputByteCount: hkdfOutputBytes
         )
         let out = derived.withUnsafeBytes { Data($0) }

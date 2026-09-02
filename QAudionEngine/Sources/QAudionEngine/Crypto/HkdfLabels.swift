@@ -80,6 +80,26 @@ public enum HkdfLabels {
     /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
     public static let hybridCtBindV1: Data = Data("q-audion-ct-bind-v1".utf8)
 
+    /// CALL-4/HSID-002 (2026-09-02 protocol audit) — session-key KDF `info`
+    /// suffix folded in when both peers negotiate the `transcriptBindV1`
+    /// handshake capability. Used ONLY as the second-pass HKDF `info` prefix
+    /// in `QAudionCallIntegration.deriveTranscriptBoundSessionKey` — NEVER
+    /// mixed into the base schema:2/3/4 `info` strings above, which stay
+    /// byte-identical for every peer that has not shipped this fix. See that
+    /// function's doc for the full `info = kdfTranscriptBindV1 ||
+    /// transcriptHash` layout. 32 bytes, NOT null-terminated.
+    public static let kdfTranscriptBindV1: Data = Data("q-audion-kdf-transcript-bind-v1".utf8)
+
+    /// CALL-4/HSID-002 — SAS `info` REPLACEMENT (not appended) used by
+    /// `ComputeSasUseCase.invoke` in place of `SasConstants.infoWordsBytes`
+    /// when the caller supplies a non-nil `transcriptHash`. A DISTINCT label
+    /// from `kdfTranscriptBindV1` above is required even though both fold in
+    /// the SAME transcript hash — an independent security review confirmed
+    /// reusing one domain-separated hash across two HKDF derivations is safe
+    /// only when each derivation carries its own label; reusing the hash
+    /// WITHOUT distinct prefixes is not. 27 bytes, NOT null-terminated.
+    public static let sasTranscriptBindV1: Data = Data("q-audion-sas-transcript-v1".utf8)
+
     // MARK: - Salts (UTF-8)
 
     /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
@@ -104,7 +124,8 @@ public enum HkdfLabels {
             messageKey, hybridPqcSessionKey, nfcCollaborativePsk,
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
-            deviceLinkSalt, phoneVideoV1, phoneVideoSaltV1
+            deviceLinkSalt, phoneVideoV1, phoneVideoSaltV1,
+            kdfTranscriptBindV1, sasTranscriptBindV1
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

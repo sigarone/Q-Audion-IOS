@@ -55,6 +55,23 @@ public enum HandshakeTranscript {
         return d
     }()
 
+    /// CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — the v1
+    /// domain string with its trailing "v2" changed to "v3", SAME LENGTH (24
+    /// bytes — self-verified below). Used ONLY by `offerV3`/`acceptV3` — NONE
+    /// of `offer`/`accept` (v1) NOR `offerV2`/`acceptV2` are touched by this
+    /// addition, exactly mirroring how `domainV2` was introduced for
+    /// W-TRANSCRIPTV2 above: a peer that has shipped through v2 (`pskMixV1`)
+    /// but not this fix keeps verifying v1/v2 byte-for-byte as before; v3 is
+    /// a THIRD, purely ADDITIONAL signature, computed/verified only when both
+    /// peers ALSO negotiate the new `transcriptBindV1` capability (checked at
+    /// the call site, not inside this file). See `offerV3`'s doc for what it
+    /// adds over `offerV2`.
+    private static let domainV3: Data = {
+        let d = Data("qaudion-handshake-sig-v3".utf8)
+        precondition(d.count == domain.count, "domainV3 length \(d.count) != domain length \(domain.count)")
+        return d
+    }()
+
     // MARK: - Low-level encoders
 
     /// `LP(x) = u16_BE(len(x)) || x`. Absent field => `LP(empty) = 0x0000`.
@@ -67,6 +84,19 @@ public enum HandshakeTranscript {
     }
 
     private static func capByte(_ v: Bool) -> UInt8 { v ? 0x01 : 0x00 }
+
+    /// CALL-3 — big-endian 4-byte unsigned integer, appended UNCONDITIONALLY
+    /// (not length-prefixed: its width is fixed at exactly 4 bytes by
+    /// construction, known to both sides, so no `LP` framing is needed — same
+    /// convention as `ratchetV`/`suiteId`/the CAPS bytes above, which are also
+    /// fixed-width and unprefixed). Used only by `offerV3`/`acceptV3`'s
+    /// `rekeyRound` field.
+    private static func appendU32BE(_ out: inout Data, _ v: UInt32) {
+        out.append(UInt8((v >> 24) & 0xFF))
+        out.append(UInt8((v >> 16) & 0xFF))
+        out.append(UInt8((v >> 8) & 0xFF))
+        out.append(UInt8(v & 0xFF))
+    }
 
     /// PSK fingerprints sorted ascending, comma-joined UTF-8; empty when none.
     ///
@@ -372,6 +402,159 @@ public enum HandshakeTranscript {
         appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))
         appendLP(&out, offerBinding)
         appendLP(&out, adv)
+        return out
+    }
+
+    /// CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — v3
+    /// sibling of `offerV2`. SAME shape as `offerV2` (`domainV3` instead of
+    /// `domainV2`) PLUS an 8th SIGNED CAPS byte (`transcriptBindV1`) appended
+    /// after the existing 7, PLUS two new fields appended LAST:
+    ///
+    ///   `LP(rekeyNonce)` — the call's own random 64-bit freshness nonce,
+    ///     signed ONCE on round 1 (the call's first handshake) only;
+    ///     `LP(empty)` (pass `nil`) on every re-key round (round > 1) — the
+    ///     nonce is never retransmitted, both sides already hold it from
+    ///     round 1 in memory (matches how `callId` itself is ephemeral,
+    ///     process-lifetime, per-call state, never persisted).
+    ///   `u32_BE(rekeyRound)` — this OFFER's 1-based round ordinal (1 = the
+    ///     call's first handshake, 2.. = re-key rounds), UNCONDITIONALLY
+    ///     signed on every round.
+    ///
+    /// CALL-3 fix: today's re-key transcript carries no round/nonce at all —
+    /// a validly-signed round-1 bundle stays validly signed if replayed at
+    /// round N. Binding a SIGNED, monotone `rekeyRound` (scoped to the call's
+    /// own random `rekeyNonce`, never a bare cross-call-persistent value)
+    /// lets a receiver's own in-memory `(callId) -> lastAcceptedRound` ratchet
+    /// reject any round <= the last one it accepted for that call — closing
+    /// the gap without needing fragile persisted state (a process restart
+    /// mid-call safely starts a fresh nonce+counter, exactly like a fresh
+    /// `callId` would).
+    ///
+    /// `offer`/`offerV2` above are NOT touched — this is a THIRD, additional,
+    /// purely-additive signature computed/verified ONLY when both peers
+    /// negotiate the new `transcriptBindV1` capability.
+    ///
+    /// Returns `nil` only when `advEnc` does (a pathological
+    /// `pskFingerprints.count > 255` — see its doc).
+    public static func offerV3(
+        callId: String,
+        signerIdentityKey: Data,
+        epochId: Data,
+        pqcPublicKey: Data,
+        x25519PublicKey: Data,
+        strongBoxPublicKey: Data?,
+        dualCurvePublicKey: Data?,
+        ratchetV3: Bool,
+        sframeV1: Bool,
+        vkeyV1: Bool,
+        sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
+        pskMixV1: Bool,
+        transcriptBindV1: Bool,
+        ratchetV: UInt8,
+        suiteId: UInt8,
+        pskFingerprints: [String]?,
+        pskRoles: [Int]?,
+        rekeyNonce: Data?,
+        rekeyRound: UInt32
+    ) -> Data? {
+        guard let adv = advEnc(pskFingerprints, pskRoles) else { return nil }
+        if let n = rekeyNonce {
+            precondition(n.count == 8, "rekeyNonce must be 8 bytes when present, got \(n.count)")
+        }
+        var out = Data()
+        out.append(domainV3)
+        out.append(roleOffer)
+        appendLP(&out, Data(callId.utf8))
+        appendLP(&out, signerIdentityKey)
+        appendLP(&out, epochId)
+        appendLP(&out, pqcPublicKey)
+        appendLP(&out, x25519PublicKey)
+        appendLP(&out, strongBoxPublicKey)
+        appendLP(&out, dualCurvePublicKey)
+        out.append(capByte(ratchetV3))
+        out.append(capByte(sframeV1))
+        out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3))
+        out.append(capByte(ratchetV4))
+        out.append(capByte(srtpDirKeyV1))
+        out.append(capByte(pskMixV1))
+        out.append(capByte(transcriptBindV1))  // CALL-3/CALL-4: 8th CAPS byte, v3-only
+        out.append(ratchetV)
+        out.append(suiteId)
+        appendLP(&out, adv)
+        appendLP(&out, rekeyNonce)
+        appendU32BE(&out, rekeyRound)
+        return out
+    }
+
+    /// CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — v3
+    /// sibling of `acceptV2`. SAME shape as `acceptV2` (`domainV3`/the 8-byte
+    /// CAPS instead of `domainV2`/7-byte CAPS; `LP(selectedPskFingerprint)`,
+    /// `LP(offerBinding)` and the responder's `LP(adv)` RETAINED UNCHANGED,
+    /// same layout/position as v2) PLUS `u32_BE(rekeyRound)` appended LAST,
+    /// ECHOING the OFFER's own round number — a tampered/replayed round on
+    /// the ACCEPT side also invalidates this signature. The ACCEPT does NOT
+    /// carry a `rekeyNonce` field: the nonce is OFFER-side-established (round
+    /// 1 only) and never needs to be echoed back.
+    ///
+    /// `offerBinding` here MUST be `SHA-256` of the OFFER's **v3** transcript
+    /// (from `offerV3`/`offerBinding`) — distinct from both the v1 `accept`'s
+    /// and the v2 `acceptV2`'s `offerBinding` params, which bind the v1/v2
+    /// OFFER transcripts respectively. `accept`/`acceptV2` above are NOT
+    /// touched by this addition.
+    ///
+    /// Returns `nil` only when `advEnc` does.
+    public static func acceptV3(
+        callId: String,
+        signerIdentityKey: Data,
+        epochId: Data,
+        ctPqc: Data,
+        ctX25519: Data,
+        ctStrongBox: Data?,
+        ctDualCurve: Data?,
+        ratchetV3: Bool,
+        sframeV1: Bool,
+        vkeyV1: Bool,
+        sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
+        pskMixV1: Bool,
+        transcriptBindV1: Bool,
+        ratchetV: UInt8,
+        suiteId: UInt8,
+        selectedPskFingerprint: String?,
+        offerBinding: Data,
+        responderPskFingerprints: [String]?,
+        responderPskRoles: [Int]?,
+        rekeyRound: UInt32
+    ) -> Data? {
+        guard let adv = advEnc(responderPskFingerprints, responderPskRoles) else { return nil }
+        var out = Data()
+        out.append(domainV3)
+        out.append(roleAccept)
+        appendLP(&out, Data(callId.utf8))
+        appendLP(&out, signerIdentityKey)
+        appendLP(&out, epochId)
+        appendLP(&out, ctPqc)
+        appendLP(&out, ctX25519)
+        appendLP(&out, ctStrongBox)
+        appendLP(&out, ctDualCurve)
+        out.append(capByte(ratchetV3))
+        out.append(capByte(sframeV1))
+        out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3))
+        out.append(capByte(ratchetV4))
+        out.append(capByte(srtpDirKeyV1))
+        out.append(capByte(pskMixV1))
+        out.append(capByte(transcriptBindV1))
+        out.append(ratchetV)
+        out.append(suiteId)
+        appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))
+        appendLP(&out, offerBinding)
+        appendLP(&out, adv)
+        appendU32BE(&out, rekeyRound)
         return out
     }
 

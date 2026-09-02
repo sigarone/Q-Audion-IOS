@@ -117,6 +117,19 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // `@EncodeDefault(NEVER) pskMixV1` field exactly.
         public let pskMixV1: Bool?
 
+        // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) —
+        // capability bit for the combined transcript-bound session-key
+        // KDF/SAS fix (CALL-4) and the signed re-key round-freshness fix
+        // (CALL-3): both new signed transcript fields (`domainV3` — see
+        // `HandshakeTranscript.offerV3`/`acceptV3`) are computed/verified
+        // ONLY when both peers advertise this bit. OPTIONAL, appended LAST,
+        // same "omit when not advertising" convention as `pskMixV1`/
+        // `ratchetV4`/`srtpDirKeyV1` above: a peer that doesn't carry the
+        // field decodes to nil (treated as `false`), and `JSONEncoder` omits
+        // a nil key, so the OFFER/ACCEPT bytes stay byte-IDENTICAL to today's
+        // wire for every peer that has not shipped this fix.
+        public let transcriptBindV1: Bool?
+
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
@@ -124,7 +137,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             sessionKdfV3: Bool? = nil,
             ratchetV4: Bool? = nil,
             srtpDirKeyV1: Bool? = nil,
-            pskMixV1: Bool? = nil
+            pskMixV1: Bool? = nil,
+            transcriptBindV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -133,6 +147,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.ratchetV4 = ratchetV4
             self.srtpDirKeyV1 = srtpDirKeyV1
             self.pskMixV1 = pskMixV1
+            self.transcriptBindV1 = transcriptBindV1
         }
     }
 
@@ -210,6 +225,33 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // `AndroidOfferBundle.sigV2`/`AndroidAcceptBundle.sigV2` (commit c6bf155).
     public let sigV2: String?
 
+    // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — v3
+    // dual-signature rollout, mirroring `sigV2`'s own additive introduction.
+    // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over
+    // `HandshakeTranscript`'s NEW v3 transcript (`offerV3`/`acceptV3`),
+    // computed by the SAME signer ALONGSIDE (never instead of) `signature`
+    // and `sigV2`. `nil` on any build that hasn't shipped this fix and on the
+    // unsigned path — verification only attempts v3 when this AND
+    // `capabilities.transcriptBindV1` are both present; a peer that hasn't
+    // shipped it is verified exactly as before (v2-then-v1), never rejected.
+    // APPENDED LAST so existing peers' wire bytes are unchanged.
+    public let sigV3: String?
+
+    /// CALL-3 — the call's own random 64-bit freshness nonce (raw 8 bytes,
+    /// base64 no-wrap/padded), present ONLY on round 1's OFFER (the call's
+    /// first handshake) — `nil` on every re-key round's OFFER and on every
+    /// ACCEPT (the nonce is never retransmitted once established). OPTIONAL,
+    /// JSONEncoder omits nil, so a bundle that doesn't carry it is
+    /// byte-wire-identical to a peer that hasn't shipped this fix.
+    public let rekeyNonce: String?
+
+    /// CALL-3 — this bundle's 1-based re-key round ordinal (1 = the call's
+    /// first handshake, 2.. = re-key rounds), present on EVERY OFFER and
+    /// ACCEPT once this fix is live for the pair (mirrors `sigV3`'s presence
+    /// exactly — both are set together or both stay nil). `nil` on any build
+    /// that hasn't shipped this fix.
+    public let rekeyRound: Int?
+
     public init(
         kind: Kind,
         callId: String,
@@ -224,7 +266,10 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         pskRoles: [Int]? = nil,
         signerIdentityKey: String? = nil,
         signature: String? = nil,
-        sigV2: String? = nil
+        sigV2: String? = nil,
+        sigV3: String? = nil,
+        rekeyNonce: String? = nil,
+        rekeyRound: Int? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -240,6 +285,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.signerIdentityKey = signerIdentityKey
         self.signature = signature
         self.sigV2 = sigV2
+        self.sigV3 = sigV3
+        self.rekeyNonce = rekeyNonce
+        self.rekeyRound = rekeyRound
     }
 }
 

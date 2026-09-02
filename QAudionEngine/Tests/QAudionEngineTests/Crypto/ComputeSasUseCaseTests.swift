@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import QAudionEngine
 
 /// Cross-platform parity tests for the in-call SAS derivation. The pinned
@@ -96,5 +97,74 @@ final class ComputeSasUseCaseTests: XCTestCase {
     func testDisplayUppercasesWithBulletSeparator() {
         let s = ComputeSasUseCase.Sas(words: ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
         XCTAssertEqual(s.display, "ALPHA · BETA · GAMMA · DELTA · EPSILON · ZETA")
+    }
+
+    // MARK: - CALL-4/HSID-002 (2026-09-02 protocol audit) — transcriptHash param
+
+    func testTranscriptHashNilIsByteIdenticalToBeforeThisFix() throws {
+        // The pinned cross-platform KAT vector above MUST still hold when the
+        // new parameter is omitted (its default) — this fix must not have
+        // touched the legacy, transcript-independent derivation path at all.
+        let sessionKey = Data((0..<32).map { UInt8($0) })
+        let withDefault = try ComputeSasUseCase.invoke(sessionKey: sessionKey)
+        let withExplicitNil = try ComputeSasUseCase.invoke(sessionKey: sessionKey, transcriptHash: nil)
+        XCTAssertEqual(withDefault.words, ["bookshelf", "pupil", "blockade", "mural", "drifter", "snapshot"])
+        XCTAssertEqual(withDefault.words, withExplicitNil.words)
+    }
+
+    func testTranscriptHashChangesTheWordsForTheSameSessionKey() throws {
+        let key = Data(repeating: 0x55, count: 32)
+        let legacy = try ComputeSasUseCase.invoke(sessionKey: key)
+        let bound = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: Data(repeating: 0xAA, count: 32))
+        XCTAssertNotEqual(
+            legacy.words, bound.words,
+            "supplying a transcript hash must change the derivation label (SasTranscriptBindV1), never silently reuse the legacy info string"
+        )
+    }
+
+    func testDifferentTranscriptHashesProduceDifferentWordsForTheSameSessionKey() throws {
+        // CALL-4 core property: two calls that negotiated DIFFERENT
+        // capability sets (hence different transcript hashes) must show
+        // DIFFERENT SAS words to the user even if, hypothetically, their
+        // session keys ever coincided — this is the "fold into the SAS
+        // input too, under its own label" half of the fix, independent of
+        // the session-key fold tested in SessionKeyTranscriptBoundTests.
+        let key = Data(repeating: 0x66, count: 32)
+        let a = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: Data(repeating: 0x01, count: 32))
+        let b = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: Data(repeating: 0x02, count: 32))
+        XCTAssertNotEqual(a.words, b.words)
+    }
+
+    func testTranscriptHashDerivationIsDeterministic() throws {
+        let key = Data(repeating: 0x77, count: 32)
+        let hash = Data(repeating: 0x09, count: 32)
+        let a = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
+        let b = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
+        XCTAssertEqual(a.words, b.words)
+    }
+
+    /// First-principles reconstruction of the exact HKDF this fix's own doc
+    /// specifies: same salt (`SasConstants.saltBytes`, unchanged), `info =
+    /// HkdfLabels.sasTranscriptBindV1(27) || transcriptHash(32)` REPLACING
+    /// (not appending to) `SasConstants.infoWordsBytes`.
+    func testTranscriptHashMatchesFirstPrinciplesHkdfReconstruction() throws {
+        let key = Data(repeating: 0x22, count: 32)
+        let hash = Data(repeating: 0x33, count: 32)
+        var expectedInfo = Data("q-audion-sas-transcript-v1".utf8)
+        expectedInfo.append(hash)
+        let derived = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: key),
+            salt: Data("qaudion-sas-v1".utf8),
+            info: expectedInfo,
+            outputByteCount: 18
+        ).withUnsafeBytes { Data($0) }
+        var expectedIndices = [Int]()
+        for i in 0..<6 {
+            let a = Int(derived[i * 3]), b = Int(derived[i * 3 + 1]), c = Int(derived[i * 3 + 2])
+            expectedIndices.append(((a << 16) | (b << 8) | c) % PgpSasWordList.words.count)
+        }
+        let expectedWords = expectedIndices.map { PgpSasWordList.words[$0] }
+        let actual = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
+        XCTAssertEqual(actual.words, expectedWords)
     }
 }
