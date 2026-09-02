@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1073",
+              date: "2026-09-02",
+              title: "v1.0.1073",
+              bullets: [
+                "fix(call): document + stage fix for iOS UI freeze on remote hangup mid-call",
+              ]),
         .init(id: "v1.0.1072",
               date: "2026-09-02",
               title: "v1.0.1072",
               bullets: [
+                "chore: regenerate changelog for v1.0.1072",
                 "fix(security): pin bcrypto-server's real wipe-signing public key (TRUST-2)",
                 "fix(call): go-live CALL-4/HSID-002 + CALL-3 transcript-bound session KDF/SAS",
                 "fix(security): reconcile transcript-bound KDF/SAS to Android canonical, fix rekeyNonce shape (CALL-4/HSID-002, CALL-3 followup)",
@@ -173,13 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1054",
                 "fix(call): responder asks the initiator to restart ICE instead of offering into a peer that discards it (W-RESPONDERREQFIRST)",
-              ]),
-        .init(id: "v1.0.1053",
-              date: "2026-08-30",
-              title: "v1.0.1053",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1053",
-                "fix(call): three-way silent-call teardown — pre-attached mic track, manual WebRTC audio unit, key-forward hardening (W-PREATTACHMIC, W-ADMMANUAL, W-CTRLBUILDDIAG)",
               ]),
     ]
 }
