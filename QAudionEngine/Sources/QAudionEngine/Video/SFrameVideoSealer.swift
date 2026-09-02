@@ -31,13 +31,25 @@ public final class SFrameVideoSealer: @unchecked Sendable {
     public static let nonceSize = SFrameCodec.nonceSize
     public static let tagSize = SFrameCodec.tagSize
 
-    private let masterProvider: () -> Data
+    /// W-B1CRASHFRAME (2026-09-02) — `() throws -> Data` (was `() -> Data`).
+    /// `forRotatingKey`/`forGroupRotating` build a closure that re-validates
+    /// the provider's key length on every call (i.e. every video frame);
+    /// that check used to be a `precondition` trap. Making the closure type
+    /// throwing lets those two factories `throw` instead, which `seal`/
+    /// `open` (already `throws`) propagate to the SAME existing `try?` /
+    /// do-catch + log/drop handling their callers already have
+    /// (`SFrameVideoCodecDecorator.swift`). `forOneToOne`/`forGroup`'s
+    /// closures still use `try!` — that stays safe because those factories
+    /// validate their (one-shot, non-rotating) input's length once at
+    /// construction via `precondition` before capturing it, so the later
+    /// `try!` can never actually throw; left unchanged.
+    private let masterProvider: () throws -> Data
     private let kid: Data
 
     private let counterLock = NSLock()
     private var counter: UInt64 = 0
 
-    private init(masterProvider: @escaping () -> Data, kid: Data) {
+    private init(masterProvider: @escaping () throws -> Data, kid: Data) {
         self.masterProvider = masterProvider
         self.kid = kid
     }
@@ -55,7 +67,7 @@ public final class SFrameVideoSealer: @unchecked Sendable {
         padded: Bool = false
     ) throws -> Data {
         let ctr = nextCounter()
-        let master = masterProvider()
+        let master = try masterProvider()
         return try SFrameCodec.seal(
             master: master,
             ctr: ctr,
@@ -73,7 +85,7 @@ public final class SFrameVideoSealer: @unchecked Sendable {
     /// Throws on tag mismatch (wrong key, tampered AAD or ciphertext) —
     /// callers should treat this as a dropped frame and continue.
     public func open(_ wire: Data) throws -> Data {
-        return try SFrameCodec.open(master: masterProvider(), wire: wire)
+        return try SFrameCodec.open(master: try masterProvider(), wire: wire)
     }
 
     /// Expose the current counter for telemetry / debug logging only.
@@ -124,14 +136,20 @@ public final class SFrameVideoSealer: @unchecked Sendable {
     ///   or an `OSAllocatedUnfairLock`-guarded reference. Must NOT
     ///   throw; if the key isn't yet available the caller should defer
     ///   sealer construction. The provider's return value is validated
-    ///   on every call — a non-32-byte return triggers a precondition
-    ///   failure (mirrors Kotlin's `IllegalArgumentException`).
+    ///   on every call — W-B1CRASHFRAME (2026-09-02): a non-32-byte
+    ///   return now `throw`s `SFrameCodec.SFrameError.invalidPqcKeyLength`
+    ///   (was a `precondition` trap on every seal/open, i.e. every frame)
+    ///   so `seal`/`open` callers' existing `try?`/do-catch drop the frame
+    ///   and log instead of crashing the call (mirrors Kotlin's
+    ///   catchable `IllegalArgumentException`).
     public static func forRotatingKey(_ pqcKeyProvider: @escaping () -> Data) -> SFrameVideoSealer {
         return SFrameVideoSealer(
             masterProvider: {
                 let k = pqcKeyProvider()
-                precondition(k.count == 32, "pqcKeyProvider returned a key of size \(k.count), expected 32")
-                return try! SFrameCodec.deriveMaster1to1(k)
+                guard k.count == 32 else {
+                    throw SFrameCodec.SFrameError.invalidPqcKeyLength(k.count)
+                }
+                return try SFrameCodec.deriveMaster1to1(k)
             },
             kid: Data()
         )
@@ -176,8 +194,12 @@ public final class SFrameVideoSealer: @unchecked Sendable {
     /// automatically.
     ///
     /// - Precondition: `kid.count == 3`. The provider's return value is
-    ///   validated on every call — a non-32-byte return triggers a
-    ///   precondition failure.
+    ///   validated on every call — W-B1CRASHFRAME (2026-09-02): a
+    ///   non-32-byte return now `throw`s
+    ///   `SFrameCodec.SFrameError.invalidChainKeyLength` (was a
+    ///   `precondition` trap on every seal/open, i.e. every frame) so the
+    ///   frame is dropped via the caller's existing error handling instead
+    ///   of crashing the call.
     public static func forGroupRotating(
         chainKeyProvider: @escaping () -> Data,
         groupIdHex: String,
@@ -189,8 +211,10 @@ public final class SFrameVideoSealer: @unchecked Sendable {
         return SFrameVideoSealer(
             masterProvider: {
                 let ck = chainKeyProvider()
-                precondition(ck.count == 32, "chainKeyProvider returned key of size \(ck.count), expected 32")
-                return try! SFrameCodec.deriveMasterGroup(
+                guard ck.count == 32 else {
+                    throw SFrameCodec.SFrameError.invalidChainKeyLength(ck.count)
+                }
+                return try SFrameCodec.deriveMasterGroup(
                     chainKey: ck,
                     groupIdHex: groupIdHex,
                     senderId: senderId

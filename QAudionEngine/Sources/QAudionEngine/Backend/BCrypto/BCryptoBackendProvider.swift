@@ -105,7 +105,17 @@ public final class BCryptoBackendProvider: BackendProvider {
         self.restClient.setTokenRefresher { [weak self] in
             guard let self else { throw BCryptoError.unauthorized }
             guard let refresh = self.config.refreshToken else { throw BCryptoError.unauthorized }
-            let pair = try await (self.accountApi as! BCryptoAccountApiImpl).refreshToken(refresh)
+            // W-B1CRASHFRAME (2026-09-02) — was `as!`. `accountApi` is a
+            // public `var`, always `BCryptoAccountApiImpl` from this same
+            // init today (see its declaration above), but nothing in the
+            // type system stops a future caller from assigning a different
+            // `AccountApi` conformer to it — this closure runs on every REST
+            // 401, so that would crash the process on the next expired
+            // token instead of just failing this one refresh.
+            guard let accountApiImpl = self.accountApi as? BCryptoAccountApiImpl else {
+                throw BCryptoError.unexpectedAccountApiImplementation
+            }
+            let pair = try await accountApiImpl.refreshToken(refresh)
             self.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
             return (accessToken: pair.accessToken, refreshToken: pair.refreshToken)
         }

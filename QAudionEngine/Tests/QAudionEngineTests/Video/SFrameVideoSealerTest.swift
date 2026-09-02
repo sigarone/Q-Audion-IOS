@@ -13,14 +13,14 @@ import CryptoKit
 /// keeps the video pipeline transparent to the audio-driven
 /// `ReKeyScheduler`).
 ///
-/// Mirrors the Kotlin `SFrameVideoSealerTest.kt` shape one-for-one. The
-/// only deviation is the two `precondition` cases (Kotlin uses
-/// `IllegalArgumentException` which is catchable; Swift's `precondition`
-/// traps the process and cannot be caught from XCTest). Those slots are
-/// retained as documentation tests using the negative input through
-/// the public surface in a way that does NOT fire the precondition,
-/// asserting the success path while leaving the failure path validated
-/// by inspection.
+/// Mirrors the Kotlin `SFrameVideoSealerTest.kt` shape one-for-one.
+///
+/// W-B1CRASHFRAME (2026-09-02) — `forRotatingKey`/`forGroupRotating`'s
+/// per-frame provider-length check used to be a `precondition` (a hard
+/// process trap XCTest cannot catch, unlike Kotlin's catchable
+/// `IllegalArgumentException`); it now `throw`s, so the two negative-path
+/// tests below exercise the REAL rejection through `XCTAssertThrowsError`
+/// instead of only documenting a success path around it.
 final class SFrameVideoSealerTest: XCTestCase {
 
     private let pqcKey: Data = {
@@ -181,17 +181,28 @@ final class SFrameVideoSealerTest: XCTestCase {
 
     // MARK: 9) forRotatingKey rejects malformed key from provider
     //
-    // Kotlin throws `IllegalArgumentException` (catchable). Swift
-    // `precondition` traps the process. We exercise the success path
-    // with a fresh 32-byte key and rely on code review for the
-    // rejection branch (`precondition(k.count == 32, ...)`). The
-    // intent of the slot is preserved.
+    // W-B1CRASHFRAME (2026-09-02) — the provider-length check is now a
+    // `throw` (was `precondition`, uncatchable), mirroring Kotlin's
+    // `IllegalArgumentException`. A malformed key must reject THAT frame,
+    // not crash the process — proven directly here instead of only by
+    // code review.
 
     func test_forRotatingKey_rejectsMalformedKeyFromProvider_positivePath() throws {
         let goodKey = Data(repeating: 0x33, count: 32)
         let sealer = SFrameVideoSealer.forRotatingKey { goodKey }
         let wire = try sealer.seal(plaintext: Data([0x42]))
         XCTAssertEqual(try sealer.open(wire), Data([0x42]))
+    }
+
+    func test_forRotatingKey_malformedKeyFromProvider_throwsInsteadOfCrashing() {
+        let badKey = Data(repeating: 0x33, count: 16) // wrong length, not 32
+        let sealer = SFrameVideoSealer.forRotatingKey { badKey }
+        XCTAssertThrowsError(try sealer.seal(plaintext: Data([0x01]))) { error in
+            guard case SFrameCodec.SFrameError.invalidPqcKeyLength(let got) = error else {
+                return XCTFail("expected invalidPqcKeyLength, got \(error)")
+            }
+            XCTAssertEqual(got, 16)
+        }
     }
 
     // MARK: 10) forGroupRotating tracks chain advance
@@ -223,5 +234,26 @@ final class SFrameVideoSealerTest: XCTestCase {
         // Reverting lets us decode the old frame.
         lock.lock(); holder.k = ck1; lock.unlock()
         XCTAssertEqual(try sealer.open(wire1), pt)
+    }
+
+    // MARK: 11) forGroupRotating rejects malformed chain key from provider
+    //
+    // W-B1CRASHFRAME (2026-09-02) — same fix as test 9 above, for the
+    // group-call rotating factory's own per-frame provider check.
+
+    func test_forGroupRotating_malformedChainKeyFromProvider_throwsInsteadOfCrashing() {
+        let badChainKey = Data(repeating: 0x11, count: 8) // wrong length, not 32
+        let sealer = SFrameVideoSealer.forGroupRotating(
+            chainKeyProvider: { badChainKey },
+            groupIdHex: "deadbeef",
+            senderId: "alice",
+            kid: Data([0x12, 0x34, 0x56])
+        )
+        XCTAssertThrowsError(try sealer.seal(plaintext: Data([0x01]))) { error in
+            guard case SFrameCodec.SFrameError.invalidChainKeyLength(let got) = error else {
+                return XCTFail("expected invalidChainKeyLength, got \(error)")
+            }
+            XCTAssertEqual(got, 8)
+        }
     }
 }

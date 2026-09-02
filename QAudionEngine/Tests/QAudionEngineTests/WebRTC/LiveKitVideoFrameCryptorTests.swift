@@ -116,4 +116,33 @@ final class LiveKitVideoFrameCryptorTests: XCTestCase {
             "AES-256 frame must not open under the legacy AES-128 key"
         )
     }
+
+    /// W-B1CRASHFRAME (2026-09-02) — `frameKey()`'s keyProvider-length check
+    /// used to be a `precondition` (a hard process trap on every seal/open
+    /// call, i.e. every video frame). It now `throw`s `badKeyLength`, so a
+    /// stale/malformed key from the provider drops just that frame through
+    /// the caller's existing `try?` fallback instead of crashing the call.
+    func testMalformedKeyProviderThrowsInsteadOfCrashing() {
+        let badKey = Data(repeating: 0x9a, count: 16) // wrong length, not 32
+        let cryptor = LiveKitVideoFrameCryptor(keyProvider: { badKey })
+        let pt = Data(repeating: 0xab, count: 96)
+
+        XCTAssertThrowsError(try cryptor.seal(data: pt, codec: .vp9, isKeyFrame: false)) { error in
+            guard case LiveKitVideoFrameCryptor.CryptorError.badKeyLength(let got, let expected) = error else {
+                return XCTFail("expected badKeyLength, got \(error)")
+            }
+            XCTAssertEqual(got, 16)
+            XCTAssertEqual(expected, 32)
+        }
+
+        let goodCryptor = LiveKitVideoFrameCryptor(keyProvider: { Data(repeating: 0x9a, count: 32) })
+        let wire = try? goodCryptor.seal(data: pt, codec: .vp9, isKeyFrame: false)
+        XCTAssertNotNil(wire, "sanity: a correctly-sized key still seals normally")
+        let badOpenCryptor = LiveKitVideoFrameCryptor(keyProvider: { badKey })
+        XCTAssertThrowsError(try badOpenCryptor.open(data: wire!, codec: .vp9, isKeyFrame: false)) { error in
+            guard case LiveKitVideoFrameCryptor.CryptorError.badKeyLength = error else {
+                return XCTFail("expected badKeyLength on open, got \(error)")
+            }
+        }
+    }
 }

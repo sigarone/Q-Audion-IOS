@@ -100,9 +100,22 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
         return derived.withUnsafeBytes { Data($0) }
     }
 
-    private func frameKey() -> SymmetricKey {
+    /// W-B1CRASHFRAME (2026-09-02) — was `precondition(pqc.count == 32, ...)`,
+    /// a hard process trap reachable on every seal/open call (i.e. every
+    /// video frame) if `keyProvider()` ever returns a malformed key (stale
+    /// rekey race, earbud placeholder, peer downgrade). `seal`/`open` are
+    /// already `throws` and every call site already wraps them in `try?` /
+    /// `do-catch` with log+drop fallback (`SFrameVideoCodecDecorator.swift`)
+    /// — so turning this into a throw reaches an existing safety net instead
+    /// of taking down the whole call. `deriveFrameCryptorKey`'s own
+    /// precondition below is intentionally left as-is: it is now only ever
+    /// reached with a key already validated here, so it is unreachable
+    /// dead-code defense, not a live trap.
+    private func frameKey() throws -> SymmetricKey {
         let pqc = keyProvider()
-        precondition(pqc.count == 32, "keyProvider returned key of size \(pqc.count), expected 32")
+        guard pqc.count == 32 else {
+            throw CryptorError.badKeyLength(got: pqc.count, expected: 32)
+        }
         let raw = Self.deriveFrameCryptorKey(pqcSessionKey: pqc)
         return SymmetricKey(data: raw)
     }
@@ -255,7 +268,7 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
         let header = data.prefix(headerLen)
         let payload = data.suffix(from: data.startIndex.advanced(by: headerLen))
         let iv = ivGen.make(ssrc: ssrc, rtpTimestamp: rtpTimestamp)
-        let key = frameKey()
+        let key = try frameKey()
 
         let nonce = try AES.GCM.Nonce(data: iv)
         let sealed = try AES.GCM.seal(
@@ -325,7 +338,7 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
         let ciphertext = ctAndTag.subdata(in: 0..<tagStart)
         let tag = ctAndTag.subdata(in: tagStart..<ctAndTag.count)
 
-        let key = frameKey()
+        let key = try frameKey()
         let nonce = try AES.GCM.Nonce(data: iv)
         let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag)
         let plaintext = try AES.GCM.open(box, using: key, authenticating: header)
@@ -341,6 +354,10 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
         case headerTooLarge(headerLen: Int, frameLen: Int)
         case frameTooShort(frameLen: Int, headerLen: Int, minBody: Int)
         case badIvLength(got: Int, expected: Int)
+        /// W-B1CRASHFRAME (2026-09-02) — keyProvider() returned a
+        /// malformed (non-32-byte) key on this frame; was a `precondition`
+        /// trap, now a droppable error.
+        case badKeyLength(got: Int, expected: Int)
 
         public var description: String {
             switch self {
@@ -350,6 +367,8 @@ public final class LiveKitVideoFrameCryptor: @unchecked Sendable {
                 return "LiveKitFrameCryptor: frame too short (\(f)B, header=\(h)B, need ≥ header+\(m)B body)"
             case .badIvLength(let got, let expected):
                 return "LiveKitFrameCryptor: bad ivLength \(got) on wire (expected \(expected))"
+            case .badKeyLength(let got, let expected):
+                return "LiveKitFrameCryptor: keyProvider returned key of size \(got)B (expected \(expected)B)"
             }
         }
     }
