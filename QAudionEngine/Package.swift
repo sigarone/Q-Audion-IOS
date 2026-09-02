@@ -388,7 +388,15 @@ let package = Package(
                 // server ent-v1 key (not issued yet). Loaded by
                 // EntitlementPublicKey.swift; the ship-guard for swapping it
                 // is EntitlementPublicKeyTests, currently skipped on purpose.
-                .copy("Resources/bcrypto_entitlement_pubkey.pem")
+                .copy("Resources/bcrypto_entitlement_pubkey.pem"),
+                // TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — DEDICATED
+                // remote-wipe signing pubkey, deliberately a SEPARATE key
+                // from the entitlement one above (different purpose,
+                // different blast radius). Loaded by
+                // WipeSigningPublicKey.swift; same placeholder/ship-guard
+                // discipline as bcrypto_entitlement_pubkey.pem — see that
+                // file's kdoc.
+                .copy("Resources/wipe_signing_pubkey.pem")
             ]
         ),
         .testTarget(

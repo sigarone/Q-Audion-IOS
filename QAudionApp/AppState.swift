@@ -1977,6 +1977,52 @@ final class AppState: ObservableObject {
         return CapabilityGate(verifier: verifier, api: api)
     }()
 
+    /// TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — Ed25519 verifier bound
+    /// to the pinned, DEDICATED wipe-signing public key
+    /// (`WipeSigningPublicKey`, a SEPARATE asset from the entitlement key
+    /// above). Unlike `capabilityGate`, a missing/corrupt asset here does
+    /// NOT crash the app: it is caught inside `verifySignedWipeCommand`
+    /// (nil verifier ⇒ every command fails verification ⇒ fail-closed —
+    /// never wipe, never trap the process over a wipe-path packaging bug).
+    lazy var wipeCommandVerifier: WipeCommandVerifier? = WipeSigningPublicKey.makeVerifier()
+
+    /// TRUST-2 — persisted `(device_id, nonce)` replay set for signed
+    /// `remote_wipe` commands. Lazy + instance-scoped (not `static`) so
+    /// tests get a fresh cache per `AppState`, matching this file's other
+    /// lazy security state (`capabilityGate`, `wipeCommandVerifier` above);
+    /// production behavior is unaffected since the underlying store persists
+    /// to disk (`WipeReplayCache.defaultPersistenceURL()`) and there is only
+    /// ever one live `AppState` per process.
+    lazy var wipeReplayCache: WipeReplayCache = WipeReplayCache()
+
+    /// TRUST-2 gate for the `remote_wipe` WS handler. Returns `true` ONLY
+    /// when `data` decodes into a well-formed `WipeCommand` whose signature
+    /// verifies against the pinned wipe-signing key, whose `issued_at` is
+    /// fresh, whose `device_id` matches THIS device's own id
+    /// (`TokenVault.loadDeviceId()`), and whose `(device_id, nonce)` pair
+    /// has not been seen before. `false` on absolutely anything else —
+    /// missing payload (a pre-TRUST-2 server, or a forged bare envelope),
+    /// unparseable fields, wrong device, expired timestamp, bad signature,
+    /// or replay. The caller (`remote_wipe` handler above) MUST treat
+    /// `false` as "do nothing" — not clear the token, not discard
+    /// entitlements, not wipe. See `WipeCommandVerifier`'s kdoc for the full
+    /// rationale and the wire-field-name caveat.
+    private func verifySignedWipeCommand(_ data: [String: Any]) -> Bool {
+        guard let verifier = wipeCommandVerifier else {
+            RTLog.error("security", "TRUST-2 remote_wipe — wipe-signing pubkey asset missing/corrupt, cannot verify anything; refusing to wipe")
+            return false
+        }
+        guard let deviceId = TokenVault.loadDeviceId(), !deviceId.isEmpty else {
+            RTLog.error("security", "TRUST-2 remote_wipe — no local device_id to bind against; refusing to wipe")
+            return false
+        }
+        guard let command = WipeCommandVerifier.parseWipeCommand(from: data) else {
+            RTLog.error("security", "TRUST-2 remote_wipe — envelope missing/malformed signed fields (device_id/wipe_id/issued_at/nonce/signature); refusing to wipe")
+            return false
+        }
+        return verifier.verify(command: command, expectedDeviceId: deviceId, replayCache: wipeReplayCache)
+    }
+
     /// earbud-relay-v1 — SW counterparty handshake coordinator for calls
     /// where the PEER's bonded earbud (HW firmware, CRUX SPE) owns the
     /// audio key. iOS never advertises the capability; it reacts to the
@@ -3564,6 +3610,41 @@ final class AppState: ObservableObject {
                 // sender-key control envelopes — have a live socket.
                 Task { @MainActor [weak self] in
                     await self?.reviveSignalingSocket()
+                }
+            },
+            onIncomingOpaqueCallWakeup: { [weak self] payload in
+                guard let self = self else { return }
+                // TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security
+                // audit backlog item 9) — the push carries NO caller
+                // identity and NO call_id by design (see
+                // `PushKitProvider.OpaqueCallWakeupPayload`'s kdoc). Report
+                // a GENERIC placeholder to CallKit right away — same
+                // "report something, satisfy the mandate" shape as
+                // `onMalformedPush` below, except this call keeps ringing
+                // instead of being ended immediately. Deliberately does
+                // NOT set `activeCallKitId` — see
+                // `reconcileOpaqueCallWakeup`'s kdoc for why that has to
+                // stay nil until the REAL server call_id is known over the
+                // WS.
+                let placeholderUuid = UUID()
+                let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
+                let shash8: String = String(payload.senderHash.prefix(8))
+                let diag: String = "[AppState] TRUST-6 PushKit→opaque call wakeup uuid=\(placeholderUuid8)… shash=\(shash8)…"
+                print(diag)
+                await self.callKit?.reportIncomingCall(
+                    uuid: placeholderUuid,
+                    callerName: "Q-Audion",
+                    hasVideo: true
+                )
+                // CRITICAL (same rationale as the 1:1/group branches above):
+                // bring the signalling WS up NOW — this is the ONLY way the
+                // real call_incoming (caller/call_id/call_type) can reach
+                // this device at all for an opaque wakeup.
+                Task { @MainActor [weak self] in
+                    await self?.reviveSignalingSocket()
+                }
+                Task { @MainActor [weak self] in
+                    await self?.reconcileOpaqueCallWakeup(placeholderCallKitId: placeholderUuid)
                 }
             },
             onMalformedPush: { [weak self] in
@@ -7395,11 +7476,12 @@ final class AppState: ObservableObject {
             }
         }
 
-        // W330: handle `remote_wipe`. Security/compliance — server
-        // sends this when an admin or recovery flow has triggered a
-        // remote wipe. Server also tries to send an FCM push but
-        // hub.go:615 SKIPS the push for ios-apns devices, so the WS
-        // envelope is the ONLY path.
+        // W330 / TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit
+        // backlog item 6): handle `remote_wipe`. Security/compliance —
+        // server sends this when an admin or recovery flow has triggered a
+        // remote wipe. Server also tries to send an FCM push but hub.go:615
+        // SKIPS the push for ios-apns devices, so the WS envelope is the
+        // ONLY path on this platform.
         //
         // P0-5 (2026-08-05, coordinated fix plan cluster 5) — this used to
         // ONLY clear the auth token, leaving every crypto key (sovereign
@@ -7408,9 +7490,39 @@ final class AppState: ObservableObject {
         // the device. LocalCryptoWipe.wipeAll() closes that — same policy
         // decision already shipped on Android/Desktop ("logout wipes crypto
         // keys same as remote-wipe").
-        ws.registerHandler(type: "remote_wipe") { [weak self] _, _ in
+        //
+        // TRUST-2 (2026-09-02) — this handler used to wipe on a BARE
+        // `{"type":"remote_wipe"}` envelope with ZERO payload validation:
+        // not even a `wipe_id` non-empty filter (Android/Desktop already had
+        // that much). Anyone able to inject a frame on the authenticated WS
+        // could wipe the device with no proof beyond "I can send a WS
+        // frame". Fixed with a cryptographic command instead of a marker
+        // field: `verifySignedWipeCommand(data)` requires an Ed25519
+        // signature (from a DEDICATED wipe-signing key, never the OTA/
+        // entitlement key — see `WipeSigningPublicKey`'s kdoc), a fresh
+        // `issued_at` (5-minute window), and a not-yet-seen `(device_id,
+        // nonce)` pair (persisted across relaunch — see `WipeReplayCache`),
+        // ALL checked against THIS device's own id. Fail-closed: a missing,
+        // malformed, expired, or replayed signature returns `false` and the
+        // wipe (and the token-clear/capability-discard alongside it) simply
+        // does not run — see `verifySignedWipeCommand`'s kdoc for why the
+        // whole handler, not just `wipeAll()`, is gated on it.
+        ws.registerHandler(type: "remote_wipe") { [weak self] _, data in
+            // Verification + every side effect below run on the SAME main
+            // hop, not just the state writes — `wipeCommandVerifier`/
+            // `wipeReplayCache` are lazy `var`s on this (non-globally-
+            // @MainActor) class, so a background-thread first-access would
+            // be exactly the kind of unsynchronized `self` mutation the
+            // call_incoming handler's own kdoc (a few handlers up) already
+            // root-caused a heap-corruption crash from. Same fix: hop the
+            // WHOLE handler onto main.
             DispatchQueue.main.async {
-                self?.authService.clearToken()
+                guard let self = self else { return }
+                guard self.verifySignedWipeCommand(data) else {
+                    RTLog.error("security", "TRUST-2 remote_wipe REJECTED — missing/malformed/expired/replayed signature or wrong device_id; refusing to wipe")
+                    return
+                }
+                self.authService.clearToken()
                 // Whole-phase-review finding I1 (2026-08-17): this handler
                 // clears the Keychain token but neither nils `currentUserId`
                 // nor flips `isAuthenticated` (pre-existing — the latter is
@@ -7419,9 +7531,9 @@ final class AppState: ObservableObject {
                 // on its own. Explicit call closes the entitlements-side
                 // leak without changing this handler's existing auth-state
                 // behavior.
-                self?.capabilityGate.discard()
+                self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
-                self?.errorMessage = "Account cancellato remotamente."
+                self.errorMessage = "Account cancellato remotamente."
             }
         }
 
@@ -12718,6 +12830,88 @@ final class AppState: ObservableObject {
         incomingCallerName = display
         incomingCallRingVisible = true
         return display
+    }
+
+    /// TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit backlog
+    /// item 9) — reconciles the generic placeholder CallKit call reported
+    /// for an opaque call-wakeup push with the REAL incoming call once its
+    /// details arrive over the authenticated WS (the existing
+    /// `call_incoming` handler above, completely UNMODIFIED — see below for
+    /// why that matters).
+    ///
+    /// ## Why a placeholder UUID, and why it is NEVER written to
+    /// `activeCallKitId`
+    /// Apple's PushKit mandate requires reporting SOME call to CallKit
+    /// before the push completes (`onMalformedPush`'s kdoc has the
+    /// citation) — but an opaque wakeup carries no `call_id`, so there is
+    /// nothing real to report yet. `placeholderCallKitId` is a throwaway
+    /// local UUID, reported purely to satisfy that mandate and give the
+    /// user something to see/hear ring. It is deliberately kept OUT of
+    /// `activeCallKitId`: the `call_incoming` handler's
+    /// `alreadyRegisteredByPushKit = (activeCallKitId != nil)` check treats
+    /// a non-nil `activeCallKitId` as "PushKit already reported THIS call"
+    /// and skips its own `reportIncomingCall` — leaving `activeCallKitId`
+    /// nil means that handler runs EXACTLY as it does today for a call that
+    /// arrives over the WS with no prior PushKit report, reporting a
+    /// SECOND, fully-informed CallKit call keyed by the real server
+    /// `call_id`. That is load-bearing, not incidental: `activeCallKitId`
+    /// is threaded through this file as the call's identity for everything
+    /// that follows (crypto transcript binding via `pqcCallId`,
+    /// accept/decline wiring, `PersistentCallRecord`, …), all of which must
+    /// end up equal to the SAME `call_id` the caller's own client used, or
+    /// the handshake this side computes would not match what the caller
+    /// computed. A placeholder invented before the real `call_id` is known
+    /// can never safely become that identity, so it never tries to — it is
+    /// superseded instead.
+    ///
+    /// ## The reconciliation itself
+    /// `activeCallKitId` is a plain `private(set) var`, not `@Published`, so
+    /// there is nothing to subscribe to via Combine — this polls it on a
+    /// short interval instead, which is the straightforward, low-risk
+    /// option here. This function only READS `activeCallKitId` and only
+    /// ever calls `reportCallEnded` on ITS OWN placeholder UUID (a value
+    /// nothing else in the app has ever seen), so it cannot collide with or
+    /// corrupt any other call's state.
+    ///
+    /// The moment `activeCallKitId` goes non-nil, `call_incoming`'s own flow
+    /// has taken over and reported the REAL call — end the placeholder
+    /// immediately so the user is not looking at two overlapping CallKit
+    /// entries. If the "couple seconds" bound elapses first, this does NOT
+    /// end the placeholder or drop the call: the TRUST-6 fix note is
+    /// explicit that ringing reliability must not regress, and unlike
+    /// Android/Desktop (where a same-push plaintext fallback field can
+    /// exist), iOS has no separate plaintext payload to fall back to WITHIN
+    /// this same push — the old-vs-new shape choice is entirely server-side,
+    /// per client version. The safest available behavior is to keep the
+    /// generic-caller placeholder ringing/answerable and let a LATE
+    /// `call_incoming` still reconcile whenever it eventually arrives, so
+    /// polling continues past the early bound rather than hard-stopping;
+    /// only the diagnostic noise level changes.
+    @MainActor
+    private func reconcileOpaqueCallWakeup(placeholderCallKitId: UUID) async {
+        let pollIntervalNs: UInt64 = 200_000_000  // 200ms
+        let earlyBoundPolls = 13                   // ~2.6s — TRUST-6's "a couple seconds"
+        let hardCapPolls = 150                      // ~30s outer safety net (ring-timeout ballpark)
+        var loggedEarlyMiss = false
+        var polls = 0
+        let placeholder8: String = String(placeholderCallKitId.uuidString.prefix(8))
+        while polls < hardCapPolls {
+            if let real = self.activeCallKitId, real != placeholderCallKitId {
+                let real8: String = String(real.uuidString.prefix(8))
+                let pollsStr: String = String(polls)
+                let diag: String = "[AppState] TRUST-6 opaque call wakeup reconciled after \(pollsStr) polls — ending placeholder=\(placeholder8)… real=\(real8)…"
+                print(diag)
+                await self.callKit?.reportCallEnded(uuid: placeholderCallKitId, reason: .failed("opaque-wakeup-superseded"))
+                return
+            }
+            if polls == earlyBoundPolls, !loggedEarlyMiss {
+                loggedEarlyMiss = true
+                RTLog.warn("call", "TRUST-6 opaque call wakeup — no real call_incoming yet after ~2.6s, still ringing placeholder=\(placeholder8)…")
+            }
+            polls += 1
+            try? await Task.sleep(nanoseconds: pollIntervalNs)
+        }
+        RTLog.warn("call", "TRUST-6 opaque call wakeup — gave up polling after ~30s, placeholder=\(placeholder8)… stays as the ringing call (generic caller name) until answered/declined or CallKit's own no-answer timeout")
     }
 
     /// W-EXTPREFIX consolidation (2026-07-29): this older, parallel resolver
