@@ -4,9 +4,11 @@ import Security
 #endif
 
 /// Keychain-backed [RatchetVault]. Persists each `(epochId, peerId)`
-/// snapshot under its own keychain item with
-/// `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` so the chain keys
-/// can never leave the device unencrypted.
+/// snapshot under its own keychain item with the `ThisDeviceOnly` class
+/// `KeychainAccessibilityPolicy` assigns to `.ratchetState`
+/// (AfterFirstUnlockThisDeviceOnly since W-KCAFTERUNLOCK, 2026-09-01) so
+/// the chain keys can never leave the device unencrypted and are still
+/// readable on a VoIP-push wake with the phone locked.
 ///
 /// Mirror of Android's `EncryptedSharedPreferencesRatchetVault.kt` —
 /// both use the platform's native secure store and the same opaque
@@ -26,7 +28,7 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
 
     /// Keychain `kSecAttrService` for the v4 PQ-ratchet opaque session blobs.
     /// A SEPARATE service from the v3.1 ``service`` (same Keystore-backed trust
-    /// boundary, `WhenUnlockedThisDeviceOnly`) so a v4 blob can never collide
+    /// boundary, same accessibility class) so a v4 blob can never collide
     /// with a v3.1 snapshot for the same `(epochId, peerId)` account. Mirrors
     /// Android's `KEY_PREFIX_V4` separate keyspace in the same encrypted store.
     public static let serviceV4 = "com.bcrypto.qaudion.ratchet.v4"
@@ -34,7 +36,20 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
     public init() {}
 
     public func load(epochId: String, peerId: String) -> RatchetSnapshot? {
-        let blob = readBlob(service: Self.service, account: Self.account(epochId: epochId, peerId: peerId))
+        // Unchanged contract: nil for "absent" AND for any read failure. A
+        // caller that would bootstrap a fresh chain on nil reads through
+        // `loadChecked` instead.
+        return (try? loadChecked(epochId: epochId, peerId: peerId)) ?? nil
+    }
+
+    /// W-KCAFTERUNLOCK (2026-09-01) — `RatchetVault.loadChecked`: same read,
+    /// but a locked Keychain (-25308) throws `VaultError.deviceLocked` instead
+    /// of answering nil. `MessageRatchet.ensureSession` reads through THIS so
+    /// it can never derive-and-persist a fresh chain over a snapshot it merely
+    /// could not decrypt yet (audit memory
+    /// reference_ios_stability_audit_2026_09_01, P1 item 5).
+    public func loadChecked(epochId: String, peerId: String) throws -> RatchetSnapshot? {
+        let blob = try readBlobChecked(service: Self.service, account: Self.account(epochId: epochId, peerId: peerId))
         guard let blob = blob else { return nil }
         return try? RatchetSnapshotCodec.decode(blob)
     }
@@ -86,18 +101,40 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
     }
 
     private func readBlob(service: String, account: String) -> Data? {
-        let query: [String: Any] = [
+        return (try? readBlobChecked(service: service, account: account)) ?? nil
+    }
+
+    /// W-KCAFTERUNLOCK (2026-09-01) — the one real read. Attributes ride along
+    /// with the data so a blob still on the legacy class is upgraded in place
+    /// right after the read that proved it readable (see
+    /// `KeychainAccessibilityMigration`). Only -25308 is surfaced as a throw;
+    /// every other non-success status still answers `nil` exactly as before.
+    private func readBlobChecked(service: String, account: String) throws -> Data? {
+        let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        var query = base
+        query[kSecReturnData as String] = true
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        if status != errSecSuccess { return nil }
-        return item as? Data
+        switch KeychainAccessibilityPolicy.classifyRead(status: status) {
+        case .absent:
+            return nil
+        case .deviceLocked:
+            throw VaultError.deviceLocked
+        case .failed:
+            return nil
+        case .found:
+            break
+        }
+        guard let attrs = item as? [String: Any] else { return nil }
+        KeychainAccessibilityMigration.upgradeIfNeeded(
+            attributes: attrs, baseQuery: base, category: .ratchetState, tag: "KeychainRatchetVault")
+        return attrs[kSecValueData as String] as? Data
     }
 
     // SECURITY C-7: the write path now propagates Keychain failures.
@@ -115,7 +152,10 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         ]
         var addAttrs = baseAttrs
         addAttrs[kSecValueData as String] = blob
-        addAttrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        // W-KCAFTERUNLOCK (2026-09-01) — class from the one policy; an inbound
+        // message decrypted on a locked phone must be able to persist the
+        // advanced chain. See KeychainAccessibilityPolicy.
+        addAttrs[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .ratchetState)
 
         let addStatus = SecItemAdd(addAttrs as CFDictionary, nil)
         if addStatus == errSecSuccess {

@@ -211,7 +211,10 @@ public final class SovereignIdentityManager {
             kSecAttrService as String: Self.keychainService,
             kSecAttrAccount as String: "primary",
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            // W-KCAFTERUNLOCK (2026-09-01) — AfterFirstUnlockThisDeviceOnly via
+            // the one policy: a VoIP-push wake with the phone locked must be
+            // able to read the identity. See KeychainAccessibilityPolicy.
+            kSecAttrAccessible as String: KeychainAccessibilityPolicy.secAttrAccessible(for: .sovereignIdentity)
         ]
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {
@@ -228,18 +231,58 @@ public final class SovereignIdentityManager {
         }
     }
 
-    /// Load stored sovereign identity.
+    /// Load stored sovereign identity. `nil` for "not stored" AND for every
+    /// read failure — the pre-W-KCAFTERUNLOCK contract, kept for the call
+    /// sites that only need the happy path. A caller that would REGENERATE or
+    /// erase on `nil` must use `readIdentity()` instead, which tells a locked
+    /// Keychain apart from an absent identity.
     public func loadIdentity() -> SovereignIdentity? {
+        return (try? readIdentity()) ?? nil
+    }
+
+    /// W-KCAFTERUNLOCK (2026-09-01) — typed read. Audit memory
+    /// reference_ios_stability_audit_2026_09_01, P1 item 5: with the item on
+    /// `WhenUnlockedThisDeviceOnly` a PushKit wake on a locked phone read
+    /// -25308 here, and `loadIdentity()` reported it as `nil` — which
+    /// `ContactKeyExchange` answered by minting a NEW identity.
+    /// - Returns: the identity, or `nil` when none is stored.
+    /// - Throws: `KeyVaultError.deviceLocked` when the item cannot be decrypted
+    ///   because the device is locked (-25308) — it may well exist, retry after
+    ///   unlock; `KeyVaultError.loadFailed` for any other Keychain status.
+    public func readIdentity() throws -> SovereignIdentity? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
             kSecAttrAccount as String: "primary",
             kSecReturnData as String: true,
+            // Attributes ride along so an item still on the legacy class is
+            // upgraded in place right after the read that proved it readable.
+            kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
+        switch KeychainAccessibilityPolicy.classifyRead(status: status) {
+        case .absent:
+            return nil
+        case .deviceLocked:
+            throw KeyVaultError.deviceLocked
+        case .failed(let failedStatus):
+            throw KeyVaultError.loadFailed(failedStatus)
+        case .found:
+            break
+        }
+        guard let attrs = item as? [String: Any],
+              let data = attrs[kSecValueData as String] as? Data else { return nil }
+        KeychainAccessibilityMigration.upgradeIfNeeded(
+            attributes: attrs,
+            baseQuery: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Self.keychainService,
+                kSecAttrAccount as String: "primary"
+            ],
+            category: .sovereignIdentity,
+            tag: "SovereignIdentityManager")
         return deserializeIdentity(data)
     }
 

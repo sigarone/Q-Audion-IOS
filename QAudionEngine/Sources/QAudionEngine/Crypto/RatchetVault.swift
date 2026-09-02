@@ -20,6 +20,16 @@ public protocol RatchetVault: AnyObject {
     /// Load a previously persisted snapshot, or `nil` if none exists.
     func load(epochId: String, peerId: String) -> RatchetSnapshot?
 
+    /// W-KCAFTERUNLOCK (2026-09-01) — `load` with the locked-store case
+    /// surfaced: returns `nil` ONLY for "nothing persisted", and throws
+    /// `VaultError.deviceLocked` when the store exists but cannot be decrypted
+    /// right now (iOS -25308 on a locked device). The protocol default forwards
+    /// to `load`, so in-memory and test vaults — which cannot be locked — need
+    /// not override it; `KeychainRatchetVault` does. `MessageRatchet
+    /// .ensureSession` bootstraps a FRESH chain on nil, which is exactly why
+    /// this exists.
+    func loadChecked(epochId: String, peerId: String) throws -> RatchetSnapshot?
+
     /// Persist a snapshot — synchronous durable flush required.
     ///
     /// SECURITY C-7: this MUST throw on persistence failure. The encrypt
@@ -70,12 +80,21 @@ public extension RatchetVault {
     func loadV4(epochId: String, peerId: String) -> Data? { nil }
     func saveV4(epochId: String, peerId: String, blob: Data) throws {}
     func deleteV4(epochId: String, peerId: String) {}
+    // W-KCAFTERUNLOCK — a vault that cannot be locked answers exactly what
+    // `load` answers.
+    func loadChecked(epochId: String, peerId: String) throws -> RatchetSnapshot? {
+        load(epochId: epochId, peerId: peerId)
+    }
 }
 
 /// SECURITY C-7: persistence failures the ratchet vault may surface.
 public enum VaultError: Error, Equatable {
     /// Keychain `SecItemAdd`/`SecItemUpdate` returned a non-success status.
     case persistFailed(OSStatus)
+    /// W-KCAFTERUNLOCK (2026-09-01) — Keychain read refused with
+    /// `errSecInteractionNotAllowed` (-25308): the device is locked, the
+    /// snapshot is NOT known to be absent. Transient; never bootstrap over it.
+    case deviceLocked
 }
 
 /// In-memory ratchet vault — useful for tests and the initial rollover

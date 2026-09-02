@@ -189,7 +189,13 @@ public final class MessageRatchet {
                 "epochId must encode to 1..255 UTF-8 bytes (got \(epochBytes.count))")
         }
 
-        if let existing = vault.load(epochId: epochId, peerId: peerId) {
+        // W-KCAFTERUNLOCK (2026-09-01) — `loadChecked`, not `load`: a locked
+        // Keychain (-25308) used to read as "no snapshot", and this branch then
+        // DERIVED a fresh chain from pskRoot and tried to persist it over the
+        // real one. Now it throws `VaultError.deviceLocked` instead —
+        // transient, retry after unlock (audit memory
+        // reference_ios_stability_audit_2026_09_01, P1 item 5).
+        if let existing = try vault.loadChecked(epochId: epochId, peerId: peerId) {
             guard existing.selfId == selfId else {
                 throw RatchetError.invalidArguments(
                     "vault snapshot belongs to a different self ('\(existing.selfId)', expected '\(selfId)')")

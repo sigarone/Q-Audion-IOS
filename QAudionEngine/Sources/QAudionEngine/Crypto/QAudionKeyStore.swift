@@ -17,7 +17,11 @@ public final class QAudionKeyStore {
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: identifier,
             kSecValueData as String: keyData,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            // W-KCAFTERUNLOCK (2026-09-01) — `.uiOnly`: backup / credential
+            // blobs are only read in the foreground, so the class stays
+            // WhenUnlockedThisDeviceOnly; routed through the policy so the
+            // per-category decision lives in exactly one place.
+            kSecAttrAccessible as String: KeychainAccessibilityPolicy.secAttrAccessible(for: .uiOnly)
         ]
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {

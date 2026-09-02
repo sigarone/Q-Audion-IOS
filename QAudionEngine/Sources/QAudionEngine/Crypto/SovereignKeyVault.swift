@@ -136,8 +136,8 @@ public final class SovereignKeyVault {
     public func storePsk(name: String, key: Data, fingerprint: String, keyClass: KeyClass?) throws {
         // IOS-SE: fresh writes honor the current protection policy. When
         // biometric key protection is enabled, attach a `.userPresence`
-        // access control; otherwise the plain WhenUnlockedThisDeviceOnly path
-        // (byte-identical to the pre-IOS-SE behavior). Existing items are
+        // access control; otherwise the plain class from
+        // `KeychainAccessibilityPolicy` (W-KCAFTERUNLOCK). Existing items are
         // re-protected via `migratePskProtection(enable:)`, not here, because
         // SecItemUpdate cannot change an item's access-control class.
         // D1: the key_class string (if any) goes into kSecAttrGeneric — a raw
@@ -160,7 +160,11 @@ public final class SovereignKeyVault {
         if let ac = KeychainProtectionPolicy.shared.makeAccessControl() {
             query[kSecAttrAccessControl as String] = ac
         } else {
-            query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            // W-KCAFTERUNLOCK (2026-09-01) — the plain class comes from the one
+            // policy (AfterFirstUnlockThisDeviceOnly today) so a PSK is readable
+            // on a VoIP-push wake with the phone locked; the `.userPresence`
+            // branch above is untouched. See KeychainAccessibilityPolicy.
+            query[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)
         }
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {
@@ -307,12 +311,21 @@ public final class SovereignKeyVault {
         listPskNames().filter { origin(name: $0).isExportable }
     }
 
+    /// - Returns: the PSK, or `nil` when no item exists under `name`.
+    /// - Throws: `KeyVaultError.deviceLocked` when the item cannot be decrypted
+    ///   because the device is locked (-25308) — it may well exist, retry after
+    ///   unlock; `KeyVaultError.loadFailed` for any other Keychain status.
     public func loadPsk(name: String) throws -> Data? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: name,
             kSecReturnData as String: true,
+            // W-KCAFTERUNLOCK (2026-09-01) — attributes ride along with the
+            // data (one round trip, same shape `migratePskProtection` already
+            // reads) so an item still on the legacy class can be upgraded in
+            // place right after the read that proved it readable.
+            kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         // IOS-SE: when protection is active, reuse the session-authenticated
@@ -324,9 +337,30 @@ public final class SovereignKeyVault {
         }
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw KeyVaultError.loadFailed(status) }
-        return item as? Data
+        switch KeychainAccessibilityPolicy.classifyRead(status: status) {
+        case .absent:
+            return nil
+        case .deviceLocked:
+            // W-KCAFTERUNLOCK — -25308: the item may exist, the Keychain is
+            // just not readable yet (locked before first unlock). Distinct from
+            // `.loadFailed` so no caller can mistake it for "no such PSK".
+            throw KeyVaultError.deviceLocked
+        case .failed(let failedStatus):
+            throw KeyVaultError.loadFailed(failedStatus)
+        case .found:
+            break
+        }
+        guard let attrs = item as? [String: Any] else { return nil }
+        KeychainAccessibilityMigration.upgradeIfNeeded(
+            attributes: attrs,
+            baseQuery: [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Self.service,
+                kSecAttrAccount as String: name
+            ],
+            category: .sessionPsk,
+            tag: "SovereignKeyVault")
+        return attrs[kSecValueData as String] as? Data
     }
 
     public func deletePsk(name: String) throws {
@@ -415,7 +449,8 @@ public final class SovereignKeyVault {
     /// `enable == true`  → re-store every item under a `.userPresence` access
     ///                     control (biometry/passcode-gated).
     /// `enable == false` → remove the access control (back to the plain
-    ///                     WhenUnlockedThisDeviceOnly class).
+    ///                     class `KeychainAccessibilityPolicy` assigns to
+    ///                     `.sessionPsk`).
     ///
     /// SAFETY: each item's value is read into memory BEFORE the item is
     /// deleted, and is restored under its prior protection if the re-add
@@ -479,7 +514,10 @@ public final class SovereignKeyVault {
             if let ac = targetAC {
                 add[kSecAttrAccessControl as String] = ac
             } else {
-                add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                // W-KCAFTERUNLOCK — the plain (no access control) class is the
+                // policy's, so disabling protection lands on the same class a
+                // fresh `storePsk` writes.
+                add[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)
             }
             let addStatus = SecItemAdd(add as CFDictionary, nil)
             if addStatus != errSecSuccess {
@@ -494,7 +532,7 @@ public final class SovereignKeyVault {
                 ]
                 if let classBlob { restore[kSecAttrGeneric as String] = classBlob }
                 if enable {
-                    restore[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                    restore[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)
                 } else {
                     var e2: Unmanaged<CFError>?
                     if let ac = SecAccessControlCreateWithFlags(
@@ -516,6 +554,13 @@ public enum KeyVaultError: Error {
     case storeFailed(OSStatus)
     case loadFailed(OSStatus)
     case deleteFailed(OSStatus)
+    /// W-KCAFTERUNLOCK (2026-09-01) — `errSecInteractionNotAllowed` (-25308):
+    /// the Keychain refused to decrypt the item because the device is locked
+    /// (before the first unlock since boot for an AfterFirstUnlock item; any
+    /// lock for a legacy WhenUnlocked one). The item is NOT known to be
+    /// absent. Transient — retry after unlock; never regenerate or delete on
+    /// it. See KeychainAccessibilityPolicy.
+    case deviceLocked
     /// W-NFCBIND — raw material was requested for an entry that may not leave
     /// the device. Carries the origin so the UI can say *why*: "created by an
     /// NFC tap, it cannot leave this device" is actionable, "export failed"
