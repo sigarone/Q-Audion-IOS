@@ -258,6 +258,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `AndroidBundleHandshake.SRTP_DIR_KEYS_ENABLED`.
     public static let srtpDirKeysEnabled = true
 
+    /// CALL-4/HSID-002 + CALL-3 go-live gate — transcript-bound session KDF/SAS +
+    /// re-key nonce+counter freshness. Mirrors Android
+    /// `PqcHandshake.HS_TRANSCRIPT_BIND_V1_ENABLED` / Desktop
+    /// `AndroidBundleHandshake.SESSION_KDF_V4_ENABLED`.
+    ///
+    /// DEFAULT FALSE (2026-09-02, post-implementation safety fix). This file
+    /// originally advertised `transcriptBindV1: true` unconditionally, with no
+    /// kill switch — the only one of the three platforms to ship this bit with
+    /// no way to disable it. The bit was implemented in parallel and
+    /// independently on all three platforms in the same session, with no live
+    /// cross-platform coordination, and each landed a DIFFERENT session-key KDF
+    /// construction under the SAME wire capability bit position: Android's
+    /// supersedes the schema:2/3 info string outright, Desktop's ADDS to it
+    /// (ct_bind || selected_fp || transcriptHash), and this file layers a SECOND
+    /// independent HKDF pass on top of whichever base key schema already
+    /// produced. Negotiation is a bitwise AND on wire position, not a byte-layout
+    /// check — two peers that both advertise this bit derive DIFFERENT session
+    /// keys from each other (the call fails: SAS mismatch / undecryptable media,
+    /// not a security downgrade, but a real regression against every other peer
+    /// that also shipped this). Flip to `true` only after a real cross-platform
+    /// KAT reconciliation pass pins ONE byte layout and all three platforms
+    /// implement that exact layout — see the Android repo's
+    /// docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 2/3.
+    public static let transcriptBindV1Enabled = false
+
     /// W574x — whether the PEER advertised `srtpDirKeyV1` in its last received
     /// OFFER/ACCEPT bundle (set in `onAndroidBundleReceived`, before
     /// `onRelaySessionReady` fires).
@@ -1192,12 +1217,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // omits the bit and both sides keep computing S0 exactly as before.
                 // Mirrored in Android's SELF_CAPABILITIES in the same commit series.
                 pskMixV1: true,
-                // CALL-3/CALL-4 (HSID-002 remainder) — always advertised true by
-                // this build; the ACTUAL negotiated behaviour (v3 signing,
-                // transcript-bound KDF/SAS, signed re-key round) only activates
-                // once the PEER'S bundle also carries this bit (checked at the
-                // v3-verify call site, never assumed).
-                transcriptBindV1: true
+                // CALL-3/CALL-4 (HSID-002 remainder) — gated by transcriptBindV1Enabled
+                // (2026-09-02 safety fix, see its doc comment: three platforms shipped
+                // incompatible KDF constructions under this same bit position). The
+                // ACTUAL negotiated behaviour (v3 signing, transcript-bound KDF/SAS,
+                // signed re-key round) only activates once the PEER'S bundle also
+                // carries this bit (checked at the v3-verify call site, never assumed).
+                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil
             ),
             pskFingerprints: advertisedPskFingerprints,
             pskRoles: advertisedPskRoles,
@@ -1430,7 +1456,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
                 pskMixV1: true,
-                transcriptBindV1: true
+                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil
             ),
             pskFingerprints: advert.fingerprints,
             pskRoles: advert.roles,
@@ -2273,7 +2299,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pskMixV1: true,
                     // CALL-3/CALL-4 (HSID-002 remainder) — same flip as the OFFER
                     // above, see its comment for the full rationale.
-                    transcriptBindV1: true
+                    transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil
                 ),
                 pskFingerprints: acceptAdvertisedPskFingerprints,
                 // W-PSKBLIND — the RECEIVED wire value, verbatim, not our static
