@@ -392,6 +392,11 @@ public final class BCryptoRestClient {
                     return retryData
                 }
                 if retryStatus == 401 { throw BCryptoError.unauthorized }
+                // W-B10PAYREQ (2026-09-02) — same mapping as the primary
+                // attempt below, applied here too so a 402 landing on the
+                // post-refresh retry isn't left as the generic httpError
+                // just because it arrived one attempt later.
+                if retryStatus == 402 { throw BCryptoError.paymentRequired }
                 throw BCryptoError.httpError(retryStatus)
             }
             throw BCryptoError.unauthorized
@@ -410,10 +415,17 @@ public final class BCryptoRestClient {
                 return retryData
             }
             if retryStatus == 401 { throw BCryptoError.unauthorized }
+            if retryStatus == 402 { throw BCryptoError.paymentRequired }
             throw BCryptoError.httpError(retryStatus)
         }
 
         if status == 401 { throw BCryptoError.unauthorized }
+        // W-B10PAYREQ (2026-09-02) — the primary chokepoint: a plain
+        // non-2xx first attempt (not a 401/421 retry) is how the
+        // overwhelming majority of a real 402 reaches this client — see
+        // `BCryptoError.paymentRequired`'s own doc for why this is a bare
+        // status check, no response-body parsing.
+        if status == 402 { throw BCryptoError.paymentRequired }
         throw BCryptoError.httpError(status)
     }
 
@@ -576,6 +588,64 @@ public enum BCryptoError: Error {
     /// Server responded 200 but payload signalled a domain error via a
     /// string field (e.g. recovery-setup `{enrolled:false, error:"..."}`).
     case server(String)
+    /// W-B1CRASHFRAME (2026-09-02) — `BCryptoBackendProvider.accountApi` is a
+    /// public `var` (always `BCryptoAccountApiImpl` today, the only
+    /// constructor site) that the token-refresher closure downcasts to reach
+    /// `refreshToken(_:)`. Was `as!`; a future caller assigning a different
+    /// `AccountApi` conformer there would otherwise crash the process on the
+    /// very next 401 instead of failing this one refresh.
+    case unexpectedAccountApiImplementation
+    /// W-B10PAYREQ (2026-09-02) — HTTP 402, this app's server-side
+    /// entitlement-denial status (`requireFeatureHTTP`/`requireAnyFeatureHTTP`
+    /// in `entitlements_enforce.go`: "design doc §4.5 typed 402 body",
+    /// written whenever a caller's current grant doesn't cover the `feat.*`
+    /// capability a request needs). Previously indistinguishable from any
+    /// other client error on THIS client — arrived as the generic
+    /// `httpError(402)`, so no call site could show a dedicated "serve un
+    /// account Pro" message instead of a raw status code (2026-09-01
+    /// stability audit, item B10). Bare case, no associated status/body:
+    /// matches this file's own existing convention for `.unauthorized`/
+    /// `.notFound`/`.certPinningFailed`, and `performRequest` already
+    /// discards the response BODY for every non-2xx status (see
+    /// `UpgradeSheet.swift`'s `redemptionErrorMessage` doc for why parsing
+    /// the `{"error","feature","package"}` shape server-side would need a
+    /// wider, out-of-scope change to this type's error contract).
+    ///
+    /// SCOPE NOTE: the server writes this same 402 body for VPN and
+    /// files-tus denials too, but on iOS those go through their OWN
+    /// request paths with their OWN error types (`VpnApiService
+    /// .VpnApiError.httpError(Int, String)`, `TusUploadClient
+    /// .TusError.createFailed(Int)`/`.patchFailed(Int)`) — never through
+    /// `BCryptoRestClient` — so this case does NOT cover a 402 on those two
+    /// (confirmed by reading both files; out of scope for this fix, which
+    /// only touches the shared client). Reachable today for KMS/PSK
+    /// material, account, and entitlements requests, all of which DO go
+    /// through this client.
+    case paymentRequired
+}
+
+/// W-B10PAYREQ (2026-09-02) — a short, ready-to-show string for the ONE
+/// case (`.paymentRequired`) this fix set out to give a dedicated message.
+/// Deliberately narrow, not a general BCryptoError→String mapper: every
+/// other case falls back to a generic line here, and `UpgradeSheet.swift`'s
+/// own `UpgradeSheetContainer.redemptionErrorMessage(_:)` keeps owning the
+/// full per-status routing for the redeem flow specifically (400/401/403/
+/// 409/429/5xx) — that switch is NOT replaced or generalized by this one.
+/// Any current or future call site that catches a `BCryptoError` from a
+/// `feat.*`-gated request can show `error.userFacingMessage` (e.g. via
+/// `QAudionSnackbar`, this app's one existing transient-message component —
+/// see `QAudionSnackbar.swift`) instead of `error.localizedDescription`,
+/// which for an untyped `httpError(402)` renders as an opaque NSError
+/// string, not something a user can act on.
+public extension BCryptoError {
+    var userFacingMessage: String {
+        switch self {
+        case .paymentRequired:
+            return "Questa funzione richiede un account Pro."
+        default:
+            return "Errore di rete — riprova."
+        }
+    }
 }
 
 // MARK: - Certificate Pinning Delegate

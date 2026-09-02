@@ -224,6 +224,24 @@ final class UpgradeSheetContainerTests: XCTestCase {
         XCTAssertEqual(container.error, "Errore del server — riprova più tardi.")
     }
 
+    /// W-B10PAYREQ (2026-09-02) — arrives as the bare `.paymentRequired`
+    /// case (NOT `.httpError(402)`) since `BCryptoRestClient` now maps 402
+    /// before it ever reaches this layer; see that case's own doc for why
+    /// redeem itself realistically never triggers this (defensive
+    /// completeness, not a live gap on this specific endpoint).
+    func testRedeemOnA402PaymentRequiredRoutesToTheDedicatedProAccountMessage() async {
+        let fake = FakeEntitlementsApiClient()
+        fake.redeemResult = .failure(BCryptoError.paymentRequired)
+        let gate = CapabilityGate(verifier: verifier, api: fake)
+        let container = UpgradeSheetContainer()
+        container.onCodeChanged(Self.validCode)
+
+        await container.redeem(api: fake, capabilityGate: gate)
+
+        XCTAssertEqual(container.error, BCryptoError.paymentRequired.userFacingMessage)
+        XCTAssertFalse(container.success)
+    }
+
     func testRedeemOnANetworkFailureRoutesToTheNetworkMessageAndNeverAdoptsOrRefreshes() async {
         // Not a BCryptoError at all -- BCryptoRestClient.performRequest lets
         // a raw URLSession failure (offline/DNS/timeout) propagate

@@ -122,6 +122,13 @@ final class UpgradeSheetContainer: ObservableObject {
         case .notFound: return "notFound"
         case .certPinningFailed: return "certPinningFailed"
         case .server: return "server"
+        // W-B1CRASHFRAME (2026-09-02) — new BCryptoError case (guards a
+        // previously-crashing `as!` in BCryptoBackendProvider's token
+        // refresher); this switch was exhaustive, so it must be listed here.
+        case .unexpectedAccountApiImplementation: return "unexpectedAccountApiImplementation"
+        // W-B10PAYREQ (2026-09-02) — new BCryptoError case (HTTP 402,
+        // entitlement denial); same exhaustiveness requirement as above.
+        case .paymentRequired: return "paymentRequired"
         }
     }
 
@@ -174,6 +181,17 @@ final class UpgradeSheetContainer: ObservableObject {
             }
         case .unauthorized:
             return "Sessione non attiva — accedi di nuovo."
+        // W-B10PAYREQ (2026-09-02) — the redeem endpoint itself isn't
+        // feat.*-gated today (verified: `redeemActivationCode`/
+        // `fetchEntitlementsToken` in `CapabilityGate.swift` carry no
+        // entitlement check server-side), so this case is defensive
+        // completeness rather than a live gap being closed — without it,
+        // a future 402 here would silently fall into the `default` below
+        // and repeat the exact "Errore imprevisto." generic-message
+        // problem item B10 exists to fix. Reuses `BCryptoError
+        // .userFacingMessage` rather than a third copy of the same string.
+        case .paymentRequired:
+            return bcError.userFacingMessage
         default:
             return "Errore imprevisto."
         }
