@@ -10484,7 +10484,14 @@ final class AppState: ObservableObject {
             let receiver = ChatFileAttachmentReceiver(appState: self)
             Task { [weak self] in
                 do {
-                    let result = try await receiver.receive(envelope: envelope)
+                    // ATT-1 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item
+                    // 1) — `senderId` here is the WS opaque_message frame's
+                    // SERVER-STAMPED sender (this function's own parameter,
+                    // set by the transport, never by the envelope's own
+                    // claimed `s` field), passed through so a present
+                    // signature is bound to it and a mismatch/forgery drops
+                    // the envelope before anything is installed or saved.
+                    let result = try await receiver.receive(envelope: envelope, transportSenderId: senderId)
                     self?.handleReceivedFileAttachment(result, senderId: senderId, fileId: envelope.fileId)
                 } catch {
                     RTLog.warn("chat", "file-attachment receive failed sender=\(senderId.prefix(8)) fileId=\(envelope.fileId.prefix(8)): \(error)")
