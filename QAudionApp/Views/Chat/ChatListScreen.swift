@@ -309,6 +309,19 @@ struct ChatListScreen: View {
             VStack(spacing: 0) {
                 QAudionBrandBanner()
                 accountTopBar
+                // W-WSBANNER (2026-09-02) — B9: wsConnectionState was reliable
+                // but only ever surfaced in Impostazioni → Info
+                // (AboutSettingsScreen kvRow). Outside the List so it stays
+                // pinned regardless of scroll position and disappears the
+                // instant the state is read as healthy again — no dismiss
+                // affordance, unlike `adminBanner` below, since it must
+                // always reflect the live value, not a one-time user choice.
+                if let status = connectionStatusBanner {
+                    connectionStatusBannerView(status)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                }
                 searchField
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
@@ -371,6 +384,10 @@ struct ChatListScreen: View {
                 // while this target is 16.
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
             }
+            // W-WSBANNER: only the banner's own appear/disappear animates —
+            // scoped to this one value so it never fires on unrelated
+            // re-renders of the List above (e.g. a new message arriving).
+            .animation(.easeInOut(duration: 0.2), value: appState.wsConnectionState)
 
             fabStack
                 .padding(.trailing, 16)
@@ -726,6 +743,51 @@ struct ChatListScreen: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(extras.warning.opacity(0.45), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Connection status banner (B9, W-WSBANNER 2026-09-02)
+
+    /// Pure read of `AppState.wsConnectionState` (W74/W550, already
+    /// `@Published`) — no new state, just a value → banner mapping (the
+    /// state → banner-or-nil decision itself lives in
+    /// `ConnectionStatusBannerPolicy`, tested independently of SwiftUI).
+    /// The only thing added here is the theme tint, which needs `extras`
+    /// from the environment.
+    private var connectionStatusBanner: (title: String, icon: String, tint: Color)? {
+        guard let policy = ConnectionStatusBannerPolicy.select(appState.wsConnectionState) else {
+            return nil
+        }
+        let tint = policy == .disconnected ? extras.riskHigh : extras.warning
+        return (policy.title, policy.systemImage, tint)
+    }
+
+    /// Same visual language as `adminBannerView` above (12pt corner radius,
+    /// tint@0.18 fill / tint@0.45 stroke) and `QAudionSnackbarHost`'s pill
+    /// (icon + text + spacer, 14/10 padding) — deliberately not a new style.
+    /// No dismiss control: unlike `adminBanner`, this must always reflect the
+    /// live connection state rather than a one-time user choice, so it has
+    /// nothing to dismiss to.
+    private func connectionStatusBannerView(
+        _ status: (title: String, icon: String, tint: Color)
+    ) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: status.icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(status.tint)
+            Text(status.title)
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurface)
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(status.tint.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(status.tint.opacity(0.45), lineWidth: 1)
         )
     }
 
