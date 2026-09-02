@@ -9,10 +9,24 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1070",
+              date: "2026-09-02",
+              title: "v1.0.1070",
+              bullets: [
+                "feat(trust): correct Sigsum key-transparency verifier (TRUST-1 residual)",
+                "fix(ci): two new KAT test files missing their private hexEncodedString helper",
+                "fix(tools): fetch-ios-live.py falls back to stale VPS_ACCESS.md when only 2/3 env vars set",
+                "fix(ci): MessageRatchet default-arg Self reference broke CI build",
+                "fix(call): AVAudioSession notifications raced AudioCapture.start() off-main (W-NOTIFYMAIN)",
+                "fix(security): signed remote-wipe command + opaque call-wakeup push (TRUST-2, TRUST-6)",
+                "fix(security): inner sealed-audio directional keys/AAD/replay + SFU/video key hardening (MEDIA-3/4/5/6/7/8, MSG-4)",
+                "fix(security): add a kill switch for transcriptBindV1, default off (CALL-4/HSID-002, CALL-3)",
+              ]),
         .init(id: "v1.0.1069",
               date: "2026-09-02",
               title: "v1.0.1069",
               bullets: [
+                "chore: regenerate changelog for v1.0.1069",
                 "fix(call): transcript-bound session key/SAS + signed re-key round freshness (CALL-4/HSID-002, CALL-3)",
                 "fix(call): consolidated AppState.swift changes from tonight's P1/P2 remediation round 2",
                 "fix(call): CallKit work off the delegate's main queue, hold support, audio AEAD-fail recovery hook (W-CALLKITOFFLOAD, W-CALLHOLD, W-AUDIOAEADREKEY)",
@@ -164,13 +178,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1051",
                 "fix(call): callee mic track landed on a transceiver libwebrtc never sends for (W-AUDIOSENDPICK)",
                 "fix(net): dual-family STUN probe and an IPv6 call-media punch-hole (W-STUNDUALSTACK, W-VPNV6PUNCH)",
-              ]),
-        .init(id: "v1.0.1050",
-              date: "2026-08-30",
-              title: "v1.0.1050",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1050",
-                "diag(call): remote heartbeat for native audio RTP — the silent-call blind spot (W-SRTPRXDIAG)",
               ]),
     ]
 }
