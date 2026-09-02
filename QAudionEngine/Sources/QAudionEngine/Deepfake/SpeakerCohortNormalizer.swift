@@ -61,7 +61,14 @@ public final class SpeakerCohortNormalizer: @unchecked Sendable {
     /// constructing its own.
     public static let shared = SpeakerCohortNormalizer()
 
-    private static let cohortAssetName = "speaker_cohort_v1"
+    // W-CIFIX (2026-09-02) — must be at least as visible as `init`'s own
+    // access level (public): a default-argument expression is compiled as
+    // part of the initializer's public surface, so a `private` value here
+    // fails to build with "is private and cannot be referenced from a
+    // default argument value" the moment anything outside this file (e.g.
+    // the QAudionEngineTests target) resolves the default. Caught by CI
+    // (ios-simulator-tests), not locally — no Swift toolchain on this box.
+    public static let cohortAssetName = "speaker_cohort_v1"
     private static let cohortAssetExtension = "bin"
     private static let embeddingDim = 512
     private static let stdFloor: Float = 1e-4
