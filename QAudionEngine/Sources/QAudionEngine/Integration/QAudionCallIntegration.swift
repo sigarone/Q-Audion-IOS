@@ -300,7 +300,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// so a real cross-platform KAT run (all three platforms' outputs
     /// compared side by side, not just each platform's own self-consistency)
     /// is still the go-live gate, same as before.
-    public static let transcriptBindV1Enabled = false
+    public static let transcriptBindV1Enabled = true // LIVE 2026-09-02 -- Android+Desktop byte-identical on shared KAT, iOS design-verified, user-authorized go-live
 
     /// MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4) go-live
     /// gate for the inner sealed-audio wire's per-direction keys + AAD + replay
