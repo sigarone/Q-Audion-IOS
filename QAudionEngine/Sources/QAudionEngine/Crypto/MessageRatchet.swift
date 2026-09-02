@@ -595,7 +595,7 @@ public final class MessageRatchet {
     /// `let` (deliberately not overridable at runtime, so it can never be a
     /// silent config toggle).
     static func deriveMsgKeyAndNonce(
-        ck: Data, chainIdx: UInt64, widenNonceV32: Bool = Self.msgNonceWidenV32Enabled
+        ck: Data, chainIdx: UInt64, widenNonceV32: Bool = MessageRatchet.msgNonceWidenV32Enabled
     ) throws -> (key: Data, nonce: Data) {
         let msgKey = hkdf(ikm: ck, salt: emptySalt, info: infoMsgKey, length: keyLen)
         // SECURITY L-16 / MSG-4 (2026-09-02 protocol audit, backlog item 5C):
