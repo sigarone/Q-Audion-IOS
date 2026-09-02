@@ -818,6 +818,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
         return try JSONDecoder().decode(RelayResponse.self, from: data)
     }
 
+    /// W-AUXPIN (2026-09-02) — see the protocol doc on `CallingApi
+    /// .pinnedUrlSession()`. `rest` is the SAME `BCryptoRestClient` every
+    /// other call in this class already sends its traffic through, so this
+    /// exposes its existing pinned session — no new pin data, no new
+    /// `URLSession` construction.
+    public func pinnedUrlSession() -> URLSession? { rest.urlSession }
+
     /// W-PHANTOMCALLID (2026-08-14) — the id of the call that is actually
     /// running, or `nil`. It NEVER invents one.
     ///

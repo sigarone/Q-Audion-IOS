@@ -106,4 +106,41 @@ final class PinnedSessionPolicyTests: XCTestCase {
         let config = BackendConfig(serverUrl: "https://notshared-f.test.local", certPinSha256B64: testPins)
         XCTAssertFalse(PinnedSessionCache.session(for: config) === URLSession.shared)
     }
+
+    // MARK: - CallingApi.pinnedUrlSession() (B11 — WssTurnBridge reuse path)
+    //
+    // WssTurnBridge lives in the Engine module and has no route to
+    // `BackendConfig.pinned(serverUrl:)` / `PinnedServerHost` (both
+    // QAudionApp-target-only), so it cannot call `PinnedSessionCache
+    // .session(for:)` directly with a correctly-pinned config. Instead it
+    // takes an already-pinned `URLSession` from its caller via
+    // `CallingApi.pinnedUrlSession()` — these tests pin THAT contract:
+    // nil by default, and `BCryptoCallingApiImpl`'s override is the exact
+    // same session object its REST traffic already uses (no second
+    // pinning mechanism).
+
+    /// Deliberately minimal — only the protocol requirements with no
+    /// default implementation. Exercises `pinnedUrlSession()`'s default
+    /// exactly as any real-world non-overriding `CallingApi` would.
+    private final class MinimalStubCallingApi: CallingApi, @unchecked Sendable {
+        func sendCallOffer(recipientId: String, sdp: String) async throws {}
+        func sendCallAnswer(recipientId: String, sdp: String) async throws {}
+        func sendIceCandidate(recipientId: String, candidate: String) async throws {}
+        func sendHangup(recipientId: String) async throws {}
+        func sendOpaqueMessage(recipientId: String, data: Data) async throws {}
+        func getRelays() async throws -> [RelayServer] { [] }
+    }
+
+    func test_pinnedUrlSession_defaultImplReturnsNil() {
+        let api: CallingApi = MinimalStubCallingApi()
+        XCTAssertNil(api.pinnedUrlSession(), "a backend that doesn't override this must leave WssTurnBridge on .shared")
+    }
+
+    func test_bcryptoCallingApiImpl_pinnedUrlSession_isRestClientsOwnSession() {
+        let ws = BCryptoWebSocketClient(config: BackendConfig(serverUrl: "https://example.invalid"))
+        let rest = BCryptoRestClient(config: BackendConfig(serverUrl: "https://example.invalid"))
+        let impl = BCryptoCallingApiImpl(ws: ws, rest: rest)
+        XCTAssertTrue(impl.pinnedUrlSession() === rest.urlSession,
+                       "must be the SAME session as the REST client's, not a newly built one")
+    }
 }

@@ -63,19 +63,29 @@ public final class WssTurnBridge: @unchecked Sendable {
     /// the port from `RealityManager.shared.activeSocksPort` (or an
     /// equivalent Tor port) before constructing the bridge.
     private let socksPort: Int?
+    /// W-AUXPIN (2026-09-02) — the caller's already cert-pinned REST
+    /// `URLSession` (SECURITY C-6), reused for this bridge's WSS-TURN
+    /// handshake instead of `URLSession.shared` (no pin) when no SOCKS
+    /// proxy is in play. `nil` (the default) preserves today's behavior
+    /// byte-for-byte — no caller before this change passed one. See
+    /// `start()`'s session-selection comment for why the SOCKS-proxy
+    /// branch is untouched.
+    private let pinnedSession: URLSession?
 
     public init(
         wssUrl: URL,
         username: String? = nil,
         credential: String? = nil,
         accessToken: String? = nil,
-        socksPort: Int? = nil
+        socksPort: Int? = nil,
+        pinnedSession: URLSession? = nil
     ) {
         self.wssUrl = wssUrl
         self.username = username
         self.credential = credential
         self.accessToken = accessToken
         self.socksPort = socksPort
+        self.pinnedSession = pinnedSession
     }
 
     deinit { stop() }
@@ -225,12 +235,13 @@ public final class WssTurnBridge: @unchecked Sendable {
             req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         }
         // Reality/Tor censorship-bypass path (additive, default off — mirrors
-        // BCryptoWebSocketClient.connect(viaSocksPort:)). When no SOCKS port
-        // is set, `session` is `URLSession.shared` — IDENTICAL to the prior
-        // behavior. When set, route this bridge's WSS-TURN socket through
-        // the SAME local tunnel the signaling socket already uses, so a
-        // call's TURN relay traffic doesn't leak outside Reality/Tor while
-        // signaling does.
+        // BCryptoWebSocketClient.connect(viaSocksPort:)). When SOCKS is set,
+        // route this bridge's WSS-TURN socket through the SAME local tunnel
+        // the signaling socket already uses, so a call's TURN relay traffic
+        // doesn't leak outside Reality/Tor while signaling does — a custom
+        // proxy config, so it cannot reuse `pinnedSession` below (that
+        // session was built with no proxy) without risking exactly the kind
+        // of behavior change this bridge's happy path must not get.
         let session: URLSession
         if let socksPort {
             let sessionConfig = URLSessionConfiguration.default
@@ -240,6 +251,16 @@ public final class WssTurnBridge: @unchecked Sendable {
                 "SOCKSPort": socksPort
             ] as [String: Any]
             session = URLSession(configuration: sessionConfig)
+        } else if PinnedSessionPolicy.auxiliaryClientsUsePinnedSession, let pinnedSession {
+            // W-AUXPIN (2026-09-02) — no SOCKS proxy in play, so the
+            // caller's pinned REST session (see init doc, B11 / audit P1
+            // item 6) is a drop-in replacement for `.shared`: identical
+            // trust decision to every other pinned request to this host,
+            // zero new `URLSession` construction. A caller that passes no
+            // session (any `CallingApi` that doesn't override
+            // `pinnedUrlSession()`) or has the kill switch off falls
+            // through to the untouched `.shared` branch below.
+            session = pinnedSession
         } else {
             session = URLSession.shared
         }

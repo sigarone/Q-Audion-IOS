@@ -203,6 +203,18 @@ public protocol CallingApi {
     /// that decode a full `RelayResponse` SHOULD override to preserve them.
     func getRelaysResponse() async throws -> RelayResponse
 
+    /// W-AUXPIN (2026-09-02) — this backend's already cert-pinned REST
+    /// `URLSession` (SECURITY C-6), if it has one. Exists so Engine-side
+    /// callers that need a plain `URLSession` bound to the SAME pin/
+    /// delegate — but have no reachable route to `BackendConfig
+    /// .pinned(serverUrl:)`/`PinnedServerHost` (both QAudionApp-target-
+    /// only, unlike this protocol) — can reuse it instead of standing up
+    /// a second pinning mechanism or falling back to `URLSession.shared`.
+    /// See `QAudionWebRtcCallController`'s WSS-TURN bridge construction,
+    /// the one caller today. Default impl returns `nil`; only
+    /// `BCryptoCallingApiImpl` overrides.
+    func pinnedUrlSession() -> URLSession?
+
     // MARK: - Pre-negotiation (optional — backend-specific)
     // The BCrypto backend implements these. Default impls are no-ops to
     // keep the protocol additive — see CallingApi+PreNegotiation extension.
@@ -236,6 +248,11 @@ public extension CallingApi {
         let servers = try await getRelays()
         return RelayResponse(relays: servers, wssTurnUrl: nil, onionAddress: nil)
     }
+
+    /// Default impl — no pinned session available (test stubs, future
+    /// backends). Callers fall back to their own pre-W-AUXPIN default
+    /// (`URLSession.shared`) exactly as before.
+    func pinnedUrlSession() -> URLSession? { nil }
 
     /// Default impl — falls back to the sdp-less overload (drops sdpMid /
     /// sdpMLineIndex). Backends that send multi-stream ICE (audio + video)

@@ -194,7 +194,8 @@ final class ServerSelector {
         do {
             let config = URLSessionConfiguration.ephemeral
             config.timeoutIntervalForRequest = probeTimeoutSec
-            let (data, resp) = try await URLSession(configuration: config).data(for: req)
+            let session = URLSession(configuration: config, delegate: pinnedDelegate(for: httpsUrl), delegateQueue: nil)
+            let (data, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let returnedUserId = json["user_id"] as? String
@@ -266,6 +267,35 @@ final class ServerSelector {
         let wssUrl: String
         let rtt: Double
         let load: Double
+    }
+
+    /// W-AUXPIN (2026-09-02) — the `URLSessionDelegate` a candidate/primary
+    /// probe should use so its TLS validation matches every other pinned
+    /// request to this host (audit reference_ios_stability_audit_2026_09_01,
+    /// P1 item 6 / B11: these probes ran on a plain `URLSessionConfiguration
+    /// .ephemeral` session with no delegate at all — one of them (line ~197)
+    /// even carries the user's bearer token).
+    ///
+    /// Deliberately reuses `PinnedURLSession.auxiliary(for:)`'s DELEGATE
+    /// only, not the session it returns: that cached session carries
+    /// `BCryptoRestClient`'s 15 s default timeout on a non-ephemeral
+    /// configuration, while `probeAll` awaits `measureRtt` SEQUENTIALLY for
+    /// every candidate — inheriting that timeout would let one unreachable
+    /// node stall server selection 3x longer than today's 5 s probe budget.
+    /// Wrapping the SAME delegate instance in each call site's own
+    /// short-timeout ephemeral `URLSessionConfiguration` keeps probing exactly
+    /// as fast as before while still validating the pin, and creates no
+    /// second pinning mechanism (same `CertPinningDelegate` object, same
+    /// pins, same kill switch).
+    ///
+    /// Returns `nil` — reproducing today's undelegated session exactly —
+    /// whenever `PinnedSessionPolicy.auxiliaryClientsUsePinnedSession` is
+    /// off (aux falls back to `.shared`, whose `.delegate` is nil) or
+    /// `serverUrl`'s host isn't the pinned production host (e.g. the
+    /// fi1.bcrypto.com DR node, which `BackendConfig.pinned(serverUrl:)`
+    /// already leaves unpinned today).
+    private func pinnedDelegate(for serverUrl: String) -> URLSessionDelegate? {
+        PinnedURLSession.auxiliary(for: serverUrl).delegate
     }
 
     /// SECURITY C-6 — uses the provider's cert-pinned BCryptoRestClient session.
@@ -341,7 +371,7 @@ final class ServerSelector {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = probeTimeoutSec
         config.timeoutIntervalForResource = probeTimeoutSec
-        let session = URLSession(configuration: config)
+        let session = URLSession(configuration: config, delegate: pinnedDelegate(for: urlStr), delegateQueue: nil)
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
         do {
