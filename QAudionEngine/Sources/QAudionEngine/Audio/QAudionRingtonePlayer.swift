@@ -72,7 +72,21 @@ public final class QAudionRingtonePlayer {
         return buf
     }
 
-    private func ensureRunning() {
+    /// Returns true iff the engine is actually running afterward — callers
+    /// MUST check this before touching `player`. `AVAudioPlayerNode.play()`
+    /// raises an uncatchable Objective-C NSException (not a Swift `Error`)
+    /// when its engine isn't running, and `engine.start()` below IS allowed
+    /// to throw and leave `engine.isRunning == false` — e.g. when the
+    /// shared `AVAudioSession` this engine deliberately doesn't own (see
+    /// the class doc) is still mid-transition because CallKit's own
+    /// activation and this player's first `ensureRunning()` land at
+    /// effectively the same instant. Live crash reports (2026-09-02,
+    /// 1.0.1075/2738 — AFTER the connect-format fix below) show exactly
+    /// this: `start()` failing silently, then the unconditional `play()`
+    /// that used to follow raising the SIGABRT. Skipping the cue on a
+    /// failed start is a far better failure mode than crashing the call.
+    @discardableResult
+    private func ensureRunning() -> Bool {
         if !connected {
             // W-VAULTLOCKNFC follow-up (2026-09-02, live crash reports —
             // "si è schiantato in fase di connessione") — `player
@@ -94,23 +108,24 @@ public final class QAudionRingtonePlayer {
                 standardFormatWithSampleRate: QAudionSynth.defaultSampleRate, channels: 1
             ) else {
                 print("[QAudionRingtonePlayer] could not construct connect format")
-                return
+                return false
             }
             engine.connect(player, to: engine.mainMixerNode, format: format)
             connected = true
         }
-        guard !engine.isRunning else { return }
+        guard !engine.isRunning else { return true }
         do {
             try engine.start()
+            return true
         } catch {
             print("[QAudionRingtonePlayer] engine start failed: \(error.localizedDescription)")
+            return false
         }
     }
 
     /// Replace the currently-playing loop with `cue`, or start one.
     public func loop(_ cue: Cue) {
-        guard let buf = buffer(for: cue) else { return }
-        ensureRunning()
+        guard let buf = buffer(for: cue), ensureRunning() else { return }
         player.stop()
         player.scheduleBuffer(buf, at: nil, options: .loops, completionHandler: nil)
         player.play()
@@ -118,8 +133,7 @@ public final class QAudionRingtonePlayer {
 
     /// Fire a one-shot cue (connected chime, ended dissolve).
     public func play(_ cue: Cue) {
-        guard let buf = buffer(for: cue) else { return }
-        ensureRunning()
+        guard let buf = buffer(for: cue), ensureRunning() else { return }
         player.stop()
         player.scheduleBuffer(buf, at: nil, options: [], completionHandler: nil)
         player.play()
