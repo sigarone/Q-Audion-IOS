@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1076",
+              date: "2026-09-02",
+              title: "v1.0.1076",
+              bullets: [
+                "fix(call): guard outgoing-ring player against a failed engine start",
+              ]),
         .init(id: "v1.0.1075",
               date: "2026-09-02",
               title: "v1.0.1075",
               bullets: [
+                "chore: regenerate changelog for v1.0.1075",
                 "fix(call): fix likely crash-at-connection in the new ring-cue engine",
                 "fix(reality-core): bump grpc-go to 1.83.1, fixes CVE-2026-84304",
               ]),
@@ -174,13 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1057",
                 "fix(app): resolve the four future-error Swift 6 isolation warnings",
-              ]),
-        .init(id: "v1.0.1056",
-              date: "2026-08-30",
-              title: "v1.0.1056",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1056",
-                "fix(call): W-DEADTXNET sentinel sample is Int64 — 1055 CI compile error",
               ]),
     ]
 }
