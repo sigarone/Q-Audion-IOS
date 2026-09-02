@@ -2131,6 +2131,14 @@ final class AppState: ObservableObject {
     /// (the call is still live in-app). Reset per call. Gated by the remote flag
     /// `ios_callkit_wake_only`.
     private var selfManagedAudioSession = false
+    /// W-CKHOLD (2026-09-02) — B5: true only while a SYSTEM
+    /// `CXSetHeldCallAction(isOnHold: true)` is the reason local video is
+    /// paused, so the matching resume (`isOnHold: false`) knows whether to
+    /// un-pause it. Without this, a hold received while the user had
+    /// ALREADY turned their own camera off (mid-call toggle) would turn it
+    /// back on for them the moment the hold clears — the opposite of what
+    /// they asked for. Reset per call alongside `callMuted`.
+    private var holdPausedLocalVideo = false
     /// In-app ringtone timer (fires every 3 s while callState == .ringing
     /// and the native CallKit UI is suppressed).
     private var ringtoneTimer: DispatchSourceTimer?
@@ -3113,6 +3121,20 @@ final class AppState: ObservableObject {
             }
         }
 
+        // W-AUDIOAEADREKEY (2026-09-02) — B3: a burst of audio AEAD decrypt
+        // failures (not one isolated bad frame —
+        // AudioAeadFailureRekeyPolicy requires several close together)
+        // means the two sides' audio session key has drifted, so ask for
+        // the SAME mid-call PQC re-handshake ReKeyScheduler already knows
+        // how to drive (the confidence-driven trigger right above). Reuses
+        // that trigger end-to-end — no new wire message type, no new
+        // handshake path, and the same caller-only glare guard inside
+        // `performPqcReKey` already governs it.
+        callService.onAudioAeadFailureBurst = { [weak self] in
+            RTLog.warn("rekey", "audio AEAD failure burst — forcing re-key")
+            self?.reKeyScheduler.forceReKey(reason: "audio-aead-fail")
+        }
+
         callService.onTxWaveformUpdate = { [weak self] samples in
             Task { @MainActor in
                 guard let self else { return }
@@ -3180,6 +3202,66 @@ final class AppState: ObservableObject {
                 await MainActor.run {
                     // Route through AppState.setMuted which forwards to CallService.
                     self.setMuted(muted)
+                }
+            }
+            // W-CKHOLD (2026-09-02) — B5: CXSetHeldCallAction, fired when
+            // this call goes on/off hold — either the SYSTEM asking
+            // (another CallKit call taking over, or Siri), or our OWN
+            // in-app Hold button (`InCallContainer.tapHold`, which sends
+            // the identical action via `CallKitManaging.setOnHold` so the
+            // native UI stays in sync). Was completely unhandled before
+            // (grep found only the constructor comment) — see audit memory
+            // reference_ios_stability_audit_2026_09_01, P2.
+            provider.onHoldChanged = { [weak self] uuid, isOnHold in
+                guard let self = self else { return }
+                await MainActor.run {
+                    // Group calls: no local media change — a group call's
+                    // audio+video belong to the LiveKit SFU room, never to
+                    // the legacy 1:1 CallService/VideoCallPipeline stack
+                    // (W-GRPVPIO-CRASH, same fork as onAudioSessionActivated/
+                    // Deactivated below). Acknowledged regardless (the Task
+                    // in CallKitProvider still fulfills the action).
+                    guard self.groupCallKitId == nil else { return }
+                    // Audio: reuse `CallService.setOnHold` VERBATIM — the
+                    // SAME `isOnHold` flag `InCallContainer.tapHold()`
+                    // already drives for a self-initiated hold (gates the
+                    // TX chokepoint in `processAndSendEncryptedFrame` so
+                    // the peer hears silence without the ratchet advancing
+                    // out of step, and pauses the duration timer). Calling
+                    // it here — for EVERY hold-state change, whichever
+                    // triggered it — keeps `CallService.isOnHold` correct
+                    // even when the system is what asked, so the next
+                    // in-app tap sees the true state instead of quietly
+                    // diverging from it. Idempotent: a self-initiated hold
+                    // already set the same value before this fires.
+                    self.callService.setOnHold(isOnHold)
+                    // Video: `CallService.isOnHold` never touches the video
+                    // pipeline (today's Hold is audio-only by design), so
+                    // decide separately whether THIS call should pause its
+                    // camera too — CallHoldPolicy is the pure decision (see
+                    // its doc comment for the full rationale); this closure
+                    // only carries out what it returns.
+                    let video = CallHoldPolicy.videoAction(
+                        isOnHold: isOnHold,
+                        isGroupCall: self.groupCallKitId != nil,
+                        isVideoCall: self.isVideoCall,
+                        localVideoAlreadyPaused: self.localVideoPaused,
+                        videoPausedByPriorHold: self.holdPausedLocalVideo)
+                    // `videoSetCameraEnabled` is the SAME path the user's
+                    // own Cam ON/OFF button drives (W393 — pauses the
+                    // capture pipeline without tearing it down, and sends
+                    // WIRE_SPEC §8.9 `call_video_state` so the peer sees an
+                    // intentional pause instead of a stall).
+                    if video.pauseLocalVideo {
+                        self.holdPausedLocalVideo = true
+                        self.videoSetCameraEnabled(false)
+                    }
+                    if video.resumeLocalVideo {
+                        self.videoSetCameraEnabled(true)
+                    }
+                    if !isOnHold {
+                        self.holdPausedLocalVideo = false
+                    }
                 }
             }
             // W464 — CallKit owns the shared AVAudioSession. The audio
@@ -3281,10 +3363,50 @@ final class AppState: ObservableObject {
                     self.videoNackCache = nil
                     self.abrController?.stop()
                     self.abrController = nil
-                    self.callService.handleAudioSessionDeactivated()
+                    // W-CKPCRESET (2026-09-02) — CallKit just invalidated
+                    // every call it knew about; leaving the 1:1
+                    // RTCPeerConnection running left mic/camera/ICE-DTLS
+                    // sockets open with nothing to ever close them (audit
+                    // memory reference_ios_stability_audit_2026_09_01, P2:
+                    // "providerDidReset does not close PC"). Reuse the exact
+                    // primitive endCall() uses for a normal hangup —
+                    // sendHangupAndClose() captures the peer id, closes the
+                    // PC synchronously, then fires call_hangup at the peer —
+                    // instead of inventing a new teardown path. Scoped to the
+                    // 1:1 controller only; see CallKitProviderResetPolicy kdoc
+                    // for why a group call's LiveKit room is out of scope here.
+                    #if canImport(WebRTC)
+                    if case .closeAndNotifyPeer = CallKitProviderResetPolicy.peerConnectionAction(
+                        hasActivePeerConnection: self.webRtcController != nil,
+                        isGroupCall: self.groupCallKitId != nil
+                    ), let ctrl = self.webRtcController as? QAudionWebRtcCallController {
+                        ctrl.sendHangupAndClose()
+                        self.webRtcController = nil
+                        self.pendingRemoteIceCandidates.removeAll()
+                    }
+                    #endif
+                    // W-CKPCRESET follow-up (review finding, 2026-09-02) —
+                    // handleAudioSessionDeactivated() only flips
+                    // audioSessionActive=false; it never stops
+                    // AudioCapture/AVAudioEngine (that is teardownAudioStack,
+                    // reachable only via endCall()). On the legacy/fallback
+                    // audio path (audioSrtpFallbackActive, ICE-outage
+                    // relay) — as opposed to native-audio-srtp, where the
+                    // mic lives in the PeerConnection's own ADM and IS
+                    // closed by sendHangupAndClose() above — the microphone
+                    // stayed physically open after a system reset. endCall()
+                    // is the same primitive every normal hangup already
+                    // calls (never touches CXProvider — no reportCallEnded
+                    // — confirmed by reading it), so it is safe here too.
+                    self.callService.endCall()
                     self.isInCall = false
                     self.isVideoCall = false
                     self.callState = .idle
+                    // W-CKHOLD — a system reset invalidates whatever call
+                    // this flag was tracking; don't let it survive into
+                    // whatever call comes next (endCall() normally does
+                    // this, but a reset does its own teardown above).
+                    self.holdPausedLocalVideo = false
                 }
             }
         }
@@ -6022,6 +6144,13 @@ final class AppState: ObservableObject {
         // above but fired within one frame of the cryptor detecting failure.
         controller.onDecryptFailureDetected = { [weak self] in
             Task { @MainActor [weak self] in self?.requestKeyframeFromSender(reason: "decryptfail") }
+        }
+        // W-AUDIOAEADREKEY (2026-09-02) — B3: native SRTP audio's own
+        // decrypt-fail signal, fed through CallService's burst/cooldown
+        // policy rather than acted on per-frame (audio has no keyframe to
+        // request — see the closure's own doc).
+        controller.onAudioDecryptFailureDetected = { [weak self] in
+            Task { @MainActor [weak self] in self?.callService.noteAudioAeadDecryptFailure() }
         }
         // W-BWCAP (2026-08-25) — our own route-tier ceiling changed →
         // report it to the peer as our local downlink decision.
@@ -13078,8 +13207,29 @@ final class AppState: ObservableObject {
         if trimmed.hasPrefix("+") {
             do {
                 let normalized = try PhoneHashHelper.normalizeE164(trimmed)
+                // W-B1CRASHFRAME (2026-09-02) — was `URL(string: serverUrl)!`.
+                // `serverUrl` is always `PinnedServerHost.url` today (the only
+                // assignment site in the whole app, a hardcoded valid https
+                // URL — see PinnedServerHost's own "why pin instead of letting
+                // the user type a server URL" doc), so this never actually
+                // fires; but it is an `@Published var`, not a constant, so one
+                // future assignment away from a force-unwrap on user-facing
+                // input. Guard it like every other failure branch in this
+                // same function instead of trapping the process.
+                guard let discoverBaseUrl = URL(string: serverUrl) else {
+                    errorMessage = "Configurazione server non valida."
+                    RTLog.error("dial", "serverUrl non è un URL valido: \(serverUrl)")
+                    return
+                }
                 let v2 = BCryptoContactsDiscoverV2Client(
-                    baseUrl: URL(string: serverUrl)!,
+                    baseUrl: discoverBaseUrl,
+                    // W-AUXPIN (2026-09-02) — this bearer-token client had no
+                    // pin (audit reference_ios_stability_audit_2026_09_01,
+                    // P1 item 6 / B11). Same cached pinned session every
+                    // other aux client uses; PinnedSessionPolicy
+                    // .auxiliaryClientsUsePinnedSession == false restores
+                    // `.shared` exactly as before.
+                    session: PinnedURLSession.auxiliary(for: serverUrl),
                     bearerTokenProvider: { [weak self] in self?.authService.loadToken() })
                 let pepper = try await v2.fetchPepper()
                 let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
@@ -13174,8 +13324,20 @@ final class AppState: ObservableObject {
         if trimmed.hasPrefix("+") {
             do {
                 let normalized = try PhoneHashHelper.normalizeE164(trimmed)
+                // W-B1CRASHFRAME (2026-09-02) — see `dialAndCall`'s identical
+                // discover-v2 branch above for the full rationale: `serverUrl`
+                // is always valid today, but this guards the `@Published var`
+                // instead of trapping the process if that ever changes.
+                guard let discoverBaseUrl = URL(string: serverUrl) else {
+                    errorMessage = "Configurazione server non valida."
+                    RTLog.error("dial", "serverUrl non è un URL valido: \(serverUrl)")
+                    return nil
+                }
                 let v2 = BCryptoContactsDiscoverV2Client(
-                    baseUrl: URL(string: serverUrl)!,
+                    baseUrl: discoverBaseUrl,
+                    // W-AUXPIN (2026-09-02) — see the other discover-v2 call
+                    // site above for the full rationale (B11 / audit P1 item 6).
+                    session: PinnedURLSession.auxiliary(for: serverUrl),
                     bearerTokenProvider: { [weak self] in self?.authService.loadToken() })
                 let pepper = try await v2.fetchPepper()
                 let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
@@ -13936,6 +14098,15 @@ final class AppState: ObservableObject {
                 controller.onDecryptFailureDetected = { [weak self] in
                     Task { @MainActor [weak self] in
                         self?.requestKeyframeFromSender(reason: "decryptfail")
+                    }
+                }
+                // W-AUDIOAEADREKEY (2026-09-02) — B3: native SRTP audio's
+                // own decrypt-fail signal, fed through CallService's
+                // burst/cooldown policy (see the closure's own doc for why
+                // this is not a per-frame nudge like video's).
+                controller.onAudioDecryptFailureDetected = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.callService.noteAudioAeadDecryptFailure()
                     }
                 }
                 // W-BWCAP (2026-08-25) — our own route-tier ceiling changed
@@ -15510,6 +15681,10 @@ extension AppState {
         // W-MUTEBTNSRC — same lifetime: a mute latched at the end of one call
         // must not open the next one showing a muted mic.
         callMuted = false
+        // W-CKHOLD — same lifetime: a hold latched at the end of one call
+        // must not leave the next call's resume logic believing IT paused
+        // the camera.
+        holdPausedLocalVideo = false
         // W-ICEGRACE — kill any pending ICE-disconnect countdown for the call
         // being torn down here. Without this a grace armed at the very end of
         // one call could fire 3s later, find the NEXT call live in
@@ -20612,6 +20787,14 @@ extension AppState {
         controller.onDecryptFailureDetected = { [weak self] in
             Task { @MainActor [weak self] in
                 self?.requestKeyframeFromSender(reason: "decryptfail")
+            }
+        }
+        // W-AUDIOAEADREKEY (2026-09-02) — B3: native SRTP audio's own
+        // decrypt-fail signal, fed through CallService's burst/cooldown
+        // policy (responder side, mirrors caller).
+        controller.onAudioDecryptFailureDetected = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.callService.noteAudioAeadDecryptFailure()
             }
         }
         // W-BWCAP (2026-08-25) — our own route-tier ceiling changed → report
