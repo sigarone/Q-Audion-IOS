@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1078",
+              date: "2026-09-03",
+              title: "v1.0.1078",
+              bullets: [
+                "fix(call): group-call join retry/timeout was too tight for a long socket suspension",
+              ]),
         .init(id: "v1.0.1077",
               date: "2026-09-02",
               title: "v1.0.1077",
               bullets: [
+                "chore: regenerate changelog for v1.0.1077",
                 "fix(call): dead-TX audio-srtp watchdog was losing the race to hangup",
               ]),
         .init(id: "v1.0.1076",
@@ -174,13 +181,6 @@ extension ReleaseNote {
               title: "v1.0.1059",
               bullets: [
                 "fix(call): FrameCryptor key ring pinned to slot 0 — every mid-call rekey killed audio AND video both ways (W-KEYSLOTROTATE)",
-              ]),
-        .init(id: "v1.0.1058",
-              date: "2026-08-30",
-              title: "v1.0.1058",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1058",
-                "fix(call): remote ICE candidates were silently dropped before the remote description — cross-network calls never left CHECKING (W-ICELATEQUEUE)",
               ]),
     ]
 }
