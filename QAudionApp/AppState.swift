@@ -12083,6 +12083,12 @@ final class AppState: ObservableObject {
             return existing
         }
         let integration = QAudionCallIntegration()
+        // MEDIA-3/4/5 — resolve THIS device's own user id for the inner
+        // sealed-audio wire's `selfIsRoleA` computation (same value `selfId`
+        // below already uses for the outer M-15 sealer's role assignment).
+        // Set before returning `integration`, so it is wired before this
+        // responder's `onAndroidBundleReceived` can ever run.
+        integration.resolveSelfUserId = { [weak self] in self?.currentUserId ?? "" }
         // W574g — install the M-15 WS-relay sealer the instant the engine
         // session key is set, race-free, carrying the handshake's own
         // callId. Responder side: this fires from the inbound OFFER's
@@ -13709,6 +13715,13 @@ final class AppState: ObservableObject {
             // builds the integration.
             if let integration = callService.callIntegration,
                let provider = liveProvider {
+                // MEDIA-3/4/5 — resolve THIS device's own user id for the
+                // inner sealed-audio wire's `selfIsRoleA` computation (same
+                // value `selfId` below already uses for the outer M-15
+                // sealer's role assignment). Wired before any handshake
+                // message can arrive, so `onAndroidBundleReceived`'s
+                // `resolveSelfUserId?()` call is never nil-when-it-shouldn't-be.
+                integration.resolveSelfUserId = { [weak self] in self?.currentUserId ?? "" }
                 // Phase-10b: wire the handshake-signing closures (sign OFFER +
                 // verify ACCEPT + TOFU pin) on the caller-side integration.
                 wireHandshakeSigning(on: integration)

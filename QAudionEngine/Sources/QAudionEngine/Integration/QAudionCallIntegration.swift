@@ -283,16 +283,65 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 2/3.
     public static let transcriptBindV1Enabled = false
 
+    /// MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4) go-live
+    /// gate for the inner sealed-audio wire's per-direction keys + AAD + replay
+    /// window (`QAudionEngine.initSession`'s `innerAudioAadV1` param). Mirrors
+    /// this platform's own `srtpDirKeysEnabled`/`transcriptBindV1Enabled`
+    /// pattern directly above, and Android/Desktop's equivalent constant for the
+    /// SAME capability bit — grep either sibling repo for `innerAudioAadV1` or
+    /// `INNER_AUDIO_AAD_V1_ENABLED` before flipping this.
+    ///
+    /// DEFAULT FALSE. This bit's exact construction (HKDF info-string pair,
+    /// AAD byte layout, replay-window shape — see `QAudionEngine.swift`'s
+    /// `W-INNERAUDIOAAD` block) was implemented on iOS alone in this session,
+    /// with no live cross-platform KAT against Android/Desktop's own
+    /// implementations of the same audit finding. Exactly the
+    /// `transcriptBindV1Enabled` situation directly above: a mismatched
+    /// construction under the same wire capability bit position would make
+    /// two peers that both advertise it derive different directional keys
+    /// from each other, breaking the call (not a security downgrade — the
+    /// call simply stops decrypting audio). Flip to `true` only after a real
+    /// cross-platform KAT reconciliation pins one byte layout and all three
+    /// platforms implement that exact layout.
+    public static let innerAudioAadV1Enabled = false
+
     /// W574x — whether the PEER advertised `srtpDirKeyV1` in its last received
     /// OFFER/ACCEPT bundle (set in `onAndroidBundleReceived`, before
     /// `onRelaySessionReady` fires).
     private var peerAdvertisedSrtpDirKey: Bool = false
+
+    /// MEDIA-3/4/5 — whether the PEER advertised `innerAudioAadV1` in its last
+    /// received OFFER/ACCEPT bundle. Same set-site/timing as
+    /// `peerAdvertisedSrtpDirKey` immediately above.
+    private var peerAdvertisedInnerAudioAad: Bool = false
 
     /// W574x — directional sealer keys are used only when BOTH peers advertise
     /// support. Read by AppState at relay-sealer install time.
     public var negotiatedSrtpDirKey: Bool {
         Self.srtpDirKeysEnabled && peerAdvertisedSrtpDirKey
     }
+
+    /// MEDIA-3/4/5 — the inner sealed-audio wire's per-direction-key/AAD/
+    /// replay-window scheme is used only when BOTH peers advertise support
+    /// (same AND-negotiation shape as `negotiatedSrtpDirKey`). Read internally
+    /// at the `engine.initSession(...)` call sites below; with the kill
+    /// switch off this is always `false` regardless of what any peer sends.
+    public var negotiatedInnerAudioAadV1: Bool {
+        Self.innerAudioAadV1Enabled && peerAdvertisedInnerAudioAad
+    }
+
+    /// MEDIA-3/4/5 — resolves THIS device's own user id, needed to compute
+    /// `PqcRtpFrameSealer.selfIsRoleA(selfUserId:peerUserId:)` for the inner
+    /// sealed-audio wire's per-direction key assignment (same role rule the
+    /// outer M-15 sealer already uses — see `AppState.installRelaySealers`'s
+    /// callers). `QAudionCallIntegration` has no notion of the app-level
+    /// signed-in user itself; AppState wires this closure once at integration
+    /// construction time, mirroring how it already resolves `currentUserId`
+    /// for the outer sealer's own `selfIsRoleA` computation. `nil`/unset (or
+    /// throwing) resolves to `""`, which is a safe, deterministic (if
+    /// arbitrary) fallback role — inert in practice since the kill switch
+    /// above keeps `negotiatedInnerAudioAadV1` false regardless.
+    public var resolveSelfUserId: (() -> String)?
 
     /// Phase 18 — whether THIS build advertises the v4 PQ ratchet (`ratchetV4`)
     /// capability. Mirrors Android `selfCapabilities().ratchetV4 =
@@ -1223,7 +1272,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // ACTUAL negotiated behaviour (v3 signing, transcript-bound KDF/SAS,
                 // signed re-key round) only activates once the PEER'S bundle also
                 // carries this bit (checked at the v3-verify call site, never assumed).
-                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil
+                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil,
+                // MEDIA-3/4/5 — gated by innerAudioAadV1Enabled (default false, see
+                // its doc). The ACTUAL negotiated behaviour (per-direction inner
+                // sealed-audio keys/AAD/replay window) only activates once the
+                // PEER'S bundle also carries this bit — see `negotiatedInnerAudioAadV1`.
+                innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
             ),
             pskFingerprints: advertisedPskFingerprints,
             pskRoles: advertisedPskRoles,
@@ -1456,7 +1510,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
                 pskMixV1: true,
-                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil
+                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil,
+                innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
             ),
             pskFingerprints: advert.fingerprints,
             pskRoles: advert.roles,
@@ -1784,6 +1839,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
         // for the pair, exactly like Android's `safePeer.ratchetV4` default.
         self.peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
+        // MEDIA-3/4/5 — capture the peer's inner-sealed-audio-AAD advertisement,
+        // same additive/AND-negotiated shape as srtpDirKeyV1/ratchetV4 above. No
+        // TOFU-pin OR here (unlike srtpDirKeyV1) — this bit has no pinning store
+        // of its own, and with `Self.innerAudioAadV1Enabled` false the AND in
+        // `negotiatedInnerAudioAadV1` keeps this inert either way.
+        self.peerAdvertisedInnerAudioAad = (bundle.capabilities?.innerAudioAadV1 ?? false)
 
         switch bundle.kind {
         case .offer:
@@ -2299,7 +2360,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pskMixV1: true,
                     // CALL-3/CALL-4 (HSID-002 remainder) — same flip as the OFFER
                     // above, see its comment for the full rationale.
-                    transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil
+                    transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil,
+                    // MEDIA-3/4/5 — same flip as the OFFER above, see its comment.
+                    innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
                 ),
                 pskFingerprints: acceptAdvertisedPskFingerprints,
                 // W-PSKBLIND — the RECEIVED wire value, verbatim, not our static
@@ -2439,7 +2502,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // managers in place (state == .sessionActive is an explicit
             // allowed transition) without touching the audio profile latch
             // or rebuilding the codec — see the isReKeyRound doc above.
-            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+            // MEDIA-3/4/5 — per-direction inner-audio keys/AAD/replay window,
+            // only actually applied when negotiated (kill switch default
+            // false — see `negotiatedInnerAudioAadV1`'s doc). Role assignment
+            // reuses the SAME rule the outer M-15 sealer uses
+            // (`PqcRtpFrameSealer.selfIsRoleA`, lexicographically-smaller
+            // userId), so a future go-live can't disagree with the outer
+            // layer about which side is "A". `epoch` reuses this round's
+            // already-agreed CALL-3 re-key round number (both peers derive
+            // the SAME value from the signed bundle) rather than a fresh,
+            // possibly-divergent counter.
+            let innerAadNegotiated = negotiatedInnerAudioAadV1
+            let innerAadSelfIsRoleA = innerAadNegotiated
+                ? PqcRtpFrameSealer.selfIsRoleA(resolveSelfUserId?() ?? "", callerId)
+                : false
+            let innerAadEpoch = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+            try engine.initSession(sharedSecret: combined, adaptivePadding: true,
+                                   innerAudioAadV1: innerAadNegotiated, callId: callId,
+                                   selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
             onRelaySessionReady?(combined, callId)
             lock.withLock { state = .active }
             // W529: handshake reached active — kill the retry loop.
@@ -2976,7 +3056,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             //    again mid-session, so this step needed no isReKeyRound
             //    guard to begin with.
             // W479 — Android peer (caller side): same AdaptivePadding scheme.
-            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+            // MEDIA-3/4/5 — same negotiated per-direction inner-audio keys/AAD/
+            // replay window as the .offer branch above; see its comment.
+            let innerAadNegotiatedCaller = negotiatedInnerAudioAadV1
+            let innerAadSelfIsRoleACaller = innerAadNegotiatedCaller
+                ? PqcRtpFrameSealer.selfIsRoleA(resolveSelfUserId?() ?? "", callerId)
+                : false
+            let innerAadEpochCaller = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+            try engine.initSession(sharedSecret: combined, adaptivePadding: true,
+                                   innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
+                                   selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
             onRelaySessionReady?(combined, callId)
             lock.withLock {
                 state = .active
@@ -4344,6 +4433,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             inputKeyMaterial: SymmetricKey(data: sessionKey),
             salt: salt,
             info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    /// MEDIA-8 (2026-09-02 protocol audit, backlog item 5B) — the video
+    /// fallback key used when the peer did NOT negotiate `vkey-v1` (see
+    /// `QAudionWebRtcCallController.ensureVideoSealerInternal`'s call site).
+    /// Replaces the old behaviour of handing the raw audio `sessionKey`
+    /// straight to the video FrameCryptor, unmodified — a single key domain
+    /// shared between audio and video with separation resting solely on the
+    /// native FrameCryptor's own SSRC/timestamp-derived IV.
+    ///
+    ///   k_video_fallback = HKDF-SHA256(IKM=sessionKey, salt=∅,
+    ///                                  info="q-audion-video-fallback-v1", L=32)
+    ///
+    /// Deliberately UNCONDITIONAL: unlike `deriveVideoKey` above (gated on
+    /// the peer advertising `vkey-v1`) this needs no peer coordination —
+    /// HKDF is a deterministic pure function of a value BOTH sides already
+    /// hold (`sessionKey`), so both legs derive the identical fallback key
+    /// independently with no wire change and no negotiation. No kill switch:
+    /// every build applies this whenever the vkey-v1 path isn't taken.
+    static func deriveVideoFallbackKey(sessionKey: Data) -> Data {
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: sessionKey),
+            salt: Data(),
+            info: Data("q-audion-video-fallback-v1".utf8),
             outputByteCount: 32
         )
         return key.withUnsafeBytes { Data($0) }

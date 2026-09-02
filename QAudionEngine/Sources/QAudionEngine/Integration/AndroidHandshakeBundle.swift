@@ -130,6 +130,20 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // wire for every peer that has not shipped this fix.
         public let transcriptBindV1: Bool?
 
+        // MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4)
+        // — capability bit for the inner sealed-audio wire's per-direction
+        // keys + AAD + replay window (see `QAudionEngine.initSession`'s
+        // `innerAudioAadV1` param and `QAudionCallIntegration
+        // .innerAudioAadV1Enabled`). OPTIONAL, appended LAST, same "omit
+        // when not advertising" convention as `pskMixV1`/`transcriptBindV1`
+        // above: a peer that doesn't carry the field decodes to nil (treated
+        // as `false`), and `JSONEncoder` omits a nil key, so the OFFER/ACCEPT
+        // bytes stay byte-IDENTICAL to today's wire until this ships on
+        // every platform and the kill switch flips on. NOT bound into the
+        // signed transcript CAPS tuple (like `pskMixV1`) — only gates local
+        // behaviour, never authenticated.
+        public let innerAudioAadV1: Bool?
+
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
@@ -138,7 +152,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             ratchetV4: Bool? = nil,
             srtpDirKeyV1: Bool? = nil,
             pskMixV1: Bool? = nil,
-            transcriptBindV1: Bool? = nil
+            transcriptBindV1: Bool? = nil,
+            innerAudioAadV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -148,6 +163,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.srtpDirKeyV1 = srtpDirKeyV1
             self.pskMixV1 = pskMixV1
             self.transcriptBindV1 = transcriptBindV1
+            self.innerAudioAadV1 = innerAudioAadV1
         }
     }
 

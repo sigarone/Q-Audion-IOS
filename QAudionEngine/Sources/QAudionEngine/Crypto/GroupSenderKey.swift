@@ -358,6 +358,15 @@ extension GroupSenderKey {
 
     private static let infoAudioSessionKey = Data("grp-audio-session-key-v1".utf8)
     private static let infoAudioFrameKeyPrefix = Data("grp-audio-frame-key".utf8)
+    /// MEDIA-7 (2026-09-02 protocol audit, backlog item 5A) — domain-separation
+    /// label for the LiveKit/SFU frame-encryption key, distinct from
+    /// `infoAudioSessionKey` above (the WS-relay fallback-audio key, ALREADY
+    /// domain-separated per this file's W-GRPAUDIOKEY section doc) and from
+    /// the group MESSAGE ratchet's own `grp-msg-key`/`grp-ratchet-step`
+    /// labels. Exact string required byte-for-byte on every platform that
+    /// turns this on — see `deriveSfuMediaKey` and
+    /// `GroupCallController.grpSfuMediaKeyV1Enabled`.
+    private static let infoSfuMediaKey = Data("grp-sfu-media-key-v1".utf8)
 
     /// `audio_key = HKDF(IKM=CK_0, salt=∅, info="grp-audio-session-key-v1", L=32)`.
     /// `ck0` is the sender's own current send-chain key snapshot for this
@@ -367,6 +376,20 @@ extension GroupSenderKey {
     /// whenever `GroupState.groupEpoch` changes.
     public static func deriveAudioSessionKey(ck0: Data) -> Data {
         return hkdf(ikm: ck0, salt: emptySalt, info: infoAudioSessionKey, length: audioKeyLen)
+    }
+
+    /// MEDIA-7 (backlog item 5A) — `sfu_key = HKDF(IKM=SK_0, salt=∅,
+    /// info="grp-sfu-media-key-v1", L=32)`. `sk0` is the same raw send-chain
+    /// (`GroupSession.currentSendKey`) or installed recv-chain
+    /// (`GroupSession.currentRecvKey`) snapshot `GroupCallController`
+    /// currently hands the LiveKit key provider UNMODIFIED — this wraps it
+    /// in a domain-separated derivation before that handoff, exactly the
+    /// same shape `deriveAudioSessionKey` already applies for the WS-relay
+    /// fallback-audio key immediately above. Gated behind
+    /// `GroupCallController.grpSfuMediaKeyV1Enabled` (default false) — the
+    /// caller chooses `sk0` verbatim or this derived value, never both.
+    public static func deriveSfuMediaKey(sk0: Data) -> Data {
+        return hkdf(ikm: sk0, salt: emptySalt, info: infoSfuMediaKey, length: audioKeyLen)
     }
 
     /// `frame_key_n = HKDF(IKM=audio_key, salt=∅, info="grp-audio-frame-key" || BE64(n), L=32)`.

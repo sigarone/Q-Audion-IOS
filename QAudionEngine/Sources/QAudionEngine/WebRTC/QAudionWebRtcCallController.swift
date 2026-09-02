@@ -2983,44 +2983,54 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// recomputed from `peerNegotiated().agreedTags` each frame. The
     /// per-frame HKDF is identical in cost to the existing one already
     /// done inside `LiveKitVideoFrameCryptor` (a second SHA-256-based
-    /// HKDF, ~2 µs). When the peer did NOT advertise `vkey-v1` the
-    /// closure returns the raw session key, preserving the W539 behaviour
-    /// for older peers. The FrameCryptor params are UNCHANGED — K_video
-    /// is the INPUT key fed to the cryptor's own internal HKDF, not the
-    /// final AES key.
+    /// HKDF, ~2 µs).
+    ///
+    /// MEDIA-8 (2026-09-02 protocol audit, backlog item 5B) — when the peer
+    /// did NOT advertise `vkey-v1` the closure USED TO return the raw
+    /// session key verbatim, sharing it byte-for-byte with the audio path
+    /// (separation then rested entirely on the native FrameCryptor's own
+    /// SSRC/timestamp-derived IV — a single key domain across audio+video).
+    /// It now derives a video-only fallback key instead — unconditional, no
+    /// peer coordination needed (deterministic HKDF over a value both sides
+    /// already hold), so unlike `deriveVideoKey`'s vkey-v1 gate this has NO
+    /// kill switch and NO capability check: every build applies it, whether
+    /// or not the peer ever advertises vkey-v1. The FrameCryptor params are
+    /// UNCHANGED either way — the returned value is always the INPUT key fed
+    /// to the cryptor's own internal HKDF, never the final AES key.
     @discardableResult
     private func ensureVideoSealerInternal() -> VideoCallSealer? {
         let sealer = ensureVideoSealer { [weak self] in
             guard let self = self else { return Data() }
             let sessionKey = self.pqcSessionKey ?? Data()
-            // Only swap to K_video when BOTH sides advertised vkey-v1 and
-            // we hold a full 32-byte session key. Anything else falls back
-            // to the raw session key (legacy/pre-vkey-v1 wire behaviour).
-            guard sessionKey.count == 32,
-                  let negotiated = self.peerNegotiated(),
-                  negotiated.useVideoKey else {
-                return sessionKey
+            // Not ready yet (no session key established) — return as-is;
+            // every downstream caller of this closure already guards on
+            // `.count == 32` and defers until a real key arrives.
+            guard sessionKey.count == 32 else { return sessionKey }
+            if let negotiated = self.peerNegotiated(), negotiated.useVideoKey {
+                // CROSS-PLATFORM K_video: feed ONLY the canonical transcript tags
+                // {sframe-v1, ratchet-v3, vkey-v1} — exactly what Android
+                // `videoTranscriptTags` (PqcHandshake.kt:502) and Desktop
+                // `agreedTagsFromFlags` build, and what the frozen
+                // PhoneVideoKeyKatTests vector pins. `negotiated.agreedTags` also
+                // contains `sframe-aes256-v1` / `dc-mux-v1`, which Android/Desktop
+                // EXCLUDE — feeding the full set made iOS's HKDF transcriptHash
+                // differ → a different K_video → Android/Desktop could not decrypt
+                // iOS video and vice-versa (black/garbage). The KAT passed only
+                // because it used the canonical 3-tag set, masking the runtime drift.
+                let canonicalTags = negotiated.agreedTags.filter {
+                    $0 == CallCapabilities.sframeV1
+                        || $0 == CallCapabilities.ratchetV3
+                        || $0 == CallCapabilities.vkeyV1
+                }
+                return QAudionCallIntegration.deriveVideoKey(
+                    sessionKey: sessionKey,
+                    agreedTags: canonicalTags,
+                    psk: self.videoContactPsk
+                )
             }
-            // CROSS-PLATFORM K_video: feed ONLY the canonical transcript tags
-            // {sframe-v1, ratchet-v3, vkey-v1} — exactly what Android
-            // `videoTranscriptTags` (PqcHandshake.kt:502) and Desktop
-            // `agreedTagsFromFlags` build, and what the frozen
-            // PhoneVideoKeyKatTests vector pins. `negotiated.agreedTags` also
-            // contains `sframe-aes256-v1` / `dc-mux-v1`, which Android/Desktop
-            // EXCLUDE — feeding the full set made iOS's HKDF transcriptHash
-            // differ → a different K_video → Android/Desktop could not decrypt
-            // iOS video and vice-versa (black/garbage). The KAT passed only
-            // because it used the canonical 3-tag set, masking the runtime drift.
-            let canonicalTags = negotiated.agreedTags.filter {
-                $0 == CallCapabilities.sframeV1
-                    || $0 == CallCapabilities.ratchetV3
-                    || $0 == CallCapabilities.vkeyV1
-            }
-            return QAudionCallIntegration.deriveVideoKey(
-                sessionKey: sessionKey,
-                agreedTags: canonicalTags,
-                psk: self.videoContactPsk
-            )
+            // MEDIA-8 — vkey-v1 not negotiated (or peer not heard from yet):
+            // local-only fallback derivation, see this method's kdoc above.
+            return QAudionCallIntegration.deriveVideoFallbackKey(sessionKey: sessionKey)
         }
         // WIRE_SPEC §8.7 — a successful pick/rekey above may have just
         // completed the "receiver cryptor attached AND keyed" pair

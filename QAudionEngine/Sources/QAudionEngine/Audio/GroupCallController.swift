@@ -241,6 +241,27 @@ public final class GroupCallController: @unchecked Sendable {
     /// race instead of guessing at a delay.
     private var pendingSfuDisconnect: Task<Void, Never>?
     private static let livekitKeyringSize: UInt32 = 16
+
+    /// MEDIA-7 (2026-09-02 protocol audit, backlog item 5A) go-live gate for
+    /// domain-separating the LiveKit/SFU media key from the raw group-ratchet
+    /// `SK_0` (`GroupSenderKey.deriveSfuMediaKey`). Mirrors this platform's
+    /// own `QAudionCallIntegration.innerAudioAadV1Enabled`/
+    /// `transcriptBindV1Enabled` pattern, and Android/Desktop's equivalent
+    /// constant for the SAME derivation — grep either sibling repo for
+    /// `grpSfuMediaKeyV1`/`GRP_SFU_MEDIA_KEY_V1_ENABLED` before flipping this.
+    ///
+    /// DEFAULT FALSE, and unlike the 1:1-call capability bits above this one
+    /// has NO peer-negotiation wire field to AND against: a group call's SFU
+    /// key is never advertised or negotiated per-participant today (there is
+    /// no capability envelope for it — `SenderKeyInitEnvelope`/
+    /// `SenderKeyRotateEnvelope` carry no capability bits), so this is a bare
+    /// build-time toggle. It is NOT safe to flip on a per-build basis: every
+    /// participant in a group call must apply the SAME transform (raw SK_0 OR
+    /// derived key, never a mix) or the SFU frames some participants send
+    /// become undecryptable to others in the SAME call. Flip to `true` only
+    /// as a coordinated, simultaneous release across every platform this
+    /// group-calling feature ships on.
+    public static let grpSfuMediaKeyV1Enabled = false
     /// W-GRPVIDEO: true when THIS call was created/joined as a video call
     /// (the creator's `callType` on `createCall`, or the invite's
     /// `call_type` threaded into `join`). Read by `handleSfuToken` to decide
@@ -1428,7 +1449,12 @@ public final class GroupCallController: @unchecked Sendable {
         guard let gs = groupState, let ck = groupSession.currentSendKey(state: gs) else { return nil }
         let selfId = manager.selfUserId
         let keyIndex = Int32(gs.groupEpoch % Self.livekitKeyringSize)
-        return GroupMediaKey(identity: selfId, keyIndex: keyIndex, keyB64: ck.base64EncodedString())
+        // MEDIA-7 — domain-separate before handing to the SFU key provider.
+        // MUST use the exact same choice `applySfuSelfKey` makes below (this
+        // pre-seed exists precisely so the two never disagree — see this
+        // method's own kdoc).
+        let sfuKey = Self.grpSfuMediaKeyV1Enabled ? GroupSenderKey.deriveSfuMediaKey(sk0: ck) : ck
+        return GroupMediaKey(identity: selfId, keyIndex: keyIndex, keyB64: sfuKey.base64EncodedString())
     }
 
     /// Push our own key (a fresh COPY of the current send-chain SK_0) into
@@ -1456,7 +1482,10 @@ public final class GroupCallController: @unchecked Sendable {
         let selfId = manager.selfUserId
         let epoch = gs.groupEpoch
         let keyIndex = Int32(epoch % Self.livekitKeyringSize)
-        let keyB64 = ck.base64EncodedString()
+        // MEDIA-7 — domain-separate before handing to the SFU key provider;
+        // see `computeSelfMediaKey`'s doc for why the two sites must agree.
+        let sfuKey = Self.grpSfuMediaKeyV1Enabled ? GroupSenderKey.deriveSfuMediaKey(sk0: ck) : ck
+        let keyB64 = sfuKey.base64EncodedString()
         let room = sfuRoom
         lock.unlock()
         // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): proves OUR OWN
@@ -1484,7 +1513,13 @@ public final class GroupCallController: @unchecked Sendable {
         }
         let epoch = gs.groupEpoch
         let keyIndex = Int32(epoch % Self.livekitKeyringSize)
-        let keyB64 = ck.base64EncodedString()
+        // MEDIA-7 — same domain-separated derivation as the self-key sites
+        // above, applied to the installed remote sender's key. Every
+        // participant applies this locally to the SAME distributed SK_0
+        // (from `sender_key_init`/`_rotate`), so it stays symmetric as long
+        // as the whole group agrees on the kill switch — see its doc.
+        let sfuKey = Self.grpSfuMediaKeyV1Enabled ? GroupSenderKey.deriveSfuMediaKey(sk0: ck) : ck
+        let keyB64 = sfuKey.base64EncodedString()
         let room = sfuRoom
         lock.unlock()
         print("[GroupCallController][telemetry] remote recv-key pushed to SFU sender=\(senderId.prefix(8)) keyIndex=\(keyIndex) epoch=\(epoch) sfuRoomConnected=\(room != nil)")
