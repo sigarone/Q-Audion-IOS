@@ -2189,6 +2189,30 @@ final class AppState: ObservableObject {
     /// and the native CallKit UI is suppressed).
     private var ringtoneTimer: DispatchSourceTimer?
 
+    /// W-RINGBACKCONFIRMED (2026-09-02) — outgoing-call cue player, port of
+    /// Android's `QAudionRingtonePlayer.kt` / Desktop's `QAudionRingtone.ts`.
+    /// Owns only the OUTGOING pre-connect cues (dialing → confirmed-ringback
+    /// → key-exchange → connected); incoming calls are unaffected (CallKit's
+    /// native ringtone + `startInAppRingtone()` above, untouched).
+    private let outgoingRingtone = QAudionRingtonePlayer()
+    /// Escalation flags mirroring `CallViewModel`'s `outgoingRingConfirmed`/
+    /// `keyExchangeCueActive` — both reset to false at the start of every
+    /// fresh outgoing call (`startCall()`), each idempotent so the two real
+    /// signals (`call_ready`, `call_answer`) and the 3 s ringback fallback
+    /// timer can race harmlessly.
+    private var outgoingRingConfirmed = false
+    private var outgoingKeyExchangeCueActive = false
+    private var outgoingRingbackFallback: DispatchWorkItem?
+    /// True once CallKit has activated the shared `AVAudioSession` for THIS
+    /// outgoing call (W464 gate — `outgoingRingtone` cannot play before
+    /// this, same constraint `AudioCapture` itself waits on).
+    private var outgoingAudioSessionReady = false
+    /// The cue currently commanded on `outgoingRingtone` (`nil` = silent).
+    /// Mirrors Desktop's `currentLoop` — avoids restarting the SAME cue's
+    /// buffer on a redundant `updateOutgoingRingCue()` call (e.g. a second
+    /// `onAudioSessionActivated` re-fire mid-ring from a route change).
+    private var outgoingRingCurrentCue: QAudionRingtonePlayer.Cue?
+
     /// FORCED-QR FIX (2026-06-24) — proactive access-token refresh.
     /// Fires at ~60% of the token TTL so the next cold-launch (and any
     /// in-flight request) never races an already-expired access token.
@@ -3353,6 +3377,7 @@ final class AppState: ObservableObject {
                         return
                     }
                     self.callService.handleAudioSessionActivated()
+                    self.markOutgoingAudioSessionReady()
                     // W-CALLSPKR (2026-07-20) — same class of gap as
                     // W-GRPSPKR above, different code path: didActivate just
                     // forced plain `.voiceChat` (no `.defaultToSpeaker`) onto
@@ -7681,6 +7706,18 @@ final class AppState: ObservableObject {
         }
         ws.registerHandler(type: "call_answer") { [weak self] _, data in
             guard let self = self else { return }
+            // W-RINGBACKCONFIRMED — earliest possible "peer answered"
+            // signal, ahead of the capability negotiation / SDP handling
+            // below (same ordering intent as Android's
+            // `PqcHandshake.peerAnswered`, fired ahead of signature
+            // verification). Hopped to main like every other touch into
+            // AppState state in this handler (WS delegate BACKGROUND
+            // thread — see the ROOT-CAUSE FIX comment a few lines down).
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.outgoingKeyExchangeCueActive = true
+                self.updateOutgoingRingCue()
+            }
             // Commit 540b79c0 parity — capture the peer's caps before
             // applying the SDP so the pipeline pick has the right
             // negotiated set when ensureVideoSealer() runs at video setup.
@@ -13671,6 +13708,27 @@ final class AppState: ObservableObject {
         startVoiceConfidenceWaveSampler()
         // WIRE_SPEC §8.3 — we placed the call → impolite on any later glare.
         originalCallRole = .caller
+        // W-RINGBACKCONFIRMED — fresh outgoing call starts its cue
+        // escalation from scratch (a redial must never inherit the
+        // previous attempt's flags); the OutgoingRing tone itself cannot
+        // start until `onAudioSessionActivated` fires (W464), but the
+        // fallback timer for "far end never sent call_ready" starts
+        // counting from t=0 like Android's `RINGBACK_FALLBACK_MS`.
+        outgoingRingConfirmed = false
+        outgoingKeyExchangeCueActive = false
+        outgoingAudioSessionReady = false
+        outgoingRingCurrentCue = nil
+        outgoingRingbackFallback?.cancel()
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.outgoingRingbackFallback = nil
+            if !self.outgoingRingConfirmed {
+                self.outgoingRingConfirmed = true
+                self.updateOutgoingRingCue()
+            }
+        }
+        outgoingRingbackFallback = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: fallback)
         // PersistentCallRecord — register outgoing call. Use activeCallKitId if
         // already set, otherwise mint a placeholder id that endCall will match.
         // The id is updated to the real outgoingCallId once beginAndroidOutgoing
@@ -13799,8 +13857,14 @@ final class AppState: ObservableObject {
                 }
                 ws.onCallReady = { [weak self] _, _, _ in
                     DispatchQueue.main.async {
+                        guard let self else { return }
                         // Peer finished PQC setup; flip UI to "Ringing".
-                        self?.callState = .ringing
+                        self.callState = .ringing
+                        // W-RINGBACKCONFIRMED — the far end's phone is
+                        // genuinely ringing: escalate OutgoingRing to the
+                        // classic "tuut" ConfirmedRingback cue.
+                        self.outgoingRingConfirmed = true
+                        self.updateOutgoingRingCue()
                     }
                 }
                 ws.onCallRing = { _, _ in
@@ -13874,6 +13938,7 @@ final class AppState: ObservableObject {
                     await MainActor.run {
                         self.activeCallKitId = localId
                         self.callService.handleAudioSessionActivated()
+                        self.markOutgoingAudioSessionReady()
                     }
                     return
                 }
@@ -13885,12 +13950,14 @@ final class AppState: ObservableObject {
                     } else {
                         await MainActor.run {
                             self.callService.handleAudioSessionActivated()
+                            self.markOutgoingAudioSessionReady()
                         }
                     }
                 } catch {
                     print("[AppState] CallKit startOutgoingCall failed: \(error)")
                     await MainActor.run {
                         self.callService.handleAudioSessionActivated()
+                        self.markOutgoingAudioSessionReady()
                     }
                 }
             }
@@ -14562,6 +14629,56 @@ final class AppState: ObservableObject {
         ringtoneTimer = nil
     }
 
+    /// W-RINGBACKCONFIRMED (2026-09-02) — re-evaluate and (if changed)
+    /// command the outgoing-call cue that SHOULD be playing right now.
+    /// Idempotent single source of truth, called from every trigger point
+    /// (`onAudioSessionActivated`, `call_ready`, `call_answer`, the 3 s
+    /// ringback fallback) rather than each site managing the player
+    /// directly — mirrors Desktop's `desiredLoop`/`tick` split.
+    ///
+    /// Three-stage escalation: OutgoingRing ("reaching the callee", from the
+    /// moment the session activates) → ConfirmedRingback (classic tuut, far
+    /// end is genuinely ringing) → KeyExchange (peer answered, deriving
+    /// keys). No-op before the session activates (nothing can play yet) or
+    /// once the call leaves the pre-connect phase (`finalizeCallActive()`
+    /// takes over from there) — so neither a late `call_ready` nor the
+    /// fallback timer can resurrect a ring under a finished/connected call.
+    private func updateOutgoingRingCue() {
+        guard outgoingAudioSessionReady, originalCallRole == .caller else { return }
+        let preConnect: Bool
+        switch callState {
+        case .connecting, .ringing: preConnect = true
+        default: preConnect = false
+        }
+        guard preConnect else { return }
+        let want: QAudionRingtonePlayer.Cue = outgoingKeyExchangeCueActive
+            ? .keyExchange
+            : (outgoingRingConfirmed ? .confirmedRingback : .outgoingRing)
+        guard want != outgoingRingCurrentCue else { return }
+        outgoingRingtone.loop(want)
+        outgoingRingCurrentCue = want
+    }
+
+    /// Stop the outgoing-call cue loop. Idempotent — safe to call even if
+    /// nothing was ever started (e.g. a callee's own `endCall()`, or an
+    /// outgoing call that ended before the audio session ever activated).
+    private func stopOutgoingRingCue() {
+        outgoingRingtone.stop()
+        outgoingRingCurrentCue = nil
+    }
+
+    /// W-RINGBACKCONFIRMED — call alongside EVERY
+    /// `callService.handleAudioSessionActivated()` site in `startCall()`
+    /// (the CXProvider-driven path AND its three fallback paths —
+    /// `callKitFreeMode`, `startOutgoingCall` returning nil, or throwing —
+    /// all represent the same "session is now active for THIS outgoing
+    /// call" moment). No-op for the callee (`updateOutgoingRingCue`'s own
+    /// `originalCallRole == .caller` guard).
+    private func markOutgoingAudioSessionReady() {
+        outgoingAudioSessionReady = true
+        updateOutgoingRingCue()
+    }
+
     /// C-2 — terminate the call when WebRTC reports a fatal ICE /
     /// connection state (`.failed` / `.disconnected` / `.closed`).
     /// Without this the controller's onStateChange/onIceConnectionState
@@ -14799,6 +14916,15 @@ final class AppState: ObservableObject {
         } else {
             self.callState = .active
             RTLog.info("call", "call_answer: callee answered — .ringing → .active")
+        }
+        // W-RINGBACKCONFIRMED — the call is up: stop the escalation loop
+        // and play the connected chime, same handoff Android/Desktop do at
+        // this exact transition. No-op for the callee (nothing was ever
+        // started — `stopOutgoingRingCue`/`outgoingRingtone.play` are both
+        // idempotent-safe either way).
+        if self.originalCallRole == .caller {
+            self.stopOutgoingRingCue()
+            self.outgoingRingtone.play(.callConnected)
         }
         maybeExchangeAvatarOnCallConnect()
     }
@@ -15606,6 +15732,15 @@ extension AppState {
         // call_hangup) must be a no-op, otherwise we double-hangup the
         // controller and leak the RTCPeerConnection.
         stopInAppRingtone()
+        // W-RINGBACKCONFIRMED — same universal-choke-point reasoning as
+        // stopInAppRingtone() above: every teardown path (local hangup,
+        // remote hangup, decline, error) funnels through here, so this is
+        // the one place that reliably stops the outgoing cue regardless of
+        // which stage it escalated to. Idempotent — safe even if nothing
+        // was ever started.
+        stopOutgoingRingCue()
+        outgoingRingbackFallback?.cancel()
+        outgoingRingbackFallback = nil
         // W-1TO1RING — covers decline (declineIncomingCall → endCall),
         // caller hangup before answer, and any other teardown path: the
         // ring screen must never outlive the call it was ringing for.
