@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1074",
+              date: "2026-09-02",
+              title: "v1.0.1074",
+              bullets: [
+                "feat(call): three-stage outgoing ring feedback, port from Android/Desktop",
+              ]),
         .init(id: "v1.0.1073",
               date: "2026-09-02",
               title: "v1.0.1073",
               bullets: [
+                "chore: regenerate changelog for v1.0.1073",
                 "fix(call): document + stage fix for iOS UI freeze on remote hangup mid-call",
               ]),
         .init(id: "v1.0.1072",
@@ -173,13 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1055",
                 "fix(call): manual-audio was armed without the CallKit activation relay — audio unit never started (W-ADMACTIVATE, W-DEADTXNET)",
-              ]),
-        .init(id: "v1.0.1054",
-              date: "2026-08-30",
-              title: "v1.0.1054",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1054",
-                "fix(call): responder asks the initiator to restart ICE instead of offering into a peer that discards it (W-RESPONDERREQFIRST)",
               ]),
     ]
 }
