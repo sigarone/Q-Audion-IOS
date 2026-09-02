@@ -385,8 +385,9 @@ final class CallService: @unchecked Sendable {
             RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx)")
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
-        // outbound-rtp row still does not exist after ~15 s of samples is
-        // the wrong-transceiver failure shape, whatever its next disguise.
+        // outbound-rtp row still does not exist after ~8 s of samples (was
+        // 15 s, see W-DEADTXNET retune below) is the wrong-transceiver
+        // failure shape, whatever its next disguise.
         // One WARN per call, so the remote log names the failure instead of
         // leaving another silent-call archaeology session.
         // W-DEADTXNET (2026-08-30) — the sentinel now also catches the
@@ -397,7 +398,7 @@ final class CallService: @unchecked Sendable {
         // ringing time no longer pre-charges the counter, and above all
         // ACTS: at the threshold it engages the srtp relay fallback
         // instead of only logging. A native pipeline that has moved zero
-        // packets 15 s into an answered call is not going to start on its
+        // packets 8 s into an answered call is not going to start on its
         // own, and the relay path needs none of WebRTC's audio unit — one
         // direction of audio restored beats a silent call while the
         // root cause is diagnosed from the deadtx line it still emits.
@@ -406,7 +407,23 @@ final class CallService: @unchecked Sendable {
         if getCallId?() != nil, getUsesNativeAudioSrtp?() == true,
            peerAnswered, audioSessionActive, !audioSrtpFallbackActive, txDead {
             srtpDeadTxBeats &+= 1
-            if srtpDeadTxBeats == 15 {
+            // W-DEADTXNET retune (2026-09-02) — live evidence tonight: 3
+            // iOS<->iOS calls (8bdccfda/19056dd4/0da60866, raw device log
+            // via /opt/bcrypto/data/files, ptx=0 on every single heartbeat
+            // start to finish) never reached the old 15 s threshold — each
+            // call ran only ~18-21 s before the caller gave up and hung up,
+            // so this sentinel was still counting when the call ended and
+            // never got to engage the relay fallback that exists precisely
+            // for this failure. Lowered to 8 s: still well past normal
+            // call-start silence (VAD/DTX legitimately sends nothing for a
+            // beat or two before the first word), but short enough to
+            // actually fire within a real short call instead of losing the
+            // race to the user hanging up first. Does NOT touch the
+            // AVAudioSession/RTCAudioSession activation path itself — see
+            // NativeAudioSessionGate's doc for why that side is
+            // deliberately left alone (three prior attempts there each made
+            // things worse).
+            if srtpDeadTxBeats == 8 {
                 RTLog.warn("call", "audiosrtp deadtx=\(rtpTx < 0 ? 1 : 2)")
                 engageAudioSrtpFallback()
             }
