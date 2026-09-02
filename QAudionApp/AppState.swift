@@ -1627,7 +1627,7 @@ final class AppState: ObservableObject {
     /// didn't fix it) still surfaces to the user. Capped for the same
     /// flood-safety reason as `bufferedGroupWires`.
     private var bufferedOneToOneCiphertexts:
-        [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?)] = []
+        [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
     private static let maxBufferedOneToOneCiphertexts = 64
     /// 2026-07-17 — same buffering idea as `bufferedGroupWires`, but for a
     /// `group_metadata_changed`/GET-fetched metadata blob whose decrypt
@@ -3908,6 +3908,46 @@ final class AppState: ObservableObject {
         wireDeviceRenewFallback(on: provider)
         provider.persistingRotatedTokens()
         self.liveProvider = provider
+        // W-MSGOUTBOX (2026-09-01) — bind the durable 1:1 outbox drainer.
+        // Primitive closures only (CLAUDE.md §16); each reads `liveProvider`
+        // at call time, so a provider swap needs nothing beyond this call
+        // running again — which it does, on every `connectPersistentSocket`.
+        // The drainer is KICKED from the state listener below, on every
+        // transition into `.authenticated` (that first transition after
+        // launch is the "sweep `.sending` rows at startup" the audit asked
+        // for — nothing can be sent before it anyway).
+        ChatOutboxDrain.shared.configure(
+            isTransportReady: { [weak self] in
+                self?.liveProvider?.persistentConnection.state == .authenticated
+            },
+            sendWire: { [weak self] peerUserId, wireBlob, clientMsgId in
+                guard let self else { throw ChatOutboxDrain.TransportError.unavailable }
+                guard let live = await self.ensurePersistentProviderConnected() else {
+                    throw ChatOutboxDrain.TransportError.unavailable
+                }
+                _ = try await live.messageApi.sendMessage(
+                    recipientId: peerUserId, content: wireBlob, clientMsgId: clientMsgId)
+            },
+            sendReceipt: { [weak self] serverMessageId in
+                guard let live = self?.liveProvider else {
+                    throw ChatOutboxDrain.TransportError.unavailable
+                }
+                try await live.messageApi.sendDeliveryReceipt(messageId: serverMessageId)
+            },
+            encrypt: { [weak self] messageId, peerUserId, plaintext in
+                guard let self else {
+                    return .refused(reasonCode: ChatContainer.SendFailureReason.notAuthenticated.rawValue)
+                }
+                let sealed = await ChatMessageSendService(appState: self).encryptForWire(
+                    messageId: messageId, peerUserId: peerUserId, plaintext: plaintext)
+                switch sealed {
+                case .success(let blob):
+                    return .sealed(blob)
+                case .failure(let reason):
+                    return .refused(reasonCode: reason.rawValue)
+                }
+            }
+        )
         // Server selection: probe all nodes and connect to the fastest one.
         // Runs in background — does not delay the login flow.
         Task { [weak self] in
@@ -4558,6 +4598,16 @@ final class AppState: ObservableObject {
                     if prev != .authenticated {
                         Task { [weak self] in
                             await self?.capabilityGate.refresh()
+                        }
+                    }
+                    // W-MSGOUTBOX (2026-09-01) — same once-per-reconnect
+                    // gate as the two blocks above: drain `.sending` rows
+                    // and queued delivery receipts now that a socket can
+                    // actually carry them (`send` DROPS frames before
+                    // `.authenticated`). Single-flight inside the drainer.
+                    if prev != .authenticated {
+                        Task { @MainActor in
+                            ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
                         }
                     }
                 }
@@ -5259,7 +5309,18 @@ final class AppState: ObservableObject {
                     self.pendingNotificationAnswer = false
                     if let provider = self.liveProvider {
                         let peer = senderId
-                        Task { try? await provider.callingApi.sendHangup(recipientId: peer) }
+                        Task {
+                            do {
+                                try await provider.callingApi.sendHangup(recipientId: peer)
+                            } catch {
+                                // W-SIGSWALLOW (2026-09-01) — was `try?`: a decline
+                                // that never reached the server left no trace (audit
+                                // memory reference_ios_stability_audit_2026_09_01, P1
+                                // item 7). Delivery is already parked inside
+                                // `deliverHangup`; this only makes a failure visible.
+                                RTLog.error("call", "sigsend fail kind=call_hangup site=coldstart_decline cid=\(callIdStr.prefix(8)) err=\(error)")
+                            }
+                        }
                     }
                     NotificationCenterService.shared.clearIncomingCall(callId: callIdStr)
                     print("[AppState] W-NOCALLKIT cold-start decline consumed — call rejected before provisioning")
@@ -7140,6 +7201,9 @@ final class AppState: ObservableObject {
                 return
             }
             let clientMsgId = data["client_msg_id"] as? String
+            // W-MSGDEDUP (2026-09-01) — `server_ts` (RFC3339, stamped by
+            // the server at store time) now orders the inbound row.
+            let serverTs = data["server_ts"] as? String
             DispatchQueue.main.async {
                 // W78-fix: the server echoes `msg_receive` back to the
                 // SENDER too (`internal/signaling/client.go` handleMsgSend
@@ -7164,7 +7228,8 @@ final class AppState: ObservableObject {
                     senderId: senderId,
                     serverMsgId: serverMsgId,
                     cipher: cipher,
-                    clientMsgId: clientMsgId
+                    clientMsgId: clientMsgId,
+                    serverTs: serverTs
                 )
             }
         }
@@ -7856,7 +7921,8 @@ final class AppState: ObservableObject {
             senderId: senderId,
             serverMsgId: serverMsgId,
             cipher: cipher,
-            clientMsgId: entry["client_msg_id"] as? String
+            clientMsgId: entry["client_msg_id"] as? String,
+            serverTs: entry["server_ts"] as? String
         )
     }
 
@@ -8293,10 +8359,11 @@ final class AppState: ObservableObject {
     /// W-AVATARPOLLUTE — append with the same drop-oldest-on-overflow
     /// bound as `bufferGroupWire`.
     private func bufferOneToOneCiphertext(
-        senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?
+        senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?
     ) {
         bufferedOneToOneCiphertexts.append(
-            (senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId))
+            (senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
+             serverTs: serverTs))
         if bufferedOneToOneCiphertexts.count > Self.maxBufferedOneToOneCiphertexts {
             bufferedOneToOneCiphertexts.removeFirst(
                 bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)
@@ -8312,8 +8379,8 @@ final class AppState: ObservableObject {
     /// still surfaces exactly once, never disappears.
     private func retryBufferedOneToOneMessages(for senderId: String) {
         guard bufferedOneToOneCiphertexts.contains(where: { $0.senderId == senderId }) else { return }
-        var remaining: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?)] = []
-        var toRetry: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?)] = []
+        var remaining: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
+        var toRetry: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
         for e in bufferedOneToOneCiphertexts {
             if e.senderId == senderId { toRetry.append(e) } else { remaining.append(e) }
         }
@@ -8321,7 +8388,7 @@ final class AppState: ObservableObject {
         for e in toRetry {
             handleIncomingMessage(
                 senderId: e.senderId, serverMsgId: e.serverMsgId, cipher: e.cipher,
-                clientMsgId: e.clientMsgId, isRetry: true)
+                clientMsgId: e.clientMsgId, serverTs: e.serverTs, isRetry: true)
         }
     }
 
@@ -8356,11 +8423,20 @@ final class AppState: ObservableObject {
     /// Parse the server RFC3339 `server_ts`; fall back to now (mirrors
     /// Android's `Instant.parse` with a `toLongOrNull` fallback).
     private static func parseGroupServerTs(_ ts: String?) -> Date {
-        guard let ts = ts, !ts.isEmpty else { return Date() }
+        parseServerTs(ts) ?? Date()
+    }
+
+    /// W-MSGDEDUP (2026-09-01) — the same parser with `nil` instead of
+    /// "now" when the wire carried nothing usable, so the 1:1 path can make
+    /// its arrival-time fallback explicit (`InboundMessagePolicy
+    /// .effectiveSentAt`) rather than baked into the parser. The group
+    /// wrapper above keeps its exact previous behavior.
+    private static func parseServerTs(_ ts: String?) -> Date? {
+        guard let ts = ts, !ts.isEmpty else { return nil }
         if let d = AppState.isoFormatter.date(from: ts) { return d }
         if let d = AppState.isoFormatterNoFrac.date(from: ts) { return d }
         if let ms = Double(ts) { return Date(timeIntervalSince1970: ms / 1000.0) }
-        return Date()
+        return nil
     }
 
     /// Persist an incoming peer message to the local store + post a
@@ -8375,11 +8451,40 @@ final class AppState: ObservableObject {
         serverMsgId: String,
         cipher: Data,
         clientMsgId: String?,
+        // W-MSGDEDUP (2026-09-01) — `server_ts` from `msg_receive` /
+        // `msg_pending_sync[]`; nil for callers that have none (mesh, tests).
+        serverTs: String? = nil,
         // W-AVATARPOLLUTE — true only when this exact ciphertext already
         // failed once and is being replayed from `bufferedOneToOneCiphertexts`
         // after a fresh key-exchange leg landed. See that buffer's kdoc.
         isRetry: Bool = false
     ) {
+        // W-MSGDEDUP (2026-09-01) — consumer-side dedup BEFORE decrypt, the
+        // 1:1 mirror of `handleIncomingGroupMessage`'s
+        // `GroupMessageStore.contains(groupHex:serverMessageId:)` gate
+        // (audit memory reference_ios_stability_audit_2026_09_01, P1 item
+        // 4). The transport is at-least-once (server stores first, relays
+        // live, replays via `msg_pending_sync` until our `msg_delivered`
+        // lands), and now the sender retries too (W-MSGOUTBOX), so a frame
+        // can legitimately arrive twice. A duplicate that reached the
+        // ratchet failed as a replay and surfaced as "[messaggio cifrato
+        // non leggibile]". Two keys, same as the row stores: the server id
+        // (server-side re-delivery) and the sender's client_msg_id
+        // (client resend the server stored twice). ACK again so the
+        // server stops re-delivering — same rule as the group path.
+        if InboundMessagePolicy.dedupEnabled {
+            let dedupStore = ConversationStore()
+            let seenByServerId = dedupStore.hasInboundMessage(serverMessageId: serverMsgId)
+            var seenByClientId = false
+            if !seenByServerId, let cmid = clientMsgId, !cmid.isEmpty {
+                seenByClientId = dedupStore.hasInboundMessage(clientMsgId: cmid, senderUserId: senderId)
+            }
+            if seenByServerId || seenByClientId {
+                RTLog.info("chat", "msg_receive dup=1 byserver=\(seenByServerId ? 1 : 0) retry=\(isRetry ? 1 : 0)")
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                return
+            }
+        }
         let crypto = MessageCrypto()
         let vault = SovereignKeyVault()
         let plaintext: String
@@ -8692,7 +8797,8 @@ final class AppState: ObservableObject {
             // surfaces exactly once rather than vanishing.
             if !isRetry {
                 bufferOneToOneCiphertext(
-                    senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId)
+                    senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
+                    serverTs: serverTs)
                 return
             }
             plaintext = "[messaggio cifrato non leggibile]"
@@ -8854,7 +8960,13 @@ final class AppState: ObservableObject {
             conversationId: conv.id,
             direction: .incoming,
             plaintext: plaintext,
-            sentAt: Date(),
+            // W-MSGDEDUP (2026-09-01) — order by the server's clock when
+            // the wire carries it (`loadMessages` sorts on `sentAt`), so a
+            // pending-sync replay or a buffered-then-retried frame lands
+            // where it was sent, not when this device got around to it.
+            // Fallback is the arrival instant — exactly the old value.
+            sentAt: InboundMessagePolicy.effectiveSentAt(
+                serverTimestamp: Self.parseServerTs(serverTs), arrival: receivedNow),
             deliveredAt: Date(),
             readAt: nil,
             status: .delivered,
@@ -9031,11 +9143,10 @@ final class AppState: ObservableObject {
         // Auto-ack delivery so the sender flips its UI to "delivered".
         // Best-effort fire-and-forget. ChatContainer's user-mark-as-read
         // sends `msg_read` separately when the screen is open.
-        if let provider = liveProvider {
-            Task {
-                try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
-            }
-        }
+        // W-MSGOUTBOX (2026-09-01) — queued when the socket is down instead
+        // of dropped (`BCryptoWebSocketClient.send` discards the frame when
+        // the task is nil); see `sendOrQueueDeliveryReceipt`.
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
         // Notify any open ChatContainer to refresh from the store.
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification,
@@ -9654,6 +9765,31 @@ final class AppState: ObservableObject {
         RTLog.error("chat", "msg_receive self-echo bind failed clientMsgId=\(clientMsgId.prefix(8)) — tick will stay stuck")
     }
 
+    /// W-MSGOUTBOX (2026-09-01) — `msg_delivered` for one inbound message.
+    /// Socket authenticated → sent as before (fire-and-forget on the live
+    /// provider). Socket not authenticated (the case
+    /// `BCryptoWebSocketClient.send` silently DROPS — task nil) → persisted
+    /// in `chat_outbox` and flushed by `ChatOutboxDrain` on the next
+    /// `.authenticated`. A lost ack is not cosmetic: the server keeps
+    /// re-delivering the message until one lands, and every re-delivery
+    /// now costs a dedup lookup instead of a ratchet replay failure.
+    private func sendOrQueueDeliveryReceipt(serverMsgId: String) {
+        let socketUp = liveProvider?.persistentConnection.state == .authenticated
+        if OutboxRetryPolicy.enabled, !socketUp {
+            ChatOutboxStore().enqueueDeliveryReceipt(
+                serverMessageId: serverMsgId,
+                nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            RTLog.info("chat", "receipt queued=1")
+            ChatOutboxDrain.shared.kick(reason: "receipt-queued")
+            return
+        }
+        if let provider = liveProvider {
+            Task {
+                try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
+            }
+        }
+    }
+
     /// Mark the locally-stored copies of delivered messages as
     /// `.delivered` so the sender's UI flips the receipt icon.
     /// W78: server↔client id reconciliation now wired. ChatContainer
@@ -9997,6 +10133,32 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// W-IDSELFHEAL (2026-09-02) — before this sweep's publish decision,
+    /// check whether the SERVER still agrees this device's signing key is
+    /// on file, and if not, clear the persisted "already confirmed"
+    /// fingerprint so the publish call right after this one actually runs
+    /// instead of skipping. See `IdentitySelfCheckPolicy`'s doc for the
+    /// full incident this closes (root-caused via the 2026-09-01/02 SAS
+    /// investigation, memory `reference_ios_stability_audit_2026_09_01.md`).
+    ///
+    /// Deliberately reads `currentUserId` (this device's OWN account), never
+    /// anything peer-supplied — this can only ever correct THIS device's own
+    /// server-side record, never trust or adopt someone else's key.
+    @MainActor
+    private func reconcileIdentityPublishStateIfNeeded(provider: BCryptoBackendProvider, signingPub: Data) async {
+        guard IdentitySelfCheckPolicy.selfCheckEnabled, let userId = currentUserId, !userId.isEmpty else { return }
+        let lastCheckKey = "com.qaudion.identity.selfheal_last_triggered"
+        let lastCheckedAt = UserDefaults.standard.object(forKey: lastCheckKey) as? Date
+        guard IdentitySelfCheckPolicy.shouldCheckNow(lastTriggeredAt: lastCheckedAt, now: Date()) else { return }
+        let serverKeys = await provider.kmsClient.fetchUserIdentityKeySet(userId: userId)
+        guard IdentitySelfCheckPolicy.needsRepublish(serverKeys: serverKeys, localSigningPub: signingPub) else { return }
+        // "crypto" — "kms" is NOT in ship-ios-logs.py's TAG_SCOPE_PREFIXES
+        // allow-list and would be silently dropped end-to-end (W-TAGDROP).
+        RTLog.warn("crypto", "idselfcheck stale=1 keys=\(serverKeys.count)")
+        UserDefaults.standard.set(Date(), forKey: lastCheckKey)
+        UserDefaults.standard.removeObject(forKey: "com.qaudion.identity.published_fingerprint")
+    }
+
     /// Shared retry-with-backoff + confirmed-fingerprint bookkeeping for
     /// `publishIdentityKeyWithRetry`'s v1/v2 publish attempts. See that
     /// function's doc for the full rationale.
@@ -10055,6 +10217,7 @@ final class AppState: ObservableObject {
                let deviceId = TokenVault.loadDeviceId() ??
                 UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                !deviceId.isEmpty {
+                await reconcileIdentityPublishStateIfNeeded(provider: provider, signingPub: signingPub)
                 await publishIdentityKeyWithRetry(
                     provider: provider, deviceKeyManager: manager, signingPub: signingPub, deviceId: deviceId
                 )
@@ -10811,7 +10974,15 @@ final class AppState: ObservableObject {
         // matching `call_incoming` envelope (stashed by sender_id). nil ⇒ legacy.
         let senderDeviceId = senderDeviceIdByPeer[senderId]
         let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
-            guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
+            guard let provider = await MainActor.run(body: { self?.liveProvider }) else {
+                // W-SIGSWALLOW (2026-09-01) — the responder's ACCEPT bundle
+                // used to vanish here without a line when no provider was
+                // live (audit memory reference_ios_stability_audit_2026_09_01,
+                // P1 item 7). Recovery is the caller's OFFER retry → cached
+                // ACCEPT replay; this only makes the drop visible.
+                RTLog.error("call", "sigsend fail kind=pqc_accept site=json reason=no_provider cid=\(parsed.callId.prefix(8)) peer=\(senderId.prefix(8))")
+                return
+            }
             // CRITICAL: ship the wire string verbatim — NOT base64-wrapped.
             // CallingApi.sendOpaqueMessage(data: Data) goes through
             // BCryptoWebSocketClient.sendOpaqueMessage which calls
@@ -10882,7 +11053,11 @@ final class AppState: ObservableObject {
                     eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
-                print("[AppState] routeInboundAndroidOffer failed: \(error)")
+                // W-SIGSWALLOW (2026-09-01) — was a bare print: a responder
+                // handshake that failed (ACCEPT build, verify or send) is the
+                // exact event that explains a silent callee, and it never
+                // reached the shipped log. Tag "call" so it does.
+                RTLog.error("call", "handshake responder fail site=json cid=\(parsed.callId.prefix(8)) peer=\(senderId.prefix(8)) err=\(error)")
             }
         }
     }
@@ -11637,7 +11812,12 @@ final class AppState: ObservableObject {
         // Build the send-opaque closure bound to this caller. Each
         // outbound ACCEPT rides the existing CallingApi WS path.
         let sendOpaque: (Data) async throws -> Void = { [weak self] payload in
-            guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
+            guard let provider = await MainActor.run(body: { self?.liveProvider }) else {
+                // W-SIGSWALLOW (2026-09-01) — same silent drop as the JSON
+                // path's `sendOpaqueRaw` (routeInboundAndroidOffer).
+                RTLog.error("call", "sigsend fail kind=pqc_accept site=quad reason=no_provider peer=\(senderId.prefix(8))")
+                return
+            }
             try await provider.callingApi.sendOpaqueMessage(
                 recipientId: senderId, data: payload)
         }
@@ -11645,7 +11825,13 @@ final class AppState: ObservableObject {
             try integration.onCapabilityMessageReceived(
                 data: blob, fromSenderId: senderId, sendOpaqueMessage: sendOpaque)
         } catch {
-            print("[AppState] responder onCapabilityMessageReceived failed: \(error)")
+            // W-SIGSWALLOW (2026-09-01) — was a bare print (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 7): the
+            // responder handshake failing (encapsulate / initSession) is the
+            // exact event that explains a silent callee, and it never
+            // reached the shipped log.
+            let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+            RTLog.error("call", "handshake responder fail site=quad cid=\(cid.prefix(8)) peer=\(senderId.prefix(8)) err=\(error)")
         }
     }
 
@@ -11908,14 +12094,27 @@ final class AppState: ObservableObject {
         if let provider = liveProvider {
             integration.sendCallProcessing = { callId, callerId in
                 Task {
-                    try? await provider.callingApi.sendCallProcessing(
-                        callId: callId, callerId: callerId)
+                    do {
+                        try await provider.callingApi.sendCallProcessing(
+                            callId: callId, callerId: callerId)
+                    } catch {
+                        // W-SIGSWALLOW (2026-09-01) — was `try?`. Deliberately
+                        // NOT retransmitted (see
+                        // `CallSignalingFailurePolicy.socketNotReadyAction`);
+                        // the loss is non-fatal but must be visible.
+                        RTLog.warn("call", "sigsend fail kind=call_processing cid=\(callId.prefix(8)) err=\(error)")
+                    }
                 }
             }
             integration.sendCallReady = { callId, callerId in
                 Task {
-                    try? await provider.callingApi.sendCallReady(
-                        callId: callId, callerId: callerId)
+                    do {
+                        try await provider.callingApi.sendCallReady(
+                            callId: callId, callerId: callerId)
+                    } catch {
+                        // W-SIGSWALLOW — same as sendCallProcessing above.
+                        RTLog.warn("call", "sigsend fail kind=call_ready cid=\(callId.prefix(8)) err=\(error)")
+                    }
                 }
             }
         }
@@ -13349,16 +13548,27 @@ final class AppState: ObservableObject {
                 integration.sendCallProcessing = { callId, callerId in
                     // Forward via the calling API (which routes through WS).
                     Task {
-                        try? await provider.callingApi.sendCallProcessing(
-                            callId: callId, callerId: callerId
-                        )
+                        do {
+                            try await provider.callingApi.sendCallProcessing(
+                                callId: callId, callerId: callerId
+                            )
+                        } catch {
+                            // W-SIGSWALLOW (2026-09-01) — was `try?`; see the
+                            // responder wiring in ensureResponderIntegration.
+                            RTLog.warn("call", "sigsend fail kind=call_processing cid=\(callId.prefix(8)) err=\(error)")
+                        }
                     }
                 }
                 integration.sendCallReady = { callId, callerId in
                     Task {
-                        try? await provider.callingApi.sendCallReady(
-                            callId: callId, callerId: callerId
-                        )
+                        do {
+                            try await provider.callingApi.sendCallReady(
+                                callId: callId, callerId: callerId
+                            )
+                        } catch {
+                            // W-SIGSWALLOW — same as sendCallProcessing above.
+                            RTLog.warn("call", "sigsend fail kind=call_ready cid=\(callId.prefix(8)) err=\(error)")
+                        }
                     }
                 }
                 integration.requestRingLocally = { [weak self] _, _ in
@@ -13817,9 +14027,16 @@ final class AppState: ObservableObject {
                 // hangup path.
                 controller.onStateChange = { [weak self] newState in
                     switch newState {
-                    case .failed:
+                    case .failed(let reason):
+                        // W-ICEGRACEDEGRADE (2026-09-01) — the controller
+                        // folds two different edges into `.failed`: ICE
+                        // `.failed` ("ICE failed", mirrored 1:1 by the
+                        // `onIceConnectionState` hook below and restartable
+                        // there) and a DTLS/connection failure that no
+                        // restart can heal. Only the first may degrade.
+                        let restartable = (reason == "ICE failed")
                         Task { @MainActor [weak self] in
-                            self?.handleIceTermination(iceIsTerminal: true)
+                            self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable)
                         }
                     case .disconnected:
                         // W-ICEGRACE — recoverable, not terminal (see
@@ -13833,7 +14050,13 @@ final class AppState: ObservableObject {
                 }
                 controller.onIceConnectionState = { [weak self] iceState in
                     switch iceState {
-                    case .failed, .closed:
+                    case .failed:
+                        // W-ICEGRACEDEGRADE — restartable terminal edge (the
+                        // controller keeps restarting ICE on it).
+                        Task { @MainActor [weak self] in
+                            self?.handleIceTermination(iceIsTerminal: true, iceRestartable: true)
+                        }
+                    case .closed:
                         Task { @MainActor [weak self] in
                             self?.handleIceTermination(iceIsTerminal: true)
                         }
@@ -13991,8 +14214,15 @@ final class AppState: ObservableObject {
     /// per-frame fallback never fired and every frame died in the dead
     /// channel (`maxRetransmits = 0`) for the whole outage. The gate that
     /// makes this comment true again lives in `sendAudioFrameData`.
+    ///
+    /// W-ICEGRACEDEGRADE (2026-09-01) — `iceRestartable`: the terminal edge
+    /// is ICE `.failed` (the controller keeps restarting ICE on it), not
+    /// `.closed` / a DTLS failure. With a relay leg bound, such an edge — and
+    /// a grace that runs out, see `resolveIceGraceExpiry` — DEGRADES the
+    /// call to the relay instead of ending it. See `IceTerminationPolicy`
+    /// for the evidence and the kill switch.
     @MainActor
-    private func handleIceTermination(iceIsTerminal: Bool) {
+    private func handleIceTermination(iceIsTerminal: Bool, iceRestartable: Bool = false) {
         // F-1 (2nd-pass regression): C-3 made `isInCall` stay false until
         // the call is ANSWERED. So an ICE / connection failure DURING
         // setup (outgoing `.connecting`, incoming `.ringing`) — i.e. the
@@ -14006,12 +14236,24 @@ final class AppState: ObservableObject {
         case .connecting, .ringing, .active, .encrypted:
             callIsLive = true
         }
-        switch iceTerminationAction(callIsLive: callIsLive, iceIsTerminal: iceIsTerminal) {
+        switch iceTerminationAction(
+            callIsLive: callIsLive,
+            iceIsTerminal: iceIsTerminal,
+            iceRestartable: iceRestartable,
+            relayPathAvailable: relayPathAvailableForIceDegrade()
+        ) {
         case .none:
             return
         case .endImmediately:
             cancelIceDisconnectGrace()
             self.endCall()
+        case .degradeToRelay:
+            // W-ICEGRACEDEGRADE — ICE `.failed` on an established call with
+            // a relay leg: the decision is made, a still-pending grace has
+            // nothing left to decide (a later `.disconnected` after the
+            // next restart arms a fresh one, and its expiry re-evaluates).
+            cancelIceDisconnectGrace()
+            degradeCallTransportToRelay(edge: 1)
         case .endAfterGrace:
             // Already counting down from an earlier `.disconnected` edge —
             // don't restart the window (a flapping ICE would otherwise keep
@@ -14022,17 +14264,93 @@ final class AppState: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(Self.iceDisconnectGraceMs) * 1_000_000)
                 guard !Task.isCancelled, let self = self else { return }
                 self.iceDisconnectGraceTask = nil
-                // Re-check liveness: the call may have ended normally (user
-                // hangup / peer hangup) while the grace was running.
-                switch self.callState {
-                case .idle, .ended:
-                    return
-                case .connecting, .ringing, .active, .encrypted:
-                    RTLog.info("call", "ICE grace expired without recovery — ending call")
-                    self.endCall()
-                }
+                // W-ICEGRACEDEGRADE — liveness re-check + relay decision
+                // live in one place for both the base and the extended grace.
+                self.resolveIceGraceExpiry(extended: false)
             }
         }
+    }
+
+    /// W-ICEGRACEDEGRADE (2026-09-01) — "a relay leg exists for this call",
+    /// the precondition for staying up on the relay when ICE gives up.
+    /// Inputs are the two facts CallService's own relay TX path needs to
+    /// route a frame at all (a provider to resolve the WS client from, and a
+    /// peer id), plus the established-call gate that keeps the F-1 rule for
+    /// calls still in setup. The pure predicate is `IceTerminationPolicy
+    /// .relayPathAvailable`; this only gathers its inputs.
+    @MainActor
+    private func relayPathAvailableForIceDegrade() -> Bool {
+        let established = (callState == .active || callState == .encrypted)
+        let legBound = (liveProvider != nil) && (callContactId != nil)
+        return IceTerminationPolicy.relayPathAvailable(
+            callEstablished: established, relayLegBound: legBound)
+    }
+
+    /// W-ICEGRACEDEGRADE (2026-09-01) — the grace (base 10 s, or the
+    /// W-SILENTPATHDEATH 50 s extension) ran out with ICE still down. Used
+    /// to be an unconditional `endCall()` at both sites (audit memory
+    /// reference_ios_stability_audit_2026_09_01, P1 item 10). Re-checks
+    /// liveness first — the call may have ended normally (user / peer
+    /// hangup) while the grace was running — then asks the pure policy
+    /// whether a relay leg can carry the call.
+    @MainActor
+    private func resolveIceGraceExpiry(extended: Bool) {
+        let callIsLive: Bool
+        switch callState {
+        case .idle, .ended:
+            callIsLive = false
+        case .connecting, .ringing, .active, .encrypted:
+            callIsLive = true
+        }
+        switch IceTerminationPolicy.graceExpiryAction(
+            callIsLive: callIsLive,
+            relayPathAvailable: relayPathAvailableForIceDegrade()
+        ) {
+        case .none, .endAfterGrace:
+            return
+        case .endImmediately:
+            if extended {
+                RTLog.info("call", "ICE restart grace expired without recovery — ending call")
+            } else {
+                RTLog.info("call", "ICE grace expired without recovery — ending call")
+            }
+            self.endCall()
+        case .degradeToRelay:
+            degradeCallTransportToRelay(edge: extended ? 3 : 2)
+        }
+    }
+
+    /// W-ICEGRACEDEGRADE (2026-09-01) — keep the call, on the relay. Android
+    /// parity for `downgradeToWsRelay("disconnected-after-grace" / "FAILED")`:
+    ///   - nothing is torn down and nothing is stopped: the W-DCTXICEGATE
+    ///     per-frame gate and the W-SRTPFALLBACK engage are already routing
+    ///     audio over the WS relay (both key off the controller's ICE state,
+    ///     not off this grace), the controller's ICE-restart watchdog keeps
+    ///     running, and the W-MEDIADEAD backstop (90 s of no REAL inbound
+    ///     audio → "media-lost", peer notified) is the only terminator left;
+    ///   - the UI learns it through the existing transport signal:
+    ///     `backendType == "relay"` is what `LiveInCallScreen`/`VideoCallView`
+    ///     already map to the RELAY chip (`.bcryptoWsRelay`) — a value no
+    ///     code path assigned before today. The `.connected`/`.completed`
+    ///     hook and `onActiveCandidatePairType` overwrite it the moment ICE
+    ///     recovers, so the chip flips back on its own.
+    /// Idempotent. `edge`: 1 = ICE `.failed`, 2 = base grace expiry, 3 =
+    /// extended grace expiry. `ws`: signalling socket state at that instant
+    /// (0 disconnected · 1 connecting · 2 connected · 3 authenticated) —
+    /// diagnostic only, deliberately not a gate (see `IceTerminationPolicy`).
+    @MainActor
+    private func degradeCallTransportToRelay(edge: Int) {
+        let wsState: Int
+        switch wsConnectionState {
+        case .disconnected:  wsState = 0
+        case .connecting:    wsState = 1
+        case .connected:     wsState = 2
+        case .authenticated: wsState = 3
+        }
+        let already: Int = (backendType == "relay") ? 1 : 0
+        RTLog.warn("call", "icegrace degrade=1 edge=" + String(edge)
+            + " ws=" + String(wsState) + " already=" + String(already))
+        backendType = "relay"
     }
 
     /// W-ICEGRACE — cancel a pending ICE-disconnect grace countdown. Called
@@ -14072,13 +14390,8 @@ final class AppState: ObservableObject {
             guard !Task.isCancelled, let self = self else { return }
             self.iceDisconnectGraceTask = nil
             self.iceGraceExtendedForRestart = false
-            switch self.callState {
-            case .idle, .ended:
-                return
-            case .connecting, .ringing, .active, .encrypted:
-                RTLog.info("call", "ICE restart grace expired without recovery — ending call")
-                self.endCall()
-            }
+            // W-ICEGRACEDEGRADE — same expiry decision as the base grace.
+            self.resolveIceGraceExpiry(extended: true)
         }
     }
 
@@ -14376,7 +14689,21 @@ extension AppState {
         // converge here). Distinct from the automatic call_answer
         // network-readiness signal. Only send site in the app.
         if let calling = self.liveProvider?.callingApi {
-            Task { try? await calling.sendCallAccepted(callId: uuid.uuidString.lowercased()) }
+            let acceptedCallId = uuid.uuidString.lowercased()
+            Task {
+                do {
+                    try await calling.sendCallAccepted(callId: acceptedCallId)
+                } catch {
+                    // W-SIGSWALLOW (2026-09-01) — was `try?`: the one envelope
+                    // that tells the caller a human accepted could fail with no
+                    // trace. On a fast-path miss the impl now sends best-effort
+                    // and arms the W-SETUPRETRY ladder before throwing (see
+                    // `CallSignalingFailurePolicy`), so this line marks the
+                    // miss, not necessarily a lost accept. Audit memory
+                    // reference_ios_stability_audit_2026_09_01, P1 item 7.
+                    RTLog.warn("call", "sigsend fail kind=call_accepted cid=\(acceptedCallId.prefix(8)) err=\(error)")
+                }
+            }
         }
         // W-AVATARCALLEE (2026-08-01): the CALLEE's avatar hook. Until now
         // `maybeExchangeAvatarOnCallConnect()` was reachable ONLY from
@@ -14414,7 +14741,29 @@ extension AppState {
             // W-NOCALLKIT — no CallKit; run the accept path directly.
             performAcceptIncoming(uuid: uuid, dismissNativeUI: false)
         } else {
-            Task { try? await callKit?.answerCall(uuid: uuid) }
+            // W-SIGSWALLOW (2026-09-01) — the 1:1 twin of
+            // `answerIncomingGroupCall`'s W-GRPDOUBLEDIALER fallback: `try?`
+            // swallowed a refused `CXAnswerCallAction` (CallKit has no record
+            // of the uuid, or the transaction is rejected) and "Accetta" did
+            // nothing at all, with no log line (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 7). Log the
+            // refusal and run the same direct accept the CallKit-free path
+            // uses; audio self-activates through CallService's didActivate
+            // fallback (activateIncomingCallAudio, Bug B) exactly as it does
+            // there. `performAcceptIncoming` is idempotent (Bug A guard), so
+            // a late CallKit answer for the same uuid is a no-op. Kill
+            // switch: `CallSignalingFailurePolicy.directAcceptOnCallKitAnswerFailure`.
+            Task { [weak self] in
+                guard let self = self else { return }
+                do {
+                    try await self.callKit?.answerCall(uuid: uuid)
+                } catch {
+                    let direct = CallSignalingFailurePolicy.directAcceptOnCallKitAnswerFailure
+                    RTLog.warn("call", "answer fail kind=cx_answer_call uuid=\(uuid.uuidString.prefix(8)) direct=\(direct ? 1 : 0) err=\(error)")
+                    guard direct else { return }
+                    await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
+                }
+            }
         }
     }
 
@@ -14903,7 +15252,19 @@ extension AppState {
         if let peer = callContactId,
            let provider = liveProvider,
            webRtcController == nil {
-            Task { try? await provider.callingApi.sendHangup(recipientId: peer) }
+            // Read the id BEFORE the send — `sendHangup` clears it by design.
+            let hangupCallId = (provider.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+            Task {
+                do {
+                    try await provider.callingApi.sendHangup(recipientId: peer)
+                } catch {
+                    // W-SIGSWALLOW (2026-09-01) — was `try?`; delivery is
+                    // parked inside `deliverHangup`, this only surfaces a
+                    // failure that used to vanish (audit memory
+                    // reference_ios_stability_audit_2026_09_01, P1 item 7).
+                    RTLog.error("call", "sigsend fail kind=call_hangup site=endcall cid=\(hangupCallId.prefix(8)) err=\(error)")
+                }
+            }
         }
 
         // W-NOCALLKIT review H1: skip CallKit teardown in callKitFreeMode — the
@@ -20322,9 +20683,14 @@ extension AppState {
         // double-teardown with the normal hangup path.
         controller.onStateChange = { [weak self] newState in
             switch newState {
-            case .failed:
+            case .failed(let reason):
+                // W-ICEGRACEDEGRADE (2026-09-01) — callee-side mirror of the
+                // caller wiring in startCall: ICE `.failed` ("ICE failed")
+                // is restartable and may degrade; a DTLS/connection failure
+                // is not.
+                let restartable = (reason == "ICE failed")
                 Task { @MainActor [weak self] in
-                    self?.handleIceTermination(iceIsTerminal: true)
+                    self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable)
                 }
             case .disconnected:
                 // W-ICEGRACE — recoverable, not terminal (callee-side mirror
@@ -20339,7 +20705,12 @@ extension AppState {
         }
         controller.onIceConnectionState = { [weak self] iceState in
             switch iceState {
-            case .failed, .closed:
+            case .failed:
+                // W-ICEGRACEDEGRADE — restartable terminal edge.
+                Task { @MainActor [weak self] in
+                    self?.handleIceTermination(iceIsTerminal: true, iceRestartable: true)
+                }
+            case .closed:
                 Task { @MainActor [weak self] in
                     self?.handleIceTermination(iceIsTerminal: true)
                 }

@@ -1474,7 +1474,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if offerAlreadyInit {
                 if let cached = lock.withLock({ lastSentLegacyAcceptWire }) {
                     print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — replaying cached ACCEPT")
-                    Task { try? await sendOpaqueMessage(cached) }
+                    Task {
+                        do { try await sendOpaqueMessage(cached) } catch {
+                            // W-SIGSWALLOW (2026-09-01) — was `try?`.
+                            print("[QAudionCallIntegration] QUAD ACCEPT replay send fail callId=\(normalizedOfferCid.prefix(8))… err=\(error)")
+                        }
+                    }
                 } else {
                     print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — session already initialised, skipping")
                 }
@@ -1490,7 +1495,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "")
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
             lock.withLock { lastSentLegacyAcceptWire = accept }
-            Task { try? await sendOpaqueMessage(accept) }
+            Task {
+                do { try await sendOpaqueMessage(accept) } catch {
+                    // W-SIGSWALLOW (2026-09-01) — was `try?` (audit memory
+                    // reference_ios_stability_audit_2026_09_01, P1 item 7): the
+                    // ACCEPT has no send-side retry of its own; recovery is the
+                    // caller's W529 OFFER retry, which this side answers by
+                    // replaying `lastSentLegacyAcceptWire` (above). A lost first
+                    // send must therefore at least be visible.
+                    print("[QAudionCallIntegration] QUAD ACCEPT send fail callId=\(normalizedOfferCid.prefix(8))… err=\(error)")
+                }
+            }
             lock.lock(); state = .active; lock.unlock()
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()

@@ -9,28 +9,19 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     private let provider: CXProvider
     private let controller: CXCallController
 
-    /// W495 — UUIDs for which CallKit rejected reportNewIncomingCall
-    /// (Focus/DnD/block-list). When the user taps Answer on the in-app
-    /// banner for these calls we bypass CXCallController (which would
-    /// also fail) and answer directly, manually activating the audio session.
-    private var callKitRejectedUUIDs: Set<UUID> = []
-    /// W-WAKEONLY — UUIDs for which the NATIVE CallKit incoming UI was actually
-    /// shown (reportNewIncomingCall succeeded). Only these can be "released"
-    /// from the system UI after answer (the foreground-suppressed path never
-    /// showed a native UI, so there is nothing to dismiss).
-    private var nativelyReportedUUIDs: Set<UUID> = []
-
-    /// Every call UUID this process has ever reported to CallKit and not yet
-    /// ended. Distinct from `nativelyReportedUUIDs`, which is cleared the
-    /// moment the system UI is dismissed while the call is still live.
-    ///
-    /// This one exists so a call can always be ended, from any path, without
-    /// the caller having to remember whether it was reported and by which
-    /// route. A CallKit call that outlives the app's own call is not a
-    /// cosmetic problem: iOS believes the phone is busy, and the next incoming
-    /// report can be refused — the user simply stops being reachable and
-    /// nothing on screen says why.
-    private var outstandingUUIDs: Set<UUID> = []
+    /// W-CKLEDGER (2026-09-01) — the W495 rejected/suppressed set, the
+    /// W-WAKEONLY natively-reported set and the outstanding set used to be
+    /// three unlocked `private var Set<UUID>` on this `@unchecked Sendable`
+    /// type. Not every access is on main: this class is not `@MainActor`, so
+    /// its `async` members run on the cooperative pool while
+    /// `registerSuppressedCall` / `releaseFromSystemUI` / `endAllOutstanding`
+    /// and the CXProviderDelegate callbacks (queue nil ⇒ main) run on the main
+    /// thread — and the PushKit+WS `dup=1` report below is two pool threads
+    /// mutating the same Set at once. All three now live behind one NSLock in
+    /// `CallKitCallLedger` (each set's own rationale is documented there);
+    /// every check-then-act below is a single atomic ledger call. See audit
+    /// memory reference_ios_stability_audit_2026_09_01, P1 item 9.
+    private let ledger = CallKitCallLedger()
 
     /// Where this type's diagnostics go. Set by the app to forward into the
     /// remote log; nil in tests and in any target that has no log sink.
@@ -102,15 +93,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
         // vs WS) is logged at the call sites in AppState.
-        let alreadyUp: Bool = nativelyReportedUUIDs.contains(uuid)
+        let alreadyUp: Bool = ledger.isNativelyReported(uuid)
         // I8 FIX — truncate the call UUID (same convention as AppState's
         // W-CALLDIAG lines for this same call) instead of printing it whole.
         print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
-            nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY
-            outstandingUUIDs.insert(uuid)
-            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstandingUUIDs.count)")
+            // W-WAKEONLY (native UI up) + outstanding, one atomic insert.
+            let outstanding: Int = ledger.recordNativeReport(uuid)
+            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstanding)")
         } catch {
             // W478 — log instead of silently dropping. CallKit rejects with:
             //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
@@ -136,16 +127,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // that costs the user an incoming call looks exactly like silence.
             log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
             if !alreadyUp {
-                callKitRejectedUUIDs.insert(uuid)
+                ledger.recordRejected(uuid)
             }
         }
     }
 
     public func reportCallEnded(uuid: UUID, reason: CallEndReason) async {
-        // W495 — clean up rejected-UUID tracking on call end.
-        callKitRejectedUUIDs.remove(uuid)
-        nativelyReportedUUIDs.remove(uuid)  // W-WAKEONLY
-        outstandingUUIDs.remove(uuid)
+        // W495 + W-WAKEONLY — clean up every ledger entry on call end.
+        ledger.forget(uuid)
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded
@@ -170,7 +159,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// should be zero, and a non-zero one is a path that forgot to end its call.
     @discardableResult
     public func endAllOutstanding(reason: CallEndReason = .remoteEnded) -> Int {
-        let stale = outstandingUUIDs
+        // W-CKLEDGER — snapshot + clear in one critical section; the CallKit
+        // reports below run on the snapshot, same set and same order as before.
+        let stale: Set<UUID> = ledger.drainOutstanding()
         guard !stale.isEmpty else { return 0 }
         let cxReason: CXCallEndedReason
         switch reason {
@@ -181,16 +172,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
         for uuid in stale {
             provider.reportCall(with: uuid, endedAt: Date(), reason: cxReason)
-            nativelyReportedUUIDs.remove(uuid)
-            callKitRejectedUUIDs.remove(uuid)
         }
-        outstandingUUIDs.removeAll()
         log?("callkit reconcile closed=\(stale.count)")
         return stale.count
     }
 
     /// How many calls this process believes are still open with CallKit.
-    public var outstandingCallCount: Int { outstandingUUIDs.count }
+    public var outstandingCallCount: Int { ledger.outstandingCount }
 
     public func startOutgoingCall(handle: String, hasVideo: Bool) async throws -> UUID {
         let uuid = UUID()
@@ -198,7 +186,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         action.isVideo = hasVideo
         let txn = CXTransaction(action: action)
         try await controller.request(txn)
-        outstandingUUIDs.insert(uuid)
+        ledger.recordOutstanding(uuid)
         return uuid
     }
 
@@ -223,7 +211,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// iOS phone UI (which looks identical to a plain voice call and would
     /// confuse users who need to distinguish encrypted calls from cleartext).
     public func registerSuppressedCall(_ uuid: UUID) {
-        callKitRejectedUUIDs.insert(uuid)
+        ledger.recordRejected(uuid)
     }
 
     /// W-WAKEONLY — "CallKit for wake only". After the user answers a
@@ -239,8 +227,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// session there (see reactivateAudioSessionForSelfManagedCall).
     @discardableResult
     public func releaseFromSystemUI(_ uuid: UUID) -> Bool {
-        guard nativelyReportedUUIDs.contains(uuid) else { return false }
-        nativelyReportedUUIDs.remove(uuid)
+        // W-CKLEDGER — atomic test-and-remove: the call stays outstanding.
+        guard ledger.releaseNativeReport(uuid) else { return false }
         provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
         // I8 FIX — truncated uuid, see above.
         print("[CallKitProvider] W-WAKEONLY — released system call UI for \(uuid.uuidString.prefix(8))…")
@@ -268,8 +256,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// onAudioSessionActivated, and call onAnswerCall directly — identical
     /// to what CXProviderDelegate would do on a successful CallKit path.
     public func answerCall(uuid: UUID) async throws {
-        if callKitRejectedUUIDs.contains(uuid) {
-            callKitRejectedUUIDs.remove(uuid)
+        // W-CKLEDGER — atomic test-and-remove, so two concurrent answerCall for
+        // the same uuid take the manual path once (as two sequential ones did).
+        if ledger.takeRejected(uuid) {
             // W497 — mirror the EXACT order of CXProviderDelegate callbacks on
             // a normal CallKit answer:
             //   1. provider(_:perform:CXAnswerCallAction) → onAnswerCall (sets up
@@ -320,7 +309,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         #else
         let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
         #endif
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        do {
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        } catch {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`: a refused category is
+            // the first link in a silent-call chain and left no line (audit
+            // memory reference_ios_stability_audit_2026_09_01, P1 item 7).
+            // Flow unchanged; the setActive retry loop below still runs.
+            print("[CallKitProvider] setCategory fail site=answer code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
         for attempt in 0..<4 {
             do {
                 try session.setActive(true)
@@ -354,7 +351,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // Omitting this caused resource leaks (audio engine, WS handlers,
         // video capture session) on system resets (rare but reproducible
         // when switching between apps that use CallKit concurrently).
-        callKitRejectedUUIDs.removeAll()
+        ledger.clearRejected()
         onProviderReset?()
     }
 
@@ -365,7 +362,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         #else
         let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
         #endif
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        do {
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        } catch {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`; log the OSStatus, keep the flow.
+            print("[CallKitProvider] setCategory fail site=start code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
     }
@@ -410,8 +412,19 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         #else
         let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
         #endif
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
-        try? audioSession.setActive(true)
+        do {
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        } catch {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`; log the OSStatus, keep the flow.
+            print("[CallKitProvider] setCategory fail site=didActivate code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
+        do {
+            try audioSession.setActive(true)
+        } catch {
+            // W-SIGSWALLOW — same: `onAudioSessionActivated` still fires so
+            // the engine start surfaces the real failure in its own log.
+            print("[CallKitProvider] setActive fail site=didActivate code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
         // W464 — the session is now active: this is the moment
         // CallService may safely start its AVAudioEngine capture/playback.
         onAudioSessionActivated?()

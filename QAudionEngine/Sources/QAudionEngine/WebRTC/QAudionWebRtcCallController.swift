@@ -1922,7 +1922,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     public func hangup() async {
         if let rid = recipientId {
-            try? await callingApi.sendHangup(recipientId: rid)
+            do {
+                try await callingApi.sendHangup(recipientId: rid)
+            } catch {
+                // W-SIGSWALLOW (2026-09-01) — was `try?` (audit memory
+                // reference_ios_stability_audit_2026_09_01, P1 item 7).
+                // Delivery is parked inside the impl; this only surfaces it.
+                print("[WebRtcCallController] sigsend fail kind=call_hangup site=hangup err=\(error)")
+            }
         }
         closeSynchronously()
     }
@@ -2048,7 +2055,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         closeSynchronously()           // closes peer connection, clears fields
         guard let r = rid else { return }
         Task.detached(priority: .userInitiated) {
-            try? await api.sendHangup(recipientId: r)
+            do {
+                try await api.sendHangup(recipientId: r)
+            } catch {
+                // W-SIGSWALLOW (2026-09-01) — see `hangup()` above.
+                print("[WebRtcCallController] sigsend fail kind=call_hangup site=close err=\(error)")
+            }
         }
     }
 
@@ -3351,7 +3363,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 accessToken: accessToken,
                 socksPort: socksPort.map(Int.init)
             )
-            if let result = try? await bridge.start() {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that
+            // failed to start silently left the call without its last-resort
+            // relay path and no line said so (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 7).
+            let bridgeResult: WssTurnBridge.BridgeResult?
+            do {
+                bridgeResult = try await bridge.start()
+            } catch {
+                print("[WebRtcCallController] wssturn bridge start fail err=\(error)")
+                bridgeResult = nil
+            }
+            if let result = bridgeResult {
                 wssTurnBridge?.stop()
                 wssTurnBridge = bridge
                 servers.insert(
@@ -3391,12 +3414,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let mid: String? = sdpMid
         let mlineIdx: Int32 = sdpMLineIndex
         Task {
-            try? await callingApi.sendIceCandidate(
-                recipientId: rid,
-                candidate: candidate,
-                sdpMid: mid,
-                sdpMLineIndex: mlineIdx
-            )
+            do {
+                try await callingApi.sendIceCandidate(
+                    recipientId: rid,
+                    candidate: candidate,
+                    sdpMid: mid,
+                    sdpMLineIndex: mlineIdx
+                )
+            } catch {
+                // W-SIGSWALLOW (2026-09-01) — was `try?`. Never log the
+                // candidate itself (SDP/ICE lines are dropped by the shipper
+                // and carry addresses); the mid is enough to correlate.
+                print("[WebRtcCallController] sigsend fail kind=call_ice mid=\(mid ?? "-") err=\(error)")
+            }
         }
     }
 
@@ -3423,7 +3453,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // whole line — re-verified 2026-08-25.
         print("[WebRtcCallController] turnsuspect count=0 refresh=1")
         Task {
-            _ = try? await provider.credentials(forceRefresh: true)
+            do {
+                _ = try await provider.credentials(forceRefresh: true)
+            } catch {
+                // W-SIGSWALLOW (2026-09-01) — was `try?`: a failed TURN
+                // credential refresh after a zero-relay gather is the very
+                // evidence the next call's "no relay" needs.
+                print("[WebRtcCallController] turnsuspect refresh fail err=\(error)")
+            }
         }
     }
 

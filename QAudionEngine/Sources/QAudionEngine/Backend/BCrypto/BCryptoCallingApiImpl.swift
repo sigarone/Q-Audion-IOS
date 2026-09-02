@@ -621,9 +621,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// Same pre-flight gate as `sendCallAnswer` — this fires the moment the
     /// incoming call_offer arrives, i.e. potentially the very first thing
     /// this device does after a background/push wake, before the WS has
-    /// necessarily reconnected. Every caller already wraps this in
-    /// `try? await` (AppState), so a timeout degrades to a silent drop —
-    /// same as today, just no longer racing a doomed send.
+    /// necessarily reconnected. Every caller (AppState) catches and logs a
+    /// timeout (W-SIGSWALLOW, 2026-09-01); the envelope is deliberately NOT
+    /// retransmitted — see `CallSignalingFailurePolicy.socketNotReadyAction`
+    /// for why neither this nor `call_ready` may ride the setup ladder.
     public func sendCallProcessing(callId: String, callerId: String) async throws {
         let ready = await ws.ensureAuthenticated(timeoutSec: 5)
         if !ready {
@@ -656,17 +657,34 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// same envelope class as call_processing/call_ready above.
     ///
     /// Same pre-flight gate as `sendCallAnswer`/`sendCallOffer` — see the
-    /// comment on `sendCallAnswer` for the failure mode this closes. The
-    /// caller (`AppState`) already wraps this in `try? await`, so a
-    /// timeout here degrades to today's silent drop rather than bricking
-    /// the call — it just now actually waits for the reconnect instead of
-    /// firing into a task that was cancelled a moment earlier.
+    /// comment on `sendCallAnswer` for the failure mode this closes. It
+    /// waits for the reconnect instead of firing into a task that was
+    /// cancelled a moment earlier; on a gate timeout it throws
+    /// `wsUnavailable` (the caller logs it) AFTER a best-effort send and
+    /// arming the retransmit ladder — see W-SIGSWALLOW inside.
     public func sendCallAccepted(callId: String) async throws {
+        let data: [String: Any] = ["call_id": callId]
         let ready = await ws.ensureAuthenticated(timeoutSec: 5)
         if !ready {
+            // W-SIGSWALLOW (2026-09-01) — this used to throw BEFORE sending,
+            // so an accept pressed while the socket was still reconnecting
+            // (the exact background-wake race `sendCallAnswer`'s comment
+            // documents) was lost outright: the W-SETUPRETRY ladder that
+            // protects the success path below was never armed on the one
+            // path that needed it. Now: one best-effort send (`ws.send`
+            // kicks its own reconnect for control envelopes) plus the SAME
+            // bounded ladder (2.5 s / 5 s, stops on unbind/progression; the
+            // caller's RX is idempotent), then still throw so the caller
+            // logs the fast-path miss. Decision + kill switch live in
+            // `CallSignalingFailurePolicy` (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 7).
+            if CallSignalingFailurePolicy.socketNotReadyAction(for: .callAccepted) == .bestEffortSendAndArmRetransmit {
+                ws.send(type: "call_accepted", data: data)
+                print("[BCryptoCalling] call_accepted fast-path miss call_id=\(callId.prefix(8))… — best-effort send + retransmit ladder armed")
+                scheduleSetupRetransmit(callId: callId, type: "call_accepted", data: data, label: "call_accepted")
+            }
             throw BCryptoCallingError.wsUnavailable
         }
-        let data: [String: Any] = ["call_id": callId]
         ws.send(type: "call_accepted", data: data)
         // W-SETUPRETRY — mirrors Android's accept-retransmit (2.5 s / 5 s,
         // CallController.startIncoming): the accept can be WRITTEN into a
