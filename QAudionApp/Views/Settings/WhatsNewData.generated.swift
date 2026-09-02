@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1077",
+              date: "2026-09-02",
+              title: "v1.0.1077",
+              bullets: [
+                "fix(call): dead-TX audio-srtp watchdog was losing the race to hangup",
+              ]),
         .init(id: "v1.0.1076",
               date: "2026-09-02",
               title: "v1.0.1076",
               bullets: [
+                "chore: regenerate changelog for v1.0.1076",
                 "fix(call): guard outgoing-ring player against a failed engine start",
               ]),
         .init(id: "v1.0.1075",
@@ -174,13 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1058",
                 "fix(call): remote ICE candidates were silently dropped before the remote description — cross-network calls never left CHECKING (W-ICELATEQUEUE)",
-              ]),
-        .init(id: "v1.0.1057",
-              date: "2026-08-30",
-              title: "v1.0.1057",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1057",
-                "fix(app): resolve the four future-error Swift 6 isolation warnings",
               ]),
     ]
 }
