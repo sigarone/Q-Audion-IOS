@@ -84,3 +84,9 @@ final class GroupSfuMediaKeyTests: XCTestCase {
         XCTAssertFalse(GroupCallController.grpSfuMediaKeyV1Enabled)
     }
 }
+
+private extension Data {
+    func hexEncodedString() -> String {
+        map { String(format: "%02x", $0) }.joined()
+    }
+}

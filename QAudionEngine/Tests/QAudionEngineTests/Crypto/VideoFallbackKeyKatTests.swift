@@ -79,3 +79,9 @@ final class VideoFallbackKeyKatTests: XCTestCase {
         XCTAssertNotEqual(fallback, vkeyV1)
     }
 }
+
+private extension Data {
+    func hexEncodedString() -> String {
+        map { String(format: "%02x", $0) }.joined()
+    }
+}
