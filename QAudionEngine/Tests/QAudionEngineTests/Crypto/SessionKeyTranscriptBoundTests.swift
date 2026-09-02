@@ -6,13 +6,17 @@ import CryptoKit
 /// `QAudionCallIntegration.deriveTranscriptBoundSessionKey` (the KDF fold) and
 /// `ComputeSasUseCase.invoke(sessionKey:transcriptHash:)` (the SAS fold).
 ///
-/// No cross-platform KAT vector exists yet for this fix — it is brand-new,
-/// unshipped, cross-platform-uncoordinated work (see this fix's own commit
-/// message for the byte layout pinned for a later reconciliation pass). These
-/// tests instead verify the PROPERTIES the fix design requires directly:
-/// deterministic, distinct-per-transcript-hash, distinct from the un-bound
-/// legacy derivation, and a first-principles HKDF reconstruction of the exact
-/// `info` layout this fix's own doc claims.
+/// ITEM 2/3 FOLLOW-UP (2026-09-02) — `deriveTranscriptBoundSessionKey` no
+/// longer takes an already-derived `baseKey`; it now operates DIRECTLY on the
+/// raw hybrid shared secrets, matching Android's DESIGNATED CANONICAL
+/// `HybridPqcKeyExchange.kt deriveSessionKeyTranscriptBound` byte-for-byte
+/// (see that function's own doc). `testCrossPlatformKatFixture` below is the
+/// shared fixed-input vector this follow-up's own audit required, cross-
+/// checked against the other two platforms' independently-computed outputs.
+/// The remaining tests verify the PROPERTIES the fix design requires
+/// directly: deterministic, distinct-per-transcript-hash, distinct-per-input,
+/// and a first-principles HKDF reconstruction of the exact `info`/`salt`
+/// layout this fix's own doc claims.
 final class SessionKeyTranscriptBoundTests: XCTestCase {
 
     private func fixedBytes(_ n: Int, seed: UInt8) -> Data {
@@ -22,58 +26,135 @@ final class SessionKeyTranscriptBoundTests: XCTestCase {
     // MARK: - deriveTranscriptBoundSessionKey
 
     func testDeterministic() {
-        let base = fixedBytes(32, seed: 1)
+        let pqcSs = fixedBytes(32, seed: 1)
+        let x25519Ss = fixedBytes(32, seed: 4)
         let hash = fixedBytes(32, seed: 2)
-        let a = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: base, transcriptHash: hash)
-        let b = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: base, transcriptHash: hash)
+        let a = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
+        let b = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
         XCTAssertEqual(a, b)
         XCTAssertEqual(a.count, 32)
     }
 
     func testDifferentTranscriptHashesProduceDifferentKeys() {
-        let base = fixedBytes(32, seed: 1)
+        let pqcSs = fixedBytes(32, seed: 1)
+        let x25519Ss = fixedBytes(32, seed: 4)
         let hashA = fixedBytes(32, seed: 2)
         let hashB = fixedBytes(32, seed: 3)
-        let keyA = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: base, transcriptHash: hashA)
-        let keyB = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: base, transcriptHash: hashB)
+        let keyA = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hashA)
+        let keyB = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hashB)
         XCTAssertNotEqual(
             keyA, keyB,
             "CALL-4 core property: a relay that strips a capability bit changes the transcript hash, which MUST change the folded session key on both ends"
         )
     }
 
-    func testDifferentBaseKeysProduceDifferentFoldedKeys() {
+    func testDifferentSharedSecretsProduceDifferentKeys() {
         let hash = fixedBytes(32, seed: 9)
-        let baseA = fixedBytes(32, seed: 1)
-        let baseB = fixedBytes(32, seed: 5)
-        let keyA = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: baseA, transcriptHash: hash)
-        let keyB = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: baseB, transcriptHash: hash)
+        let x25519Ss = fixedBytes(32, seed: 4)
+        let pqcSsA = fixedBytes(32, seed: 1)
+        let pqcSsB = fixedBytes(32, seed: 5)
+        let keyA = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSsA, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
+        let keyB = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSsB, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
         XCTAssertNotEqual(keyA, keyB)
     }
 
-    func testFoldedKeyDiffersFromUnfoldedBaseKey() {
-        let base = fixedBytes(32, seed: 7)
-        let hash = fixedBytes(32, seed: 8)
-        let folded = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: base, transcriptHash: hash)
-        XCTAssertNotEqual(folded, base, "folding must actually change the key, not pass it through")
+    func testPresentPskChangesTheDerivedKey() {
+        // Canonical construction: a non-empty PSK REPLACES the salt (never
+        // appended to ikm/info) — so supplying one must change the output.
+        let pqcSs = fixedBytes(32, seed: 1)
+        let x25519Ss = fixedBytes(32, seed: 4)
+        let hash = fixedBytes(32, seed: 9)
+        let noPsk = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
+        let withPsk = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: fixedBytes(32, seed: 20), transcriptHash: hash)
+        XCTAssertNotEqual(noPsk, withPsk)
+    }
+
+    func testEmptyPskIsTreatedAsAbsent() {
+        // Canonical construction: `psk != nil && !psk.isEmpty` — an explicitly
+        // empty Data must take the SAME no-PSK salt path as nil, not an
+        // empty-Data HKDF salt.
+        let pqcSs = fixedBytes(32, seed: 1)
+        let x25519Ss = fixedBytes(32, seed: 4)
+        let hash = fixedBytes(32, seed: 9)
+        let withNil = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
+        let withEmpty = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: Data(), transcriptHash: hash)
+        XCTAssertEqual(withNil, withEmpty)
     }
 
     /// First-principles reconstruction of the exact HKDF this fix's own doc
-    /// specifies: `ikm = baseKey`, `salt = HkdfLabels.hybridPqcSaltV1`,
-    /// `info = HkdfLabels.kdfTranscriptBindV1(32) || transcriptHash(32)`.
+    /// specifies: `ikm = pqcSharedSecret || x25519Shared`,
+    /// `salt = HkdfLabels.hybridPqcSaltV1` (no-PSK path),
+    /// `info = HkdfLabels.hybridPqcSessionKey(20) || transcriptHash(32)`.
     func testMatchesFirstPrinciplesHkdfReconstruction() {
-        let base = fixedBytes(32, seed: 11)
+        let pqcSs = fixedBytes(32, seed: 11)
+        let x25519Ss = fixedBytes(32, seed: 15)
         let hash = fixedBytes(32, seed: 12)
-        var expectedInfo = Data("q-audion-kdf-transcript-bind-v1".utf8)
+        var ikm = pqcSs
+        ikm.append(x25519Ss)
+        var expectedInfo = Data("q-audion-session-key".utf8)
         expectedInfo.append(hash)
         let expected = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: base),
+            inputKeyMaterial: SymmetricKey(data: ikm),
             salt: Data("q-audion-hybrid-pqc-v1".utf8),
             info: expectedInfo,
             outputByteCount: 32
         ).withUnsafeBytes { Data($0) }
-        let actual = QAudionCallIntegration.deriveTranscriptBoundSessionKey(baseKey: base, transcriptHash: hash)
+        let actual = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSs, x25519Shared: x25519Ss, psk: nil, transcriptHash: hash)
         XCTAssertEqual(actual, expected)
+    }
+
+    // MARK: - Cross-platform KAT (ITEM 2/3 FOLLOW-UP shared fixture)
+
+    /// The EXACT fixed-input vector specified by the item 2/3 follow-up audit
+    /// — byte-identical inputs on all three platforms (Android/iOS/Desktop),
+    /// so the three independently-computed outputs can be cross-checked for
+    /// true convergence, not just each platform's own self-consistency.
+    ///
+    ///   pqcSharedSecret = 32 bytes of 0x11
+    ///   x25519Shared    = 32 bytes of 0x22
+    ///   psk             = nil (no-PSK salt path)
+    ///   transcriptHash  = SHA-256("qaudion-item23-kat-fixture-v1")
+    ///
+    /// Expected outputs were computed independently in Python against an
+    /// RFC-5869-verified HKDF-SHA256 implementation (see this follow-up's own
+    /// commit message for the exact derivation and the values reported for
+    /// cross-checking against Android/Desktop). UNVERIFIED against a live
+    /// Swift/CryptoKit run — this session has no macOS/Xcode toolchain to
+    /// compile or execute this test suite; the expected constants below are
+    /// the by-hand HKDF computation, not a captured CryptoKit output.
+    func testCrossPlatformKatFixture() {
+        let pqcSharedSecret = Data(repeating: 0x11, count: 32)
+        let x25519Shared = Data(repeating: 0x22, count: 32)
+        let transcriptHash = Data(SHA256.hash(data: Data("qaudion-item23-kat-fixture-v1".utf8)))
+        XCTAssertEqual(
+            transcriptHash.map { String(format: "%02x", $0) }.joined(),
+            "13531c62a42cc8c0c4e99ff4720120b75163e054995ed94a92eda8b52e6060e8"
+        )
+
+        let sessionKey = QAudionCallIntegration.deriveTranscriptBoundSessionKey(
+            pqcSharedSecret: pqcSharedSecret,
+            x25519Shared: x25519Shared,
+            psk: nil,
+            transcriptHash: transcriptHash
+        )
+        XCTAssertEqual(
+            sessionKey.map { String(format: "%02x", $0) }.joined(),
+            "a70fa416996564881a7bf4cefba22ca4dc541d07d822a75f4f2f9955bac33c60"
+        )
+
+        let sas = try? ComputeSasUseCase.invoke(sessionKey: sessionKey, transcriptHash: transcriptHash)
+        XCTAssertEqual(sas?.words, ["uproot", "absurd", "shadow", "printer", "southward", "clockwork"])
     }
 
     // MARK: - rekeyFreshnessValue (CALL-3's literal HKDF formula, ready for a future consumer)

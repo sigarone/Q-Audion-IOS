@@ -145,12 +145,16 @@ final class ComputeSasUseCaseTests: XCTestCase {
 
     /// First-principles reconstruction of the exact HKDF this fix's own doc
     /// specifies: same salt (`SasConstants.saltBytes`, unchanged), `info =
-    /// HkdfLabels.sasTranscriptBindV1(27) || transcriptHash(32)` REPLACING
+    /// HkdfLabels.sasTranscriptBindV1(23) || transcriptHash(32)` REPLACING
     /// (not appending to) `SasConstants.infoWordsBytes`.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — the label reconciled to Android's
+    /// canonical value `"q-audion-sas-transcript"` (23 bytes, no `-v1`
+    /// suffix) — see `HkdfLabels.sasTranscriptBindV1`'s doc.
     func testTranscriptHashMatchesFirstPrinciplesHkdfReconstruction() throws {
         let key = Data(repeating: 0x22, count: 32)
         let hash = Data(repeating: 0x33, count: 32)
-        var expectedInfo = Data("q-audion-sas-transcript-v1".utf8)
+        var expectedInfo = Data("q-audion-sas-transcript".utf8)
         expectedInfo.append(hash)
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: key),

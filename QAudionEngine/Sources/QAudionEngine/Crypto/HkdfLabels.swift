@@ -80,25 +80,43 @@ public enum HkdfLabels {
     /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
     public static let hybridCtBindV1: Data = Data("q-audion-ct-bind-v1".utf8)
 
-    /// CALL-4/HSID-002 (2026-09-02 protocol audit) — session-key KDF `info`
-    /// suffix folded in when both peers negotiate the `transcriptBindV1`
-    /// handshake capability. Used ONLY as the second-pass HKDF `info` prefix
-    /// in `QAudionCallIntegration.deriveTranscriptBoundSessionKey` — NEVER
-    /// mixed into the base schema:2/3/4 `info` strings above, which stay
-    /// byte-identical for every peer that has not shipped this fix. See that
-    /// function's doc for the full `info = kdfTranscriptBindV1 ||
-    /// transcriptHash` layout. 32 bytes, NOT null-terminated.
+    /// SUPERSEDED (ITEM 2/3 FOLLOW-UP, 2026-09-02) — this platform's
+    /// PRE-RECONCILIATION session-key KDF `info` label, used only by the
+    /// cascaded second-HKDF-pass construction `deriveTranscriptBoundSessionKey`
+    /// carried before this follow-up (see that function's current doc for the
+    /// reconciled, canonical construction, which reuses `hybridPqcSessionKey`
+    /// above as its `info` prefix instead of this label — matching Android's
+    /// `HybridPqcKeyExchange.kt deriveSessionKeyTranscriptBound` byte-for-byte,
+    /// which never had a dedicated KDF-transcript-bind label of its own).
+    /// Kept defined (not deleted) only so old references/diffs still resolve;
+    /// no production code path reads this constant any more. Never had a live
+    /// call using it — `transcriptBindV1Enabled` has been `false` since this
+    /// bit's introduction. 32 bytes, NOT null-terminated.
     public static let kdfTranscriptBindV1: Data = Data("q-audion-kdf-transcript-bind-v1".utf8)
 
     /// CALL-4/HSID-002 — SAS `info` REPLACEMENT (not appended) used by
     /// `ComputeSasUseCase.invoke` in place of `SasConstants.infoWordsBytes`
     /// when the caller supplies a non-nil `transcriptHash`. A DISTINCT label
-    /// from `kdfTranscriptBindV1` above is required even though both fold in
-    /// the SAME transcript hash — an independent security review confirmed
+    /// from the session-key KDF's own `info` prefix (`hybridPqcSessionKey`
+    /// above) is required even though both fold in the SAME transcript hash
+    /// — an independent security review confirmed
     /// reusing one domain-separated hash across two HKDF derivations is safe
     /// only when each derivation carries its own label; reusing the hash
-    /// WITHOUT distinct prefixes is not. 27 bytes, NOT null-terminated.
-    public static let sasTranscriptBindV1: Data = Data("q-audion-sas-transcript-v1".utf8)
+    /// WITHOUT distinct prefixes is not. 23 bytes, NOT null-terminated.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — reconciled to Android's canonical
+    /// value `"q-audion-sas-transcript"` (`SasConstants
+    /// .INFO_WORDS_TRANSCRIPT_BOUND_PREFIX`, `HybridPqcKeyExchange.kt`
+    /// sibling `PgpSasWords.kt`), NO trailing `-v1` version suffix. This
+    /// label previously carried a `-v1` suffix (27 bytes) that Android never
+    /// had — the two platforms' independent implementations diverged on a
+    /// detail neither this fix's own kdoc above nor the original security
+    /// review actually required (a distinct label is what matters, not its
+    /// exact spelling), so the shorter Android string is now the shared
+    /// cross-platform value. Never had a live call using the old value —
+    /// `transcriptBindV1Enabled` has been `false` since this bit's
+    /// introduction — so this is a pre-go-live correction, not a wire break.
+    public static let sasTranscriptBindV1: Data = Data("q-audion-sas-transcript".utf8)
 
     // MARK: - Salts (UTF-8)
 

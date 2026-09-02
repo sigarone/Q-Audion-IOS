@@ -281,6 +281,25 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// KAT reconciliation pass pins ONE byte layout and all three platforms
     /// implement that exact layout — see the Android repo's
     /// docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 2/3.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — the reconciliation pass above landed:
+    /// this platform's session-key KDF/SAS are now byte-for-byte ports of
+    /// Android's DESIGNATED CANONICAL construction (see
+    /// `deriveTranscriptBoundSessionKey`/`ComputeSasUseCase.invoke`'s docs),
+    /// `rekeyNonce`/`rekeyRound` are fixed-width and always-present on both
+    /// OFFER and ACCEPT (see `HandshakeTranscript.offerV3`/`acceptV3`'s
+    /// docs), and every capability-advertisement site now excludes this bit
+    /// for an earbud-possible/hw_only call (search this file for
+    /// `earbudPairingGattProxy == nil` and `keyClass == 0` near
+    /// `transcriptBindV1:`) — the UNRESOLVED interaction between
+    /// transcript-binding and the earbud-exclusive schema:4 KDF that this
+    /// follow-up's own audit flagged. STILL `false`: this reconciliation
+    /// pass was done by close reading of Android's real source on the same
+    /// machine (no macOS/Xcode toolchain available to compile or run this
+    /// platform's own test suite — see this follow-up's own commit message),
+    /// so a real cross-platform KAT run (all three platforms' outputs
+    /// compared side by side, not just each platform's own self-consistency)
+    /// is still the go-live gate, same as before.
     public static let transcriptBindV1Enabled = false
 
     /// MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4) go-live
@@ -1272,7 +1291,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // ACTUAL negotiated behaviour (v3 signing, transcript-bound KDF/SAS,
                 // signed re-key round) only activates once the PEER'S bundle also
                 // carries this bit (checked at the v3-verify call site, never assumed).
-                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil,
+                //
+                // ITEM 2/3 FOLLOW-UP — ALSO never advertised when a physical earbud is
+                // paired locally (`earbudPairingGattProxy != nil`), conservative-by-
+                // design pending a deliberate decision on how transcript-binding should
+                // compose with the earbud-exclusive schema:4 hw_only KDF
+                // (`deriveHybridSessionKeyV4`/`keyClass != 0`) — the canonical
+                // `deriveSessionKeyTranscriptBound` construction has no
+                // `keyClass`/`negDigest` input at all, so negotiating it for a call
+                // that ends up hw_only would silently drop that scheme's hw-bound
+                // confirmation property. This OFFER can't yet know whether the call
+                // will actually resolve hw_only (that depends on PSK selection, which
+                // only happens once the peer answers) — `earbudPairingGattProxy != nil`
+                // is the earliest, most conservative signal available at send time:
+                // no local earbud paired ⇒ this leg structurally cannot end up hw_only.
+                // See `deriveTranscriptBoundSessionKey`'s doc and the `keyClass == 0`
+                // gates at its two call sites in this file for the other half of this
+                // scoping.
+                transcriptBindV1: (Self.transcriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
                 // MEDIA-3/4/5 — gated by innerAudioAadV1Enabled (default false, see
                 // its doc). The ACTUAL negotiated behaviour (per-direction inner
                 // sealed-audio keys/AAD/replay window) only activates once the
@@ -1281,9 +1317,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             ),
             pskFingerprints: advertisedPskFingerprints,
             pskRoles: advertisedPskRoles,
-            // CALL-3 — round 1 signs the nonce; every later re-key round on
-            // this call signs `rekeyRound` only (nonce field empty on the
-            // wire — see `HandshakeTranscript.offerV3`'s doc).
+            // CALL-3 — ITEM 2/3 FOLLOW-UP: resent IDENTICALLY on every round of the
+            // call (round 1 here, and every re-key round in `performPqcReKey`), not
+            // just round 1 — see `HandshakeTranscript.offerV3`'s doc for why the prior
+            // "round 1 only" shape broke cross-platform transcript-hash equality.
             rekeyNonce: rekeyNonceRound1.base64EncodedString(),
             rekeyRound: 1
         )
@@ -1490,13 +1527,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // no round-1 record for this callId simply treats this round's
         // `transcriptBindV1` path as unavailable (falls back to legacy KDF/SAS
         // — see the `.offer` case's round-freshness gate).
-        let thisRound: UInt32 = lock.withLock {
+        // ITEM 2/3 FOLLOW-UP — `thisRoundNonce` is now returned alongside the round
+        // number: the OFFER resends the SAME nonce on every round (see
+        // `HandshakeTranscript.offerV3`'s doc), so this leg needs the actual bytes
+        // here, not just the round-1 existence check the prior version only used to
+        // decide whether to (re)generate.
+        let (thisRound, thisRoundNonce): (UInt32, Data) = lock.withLock {
             let next = (rekeyRoundByCall[callId.lowercased()] ?? 1) + 1
             rekeyRoundByCall[callId.lowercased()] = next
-            if rekeyNonceByCall[callId.lowercased()] == nil {
-                rekeyNonceByCall[callId.lowercased()] = Self.generateRekeyNonce()
+            let nonce: Data
+            if let existing = rekeyNonceByCall[callId.lowercased()] {
+                nonce = existing
+            } else {
+                nonce = Self.generateRekeyNonce()
+                rekeyNonceByCall[callId.lowercased()] = nonce
             }
-            return next
+            return (next, nonce)
         }
         let offerBundle = AndroidHandshakeBundle(
             kind: .offer,
@@ -1510,14 +1556,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 ratchetV4: Self.advertisesRatchetV4 ? true : nil,
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
                 pskMixV1: true,
-                transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil,
+                // ITEM 2/3 FOLLOW-UP — same earbud-exclusion rationale as the round-1
+                // OFFER's own `transcriptBindV1` field above; see that comment.
+                transcriptBindV1: (Self.transcriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
                 innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
             ),
             pskFingerprints: advert.fingerprints,
             pskRoles: advert.roles,
-            // CALL-3 — re-key rounds (round > 1) never resend the nonce; only
-            // round 1's OFFER (`onAndroidCallSetupStarted`) carries it.
-            rekeyNonce: nil,
+            // CALL-3 — ITEM 2/3 FOLLOW-UP: every re-key round resends the SAME nonce
+            // round 1 established (never a fresh one mid-call) — see
+            // `HandshakeTranscript.offerV3`'s doc for why the prior "round 1 only"
+            // shape broke cross-platform transcript-hash equality.
+            rekeyNonce: thisRoundNonce.base64EncodedString(),
             rekeyRound: Int(thisRound)
         )
         // Stash the advert list (KCMAC needs it, same as the original
@@ -2008,6 +2058,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // unless v3 verification actually succeeds.
             var offerBindingV3 = Data()
             var acceptedRoundV3: UInt32?
+            // ITEM 2/3 FOLLOW-UP — the OFFER's own rekeyNonce, captured alongside
+            // `acceptedRoundV3` ONLY once v3 actually verified below, so the ACCEPT
+            // this responder sends back can echo it (`HandshakeTranscript.acceptV3`
+            // now REQUIRES a `rekeyNonce` — see its doc). `nil` exactly when
+            // `acceptedRoundV3` is `nil` (the two are set together, in the same
+            // branch, from the same verified OFFER).
+            var acceptedNonceV3: Data?
             let normalizedOIdV3 = callId.lowercased()
             // A re-key round for CALL-3 purposes iff this call has already
             // completed ONE FULL handshake before this OFFER arrived — same
@@ -2066,6 +2123,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     lock.withLock { lastAcceptedRekeyRoundByCall[normalizedOIdV3] = round }
                     offerBindingV3 = HandshakeTranscript.offerBinding(offerTV3)
                     acceptedRoundV3 = round
+                    // ITEM 2/3 FOLLOW-UP — `offerTranscriptV3` only returned non-nil
+                    // above because `bundle.rekeyNonce` decoded to a valid 8-byte
+                    // value (it is one of that function's own required guards), so
+                    // this decode cannot fail here; re-decoding (rather than
+                    // threading the raw bytes out of `offerTranscriptV3`) keeps that
+                    // function's signature unchanged and this call site self-
+                    // contained.
+                    acceptedNonceV3 = Self.rekeyNonceRaw(from: bundle.rekeyNonce)
                 } else {
                     print("[QAudionCallIntegration] CALL-3/CALL-4: OFFER carried sigV3/rekeyRound but v3 verification FAILED callId=\(callId.prefix(8))… — falling back to legacy KDF/SAS/re-key-transcript shape, call NOT dropped")
                 }
@@ -2222,8 +2287,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
 
             // Derive session key — V4 when keyClass != 0, schema:2 otherwise.
-            // `var`: CALL-4 below may fold the v3 transcript hash on top via a
-            // second, independent HKDF pass (`deriveTranscriptBoundSessionKey`).
+            // `var`: CALL-4 below may REPLACE this with the canonical
+            // transcript-bound derivation (`deriveTranscriptBoundSessionKey`),
+            // ONLY when `keyClass == 0` — see that override's own comment.
             var combined: Data
             if keyClass != 0 {
                 let nd = Self.negDigest(fpSetInit: fpSetInit, fpSetResp: fpSetResp)
@@ -2360,7 +2426,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pskMixV1: true,
                     // CALL-3/CALL-4 (HSID-002 remainder) — same flip as the OFFER
                     // above, see its comment for the full rationale.
-                    transcriptBindV1: Self.transcriptBindV1Enabled ? true : nil,
+                    //
+                    // ITEM 2/3 FOLLOW-UP — gated on `keyClass == 0` rather than the
+                    // OFFER's earbud-presence proxy: by THIS point in the function the
+                    // call's actual hw_only outcome is already known precisely
+                    // (`keyClass` was set a few steps above), so this leg can use the
+                    // exact signal instead of the conservative "earbud paired" one —
+                    // see `deriveTranscriptBoundSessionKey`'s doc for why hw_only
+                    // (`keyClass != 0`) and transcript-binding must not compose yet.
+                    transcriptBindV1: (Self.transcriptBindV1Enabled && keyClass == 0) ? true : nil,
                     // MEDIA-3/4/5 — same flip as the OFFER above, see its comment.
                     innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
                 ),
@@ -2371,8 +2445,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // value everything downstream uses.
                 selectedPskFingerprint: selectedPsk != nil ? resolvedAdvert.wireValue : nil,
                 pskRoles: acceptAdvertisedPskRoles,
-                // CALL-3 — echo the OFFER's own round number (nil when v3 was
-                // not established for this round — see the gate above).
+                // CALL-3 — ITEM 2/3 FOLLOW-UP: echo the OFFER's own (rekeyNonce,
+                // rekeyRound) pair — both nil together when v3 was not established
+                // for this round (see the gate above), both set together otherwise
+                // (`acceptedNonceV3`/`acceptedRoundV3` are only ever written in the
+                // same branch). `HandshakeTranscript.acceptV3` now requires the
+                // nonce echo — see its doc.
+                rekeyNonce: acceptedNonceV3?.base64EncodedString(),
                 rekeyRound: acceptedRoundV3.map { Int($0) }
             )
 
@@ -2413,14 +2492,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     : Self.acceptTranscriptV3(from: accept, callId: callId, signerKeyRaw: idKey, offerBindingV3: offerBindingV3)
                 acceptToSend = signedCopy(of: accept, transcript: acceptT, transcriptV2: acceptTV2, transcriptV3: acceptTV3)
                 if let acceptTV2 { acceptBindingV2ForKc = HandshakeTranscript.offerBinding(acceptTV2) }
-                // CALL-4 — fold the v3 ACCEPT transcript's own SHA-256 into the
-                // session key via a second HKDF pass, ONLY when `sigV3` actually
-                // attached (never on a signer failure — `signedCopy` already
-                // isolates that; checking `acceptToSend.sigV3` here, not just
-                // "acceptTV3 != nil", is what makes sure of it).
-                if let t3 = acceptTV3, acceptToSend.sigV3 != nil {
+                // CALL-4 — ITEM 2/3 FOLLOW-UP: recompute `combined` from the raw
+                // hybrid shared secrets under the canonical transcript-bound KDF
+                // (REPLACING, not further transforming, the schema:2 derivation
+                // above), ONLY when `sigV3` actually attached (never on a signer
+                // failure — `signedCopy` already isolates that; checking
+                // `acceptToSend.sigV3` here, not just "acceptTV3 != nil", is what
+                // makes sure of it) AND `keyClass == 0` — the OFFER-side capability
+                // gate above already keeps `transcriptBindV1` off this device's own
+                // earbud-possible legs, but a peer's independent build (or a future
+                // regression there) could still advertise it; this second, local
+                // check is what actually decides whether the override runs, so it
+                // never depends on the peer alone. See
+                // `deriveTranscriptBoundSessionKey`'s doc for the earbud-composition
+                // rationale.
+                if let t3 = acceptTV3, acceptToSend.sigV3 != nil, keyClass == 0 {
                     let transcriptHashV3 = HandshakeTranscript.offerBinding(t3)
-                    combined = Self.deriveTranscriptBoundSessionKey(baseKey: combined, transcriptHash: transcriptHashV3)
+                    combined = Self.deriveTranscriptBoundSessionKey(
+                        pqcSharedSecret: pqcResult.sharedSecret,
+                        x25519Shared: x25519Result.sharedSecret,
+                        psk: selectedPsk,
+                        transcriptHash: transcriptHashV3
+                    )
                     print("[QAudionCallIntegration] CALL-4: transcript-bound session key active (responder) callId=\(callId.prefix(8))…")
                 }
             }
@@ -2920,9 +3013,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
 
             // 4. Derive session key — V4 when keyClass != 0, schema:2 otherwise.
-            // `var`: CALL-4 below may fold the v3 transcript hash on top via a
-            // second, independent HKDF pass (`deriveTranscriptBoundSessionKey`).
+            // `var`: CALL-4 below may REPLACE this with the canonical
+            // transcript-bound derivation (`deriveTranscriptBoundSessionKey`).
             var combined: Data
+            // ITEM 2/3 FOLLOW-UP — the PSK the schema:2 branch below mixes, hoisted
+            // out of that branch's own scope so CALL-4's override (which needs the
+            // SAME raw psk/pqcSs/x25519Ss inputs schema:2 used, not schema:2's
+            // already-derived output) can read it. Only ever meaningful when
+            // `keyClassAccept == 0` — the V4/hw_only branch does not set it, and
+            // CALL-4's override below only runs when `keyClassAccept == 0` too, so
+            // the two are never out of sync.
+            var schema2PskAccept: Data?
             if keyClassAccept != 0 {
                 let nd = Self.negDigest(fpSetInit: fpSetInitAccept, fpSetResp: fpSetRespAccept)
                 // WIRE_SPEC §5 P1 fix: look up PSK by fingerprint from SovereignKeyVault.
@@ -2980,6 +3081,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         ownEphemeralX25519Pub: local.x25519Priv.publicKey.rawRepresentation
                     )
                 }()
+                schema2PskAccept = fallbackPsk
                 combined = Self.deriveHybridSessionKey(
                     pqcSs: pqcSs,
                     x25519Ss: x25519Ss,
@@ -2988,10 +3090,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 )
             }
 
-            // CALL-4 — fold the v3 transcript hash established above (nil ⇒
-            // not negotiated/verified for this round ⇒ legacy key unchanged).
-            if let h3 = acceptTranscriptHashV3 {
-                combined = Self.deriveTranscriptBoundSessionKey(baseKey: combined, transcriptHash: h3)
+            // CALL-4 — ITEM 2/3 FOLLOW-UP: REPLACE `combined` (not a further
+            // transform of it) with the canonical transcript-bound derivation over
+            // the SAME raw `pqcSs`/`x25519Ss`/`schema2PskAccept` inputs the schema:2
+            // branch above used, when `acceptTranscriptHashV3` was established above
+            // (nil ⇒ not negotiated/verified for this round ⇒ legacy key unchanged)
+            // AND `keyClassAccept == 0` — mirrors the responder leg's own
+            // `keyClass == 0` gate (see its comment there for the earbud-composition
+            // rationale this enforces on this leg too, independent of what the peer
+            // advertised).
+            if let h3 = acceptTranscriptHashV3, keyClassAccept == 0 {
+                combined = Self.deriveTranscriptBoundSessionKey(
+                    pqcSharedSecret: pqcSs,
+                    x25519Shared: x25519Ss,
+                    psk: schema2PskAccept,
+                    transcriptHash: h3
+                )
                 print("[QAudionCallIntegration] CALL-4: transcript-bound session key active (caller) callId=\(callId.prefix(8))…")
             }
 
@@ -3393,14 +3507,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     /// CALL-3 — decode a bundle's `rekeyNonce` (base64) to raw bytes for
-    /// `HandshakeTranscript.offerV3`. Returns `nil` for an absent field AND for
-    /// any present-but-malformed value (wrong length, bad base64) — NEVER a
-    /// length other than exactly 8 bytes, because `offerV3` `precondition`s on
-    /// that length when non-nil and a `precondition` cannot be caught (see
-    /// `HandshakeTranscript.advEnc`'s doc on the same hazard). A malformed
-    /// peer-controlled nonce therefore degrades to "no nonce on this round"
-    /// (round 1 without a nonce still signs fine — `rekeyRound` alone still
-    /// gates monotonicity), never a crash.
+    /// `HandshakeTranscript.offerV3`/`acceptV3`. Returns `nil` for an absent
+    /// field AND for any present-but-malformed value (wrong length, bad
+    /// base64) — NEVER a length other than exactly 8 bytes, because
+    /// `offerV3`/`acceptV3` `precondition` on that length and a
+    /// `precondition` cannot be caught (see `HandshakeTranscript.advEnc`'s
+    /// doc on the same hazard).
+    ///
+    /// ITEM 2/3 FOLLOW-UP — `rekeyNonce` is now a REQUIRED field on both
+    /// `offerV3` and `acceptV3` (resent on every round, never omitted — see
+    /// `offerV3`'s doc), so a `nil` return here degrades the CALLER's entire
+    /// v3 transcript to `nil` (falls back to legacy KDF/SAS for that round —
+    /// see `offerTranscriptV3`/`acceptTranscriptV3`), never a crash: a
+    /// malformed/absent peer-controlled nonce simply means "this round never
+    /// gets v3", not "sign with a wrong-shaped nonce".
     private static func rekeyNonceRaw(from b64: String?) -> Data? {
         guard let b64, let raw = Data(base64Encoded: b64), raw.count == 8 else { return nil }
         return raw
@@ -3484,8 +3604,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Same base64-decode guards, PLUS requires `bundle.rekeyRound` to be
     /// present (v3 is meaningless without a round number — returns `nil`,
     /// same "degrade to legacy" contract every other guard in this function
-    /// already follows) and decodes `bundle.rekeyNonce` via `rekeyNonceRaw`
-    /// (never a crash on malformed input — see that helper's doc).
+    /// already follows) AND, ITEM 2/3 FOLLOW-UP, requires `bundle.rekeyNonce`
+    /// to decode via `rekeyNonceRaw` to a valid 8-byte value — `offerV3` now
+    /// takes `rekeyNonce` as a REQUIRED, non-optional `Data` (see its own
+    /// doc: the nonce is resent on every round, not just round 1, so there is
+    /// no longer a legitimate "round > 1, no nonce" shape to accommodate). A
+    /// missing/malformed nonce degrades this ENTIRE v3 transcript to `nil`
+    /// (same "fall back to legacy KDF/SAS" contract as every other guard
+    /// here), never a `precondition` trap on peer-controlled input.
     private static func offerTranscriptV3(
         from bundle: AndroidHandshakeBundle,
         callId: String,
@@ -3493,7 +3619,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ) -> Data? {
         guard let pqcB64 = bundle.pqcPublicKey, let pqcRaw = Data(base64Encoded: pqcB64),
               let x25B64 = bundle.x25519PublicKey, let x25Raw = Data(base64Encoded: x25B64),
-              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max) else {
+              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
         }
         let strongBox = bundle.strongBoxPublicKey.flatMap { Data(base64Encoded: $0) }
@@ -3519,7 +3646,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             suiteId: HandshakeSigningPolicy.suiteId,
             pskFingerprints: bundle.pskFingerprints,
             pskRoles: bundle.pskRoles,
-            rekeyNonce: rekeyNonceRaw(from: bundle.rekeyNonce),
+            rekeyNonce: nonceRaw,
             rekeyRound: UInt32(roundInt)
         )
     }
@@ -3614,6 +3741,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// from the v1/v2 `offerBinding`s the sibling functions bind to. Requires
     /// `bundle.rekeyRound` (this ACCEPT's own echoed round) to be present,
     /// same "degrade to legacy" contract as `offerTranscriptV3`.
+    ///
+    /// ITEM 2/3 FOLLOW-UP — ALSO requires `bundle.rekeyNonce` (the RESPONDER'S
+    /// ECHO of the OFFER's nonce, now set on every ACCEPT this bundle builder
+    /// produces — see the `.offer`/`.accept` cases in `onAndroidBundleReceived`)
+    /// to decode via `rekeyNonceRaw`: `acceptV3` now takes `rekeyNonce` as a
+    /// REQUIRED, non-optional `Data`, matching Android's `acceptV3` shape —
+    /// this platform's ACCEPT transcript previously carried no nonce field at
+    /// all (see `HandshakeTranscript.acceptV3`'s doc).
     private static func acceptTranscriptV3(
         from bundle: AndroidHandshakeBundle,
         callId: String,
@@ -3623,7 +3758,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let ct = bundle.ciphertext,
               let pqcRaw = Data(base64Encoded: ct.pqc),
               let x25Raw = Data(base64Encoded: ct.x25519),
-              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max) else {
+              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
         }
         let strongBox = ct.strongBox.flatMap { Data(base64Encoded: $0) }
@@ -3651,6 +3787,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             offerBinding: offerBindingV3,
             responderPskFingerprints: bundle.pskFingerprints,
             responderPskRoles: bundle.pskRoles,
+            rekeyNonce: nonceRaw,
             rekeyRound: UInt32(roundInt)
         )
     }
@@ -4248,31 +4385,52 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     // MARK: - CALL-4/HSID-002 (2026-09-02 protocol audit) — transcript-bound
-    // session key, second HKDF pass over the base schema output
+    // session key, canonical single-pass construction (ITEM 2/3 FOLLOW-UP,
+    // reconciled to Android's HybridPqcKeyExchange.kt
+    // deriveSessionKeyTranscriptBound — the DESIGNATED CANONICAL construction
+    // across all three platforms, see this fix's own commit message)
 
-    /// CALL-4/HSID-002 — folds the v3 handshake transcript's SHA-256 into the
-    /// session key via a SECOND, independent HKDF-SHA256 pass over whichever
-    /// base key the existing schema selection (schema:2/3, or the
-    /// earbud-exclusive schema:4 above) already produced. Applied ONLY when
-    /// both peers negotiated `transcriptBindV1` AND that round's v3 signature
-    /// verified — the caller (`onAndroidBundleReceived`) is responsible for
-    /// that gate; this function itself is unconditional given a `baseKey` and
-    /// `transcriptHash`.
+    /// CALL-4/HSID-002 — the transcript-bound session-key KDF. Operates
+    /// DIRECTLY on the raw hybrid shared secrets, exactly like the un-bound
+    /// schema:2 derivation (`deriveHybridSessionKey`) — this is a REPLACEMENT
+    /// for that derivation's `info`, not a second pass layered on top of its
+    /// output. Applied ONLY when both peers negotiated `transcriptBindV1` AND
+    /// that round's v3 signature verified — the caller
+    /// (`onAndroidBundleReceived`) is responsible for that gate, INCLUDING
+    /// never calling this for a call using the earbud-exclusive schema:4 KDF
+    /// (`deriveHybridSessionKeyV4`, `keyClass != 0`) — see the "UNRESOLVED
+    /// INTERACTION" note on `transcriptBindV1`'s capability-advertisement
+    /// sites (search this file for `keyClass == 0` near this function's call
+    /// sites) for why: this construction has no `keyClass`/`negDigest` input
+    /// at all, so composing it with the earbud hw_only scheme was left
+    /// unresolved by design pending a dedicated decision, and the
+    /// conservative fix here is to never negotiate `transcriptBindV1` for an
+    /// earbud/sovereign-earbud call in the first place.
     ///
-    /// Design note (why a cascade, not a new `info` on the FIRST pass): the v3
-    /// transcript hash needs to compose cleanly with WHICHEVER base schema ran
-    /// (plain schema:2/3 today, the earbud schema:4 tomorrow, whatever comes
-    /// after) without this function needing to know that schema's own
-    /// `pqcSs`/`x25519Ss`/`pqcCiphertext`/`psk` inputs — HKDF-over-an-HKDF-
-    /// output using the prior output as new IKM is a standard, safe
-    /// composition (RFC 5869 does not require IKM to be "raw" key material).
-    /// A fixed, public salt is sufficient here: the PSK (when one is
-    /// negotiated) is ALREADY mixed into `baseKey` via its own schema's salt,
-    /// so this pass does not need to re-derive salt from it — its only job is
-    /// binding `transcriptHash` under its OWN domain-separation label.
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — REPLACES the prior CASCADED
+    /// second-HKDF-pass-over-`baseKey` construction this function used to be
+    /// (see the git history for the pre-follow-up version). All three
+    /// platforms had independently implemented DIFFERENT algebraic
+    /// constructions under the SAME `transcriptBindV1` wire capability bit;
+    /// Android's is DESIGNATED CANONICAL (simplest, externally
+    /// security-reviewed before the original implementation) and this
+    /// function is now a byte-for-byte Swift port of Android's
+    /// `HybridPqcKeyExchange.kt deriveSessionKeyTranscriptBound`:
     ///
-    ///   info = HkdfLabels.kdfTranscriptBindV1(32) || transcriptHash(32) [64B]
-    ///   key  = HKDF-SHA256(ikm: baseKey, salt: HkdfLabels.hybridPqcSaltV1, info, 32)
+    ///   ikm  = pqcSharedSecret(32) || x25519Shared(32)                  [64B]
+    ///   salt = psk                if (psk != nil && !psk.isEmpty)
+    ///          else HkdfLabels.hybridPqcSaltV1  // "q-audion-hybrid-pqc-v1"
+    ///   info = HkdfLabels.hybridPqcSessionKey(20) || transcriptHash(32) [52B]
+    ///   key  = HKDF-SHA256(ikm, salt, info, 32)
+    ///
+    /// Deliberately does NOT also fold `ctBind`/`selectedFp` the way
+    /// schema:3/4 do: `transcriptHash` (the v3 ACCEPT transcript's SHA-256)
+    /// already embeds the raw ML-KEM ciphertext and the selected PSK
+    /// fingerprint set directly — recursively, via `HandshakeTranscript
+    /// .acceptV3`/`offerV3`'s own `ctPqc`/`ctX25519`/`advEnc` fields — so
+    /// re-adding them here would be redundant, not additional protection
+    /// (this platform's prior construction did include a `ctBind` HMAC via
+    /// the base-key cascade; that redundancy is what this follow-up removes).
     ///
     /// `transcriptHash` MUST be exactly 32 bytes (a SHA-256 digest) —
     /// `precondition`-checked; callers only ever pass
@@ -4281,19 +4439,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// input (the peer only influences the TRANSCRIPT that gets hashed, never
     /// the hash's length).
     ///
-    /// `internal` (not `private`) so a future cross-platform KAT test can
+    /// `internal` (not `private`) so the cross-platform KAT test
+    /// (`SessionKeyTranscriptBoundTests.testCrossPlatformKatFixture`) can
     /// exercise this exact production path via `@testable import`.
     static func deriveTranscriptBoundSessionKey(
-        baseKey: Data,
+        pqcSharedSecret: Data,
+        x25519Shared: Data,
+        psk: Data?,
         transcriptHash: Data
     ) -> Data {
         precondition(transcriptHash.count == 32, "transcriptHash must be 32 bytes")
-        var info = Data(capacity: HkdfLabels.kdfTranscriptBindV1.count + 32)
-        info.append(HkdfLabels.kdfTranscriptBindV1)
+        var ikm = Data(capacity: pqcSharedSecret.count + x25519Shared.count)
+        ikm.append(pqcSharedSecret)
+        ikm.append(x25519Shared)
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
+        var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + transcriptHash.count)
+        info.append(HkdfLabels.hybridPqcSessionKey)
         info.append(transcriptHash)
         let key = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: baseKey),
-            salt: HkdfLabels.hybridPqcSaltV1,
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
             info: info,
             outputByteCount: 32
         )

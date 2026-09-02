@@ -410,15 +410,25 @@ public enum HandshakeTranscript {
     /// `domainV2`) PLUS an 8th SIGNED CAPS byte (`transcriptBindV1`) appended
     /// after the existing 7, PLUS two new fields appended LAST:
     ///
-    ///   `LP(rekeyNonce)` — the call's own random 64-bit freshness nonce,
-    ///     signed ONCE on round 1 (the call's first handshake) only;
-    ///     `LP(empty)` (pass `nil`) on every re-key round (round > 1) — the
-    ///     nonce is never retransmitted, both sides already hold it from
-    ///     round 1 in memory (matches how `callId` itself is ephemeral,
-    ///     process-lifetime, per-call state, never persisted).
+    ///   `rekeyNonce` (8 RAW bytes, NOT length-prefixed) — the call's own
+    ///     random 64-bit freshness nonce, generated once at call start and
+    ///     resent IDENTICALLY on every round of the call, including every
+    ///     re-key round (round > 1) — never regenerated mid-call.
     ///   `u32_BE(rekeyRound)` — this OFFER's 1-based round ordinal (1 = the
     ///     call's first handshake, 2.. = re-key rounds), UNCONDITIONALLY
     ///     signed on every round.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — `rekeyNonce` is now REQUIRED and
+    /// FIXED-WIDTH (not length-prefixed), matching Android's
+    /// `HandshakeTranscript.kt offerV3` byte-for-byte
+    /// (`require(rekeyNonce.size == 8)`, appended raw). The prior shape
+    /// here — `Data?`, `LP`-framed, resent on round 1 only and omitted
+    /// (`LP(empty)`) on every re-key round — was a real, small bandwidth
+    /// optimization, but it broke byte-for-byte cross-platform transcript
+    /// equality: since `transcriptHash` (this transcript's own SHA-256) is
+    /// what CALL-4's session-key/SAS KDFs derive everything else from, ANY
+    /// platform-specific difference in this transcript's bytes makes the two
+    /// peers derive different keys even when every other field agrees.
     ///
     /// CALL-3 fix: today's re-key transcript carries no round/nonce at all —
     /// a validly-signed round-1 bundle stays validly signed if replayed at
@@ -456,13 +466,11 @@ public enum HandshakeTranscript {
         suiteId: UInt8,
         pskFingerprints: [String]?,
         pskRoles: [Int]?,
-        rekeyNonce: Data?,
+        rekeyNonce: Data,
         rekeyRound: UInt32
     ) -> Data? {
         guard let adv = advEnc(pskFingerprints, pskRoles) else { return nil }
-        if let n = rekeyNonce {
-            precondition(n.count == 8, "rekeyNonce must be 8 bytes when present, got \(n.count)")
-        }
+        precondition(rekeyNonce.count == 8, "rekeyNonce must be exactly 8 bytes, got \(rekeyNonce.count)")
         var out = Data()
         out.append(domainV3)
         out.append(roleOffer)
@@ -484,7 +492,7 @@ public enum HandshakeTranscript {
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, adv)
-        appendLP(&out, rekeyNonce)
+        out.append(rekeyNonce)  // CALL-3: 8 RAW bytes, NOT length-prefixed — see doc above
         appendU32BE(&out, rekeyRound)
         return out
     }
@@ -493,11 +501,24 @@ public enum HandshakeTranscript {
     /// sibling of `acceptV2`. SAME shape as `acceptV2` (`domainV3`/the 8-byte
     /// CAPS instead of `domainV2`/7-byte CAPS; `LP(selectedPskFingerprint)`,
     /// `LP(offerBinding)` and the responder's `LP(adv)` RETAINED UNCHANGED,
-    /// same layout/position as v2) PLUS `u32_BE(rekeyRound)` appended LAST,
-    /// ECHOING the OFFER's own round number — a tampered/replayed round on
-    /// the ACCEPT side also invalidates this signature. The ACCEPT does NOT
-    /// carry a `rekeyNonce` field: the nonce is OFFER-side-established (round
-    /// 1 only) and never needs to be echoed back.
+    /// same layout/position as v2) PLUS TWO fields appended LAST: `rekeyNonce`
+    /// (8 RAW bytes, NOT length-prefixed) and `u32_BE(rekeyRound)` — the
+    /// RESPONDER'S ECHO of the exact `(rekeyNonce, rekeyRound)` pair carried
+    /// by the OFFER this ACCEPT answers (verified equal to it by the caller
+    /// before this is invoked). A tampered/replayed round OR nonce on the
+    /// ACCEPT side also invalidates this signature.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — `rekeyNonce` is a NEW parameter here,
+    /// matching Android's `HandshakeTranscript.kt acceptV3` byte-for-byte
+    /// (`require(rekeyNonce.size == 8)`, appended raw immediately before
+    /// `rekeyRound`). This platform's ACCEPT transcript previously carried NO
+    /// nonce field at all — only the OFFER did, and only on round 1 — on the
+    /// theory that "both sides already hold it from round 1, no need to echo
+    /// it back". That is true for the KEY MATERIAL, but it made this
+    /// platform's v3 ACCEPT transcript a different SHAPE (one fewer raw
+    /// field) than Android's, which breaks byte-for-byte transcript equality
+    /// — see `offerV3`'s doc for why that specifically matters here (the
+    /// transcript hash is what CALL-4's KDFs derive everything else from).
     ///
     /// `offerBinding` here MUST be `SHA-256` of the OFFER's **v3** transcript
     /// (from `offerV3`/`offerBinding`) — distinct from both the v1 `accept`'s
@@ -528,9 +549,11 @@ public enum HandshakeTranscript {
         offerBinding: Data,
         responderPskFingerprints: [String]?,
         responderPskRoles: [Int]?,
+        rekeyNonce: Data,
         rekeyRound: UInt32
     ) -> Data? {
         guard let adv = advEnc(responderPskFingerprints, responderPskRoles) else { return nil }
+        precondition(rekeyNonce.count == 8, "rekeyNonce must be exactly 8 bytes, got \(rekeyNonce.count)")
         var out = Data()
         out.append(domainV3)
         out.append(roleAccept)
@@ -554,6 +577,7 @@ public enum HandshakeTranscript {
         appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))
         appendLP(&out, offerBinding)
         appendLP(&out, adv)
+        out.append(rekeyNonce)  // CALL-3: 8 RAW bytes, NOT length-prefixed — see doc above
         appendU32BE(&out, rekeyRound)
         return out
     }

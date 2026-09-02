@@ -67,8 +67,17 @@ final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
         XCTAssertTrue(json.contains("\"rekeyRound\":1"))
     }
 
-    /// A re-key round's OFFER carries `rekeyRound` WITHOUT `rekeyNonce` — the
-    /// nonce is established once at round 1 and never retransmitted.
+    /// `AndroidHandshakeBundle` itself imposes NO relationship between
+    /// `rekeyRound` and `rekeyNonce` — either may be set independently of the
+    /// other at the Codable/wire level; a bundle carrying `rekeyRound` alone
+    /// still encodes/decodes cleanly. This is a struct-level property test
+    /// only, NOT a claim about production behaviour: ITEM 2/3 FOLLOW-UP
+    /// (2026-09-02) made `QAudionCallIntegration` itself always populate
+    /// `rekeyNonce` alongside `rekeyRound` on every OFFER (round 1 AND every
+    /// re-key round — see `HandshakeTranscript.offerV3`'s doc for why the
+    /// prior "round 1 only" production behaviour broke cross-platform
+    /// transcript-hash equality); this test's own construction below simply
+    /// never sets it, to prove the struct doesn't require it.
     func testBundleEncodesRekeyRoundWithoutNonceForReKeyRounds() throws {
         let bundle = AndroidHandshakeBundle(
             kind: .offer,

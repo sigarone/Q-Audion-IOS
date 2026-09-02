@@ -66,8 +66,12 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
 
     private let eightByteNonce = Data([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88])
 
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — `rekeyNonce` is now REQUIRED on
+    /// `offerV3` (resent on every round, not just round 1 — see
+    /// `HandshakeTranscript.offerV3`'s doc), so this fixture no longer
+    /// accepts `nil`.
     private func offerV3Fixture(
-        rekeyNonce: Data?,
+        rekeyNonce: Data,
         rekeyRound: UInt32,
         transcriptBindV1: Bool = true,
         pskFingerprints: [String]? = nil,
@@ -159,27 +163,34 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
         expected.append(0x04)
         expected.append(0x01)
         expected.append(lp(expectedAdvEnc(fps, roles)))
-        expected.append(lp(eightByteNonce))
+        // ITEM 2/3 FOLLOW-UP — rekeyNonce is 8 RAW bytes, NOT length-prefixed.
+        expected.append(eightByteNonce)
         expected.append(u32be(1))
 
         XCTAssertEqual(actual, expected)
         XCTAssertEqual(actual.count, expected.count)
     }
 
-    func testOfferV3Round2OmitsNonceOnTheWire() {
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — REPLACES the old
+    /// `testOfferV3Round2OmitsNonceOnTheWire` (the "round 1 only" nonce shape
+    /// this follow-up removed — see `HandshakeTranscript.offerV3`'s doc for
+    /// why). The nonce is now resent IDENTICALLY on every round: round 1 and
+    /// round 2 transcripts must be the SAME LENGTH (the nonce field is
+    /// fixed-width, not length-prefixed, so its presence never changes the
+    /// byte count), differing only in the trailing round number.
+    func testOfferV3Round2CarriesTheSameNonceOnTheWire() {
         guard let round1 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1),
-              let round2 = offerV3Fixture(rekeyNonce: nil, rekeyRound: 2) else {
+              let round2 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 2) else {
             XCTFail("offerV3 returned nil"); return
         }
-        // round2's transcript must NOT contain the nonce bytes anywhere its LP
-        // slot would put them, and must be a DIFFERENT overall byte string.
-        XCTAssertNotEqual(round1, round2)
-        // The nonce LP field encodes as 0x00 0x08 <8 bytes> when present, and
-        // 0x00 0x00 (LP of empty) when absent — the two transcripts must differ
-        // in length by exactly 8 bytes (the omitted nonce payload) once the
-        // round number's own encoding (same width, u32 BE, both cases) is
-        // accounted for.
-        XCTAssertEqual(round1.count, round2.count + 8)
+        XCTAssertNotEqual(round1, round2, "the round number must still change the transcript")
+        XCTAssertEqual(round1.count, round2.count, "the nonce field is fixed-width and always present, so resending the SAME nonce on round 2 must not change the transcript's length")
+        // The only difference between the two transcripts must be the final
+        // 4 bytes (u32_BE(round)) — everything up to and including the raw
+        // 8-byte nonce is byte-identical.
+        let splitPoint = round1.count - 4
+        XCTAssertEqual(round1.prefix(splitPoint), round2.prefix(splitPoint))
+        XCTAssertNotEqual(round1.suffix(4), round2.suffix(4))
     }
 
     // MARK: - Byte-layout: ACCEPT v3
@@ -204,6 +215,9 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
             selectedPskFingerprint: "abc",
             offerBinding: offerBindingV3,
             responderPskFingerprints: responderFps, responderPskRoles: responderRoles,
+            // ITEM 2/3 FOLLOW-UP — the RESPONDER'S ECHO of the OFFER's rekeyNonce,
+            // now a REQUIRED parameter — see `HandshakeTranscript.acceptV3`'s doc.
+            rekeyNonce: eightByteNonce,
             rekeyRound: 3
         ) else {
             XCTFail("acceptV3 returned nil"); return
@@ -225,9 +239,35 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
         expected.append(lp(Data("abc".utf8)))
         expected.append(lp(offerBindingV3))
         expected.append(lp(expectedAdvEnc(responderFps, responderRoles)))
+        // ITEM 2/3 FOLLOW-UP — rekeyNonce is 8 RAW bytes, NOT length-prefixed,
+        // appended immediately before rekeyRound.
+        expected.append(eightByteNonce)
         expected.append(u32be(3))
 
         XCTAssertEqual(actual, expected)
+    }
+
+    /// ITEM 2/3 FOLLOW-UP — a different nonce echo must change the ACCEPT
+    /// transcript, same core property `testOfferV3DifferentNoncesProduceDifferentRound1Transcripts`
+    /// already covers for the OFFER side.
+    func testAcceptV3DifferentNoncesProduceDifferentTranscripts() {
+        func fixture(nonce: Data) -> Data? {
+            HandshakeTranscript.acceptV3(
+                callId: "call-99", signerIdentityKey: fixedBytes(32, seed: 0x50), epochId: fixedBytes(16, seed: 0x60),
+                ctPqc: fixedBytes(24, seed: 0x70), ctX25519: fixedBytes(32, seed: 0x80),
+                ctStrongBox: nil, ctDualCurve: nil,
+                ratchetV3: true, sframeV1: true, vkeyV1: false, sessionKdfV3: true, ratchetV4: false, srtpDirKeyV1: true,
+                pskMixV1: false, transcriptBindV1: true,
+                ratchetV: 0x04, suiteId: 0x01,
+                selectedPskFingerprint: "abc",
+                offerBinding: fixedBytes(32, seed: 0x90),
+                responderPskFingerprints: nil, responderPskRoles: nil,
+                rekeyNonce: nonce, rekeyRound: 3
+            )
+        }
+        let a = fixture(nonce: eightByteNonce)
+        let b = fixture(nonce: Data([0, 0, 0, 0, 0, 0, 0, 1]))
+        XCTAssertNotEqual(a, b)
     }
 
     // MARK: - transcriptBindV1 is signed (closes the "strip a capability bit" gap for THIS bit itself)
@@ -241,9 +281,11 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
     // MARK: - CALL-3: round number changes the transcript (closes the "identical epoch every round" gap)
 
     func testOfferV3DifferentRoundsProduceDifferentTranscripts() {
-        let r1 = offerV3Fixture(rekeyNonce: nil, rekeyRound: 1)
-        let r2 = offerV3Fixture(rekeyNonce: nil, rekeyRound: 2)
-        let r3 = offerV3Fixture(rekeyNonce: nil, rekeyRound: 3)
+        // ITEM 2/3 FOLLOW-UP — the SAME nonce every round (resent, never
+        // regenerated), so any transcript difference here is purely the round.
+        let r1 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1)
+        let r2 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 2)
+        let r3 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 3)
         XCTAssertNotEqual(r1, r2)
         XCTAssertNotEqual(r2, r3)
         XCTAssertNotEqual(r1, r3)
@@ -265,7 +307,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
 
     func testOfferV3ReturnsNilForOversizedPskList() {
         let many = (0..<256).map { _ in fp(0x11) }
-        let result = offerV3Fixture(rekeyNonce: nil, rekeyRound: 1, pskFingerprints: many)
+        let result = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1, pskFingerprints: many)
         XCTAssertNil(result, "a >255-entry advertised list must fail gracefully (nil), never trap the process")
     }
 
@@ -283,7 +325,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
     func testOfferV3SignatureInvalidatedByRoundTampering() throws {
         let priv = Curve25519.Signing.PrivateKey()
         guard let round1 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1),
-              let round2 = offerV3Fixture(rekeyNonce: nil, rekeyRound: 2) else {
+              let round2 = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 2) else {
             XCTFail("offerV3 returned nil"); return
         }
         let sig = try HandshakeTranscript.sign(transcript: round1, signingPrivateKeyRaw: priv.rawRepresentation)

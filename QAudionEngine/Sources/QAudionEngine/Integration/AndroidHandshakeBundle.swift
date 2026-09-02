@@ -254,10 +254,17 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let sigV3: String?
 
     /// CALL-3 — the call's own random 64-bit freshness nonce (raw 8 bytes,
-    /// base64 no-wrap/padded), present ONLY on round 1's OFFER (the call's
-    /// first handshake) — `nil` on every re-key round's OFFER and on every
-    /// ACCEPT (the nonce is never retransmitted once established). OPTIONAL,
-    /// JSONEncoder omits nil, so a bundle that doesn't carry it is
+    /// base64 no-wrap/padded), generated once at call start.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — present on EVERY OFFER of the call
+    /// (round 1 AND every re-key round, unchanged across all of them) once
+    /// this fix is live for the pair, AND echoed back verbatim on the
+    /// matching ACCEPT — mirrors `rekeyRound`'s own "present on every
+    /// OFFER/ACCEPT once live" rule exactly (both are set together or both
+    /// stay nil). Previously present ONLY on round 1's OFFER and never on any
+    /// ACCEPT — that shape broke byte-for-byte v3 transcript equality against
+    /// Android/Desktop (see `HandshakeTranscript.offerV3`/`acceptV3`'s docs).
+    /// OPTIONAL, JSONEncoder omits nil, so a bundle that doesn't carry it is
     /// byte-wire-identical to a peer that hasn't shipped this fix.
     public let rekeyNonce: String?
 
