@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1075",
+              date: "2026-09-02",
+              title: "v1.0.1075",
+              bullets: [
+                "fix(call): fix likely crash-at-connection in the new ring-cue engine",
+                "fix(reality-core): bump grpc-go to 1.83.1, fixes CVE-2026-84304",
+              ]),
         .init(id: "v1.0.1074",
               date: "2026-09-02",
               title: "v1.0.1074",
               bullets: [
+                "chore: regenerate changelog for v1.0.1074",
                 "feat(call): three-stage outgoing ring feedback, port from Android/Desktop",
               ]),
         .init(id: "v1.0.1073",
@@ -173,13 +181,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1056",
                 "fix(call): W-DEADTXNET sentinel sample is Int64 — 1055 CI compile error",
-              ]),
-        .init(id: "v1.0.1055",
-              date: "2026-08-30",
-              title: "v1.0.1055",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1055",
-                "fix(call): manual-audio was armed without the CallKit activation relay — audio unit never started (W-ADMACTIVATE, W-DEADTXNET)",
               ]),
     ]
 }
