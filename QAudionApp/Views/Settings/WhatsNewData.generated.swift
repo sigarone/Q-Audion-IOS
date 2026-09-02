@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1071",
+              date: "2026-09-02",
+              title: "v1.0.1071",
+              bullets: [
+                "fix(security): remove redundant LP() length-prefix on wrapped_content_key in ATT-1 canon (ATT-1-followup)",
+                "fix(ci): SigsumVerifier.FailureReason missing Error conformance broke build",
+              ]),
         .init(id: "v1.0.1070",
               date: "2026-09-02",
               title: "v1.0.1070",
               bullets: [
+                "chore: regenerate changelog for v1.0.1070",
                 "feat(trust): correct Sigsum key-transparency verifier (TRUST-1 residual)",
                 "fix(ci): two new KAT test files missing their private hexEncodedString helper",
                 "fix(tools): fetch-ios-live.py falls back to stale VPS_ACCESS.md when only 2/3 env vars set",
@@ -170,14 +178,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1052",
                 "diag(call): make activateNativeAudioSrtp's decisions remote-visible (W-AUDIOSENDDIAG)",
-              ]),
-        .init(id: "v1.0.1051",
-              date: "2026-08-30",
-              title: "v1.0.1051",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1051",
-                "fix(call): callee mic track landed on a transceiver libwebrtc never sends for (W-AUDIOSENDPICK)",
-                "fix(net): dual-family STUN probe and an IPv6 call-media punch-hole (W-STUNDUALSTACK, W-VPNV6PUNCH)",
               ]),
     ]
 }
