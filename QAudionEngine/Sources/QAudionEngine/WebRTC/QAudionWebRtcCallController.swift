@@ -183,6 +183,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `onVideoStallDetected`.
     public var onDecryptFailureDetected: (() -> Void)?
 
+    /// W-AUDIOAEADREKEY (2026-09-02) — B3: audio mirror of
+    /// `onDecryptFailureDetected` above, fired by the native SRTP AUDIO
+    /// FrameCryptor's own decrypt-fail state callback (see
+    /// `NativeAudioFrameCryptor.onDecryptFailure`, previously unwired —
+    /// "reserved for future rekey-skew diagnostics"). Unlike video, audio
+    /// has no keyframe to request, so this does NOT feed a per-frame
+    /// nudge: the consumer is expected to run it through a burst/cooldown
+    /// policy (`AudioAeadFailureRekeyPolicy`) before acting, since a
+    /// single failing frame is normal background noise. May fire from the
+    /// WebRTC signalling thread — consumers hop to @MainActor themselves,
+    /// same contract as `onDecryptFailureDetected`.
+    public var onAudioDecryptFailureDetected: (() -> Void)?
+
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
     /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
@@ -3356,12 +3369,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // tunneled. `activeSocksPort` is `nil` when Reality isn't
             // running, which preserves today's direct-dial behavior.
             let socksPort = await RealityManager.shared.activeSocksPort
+            // W-AUXPIN (2026-09-02, B11) — reuse callingApi's already
+            // cert-pinned REST session for this bridge's WSS-TURN handshake
+            // instead of URLSession.shared (no pin). nil for any CallingApi
+            // that doesn't override pinnedUrlSession() (test stubs) —
+            // WssTurnBridge then falls back to `.shared` exactly as before.
             let bridge = WssTurnBridge(
                 wssUrl: wssUrl,
                 username: firstTurn.username,
                 credential: firstTurn.credential,
                 accessToken: accessToken,
-                socksPort: socksPort.map(Int.init)
+                socksPort: socksPort.map(Int.init),
+                pinnedSession: callingApi.pinnedUrlSession()
             )
             // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that
             // failed to start silently left the call without its last-resort
@@ -4125,6 +4144,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public func peerConnection(_ pc: QAudionPeerConnection,
                                didReceiveNativeAudioSrtpReceiver receiver: RTCRtpReceiver) {
         let participant = recipientId ?? "peer"
+        // W-AUDIOAEADREKEY (2026-09-02) — B3: wire the cryptor's
+        // decrypt-fail state callback to the controller's own closure,
+        // mirroring the video receiver wiring immediately above.
+        // Idempotent (re-assigns the same closure) across every
+        // `didReceiveNativeAudioSrtpReceiver` call, including a mid-call
+        // rebind — the closure lives on the OUTER `NativeAudioFrameCryptor`
+        // holder, not the transient `RTCFrameCryptor` `attachReceiver`/
+        // `rebindReceiver` recreate underneath it.
+        let cryptor = pc.ensureNativeAudioCryptor(participantId: participant)
+        cryptor.onDecryptFailure = { [weak self] in
+            print("[WebRtcCallController] W-AUDIOAEADREKEY: audio receiver cryptor decrypt-fail")
+            self?.onAudioDecryptFailureDetected?()
+        }
         let attached = pc.attachAudioReceiverCryptor(receiver, participantId: participant) { [weak self] pcm in
             // PCM-TAP PARITY — see NativeAudioPcmTap's own doc. Feeds the
             // SAME Guardian/VoiceAnalysis/ContactVoiceVerifier/

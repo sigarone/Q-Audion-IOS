@@ -323,8 +323,29 @@ public final class VideoCallPipeline: NSObject {
         // called stop() (MainActor), racing any in-flight captureQueue
         // work on the same session.
         let session = captureSession
-        captureQueue.sync {
-            session.stopRunning()
+        switch CallKitWorkOffloadPolicy.stopRunningDispatch() {
+        case .blockingSync:
+            captureQueue.sync {
+                session.stopRunning()
+            }
+        case .fireAndForgetAsync:
+            // W-CKMAINBLOCK (2026-09-02) — `.sync` here blocked the CALLING
+            // thread for however long the camera HAL takes to physically
+            // stop (Apple's own doc on `stopRunning()`: "This method is
+            // synchronous and blocks until the session stops running
+            // completely" — same class of block `start()` above already
+            // avoids for `startRunning()`, see its W565 comment). `stop()`
+            // can run on the main thread from a CallKit-triggered teardown
+            // (`providerDidReset` → `onProviderReset` → `videoPipeline?.
+            // stop()`), and CXProvider's delegate queue (nil = main) is
+            // shared by every OTHER CallKit callback too, so blocking here
+            // risks starving a later mute/end action, not just this call.
+            // `captureQueue` is serial: queuing the stop still runs it
+            // before any later session mutation (a fast re-`start()`'s
+            // `setupSession()` included) — only the CALLER stops waiting.
+            captureQueue.async {
+                session.stopRunning()
+            }
         }
         encoder.invalidate()
         decoder.invalidate()

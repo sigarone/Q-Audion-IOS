@@ -964,6 +964,23 @@ public final class QAudionPeerConnection: NSObject {
         return attached
     }
 
+    /// W-AUDIOAEADREKEY (2026-09-02) — B3: create the per-call native AUDIO
+    /// FrameCryptor holder (idempotent), audio mirror of
+    /// `ensureNativeVideoCryptor`. Lets the controller wire
+    /// `onDecryptFailure` onto the OUTER holder before (or independently
+    /// of) `attachAudioReceiverCryptor`/`activateNativeAudioSrtp` actually
+    /// attaching a sender/receiver — the closure lives on this holder, not
+    /// the transient `RTCFrameCryptor` those attach, so it survives a
+    /// mid-call rebind (`rebindAudioReceiverCryptorPostNegotiation`)
+    /// unchanged, same as video's.
+    @discardableResult
+    public func ensureNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
+        if let c = nativeAudioCryptor { return c }
+        let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
+        nativeAudioCryptor = c
+        return c
+    }
+
     /// Attach + enable the native AUDIO cryptor on an inbound SRTP audio
     /// receiver, and install the RX PCM tap (PCM-TAP PARITY). Call from the
     /// `didAdd rtpReceiver` branch once `peerCallCapabilities?.useAudioSrtp

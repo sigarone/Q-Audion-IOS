@@ -731,6 +731,23 @@ final class CallService: @unchecked Sendable {
     /// reaches its answered state (both `peerAnswered = true` sites),
     /// cancelled + cleared in `teardownAudioStack()`.
     private var mediaDeadWatchdogTask: Task<Void, Never>?
+    /// W-AUDIOAEADREKEY (2026-09-02) — B3: fired when
+    /// `AudioAeadFailureRekeyPolicy` judges the recent audio AEAD decrypt
+    /// failures a real burst (persistent key drift), not an isolated bad
+    /// frame — see `noteAudioAeadDecryptFailure()`. Wired by AppState to
+    /// `reKeyScheduler.forceReKey(reason:)`, the SAME mid-call PQC
+    /// re-handshake trigger already used for `ContactVoiceVerifier`'s
+    /// confidence signal. May fire from the RX audio-decode thread or the
+    /// WebRTC signalling thread (native SRTP cryptor callback) — the
+    /// consumer hops to @MainActor itself, same contract as
+    /// `onLocalInboundLossReport`.
+    public var onAudioAeadFailureBurst: (() -> Void)?
+    /// Backs `noteAudioAeadDecryptFailure()`. Fed from two different
+    /// threads (see above), so access is serialized by `audioAeadFailureLock`
+    /// rather than relying on the single-caller assumption
+    /// `AudioAeadFailureRekeyMeter` otherwise documents.
+    private let audioAeadFailureMeter = AudioAeadFailureRekeyMeter()
+    private let audioAeadFailureLock = NSLock()
     /// W-DCMUX (2026-08-11) — why the closure above returned `false`, as a
     /// single Int. Wired by AppState; read ONLY when a fallback line is about to
     /// be printed (first occurrence, then every 250th), never per frame.
@@ -1959,6 +1976,7 @@ final class CallService: @unchecked Sendable {
                 audioCapture?.playFrame(pcm)  // single-engine: playback lives on the capture engine
             } catch {
                 rxDecryptErrorCount &+= 1
+                noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
             }
         }
     }
@@ -1981,6 +1999,38 @@ final class CallService: @unchecked Sendable {
         guard !firedFirstRealDecode else { return }
         firedFirstRealDecode = true
         onFirstRealDecode?()
+    }
+
+    /// W-AUDIOAEADREKEY (2026-09-02) — B3: note one audio AEAD decrypt
+    /// failure from EITHER source this app has today — the legacy
+    /// sealed-relay `processIncomingAudio` catch below, or the native SRTP
+    /// audio FrameCryptor's decrypt-fail callback (wired by
+    /// `QAudionWebRtcCallController.onAudioDecryptFailureDetected`) — and
+    /// fire `onAudioAeadFailureBurst` when `AudioAeadFailureRekeyPolicy`
+    /// judges the recent failures a real burst rather than one isolated
+    /// bad frame. Deliberately does NOT count relay-seal (M-15) unseal
+    /// failures: those are a replay/forgery check on the WS-relay
+    /// envelope wrapper, a different layer from the PQC audio session key
+    /// — re-keying the session would not fix a seal failure and would
+    /// blur a real replay/attack signal with an ordinary key-drift one.
+    /// Safe to call from either the RX audio-decode thread or the WebRTC
+    /// signalling thread (the two real call sites) — `audioAeadFailureLock`
+    /// serializes access to the otherwise not-thread-safe meter. Not
+    /// `private`: `QAudionWebRtcCallController.onAudioDecryptFailureDetected`
+    /// reaches this through AppState's wiring, same cross-file-internal
+    /// pattern as `updateRouteTier`/`noteAudioDataChannelState` below.
+    func noteAudioAeadDecryptFailure() {
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        audioAeadFailureLock.lock()
+        // The meter always runs (pure, tested logic) even while the kill
+        // switch is off, so its state stays correct for whenever
+        // AudioAeadFailureRekeyPolicy.triggerEnabled is flipped on.
+        let shouldTrigger = audioAeadFailureMeter.noteFailure(nowMs: nowMs)
+        audioAeadFailureLock.unlock()
+        // W-AUDIOAEADREKEY kill switch — see AudioAeadFailureRekeyPolicy
+        // .triggerEnabled's own doc: default OFF, never verified live.
+        guard shouldTrigger, AudioAeadFailureRekeyPolicy.triggerEnabled else { return }
+        onAudioAeadFailureBurst?()
     }
 
     /// W-MEDIADEAD (2026-08-25) — arm the per-call inbound-audio liveness
@@ -2453,6 +2503,7 @@ final class CallService: @unchecked Sendable {
                 self.rxLevelSampleCount &+= Int64(rxSamples.count)
             } catch {
                 self.rxDecryptErrorCount &+= 1
+                self.noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
                 if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
                     let desc: String = error.localizedDescription
                     let cnt: String = self.rxDecryptErrorCount.description
@@ -2780,6 +2831,12 @@ final class CallService: @unchecked Sendable {
         framesReceivedRx = 0
         txEncryptErrorCount = 0
         rxDecryptErrorCount = 0
+        // W-AUDIOAEADREKEY (2026-09-02) — B3: a fresh call must not inherit
+        // the previous call's failure history or cooldown clock, same
+        // discipline every other per-call counter on this page follows.
+        audioAeadFailureLock.lock()
+        audioAeadFailureMeter.reset()
+        audioAeadFailureLock.unlock()
         txSessionReady = false            // W-TXGATE — re-arm for the next call
         txPreHandshakeDropped = 0
         rxLevelPeak = 0        // AUDIO-DIAG (2026-07-12) — reset RX level accumulators
@@ -2838,6 +2895,14 @@ final class CallService: @unchecked Sendable {
     }
 
     // MARK: - W464 — CallKit audio-session lifecycle
+
+    /// W-CKMAINBLOCK (2026-09-02) — dedicated serial queue the
+    /// `AudioCapture.start()` call runs on when
+    /// `CallKitWorkOffloadPolicy.audioEngineBackgroundQueueEnabled` is on.
+    /// Unused (never scheduled) while the kill switch is off, so this has
+    /// no effect on today's shipped behaviour by itself.
+    private static let audioEngineOffloadQueue = DispatchQueue(
+        label: "com.qaudion.callservice.audioengine", qos: .userInitiated)
 
     /// W464 — start the capture + playback `AVAudioEngine`s, but ONLY once
     /// CallKit has activated the shared `AVAudioSession`.
@@ -2947,67 +3012,100 @@ final class CallService: @unchecked Sendable {
             // Idempotent on the engine (the latch is terminal), and a no-op on
             // any build with the send kill switch off.
             latchAudioProfileForCall()
-            do {
-                try capture.start()
-                // W-AUDIOGATEDIAG (2026-08-03): confirms all three gates
-                // above actually cleared and AVAudioEngine.start() itself
-                // succeeded — the one line that, if present, rules out
-                // startAudioIOIfReady as the cause of a "no audio"
-                // report and points at TX encode/send or RX decode/
-                // playback instead. Was previously unlogged entirely
-                // (silence on success gave no positive confirmation).
-                RTLog.info("call", "audioIO started=1")
-                // W-VPIODIAG (2026-08-12): whether Apple's Voice Processing I/O
-                // — AEC, NS and AGC behind one hardware switch — is actually
-                // engaged for this call.
-                //
-                // Added because the question "was echo cancellation off on that
-                // call?" could not be answered from telemetry at all. Android
-                // ships it per call ("Audio capture started: ... ns=true,
-                // aec=true"); iOS emitted the equivalent only through
-                // AudioProcessingPipeline.emitSessionDiagnostics, which is a
-                // plain print() carrying `vpio=true` — a non-numeric run, which
-                // is exactly what the redactor drops. Zero such lines exist in
-                // Loki, so the state was invisible remotely no matter how many
-                // calls were made.
-                //
-                // Every field is therefore numeric, per the same rule the
-                // capfail branch below documents. `vpio` is what the engine
-                // ended up with, `want` is what the user's toggles asked for,
-                // and they differ exactly when a fallback fired: the W-AEC-FIX
-                // starve watchdog or the setVoiceProcessingEnabled NSException
-                // degrade, both of which trade echo for a working mic and
-                // count in `byp`.
-                let vpActive = audioPipeline?.voiceProcessingIsActive == true
-                // W574c only force-enables AEC on the built-in loudspeaker route —
-                // "was echo cancellation off" is unanswerable without knowing
-                // whether that route was even the one active, so it rides along
-                // on the same numeric-only line for the same redactor reason.
-                let onSpeaker = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
-                RTLog.info(
-                    "call",
-                    "audioVp vpio=\(vpActive ? 1 : 0)"
-                        + " want=\(CallsGate.anyVoiceProcessingEnabled ? 1 : 0)"
-                        + " byp=\(audioPipeline?.voiceProcessingBypassCount ?? -1)"
-                        + " aec=\(CallsGate.aecEnabled ? 1 : 0)"
-                        + " ns=\(CallsGate.nsEnabled ? 1 : 0)"
-                        + " agc=\(CallsGate.agcEnabled ? 1 : 0)"
-                        + " spk=\(onSpeaker ? 1 : 0)"
-                )
-            } catch {
-                // Was print()-only — invisible in every remote log pull.
-                // The error description is deliberately NOT included: it's
-                // free-form English text, and a multi-word free-form run
-                // makes the redactor drop the WHOLE line (verified against
-                // the real redact_body), not just scrub the offending part
-                // — better a bare positive/negative signal that reliably
-                // ships than a detailed one that silently doesn't.
-                RTLog.warn("call", "audioIO capfail=1")
+            // W-CKMAINBLOCK (2026-09-02) — `capture.start()` below reaches
+            // `setVoiceProcessingEnabled`, observed to block (see
+            // AudioProcessingPipeline's W-GRPVPIO-CRASH-5 comment), and this
+            // whole call chain runs on whatever thread called
+            // `startAudioIOIfReady()` — main, via CallKitProvider's
+            // `onAudioSessionActivated`/`didActivate` (CXProvider.setDelegate
+            // queue: nil = the SAME main queue every other CXProviderDelegate
+            // callback shares, so a block here can starve a later mute/end
+            // action too — audit memory reference_ios_stability_audit_2026_09_01,
+            // P1 (8)). `CallKitWorkOffloadPolicy.audioEngineDispatch()` decides
+            // whether this runs inline (today's byte-for-byte behaviour) or on
+            // a dedicated background queue (fire-and-forget — `RTLog` hops
+            // back to `@MainActor` internally for the diagnostics, see
+            // `performAudioCaptureStart`); see that type's kdoc for why the
+            // switch defaults OFF.
+            switch CallKitWorkOffloadPolicy.audioEngineDispatch() {
+            case .inlineOnCallingThread:
+                performAudioCaptureStart(capture)
+            case .backgroundQueueFireAndForget:
+                Self.audioEngineOffloadQueue.async { [weak self] in
+                    self?.performAudioCaptureStart(capture)
+                }
             }
         }
         // Diagnostics: mark audio I/O live once the single engine has started.
         if audioCapture != nil {
             audioEnginesStarted = true
+        }
+    }
+
+    /// W-CKMAINBLOCK (2026-09-02) — the actual `AudioCapture.start()` call
+    /// plus its success/failure diagnostics, extracted unchanged from
+    /// `startAudioIOIfReady()` so it can run either inline (kill switch off)
+    /// or on `Self.audioEngineOffloadQueue` (kill switch on) — see the call
+    /// site. `RTLog.*` and `print` are safe off the main thread (RTLog hops
+    /// to `@MainActor` internally when not already on it; `print` is
+    /// stdlib-serialized), so this needs no completion hop of its own.
+    private func performAudioCaptureStart(_ capture: AudioCapture) {
+        do {
+            try capture.start()
+            // W-AUDIOGATEDIAG (2026-08-03): confirms all three gates
+            // above actually cleared and AVAudioEngine.start() itself
+            // succeeded — the one line that, if present, rules out
+            // startAudioIOIfReady as the cause of a "no audio"
+            // report and points at TX encode/send or RX decode/
+            // playback instead. Was previously unlogged entirely
+            // (silence on success gave no positive confirmation).
+            RTLog.info("call", "audioIO started=1")
+            // W-VPIODIAG (2026-08-12): whether Apple's Voice Processing I/O
+            // — AEC, NS and AGC behind one hardware switch — is actually
+            // engaged for this call.
+            //
+            // Added because the question "was echo cancellation off on that
+            // call?" could not be answered from telemetry at all. Android
+            // ships it per call ("Audio capture started: ... ns=true,
+            // aec=true"); iOS emitted the equivalent only through
+            // AudioProcessingPipeline.emitSessionDiagnostics, which is a
+            // plain print() carrying `vpio=true` — a non-numeric run, which
+            // is exactly what the redactor drops. Zero such lines exist in
+            // Loki, so the state was invisible remotely no matter how many
+            // calls were made.
+            //
+            // Every field is therefore numeric, per the same rule the
+            // capfail branch below documents. `vpio` is what the engine
+            // ended up with, `want` is what the user's toggles asked for,
+            // and they differ exactly when a fallback fired: the W-AEC-FIX
+            // starve watchdog or the setVoiceProcessingEnabled NSException
+            // degrade, both of which trade echo for a working mic and
+            // count in `byp`.
+            let vpActive = audioPipeline?.voiceProcessingIsActive == true
+            // W574c only force-enables AEC on the built-in loudspeaker route —
+            // "was echo cancellation off" is unanswerable without knowing
+            // whether that route was even the one active, so it rides along
+            // on the same numeric-only line for the same redactor reason.
+            let onSpeaker = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
+            RTLog.info(
+                "call",
+                "audioVp vpio=\(vpActive ? 1 : 0)"
+                    + " want=\(CallsGate.anyVoiceProcessingEnabled ? 1 : 0)"
+                    + " byp=\(audioPipeline?.voiceProcessingBypassCount ?? -1)"
+                    + " aec=\(CallsGate.aecEnabled ? 1 : 0)"
+                    + " ns=\(CallsGate.nsEnabled ? 1 : 0)"
+                    + " agc=\(CallsGate.agcEnabled ? 1 : 0)"
+                    + " spk=\(onSpeaker ? 1 : 0)"
+            )
+        } catch {
+            // Was print()-only — invisible in every remote log pull.
+            // The error description is deliberately NOT included: it's
+            // free-form English text, and a multi-word free-form run
+            // makes the redactor drop the WHOLE line (verified against
+            // the real redact_body), not just scrub the offending part
+            // — better a bare positive/negative signal that reliably
+            // ships than a detailed one that silently doesn't.
+            RTLog.warn("call", "audioIO capfail=1")
         }
     }
 

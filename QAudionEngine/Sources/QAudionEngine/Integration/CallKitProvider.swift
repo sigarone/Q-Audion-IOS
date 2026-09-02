@@ -33,6 +33,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
+    /// W-CKHOLD (2026-09-02) — fired from `provider(_:perform:
+    /// CXSetHeldCallAction)` when the SYSTEM (not our own UI) puts this
+    /// call on hold or takes it off — another CallKit call becoming
+    /// active, or a Siri "hold my call" request. See B5, audit memory
+    /// reference_ios_stability_audit_2026_09_01, P2: until now this action
+    /// reached no delegate method at all, so CallKit's Hold button
+    /// silently failed (the action was never fulfilled).
+    public var onHoldChanged: ((UUID, Bool) async -> Void)?
     /// W464 — fired when CallKit has activated the shared AVAudioSession.
     /// This is the ONLY safe moment to start `AVAudioEngine` (mic capture
     /// + speaker playback). Starting the engine before this point throws
@@ -60,9 +68,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         cfg.includesCallsInRecents = false
         // Note: CXProviderConfiguration has no supportsHolding property;
         // the Hold button appears when provider implements
-        // provider(_:perform:CXSetHeldCallAction). Since we implement
-        // setOnHold() via CXCallController, hold is available but
-        // signaling-layer hold/resume is a no-op — acceptable.
+        // provider(_:perform:CXSetHeldCallAction) (verified against Apple's
+        // CXSetHeldCallAction docs, 2026-09-02) — see that method below.
+        // `reportIncomingCall` also stamps `CXCallUpdate.supportsHolding`
+        // explicitly rather than relying on its undocumented default.
         //
         // Custom ringtone: the bundled "qaudion_ringtone.caf" (Copy-Bundle-
         // Resources, see project.yml) plays instead of the default iOS ringtone
@@ -85,6 +94,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: callerName)
         update.hasVideo = hasVideo
+        // W-CKHOLD (2026-09-02) — explicit rather than relying on
+        // CXCallUpdate's default: this is what makes the native Hold
+        // affordance appear at all (see `provider(_:perform:
+        // CXSetHeldCallAction)` below for the handler side).
+        update.supportsHolding = true
         // Tag the native (cleartext) call UI as an encrypted Q-Audion call. The
         // caller name itself is resolved from the LOCAL address book by the call
         // sites (PushKit + WS), so this only appends the security marker.
@@ -398,6 +412,20 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         Task {
             await onMutedChanged?(action.callUUID, action.isMuted)
+            action.fulfill()
+        }
+    }
+
+    /// W-CKHOLD (2026-09-02) — B5: the system (another CallKit call
+    /// becoming active, or Siri) places THIS call on/off hold. Previously
+    /// unimplemented, so CallKit's own Hold action was requested and never
+    /// fulfilled or failed — it just silently timed out, and audio/video
+    /// kept flowing while the system UI believed the call was held.
+    /// Mirrors the shape of every other `perform` handler in this file:
+    /// hand the UUID + new hold state to the app layer, then fulfill.
+    public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
+        Task {
+            await onHoldChanged?(action.callUUID, action.isOnHold)
             action.fulfill()
         }
     }
