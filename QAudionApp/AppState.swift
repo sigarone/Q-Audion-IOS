@@ -19909,6 +19909,25 @@ extension AppState {
             // last the entire original window — see armGroupCallJoinTimeout's
             // note above for the incident this schedule and the timeout are
             // widened together for.
+            // W-GRPJOINSOCKETPROBE (2026-09-03) — root cause underneath the
+            // retune above: every retry here used to resend
+            // `group_call_join` straight onto whatever socket
+            // `rejoinAfterReconnect` found, with no re-check. If the
+            // suspension this schedule exists for is still in effect, that
+            // is the SAME suspended task every time — 5 blind resends into
+            // the same void, not 5 independent chances. `ensureAuthenticated`
+            // is the exact tool built for this (its own doc: "the silent
+            // DROPPED + CallKit-flash failure mode where iOS suspended the
+            // task in background but the local state machine still believes
+            // itself authenticated") and is already safe to call repeatedly
+            // — fast-path no-op on a healthy connection, pings and waits for
+            // a pong before ever tearing a live socket down (the exact
+            // reconnect-storm this codebase already got burned by once, see
+            // that function's own comment), only forceReconnect()s when the
+            // probe genuinely gets nothing back. Calling it here before each
+            // retry — not just before the original join — gives a stuck
+            // socket an actual chance to be detected and replaced instead of
+            // being resent into on a fixed schedule regardless.
             var elapsedSec = 0.0
             for markSec in [3.0, 6.0, 10.0, 14.0, 20.0] {
                 let deltaSec = markSec - elapsedSec
@@ -19917,6 +19936,12 @@ extension AppState {
                 guard self.groupCallController === controller,
                       case .connecting(let stillCid) = self.groupCallControllerState,
                       stillCid == callId else { return }
+                if let live = self.liveProvider {
+                    _ = await live.persistentConnection.ensureAuthenticated(timeoutSec: 3)
+                }
+                guard self.groupCallController === controller,
+                      case .connecting(let stillCid2) = self.groupCallControllerState,
+                      stillCid2 == callId else { return }
                 controller.rejoinAfterReconnect()
             }
         }
