@@ -1276,6 +1276,11 @@ final class CallService: @unchecked Sendable {
         // observer-driven restart during a group call can't SIGABRT in
         // setVoiceProcessingEnabled. See AudioCapture.isGroupCallActive kdoc.
         capture.isGroupCallActive = { [weak self] in self?.isGroupCallActive?() == true }
+        // W-AUDIORESUME (2026-09-01) — this capture runs under a voice call:
+        // an interruption that ends WITHOUT `.shouldResume` is retried (1 s /
+        // 3 s) instead of leaving the engine dead, and the 10 s engine-state
+        // beacon is armed. See AudioInterruptionRecoveryPolicy.
+        capture.sessionOwnership = .voiceCall
         let playback = AudioPlayback()
 
         // Encrypt-on-mic-frame callback: ogni PCM dal mic passa attraverso
@@ -1596,6 +1601,9 @@ final class CallService: @unchecked Sendable {
         // (see startCall). Closes the observer-driven restart that bypasses
         // the activateIncomingCallAudio entry guard during a group call.
         capture.isGroupCallActive = { [weak self] in self?.isGroupCallActive?() == true }
+        // W-AUDIORESUME (2026-09-01) — same voice-call ownership as the
+        // outgoing side (see startCall): bounded resume retry + state beacon.
+        capture.sessionOwnership = .voiceCall
         let playback = AudioPlayback()
 
         // TX path: mic → VP DSP → encrypt → WS send (same as outgoing).

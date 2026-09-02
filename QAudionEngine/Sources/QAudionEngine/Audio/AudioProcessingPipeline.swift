@@ -392,6 +392,11 @@ public final class AudioProcessingPipeline {
     /// Read by `AudioCapture.restartEngineForRoute` to bound retries.
     public var voiceProcessingBypassCount: Int { vpioBypassCountThisCall }
 
+    /// W-AUDIOBEACON (2026-09-01) — read-only view of the canonical per-call
+    /// restart counter for `AudioCapture`'s periodic engine-state line, so
+    /// the beacon reports the same number `call.audio.diag` does at teardown.
+    public var engineRestartCount: Int { engineRestartsThisCall }
+
     /// Pure step function for the speaker-residency accumulator: given the ms
     /// accumulated so far, whether an interval is currently open (0 = no)
     /// and since when, the newly-observed route state, and the current wall
@@ -694,6 +699,20 @@ public final class AudioProcessingPipeline {
     public func deactivateSession() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         isConfigured = false
+    }
+
+    /// W-MEDIARESET (2026-09-01) — forget that the session was configured,
+    /// WITHOUT touching it. After `AVAudioSession.mediaServicesWereReset`
+    /// the category/mode/preferred-* we set are gone with the media server
+    /// and the VP-IO unit is orphaned; the next `AudioCapture.start()` must
+    /// re-run `configureForVoIP()` (setCategory + best-effort setActive)
+    /// instead of skipping it on a stale `isConfigured`. Deliberately NOT
+    /// `deactivateSession()`: that would `setActive(false)` mid-call and
+    /// notify others, which is CallKit's decision, not ours. See
+    /// `AudioInterruptionRecoveryPolicy.mediaServicesResetAction`.
+    public func invalidateSessionConfiguration() {
+        isConfigured = false
+        voiceProcessingActive = false
     }
 
     /// Bug B robustness — best-effort (re)activate the shared session.

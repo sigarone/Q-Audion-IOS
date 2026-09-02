@@ -894,6 +894,35 @@ public final class AudioCapture {
     private var engineBuiltForSpeaker = false
     private var pendingRouteRestart: DispatchWorkItem?
 
+    // ── W-AUDIORESUME / W-MEDIARESET / W-AUDIOBEACON (2026-09-01) ──────────
+    // Evidence: audit memory reference_ios_stability_audit_2026_09_01, P1
+    // (1)/(2) — background audio loss with the process alive for 80 s and no
+    // shipped line able to say whether the engine was running; `.ended`
+    // without `.shouldResume` never resumed; mediaServicesWereReset unhandled.
+    // Decisions live in `AudioInterruptionRecoveryPolicy` (pure, tested);
+    // this file only owns the timers/notifications and funnels every
+    // recovery through the existing `start()` / `restartEngineForRoute`.
+
+    /// Who owns the session this capture runs under. `.passive` (default)
+    /// keeps every pre-existing behaviour for enrollment / unlock / group
+    /// fallback captures; `CallService` sets `.voiceCall` on its 1:1 capture.
+    public var sessionOwnership: AudioInterruptionRecoveryPolicy.SessionOwnership = .passive
+    /// The armed resume retry of the bounded 1 s / 3 s ladder. Cancelled by
+    /// a new `.began`, by `stop()`, and consumed by its own run.
+    private var pendingResumeRetry: DispatchWorkItem?
+    private var mediaServicesResetObserver: NSObjectProtocol?
+    /// Engine-state beacon timer (main queue). nil = not armed.
+    private var stateBeaconTimer: DispatchSourceTimer?
+    /// Monotonic ms of the last tap buffer / of the last frame handed to the
+    /// player node; 0 = never. `lastMicFrameAtMs` is written on the tap
+    /// thread and read on main — the same single-writer benign race this
+    /// file already accepts for `lastLoudPlayoutAtMs` (a diagnostic counter,
+    /// never a correctness input). `lastPlayoutFrameAtMs` is main-only.
+    /// Deliberately NOT reset by `start()`: an engine rebuild that never
+    /// delivers a frame must show the age still growing.
+    private var lastMicFrameAtMs: Int64 = 0
+    private var lastPlayoutFrameAtMs: Int64 = 0
+
     /// Initialize with an optional audio processing pipeline.
     /// When provided, the pipeline configures AVAudioSession for VoIP and
     /// enables Apple's Voice Processing I/O (hardware AEC, NS, AGC) on the
@@ -1075,6 +1104,7 @@ public final class AudioCapture {
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
+            self.lastMicFrameAtMs = Self.monotonicNowMs()  // W-AUDIOBEACON — one store, no other work on this thread
             guard var raw = self.convertTapBufferToInt16(buffer, rateConverter: rateConverter, canonicalFormat: format) else { return }
             self.updateEchoBucket(rawPcm: raw)
             if Self.micAgcEnabled {
@@ -1103,6 +1133,10 @@ public final class AudioCapture {
         // 6. M-12 — observe AVAudioSession interruptions so we can
         //    pause on .began and resume on .ended (.shouldResume).
         registerInterruptionObserver()
+        // W-AUDIOBEACON — periodic engine-state line while a voice-call
+        // capture is alive (no-op for .passive owners; no-op if already armed
+        // by a previous start() of this same call).
+        armStateBeaconIfNeeded()
 
         // 7. W-AEC-FIX — if VP-IO is active, arm the starve watchdog. If the
         //    input tap never delivers a buffer within the window (the iPad
@@ -1791,6 +1825,7 @@ public final class AudioCapture {
         // than by hopping to reconcile two different calling threads.
         dispatchPrecondition(condition: .onQueue(.main))
         playoutInFlight += 1
+        lastPlayoutFrameAtMs = Self.monotonicNowMs()  // W-AUDIOBEACON — a frame really reached the player node
         audioPipeline.notePlayoutScheduled(inFlightAfter: playoutInFlight)
         player.scheduleBuffer(buffer) { [weak self] in
             // W-PLAYOUTRACE — do NOT touch engine/playerNode on this thread. This
@@ -1843,6 +1878,21 @@ public final class AudioCapture {
             queue: nil
         ) { [weak self] note in
             self?.handleRouteChange(note)
+        }
+        // W-MEDIARESET (2026-09-01) — the media server restarting under a
+        // live capture orphans every audio object and wipes the session
+        // configuration. It was never observed here (only a comment in
+        // VideoCallPipeline mentioned it), so a reset mid-call left a dead
+        // engine with `isRunning == true` — the W-AUDIODEATH signature from
+        // a cause none of the restart paths could see. Same lifetime as the
+        // two observers above (removed by stop()/deinit).
+        guard mediaServicesResetObserver == nil else { return }
+        mediaServicesResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleMediaServicesReset()
         }
     }
 
@@ -2058,6 +2108,7 @@ public final class AudioCapture {
             // Do NOT deactivate the session — the OS owns it for the
             // duration of the interruption.
             wasInterrupted = true
+            cancelPendingResumeRetry()  // W-AUDIORESUME — a new interruption supersedes any armed retry
             engine?.inputNode.removeTap(onBus: 0)
             playerNode?.stop()
             playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
@@ -2078,7 +2129,25 @@ public final class AudioCapture {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: optRaw)
                 shouldResume = opts.contains(.shouldResume)
             }
-            guard shouldResume else { return }
+            // W-AUDIORESUME (2026-09-01) — `.ended` without `.shouldResume`
+            // used to `return` here and the engine stayed dead for the rest
+            // of the call (audit reference_ios_stability_audit_2026_09_01,
+            // P1 (2)). The missing hint is the OS saying "not sure you want
+            // it back", not a prohibition: while a voice call owns the
+            // session the app DOES want it back, so a bounded 1 s / 3 s
+            // retry runs instead. `.passive` captures still return here.
+            let endedAction = AudioInterruptionRecoveryPolicy.interruptionEndedAction(
+                shouldResumeHint: shouldResume, ownership: sessionOwnership)
+            switch endedAction {
+            case .ignore:
+                return
+            case .retryLater:
+                print("[AudioCapture] W-AUDIORESUME: interruption ended without shouldResume during a voice call — retrying activation at 1 s / 3 s")
+                scheduleResumeRetry(attemptIndex: 0)
+                return
+            case .resumeNow:
+                break
+            }
             // start() reconfigures + reactivates the session and rebuilds
             // the engine/tap. The observer is still registered (only
             // stop()/deinit remove it) so start()'s register call no-ops.
@@ -2088,9 +2157,195 @@ public final class AudioCapture {
                 let edesc: String = error.localizedDescription
                 let line: String = "[AudioCapture] resume after interruption failed: " + edesc
                 print(line)
+                // W-AUDIORESUME — the hinted resume threw: the one engine
+                // death W-AUDIODEATH's ladder never covered. Same bounded
+                // retry, same voice-call gate; a `.passive` owner keeps the
+                // print-and-give-up above.
+                if AudioInterruptionRecoveryPolicy.hintedResumeFailedAction(ownership: sessionOwnership) == .retryLater {
+                    audioPipeline.noteEngineRestartFailed()
+                    scheduleResumeRetry(attemptIndex: 0)
+                }
             }
         @unknown default:
             break
+        }
+    }
+
+    // MARK: - W-AUDIORESUME / W-MEDIARESET / W-AUDIOBEACON (2026-09-01)
+    //
+    // Mechanics only — timers, notification hops, the engine calls. The
+    // decisions and their evidence are in `AudioInterruptionRecoveryPolicy`.
+    // Every recovery here funnels through the EXISTING `start()` /
+    // `restartEngineForRoute` machinery; nothing in this block builds or
+    // configures an engine on its own.
+
+    /// Monotonic milliseconds for the frame-age counters — immune to the
+    /// wall-clock jumps a backgrounded device sees.
+    private static func monotonicNowMs() -> Int64 {
+        Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+    }
+
+    /// W-AUDIORESUME — arm retry number `attemptIndex` of the bounded resume
+    /// ladder (lands 1 s, then 3 s after `.ended`), or declare audio lost
+    /// once the schedule is exhausted. Main queue, like every other engine
+    /// mutation in this file.
+    private func scheduleResumeRetry(attemptIndex: Int) {
+        guard let delayMs = AudioInterruptionRecoveryPolicy.resumeRetryDelayMs(attemptIndex: attemptIndex) else {
+            // Exhausted: the engine is down for the rest of this call. Say so
+            // in a form that survives the remote-log redactor (short numeric
+            // tokens, no bracketed prefix — see AudioEngineStateBeacon's
+            // kdoc) so the next incident is a fact rather than an inference.
+            let lost: String = "audioresume lost=1 attempts=" + String(attemptIndex)
+            print(lost)
+            print("[AudioCapture] W-AUDIORESUME: resume retries exhausted — audio is DOWN for this call")
+            return
+        }
+        pendingResumeRetry?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingResumeRetry = nil
+            // Someone else (CallKit didActivate → CallService restart, a new
+            // `.began`, teardown) may have moved on — never fight them. A nil
+            // interruption observer means stop() ran: the call is over.
+            guard !self.isRunning, !self.wasInterrupted, self.interruptionObserver != nil else { return }
+            // The category survived the interruption (only deactivateSession
+            // clears `isConfigured`); what was lost is ACTIVATION, so ask for
+            // it back explicitly before rebuilding — best-effort `try?`, the
+            // same call the CallService didActivate fallback makes.
+            self.audioPipeline.activateSession()
+            let attemptNo: String = String(attemptIndex + 1)
+            var failure: String?
+            do {
+                try self.start()
+            } catch {
+                failure = error.localizedDescription
+            }
+            if failure == nil, self.isRunning {
+                let ok: String = "audioresume attempt=" + attemptNo + " ok=1"
+                print(ok)
+                return
+            }
+            if failure == nil {
+                // start() returned without running: the group-call VP-IO gate
+                // refused it, i.e. a group call owns audio now. Stop the ladder.
+                let gated: String = "audioresume attempt=" + attemptNo + " ok=0 gated=1"
+                print(gated)
+                return
+            }
+            self.audioPipeline.noteEngineRestartFailed()  // engine_restart_fail telemetry, no new field
+            let failed: String = "audioresume attempt=" + attemptNo + " ok=0"
+            print(failed)
+            let reason: String = failure ?? ""
+            let detail: String = "[AudioCapture] W-AUDIORESUME: resume attempt " + attemptNo + " failed: " + reason
+            print(detail)
+            self.scheduleResumeRetry(attemptIndex: attemptIndex + 1)
+        }
+        pendingResumeRetry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(delayMs)), execute: work)
+    }
+
+    private func cancelPendingResumeRetry() {
+        pendingResumeRetry?.cancel()
+        pendingResumeRetry = nil
+    }
+
+    /// W-MEDIARESET — the media server restarted under us: every audio
+    /// object is orphaned and the session configuration is gone, so the
+    /// engine must be rebuilt from scratch and the session set up again.
+    /// Hop to main (engine/playerNode are main-owned — W-PLAYOUTRACE) and
+    /// reuse the route-restart machine: `restartEngineForRoute` arms the
+    /// same suppress window that already keeps a reconfiguration's own
+    /// route-change echoes from thrashing, and its W-AUDIODEATH ladder covers
+    /// a `start()` that fails while the server is still coming back.
+    private func handleMediaServicesReset() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let action = AudioInterruptionRecoveryPolicy.mediaServicesResetAction(isRunning: self.isRunning)
+            let runFlag: String = self.isRunning ? "1" : "0"
+            let actionCode: String = String(Self.mediaResetActionCode(action))
+            let line: String = "audioreset run=" + runFlag + " act=" + actionCode
+            print(line)
+            switch action {
+            case .ignore:
+                return
+            case .invalidateSessionOnly:
+                // Not running (mid-interruption or a ladder attempt pending):
+                // whichever path calls start() next re-runs configureForVoIP.
+                self.audioPipeline.invalidateSessionConfiguration()
+            case .rebuildEngine:
+                print("[AudioCapture] W-MEDIARESET: media services were reset under a running capture — reconfiguring the session and rebuilding the engine")
+                self.audioPipeline.invalidateSessionConfiguration()
+                self.restartEngineForRoute(routeDriven: false)
+            }
+        }
+    }
+
+    private static func mediaResetActionCode(_ action: AudioInterruptionRecoveryPolicy.MediaServicesResetAction) -> Int {
+        switch action {
+        case .ignore: return 0
+        case .invalidateSessionOnly: return 1
+        case .rebuildEngine: return 2
+        }
+    }
+
+    /// W-AUDIOBEACON — periodic engine-state line while a voice-call capture
+    /// is alive. A dedicated timer on the main queue (the engine's owning
+    /// thread), never the tap or render thread — their only contribution is
+    /// one timestamp store per delivered buffer. Armed once per call: a
+    /// mid-call `start()` from a route restart finds it already running.
+    private func armStateBeaconIfNeeded() {
+        guard stateBeaconTimer == nil,
+              AudioEngineStateBeacon.shouldRun(ownership: sessionOwnership) else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let interval = DispatchTimeInterval.seconds(AudioEngineStateBeacon.intervalSec)
+        timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.emitStateBeacon()
+        }
+        timer.resume()
+        stateBeaconTimer = timer
+    }
+
+    private func cancelStateBeacon() {
+        stateBeaconTimer?.cancel()
+        stateBeaconTimer = nil
+    }
+
+    private func emitStateBeacon() {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        let now = Self.monotonicNowMs()
+        let snapshot = AudioEngineStateBeacon.Snapshot(
+            engineRunning: engine?.isRunning ?? false,
+            captureRunning: isRunning,
+            voiceProcessingActive: audioPipeline.voiceProcessingIsActive,
+            otherAudioPlaying: session.isOtherAudioPlaying,
+            outputRouteCode: Self.routeCode(for: route.outputs.first?.portType),
+            inputRouteCode: Self.routeCode(for: route.inputs.first?.portType),
+            micAgeSeconds: AudioEngineStateBeacon.ageSeconds(lastAtMs: lastMicFrameAtMs, nowMs: now),
+            playoutAgeSeconds: AudioEngineStateBeacon.ageSeconds(lastAtMs: lastPlayoutFrameAtMs, nowMs: now),
+            interrupted: wasInterrupted,
+            engineRestarts: audioPipeline.engineRestartCount)
+        let line: String = AudioEngineStateBeacon.line(snapshot)
+        print(line)
+    }
+
+    /// Numeric route legend for the beacon — see `AudioEngineStateBeacon`
+    /// for why the port NAME cannot be shipped.
+    private static func routeCode(for port: AVAudioSession.Port?) -> Int {
+        guard let port else { return AudioEngineStateBeacon.routeCodeNone }
+        switch port {
+        case .builtInReceiver: return AudioEngineStateBeacon.routeCodeReceiver
+        case .builtInSpeaker: return AudioEngineStateBeacon.routeCodeSpeaker
+        case .builtInMic: return AudioEngineStateBeacon.routeCodeBuiltInMic
+        case .headphones, .headsetMic, .lineOut, .lineIn: return AudioEngineStateBeacon.routeCodeWired
+        case .bluetoothHFP: return AudioEngineStateBeacon.routeCodeBluetoothHFP
+        case .bluetoothA2DP: return AudioEngineStateBeacon.routeCodeBluetoothA2DP
+        case .bluetoothLE: return AudioEngineStateBeacon.routeCodeBluetoothLE
+        case .carAudio: return AudioEngineStateBeacon.routeCodeCarAudio
+        case .airPlay: return AudioEngineStateBeacon.routeCodeAirPlay
+        case .usbAudio: return AudioEngineStateBeacon.routeCodeUsb
+        default: return AudioEngineStateBeacon.routeCodeOther
         }
     }
 
@@ -2105,6 +2360,14 @@ public final class AudioCapture {
         // fire after the call has torn down the engine.
         pendingRouteRestart?.cancel()
         pendingRouteRestart = nil
+        // W-AUDIORESUME / W-AUDIOBEACON / W-MEDIARESET — same discipline for
+        // the resume ladder, the beacon timer and the reset observer.
+        cancelPendingResumeRetry()
+        cancelStateBeacon()
+        if let obs = mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(obs)
+            mediaServicesResetObserver = nil
+        }
         if let obs = interruptionObserver {
             NotificationCenter.default.removeObserver(obs)
             interruptionObserver = nil
@@ -2138,6 +2401,11 @@ public final class AudioCapture {
         if let obs = routeChangeObserver {
             NotificationCenter.default.removeObserver(obs)
         }
+        if let obs = mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        stateBeaconTimer?.cancel()
+        pendingResumeRetry?.cancel()
     }
 
     public var isCapturing: Bool { isRunning }
