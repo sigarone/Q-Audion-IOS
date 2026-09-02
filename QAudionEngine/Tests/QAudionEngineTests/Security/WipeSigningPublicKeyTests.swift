@@ -14,7 +14,12 @@ final class WipeSigningPublicKeyTests: XCTestCase {
     /// Single switch for the ship-guard below. Flip to `false` in the SAME
     /// commit that swaps `Resources/wipe_signing_pubkey.pem` for the real
     /// bcrypto-server-issued key.
-    private static let assetIsStillThePlaceholder = true
+    ///
+    /// FLIPPED 2026-09-02 — bcrypto-server generated its real wipe-signing
+    /// keypair on first boot of the production deploy (pub
+    /// hORZ2NjhScB3UVxyqHApIiHgjL+ddPuQ7oXm/NOn79s=); the asset below is
+    /// that real key, not the throwaway placeholder.
+    private static let assetIsStillThePlaceholder = false
 
     // MARK: - Ship-guard
 
