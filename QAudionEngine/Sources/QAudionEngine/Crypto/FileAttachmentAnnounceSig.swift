@@ -36,7 +36,20 @@ import CryptoKit
 ///                                                    #   recipient it was signed for, so it
 ///                                                    #   cannot be replayed to a different peer
 ///       || sender_ephemeral_pub(32B)
-///       || n_wraps(1B) || (device_id(16B) || LP(wrapped_content_key))*
+///       || n_wraps(1B) || (device_id(16B) || wrapped_content_key(48B FIXED))*
+///                                                    # wrapped_content_key is NOT length-
+///                                                    #   prefixed: its length is already
+///                                                    #   fully determined by the AEAD wrap
+///                                                    #   construction (32B content key +
+///                                                    #   16B GCM tag =
+///                                                    #   `FileAttachmentAnnounce.wrappedContentKeyLen`),
+///                                                    #   so a length prefix would be redundant.
+///                                                    #   Matches Android/Desktop, which never
+///                                                    #   length-prefixed this field either —
+///                                                    #   this type's own earlier LP(...) here
+///                                                    #   was the one-of-three divergence
+///                                                    #   ATT-1-followup fixed (majority + design
+///                                                    #   merit: redundant length prefix removed).
 ///       || LP(tus_file_id)
 ///       || total_chunks(4B BE)
 ///       || total_size_bytes(8B BE, two's-complement bit pattern)
@@ -112,12 +125,14 @@ public enum FileAttachmentAnnounceSig {
 
     /// Build the canonical signed bytes. Returns `nil` only for pathological
     /// input that cannot be encoded at all (a non-16-byte id, a wrap count
-    /// above 255, a wrap or tus-file-id field longer than 65535 bytes) —
-    /// never throws/traps on adversarial peer input, mirroring
-    /// `HandshakeTranscript.advEnc`'s and `KmsHsBundleV1`'s own
-    /// never-crash-on-untrusted-bytes discipline. A `nil` canon means the
-    /// caller cannot verify and must treat the signature as invalid (drop),
-    /// exactly like a signature that verifies to `false`.
+    /// above 255, a wrap whose `wrappedContentKey` is not exactly
+    /// `FileAttachmentAnnounce.wrappedContentKeyLen` (48) bytes, or a
+    /// tus-file-id field longer than 65535 bytes) — never throws/traps on
+    /// adversarial peer input, mirroring `HandshakeTranscript.advEnc`'s and
+    /// `KmsHsBundleV1`'s own never-crash-on-untrusted-bytes discipline. A
+    /// `nil` canon means the caller cannot verify and must treat the
+    /// signature as invalid (drop), exactly like a signature that verifies
+    /// to `false`.
     public static func canon(
         fileId: Data,
         senderUuid: Data,
@@ -142,9 +157,11 @@ public enum FileAttachmentAnnounceSig {
         out.append(senderEphemeralPub)
         out.append(UInt8(wraps.count))
         for wrap in wraps {
-            guard wrap.deviceId.count == 16 else { return nil }
+            guard wrap.deviceId.count == 16,
+                  wrap.wrappedContentKey.count == FileAttachmentAnnounce.wrappedContentKeyLen
+            else { return nil }
             out.append(wrap.deviceId)
-            guard appendLP(&out, wrap.wrappedContentKey) else { return nil }
+            out.append(wrap.wrappedContentKey)
         }
         guard appendLP(&out, Data(tusFileId.utf8)) else { return nil }
         var chunksBe = UInt32(truncatingIfNeeded: totalChunks).bigEndian

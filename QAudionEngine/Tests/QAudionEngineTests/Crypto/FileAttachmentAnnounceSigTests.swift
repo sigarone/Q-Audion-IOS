@@ -218,4 +218,56 @@ final class FileAttachmentAnnounceSigTests: XCTestCase {
         XCTAssertNotNil(c1)
         XCTAssertEqual(c1, c2, "canon construction must be a pure function of its inputs")
     }
+
+    // MARK: - ATT-1-followup: wrapped_content_key is a FIXED 48B field, no LP
+
+    /// Regression guard for the ATT-1-followup fix: `wrapped_content_key` used
+    /// to be `LP`-prefixed (`u16_BE(len) || bytes`) here — the one-of-three
+    /// platform divergence found by direct cross-platform comparison (Android
+    /// and Desktop never length-prefixed this field: its length is already
+    /// fully determined by the AEAD wrap construction). A canon built from a
+    /// 48-byte wrap must NOT contain a `0x00 0x30` (u16be 48) length-prefix
+    /// pair immediately before the wrap bytes — asserting the field's byte
+    /// offset directly pins the fixed-width, no-prefix shape so this can
+    /// never silently regress back to LP.
+    func test_canon_wrappedContentKeyIsFixed48BytesNoLengthPrefix() throws {
+        let f = try makeFixture()
+        let c = try XCTUnwrap(canon(f))
+
+        // Fixed prefix up to and including n_wraps(1B): domain(26) +
+        // version(1) + fileId(16) + senderUuid(16) + recipientUuid(16) +
+        // senderEphemeralPub(32) + n_wraps(1) = 108.
+        let domainLen = 26 // "qaudion-fa-announce-sig-v1".utf8.count
+        let prefixLen = domainLen + 1 + 16 + 16 + 16 + 32 + 1
+        XCTAssertEqual(c.count, prefixLen + 16 + 48 + 2 + f.tusFileId.utf8.count + 4 + 8 + 16,
+                        "canon length must match the fixed-width (no wrap-key length-prefix) layout exactly")
+
+        // Immediately after n_wraps || device_id(16B), the NEXT 48 bytes must
+        // be the raw wrapped_content_key itself — NOT a 2-byte length prefix
+        // (which would make the field start with 0x00 0x30 for a 48-byte key).
+        let wrapKeyStart = prefixLen + 16
+        let wrapKeyBytes = c.subdata(in: wrapKeyStart..<(wrapKeyStart + 48))
+        XCTAssertEqual(wrapKeyBytes, f.wraps[0].wrappedContentKey,
+                        "wrapped_content_key must appear as a raw fixed 48B field, byte-identical to the input, with no length prefix")
+        XCTAssertFalse(wrapKeyBytes.starts(with: [0x00, 0x30]),
+                        "a leading u16be(48) length prefix must not be present ahead of the wrap key bytes")
+    }
+
+    /// Android/Desktop both throw/return-nil on a wrong-length wrap rather
+    /// than silently truncating or padding — this platform must fail closed
+    /// (`canon` -> `nil`) the same way.
+    func test_canon_rejectsWrongLengthWrappedContentKey() throws {
+        let f = try makeFixture()
+        let badWraps = [
+            FileAttachmentAnnounceSig.DeviceWrap(
+                deviceId: f.wraps[0].deviceId,
+                wrappedContentKey: Data(repeating: 0x09, count: 47)) // 47, not 48
+        ]
+        XCTAssertNil(FileAttachmentAnnounceSig.canon(
+            fileId: f.fileId, senderUuid: f.senderUuid, recipientUuid: f.recipientUuid,
+            senderEphemeralPub: f.senderEphemeralPub, wraps: badWraps, tusFileId: f.tusFileId,
+            totalChunks: f.totalChunks, totalSizeBytes: f.totalSizeBytes,
+            transportSenderId: f.transportSenderId
+        ), "canon must fail closed (nil) on a wrapped_content_key that is not exactly 48 bytes, never truncate/pad")
+    }
 }
