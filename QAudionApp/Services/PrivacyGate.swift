@@ -71,11 +71,20 @@ public enum PrivacyGate {
         return readBoolWithDefault(keyMessagePreview, default: true)
     }
 
-    /// Default OFF. When on, the app detects screenshots and applies
-    /// UIKit secure layer to block OS-level screen capture.
+    /// Default ON (W-PRIVACYDEFAULTON, 2026-09-02 — audit memory
+    /// reference_ios_stability_audit_2026_09_01, P2 "privacy overlay
+    /// default OFF"). When on, the app hides content from app-switcher
+    /// snapshots, warns on a screenshot, and warns on an active screen
+    /// recording (see `QAudionApp.registerScreenshotObserver` /
+    /// `registerScreenRecordingObserver`). The safer default for a
+    /// security-sensitive messenger; PrivacySettingsScreen already exposes
+    /// a toggle so a user who wants it off can turn it off there — this
+    /// only changes what a user who never opened Settings gets. Only the
+    /// DEFAULT moves; `readSecureBoolWithDefault` still returns whatever an
+    /// existing explicit choice was, in either direction.
     /// SECURITY M-28: Keychain-backed (security-affecting flag).
     public static var screenshotProtectionEnabled: Bool {
-        return readSecureBoolWithDefault(keyScreenshotProtection, default: false)
+        return readSecureBoolWithDefault(keyScreenshotProtection, default: true)
     }
 
     /// MASVS-AUTH remediation (2026-08-21, A1b/I4) — the default (used only

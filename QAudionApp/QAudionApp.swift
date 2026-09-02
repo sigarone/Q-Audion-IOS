@@ -195,6 +195,10 @@ struct QAudionApp: App {
                 EphemeralMessageJanitor.shared.start()
                 // W441: listen for OS screenshot events and warn in the log.
                 registerScreenshotObserver()
+                // W-SCREENRECDETECT (2026-09-02): listen for an active
+                // screen-recording/mirroring session and warn in the log,
+                // same gate + scheme as the screenshot observer above.
+                registerScreenRecordingObserver()
                 // W-APPSTORAGEDEADLOCK — keep the root-level @State in sync
                 // with the real (Keychain-backed) value without SwiftUI's
                 // own @AppStorage/UserDefaults-observer machinery. See
@@ -264,6 +268,31 @@ struct QAudionApp: App {
         ) { _ in
             guard PrivacyGate.screenshotProtectionEnabled else { return }
             RTLog.warn("privacy", "screenshot taken while protection is active")
+        }
+    }
+
+    /// W-SCREENRECDETECT (2026-09-02) — sibling to the screenshot observer
+    /// above. The screenshot notification is one-shot (a still capture);
+    /// `UIScreen.capturedDidChangeNotification` is Apple's own API for a
+    /// LIVE capture session (Control Center screen recording, AirPlay/
+    /// QuickTime device mirroring — `isCaptured` does not distinguish the
+    /// two, per Apple's own doc) and had no listener at all before this fix
+    /// (audit memory reference_ios_stability_audit_2026_09_01, P2 "privacy
+    /// overlay default OFF" item). `UIScreen.main` matches this codebase's
+    /// existing convention (`AboutSettingsScreen.swift`); the actual
+    /// log-or-not decision is `ScreenCaptureAlertPolicy.shouldLog`, pure and
+    /// unit-tested, so this closure is just wiring.
+    private func registerScreenRecordingObserver() {
+        NotificationCenter.default.addObserver(
+            forName: UIScreen.capturedDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            guard ScreenCaptureAlertPolicy.shouldLog(
+                protectionEnabled: PrivacyGate.screenshotProtectionEnabled,
+                isCaptured: UIScreen.main.isCaptured
+            ) else { return }
+            RTLog.warn("privacy", "screen recording active while protection is active")
         }
     }
 }
