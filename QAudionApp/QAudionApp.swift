@@ -63,6 +63,32 @@ struct QAudionApp: App {
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
 
+        // W-DBOPENRECOVER (2026-09-01) — a local-database open/migration
+        // failure no longer traps the process (audit memory
+        // reference_ios_stability_audit_2026_09_01, P0; ladder in
+        // DatabaseOpenRecoveryPolicy). Installed HERE, before `AppState()`
+        // is built (StateObject is lazy) and therefore before the first
+        // `QAudionDatabase.shared` access anywhere, so a quarantine/degrade
+        // decided during that first open reaches the ring buffer via RTLog
+        // even when it happens before the stdout tee attaches in `.onAppear`,
+        // and the sealed telemetry when consent is on. Same closure shape as
+        // `controller.videoTelemetry` in AppState. Tag "chat": the file IS
+        // the chat store, and only tags on scripts/ship-ios-logs.py's
+        // TAG_SCOPE_PREFIXES survive the shipper's gate (a new "db" tag
+        // would be dropped whole); the line's numeric tail is the part the
+        // redactor lets through. Must not touch the database itself.
+        QAudionDatabase.onOpenOutcome = { outcome in
+            let line = DatabaseOpenRecoveryPolicy.logLine(for: outcome)
+            if outcome.isDegraded {
+                RTLog.error("chat", line)
+            } else {
+                RTLog.warn("chat", line)
+            }
+            TelemetryService.shared.emit(
+                kind: "db.open_recovery",
+                attrs: DatabaseOpenRecoveryPolicy.telemetryAttributes(for: outcome))
+        }
+
         // W-BGK: BGAppRefreshTask must be registered before the app finishes
         // launching (Apple requirement). We forward it via NotificationCenter
         // so AppState.handleWsKeepaliveTask() can access the live auth state
