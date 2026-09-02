@@ -1857,11 +1857,39 @@ public final class AudioCapture {
     }
 
     private func registerInterruptionObserver() {
+        // W-NOTIFYMAIN (2026-09-02) — all three observers below used to pass
+        // `queue: nil`, which per NotificationCenter's own contract delivers
+        // the block SYNCHRONOUSLY on whatever thread posts the notification —
+        // for AVAudioSession that thread is NOT guaranteed to be main (Apple's
+        // own AVAudioSession guidance: these notifications may arrive on a
+        // background thread and engine work should be confined to main to
+        // avoid races). `handleInterruption`'s `.ended` branch calls `start()`
+        // directly (line ~2155) and `handleRouteChange` calls
+        // `restartEngineForRoute()` (tears down + nils `engine`/`playerNode`
+        // then rebuilds) directly — both unsynchronized against every OTHER
+        // caller of `start()`, which (CallKit didActivate, handleCallAnswered,
+        // activateIncomingCallAudio, and the renegotiation `call_offer` path
+        // via `AppState.handleIncomingWebRtcOffer`, explicitly hopped to main
+        // by its own 2026-07-12 fix) all run on main. Two concurrent, ordinary
+        // AVAudioEngine/AVAudioPlayerNode `start()` builds racing on two
+        // different threads against the same hardware session is exactly what
+        // produced a live, reproducible crash: NSException
+        // com.apple.coreaudio.avfaudio "player started when in a disconnected
+        // state" (CallService.performAudioCaptureStart → AudioCapture.start,
+        // seen on an iOS↔Android call while Android handed off Wi-Fi→5G,
+        // which drives an ICE-restart `call_offer` on iOS — landing in the
+        // exact window this file's own W574p comment already documents as
+        // self-provoking MORE route-change notifications). `handleMediaServicesReset`
+        // already re-hops internally (its own `DispatchQueue.main.async`), so
+        // routing its observer through `.main` too is a harmless no-op there.
+        // Delivering all three on `.main` — the SAME serial queue every
+        // `start()`/`stop()` caller already uses — makes them mutually
+        // exclusive by construction, no new lock needed.
         guard interruptionObserver == nil else { return }
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil,
-            queue: nil
+            queue: .main
         ) { [weak self] note in
             self?.handleInterruption(note)
         }
@@ -1875,7 +1903,7 @@ public final class AudioCapture {
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
-            queue: nil
+            queue: .main
         ) { [weak self] note in
             self?.handleRouteChange(note)
         }
@@ -1890,7 +1918,7 @@ public final class AudioCapture {
         mediaServicesResetObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification,
             object: nil,
-            queue: nil
+            queue: .main
         ) { [weak self] _ in
             self?.handleMediaServicesReset()
         }
