@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1072",
+              date: "2026-09-02",
+              title: "v1.0.1072",
+              bullets: [
+                "fix(security): pin bcrypto-server's real wipe-signing public key (TRUST-2)",
+                "fix(call): go-live CALL-4/HSID-002 + CALL-3 transcript-bound session KDF/SAS",
+                "fix(security): reconcile transcript-bound KDF/SAS to Android canonical, fix rekeyNonce shape (CALL-4/HSID-002, CALL-3 followup)",
+              ]),
         .init(id: "v1.0.1071",
               date: "2026-09-02",
               title: "v1.0.1071",
               bullets: [
+                "chore: regenerate changelog for v1.0.1071",
                 "fix(security): remove redundant LP() length-prefix on wrapped_content_key in ATT-1 canon (ATT-1-followup)",
                 "fix(ci): SigsumVerifier.FailureReason missing Error conformance broke build",
               ]),
@@ -171,13 +180,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1053",
                 "fix(call): three-way silent-call teardown — pre-attached mic track, manual WebRTC audio unit, key-forward hardening (W-PREATTACHMIC, W-ADMMANUAL, W-CTRLBUILDDIAG)",
-              ]),
-        .init(id: "v1.0.1052",
-              date: "2026-08-30",
-              title: "v1.0.1052",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1052",
-                "diag(call): make activateNativeAudioSrtp's decisions remote-visible (W-AUDIOSENDDIAG)",
               ]),
     ]
 }
