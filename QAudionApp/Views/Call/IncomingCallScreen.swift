@@ -74,8 +74,15 @@ struct IncomingCallScreen: View {
                     .padding(.bottom, 40)
 
                 ZStack {
-                    AvatarHalo(color: extras.success,    diameter: 240)
-                    AvatarHalo(color: extras.pqcAccent,  diameter: 200)
+                    // Always .settled/unconfirmed — this screen is torn
+                    // down before Accept even finishes processing
+                    // (appState.incomingCallRingVisible clears BEFORE
+                    // callState leaves .ringing) and there is no
+                    // client-side timeout on a 1:1 incoming ring, so an
+                    // animating ring here would have no real progress to
+                    // show and no bound on how long it could run. See the
+                    // design doc's "What is NOT real on iOS" section.
+                    KeyExchangeRing(phase: .settled, confirmed: false, ringSize: 240)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
                                   size: 160,
