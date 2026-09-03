@@ -9,10 +9,26 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1080",
+              date: "2026-09-03",
+              title: "v1.0.1080",
+              bullets: [
+                "feat(call): handle the server's new VoIP call-cancel push",
+                "test(key-exchange-ring): unit tests for the OutgoingCallScreen.State to ring-phase mapping",
+                "feat(call): thread real PSK/fingerprint data into OutgoingCallScreen",
+                "docs+test(crypto): close the v3-transcript reconciliation-pass gate for real",
+                "docs(call): correct OutgoingCallScreen crystallize-timing in the ring spec",
+                "feat(call): IncomingCallScreen uses a settled KeyExchangeRing, removes duplicate AvatarHalo",
+                "feat(call): OutgoingCallScreen uses KeyExchangeRing instead of AvatarHalo",
+                "feat(key-exchange-ring): KeyExchangeRing SwiftUI component",
+                "docs(call): implementation plan for key-exchange avatar ring animation (iOS)",
+                "docs(call): design spec for key-exchange avatar ring animation (iOS port)",
+              ]),
         .init(id: "v1.0.1079",
               date: "2026-09-03",
               title: "v1.0.1079",
               bullets: [
+                "chore: regenerate changelog for v1.0.1079",
                 "fix(call): group-call join retries were resending onto the same suspended socket",
               ]),
         .init(id: "v1.0.1078",
@@ -174,14 +190,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1061",
                 "fix(call): RTCAudioSession gate deadlocked its callers — all gate ops now async on one serial queue (W-ADMASYNC)",
-              ]),
-        .init(id: "v1.0.1060",
-              date: "2026-08-30",
-              title: "v1.0.1060",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1060",
-                "fix(call): key-ring slot is now the explicit crypto epoch — distinct-key counting was poisoned by the transitional SAS key (W-KEYSLOTROTATE v2)",
-                "chore: regenerate changelog for v1.0.1059",
               ]),
     ]
 }
