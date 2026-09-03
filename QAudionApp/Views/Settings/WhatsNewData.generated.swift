@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1082",
+              date: "2026-09-04",
+              title: "v1.0.1082",
+              bullets: [
+                "fix(call): qualify ringPhase(for:) call to unblock the TestFlight build",
+              ]),
         .init(id: "v1.0.1081",
               date: "2026-09-04",
               title: "v1.0.1081",
               bullets: [
+                "chore: regenerate changelog for v1.0.1081",
                 "feat(sigsum): show kt-status on the Security Dashboard",
                 "fix(crypto): rename transcriptBindV1 wire capability to hsTranscriptBindV1",
                 "fix(call): reset stale PSK display metadata at call start and teardown",
@@ -185,13 +192,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1063",
                 "fix(call): epoch counter charged every sasReady re-firing — slot climbed mid-call to 13 (W-KEYSLOTROTATE v4)",
-              ]),
-        .init(id: "v1.0.1062",
-              date: "2026-08-30",
-              title: "v1.0.1062",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1062",
-                "fix(call): rekey-epoch counter read a stale .mlKem flag — second call of a session tagged epoch 0 as slot 1 again (W-KEYSLOTROTATE v3)",
               ]),
     ]
 }
