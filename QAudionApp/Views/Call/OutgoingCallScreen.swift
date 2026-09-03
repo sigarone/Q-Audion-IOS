@@ -77,7 +77,11 @@ struct OutgoingCallScreen: View {
     /// plan's Task 2 note on why (this screen is proven to survive exactly
     /// one render frame at `.connected`, `ContentView.swift:426-433`).
     private var ringPhase: KeyExchangeRing.Phase {
-        ringPhase(for: state)
+        // Qualified with the module name: an unqualified call here resolves
+        // to this same computed property (Swift shadowing rule), not the
+        // free function in KeyExchangeRing.swift — see that function's
+        // definition for the actual phase-mapping logic.
+        QAudionApp.ringPhase(for: state)
     }
 
     /// True whenever a handshake round-trip is genuinely in flight —
