@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1081",
+              date: "2026-09-04",
+              title: "v1.0.1081",
+              bullets: [
+                "feat(sigsum): show kt-status on the Security Dashboard",
+                "fix(crypto): rename transcriptBindV1 wire capability to hsTranscriptBindV1",
+                "fix(call): reset stale PSK display metadata at call start and teardown",
+              ]),
         .init(id: "v1.0.1080",
               date: "2026-09-03",
               title: "v1.0.1080",
               bullets: [
+                "chore: regenerate changelog for v1.0.1080",
                 "feat(call): handle the server's new VoIP call-cancel push",
                 "test(key-exchange-ring): unit tests for the OutgoingCallScreen.State to ring-phase mapping",
                 "feat(call): thread real PSK/fingerprint data into OutgoingCallScreen",
@@ -183,13 +192,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1062",
                 "fix(call): rekey-epoch counter read a stale .mlKem flag — second call of a session tagged epoch 0 as slot 1 again (W-KEYSLOTROTATE v3)",
-              ]),
-        .init(id: "v1.0.1061",
-              date: "2026-08-30",
-              title: "v1.0.1061",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1061",
-                "fix(call): RTCAudioSession gate deadlocked its callers — all gate ops now async on one serial queue (W-ADMASYNC)",
               ]),
     ]
 }
