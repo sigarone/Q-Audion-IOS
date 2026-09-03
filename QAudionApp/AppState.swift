@@ -13852,6 +13852,22 @@ final class AppState: ObservableObject {
             selfId: currentUserId ?? "",
             peerId: contactId)
         pskActive = !(callPqcSessionKey?.isEmpty ?? true)
+        // Drop the PREVIOUS call's PSK display metadata now, unconditionally
+        // — this transitional key is derived straight from the local PSK
+        // ladder, not through CallSessionKeyBroker, so the real
+        // method/name/fingerprint for THIS call aren't known yet regardless.
+        // Resetting here (not only at teardown) guarantees a clean slate no
+        // matter which completion path this call eventually takes: the JSON
+        // OFFER/ACCEPT path fires registerPqcSessionKeyWithPsk and re-sets
+        // these, but the legacy/earbud paths (QAudionCallIntegration.swift
+        // onPqcSessionKeyEstablished, completeEarbudCounterparty) only ever
+        // call the WithPsk-less callback and would otherwise leave a stale
+        // label from the prior call showing indefinitely — first surfaced
+        // by OutgoingCallScreen's new PSK pill (feat/key-exchange-ring),
+        // which unlike LiveInCallScreen renders for the whole ring duration.
+        pskMethod = ""
+        pskName = ""
+        pskFingerprint = ""
         // M-10: SAS words shown now are seeded from the transitional
         // PSK, NOT the ML-KEM handshake. Flip to .mlKem only when the
         // broker's real key overwrites it (see wireSasReadyToController).
@@ -16029,6 +16045,19 @@ extension AppState {
         callPqcSessionKey = nil
         callPqcRekeyEpoch = -1
         lastCountedPqcKey = nil
+        // Same reasoning as callPqcSessionKey above, extended to the PSK
+        // display metadata it's paired with in the UI (LiveInCallScreen's
+        // KeyInfo panel, OutgoingCallScreen's PSK pill): without this, a
+        // call that never mixed a PSK could still show the PREVIOUS call's
+        // method/name/fingerprint until this call's own handshake (if any)
+        // overwrites them. startCall() also resets these at call setup —
+        // both sites matter, since not every completion path fires the
+        // callback that would otherwise refresh them (see startCall()'s
+        // longer comment on the same reset).
+        pskActive = false
+        pskMethod = ""
+        pskName = ""
+        pskFingerprint = ""
         // Task 10: drop the pinned video sealer identity alongside the
         // session key so a stale (callId, selfIsRoleA) can't leak into the
         // next call's video pipeline.
