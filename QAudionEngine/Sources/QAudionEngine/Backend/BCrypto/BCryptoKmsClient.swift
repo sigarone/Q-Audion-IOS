@@ -193,6 +193,55 @@ public final class BCryptoKmsClient {
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
 
+    /// Sigsum key-transparency submit status (2026-09-04) for the CALLING
+    /// user's own currently-published identity key. Purely informational —
+    /// mirrors Android `BCryptoApi.getKtStatus` / `KtStatusResponse` — never
+    /// read by any trust or call decision, only by the Security Dashboard.
+    public enum KtStatus: Equatable {
+        case confirmed(logName: String, leafIndex: Int64, treeSize: Int64, cosignatureCount: Int, verifiedAtMs: Int64)
+        case pending(enqueuedAtMs: Int64)
+        case failed(lastAttemptMs: Int64, lastError: String)
+        case notSubmitted
+        /// Client-side fetch failure (offline, transport error, malformed
+        /// response) — distinct from the server's own "failed" status, which
+        /// means a real submit attempt completed and errored.
+        case unknown
+    }
+
+    /// GET /api/v1/users/me/identity-key/kt-status. Never throws — any
+    /// failure (offline, transport, decode) resolves to `.unknown` so the
+    /// dashboard always has something to render.
+    public func fetchKtStatus() async -> KtStatus {
+        guard !rest.isOffline else { return .unknown }
+        do {
+            let data = try await rest.get("/api/v1/users/me/identity-key/kt-status")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let status = json["status"] as? String else {
+                return .unknown
+            }
+            switch status {
+            case "confirmed":
+                let logName = json["log_name"] as? String ?? ""
+                let leafIndex = (json["leaf_index"] as? NSNumber)?.int64Value ?? 0
+                let treeSize = (json["tree_size"] as? NSNumber)?.int64Value ?? 0
+                let cosigCount = (json["cosignature_count"] as? NSNumber)?.intValue ?? 0
+                let verifiedAtMs = (json["verified_at_ms"] as? NSNumber)?.int64Value ?? 0
+                return .confirmed(logName: logName, leafIndex: leafIndex, treeSize: treeSize, cosignatureCount: cosigCount, verifiedAtMs: verifiedAtMs)
+            case "pending":
+                let enqueuedAtMs = (json["enqueued_at_ms"] as? NSNumber)?.int64Value ?? 0
+                return .pending(enqueuedAtMs: enqueuedAtMs)
+            case "failed":
+                let lastAttemptMs = (json["last_attempt_ms"] as? NSNumber)?.int64Value ?? 0
+                let lastError = json["last_error"] as? String ?? ""
+                return .failed(lastAttemptMs: lastAttemptMs, lastError: lastError)
+            default:
+                return .notSubmitted
+            }
+        } catch {
+            return .unknown
+        }
+    }
+
     /// Fetch a peer's published long-term Ed25519 identity key (RAW 32 bytes),
     /// or `nil` when the peer has not published one (404) or on any transport /
     /// decode error. This is the iOS mirror of Android

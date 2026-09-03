@@ -9,12 +9,27 @@ final class SecurityDashboardContainer: ObservableObject {
     @Published private(set) var viewModel: SecurityDashboardViewModel
     @Published var errorMessage: String?
 
+    // Sigsum kt-status (2026-09-04) — kept separate from `viewModel` on
+    // purpose: everything else on this screen is read synchronously from
+    // local stores (`loadLocalState` below), while this one field is a
+    // REMOTE call. Folding it into `viewModel` would mean either blocking
+    // `loadLocalState` on the network or race-overwriting a fresh kt-status
+    // with a stale local-only rebuild. `.unknown` until the fetch resolves
+    // (see `BCryptoKmsClient.KtStatus`'s kdoc) — purely informational,
+    // never affects any trust or call decision on this or any other screen.
+    @Published private(set) var ktStatus: BCryptoKmsClient.KtStatus = .unknown
+
     let appState: AppState
 
     init(appState: AppState, initial: SecurityDashboardViewModel = .mock) {
         self.appState = appState
         self.viewModel = initial
         loadLocalState()
+    }
+
+    func loadKtStatus() async {
+        let provider = appState.makeUploadProvider()
+        ktStatus = await provider.kmsClient.fetchKtStatus()
     }
 
     func loadLocalState() {
@@ -64,6 +79,7 @@ final class SecurityDashboardContainer: ObservableObject {
 
     func refresh() {
         loadLocalState()
+        Task { await loadKtStatus() }
     }
 
     private func deriveDisplayPubkey() -> Data {
@@ -123,6 +139,30 @@ struct SecurityDashboardScreen: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
+    /// Sigsum kt-status row label + color. See `BCryptoKmsClient.KtStatus`'s
+    /// kdoc — "confirmed" is the only state backed by an independently
+    /// verified transparency-log proof; "pending"/"unknown" are neutral
+    /// (amber, not red — a normal transient state, not a problem) and
+    /// "failed" is the one state that means a real submit attempt errored.
+    private var ktStatusLabel: String {
+        switch container.ktStatus {
+        case .confirmed: return "Verificata"
+        case .pending: return "In corso"
+        case .failed: return "Non riuscita"
+        case .notSubmitted: return "Non attiva"
+        case .unknown: return "Sconosciuto"
+        }
+    }
+
+    private var ktStatusColor: Color {
+        switch container.ktStatus {
+        case .confirmed: return extras.success
+        case .pending, .unknown: return extras.warning
+        case .failed: return extras.riskHigh
+        case .notSubmitted: return scheme.onSurfaceVariant
+        }
+    }
+
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
@@ -146,6 +186,18 @@ struct SecurityDashboardScreen: View {
                         kvRow(label: "Ultima rotazione",
                               value: lastRotationText,
                               mono: false)
+                    }
+
+                    // Sigsum key transparency (2026-09-04) — purely
+                    // informational per the product requirement: never
+                    // blocks or refuses anything, just lets the user (and
+                    // support) see whether the identity-key transparency
+                    // submission is actually working.
+                    SettingsSectionHeader("TRASPARENZA CHIAVE")
+                    VStack(spacing: 8) {
+                        statusRow(label: "Stato",
+                                  value: ktStatusLabel,
+                                  tone: ktStatusColor)
                     }
 
                     SettingsSectionHeader("MINACCE")
@@ -204,6 +256,7 @@ struct SecurityDashboardScreen: View {
             }
         }
         .onAppear { container.loadLocalState() }
+        .task { await container.loadKtStatus() }
         .alert("Errore", isPresented: Binding<Bool>(
             get: { container.errorMessage != nil },
             set: { isPresented in
