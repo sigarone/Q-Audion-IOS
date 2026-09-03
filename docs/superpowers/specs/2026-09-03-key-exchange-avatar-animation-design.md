@@ -143,16 +143,25 @@ never given a non-`.settled` phase in the first place).
 ### `OutgoingCallScreen` wiring
 
 Map `OutgoingCallScreen.State` (`dialing`/`handshaking`/`connected`/
-`rekeying`/`ended`) to the ring's phase: `.dialing` and `.handshaking` both
-→ ring `.handshaking` (the PQC round-trip is already in flight during
+`rekeying`/`ended`) to the ring's phase as a **pure computed property** —
+no local timer, no `@State` phase machine needed, unlike Android's
+`Settled`-after-a-delay approach. Investigated directly why: `ContentView
+.makeOutgoingScreen()`'s own comment (`ContentView.swift:426-433`,
+`W-OUTGOINGDOT3`) establishes that `.connected` is visible for exactly one
+render pass — `showLiveCallScreen` only flips via an `.onChange` that
+SwiftUI fires *after* the current frame, specifically so that one frame
+can render the third handshake checkmark before the screen is replaced by
+`LiveInCallScreen`/`VideoCallView`. Building a 320ms pulse-then-settle
+timer inside a view proven to survive one frame at that state would be
+inert complexity solving nothing. Mapping: `.dialing` and `.handshaking`
+both → ring `.handshaking` (the PQC round-trip is already in flight during
 `.dialing` too — that iOS-only sub-phase distinguishes "transport not yet
 confirmed" from "confirmed," not "handshake not started," per the shared
 cross-platform wire protocol both apps implement); `.connected` → ring
-`.crystallizing` then `.settled` after the pulse, exactly mirroring
-Android's own `Crystallizing`-then-`Settled` timing (320ms + 200ms
-buffer); `.rekeying`/`.ended` → `.settled` (`.rekeying` is documented dead
-in production wiring today, `ContentView.swift:424-451`; `.ended` means
-the screen is being torn down regardless).
+`.crystallizing` directly (the one frame it's visible for IS the pulse);
+`.rekeying`/`.ended` → `.settled` (`.rekeying` is documented dead in
+production wiring today, `ContentView.swift:424-451`; `.ended` means the
+screen is being torn down regardless).
 
 Fingerprint reveal and PSK pill: only meaningful once `LiveInCallScreen
 .liveKeyInfo`-equivalent data exists, i.e. once `AppState.callPqcSessionKey`
