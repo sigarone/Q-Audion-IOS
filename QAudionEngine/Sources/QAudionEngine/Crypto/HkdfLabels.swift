@@ -90,7 +90,7 @@ public enum HkdfLabels {
     /// which never had a dedicated KDF-transcript-bind label of its own).
     /// Kept defined (not deleted) only so old references/diffs still resolve;
     /// no production code path reads this constant any more. Never had a live
-    /// call using it — `transcriptBindV1Enabled` has been `false` since this
+    /// call using it — `hsTranscriptBindV1Enabled` has been `false` since this
     /// bit's introduction. 32 bytes, NOT null-terminated.
     public static let kdfTranscriptBindV1: Data = Data("q-audion-kdf-transcript-bind-v1".utf8)
 
@@ -114,7 +114,7 @@ public enum HkdfLabels {
     /// review actually required (a distinct label is what matters, not its
     /// exact spelling), so the shorter Android string is now the shared
     /// cross-platform value. Never had a live call using the old value —
-    /// `transcriptBindV1Enabled` has been `false` since this bit's
+    /// `hsTranscriptBindV1Enabled` has been `false` since this bit's
     /// introduction — so this is a pre-go-live correction, not a wire break.
     public static let sasTranscriptBindV1: Data = Data("q-audion-sas-transcript".utf8)
 

@@ -120,7 +120,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// an inbound OFFER whose signed `rekeyRound` is <= the value stored here
     /// is a stale/replayed round and MUST be refused (never installed, never
     /// ACCEPTed) — see the `.offer` case's round-freshness gate. Populated
-    /// only for a call whose peer negotiated `transcriptBindV1` AND whose v3
+    /// only for a call whose peer negotiated `hsTranscriptBindV1` AND whose v3
     /// signature verified; a call that never reaches that bar simply has no
     /// entry here and every round is accepted exactly as before this fix
     /// (content-fingerprint dedup, `processedOfferFingerprintsByCall`, is
@@ -260,76 +260,99 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// CALL-4/HSID-002 + CALL-3 go-live gate — transcript-bound session KDF/SAS +
     /// re-key nonce+counter freshness. Mirrors Android
-    /// `PqcHandshake.HS_TRANSCRIPT_BIND_V1_ENABLED` / Desktop
-    /// `AndroidBundleHandshake.SESSION_KDF_V4_ENABLED`.
+    /// `PqcHandshake.HS_TRANSCRIPT_BIND_V1_ENABLED`. Desktop's equivalent gate
+    /// was `AndroidBundleHandshake.SESSION_KDF_V4_ENABLED` as of this writing;
+    /// Desktop's own wire-key-name fix (converging its `sessionKdfV4` wire
+    /// spelling on `hsTranscriptBindV1` to match Android/iOS, see history (3)
+    /// below) was landing in parallel with this change — re-grep the Desktop
+    /// repo for its current constant name rather than trusting this comment
+    /// if it matters, since that rename's exact result was not observed here.
     ///
-    /// DEFAULT FALSE (2026-09-02, post-implementation safety fix). This file
-    /// originally advertised `transcriptBindV1: true` unconditionally, with no
-    /// kill switch — the only one of the three platforms to ship this bit with
-    /// no way to disable it. The bit was implemented in parallel and
-    /// independently on all three platforms in the same session, with no live
-    /// cross-platform coordination, and each landed a DIFFERENT session-key KDF
-    /// construction under the SAME wire capability bit position: Android's
-    /// supersedes the schema:2/3 info string outright, Desktop's ADDS to it
-    /// (ct_bind || selected_fp || transcriptHash), and this file layers a SECOND
-    /// independent HKDF pass on top of whichever base key schema already
-    /// produced. Negotiation is a bitwise AND on wire position, not a byte-layout
-    /// check — two peers that both advertise this bit derive DIFFERENT session
-    /// keys from each other (the call fails: SAS mismatch / undecryptable media,
-    /// not a security downgrade, but a real regression against every other peer
-    /// that also shipped this). Flip to `true` only after a real cross-platform
-    /// KAT reconciliation pass pins ONE byte layout and all three platforms
-    /// implement that exact layout — see the Android repo's
-    /// docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 2/3.
+    /// HISTORY, oldest first — kept for provenance, do not delete when
+    /// editing this doc again:
     ///
-    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — the reconciliation pass above landed:
-    /// this platform's session-key KDF/SAS are now byte-for-byte ports of
-    /// Android's DESIGNATED CANONICAL construction (see
-    /// `deriveTranscriptBoundSessionKey`/`ComputeSasUseCase.invoke`'s docs),
-    /// `rekeyNonce`/`rekeyRound` are fixed-width and always-present on both
-    /// OFFER and ACCEPT (see `HandshakeTranscript.offerV3`/`acceptV3`'s
-    /// docs), and every capability-advertisement site now excludes this bit
-    /// for an earbud-possible/hw_only call (search this file for
-    /// `earbudPairingGattProxy == nil` and `keyClass == 0` near
-    /// `transcriptBindV1:`) — the UNRESOLVED interaction between
-    /// transcript-binding and the earbud-exclusive schema:4 KDF that this
-    /// follow-up's own audit flagged.
+    /// 1. DEFAULT FALSE (2026-09-02, post-implementation safety fix). This
+    ///    file originally advertised `transcriptBindV1: true` unconditionally,
+    ///    with no kill switch. The bit was implemented in parallel and
+    ///    independently on all three platforms in the same session, with no
+    ///    live cross-platform coordination, and each landed a DIFFERENT
+    ///    session-key KDF construction under the SAME wire capability bit
+    ///    position: Android's superseded the schema:2/3 info string outright,
+    ///    Desktop's ADDED to it (ct_bind || selected_fp || transcriptHash),
+    ///    and this file layered a SECOND independent HKDF pass on top of
+    ///    whichever base key schema already produced. Two peers that both
+    ///    advertised the bit would have derived DIFFERENT session keys from
+    ///    each other.
     ///
-    /// RECONCILIATION PASS CLOSED (2026-09-03 follow-up) — the note above
-    /// ("STILL false... real KAT is still the gate") is what previously sat
-    /// right next to this constant already being `true`, which read as a
-    /// live feature flagged red for no stated reason; that contradiction was
-    /// itself reported as a bug and is what this pass closes, not evidence
-    /// the KDF/transcript were actually broken. What changed: a real,
-    /// fixed-input KAT was generated by running Android's
-    /// `HandshakeTranscript.offerV3`/`acceptV3` for real
-    /// (`./gradlew :qaudion-engine:testDebugUnitTest`, now pinned permanently
-    /// in `HandshakeTranscriptV3SharedKatTest.kt`), independently
-    /// reimplemented byte-for-byte in Python (plain SHA-256, no code shared
-    /// with either platform) as a trusted oracle, and this platform's
-    /// `HandshakeTranscript.swift offerV3`/`acceptV3` was then read
-    /// line-by-line against that oracle: same `domainV3`/role bytes, same
-    /// `appendLP`/`capByte`/`appendU32BE`/`advEnc` encoders, same field
-    /// order, same 8-byte CAPS layout — no divergence found. The SAME
-    /// pinned vector is now `HandshakeTranscriptV3Tests
-    /// .testCrossPlatformKatFixture` in this platform's own test target.
-    /// STILL genuinely unverified by an actual Swift/CryptoKit execution (no
-    /// macOS/Xcode toolchain this session, unchanged) — the first real
-    /// CI/device run of that test is the remaining confirmation step, which
-    /// is why the source-level cross-check above exists at all: it is the
-    /// most rigorous verification available without a compiler, not a
-    /// substitute for eventually running it for real. Desktop's
-    /// `HandshakeTranscript.ts` was NOT re-verified in this pass — the
-    /// original "Android+Desktop byte-identical on shared KAT" claim
-    /// predates it. If a live Desktop↔mobile call ever fails `sigV3`
-    /// verification, re-run this same fixed-input vector against Desktop
-    /// before assuming the byte layout regressed elsewhere.
-    public static let transcriptBindV1Enabled = true // LIVE 2026-09-02, reconciliation pass closed 2026-09-03 (Android+iOS KAT-verified, see doc above; Desktop unverified this pass)
+    /// 2. KDF/SAS + transcript-v3 BYTE LAYOUT RECONCILED (2026-09-02/03). A
+    ///    fixed-input KAT (`pqcSharedSecret`=32×0x11, `x25519Shared`=32×0x22,
+    ///    `psk`=nil, `transcriptHash`=SHA-256("qaudion-item23-kat-fixture-v1"))
+    ///    asserts `session_key =
+    ///    a70fa416996564881a7bf4cefba22ca4dc541d07d822a75f4f2f9955bac33c60`,
+    ///    `sas_words = uproot absurd shadow printer southward clockwork`:
+    ///      - Android's `TranscriptBoundKdfSasSharedKatTest.kt` — PASSING,
+    ///        live-run.
+    ///      - Desktop's `test/kat/sessionKeyV4Transcript.kat.spec.ts` —
+    ///        PASSING, run live via `npx vitest run`, byte-identical.
+    ///      - iOS's own `SessionKeyTranscriptBoundTests
+    ///        .testCrossPlatformKatFixture()` pins the SAME hex, and
+    ///        `deriveTranscriptBoundSessionKey`/`ComputeSasUseCase.invoke`
+    ///        were read line-by-line against it — construction matches
+    ///        exactly, but this is SOURCE-LEVEL verification only: no
+    ///        macOS/Xcode toolchain has run this platform's own Swift test,
+    ///        so iOS's contribution to the convergence is confirmed by
+    ///        careful reading, not live execution, unlike the other two.
+    ///    Separately, the signed v3 transcript byte layout (`domainV3`,
+    ///    `appendLP`/`capByte`/`appendU32BE`/`advEnc` encoders, the 8-byte
+    ///    CAPS array — see `HandshakeTranscript.offerV3`/`acceptV3`) was
+    ///    checked the same way: a real fixed-input vector generated by
+    ///    Android's own `HandshakeTranscriptV3SharedKatTest.kt`, an
+    ///    independent Python re-implementation as a trusted oracle, and this
+    ///    file's `HandshakeTranscript.swift offerV3`/`acceptV3` read
+    ///    line-by-line against both — no divergence found, same source-level
+    ///    (not live-run) caveat as above. Desktop's `HandshakeTranscript.ts`
+    ///    was NOT re-checked in this pass. `rekeyNonce`/`rekeyRound` are
+    ///    fixed-width and always-present on both OFFER and ACCEPT, and every
+    ///    capability-advertisement site excludes this bit for an
+    ///    earbud-possible/hw_only call (search this file for
+    ///    `earbudPairingGattProxy == nil` and `keyClass == 0` near
+    ///    `hsTranscriptBindV1:`) — whether that earbud/schema:4 exclusion is
+    ///    still the right call once this bit is actually reachable in
+    ///    production has NOT been re-examined in the wire-key-name fix below
+    ///    and remains open.
+    ///
+    /// 3. THE ACTUAL BLOCKING BUG, found and fixed 2026-09-03 — with the
+    ///    KDF/SAS/transcript algorithm itself converged per (2), this
+    ///    capability had STILL never negotiated `true` on any real
+    ///    Android↔iOS call, because the wire JSON key carrying the boolean
+    ///    was spelled DIFFERENTLY on every platform: `transcriptBindV1` here,
+    ///    `hsTranscriptBindV1` on Android (`Capabilities.hsTranscriptBindV1`,
+    ///    no `@SerialName` override, so the Kotlin property name IS the JSON
+    ///    key), `sessionKdfV4` on Desktop. `AndroidHandshakeBundle
+    ///    .Capabilities` here has no `CodingKeys` override either, so the
+    ///    same rule applies to Swift's synthesized `Codable`: an Android peer
+    ///    sending `"hsTranscriptBindV1": true` decoded to `nil` (unrecognised
+    ///    key) on this platform and was therefore always treated as `false`,
+    ///    while this platform's own `"transcriptBindV1": true` was an
+    ///    unrecognised key to Android's `ignoreUnknownKeys = true` decoder —
+    ///    silently dropped, no crash, no signal either direction. This is
+    ///    believed to be the root cause of the still-open user report of
+    ///    persistent "unrecognized signature / lower security" warnings on
+    ///    live Android↔iOS calls: the pair always silently fell back to the
+    ///    legacy schema:2/3 KDF and the transcript-independent SAS, never the
+    ///    fix in (2) above. The property and this constant are now both named
+    ///    `hsTranscriptBindV1`/`hsTranscriptBindV1Enabled` (matching Android's
+    ///    spelling exactly, since Android's kotlinx.serialization name is the
+    ///    one every other platform must match byte-for-byte) so the wire key
+    ///    agrees on all three platforms. The KDF/SAS/transcript MATH was
+    ///    never the problem and was NOT touched by this fix — only the
+    ///    identifier used to read/write this one boolean.
+    public static let hsTranscriptBindV1Enabled = true // LIVE 2026-09-03 — KDF/SAS/transcript byte layout reconciled per history (2), wire key name now matches Android's hsTranscriptBindV1 per history (3)
 
     /// MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4) go-live
     /// gate for the inner sealed-audio wire's per-direction keys + AAD + replay
     /// window (`QAudionEngine.initSession`'s `innerAudioAadV1` param). Mirrors
-    /// this platform's own `srtpDirKeysEnabled`/`transcriptBindV1Enabled`
+    /// this platform's own `srtpDirKeysEnabled`/`hsTranscriptBindV1Enabled`
     /// pattern directly above, and Android/Desktop's equivalent constant for the
     /// SAME capability bit — grep either sibling repo for `innerAudioAadV1` or
     /// `INNER_AUDIO_AAD_V1_ENABLED` before flipping this.
@@ -339,7 +362,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `W-INNERAUDIOAAD` block) was implemented on iOS alone in this session,
     /// with no live cross-platform KAT against Android/Desktop's own
     /// implementations of the same audit finding. Exactly the
-    /// `transcriptBindV1Enabled` situation directly above: a mismatched
+    /// `hsTranscriptBindV1Enabled` situation directly above: a mismatched
     /// construction under the same wire capability bit position would make
     /// two peers that both advertise it derive different directional keys
     /// from each other, breaking the call (not a security downgrade — the
@@ -1309,7 +1332,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // omits the bit and both sides keep computing S0 exactly as before.
                 // Mirrored in Android's SELF_CAPABILITIES in the same commit series.
                 pskMixV1: true,
-                // CALL-3/CALL-4 (HSID-002 remainder) — gated by transcriptBindV1Enabled
+                // CALL-3/CALL-4 (HSID-002 remainder) — gated by hsTranscriptBindV1Enabled
                 // (2026-09-02 safety fix, see its doc comment: three platforms shipped
                 // incompatible KDF constructions under this same bit position). The
                 // ACTUAL negotiated behaviour (v3 signing, transcript-bound KDF/SAS,
@@ -1332,7 +1355,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // See `deriveTranscriptBoundSessionKey`'s doc and the `keyClass == 0`
                 // gates at its two call sites in this file for the other half of this
                 // scoping.
-                transcriptBindV1: (Self.transcriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
+                hsTranscriptBindV1: (Self.hsTranscriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
                 // MEDIA-3/4/5 — gated by innerAudioAadV1Enabled (default false, see
                 // its doc). The ACTUAL negotiated behaviour (per-direction inner
                 // sealed-audio keys/AAD/replay window) only activates once the
@@ -1549,7 +1572,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // requires a completed original handshake) falls back to round 2 with
         // a freshly-generated nonce rather than crashing; a responder that has
         // no round-1 record for this callId simply treats this round's
-        // `transcriptBindV1` path as unavailable (falls back to legacy KDF/SAS
+        // `hsTranscriptBindV1` path as unavailable (falls back to legacy KDF/SAS
         // — see the `.offer` case's round-freshness gate).
         // ITEM 2/3 FOLLOW-UP — `thisRoundNonce` is now returned alongside the round
         // number: the OFFER resends the SAME nonce on every round (see
@@ -1581,8 +1604,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
                 pskMixV1: true,
                 // ITEM 2/3 FOLLOW-UP — same earbud-exclusion rationale as the round-1
-                // OFFER's own `transcriptBindV1` field above; see that comment.
-                transcriptBindV1: (Self.transcriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
+                // OFFER's own `hsTranscriptBindV1` field above; see that comment.
+                hsTranscriptBindV1: (Self.hsTranscriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
                 innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
             ),
             pskFingerprints: advert.fingerprints,
@@ -2071,7 +2094,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
             // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) —
             // transcript-bound KDF/SAS (CALL-4) + signed re-key round freshness
-            // (CALL-3), gated on the peer's bundle advertising `transcriptBindV1`
+            // (CALL-3), gated on the peer's bundle advertising `hsTranscriptBindV1`
             // AND carrying a v3 signature that verifies. ADDITIVE on top of the
             // v1/v2 verification above (never a replacement for it): on ANY
             // failure to establish v3 (capability not advertised, `sigV3`
@@ -2110,7 +2133,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let isKnownRetransmitV3 = lock.withLock {
                 processedOfferFingerprintsByCall.contains(normalizedOIdV3 + "#" + offerFingerprintV3)
             }
-            if bundle.capabilities?.transcriptBindV1 ?? false,
+            if bundle.capabilities?.hsTranscriptBindV1 ?? false,
                let sigV3B64 = bundle.sigV3, !sigV3B64.isEmpty,
                let sikB64 = bundle.signerIdentityKey, !sikB64.isEmpty,
                let sigV3Data = Data(base64Encoded: sigV3B64), sigV3Data.count == 64,
@@ -2458,7 +2481,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // exact signal instead of the conservative "earbud paired" one —
                     // see `deriveTranscriptBoundSessionKey`'s doc for why hw_only
                     // (`keyClass != 0`) and transcript-binding must not compose yet.
-                    transcriptBindV1: (Self.transcriptBindV1Enabled && keyClass == 0) ? true : nil,
+                    hsTranscriptBindV1: (Self.hsTranscriptBindV1Enabled && keyClass == 0) ? true : nil,
                     // MEDIA-3/4/5 — same flip as the OFFER above, see its comment.
                     innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
                 ),
@@ -2523,7 +2546,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // failure — `signedCopy` already isolates that; checking
                 // `acceptToSend.sigV3` here, not just "acceptTV3 != nil", is what
                 // makes sure of it) AND `keyClass == 0` — the OFFER-side capability
-                // gate above already keeps `transcriptBindV1` off this device's own
+                // gate above already keeps `hsTranscriptBindV1` off this device's own
                 // earbud-possible legs, but a peer's independent build (or a future
                 // regression there) could still advertise it; this second, local
                 // check is what actually decides whether the override runs, so it
@@ -2939,7 +2962,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // per-attempt id, not merely a monotone counter). This block only
             // establishes `acceptTranscriptHashV3` for CALL-4's KDF/SAS fold.
             var acceptTranscriptHashV3: Data?
-            if bundle.capabilities?.transcriptBindV1 ?? false,
+            if bundle.capabilities?.hsTranscriptBindV1 ?? false,
                let sigV3B64 = bundle.sigV3, !sigV3B64.isEmpty,
                let sikB64 = bundle.signerIdentityKey, !sikB64.isEmpty,
                let sigV3Data = Data(base64Encoded: sigV3B64), sigV3Data.count == 64 {
@@ -3519,15 +3542,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     /// CALL-3/CALL-4 (HSID-002 remainder) — 8-tuple sibling of `capsFromBundle7`,
-    /// adding `transcriptBindV1` (bound into the v3 transcript's 8th CAPS byte
+    /// adding `hsTranscriptBindV1` (bound into the v3 transcript's 8th CAPS byte
     /// ONLY — `capsFromBundle`/v1's 6-byte and `capsFromBundle7`/v2's 7-byte CAPS
     /// are completely untouched). Absent/null capabilities → false, same rule as
     /// `capsFromBundle`/`capsFromBundle7`.
     private static func capsFromBundle8(
         _ caps: AndroidHandshakeBundle.Capabilities?
-    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool, sessionKdfV3: Bool, ratchetV4: Bool, srtpDirKeyV1: Bool, pskMixV1: Bool, transcriptBindV1: Bool) {
+    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool, sessionKdfV3: Bool, ratchetV4: Bool, srtpDirKeyV1: Bool, pskMixV1: Bool, hsTranscriptBindV1: Bool) {
         let c7 = capsFromBundle7(caps)
-        return (c7.ratchetV3, c7.sframeV1, c7.vkeyV1, c7.sessionKdfV3, c7.ratchetV4, c7.srtpDirKeyV1, c7.pskMixV1, caps?.transcriptBindV1 ?? false)
+        return (c7.ratchetV3, c7.sframeV1, c7.vkeyV1, c7.sessionKdfV3, c7.ratchetV4, c7.srtpDirKeyV1, c7.pskMixV1, caps?.hsTranscriptBindV1 ?? false)
     }
 
     /// CALL-3 — decode a bundle's `rekeyNonce` (base64) to raw bytes for
@@ -3665,7 +3688,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             ratchetV4: caps.ratchetV4,
             srtpDirKeyV1: caps.srtpDirKeyV1,
             pskMixV1: caps.pskMixV1,
-            transcriptBindV1: caps.transcriptBindV1,
+            hsTranscriptBindV1: caps.hsTranscriptBindV1,
             ratchetV: HandshakeSigningPolicy.ratchetV,
             suiteId: HandshakeSigningPolicy.suiteId,
             pskFingerprints: bundle.pskFingerprints,
@@ -3804,7 +3827,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             ratchetV4: caps.ratchetV4,
             srtpDirKeyV1: caps.srtpDirKeyV1,
             pskMixV1: caps.pskMixV1,
-            transcriptBindV1: caps.transcriptBindV1,
+            hsTranscriptBindV1: caps.hsTranscriptBindV1,
             ratchetV: HandshakeSigningPolicy.ratchetV,
             suiteId: HandshakeSigningPolicy.suiteId,
             selectedPskFingerprint: bundle.selectedPskFingerprint,
@@ -4418,24 +4441,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// DIRECTLY on the raw hybrid shared secrets, exactly like the un-bound
     /// schema:2 derivation (`deriveHybridSessionKey`) — this is a REPLACEMENT
     /// for that derivation's `info`, not a second pass layered on top of its
-    /// output. Applied ONLY when both peers negotiated `transcriptBindV1` AND
+    /// output. Applied ONLY when both peers negotiated `hsTranscriptBindV1` AND
     /// that round's v3 signature verified — the caller
     /// (`onAndroidBundleReceived`) is responsible for that gate, INCLUDING
     /// never calling this for a call using the earbud-exclusive schema:4 KDF
     /// (`deriveHybridSessionKeyV4`, `keyClass != 0`) — see the "UNRESOLVED
-    /// INTERACTION" note on `transcriptBindV1`'s capability-advertisement
+    /// INTERACTION" note on `hsTranscriptBindV1`'s capability-advertisement
     /// sites (search this file for `keyClass == 0` near this function's call
     /// sites) for why: this construction has no `keyClass`/`negDigest` input
     /// at all, so composing it with the earbud hw_only scheme was left
     /// unresolved by design pending a dedicated decision, and the
-    /// conservative fix here is to never negotiate `transcriptBindV1` for an
+    /// conservative fix here is to never negotiate `hsTranscriptBindV1` for an
     /// earbud/sovereign-earbud call in the first place.
     ///
     /// ITEM 2/3 FOLLOW-UP (2026-09-02) — REPLACES the prior CASCADED
     /// second-HKDF-pass-over-`baseKey` construction this function used to be
     /// (see the git history for the pre-follow-up version). All three
     /// platforms had independently implemented DIFFERENT algebraic
-    /// constructions under the SAME `transcriptBindV1` wire capability bit;
+    /// constructions under the SAME `hsTranscriptBindV1` wire capability bit;
     /// Android's is DESIGNATED CANONICAL (simplest, externally
     /// security-reviewed before the original implementation) and this
     /// function is now a byte-for-byte Swift port of Android's

@@ -63,7 +63,7 @@ public enum HandshakeTranscript {
     /// W-TRANSCRIPTV2 above: a peer that has shipped through v2 (`pskMixV1`)
     /// but not this fix keeps verifying v1/v2 byte-for-byte as before; v3 is
     /// a THIRD, purely ADDITIONAL signature, computed/verified only when both
-    /// peers ALSO negotiate the new `transcriptBindV1` capability (checked at
+    /// peers ALSO negotiate the new `hsTranscriptBindV1` capability (checked at
     /// the call site, not inside this file). See `offerV3`'s doc for what it
     /// adds over `offerV2`.
     private static let domainV3: Data = {
@@ -407,7 +407,7 @@ public enum HandshakeTranscript {
 
     /// CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — v3
     /// sibling of `offerV2`. SAME shape as `offerV2` (`domainV3` instead of
-    /// `domainV2`) PLUS an 8th SIGNED CAPS byte (`transcriptBindV1`) appended
+    /// `domainV2`) PLUS an 8th SIGNED CAPS byte (`hsTranscriptBindV1`) appended
     /// after the existing 7, PLUS two new fields appended LAST:
     ///
     ///   `rekeyNonce` (8 RAW bytes, NOT length-prefixed) — the call's own
@@ -442,7 +442,7 @@ public enum HandshakeTranscript {
     ///
     /// `offer`/`offerV2` above are NOT touched — this is a THIRD, additional,
     /// purely-additive signature computed/verified ONLY when both peers
-    /// negotiate the new `transcriptBindV1` capability.
+    /// negotiate the new `hsTranscriptBindV1` capability.
     ///
     /// Returns `nil` only when `advEnc` does (a pathological
     /// `pskFingerprints.count > 255` — see its doc).
@@ -461,7 +461,7 @@ public enum HandshakeTranscript {
         ratchetV4: Bool,
         srtpDirKeyV1: Bool,
         pskMixV1: Bool,
-        transcriptBindV1: Bool,
+        hsTranscriptBindV1: Bool,
         ratchetV: UInt8,
         suiteId: UInt8,
         pskFingerprints: [String]?,
@@ -488,7 +488,7 @@ public enum HandshakeTranscript {
         out.append(capByte(ratchetV4))
         out.append(capByte(srtpDirKeyV1))
         out.append(capByte(pskMixV1))
-        out.append(capByte(transcriptBindV1))  // CALL-3/CALL-4: 8th CAPS byte, v3-only
+        out.append(capByte(hsTranscriptBindV1))  // CALL-3/CALL-4: 8th CAPS byte, v3-only
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, adv)
@@ -542,7 +542,7 @@ public enum HandshakeTranscript {
         ratchetV4: Bool,
         srtpDirKeyV1: Bool,
         pskMixV1: Bool,
-        transcriptBindV1: Bool,
+        hsTranscriptBindV1: Bool,
         ratchetV: UInt8,
         suiteId: UInt8,
         selectedPskFingerprint: String?,
@@ -571,7 +571,7 @@ public enum HandshakeTranscript {
         out.append(capByte(ratchetV4))
         out.append(capByte(srtpDirKeyV1))
         out.append(capByte(pskMixV1))
-        out.append(capByte(transcriptBindV1))
+        out.append(capByte(hsTranscriptBindV1))
         out.append(ratchetV)
         out.append(suiteId)
         appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))

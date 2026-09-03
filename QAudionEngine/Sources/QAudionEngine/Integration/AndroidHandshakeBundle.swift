@@ -128,14 +128,30 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // field decodes to nil (treated as `false`), and `JSONEncoder` omits
         // a nil key, so the OFFER/ACCEPT bytes stay byte-IDENTICAL to today's
         // wire for every peer that has not shipped this fix.
-        public let transcriptBindV1: Bool?
+        //
+        // W-HSCAPKEYFIX (2026-09-03): this property has NO `CodingKeys`
+        // override, so its Swift name IS the wire JSON key. It was
+        // previously spelled `transcriptBindV1` here while Android's
+        // kotlinx.serialization `Capabilities.hsTranscriptBindV1` field
+        // (no `@SerialName`, same rule) put it on the wire as
+        // `hsTranscriptBindV1` — an exact-string-key mismatch that made an
+        // Android peer's `"hsTranscriptBindV1": true` decode to `nil` here
+        // (unrecognised key), and iOS's `"transcriptBindV1": true` decode
+        // to `nil` on Android (`ignoreUnknownKeys = true` swallows it
+        // silently). Net effect: this bit could never actually negotiate
+        // `true` on a real Android↔iOS call, so the fix always silently
+        // fell back to the legacy KDF/SAS. Renamed to match Android's wire
+        // spelling exactly. The KDF/SAS byte layout itself was never wrong
+        // — see `QAudionCallIntegration.hsTranscriptBindV1Enabled`'s doc
+        // for the cross-platform KAT convergence evidence.
+        public let hsTranscriptBindV1: Bool?
 
         // MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4)
         // — capability bit for the inner sealed-audio wire's per-direction
         // keys + AAD + replay window (see `QAudionEngine.initSession`'s
         // `innerAudioAadV1` param and `QAudionCallIntegration
         // .innerAudioAadV1Enabled`). OPTIONAL, appended LAST, same "omit
-        // when not advertising" convention as `pskMixV1`/`transcriptBindV1`
+        // when not advertising" convention as `pskMixV1`/`hsTranscriptBindV1`
         // above: a peer that doesn't carry the field decodes to nil (treated
         // as `false`), and `JSONEncoder` omits a nil key, so the OFFER/ACCEPT
         // bytes stay byte-IDENTICAL to today's wire until this ships on
@@ -152,7 +168,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             ratchetV4: Bool? = nil,
             srtpDirKeyV1: Bool? = nil,
             pskMixV1: Bool? = nil,
-            transcriptBindV1: Bool? = nil,
+            hsTranscriptBindV1: Bool? = nil,
             innerAudioAadV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
@@ -162,7 +178,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.ratchetV4 = ratchetV4
             self.srtpDirKeyV1 = srtpDirKeyV1
             self.pskMixV1 = pskMixV1
-            self.transcriptBindV1 = transcriptBindV1
+            self.hsTranscriptBindV1 = hsTranscriptBindV1
             self.innerAudioAadV1 = innerAudioAadV1
         }
     }
@@ -248,7 +264,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // computed by the SAME signer ALONGSIDE (never instead of) `signature`
     // and `sigV2`. `nil` on any build that hasn't shipped this fix and on the
     // unsigned path — verification only attempts v3 when this AND
-    // `capabilities.transcriptBindV1` are both present; a peer that hasn't
+    // `capabilities.hsTranscriptBindV1` are both present; a peer that hasn't
     // shipped it is verified exactly as before (v2-then-v1), never rejected.
     // APPENDED LAST so existing peers' wire bytes are unchanged.
     public let sigV3: String?

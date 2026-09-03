@@ -11,12 +11,26 @@ import CryptoKit
 /// raw hybrid shared secrets, matching Android's DESIGNATED CANONICAL
 /// `HybridPqcKeyExchange.kt deriveSessionKeyTranscriptBound` byte-for-byte
 /// (see that function's own doc). `testCrossPlatformKatFixture` below is the
-/// shared fixed-input vector this follow-up's own audit required, cross-
-/// checked against the other two platforms' independently-computed outputs.
-/// The remaining tests verify the PROPERTIES the fix design requires
-/// directly: deterministic, distinct-per-transcript-hash, distinct-per-input,
-/// and a first-principles HKDF reconstruction of the exact `info`/`salt`
-/// layout this fix's own doc claims.
+/// shared fixed-input vector this follow-up's own audit required — as of the
+/// 2026-09-03 reconciliation pass, Android's own sibling test
+/// (`TranscriptBoundKdfSasSharedKatTest.kt`) and Desktop's
+/// (`test/kat/sessionKeyV4Transcript.kat.spec.ts`) were both RUN LIVE against
+/// this same fixed input and produced byte-identical hex (see
+/// `testCrossPlatformKatFixture`'s own doc for exactly what that does and
+/// does not prove about THIS platform). The remaining tests verify the
+/// PROPERTIES the fix design requires directly: deterministic,
+/// distinct-per-transcript-hash, distinct-per-input, and a first-principles
+/// HKDF reconstruction of the exact `info`/`salt` layout this fix's own doc
+/// claims.
+///
+/// W-HSCAPKEYFIX (2026-09-03) — this KDF/SAS construction itself was NEVER
+/// the bug. The reason it never actually ran on a live Android↔iOS call was a
+/// SEPARATE issue one layer up the stack: the wire capability bit that gates
+/// it (`AndroidHandshakeBundle.Capabilities.hsTranscriptBindV1`, formerly
+/// misspelled `transcriptBindV1` on this platform only) never negotiated
+/// `true` between real peers because the JSON key name didn't match Android's
+/// — see `QAudionCallIntegration.hsTranscriptBindV1Enabled`'s doc for the
+/// full account. Fixed there; nothing in this file's KDF/SAS math changed.
 final class SessionKeyTranscriptBoundTests: XCTestCase {
 
     private func fixedBytes(_ n: Int, seed: UInt8) -> Data {
@@ -128,11 +142,25 @@ final class SessionKeyTranscriptBoundTests: XCTestCase {
     ///
     /// Expected outputs were computed independently in Python against an
     /// RFC-5869-verified HKDF-SHA256 implementation (see this follow-up's own
-    /// commit message for the exact derivation and the values reported for
-    /// cross-checking against Android/Desktop). UNVERIFIED against a live
-    /// Swift/CryptoKit run — this session has no macOS/Xcode toolchain to
-    /// compile or execute this test suite; the expected constants below are
-    /// the by-hand HKDF computation, not a captured CryptoKit output.
+    /// commit message for the exact derivation).
+    ///
+    /// WHAT IS AND ISN'T LIVE-VERIFIED (2026-09-03 reconciliation pass, be
+    /// precise, don't overclaim): Android's `TranscriptBoundKdfSasSharedKatTest.kt`
+    /// was run for real (`./gradlew :qaudion-engine:testDebugUnitTest`) against
+    /// this exact fixed input and PASSED — confirmed live. Desktop's
+    /// `test/kat/sessionKeyV4Transcript.kat.spec.ts` was also run for real
+    /// (`npx vitest run`) against the same input and PASSED with byte-identical
+    /// output — confirmed live. So cross-platform convergence on this vector is
+    /// proven by live execution on 2 of the 3 platforms. THIS platform's own
+    /// contribution is NOT: this session has no macOS/Xcode toolchain, so this
+    /// test has never actually compiled or run. `deriveTranscriptBoundSessionKey`
+    /// and `ComputeSasUseCase.invoke` were instead read line-by-line against the
+    /// same Python oracle used for Android/Desktop and match exactly (same
+    /// `ikm`/`salt`/`info` construction, same HKDF-SHA256 call, same output
+    /// size) — that is source-level verification, the most rigorous check
+    /// available without a compiler, but it is NOT equivalent to a live run:
+    /// a real CryptoKit execution of this test is still the outstanding
+    /// confirmation step for iOS specifically.
     func testCrossPlatformKatFixture() {
         let pqcSharedSecret = Data(repeating: 0x11, count: 32)
         let x25519Shared = Data(repeating: 0x22, count: 32)

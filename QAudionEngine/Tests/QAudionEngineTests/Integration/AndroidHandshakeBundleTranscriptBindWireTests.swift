@@ -2,28 +2,40 @@ import XCTest
 @testable import QAudionEngine
 
 /// CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit): wire-encoding
-/// properties for the new additive fields — `Capabilities.transcriptBindV1`
+/// properties for the new additive fields — `Capabilities.hsTranscriptBindV1`
 /// and the bundle root's `sigV3`/`rekeyNonce`/`rekeyRound`. All FOUR MUST be
 /// omitted from the encoded JSON at their default (nil) so the wire bytes for
 /// a peer that has not shipped this fix stay byte-identical to today, mirroring
 /// the established "omit when default" convention `AndroidHandshakeBundlePskMixWireTests`
 /// already proves for `pskMixV1`/`pskRoles`.
+///
+/// W-HSCAPKEYFIX (2026-09-03) — this file's own round-trip tests below only
+/// ever encode-then-decode with iOS's OWN encoder/decoder, so they could not
+/// have caught (and did not catch) the real bug: iOS originally spelled this
+/// property `transcriptBindV1` while Android's kotlinx.serialization
+/// `Capabilities.hsTranscriptBindV1` field (no `@SerialName`, so the Kotlin
+/// property name IS the JSON key, exactly like iOS's un-annotated `Codable`
+/// struct) put it on the wire as `hsTranscriptBindV1` — a mismatch invisible
+/// to any test that only ever decodes iOS's own output. `testDecodesAndroidWireKeyLiteralHsTranscriptBindV1`
+/// below closes that gap by decoding a hand-written literal matching Android's
+/// actual wire spelling, so a future regression back to a mismatched name
+/// fails this suite immediately instead of silently breaking interop again.
 final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
 
-    // MARK: - Capabilities.transcriptBindV1
+    // MARK: - Capabilities.hsTranscriptBindV1
 
     func testCapabilitiesOmitsTranscriptBindV1WhenNil() throws {
         let caps = AndroidHandshakeBundle.Capabilities(ratchetV3: true)
         let data = try JSONEncoder().encode(caps)
         let json = String(data: data, encoding: .utf8) ?? ""
-        XCTAssertFalse(json.contains("transcriptBindV1"), "transcriptBindV1 must be omitted from the wire when nil, got: \(json)")
+        XCTAssertFalse(json.contains("hsTranscriptBindV1"), "hsTranscriptBindV1 must be omitted from the wire when nil, got: \(json)")
     }
 
     func testCapabilitiesEncodesTranscriptBindV1WhenSetTrue() throws {
-        let caps = AndroidHandshakeBundle.Capabilities(ratchetV3: true, transcriptBindV1: true)
+        let caps = AndroidHandshakeBundle.Capabilities(ratchetV3: true, hsTranscriptBindV1: true)
         let data = try JSONEncoder().encode(caps)
         let json = String(data: data, encoding: .utf8) ?? ""
-        XCTAssertTrue(json.contains("\"transcriptBindV1\":true"))
+        XCTAssertTrue(json.contains("\"hsTranscriptBindV1\":true"))
     }
 
     func testCapabilitiesDecodesLegacyWithoutTranscriptBindV1AsNil() throws {
@@ -31,7 +43,24 @@ final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
         {"ratchetV3":true}
         """
         let caps = try JSONDecoder().decode(AndroidHandshakeBundle.Capabilities.self, from: Data(legacyJson.utf8))
-        XCTAssertNil(caps.transcriptBindV1)
+        XCTAssertNil(caps.hsTranscriptBindV1)
+    }
+
+    /// W-HSCAPKEYFIX (2026-09-03) — THE test that would have caught the
+    /// original wire-key-name mismatch bug, and must exist going forward so
+    /// it can never silently regress back to a mismatched name. Decodes a
+    /// HAND-WRITTEN JSON literal using the EXACT key Android's
+    /// kotlinx.serialization `Capabilities.hsTranscriptBindV1` field actually
+    /// emits on the wire (no `@SerialName` override there either, so the
+    /// Kotlin property name IS the JSON key) — never a round-trip through
+    /// iOS's own encoder, which is precisely what let the original mismatch
+    /// hide from every other test in this file.
+    func testDecodesAndroidWireKeyLiteralHsTranscriptBindV1() throws {
+        let androidWireJson = """
+        {"ratchetV3":true,"hsTranscriptBindV1":true}
+        """
+        let caps = try JSONDecoder().decode(AndroidHandshakeBundle.Capabilities.self, from: Data(androidWireJson.utf8))
+        XCTAssertEqual(caps.hsTranscriptBindV1, true, "must decode Android's literal hsTranscriptBindV1 wire key to true, not nil/false")
     }
 
     // MARK: - Bundle root: sigV3 / rekeyNonce / rekeyRound
@@ -114,7 +143,7 @@ final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
             pqcPublicKey: "",
             x25519PublicKey: "",
             ciphertext: AndroidHandshakeBundle.Ciphertext(pqc: "cA==", x25519: "eA=="),
-            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true, transcriptBindV1: true),
+            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true, hsTranscriptBindV1: true),
             sigV3: "c2lnMw==",
             rekeyRound: 3
         )
@@ -122,7 +151,7 @@ final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AndroidHandshakeBundle.self, from: data)
         XCTAssertEqual(decoded.sigV3, original.sigV3)
         XCTAssertEqual(decoded.rekeyRound, original.rekeyRound)
-        XCTAssertEqual(decoded.capabilities?.transcriptBindV1, true)
+        XCTAssertEqual(decoded.capabilities?.hsTranscriptBindV1, true)
         XCTAssertNil(decoded.rekeyNonce)
     }
 }

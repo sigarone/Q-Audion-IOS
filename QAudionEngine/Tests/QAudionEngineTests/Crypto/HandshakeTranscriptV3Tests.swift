@@ -4,7 +4,7 @@ import CryptoKit
 
 /// CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — independent,
 /// first-principles reconstruction tests for the v3 transcript additions
-/// (`domainV3`, the 8th CAPS byte `transcriptBindV1`, `rekeyNonce`/`rekeyRound`,
+/// (`domainV3`, the 8th CAPS byte `hsTranscriptBindV1`, `rekeyNonce`/`rekeyRound`,
 /// `offerV3`, `acceptV3`).
 ///
 /// This file does NOT touch, re-derive, or re-run `offer`/`accept` (v1) or
@@ -73,7 +73,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
     private func offerV3Fixture(
         rekeyNonce: Data,
         rekeyRound: UInt32,
-        transcriptBindV1: Bool = true,
+        hsTranscriptBindV1: Bool = true,
         pskFingerprints: [String]? = nil,
         pskRoles: [Int]? = nil
     ) -> Data? {
@@ -87,7 +87,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
             dualCurvePublicKey: nil,
             ratchetV3: true, sframeV1: true, vkeyV1: true, sessionKdfV3: false,
             ratchetV4: true, srtpDirKeyV1: false, pskMixV1: true,
-            transcriptBindV1: transcriptBindV1,
+            hsTranscriptBindV1: hsTranscriptBindV1,
             ratchetV: 0x04, suiteId: 0x01,
             pskFingerprints: pskFingerprints, pskRoles: pskRoles,
             rekeyNonce: rekeyNonce, rekeyRound: rekeyRound
@@ -140,7 +140,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
             pqcPublicKey: pqc, x25519PublicKey: x25,
             strongBoxPublicKey: nil, dualCurvePublicKey: nil,
             ratchetV3: true, sframeV1: false, vkeyV1: true, sessionKdfV3: false, ratchetV4: true, srtpDirKeyV1: false,
-            pskMixV1: true, transcriptBindV1: true,
+            pskMixV1: true, hsTranscriptBindV1: true,
             ratchetV: 0x04, suiteId: 0x01,
             pskFingerprints: fps, pskRoles: roles,
             rekeyNonce: eightByteNonce, rekeyRound: 1
@@ -158,7 +158,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
         expected.append(lp(x25))
         expected.append(lp(nil))
         expected.append(lp(nil))
-        // caps8: ratchetV3,sframeV1,vkeyV1,sessionKdfV3,ratchetV4,srtpDirKeyV1,pskMixV1,transcriptBindV1
+        // caps8: ratchetV3,sframeV1,vkeyV1,sessionKdfV3,ratchetV4,srtpDirKeyV1,pskMixV1,hsTranscriptBindV1
         expected.append(contentsOf: [UInt8(1), 0, 1, 0, 1, 0, 1, 1])
         expected.append(0x04)
         expected.append(0x01)
@@ -210,7 +210,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
             ctPqc: ctPqc, ctX25519: ctX25,
             ctStrongBox: nil, ctDualCurve: nil,
             ratchetV3: true, sframeV1: true, vkeyV1: false, sessionKdfV3: true, ratchetV4: false, srtpDirKeyV1: true,
-            pskMixV1: false, transcriptBindV1: true,
+            pskMixV1: false, hsTranscriptBindV1: true,
             ratchetV: 0x04, suiteId: 0x01,
             selectedPskFingerprint: "abc",
             offerBinding: offerBindingV3,
@@ -257,7 +257,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
                 ctPqc: fixedBytes(24, seed: 0x70), ctX25519: fixedBytes(32, seed: 0x80),
                 ctStrongBox: nil, ctDualCurve: nil,
                 ratchetV3: true, sframeV1: true, vkeyV1: false, sessionKdfV3: true, ratchetV4: false, srtpDirKeyV1: true,
-                pskMixV1: false, transcriptBindV1: true,
+                pskMixV1: false, hsTranscriptBindV1: true,
                 ratchetV: 0x04, suiteId: 0x01,
                 selectedPskFingerprint: "abc",
                 offerBinding: fixedBytes(32, seed: 0x90),
@@ -270,12 +270,12 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
-    // MARK: - transcriptBindV1 is signed (closes the "strip a capability bit" gap for THIS bit itself)
+    // MARK: - hsTranscriptBindV1 is signed (closes the "strip a capability bit" gap for THIS bit itself)
 
     func testOfferV3TranscriptBindV1FlipChangesTranscript() {
-        let a = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1, transcriptBindV1: false)
-        let b = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1, transcriptBindV1: true)
-        XCTAssertNotEqual(a, b, "the 8th CAPS byte (transcriptBindV1) must itself be signed into the v3 transcript")
+        let a = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1, hsTranscriptBindV1: false)
+        let b = offerV3Fixture(rekeyNonce: eightByteNonce, rekeyRound: 1, hsTranscriptBindV1: true)
+        XCTAssertNotEqual(a, b, "the 8th CAPS byte (hsTranscriptBindV1) must itself be signed into the v3 transcript")
     }
 
     // MARK: - CALL-3: round number changes the transcript (closes the "identical epoch every round" gap)
@@ -339,8 +339,10 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
     // MARK: - Cross-platform KAT (2026-09-03 reconciliation pass)
 
     /// The reconciliation-pass KAT [PqcHandshake.HS_TRANSCRIPT_BIND_V1_ENABLED]'s
-    /// kdoc (Android) names as the go-live gate for `transcriptBindV1`/
-    /// `hsTranscriptBindV1`. Fixed inputs, byte-identical to Android's own
+    /// kdoc (Android) names as the go-live gate for `hsTranscriptBindV1`
+    /// (this platform's own property/constant of the same name after the
+    /// 2026-09-03 wire-key-name fix — see `QAudionCallIntegration
+    /// .hsTranscriptBindV1Enabled`'s doc). Fixed inputs, byte-identical to Android's own
     /// `HandshakeTranscriptV3SharedKatTest.kt`, which ran this exact vector for
     /// real via `./gradlew :qaudion-engine:testDebugUnitTest` and got the pinned
     /// hex below. That output was independently reimplemented byte-for-byte in
@@ -366,7 +368,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
             strongBoxPublicKey: nil,
             dualCurvePublicKey: nil,
             ratchetV3: true, sframeV1: true, vkeyV1: true, sessionKdfV3: true,
-            ratchetV4: false, srtpDirKeyV1: true, pskMixV1: true, transcriptBindV1: true,
+            ratchetV4: false, srtpDirKeyV1: true, pskMixV1: true, hsTranscriptBindV1: true,
             ratchetV: 3, suiteId: 1,
             pskFingerprints: nil, pskRoles: nil,
             rekeyNonce: rekeyNonce, rekeyRound: 1
@@ -393,7 +395,7 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
             ctStrongBox: nil,
             ctDualCurve: nil,
             ratchetV3: true, sframeV1: true, vkeyV1: true, sessionKdfV3: true,
-            ratchetV4: false, srtpDirKeyV1: true, pskMixV1: true, transcriptBindV1: true,
+            ratchetV4: false, srtpDirKeyV1: true, pskMixV1: true, hsTranscriptBindV1: true,
             ratchetV: 3, suiteId: 1,
             selectedPskFingerprint: nil,
             offerBinding: offerBinding,

@@ -56,7 +56,7 @@ public enum ComputeSasUseCase {
     ///   - initiator: reserved for future protocol transcripts; unused in v1.
     ///   - transcriptHash: CALL-4/HSID-002 (2026-09-02 protocol audit) — the
     ///     32-byte SHA-256 of the call's v3 handshake transcript, supplied
-    ///     ONLY when both peers negotiated the `transcriptBindV1` capability
+    ///     ONLY when both peers negotiated the `hsTranscriptBindV1` capability
     ///     and its signature verified. When non-nil, `info` becomes
     ///     `HkdfLabels.sasTranscriptBindV1 || transcriptHash` INSTEAD of
     ///     `SasConstants.infoWordsBytes` — a relay that strips a signed

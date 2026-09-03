@@ -246,7 +246,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// domain-separating the LiveKit/SFU media key from the raw group-ratchet
     /// `SK_0` (`GroupSenderKey.deriveSfuMediaKey`). Mirrors this platform's
     /// own `QAudionCallIntegration.innerAudioAadV1Enabled`/
-    /// `transcriptBindV1Enabled` pattern, and Android/Desktop's equivalent
+    /// `hsTranscriptBindV1Enabled` pattern, and Android/Desktop's equivalent
     /// constant for the SAME derivation — grep either sibling repo for
     /// `grpSfuMediaKeyV1`/`GRP_SFU_MEDIA_KEY_V1_ENABLED` before flipping this.
     ///
