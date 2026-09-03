@@ -440,12 +440,24 @@ struct ContentView: View {
         let name: String = outgoingDisplayName.isEmpty
             ? (appState.callContactId ?? "…")
             : outgoingDisplayName
+        // Key-exchange ring — only non-nil once the real PQC session key
+        // exists (same condition LiveInCallScreen.liveKeyInfo uses), which
+        // in practice is only true for the single .connected render frame
+        // this screen survives — see this plan's design-doc reference for
+        // why these are shown immediately rather than animated in.
+        let pskMethodLabel: String? = appState.pskMethod.isEmpty ? nil : appState.pskMethod
+        let sessionFingerprint: String? = {
+            guard let key = appState.callPqcSessionKey, !key.isEmpty else { return nil }
+            return LiveInCallScreen.sessionFingerprintFromKey(key)
+        }()
         return OutgoingCallScreen(
             peerDisplayName: name,
             avatarUrl: outgoingAvatarUrl,
             state: outState,
             elapsedSeconds: Int(appState.callService.callDurationSeconds),
             peerShortNumber: outgoingShortNumber,
+            pskMethodLabel: pskMethodLabel,
+            sessionFingerprint: sessionFingerprint,
             onHangup: { appState.endCall() }
         )
     }

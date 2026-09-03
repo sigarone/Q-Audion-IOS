@@ -761,7 +761,7 @@ struct LiveInCallScreen: View {
     /// Compute a short display fingerprint from the ML-KEM session key.
     /// Format: first 8 hex chars + "…" + last 4 hex chars of SHA-256(key).
     /// E.g. "7f3bd2a1…d2e9" — matches Android KeyInfoPanel.
-    private static func sessionFingerprintFromKey(_ key: Data) -> String {
+    static func sessionFingerprintFromKey(_ key: Data) -> String {
         let digest = SHA256.hash(data: key)
         var hex = ""
         for byte in digest {
