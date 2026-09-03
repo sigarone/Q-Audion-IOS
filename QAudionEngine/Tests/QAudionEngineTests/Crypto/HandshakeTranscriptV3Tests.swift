@@ -335,4 +335,79 @@ final class HandshakeTranscriptV3Tests: XCTestCase {
         // invalidating its own signature.
         XCTAssertFalse(HandshakeTranscript.verify(transcript: round2, signature: sig, signerIdentityKey: priv.publicKey.rawRepresentation))
     }
+
+    // MARK: - Cross-platform KAT (2026-09-03 reconciliation pass)
+
+    /// The reconciliation-pass KAT [PqcHandshake.HS_TRANSCRIPT_BIND_V1_ENABLED]'s
+    /// kdoc (Android) names as the go-live gate for `transcriptBindV1`/
+    /// `hsTranscriptBindV1`. Fixed inputs, byte-identical to Android's own
+    /// `HandshakeTranscriptV3SharedKatTest.kt`, which ran this exact vector for
+    /// real via `./gradlew :qaudion-engine:testDebugUnitTest` and got the pinned
+    /// hex below. That output was independently reimplemented byte-for-byte in
+    /// Python (plain SHA-256, no shared code with either platform) as a trusted
+    /// oracle, and THIS platform's `offerV3`/`acceptV3` (this file's own
+    /// `HandshakeTranscript.swift`) was then read line-by-line against that
+    /// oracle: same domain/role bytes, same `appendLP`/`capByte`/`appendU32BE`/
+    /// `advEnc` encoders, same field order, same 8-byte CAPS layout. No
+    /// divergence found. UNVERIFIED against a live Swift/CryptoKit run (no
+    /// macOS/Xcode toolchain available this session) — if this test is ever run
+    /// on real hardware/CI and fails, that is real signal a divergence exists
+    /// despite the source-level match; do not assume the fixture is stale
+    /// without re-diffing against Android's real run first.
+    func testCrossPlatformKatFixture() throws {
+        let callId = "kat-transcript-v3"
+        let rekeyNonce = Data(repeating: 0x05, count: 8)
+        guard let offerBytes = HandshakeTranscript.offerV3(
+            callId: callId,
+            signerIdentityKey: Data(repeating: 0x01, count: 32),
+            epochId: Data(repeating: 0x02, count: 16),
+            pqcPublicKey: Data(repeating: 0x03, count: 8),
+            x25519PublicKey: Data(repeating: 0x04, count: 8),
+            strongBoxPublicKey: nil,
+            dualCurvePublicKey: nil,
+            ratchetV3: true, sframeV1: true, vkeyV1: true, sessionKdfV3: true,
+            ratchetV4: false, srtpDirKeyV1: true, pskMixV1: true, transcriptBindV1: true,
+            ratchetV: 3, suiteId: 1,
+            pskFingerprints: nil, pskRoles: nil,
+            rekeyNonce: rekeyNonce, rekeyRound: 1
+        ) else {
+            XCTFail("offerV3 returned nil"); return
+        }
+        XCTAssertEqual(
+            offerBytes.map { String(format: "%02x", $0) }.joined(),
+            "71617564696f6e2d68616e647368616b652d7369672d76330100116b61742d7472616e7363726970742d76330020010101010101010101010101010101010101010101010101010101010101010100100202020202020202020202020202020200080303030303030303000804040404040404040000000001010101000101010301000100050505050505050500000001"
+        )
+
+        let offerBinding = Data(SHA256.hash(data: offerBytes))
+        XCTAssertEqual(
+            offerBinding.map { String(format: "%02x", $0) }.joined(),
+            "6450e27b0f5903f925eaadfaf131c821a471bd286f86dfea5b04ecd6e7d803c4"
+        )
+
+        guard let acceptBytes = HandshakeTranscript.acceptV3(
+            callId: callId,
+            signerIdentityKey: Data(repeating: 0x06, count: 32),
+            epochId: Data(repeating: 0x07, count: 16),
+            ctPqc: Data(repeating: 0x08, count: 8),
+            ctX25519: Data(repeating: 0x09, count: 8),
+            ctStrongBox: nil,
+            ctDualCurve: nil,
+            ratchetV3: true, sframeV1: true, vkeyV1: true, sessionKdfV3: true,
+            ratchetV4: false, srtpDirKeyV1: true, pskMixV1: true, transcriptBindV1: true,
+            ratchetV: 3, suiteId: 1,
+            selectedPskFingerprint: nil,
+            offerBinding: offerBinding,
+            responderPskFingerprints: nil, responderPskRoles: nil,
+            rekeyNonce: rekeyNonce, rekeyRound: 1
+        ) else {
+            XCTFail("acceptV3 returned nil"); return
+        }
+        XCTAssertEqual(acceptBytes.count, 181)
+
+        let transcriptHash = Data(SHA256.hash(data: acceptBytes))
+        XCTAssertEqual(
+            transcriptHash.map { String(format: "%02x", $0) }.joined(),
+            "dd2bffb7268dc908e45740d99a3754e49a3ee28c4d15a4816232df5ad3cc544e"
+        )
+    }
 }
