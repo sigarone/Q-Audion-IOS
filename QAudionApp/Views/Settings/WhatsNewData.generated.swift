@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1083",
+              date: "2026-09-04",
+              title: "v1.0.1083",
+              bullets: [
+                "fix(call): rename the shadowing ringPhase property, my qualified-call fix was wrong",
+              ]),
         .init(id: "v1.0.1082",
               date: "2026-09-04",
               title: "v1.0.1082",
               bullets: [
+                "chore: regenerate changelog for v1.0.1082",
                 "fix(call): qualify ringPhase(for:) call to unblock the TestFlight build",
               ]),
         .init(id: "v1.0.1081",
@@ -185,13 +192,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1064",
                 "fix(call): the VoIP session config never reached the live session — no input in the route, so BOTH capture engines were silent (W-SESSIONLOCK)",
-              ]),
-        .init(id: "v1.0.1063",
-              date: "2026-08-30",
-              title: "v1.0.1063",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1063",
-                "fix(call): epoch counter charged every sasReady re-firing — slot climbed mid-call to 13 (W-KEYSLOTROTATE v4)",
               ]),
     ]
 }
