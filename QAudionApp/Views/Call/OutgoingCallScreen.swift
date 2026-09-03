@@ -41,6 +41,16 @@ struct OutgoingCallScreen: View {
     /// Numero interno PBX del destinatario (es. "103").
     /// Priorità assoluta nel cerchietto dell'avatar.
     let peerShortNumber: String?
+    /// PSK binding method label ("NFC"/"QR"/"KMS"/…), non-nil only once a
+    /// real PSK was mixed into THIS call's session key — mirrors
+    /// `InCallScreen.KeyInfo.pskMethodLabel`. Shown as an immediate
+    /// `MetaPill`, not an animated reveal — see this file's kdoc-equivalent
+    /// note on `ringPhase` below for why.
+    let pskMethodLabel: String?
+    /// Session-key fingerprint, formatted like `LiveInCallScreen
+    /// .sessionFingerprintFromKey` — non-nil only once the real PQC session
+    /// key exists. Shown as an immediate `Text`, not an animated reveal.
+    let sessionFingerprint: String?
     let onHangup: () -> Void
 
     init(peerDisplayName: String,
@@ -49,6 +59,8 @@ struct OutgoingCallScreen: View {
          elapsedSeconds: Int = 0,
          errorMessage: String? = nil,
          peerShortNumber: String? = nil,
+         pskMethodLabel: String? = nil,
+         sessionFingerprint: String? = nil,
          onHangup: @escaping () -> Void) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
@@ -56,7 +68,32 @@ struct OutgoingCallScreen: View {
         self.elapsedSeconds = elapsedSeconds
         self.errorMessage = errorMessage
         self.peerShortNumber = peerShortNumber
+        self.pskMethodLabel = pskMethodLabel
+        self.sessionFingerprint = sessionFingerprint
         self.onHangup = onHangup
+    }
+
+    /// Pure function of `state` — no local timer, see the implementation
+    /// plan's Task 2 note on why (this screen is proven to survive exactly
+    /// one render frame at `.connected`, `ContentView.swift:426-433`).
+    private var ringPhase: KeyExchangeRing.Phase {
+        ringPhase(for: state)
+    }
+
+    /// True whenever a handshake round-trip is genuinely in flight —
+    /// everything except the terminal `.ended` state (and `.rekeying`,
+    /// which is dead in production wiring today but treated the same way
+    /// for safety).
+    private var ringConfirmed: Bool {
+        state == .dialing || state == .handshaking || state == .connected
+    }
+
+    private var ringPQCColorForText: Color {
+        Color(red: 0x8F / 255.0, green: 0xD3 / 255.0, blue: 0xFF / 255.0)
+    }
+
+    private var pskPillColor: Color {
+        Color(red: 0x7C / 255.0, green: 0x6F / 255.0, blue: 0xFF / 255.0)
     }
 
     var body: some View {
@@ -74,7 +111,7 @@ struct OutgoingCallScreen: View {
                         .padding(.bottom, 36)
 
                     ZStack {
-                        AvatarHalo(color: extras.pqcAccent, diameter: 240)
+                        KeyExchangeRing(phase: ringPhase, confirmed: ringConfirmed, ringSize: 240)
                         QAudionAvatar(displayName: peerDisplayName,
                                       imageURL: avatarUrl,
                                       size: 160,
@@ -82,6 +119,14 @@ struct OutgoingCallScreen: View {
                     }
                     .frame(width: 240, height: 240)
                     .padding(.bottom, 24)
+
+                    if let fp = sessionFingerprint {
+                        Text(fp)
+                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .tracking(2)
+                            .foregroundStyle(ringPQCColorForText)
+                            .padding(.bottom, 6)
+                    }
 
                     Text(peerDisplayName)
                         .font(.system(size: 36, weight: .semibold, design: .default))
@@ -100,6 +145,9 @@ struct OutgoingCallScreen: View {
                         MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
                         MetaPill("VOICE TRUST · ENROLLED", accent: extras.success, filled: true)
                         MetaPill("LOW LATENCY · 48ms", accent: extras.warning)
+                        if let method = pskMethodLabel {
+                            MetaPill("PSK · \(method)", accent: pskPillColor, filled: true)
+                        }
                     }
                     .padding(.bottom, 22)
 
