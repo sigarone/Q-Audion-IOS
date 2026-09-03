@@ -72,6 +72,17 @@ public final class PushKitProvider {
         public let timestamp: Int64
     }
 
+    /// W-CANCELPUSH (2026-09-03) — decoded form of the `type ==
+    /// "call_cancelled"` VoIP payload (server: `internal/push/apns.go`
+    /// `SendVoIPCallCancel`/`SendAlertCallCancel`). Wire: `{call_id}` only —
+    /// deliberately no caller identity, this is a stop-ringing signal for a
+    /// call the RECEIVING side already knows about (it already showed the
+    /// ring from the original `incoming_call` push), not new information.
+    /// Public so unit tests can use it.
+    public struct ParsedCancelPayload: Equatable, Sendable {
+        public let callId: UUID
+    }
+
     public enum DecodeError: Error {
         case wrongType(String)
         case missingField(String)
@@ -154,6 +165,22 @@ public final class PushKitProvider {
         return OpaqueCallWakeupPayload(kind: kind, senderHash: shash, timestamp: ts)
     }
 
+    /// W-CANCELPUSH — stateless parser for the call-cancel VoIP payload.
+    /// Pure function, testable on any platform, same discipline as the
+    /// other parsers above.
+    public static func parseCancelPayload(_ dict: [String: Any]) throws -> ParsedCancelPayload {
+        guard let type = dict["type"] as? String, type == "call_cancelled" else {
+            throw DecodeError.wrongType(dict["type"] as? String ?? "<absent>")
+        }
+        guard let callIdStr = dict["call_id"] as? String else {
+            throw DecodeError.missingField("call_id")
+        }
+        guard let callId = UUID(uuidString: callIdStr) else {
+            throw DecodeError.badUUID(callIdStr)
+        }
+        return ParsedCancelPayload(callId: callId)
+    }
+
     // MARK: - PushKit-only behaviors (iOS-only)
 
     #if canImport(PushKit) && os(iOS)
@@ -168,6 +195,13 @@ public final class PushKitProvider {
     /// SOME incoming call to CallKit before the push completes — see
     /// `AppState`'s wiring for how it does that with no identity to show yet.
     public typealias IncomingOpaqueCallWakeupHandler = (OpaqueCallWakeupPayload) async -> Void
+    /// W-CANCELPUSH — fired for a `type == "call_cancelled"` VoIP push. Same
+    /// iOS mandate as the other handlers: it MUST report SOME call to
+    /// CallKit before the push completes — in practice this means reporting
+    /// the SAME `callId` UUID that is already ringing (from the original
+    /// invite) and immediately ending it, so CallKit dismisses that ring
+    /// without ever surfacing a new one. See `AppState`'s wiring.
+    public typealias IncomingCancelHandler = (ParsedCancelPayload) async -> Void
     /// Fired when a VoIP push arrives that we CANNOT decode into a call
     /// (wrong type / missing field / bad UUID / non-[String:Any] payload).
     /// The handler MUST still report-and-end a placeholder call to CallKit —
@@ -179,6 +213,7 @@ public final class PushKitProvider {
     private let onIncomingCall: IncomingHandler
     private let onIncomingGroupCall: IncomingGroupHandler?
     private let onIncomingOpaqueCallWakeup: IncomingOpaqueCallWakeupHandler?
+    private let onIncomingCancel: IncomingCancelHandler?
     private let onMalformedPush: MalformedHandler?
 
     private final class Delegate: NSObject, PKPushRegistryDelegate {
@@ -232,6 +267,17 @@ public final class PushKitProvider {
                     await opaqueCallHandler(opaqueCall)
                     completion()
                 }
+            } else if let owner = self.owner,
+                      let cancelHandler = owner.onIncomingCancel,
+                      let cancel = try? PushKitProvider.parseCancelPayload(dict) {
+                // W-CANCELPUSH — same mandate as every other branch: the
+                // handler reports (and immediately ends) a call to CallKit
+                // before completion(). If no handler is wired, fall through
+                // to onMalformedPush rather than completing silently.
+                Task {
+                    await cancelHandler(cancel)
+                    completion()
+                }
             } else {
                 Task {
                     await self.owner?.onMalformedPush?()
@@ -247,11 +293,13 @@ public final class PushKitProvider {
                 onIncomingCall: @escaping IncomingHandler,
                 onIncomingGroupCall: IncomingGroupHandler? = nil,
                 onIncomingOpaqueCallWakeup: IncomingOpaqueCallWakeupHandler? = nil,
+                onIncomingCancel: IncomingCancelHandler? = nil,
                 onMalformedPush: MalformedHandler? = nil) {
         self.onTokenUpdate = onTokenUpdate
         self.onIncomingCall = onIncomingCall
         self.onIncomingGroupCall = onIncomingGroupCall
         self.onIncomingOpaqueCallWakeup = onIncomingOpaqueCallWakeup
+        self.onIncomingCancel = onIncomingCancel
         self.onMalformedPush = onMalformedPush
         self.registry = PKPushRegistry(queue: .main)
         delegate.owner = self

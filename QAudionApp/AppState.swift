@@ -3672,6 +3672,38 @@ final class AppState: ObservableObject {
                     await self?.reconcileOpaqueCallWakeup(placeholderCallKitId: placeholderUuid)
                 }
             },
+            onIncomingCancel: { [weak self] payload in
+                guard let self = self else { return }
+                // W-CANCELPUSH (2026-09-03) — the caller hung up before this
+                // device answered, and the WS-based `call_hangup`/
+                // `call_cancel` relay may have missed the window (see
+                // APNsClient.SendVoIPCallCancel's doc for the live incident
+                // this closes). Report-then-immediately-end the SAME
+                // `payload.callId` UUID the original `incoming_call` push
+                // already reported to CallKit — CallKit recognizes the UUID
+                // and dismisses THAT ring, satisfying the PushKit mandate
+                // without ever surfacing a new visible call. `.remoteEnded`
+                // (not `.failed`) because this genuinely is the far end
+                // ending the call, not an error on this device.
+                //
+                // Idempotent by construction: if this device already
+                // answered/ended the call itself before the push arrived,
+                // CallKit has no record of `payload.callId` to match against
+                // (or it is already ended) and this is a harmless no-op —
+                // same as `onMalformedPush` below reporting a UUID CallKit
+                // has never seen.
+                let diag: String = "[AppState] W-CANCELPUSH PushKit→cancel uuid=\(payload.callId.uuidString.prefix(8))…"
+                print(diag)
+                await self.callKit?.reportIncomingCall(uuid: payload.callId, callerName: "Q-Audion", hasVideo: false)
+                await self.callKit?.reportCallEnded(uuid: payload.callId, reason: .remoteEnded)
+                // Same local teardown a WS-delivered call_cancel/call_hangup
+                // would have driven for this call, in case the push wins
+                // the race against a delayed WS message for the SAME call:
+                // stop any ring UI/sound and clear latched invite state so
+                // this device doesn't also show its own stale ring screen.
+                self.stopInAppRingtone()
+                self.incomingCallRingVisible = false
+            },
             onMalformedPush: { [weak self] in
                 guard let self = self else { return }
                 // A VoIP push arrived that we cannot turn into a call (malformed /

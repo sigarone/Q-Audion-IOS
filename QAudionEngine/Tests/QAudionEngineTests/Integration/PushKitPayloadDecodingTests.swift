@@ -150,4 +150,37 @@ final class PushKitPayloadDecodingTests: XCTestCase {
         let dict: [String: Any] = ["type": "opaque_wakeup", "kind": "call"]
         XCTAssertThrowsError(try PushKitProvider.parsePayload(dict))
     }
+
+    // MARK: - W-CANCELPUSH (2026-09-03) — call-cancel payload. Wire shape:
+    // server internal/push/apns.go SendVoIPCallCancel/SendAlertCallCancel,
+    // {type:"call_cancelled", call_id}. Deliberately no caller identity.
+
+    func test_decodesCancelPayload() throws {
+        let dict: [String: Any] = [
+            "type": "call_cancelled",
+            "call_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        ]
+        let parsed = try PushKitProvider.parseCancelPayload(dict)
+        XCTAssertEqual(parsed.callId.uuidString.lowercased(), "f47ac10b-58cc-4372-a567-0e02b2c3d479")
+    }
+
+    func test_cancelPayload_rejectsWrongType() throws {
+        let dict: [String: Any] = ["type": "incoming_call", "call_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"]
+        XCTAssertThrowsError(try PushKitProvider.parseCancelPayload(dict))
+    }
+
+    func test_cancelPayload_rejectsMissingCallId() throws {
+        let dict: [String: Any] = ["type": "call_cancelled"]
+        XCTAssertThrowsError(try PushKitProvider.parseCancelPayload(dict))
+    }
+
+    func test_cancelPayload_rejectsBadUUID() throws {
+        let dict: [String: Any] = ["type": "call_cancelled", "call_id": "not-a-uuid"]
+        XCTAssertThrowsError(try PushKitProvider.parseCancelPayload(dict))
+    }
+
+    func test_cancelPayloadTypeIsRejectedByPlaintextParser() throws {
+        let dict: [String: Any] = ["type": "call_cancelled", "call_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"]
+        XCTAssertThrowsError(try PushKitProvider.parsePayload(dict))
+    }
 }
