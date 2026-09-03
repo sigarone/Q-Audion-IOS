@@ -45,7 +45,7 @@ struct OutgoingCallScreen: View {
     /// real PSK was mixed into THIS call's session key — mirrors
     /// `InCallScreen.KeyInfo.pskMethodLabel`. Shown as an immediate
     /// `MetaPill`, not an animated reveal — see this file's kdoc-equivalent
-    /// note on `ringPhase` below for why.
+    /// note on `currentRingPhase` below for why.
     let pskMethodLabel: String?
     /// Session-key fingerprint, formatted like `LiveInCallScreen
     /// .sessionFingerprintFromKey` — non-nil only once the real PQC session
@@ -76,12 +76,20 @@ struct OutgoingCallScreen: View {
     /// Pure function of `state` — no local timer, see the implementation
     /// plan's Task 2 note on why (this screen is proven to survive exactly
     /// one render frame at `.connected`, `ContentView.swift:426-433`).
-    private var ringPhase: KeyExchangeRing.Phase {
-        // Qualified with the module name: an unqualified call here resolves
-        // to this same computed property (Swift shadowing rule), not the
-        // free function in KeyExchangeRing.swift — see that function's
-        // definition for the actual phase-mapping logic.
-        QAudionApp.ringPhase(for: state)
+    // Named `currentRingPhase`, NOT `ringPhase`: a same-named computed
+    // property calling the free function `ringPhase(for:)` (KeyExchangeRing
+    // .swift) from its own body does not disambiguate by argument label —
+    // Swift resolves the bare `ringPhase` callee to this property itself
+    // ("use of 'ringPhase' refers to instance method rather than global
+    // function"). Module-qualifying (`QAudionApp.ringPhase(for:)`) does NOT
+    // fix it either: this target's `@main` entry type is ALSO named
+    // `QAudionApp` (QAudionApp.swift), so `QAudionApp.` resolves to that
+    // type, not the module, and the compiler reports "type 'QAudionApp' has
+    // no member 'ringPhase'" instead. Renaming the property is the only fix
+    // that isn't fighting Swift's name lookup — see the free function's own
+    // definition for the actual phase-mapping logic.
+    private var currentRingPhase: KeyExchangeRing.Phase {
+        ringPhase(for: state)
     }
 
     /// True whenever a handshake round-trip is genuinely in flight —
@@ -115,7 +123,7 @@ struct OutgoingCallScreen: View {
                         .padding(.bottom, 36)
 
                     ZStack {
-                        KeyExchangeRing(phase: ringPhase, confirmed: ringConfirmed, ringSize: 240)
+                        KeyExchangeRing(phase: currentRingPhase, confirmed: ringConfirmed, ringSize: 240)
                         QAudionAvatar(displayName: peerDisplayName,
                                       imageURL: avatarUrl,
                                       size: 160,
