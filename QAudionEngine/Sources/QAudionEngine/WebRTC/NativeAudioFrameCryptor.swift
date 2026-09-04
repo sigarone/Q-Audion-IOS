@@ -76,19 +76,36 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
         return senderCryptor != nil
     }
 
-    /// Publish / rotate the 32-byte raw PQC session key at index 0. Safe to
-    /// call before OR after the cryptors are attached.
-    public func setKey(_ key: Data, slot: Int32 = 0) {
+    /// Install [key] into the decode ring at [slot] — this ALONE is what
+    /// lets this device decode a peer's frames already tagged with this
+    /// slot/epoch (the receiver is driven entirely by the on-wire key
+    /// index, never by this device's own sender state). Callable
+    /// immediately upon deriving the key; does NOT touch this device's own
+    /// outbound frames (see `switchSender`). Safe to call before OR after
+    /// the cryptors are attached. Returns `false` if the key is the wrong
+    /// size (nothing installed).
+    public func installKey(_ key: Data, slot: Int32) -> Bool {
         guard key.count == 32 else {
-            print("[NativeAudioFrameCryptor] setKey ignored — key is \(key.count) bytes, expected 32")
-            return
+            print("[NativeAudioFrameCryptor] installKey ignored — key is \(key.count) bytes, expected 32")
+            return false
         }
         lock.lock(); defer { lock.unlock() }
         currentKeyIndex = Int(slot)
         keyProvider.setSharedKey(key, with: slot)
-        senderCryptor?.keyIndex = slot
         hasKey = true
         print("[NativeAudioFrameCryptor] key installed at slot \(slot)")
+        return true
+    }
+
+    /// Switch THIS device's own outbound audio frames to announce [slot]
+    /// (the slot `installKey` just installed). Call this only once the
+    /// caller has decided it is safe to switch (see `RekeySwitchGate`) —
+    /// this function itself has no timing/coordination logic.
+    public func switchSender(slot: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        currentSenderKeyIndex = Int(slot)
+        senderCryptor?.keyIndex = slot
+        print("[NativeAudioFrameCryptor] sender switched to slot \(slot)")
     }
 
     // W-KEYSLOTROTATE (2026-08-30) — Android rotates the FrameCryptor key
@@ -110,6 +127,13 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     // one place that can tell transitional / real / rekey apart.
     private var currentKeyIndex: Int = 0
 
+    /// W-GATEBYPASS (2026-09-04) — see NativeVideoFrameCryptor's identical
+    /// field for the full rationale: the slot `switchSender` last ACTUALLY
+    /// announced, distinct from `currentKeyIndex` (last INSTALLED). Seeding
+    /// a freshly (re)created sender cryptor from this instead of
+    /// `currentKeyIndex` avoids bypassing a pending RekeySwitchGate window.
+    private var currentSenderKeyIndex: Int = 0
+
     /// Create + enable the sender cryptor. Idempotent. Must run on the
     /// WebRTC signalling thread / a WebRTC callback, same constraint as
     /// ``NativeVideoFrameCryptor/attachSender(_:)``.
@@ -125,7 +149,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
             print("[NativeAudioFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
             return false
         }
-        c.keyIndex = Int32(currentKeyIndex)  // W-KEYSLOTROTATE
+        c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
         c.enabled = true
         senderCryptor = c
         print("[NativeAudioFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")

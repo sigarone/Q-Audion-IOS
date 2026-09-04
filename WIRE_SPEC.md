@@ -952,22 +952,52 @@ offerer-side only, per-platform, months apart; iOS never had it.)
   receiver MUST re-latch sink + cryptor to the new mid (and MAY treat the
   old one as closed).
 
-### 8.7 Media readiness & keyframe recovery (v1.1)
+### 8.7 Media readiness & keyframe recovery (v1.2)
 
 - `call_media_ready`: the RECEIVER sends it when its receiver-cryptor is
   BOTH keyed and bound to the negotiated video mid. The SENDER SHOULD
   hold video TX (camera or gate) until ready arrives or a **2 s** timeout
   elapses (timeout ⇒ proceed as today — the handshake is an optimization
   for correctness, never a hard gate: signal-not-kill). On receiving
-  ready, the sender MUST force an IDR.
+  ready for the FIRST key of a call (`key_epoch = 0`), the sender MUST
+  force an IDR.
 - `video_keyframe_request`: receiver→sender; the sender MUST force a
   local encoder IDR. Senders rate-limit to 1/s. Rationale: the E2EE
   frame-transform suppresses libwebrtc's native PLI on every platform,
   so decoder recovery REQUIRES an explicit wire path. Platforms SHOULD
   additionally run a periodic (~5 s) sender-side IDR forcer.
-- Rekey: `key_epoch` is monotonic per call. Receivers keep the PREVIOUS
-  video key valid for a grace window (mirror of the audio `previousKey`
-  fallback) so in-flight frames sealed under the old epoch still decrypt.
+- Rekey: `key_epoch` is monotonic per call, tracked INDEPENDENTLY per
+  media kind (audio and video can be at different epochs at the same
+  instant on platforms that track them separately). Receivers keep the
+  PREVIOUS key valid for a grace window (mirror of the audio
+  `previousKey` fallback) so in-flight frames sealed under the old epoch
+  still decrypt.
+- **Re-key media-deafness fix (v1.2, 2026-09-04)** — `call_media_ready`
+  gained a `media` field (`"audio" | "video"`, additive; a receiver that
+  predates it treats an absent value as `"video"`, the only kind that
+  existed before) and is now sent on EVERY re-key (`key_epoch > 0`), not
+  just once per call. On deriving a new epoch's key, a device MUST
+  install it into its own decode ring IMMEDIATELY (decode is driven
+  purely by the on-wire `key_epoch`, never by the device's own sender
+  state, so this needs no coordination) and SHOULD defer switching its
+  OWN sender to the new epoch until it receives the peer's
+  `call_media_ready` for that exact `(media, key_epoch)` pair or the same
+  **2 s** timeout elapses (identical signal-not-kill bound as the
+  original epoch-0 case — a peer that never sends a per-epoch ready
+  always falls through this same timeout, so the fix degrades cleanly
+  against an unpatched peer). A `call_media_ready` with `key_epoch > 0`
+  means "I installed your new epoch, safe for you to switch to it" and
+  MUST NOT be conflated with the original epoch-0 semantics ("I'm bound,
+  force an IDR") — a receiving platform must only react to a
+  `key_epoch > 0` ready when it is the exact epoch that platform's own
+  re-key machinery is currently waiting on, not merely because the
+  number is nonzero (a legacy per-call reannounce for stall recovery can
+  also carry whatever the LIVE epoch happens to be at the time, not a
+  hardcoded 0 — this exact confusion was caught and fixed on Android by
+  a final pre-merge review, and independently guarded against on iOS via
+  an explicit epoch-match check before the new inbound branch fires).
+  Shipped: Android (`qaudion-android-new`, commit `98beab386`), iOS
+  (this repo, branch `fix/rekey-media-deafness-skew`). Desktop pending.
 
 ### 8.8 Transport rails & key custody
 

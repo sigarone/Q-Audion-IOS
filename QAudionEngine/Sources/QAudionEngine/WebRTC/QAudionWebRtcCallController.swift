@@ -138,6 +138,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// @MainActor themselves (same contract as onRemoteVideoTrack).
     public var onInboundVideoReady: ((String?) -> Void)?
 
+    /// WIRE_SPEC §8.7 v1.2 — fired once a mid-call REKEY (`key_epoch > 0`)
+    /// has installed a new key for `media` ("audio"/"video") and armed the
+    /// matching `RekeySwitchGate` (see `videoSwitchGate`/`audioSwitchGate`
+    /// below). Asks the app layer to announce readiness to the peer —
+    /// `call_media_ready(media:, keyEpoch:, dir:"recv")` — same
+    /// closure-callback indirection as `onInboundVideoReady` (CLAUDE.md
+    /// §16: this controller must not import AppState/BCryptoCallingApiImpl
+    /// directly). AppState is responsible for its own send-side dedup
+    /// (a redundant re-arm of the same epoch must not double-send — see
+    /// `sendRekeyMediaReady`'s doc). May fire from the WebRTC signalling
+    /// thread or wherever the PQC key was last published — consumers hop
+    /// to @MainActor themselves (same contract as `onInboundVideoReady`).
+    public var onRekeyReady: ((_ media: String, _ epoch: Int32) -> Void)?
+
     /// WIRE_SPEC §8.7 (INT-4a) — fired when the RECEIVER-side video decode
     /// has STALLED: the inbound video track exists and bytes are arriving,
     /// but `framesDecoded` has not advanced for ~5s (the decoder is missing
@@ -661,6 +675,43 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// slot handed to the FrameCryptors is `epoch % 16`, matching
     /// Android's ring exactly.
     public var pqcSessionKeyEpoch: Int32 = 0
+
+    /// WIRE_SPEC §8.7 v1.2 — re-key media-deafness fix. Coordinates
+    /// deferring THIS device's own sender switch to a newly-installed
+    /// re-key epoch until the peer confirms readiness (`call_media_ready`)
+    /// or a 2s timeout elapses (`armRekeySwitch`/`attemptRekeySwitch`
+    /// below). One gate per media kind, mirroring Android's shape, even
+    /// though both are typically armed to the SAME epoch today given the
+    /// one shared `pqcSessionKeyEpoch` above (see the design doc's own
+    /// note on this — docs/superpowers/specs/2026-09-04-rekey-media-
+    /// deafness-skew.md). `var`, not `let`: reset to a fresh instance in
+    /// `closeSynchronously()` — this class's own teardown comments
+    /// ("reset ... for the NEXT call") show it is written to tolerate
+    /// being reused across calls, so a stale armed/switched epoch must
+    /// never leak into a later call (the exact bug class Android's Task 4
+    /// implementer found and fixed on the Kotlin side).
+    /// ⚠️ NSLock-protected by `txHoldLock`, same as `_videoTxHoldTimeoutTask`
+    /// below — this class is `@unchecked Sendable` (rekeys can arm from the
+    /// WebRTC signalling thread while `closeSynchronously()` reassigns these
+    /// from @MainActor teardown). NEVER read or write these two vars
+    /// directly outside `txHoldLock` — use `switchGate(for:)`, which is the
+    /// only lock-guarded accessor.
+    var videoSwitchGate = RekeySwitchGate()
+    var audioSwitchGate = RekeySwitchGate()
+
+    /// In-flight 2s rekey-switch timeout tasks (one per `armRekeySwitch`
+    /// call). Cancelled in `closeSynchronously()` — without this, a stale
+    /// timeout from a call that already ended could fire against a REUSED
+    /// controller's next call and, on an unlucky same-epoch coincidence,
+    /// spuriously switch the new call's own still-pending rekey early.
+    /// Mirrors this file's existing task-cancel-on-teardown discipline
+    /// (`restartPathMonitor`, `iceRecoveryWatchdogTask`,
+    /// `_videoTxHoldTimeoutTask`, all cancelled in the same method).
+    /// ⚠️ NSLock-protected by `txHoldLock` — same reasoning as
+    /// `videoSwitchGate`/`audioSwitchGate` above (appended from
+    /// `armRekeySwitch`, possibly off-@MainActor; cleared from
+    /// `closeSynchronously()`). Every read/write site must hold the lock.
+    private var rekeySwitchTimeoutTasks: [Task<Void, Never>] = []
 
     public var pqcSessionKey: Data? {
         didSet {
@@ -2042,6 +2093,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         txHoldLock.lock()
         _peerMediaReadySeen = false
         txHoldLock.unlock()
+        // WIRE_SPEC §8.7 v1.2 — drop any in-flight rekey-switch timeouts
+        // and re-arm both gates fresh, so a REUSED controller's next call
+        // starts with no pending/switched epoch (see videoSwitchGate's own
+        // doc for the exact bug class this closes). Guarded by the SAME
+        // txHoldLock as `_videoTxHoldTimeoutTask` right above — this class
+        // is `@unchecked Sendable` and genuinely multi-threaded (rekeys can
+        // arm from the WebRTC signalling thread while teardown runs from
+        // @MainActor), so the array append/clear and the two var
+        // reassignments below need the identical lock discipline, not just
+        // the identical cancel-on-teardown behavior.
+        txHoldLock.lock()
+        rekeySwitchTimeoutTasks.forEach { $0.cancel() }
+        rekeySwitchTimeoutTasks.removeAll()
+        videoSwitchGate = RekeySwitchGate()
+        audioSwitchGate = RekeySwitchGate()
+        txHoldLock.unlock()
         state = .disconnected
     }
 
@@ -2833,6 +2900,94 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         installAudioSrtpIfPossible()
     }
 
+    // MARK: - WIRE_SPEC §8.7 v1.2 — rekey sender-switch gate
+
+    /// Snapshot the `media` gate's CURRENT object reference under
+    /// `txHoldLock`. This class is `@unchecked Sendable` and genuinely
+    /// multi-threaded (rekeys arm from the WebRTC signalling thread while
+    /// `closeSynchronously()` can reassign `videoSwitchGate`/
+    /// `audioSwitchGate` to fresh instances from @MainActor teardown) — so
+    /// reading the `var` property itself needs the same lock discipline as
+    /// `_videoTxHoldTimeoutTask`, independent of `RekeySwitchGate`'s own
+    /// internal NSLock (which only protects ITS state, not this class's
+    /// reference to it). Once a valid reference is captured here, calling
+    /// its own thread-safe `arm`/`attemptSwitch`/`currentPendingEpoch` needs
+    /// no further lock — `RekeySwitchGate` already serializes those itself.
+    private func switchGate(for media: String) -> RekeySwitchGate {
+        txHoldLock.lock()
+        defer { txHoldLock.unlock() }
+        return (media == "audio") ? audioSwitchGate : videoSwitchGate
+    }
+
+    /// After installing a REKEYED (`epoch > 0`) key for `media`, arm the
+    /// matching `RekeySwitchGate`, ask the app layer to announce readiness
+    /// (`onRekeyReady`), and race the SAME 2s signal-not-kill timeout this
+    /// file already uses for the video TX-hold (`beginVideoTxHold` above —
+    /// same `Task { try? await Task.sleep(nanoseconds: 2_000_000_000) }`
+    /// idiom) against the peer's own `call_media_ready`. Whichever side
+    /// wins calls `attemptRekeySwitch` — idempotent, so the loser's call
+    /// is a harmless no-op. Never called for `epoch == 0` (the original
+    /// first-key-of-a-call behavior stays an immediate, ungated switch —
+    /// see the two call sites below).
+    private func armRekeySwitch(media: String, epoch: Int32) {
+        let gate = switchGate(for: media)
+        gate.arm(epoch)
+        onRekeyReady?(media, epoch)
+        let task = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.attemptRekeySwitch(media: media, epoch: epoch)
+        }
+        // txHoldLock-guarded append — see switchGate's doc for why this
+        // array needs the same lock as the gate references: it is mutated
+        // from whichever thread arms a rekey AND cleared from
+        // closeSynchronously()'s @MainActor teardown. Entries are only
+        // pruned in bulk at teardown, not per-completion — this file has no
+        // cheap "has this Task finished" check for a non-throwing
+        // `Task<Void, Never>`, and RekeySwitchGate's own idempotency makes a
+        // stale entry harmless (its eventual fire is a no-op), so the array
+        // is bounded by "rekeys this call", not by anything unbounded.
+        txHoldLock.lock()
+        rekeySwitchTimeoutTasks.append(task)
+        txHoldLock.unlock()
+    }
+
+    /// Attempt to switch THIS device's own `media` sender to `epoch`,
+    /// honoring `RekeySwitchGate`'s idempotent exact-epoch match. Called
+    /// from both sides of the race: this file's own 2s timeout task above,
+    /// and AppState's inbound `call_media_ready` handler (only once it has
+    /// confirmed `epoch` is the one this gate is actually waiting on — see
+    /// `rekeySwitchGateArmedEpoch(media:)` below). Returns `false` for a
+    /// stale, premature, or already-switched epoch — a legitimate no-op,
+    /// not an error.
+    @discardableResult
+    public func attemptRekeySwitch(media: String, epoch: Int32) -> Bool {
+        let gate = switchGate(for: media)
+        guard gate.attemptSwitch(epoch) else { return false }
+        let slot = epoch % 16
+        if media == "audio" {
+            peerConnection?.nativeAudioCryptor?.switchSender(slot: slot)
+        } else {
+            peerConnection?.nativeVideoCryptor?.switchSender(slot: slot)
+        }
+        return true
+    }
+
+    /// The epoch `media`'s `RekeySwitchGate` is currently armed for, or
+    /// `-1` if `arm` has never been called this call. AppState MUST check
+    /// this equals the received `key_epoch` BEFORE calling
+    /// `attemptRekeySwitch` — a `call_media_ready` with `key_epoch > 0` is
+    /// NOT by itself proof this is the rekey-ready this controller is
+    /// waiting on (e.g. a legacy/self-heal reannounce could in principle
+    /// carry a live nonzero epoch for an unrelated reason); only an EXACT
+    /// match against the currently-armed epoch means fall through to the
+    /// dedicated rekey handling instead of the pre-existing epoch-0-style
+    /// path. This is the specific check Android's final review added after
+    /// catching a bug of exactly this shape.
+    public func rekeySwitchGateArmedEpoch(media: String) -> Int32 {
+        switchGate(for: media).currentPendingEpoch()
+    }
+
     /// IOS-C4b (2026-08-26) — install/rekey the native SRTP audio path the
     /// moment BOTH the peer's negotiated capabilities (`audioSrtpV1` in the
     /// intersection) AND a 32-byte PQC session key are available. Mirrors
@@ -2888,10 +3043,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // rebindReceiver's own doc for the live-call failure this closes.
         _ = peerConnection?.rebindAudioReceiverCryptorPostNegotiation()
         let participant = recipientId ?? "peer"
+        let epoch = pqcSessionKeyEpoch
+        let slot = epoch % 16
         let installed = peerConnection?.activateNativeAudioSrtp(
             key: key,
             participantId: participant,
-            slot: pqcSessionKeyEpoch % 16,
+            slot: slot,
             txSink: { [weak self] pcm in
                 // PCM-TAP PARITY (TX/local mic) — mirrors Android's
                 // `feedOwnerContinuity` wiring on `audioSrtpTxSink`. Tier 1
@@ -2906,6 +3063,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if installed {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")
             print("audiosrtp tx=1")
+            // WIRE_SPEC §8.7 v1.2 — `activateNativeAudioSrtp` only installs
+            // the key now (see its own updated doc); it no longer switches
+            // the sender itself. Epoch 0 (this call's first audio key)
+            // switches immediately — original, ungated behavior, unchanged.
+            // Epoch > 0 (a live rekey) defers the switch until the peer's
+            // `call_media_ready` for this exact epoch or a 2s timeout,
+            // exactly like the video path below.
+            if epoch > 0 {
+                armRekeySwitch(media: "audio", epoch: epoch)
+            } else {
+                peerConnection?.nativeAudioCryptor?.switchSender(slot: slot)
+            }
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -3082,7 +3251,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if case .native = videoSealer {
             let k = pqcSessionKeyProvider()
             if k.count == 32, let c = peerConnection?.nativeVideoCryptor {
-                c.setKey(k, slot: pqcSessionKeyEpoch % 16)
+                let epoch = pqcSessionKeyEpoch
+                let slot = epoch % 16
+                if c.installKey(k, slot: slot) {
+                    // WIRE_SPEC §8.7 v1.2 — epoch 0 (re-publishing this
+                    // call's first key, e.g. a duplicate didSet firing
+                    // without an actual rekey) switches immediately,
+                    // matching the original combined-setKey behavior.
+                    // Epoch > 0 (a real rekey) defers the switch until the
+                    // peer's call_media_ready for this exact epoch or a 2s
+                    // timeout — see armRekeySwitch's doc.
+                    if epoch > 0 {
+                        armRekeySwitch(media: "video", epoch: epoch)
+                    } else {
+                        c.switchSender(slot: slot)
+                    }
+                }
                 peerConnection?.attachVideoSenderCryptor()  // idempotent
                 print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
             }
@@ -3158,7 +3342,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // codec-layer LiveKit decorator is NO LONGER used (it broke H265).
             let participant = recipientId ?? "peer"
             let cryptor = peerConnection?.ensureNativeVideoCryptor(participantId: participant)
-            cryptor?.setKey(kVideo, slot: pqcSessionKeyEpoch % 16)
+            // WIRE_SPEC §8.7 v1.2 — this branch only ever runs ONCE per
+            // call (the early-return guard above latches `videoSealer`
+            // after the first pick), so this is structurally the FIRST key
+            // video ever sees this call, regardless of the literal
+            // `pqcSessionKeyEpoch` value — the ORIGINAL, ungated
+            // install+switch behavior stays here unchanged. Only the
+            // REKEY branch above (`if case .native = videoSealer`) gates
+            // the switch on peer readiness.
+            let initialSlot = pqcSessionKeyEpoch % 16
+            if let c = cryptor, c.installKey(kVideo, slot: initialSlot) {
+                c.switchSender(slot: initialSlot)
+            }
             // W-VIDEOSENDHEALTH (2026-08-27) — attachVideoSenderCryptor()'s
             // Bool result used to be discarded here, and videoSealer is set
             // to .native unconditionally right below regardless of whether

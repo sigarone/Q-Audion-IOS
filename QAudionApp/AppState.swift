@@ -5924,9 +5924,36 @@ final class AppState: ObservableObject {
         // WIRE_SPEC §8.7 (v1.1) — media readiness + keyframe recovery.
         // Both events funnel into the same honor path: force a local
         // encoder IDR for the active call (rate-limited to 1/s inside).
-        ws.onCallMediaReady = { [weak self] callId, senderId, _, _, _ in
+        //
+        // WIRE_SPEC §8.7 v1.2 — a `call_media_ready` with `key_epoch > 0`
+        // is a REKEY-ready (media: "audio"/"video"), a different concern
+        // from the original epoch-0 "I'm bound, force an IDR" signal, and
+        // MUST NOT be conflated with it: `key_epoch > 0` alone is not proof
+        // this is the rekey this controller's own switch-gate is waiting
+        // on (e.g. `reannounceCallMediaReadyForSelfHeal` re-sends on stall
+        // recovery — it happens to always carry `keyEpoch: 0` today, but
+        // the gate check below is the real, exact-match guard regardless).
+        // Only when `videoSwitchGate`/`audioSwitchGate` (selected by
+        // `media`) is actually armed for this EXACT epoch do we short-
+        // circuit to `attemptRekeySwitch` and skip the legacy handling;
+        // any other `key_epoch > 0` event falls through UNCHANGED.
+        ws.onCallMediaReady = { [weak self] callId, senderId, _, keyEpoch, _, media in
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                #if canImport(WebRTC)
+                if keyEpoch > 0,
+                   let epoch = Int32(exactly: keyEpoch),
+                   self.isInCall,
+                   let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+                   let activeCallId = impl.getActiveCallId(),
+                   callId.caseInsensitiveCompare(activeCallId) == .orderedSame,
+                   self.callContactId == senderId,
+                   let controller = self.webRtcController as? QAudionWebRtcCallController,
+                   controller.rekeySwitchGateArmedEpoch(media: media) == epoch {
+                    controller.attemptRekeySwitch(media: media, epoch: epoch)
+                    return
+                }
+                #endif
                 self.handleInboundKeyframeSignal(
                     callId: callId, senderId: senderId, kind: "call_media_ready")
             }
@@ -6272,6 +6299,12 @@ final class AppState: ObservableObject {
         // per call+mid inside sendCallMediaReadyOnce).
         controller.onInboundVideoReady = { [weak self] mid in
             Task { @MainActor [weak self] in self?.sendCallMediaReadyOnce(mid: mid) }
+        }
+        // WIRE_SPEC §8.7 v1.2 — rekey (key_epoch > 0) readiness → per-
+        // (call, media, epoch) call_media_ready announce (dedup inside
+        // sendRekeyMediaReady).
+        controller.onRekeyReady = { [weak self] media, epoch in
+            Task { @MainActor [weak self] in self?.sendRekeyMediaReady(media: media, epoch: epoch) }
         }
         // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge the sender.
         controller.onVideoStallDetected = { [weak self] in
@@ -6806,7 +6839,43 @@ final class AppState: ObservableObject {
                 recipientId: peerId,
                 mid: midValue,
                 keyEpoch: 0,
-                dir: "recv")
+                dir: "recv",
+                media: "video")
+        }
+    }
+
+    /// WIRE_SPEC §8.7 v1.2 — fired by
+    /// `QAudionWebRtcCallController.onRekeyReady` once a mid-call REKEY
+    /// (`key_epoch > 0`) has installed a new key for `media` and armed the
+    /// matching `RekeySwitchGate`. Ships `call_media_ready` announcing
+    /// THAT epoch so the peer can safely switch its own sender.
+    ///
+    /// Distinct dedup shape from `sendCallMediaReadyOnce`'s per-(call,mid)
+    /// key: this fires once per (call, media, epoch) — unlike the
+    /// original once-per-call video-ready signal, EVERY rekey needs its
+    /// own readiness announce — but a redundant re-arm of the SAME epoch
+    /// (both `installAudioSrtpIfPossible` and `ensureVideoSealer` can be
+    /// re-triggered by more than one caller for a key that hasn't actually
+    /// changed) must not double-send. Reuses `mediaReadySentKeys` with a
+    /// `"rekey:"`-prefixed key so it shares that Set's existing
+    /// per-call reset in `endCall()` without needing a second reset site.
+    @MainActor
+    private func sendRekeyMediaReady(media: String, epoch: Int32) {
+        guard let peerId = callContactId,
+              let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else { return }
+        let dedupKey = "rekey:" + callId.lowercased() + ":" + media + ":" + String(epoch)
+        guard !mediaReadySentKeys.contains(dedupKey) else { return }
+        mediaReadySentKeys.insert(dedupKey)
+        RTLog.info("call", "call_media_ready → sender (media=\(media), dir=recv, epoch=\(epoch))")
+        Task {
+            try? await impl.sendCallMediaReady(
+                callId: callId,
+                recipientId: peerId,
+                mid: "",
+                keyEpoch: Int(epoch),
+                dir: "recv",
+                media: media)
         }
     }
 
@@ -7224,7 +7293,8 @@ final class AppState: ObservableObject {
                 recipientId: peerId,
                 mid: midValue,
                 keyEpoch: 0,
-                dir: "recv")
+                dir: "recv",
+                media: "video")
         }
         // Local IDR through the SAME shared 1/s honor limiter as
         // handleInboundKeyframeSignal (flag-based force — collapses with
@@ -14408,6 +14478,13 @@ final class AppState: ObservableObject {
                         self?.sendCallMediaReadyOnce(mid: mid)
                     }
                 }
+                // WIRE_SPEC §8.7 v1.2 — rekey readiness → per-(call, media,
+                // epoch) call_media_ready announce.
+                controller.onRekeyReady = { [weak self] media, epoch in
+                    Task { @MainActor [weak self] in
+                        self?.sendRekeyMediaReady(media: media, epoch: epoch)
+                    }
+                }
                 // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge sender.
                 controller.onVideoStallDetected = { [weak self] in
                     Task { @MainActor [weak self] in
@@ -21219,6 +21296,13 @@ extension AppState {
         controller.onInboundVideoReady = { [weak self] mid in
             Task { @MainActor [weak self] in
                 self?.sendCallMediaReadyOnce(mid: mid)
+            }
+        }
+        // WIRE_SPEC §8.7 v1.2 — rekey readiness → per-(call, media, epoch)
+        // call_media_ready announce (responder side).
+        controller.onRekeyReady = { [weak self] media, epoch in
+            Task { @MainActor [weak self] in
+                self?.sendRekeyMediaReady(media: media, epoch: epoch)
             }
         }
         // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge the sender.

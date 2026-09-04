@@ -87,14 +87,18 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// media-consent v1: `media` absent on the wire ⇒ "camera".
     public var onCallUpgradeIntent: ((_ callId: String, _ senderId: String, _ media: String) -> Void)?
 
-    /// WIRE_SPEC §8.7 (v1.1) — receiver→sender media readiness. The peer's
-    /// receiver-side video cryptor is BOTH keyed and bound to the negotiated
-    /// mid; we (the video SENDER) must force a local encoder IDR so the
-    /// peer's decoder bootstraps immediately. Server stamps `sender_id` and
+    /// WIRE_SPEC §8.7 (v1.2) — receiver→sender media readiness. The peer's
+    /// receiver-side cryptor is BOTH keyed and bound to the negotiated
+    /// mid; on the original `keyEpoch == 0` case we (the SENDER) must force
+    /// a local encoder IDR so the peer's decoder bootstraps immediately; on
+    /// a re-key (`keyEpoch > 0`) this instead gates the deferred sender
+    /// switch (see `RekeySwitchGate`). Server stamps `sender_id` and
     /// relays transparently (same envelope class as call_upgrade_*).
     /// `mid` may be empty when the peer could not resolve the transceiver
-    /// mid; `dir` is "recv" today; `keyEpoch` is 0 until rekey epochs ship.
-    public var onCallMediaReady: ((_ callId: String, _ senderId: String, _ mid: String, _ keyEpoch: Int, _ dir: String) -> Void)?
+    /// mid; `dir` is "recv" today; `keyEpoch` is 0 until rekey epochs ship;
+    /// `media` is "audio" or "video" (additive, absent on the wire ⇒
+    /// "video" — matches Android's null-default exactly).
+    public var onCallMediaReady: ((_ callId: String, _ senderId: String, _ mid: String, _ keyEpoch: Int, _ dir: String, _ media: String) -> Void)?
 
     /// WIRE_SPEC §8.7 (v1.1) — receiver→sender explicit keyframe recovery.
     /// The E2EE frame-transform suppresses libwebrtc's native PLI, so the
@@ -783,10 +787,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             self.onCallUpgradeIntent?(callId, senderId, media)
         }
 
-        // WIRE_SPEC §8.7 (v1.1) — call_media_ready (receiver→sender).
+        // WIRE_SPEC §8.7 (v1.2) — call_media_ready (receiver→sender).
         // Same envelope class as call_upgrade_*: the server stamps
         // `sender_id` and relays transparently. `from` fallback mirrors
-        // the call_upgrade_request handler above.
+        // the call_upgrade_request handler above. `media` is additive —
+        // absent on the wire ⇒ "video" (matches Android's null-default).
+        // NOTE: `data["media"]` is ALSO read by the UNRELATED
+        // `call_upgrade_intent` handler above (means "camera"/"screen"
+        // there) — same dict key name, different message type, not a
+        // real collision (each handler reads its own message's `data`).
         registerHandler(type: "call_media_ready") { [weak self] _, data in
             guard let self = self,
                   let callId = data["call_id"] as? String else { return }
@@ -796,7 +805,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let mid = (data["mid"] as? String) ?? ""
             let keyEpoch = (data["key_epoch"] as? Int) ?? 0
             let dir = (data["dir"] as? String) ?? "recv"
-            self.onCallMediaReady?(callId, senderId, mid, keyEpoch, dir)
+            let media = (data["media"] as? String) ?? "video"
+            self.onCallMediaReady?(callId, senderId, mid, keyEpoch, dir, media)
         }
 
         // WIRE_SPEC §8.7 (v1.1) — video_keyframe_request (receiver→sender).

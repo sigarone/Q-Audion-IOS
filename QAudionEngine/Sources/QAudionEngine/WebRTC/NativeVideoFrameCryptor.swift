@@ -110,21 +110,38 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
         return senderCryptor != nil
     }
 
-    /// Publish / rotate the 32-byte K_video at index 0 (Android setSharedKey(0,key)).
-    /// Safe to call before OR after the cryptors are attached — the native
-    /// KeyProvider drops inbound frames until a key is present
-    /// (discardFrameWhenCryptorNotReady), so attach-before-key is fine.
-    public func setKey(_ kVideo: Data, slot: Int32 = 0) {
+    /// Install [kVideo] into the decode ring at [slot] — this ALONE is what
+    /// lets this device decode a peer's frames already tagged with this
+    /// slot/epoch (the receiver is driven entirely by the on-wire key
+    /// index, never by this device's own sender state). Callable
+    /// immediately upon deriving the key; does NOT touch this device's own
+    /// outbound frames (see `switchSender`). Safe to call before OR after
+    /// the cryptors are attached — the native KeyProvider drops inbound
+    /// frames until a key is present (discardFrameWhenCryptorNotReady), so
+    /// attach-before-key is fine. Returns `false` if the key is the wrong
+    /// size (nothing installed).
+    public func installKey(_ kVideo: Data, slot: Int32) -> Bool {
         guard kVideo.count == 32 else {
-            print("[NativeVideoFrameCryptor] setKey ignored — key is \(kVideo.count) bytes, expected 32")
-            return
+            print("[NativeVideoFrameCryptor] installKey ignored — key is \(kVideo.count) bytes, expected 32")
+            return false
         }
         lock.lock(); defer { lock.unlock() }
         currentKeyIndex = Int(slot)
         keyProvider.setSharedKey(kVideo, with: slot)
-        senderCryptor?.keyIndex = slot
         hasKey = true
         print("[NativeVideoFrameCryptor] key installed at slot \(slot)")
+        return true
+    }
+
+    /// Switch THIS device's own outbound video frames to announce [slot]
+    /// (the slot `installKey` just installed). Call this only once the
+    /// caller has decided it is safe to switch (see `RekeySwitchGate`) —
+    /// this function itself has no timing/coordination logic.
+    public func switchSender(slot: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        currentSenderKeyIndex = Int(slot)
+        senderCryptor?.keyIndex = slot
+        print("[NativeVideoFrameCryptor] sender switched to slot \(slot)")
     }
 
     // W-KEYSLOTROTATE (2026-08-30) — Android rotates the FrameCryptor key
@@ -142,9 +159,26 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     // flows from AppState's sasReady accounting instead.
     private var currentKeyIndex: Int = 0
 
+    /// W-GATEBYPASS (2026-09-04, final review of the re-key media-deafness
+    /// fix) — the slot `switchSender` last ACTUALLY announced, distinct from
+    /// `currentKeyIndex` (the slot `installKey` last INSTALLED). A rekey
+    /// pending inside its 2s RekeySwitchGate window has already advanced
+    /// `currentKeyIndex` to the new epoch's slot but has NOT yet been
+    /// confirmed safe to announce. `rebindSender`/`attachSender` used to seed
+    /// a freshly (re)created sender cryptor from `currentKeyIndex`, so a
+    /// sender recreated during that window (e.g. a mid-call video upgrade
+    /// racing a pending audio/video rekey) announced the new epoch
+    /// immediately, bypassing the gate it was waiting on — exactly the
+    /// deafness race this whole feature exists to close, just for a fresh
+    /// sender instead of an existing one. Seeding from the last CONFIRMED
+    /// slot instead means a sender created mid-gate starts on the last
+    /// epoch the peer is known to be ready for, and `switchSender` (called
+    /// once the gate actually resolves) still moves it forward correctly.
+    private var currentSenderKeyIndex: Int = 0
+
     /// Create + enable the sender cryptor. Idempotent. Does NOT require the key
     /// to be set yet (the shared KeyProvider holds it; frames are discarded
-    /// until setKey runs). Must run on the WebRTC signalling thread / a WebRTC
+    /// until installKey runs). Must run on the WebRTC signalling thread / a WebRTC
     /// callback — call from setLocalDescription completion or ensureVideoSealer.
     @discardableResult
     public func attachSender(_ sender: RTCRtpSender) -> Bool {
@@ -158,7 +192,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
             print("[NativeVideoFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
             return false
         }
-        c.keyIndex = Int32(currentKeyIndex)  // W-KEYSLOTROTATE
+        c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
         c.enabled = true
         senderCryptor = c
         print("[NativeVideoFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
