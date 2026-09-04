@@ -123,9 +123,24 @@ public enum CallKitWorkOffloadPolicy {
     /// `setVoiceProcessingEnabled` onto a background queue while
     /// `engine.stop()` keeps running inline on the caller's thread would be
     /// a genuinely new data race on an Apple type with no documented
-    /// thread-safety guarantee, not merely a latency fix — needs on-device
+    /// thread-safety guarantee, not merely a latency fix — needed on-device
     /// verification (no Mac/Xcode in this environment) before flipping.
-    public static let voiceProcessingTeardownQueueEnabled: Bool = false
+    ///
+    /// FLIPPED ON (2026-09-04, Pavel) — live report: this exact freeze
+    /// (Android hangs up a video call correctly, iOS's own UI including the
+    /// hangup button stays stuck) reproduced again, same call chain this
+    /// kdoc already names. Turned on for live on-device verification with
+    /// two test phones already in hand rather than staying blocked forever
+    /// on a Mac/Xcode this environment doesn't have. Known residual risk,
+    /// unchanged from the paragraph above: `AudioCapture.stop()` still calls
+    /// `engine?.stop()` immediately after `disableVoiceProcessing(on:)`
+    /// returns, with no queue serializing the two — if this surfaces a crash
+    /// or corrupt state on the call immediately after a hangup, revert this
+    /// to `false` first (byte-identical rollback) before investigating the
+    /// proper fix (serialize ALL of AudioCapture's engine mutations, start()
+    /// included, through one queue — the audio-side twin of `captureQueue`
+    /// on the video side, out of scope for this flip).
+    public static let voiceProcessingTeardownQueueEnabled: Bool = true
 
     /// What `AudioProcessingPipeline.disableVoiceProcessing(on:)` should do
     /// with `setVoiceProcessingEnabled(false)`.

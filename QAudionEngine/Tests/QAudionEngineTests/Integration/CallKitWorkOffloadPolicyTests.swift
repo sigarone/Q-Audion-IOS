@@ -13,14 +13,17 @@ final class CallKitWorkOffloadPolicyTests: XCTestCase {
     // MARK: - Kill switch defaults
 
     /// The video fix mirrors an ALREADY-SHIPPED in-file pattern (`start()`'s
-    /// `startRunning()` hop) — default ON. The audio fix has no such
-    /// precedent and was never verified live — default OFF. Rule: any
-    /// behaviour change here is deliberate; a flipped default should be a
-    /// reviewed edit to this test, never a silent regression.
-    func test_defaults_videoOnAudioOff() {
+    /// `startRunning()` hop) — default ON. `audioEngineBackgroundQueueEnabled`
+    /// has no such precedent and was never verified live — stays OFF.
+    /// `voiceProcessingTeardownQueueEnabled` flipped ON 2026-09-04 (Pavel) —
+    /// see its own kdoc for the live freeze report that motivated turning it
+    /// on for on-device verification. Rule unchanged: any behaviour change
+    /// here is deliberate; a flipped default is a reviewed edit to this
+    /// test, never a silent regression.
+    func test_defaults_videoOnTeardownOnAudioEngineOff() {
         XCTAssertTrue(Policy.asyncStopRunningEnabled)
         XCTAssertFalse(Policy.audioEngineBackgroundQueueEnabled)
-        XCTAssertFalse(Policy.voiceProcessingTeardownQueueEnabled)
+        XCTAssertTrue(Policy.voiceProcessingTeardownQueueEnabled)
     }
 
     // MARK: - stopRunningDispatch
@@ -55,9 +58,9 @@ final class CallKitWorkOffloadPolicyTests: XCTestCase {
         XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(enabled: false), .blockingSync)
     }
 
-    /// Calling with no argument uses the shipped default (currently OFF —
-    /// today's exact behaviour, byte-for-byte, until this is verified live).
+    /// Calling with no argument uses the shipped default (ON as of
+    /// 2026-09-04 — see the kill switch's own kdoc).
     func test_voiceProcessingTeardownDispatch_defaultArgumentMatchesTheKillSwitch() {
-        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(), .blockingSync)
+        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(), .fireAndForgetAsync)
     }
 }
