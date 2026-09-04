@@ -870,7 +870,16 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioCryptor = c
             return c
         }()
-        cryptor.setKey(key, slot: slot)
+        // Task 3 (rekey media-deafness split): this call site handles BOTH
+        // initial activation and later rekeys of native audio-srtp (see
+        // `installAudioSrtpIfPossible`'s own doc — "repeat calls (rekey)
+        // just re-publish the key") with no gating today, so install+switch
+        // stay combined here exactly as `setKey` used to do. Only switch
+        // the sender if the key actually installed, matching `setKey`'s own
+        // guard (never touched `senderCryptor?.keyIndex` on a bad-size key).
+        if cryptor.installKey(key, slot: slot) {
+            cryptor.switchSender(slot: slot)
+        }
 
         // W-AUDIOSENDPICK — carry an already-created mic track onto the live
         // sender instead of minting a second one: the track (with its PCM
