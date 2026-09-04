@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1086",
+              date: "2026-09-04",
+              title: "v1.0.1086",
+              bullets: [
+                "fix(call): enable async voice-processing teardown to stop the remote-hangup UI freeze",
+              ]),
         .init(id: "v1.0.1085",
               date: "2026-09-04",
               title: "v1.0.1085",
               bullets: [
+                "chore: regenerate changelog for v1.0.1085",
                 "fix(call): close the last silent-throw + wrong-type blind spots in the dcmux audio fallback",
                 "fix(call): cap ICE-recovery watchdog retry duration (W-ICERECOVERYCAP)",
               ]),
@@ -193,14 +200,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1067",
                 "fix(call): drop manual audio mode entirely — back to the session arrangement that shipped healthy (W-ADMNOMANUAL)",
-              ]),
-        .init(id: "v1.0.1066",
-              date: "2026-08-30",
-              title: "v1.0.1066",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1066",
-                "fix(call): remove the CallKit activation relay — it was what killed microphone capture (revert W-ADMACTIVATE)",
-                "docs: mandatory gate before any audio/session/crypto build",
               ]),
     ]
 }
