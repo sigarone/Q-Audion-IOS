@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1085",
+              date: "2026-09-04",
+              title: "v1.0.1085",
+              bullets: [
+                "fix(call): close the last silent-throw + wrong-type blind spots in the dcmux audio fallback",
+                "fix(call): cap ICE-recovery watchdog retry duration (W-ICERECOVERYCAP)",
+              ]),
         .init(id: "v1.0.1084",
               date: "2026-09-04",
               title: "v1.0.1084",
               bullets: [
+                "chore: regenerate changelog for v1.0.1084",
                 "fix(rekey): seed a recreated sender cryptor from the confirmed slot, not the installed one",
                 "docs(rekey): update WIRE_SPEC.md §8.7 for the per-epoch call_media_ready",
                 "fix(rekey): guard rekey-switch gate/timeout state with txHoldLock",
@@ -193,13 +201,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1066",
                 "fix(call): remove the CallKit activation relay — it was what killed microphone capture (revert W-ADMACTIVATE)",
                 "docs: mandatory gate before any audio/session/crypto build",
-              ]),
-        .init(id: "v1.0.1065",
-              date: "2026-08-30",
-              title: "v1.0.1065",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1065",
-                "fix(audio): six screens changed the shared session category and none restored it — a played voice note silenced every later call (W-SESSIONCATLEAK)",
               ]),
     ]
 }
