@@ -20,6 +20,22 @@ final class RestartIceDecisionsTests: XCTestCase {
         XCTAssertEqual(RestartIceDecisions.restartOfferParkBudgetMs, 45_000)
         XCTAssertEqual(RestartIceDecisions.restartOfferFastPathTimeoutSec, 5)
         XCTAssertEqual(RestartIceDecisions.restartOfferParkTimeoutSec, 40)
+        XCTAssertEqual(RestartIceDecisions.iceRecoveryMaxTotalDurationMs, 90_000)
+    }
+
+    // MARK: - W-ICERECOVERYCAP (2026-09-04) — escalation-loop total budget.
+
+    /// The budget must clear a single in-flight `restartIce` attempt's own
+    /// worst-case completion (`restartOfferParkBudgetMs`, 45s if the WS is
+    /// down when it fires) with real margin left over for at least one
+    /// settled retry — otherwise the cap could sever an attempt that was
+    /// still legitimately in flight rather than only stopping a truly dead
+    /// loop.
+    func test_iceRecoveryMaxTotalDurationMs_clearsOneFullParkAttemptWithMargin() {
+        XCTAssertGreaterThan(
+            RestartIceDecisions.iceRecoveryMaxTotalDurationMs,
+            RestartIceDecisions.restartOfferParkBudgetMs + RestartIceDecisions.recoverySettleInitialMs
+        )
     }
 
     // MARK: - Audit item 4 (2026-08-26) — live send-path timing vs. the

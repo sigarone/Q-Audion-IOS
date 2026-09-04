@@ -6306,6 +6306,12 @@ final class AppState: ObservableObject {
         controller.onRekeyReady = { [weak self] media, epoch in
             Task { @MainActor [weak self] in self?.sendRekeyMediaReady(media: media, epoch: epoch) }
         }
+        // W-ICERECOVERYCAP (2026-09-04) — ICE-recovery watchdog gave up
+        // after its total-duration budget; tear the call down instead of
+        // leaving it retrying forever.
+        controller.onIceRecoveryExhausted = { [weak self] in
+            Task { @MainActor [weak self] in self?.handleIceRecoveryExhausted() }
+        }
         // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge the sender.
         controller.onVideoStallDetected = { [weak self] in
             Task { @MainActor [weak self] in self?.requestKeyframeFromSender() }
@@ -7406,6 +7412,37 @@ final class AppState: ObservableObject {
                 delay: 0.1
             )
         }
+    }
+
+    /// W-ICERECOVERYCAP (2026-09-04) — `QAudionWebRtcCallController
+    /// .onIceRecoveryExhausted` fired: the ICE-recovery watchdog retried
+    /// `restartIce` for `RestartIceDecisions.iceRecoveryMaxTotalDurationMs`
+    /// (90s) with ICE never leaving `.failed`/`.disconnected`. Before this
+    /// existed, nothing tore the call down client-side in this situation —
+    /// the watchdog just kept retrying, each attempt rejected by the
+    /// server's W-STALEOFFER defense once it no longer tracked the
+    /// call_id (live incident 2026-09-03: 2+ minutes of stale restart
+    /// offers against an already-ended call). Mirrors `onMediaDead`'s
+    /// teardown shape exactly — in-band control hangup first, then the
+    /// reason-bearing envelope+opaque pair by explicit id after a
+    /// synchronous unbind, then local teardown — with its own reason
+    /// string so the two backstops stay distinguishable in telemetry.
+    /// Wired at all 3 `QAudionWebRtcCallController` construction sites
+    /// (same set as `onRekeyReady`).
+    @MainActor
+    private func handleIceRecoveryExhausted() {
+        RTLog.error("call", "icerecovery exhausted=1")
+        self.callService.sendControlHangup(reason: "ice-recovery-exhausted")
+        if let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+           let cid = impl.getActiveCallId(),
+           let peer = self.callContactId {
+            impl.unbindActiveCallId(matching: cid)
+            Task {
+                try? await impl.sendCallHangupForId(
+                    callId: cid, recipientId: peer, reason: "ice-recovery-exhausted")
+            }
+        }
+        self.endCall(notifyPeerInBand: false)
     }
 
     /// W-HANGUPECHO (2026-08-25) — tell the SERVER the call is over when the
@@ -14485,6 +14522,14 @@ final class AppState: ObservableObject {
                         self?.sendRekeyMediaReady(media: media, epoch: epoch)
                     }
                 }
+                // W-ICERECOVERYCAP (2026-09-04) — ICE-recovery watchdog gave
+                // up after its total-duration budget; tear the call down
+                // instead of leaving it retrying forever.
+                controller.onIceRecoveryExhausted = { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.handleIceRecoveryExhausted()
+                    }
+                }
                 // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge sender.
                 controller.onVideoStallDetected = { [weak self] in
                     Task { @MainActor [weak self] in
@@ -21303,6 +21348,14 @@ extension AppState {
         controller.onRekeyReady = { [weak self] media, epoch in
             Task { @MainActor [weak self] in
                 self?.sendRekeyMediaReady(media: media, epoch: epoch)
+            }
+        }
+        // W-ICERECOVERYCAP (2026-09-04) — ICE-recovery watchdog gave up
+        // after its total-duration budget; tear the call down instead of
+        // leaving it retrying forever.
+        controller.onIceRecoveryExhausted = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleIceRecoveryExhausted()
             }
         }
         // WIRE_SPEC §8.7 (INT-4a) — receiver decode stall → nudge the sender.

@@ -152,6 +152,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// to @MainActor themselves (same contract as `onInboundVideoReady`).
     public var onRekeyReady: ((_ media: String, _ epoch: Int32) -> Void)?
 
+    /// W-ICERECOVERYCAP (2026-09-04) — fired when
+    /// `armIceRecoveryWatchdogIfNeeded`'s escalation loop hit
+    /// `RestartIceDecisions.iceRecoveryMaxTotalDurationMs` of continuously
+    /// bad ICE with no self-heal and no external cancellation
+    /// (`disarmIceRecoveryWatchdog`/`closeSynchronously` never ran). The
+    /// call cannot be revived P2P at this point; same closure-indirection
+    /// contract as `onRekeyReady` (CLAUDE.md §16) — the app layer decides
+    /// how to tear the call down (mirrors `CallService.onMediaDead`'s
+    /// shape: in-band control hangup, explicit hangup-by-id, local
+    /// teardown). Fires from wherever the watchdog Task runs; consumers
+    /// hop to @MainActor themselves.
+    public var onIceRecoveryExhausted: (() -> Void)?
+
     /// WIRE_SPEC §8.7 (INT-4a) — fired when the RECEIVER-side video decode
     /// has STALLED: the inbound video track exists and bytes are arriving,
     /// but `framesDecoded` has not advanced for ~5s (the decoder is missing
@@ -2344,8 +2357,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 return
             }
             self.log?("ice_recovery escalate=1")
+            let escalationStartedAtMs = Self.nowMs()
             var settleMs = RestartIceDecisions.recoverySettleInitialMs
             while !Task.isCancelled && self.isIceStateBad(self.lastIceConnectionState) {
+                // W-ICERECOVERYCAP (2026-09-04) — this loop used to have no
+                // total-duration ceiling: a call whose peer is already gone
+                // (no self-heal ever comes) retried `restartIce` forever,
+                // each attempt rejected by the server's W-STALEOFFER defense
+                // once it no longer tracks the call_id. Give up once the
+                // escalation has run for `iceRecoveryMaxTotalDurationMs`
+                // regardless of ICE state, and let the app layer tear the
+                // call down instead of retrying past the point of no return.
+                let escalationElapsedMs = Self.nowMs() - escalationStartedAtMs
+                if escalationElapsedMs >= RestartIceDecisions.iceRecoveryMaxTotalDurationMs {
+                    self.log?("ice_recovery exhausted=1 elapsed_ms=\(escalationElapsedMs)")
+                    self.iceRecoveryWatchdogTask = nil
+                    self.onIceRecoveryExhausted?()
+                    return
+                }
                 await self.restartIce(reason: "ice-failed-recovery-watchdog")
                 guard !Task.isCancelled else { return }
                 // W-WATCHDOGDEBOUNCE (2026-08-30) — sleep at least past

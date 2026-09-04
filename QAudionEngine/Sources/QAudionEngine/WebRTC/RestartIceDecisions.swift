@@ -60,6 +60,28 @@ public enum RestartIceDecisions {
     /// `ICE_FAILED_RECOVERY_MAX_SETTLE_MS`.
     public static let recoverySettleMaxMs: Int64 = 20_000
 
+    /// W-ICERECOVERYCAP (2026-09-04) — total wall-clock budget for the
+    /// escalation loop in `armIceRecoveryWatchdogIfNeeded` (the repeated
+    /// `restartIce` retries once self-repair has already failed once).
+    /// Before this existed the loop had NO upper bound at all — it kept
+    /// retrying for as long as `lastIceConnectionState` stayed bad, which
+    /// is unbounded if the call is actually dead (peer already hung up,
+    /// PeerConnection never torn down locally) rather than merely
+    /// disconnected. Live incident 2026-09-03 (call a89bef42): the same
+    /// dead call_id kept getting restart offers for 2+ minutes, each
+    /// rejected by the server's W-STALEOFFER defense (bcrypto-lite
+    /// main.go) with its own `call_hangup` reply — proof the recovery was
+    /// pointless well before this budget's ceiling.
+    ///
+    /// Sized like `MediaDeadDecisions.timeoutMs` (90s, this directory's
+    /// other "give up on a phantom call" backstop) rather than derived
+    /// from a shorter constant, specifically so it can never cut off a
+    /// single in-flight restart attempt: one attempt's own worst-case
+    /// completion is `restartOfferParkBudgetMs` (45s) if the WS is down
+    /// when it fires, so the total budget must clear that plus room for
+    /// at least one settled retry, not just barely exceed it.
+    public static let iceRecoveryMaxTotalDurationMs: Int64 = 90_000
+
     /// W-WATCHDOGDEBOUNCE (2026-08-30) — the actual sleep between two
     /// consecutive watchdog `restartIce` attempts: the proposed settle
     /// window, floored at `iceRestartDebounceMs` plus a margin so the next
