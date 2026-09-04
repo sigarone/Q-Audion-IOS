@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1087",
+              date: "2026-09-04",
+              title: "v1.0.1087",
+              bullets: [
+                "fix(video): break the HevcEncoder.invalidate() self-deadlock that froze the app on hangup",
+              ]),
         .init(id: "v1.0.1086",
               date: "2026-09-04",
               title: "v1.0.1086",
               bullets: [
+                "chore: regenerate changelog for v1.0.1086",
                 "fix(call): enable async voice-processing teardown to stop the remote-hangup UI freeze",
               ]),
         .init(id: "v1.0.1085",
@@ -193,13 +200,6 @@ extension ReleaseNote {
                 "fix(net): node selection probed liveness and called it readiness",
                 "fix(transport): REST and the WebSocket stopped agreeing on which node we are on",
                 "feat(call): act on the server's relays_updated push instead of ignoring it",
-              ]),
-        .init(id: "v1.0.1067",
-              date: "2026-08-31",
-              title: "v1.0.1067",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1067",
-                "fix(call): drop manual audio mode entirely — back to the session arrangement that shipped healthy (W-ADMNOMANUAL)",
               ]),
     ]
 }
