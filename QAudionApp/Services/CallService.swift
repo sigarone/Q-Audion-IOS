@@ -3406,6 +3406,12 @@ final class CallService: @unchecked Sendable {
                         case -4: why = "nopc"
                         case -3: why = "pinned"
                         case -2: why = "noctl"
+                        // W-DCMUX-2 (2026-09-04) — split from -2 so a future
+                        // occurrence tells us "nil" vs "wrong type" without
+                        // another log-diving session. See the AppState
+                        // audioDataChannelDiag kdoc for the two root-caused
+                        // calls that motivated this.
+                        case -6: why = "wrongtype"
                         case -1: why = "nochan"
                         case 0:  why = "conn"
                         case 2:  why = "closing"

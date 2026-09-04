@@ -4419,10 +4419,24 @@ final class AppState: ObservableObject {
         //   -5 icegate  controller and channel fine, but W-DCTXICEGATE is
         //               diverting: ICE is not carrying, so frames go to the
         //               WS relay even though the DC still reads `.open`
+        //   -6 wrongtype `webRtcController` is non-nil but NOT a
+        //               QAudionWebRtcCallController — split out from -2
+        //               (2026-09-04) after root-causing two Android<->iOS
+        //               calls (576ea1c6, 24ff2890) tonight where `noctl`
+        //               fired on every frame for a call's entire duration
+        //               with NEITHER known silent-throw site (this file's
+        //               startOutgoingCall/acceptIncomingCall catches, both
+        //               now RTLog'd) nor providerDidReset having fired —
+        //               i.e. a still-unidentified path left `webRtcController`
+        //               either nil or (unproven, hence this split) holding
+        //               something else. -2 now means nil specifically; -6
+        //               means "non-nil, wrong type" so the NEXT occurrence
+        //               tells us which without another log-diving session.
         callService.audioDataChannelDiag = { [weak self] in
             guard let self = self else { return -2 }
             if self.audioPinnedToWsRelay { return -3 }
-            guard let controller = self.webRtcController as? QAudionWebRtcCallController else { return -2 }
+            guard let raw = self.webRtcController else { return -2 }
+            guard let controller = raw as? QAudionWebRtcCallController else { return -6 }
             if controller.audioTxIceGateClosed { return -5 }
             return controller.audioDataChannelStateRaw
         }
@@ -14752,6 +14766,23 @@ final class AppState: ObservableObject {
                         }
                         #endif
                     } catch {
+                        // W-DCSTUCK-DIAG-2 (2026-09-04) — was print()-only, the
+                        // exact silent-failure shape `acceptIncomingCall`'s own
+                        // catch (below, W-DCSTUCK-DIAG) was already fixed for on
+                        // 2026-08-13 after two real calls stayed on the WS-relay
+                        // fallback for their entire duration with no remote
+                        // evidence of why. This is that same fix for the
+                        // CALLER-side twin: a `startOutgoingCall` throw here
+                        // leaves `webRtcController` nil for the rest of the
+                        // call, and `sendAudioOverDataChannel`/
+                        // `audioDataChannelDiag` (AppState 4400/4425) report
+                        // that as `-2 noctl` on every subsequent frame — with
+                        // this print-only line as the ONLY place the actual
+                        // reason ever existed, visible only in a live Xcode
+                        // console nobody was attached to. Root-caused two
+                        // Android<->iOS calls (576ea1c6, 24ff2890) tonight that
+                        // fit this exact shape with zero server-visible cause.
+                        RTLog.warn("call", "webrtc start_outgoing ok=0 err=\(error)")
                         print("[AppState] WebRTC startOutgoingCall failed: \(error)")
                         await MainActor.run {
                             self?.webRtcController = nil
