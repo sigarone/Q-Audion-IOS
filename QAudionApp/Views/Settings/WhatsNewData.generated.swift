@@ -9,10 +9,25 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1084",
+              date: "2026-09-04",
+              title: "v1.0.1084",
+              bullets: [
+                "fix(rekey): seed a recreated sender cryptor from the confirmed slot, not the installed one",
+                "docs(rekey): update WIRE_SPEC.md §8.7 for the per-epoch call_media_ready",
+                "fix(rekey): guard rekey-switch gate/timeout state with txHoldLock",
+                "feat(rekey): gate sender switch on peer readiness or 2s timeout, both directions",
+                "feat(rekey): split NativeVideoFrameCryptor/NativeAudioFrameCryptor setKey into install + switch",
+                "feat(rekey): add RekeySwitchGate, pure re-key sender-switch coordinator",
+                "feat(rekey): add media field to call_media_ready wire message",
+                "docs(rekey): iOS implementation plan for the media-deafness skew fix",
+                "docs(rekey): design for the media-deafness skew fix — iOS port",
+              ]),
         .init(id: "v1.0.1083",
               date: "2026-09-04",
               title: "v1.0.1083",
               bullets: [
+                "chore: regenerate changelog for v1.0.1083",
                 "fix(call): rename the shadowing ringPhase property, my qualified-call fix was wrong",
               ]),
         .init(id: "v1.0.1082",
@@ -185,13 +200,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1065",
                 "fix(audio): six screens changed the shared session category and none restored it — a played voice note silenced every later call (W-SESSIONCATLEAK)",
-              ]),
-        .init(id: "v1.0.1064",
-              date: "2026-08-30",
-              title: "v1.0.1064",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1064",
-                "fix(call): the VoIP session config never reached the live session — no input in the route, so BOTH capture engines were silent (W-SESSIONLOCK)",
               ]),
     ]
 }
