@@ -139,6 +139,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     /// this function itself has no timing/coordination logic.
     public func switchSender(slot: Int32) {
         lock.lock(); defer { lock.unlock() }
+        currentSenderKeyIndex = Int(slot)
         senderCryptor?.keyIndex = slot
         print("[NativeVideoFrameCryptor] sender switched to slot \(slot)")
     }
@@ -158,6 +159,23 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     // flows from AppState's sasReady accounting instead.
     private var currentKeyIndex: Int = 0
 
+    /// W-GATEBYPASS (2026-09-04, final review of the re-key media-deafness
+    /// fix) — the slot `switchSender` last ACTUALLY announced, distinct from
+    /// `currentKeyIndex` (the slot `installKey` last INSTALLED). A rekey
+    /// pending inside its 2s RekeySwitchGate window has already advanced
+    /// `currentKeyIndex` to the new epoch's slot but has NOT yet been
+    /// confirmed safe to announce. `rebindSender`/`attachSender` used to seed
+    /// a freshly (re)created sender cryptor from `currentKeyIndex`, so a
+    /// sender recreated during that window (e.g. a mid-call video upgrade
+    /// racing a pending audio/video rekey) announced the new epoch
+    /// immediately, bypassing the gate it was waiting on — exactly the
+    /// deafness race this whole feature exists to close, just for a fresh
+    /// sender instead of an existing one. Seeding from the last CONFIRMED
+    /// slot instead means a sender created mid-gate starts on the last
+    /// epoch the peer is known to be ready for, and `switchSender` (called
+    /// once the gate actually resolves) still moves it forward correctly.
+    private var currentSenderKeyIndex: Int = 0
+
     /// Create + enable the sender cryptor. Idempotent. Does NOT require the key
     /// to be set yet (the shared KeyProvider holds it; frames are discarded
     /// until installKey runs). Must run on the WebRTC signalling thread / a WebRTC
@@ -174,7 +192,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
             print("[NativeVideoFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
             return false
         }
-        c.keyIndex = Int32(currentKeyIndex)  // W-KEYSLOTROTATE
+        c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
         c.enabled = true
         senderCryptor = c
         print("[NativeVideoFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")

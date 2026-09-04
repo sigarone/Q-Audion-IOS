@@ -103,6 +103,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     /// this function itself has no timing/coordination logic.
     public func switchSender(slot: Int32) {
         lock.lock(); defer { lock.unlock() }
+        currentSenderKeyIndex = Int(slot)
         senderCryptor?.keyIndex = slot
         print("[NativeAudioFrameCryptor] sender switched to slot \(slot)")
     }
@@ -126,6 +127,13 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     // one place that can tell transitional / real / rekey apart.
     private var currentKeyIndex: Int = 0
 
+    /// W-GATEBYPASS (2026-09-04) — see NativeVideoFrameCryptor's identical
+    /// field for the full rationale: the slot `switchSender` last ACTUALLY
+    /// announced, distinct from `currentKeyIndex` (last INSTALLED). Seeding
+    /// a freshly (re)created sender cryptor from this instead of
+    /// `currentKeyIndex` avoids bypassing a pending RekeySwitchGate window.
+    private var currentSenderKeyIndex: Int = 0
+
     /// Create + enable the sender cryptor. Idempotent. Must run on the
     /// WebRTC signalling thread / a WebRTC callback, same constraint as
     /// ``NativeVideoFrameCryptor/attachSender(_:)``.
@@ -141,7 +149,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
             print("[NativeAudioFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
             return false
         }
-        c.keyIndex = Int32(currentKeyIndex)  // W-KEYSLOTROTATE
+        c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
         c.enabled = true
         senderCryptor = c
         print("[NativeAudioFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
