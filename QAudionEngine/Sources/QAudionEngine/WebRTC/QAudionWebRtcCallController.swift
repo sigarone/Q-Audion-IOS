@@ -690,6 +690,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// being reused across calls, so a stale armed/switched epoch must
     /// never leak into a later call (the exact bug class Android's Task 4
     /// implementer found and fixed on the Kotlin side).
+    /// ⚠️ NSLock-protected by `txHoldLock`, same as `_videoTxHoldTimeoutTask`
+    /// below — this class is `@unchecked Sendable` (rekeys can arm from the
+    /// WebRTC signalling thread while `closeSynchronously()` reassigns these
+    /// from @MainActor teardown). NEVER read or write these two vars
+    /// directly outside `txHoldLock` — use `switchGate(for:)`, which is the
+    /// only lock-guarded accessor.
     var videoSwitchGate = RekeySwitchGate()
     var audioSwitchGate = RekeySwitchGate()
 
@@ -701,6 +707,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Mirrors this file's existing task-cancel-on-teardown discipline
     /// (`restartPathMonitor`, `iceRecoveryWatchdogTask`,
     /// `_videoTxHoldTimeoutTask`, all cancelled in the same method).
+    /// ⚠️ NSLock-protected by `txHoldLock` — same reasoning as
+    /// `videoSwitchGate`/`audioSwitchGate` above (appended from
+    /// `armRekeySwitch`, possibly off-@MainActor; cleared from
+    /// `closeSynchronously()`). Every read/write site must hold the lock.
     private var rekeySwitchTimeoutTasks: [Task<Void, Never>] = []
 
     public var pqcSessionKey: Data? {
@@ -2086,11 +2096,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // WIRE_SPEC §8.7 v1.2 — drop any in-flight rekey-switch timeouts
         // and re-arm both gates fresh, so a REUSED controller's next call
         // starts with no pending/switched epoch (see videoSwitchGate's own
-        // doc for the exact bug class this closes).
+        // doc for the exact bug class this closes). Guarded by the SAME
+        // txHoldLock as `_videoTxHoldTimeoutTask` right above — this class
+        // is `@unchecked Sendable` and genuinely multi-threaded (rekeys can
+        // arm from the WebRTC signalling thread while teardown runs from
+        // @MainActor), so the array append/clear and the two var
+        // reassignments below need the identical lock discipline, not just
+        // the identical cancel-on-teardown behavior.
+        txHoldLock.lock()
         rekeySwitchTimeoutTasks.forEach { $0.cancel() }
         rekeySwitchTimeoutTasks.removeAll()
         videoSwitchGate = RekeySwitchGate()
         audioSwitchGate = RekeySwitchGate()
+        txHoldLock.unlock()
         state = .disconnected
     }
 
@@ -2884,6 +2902,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     // MARK: - WIRE_SPEC §8.7 v1.2 — rekey sender-switch gate
 
+    /// Snapshot the `media` gate's CURRENT object reference under
+    /// `txHoldLock`. This class is `@unchecked Sendable` and genuinely
+    /// multi-threaded (rekeys arm from the WebRTC signalling thread while
+    /// `closeSynchronously()` can reassign `videoSwitchGate`/
+    /// `audioSwitchGate` to fresh instances from @MainActor teardown) — so
+    /// reading the `var` property itself needs the same lock discipline as
+    /// `_videoTxHoldTimeoutTask`, independent of `RekeySwitchGate`'s own
+    /// internal NSLock (which only protects ITS state, not this class's
+    /// reference to it). Once a valid reference is captured here, calling
+    /// its own thread-safe `arm`/`attemptSwitch`/`currentPendingEpoch` needs
+    /// no further lock — `RekeySwitchGate` already serializes those itself.
+    private func switchGate(for media: String) -> RekeySwitchGate {
+        txHoldLock.lock()
+        defer { txHoldLock.unlock() }
+        return (media == "audio") ? audioSwitchGate : videoSwitchGate
+    }
+
     /// After installing a REKEYED (`epoch > 0`) key for `media`, arm the
     /// matching `RekeySwitchGate`, ask the app layer to announce readiness
     /// (`onRekeyReady`), and race the SAME 2s signal-not-kill timeout this
@@ -2895,7 +2930,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// first-key-of-a-call behavior stays an immediate, ungated switch —
     /// see the two call sites below).
     private func armRekeySwitch(media: String, epoch: Int32) {
-        let gate = (media == "audio") ? audioSwitchGate : videoSwitchGate
+        let gate = switchGate(for: media)
         gate.arm(epoch)
         onRekeyReady?(media, epoch)
         let task = Task { [weak self] in
@@ -2903,7 +2938,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             guard let self, !Task.isCancelled else { return }
             self.attemptRekeySwitch(media: media, epoch: epoch)
         }
+        // txHoldLock-guarded append — see switchGate's doc for why this
+        // array needs the same lock as the gate references: it is mutated
+        // from whichever thread arms a rekey AND cleared from
+        // closeSynchronously()'s @MainActor teardown. Entries are only
+        // pruned in bulk at teardown, not per-completion — this file has no
+        // cheap "has this Task finished" check for a non-throwing
+        // `Task<Void, Never>`, and RekeySwitchGate's own idempotency makes a
+        // stale entry harmless (its eventual fire is a no-op), so the array
+        // is bounded by "rekeys this call", not by anything unbounded.
+        txHoldLock.lock()
         rekeySwitchTimeoutTasks.append(task)
+        txHoldLock.unlock()
     }
 
     /// Attempt to switch THIS device's own `media` sender to `epoch`,
@@ -2916,7 +2962,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// not an error.
     @discardableResult
     public func attemptRekeySwitch(media: String, epoch: Int32) -> Bool {
-        let gate = (media == "audio") ? audioSwitchGate : videoSwitchGate
+        let gate = switchGate(for: media)
         guard gate.attemptSwitch(epoch) else { return false }
         let slot = epoch % 16
         if media == "audio" {
@@ -2939,7 +2985,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// path. This is the specific check Android's final review added after
     /// catching a bug of exactly this shape.
     public func rekeySwitchGateArmedEpoch(media: String) -> Int32 {
-        (media == "audio") ? audioSwitchGate.currentPendingEpoch() : videoSwitchGate.currentPendingEpoch()
+        switchGate(for: media).currentPendingEpoch()
     }
 
     /// IOS-C4b (2026-08-26) — install/rekey the native SRTP audio path the
