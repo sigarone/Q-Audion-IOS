@@ -5924,7 +5924,7 @@ final class AppState: ObservableObject {
         // WIRE_SPEC §8.7 (v1.1) — media readiness + keyframe recovery.
         // Both events funnel into the same honor path: force a local
         // encoder IDR for the active call (rate-limited to 1/s inside).
-        ws.onCallMediaReady = { [weak self] callId, senderId, _, _, _ in
+        ws.onCallMediaReady = { [weak self] callId, senderId, _, _, _, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.handleInboundKeyframeSignal(
@@ -6806,7 +6806,8 @@ final class AppState: ObservableObject {
                 recipientId: peerId,
                 mid: midValue,
                 keyEpoch: 0,
-                dir: "recv")
+                dir: "recv",
+                media: "video")
         }
     }
 
@@ -7224,7 +7225,8 @@ final class AppState: ObservableObject {
                 recipientId: peerId,
                 mid: midValue,
                 keyEpoch: 0,
-                dir: "recv")
+                dir: "recv",
+                media: "video")
         }
         // Local IDR through the SAME shared 1/s honor limiter as
         // handleInboundKeyframeSignal (flag-based force — collapses with

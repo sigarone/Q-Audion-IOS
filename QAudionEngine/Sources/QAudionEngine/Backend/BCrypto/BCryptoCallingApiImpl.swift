@@ -736,18 +736,22 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ])
     }
 
-    /// WIRE_SPEC §8.7 (v1.1) — receiver→sender media readiness. Sent by
-    /// the RECEIVER when its receiver-side video cryptor is BOTH keyed
-    /// and bound to the negotiated video mid; the sender responds by
-    /// forcing a local encoder IDR. `dir` is "recv" today; `keyEpoch`
-    /// is 0 until rekey epochs ship. The server stamps `sender_id` and
-    /// relays transparently (same class as call_upgrade_*).
+    /// WIRE_SPEC §8.7 (v1.2) — receiver→sender media readiness. Sent by
+    /// the RECEIVER when its receiver-side cryptor is BOTH keyed and
+    /// bound to the negotiated mid; the sender responds by forcing a
+    /// local encoder IDR (video) or, from `keyEpoch > 0` on, gates the
+    /// deferred sender-switch for a re-key (see `RekeySwitchGate`).
+    /// `dir` is "recv" today; `keyEpoch` is 0 until rekey epochs ship.
+    /// `media` is "audio" or "video" — additive field, fires on EVERY
+    /// re-key now, not just the first key of a call. The server stamps
+    /// `sender_id` and relays transparently (same class as call_upgrade_*).
     public func sendCallMediaReady(
         callId: String,
         recipientId: String,
         mid: String,
         keyEpoch: Int,
-        dir: String
+        dir: String,
+        media: String
     ) async throws {
         ws.send(type: "call_media_ready", data: [
             "call_id": callId,
@@ -755,6 +759,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
             "mid": mid,
             "key_epoch": keyEpoch,
             "dir": dir,
+            "media": media,
         ])
     }
 
