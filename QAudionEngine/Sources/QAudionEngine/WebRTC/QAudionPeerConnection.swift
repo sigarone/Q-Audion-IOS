@@ -1281,6 +1281,48 @@ public final class QAudionPeerConnection: NSObject {
         }
     }
 
+    /// W-RESPONDERPRIME (2026-09-05, port of Android `PeerConnectionHolder.
+    /// restartIce`'s `!activeAsInitiator` branch, `pc.restartIce()` at
+    /// `PeerConnectionHolder.kt:4965`) — kick the local ICE agent's
+    /// re-gather (fresh ufrag/pwd, fresh candidate gathering) WITHOUT any
+    /// SDP exchange: no `createOffer`, no `setLocalDescription`, no
+    /// signaling-state change at all.
+    ///
+    /// This is the missing head start in `QAudionWebRtcCallController.
+    /// restartIce`'s W-RESPONDERREQFIRST branch: when this side is the
+    /// RESPONDER and the peer negotiated `restart-ice-req-v1`, this side
+    /// deliberately never builds its own offer (that is the whole point of
+    /// request-first — "exactly one leg ever authors restart offers", see
+    /// that branch's own doc) — so nothing on this side previously
+    /// triggered local candidate re-gathering before the peer's own
+    /// restart offer arrives and gets applied via `applyRemoteRestartOffer`.
+    /// Calling this in parallel with the request lets local gathering run
+    /// WHILE the request/offer round trip is in flight instead of only
+    /// starting once that round trip completes — the same "candidates
+    /// already gathering the instant the network changes" property
+    /// Android's responder has always had for this branch.
+    ///
+    /// `createOffer`'s own doc above records why it deliberately avoids
+    /// calling `restartIce()` directly: no local toolchain to grep-verify
+    /// the symbol against this app's vendored WebRTC binary, so that path
+    /// instead leans on the "IceRestart" SDP constraint (core-libwebrtc,
+    /// verified stable across every binding). That constraint-based
+    /// substitute is not available here — this branch has no SDP to attach
+    /// a constraint to in the first place. `restartIce()` is a standard,
+    /// long-standing public method on `RTCPeerConnection` (added for W3C
+    /// `RTCPeerConnection.restartIce()` spec parity well before this app's
+    /// pinned M144 branch, and untouched by this fork's H265/AES-256
+    /// FrameCryptor patches, which only touch the encoder/decoder/cryptor
+    /// layers — not signaling/ICE) — verified here via CI's real Swift
+    /// compiler rather than a local build (still unavailable this
+    /// session): a wrong symbol fails the build loud, before merge, rather
+    /// than silently at runtime.
+    public func primeIceRestart() {
+        guard let pc = peerConnection else { return }
+        pc.restartIce()
+        print("[WebRTC] primeIceRestart: local ICE re-gather kicked (no SDP sent)")
+    }
+
     // MARK: - Offer / Answer
 
     /// - Parameter iceRestart: W-SILENTPATHDEATH (2026-08-25) — when `true`,

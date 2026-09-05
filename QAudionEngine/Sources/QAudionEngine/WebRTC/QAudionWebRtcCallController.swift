@@ -2538,13 +2538,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     ///     racing the initiator's still correctly loses under the exact
     ///     same, already-unit-tested politeness rule, no new conflict
     ///     resolution needed.
-    /// The one thing genuinely NOT reproduced from Android's responder
-    /// path is the proactive-priming HEAD START (local candidates already
-    /// gathering the instant the network changes, before any offer is
-    /// even built) — this responder-side call still goes through the
-    /// same `createOffer(iceRestart: true)` + send path the initiator
-    /// uses, so the correctness guarantee holds but the responder's own
-    /// restart is exactly as fast as the initiator's, not faster.
+    /// W-RESPONDERPRIME (2026-09-05) — Android's responder proactive-
+    /// priming HEAD START (local candidates already gathering the instant
+    /// the network changes, before any offer round trip completes) is now
+    /// reproduced too, but only where it was actually missing: the
+    /// W-RESPONDERREQFIRST branch below, which never builds a local offer
+    /// at all (see `primeIceRestart`'s doc). The OTHER responder path —
+    /// the fresh-offer fallback for peers that never advertised
+    /// `restart-ice-req-v1` — already gets the equivalent effect for free
+    /// from `createOffer(iceRestart: true)`'s own `setLocalDescription`
+    /// call (the "IceRestart" constraint kicks local re-gather the moment
+    /// that commits), so it needed no separate priming call.
     ///
     /// Debounced by `RestartIceDecisions.iceRestartDebounceMs` — a
     /// flapping interface must not spam fresh CallOffer frames. This is
@@ -2659,6 +2663,16 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // request capability (old builds), where the receive paths that
         // DO accept responder offers are the only recovery there is.
         if !isInitiator, peerNegotiated()?.useRestartIceRequest == true {
+            // W-RESPONDERPRIME (2026-09-05) — this branch never builds its
+            // own offer (that is the point of request-first), so nothing
+            // here previously started local candidate re-gathering before
+            // the peer's own restart offer arrives. Prime it now, in
+            // parallel with the request, so gathering runs WHILE that
+            // round trip is in flight — see `primeIceRestart`'s own doc for
+            // why this needed a genuine native call rather than the
+            // `createOffer`-constraint substitute used elsewhere in this
+            // method.
+            peerConnection?.primeIceRestart()
             let reqSent = await callingApi.sendRestartIceRequest(recipientId: rid)
             log?("restart_ice req_sent=\(reqSent ? 1 : 0) reason=\(reason)")
             return
