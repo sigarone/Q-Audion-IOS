@@ -70,6 +70,38 @@ final class AudioAeadFailureRekeyPolicyTests: XCTestCase {
         XCTAssertTrue(meter.noteFailure(nowMs: base + 40))
     }
 
+    /// W-AUDIOAEADREKEY (2026-09-05) — calibration: `triggerEnabled` was
+    /// flipped on with no live-device verification available this session
+    /// (see that flag's own doc). This is the one half of that risk this
+    /// suite CAN close without a device: ordinary, scattered transient
+    /// decrypt noise on an otherwise-healthy call — the kind any real call
+    /// sees occasionally (see `CallService`'s own RX catch-block comments) —
+    /// must never accumulate to a spurious trigger. Simulates 60 isolated
+    /// failures spread every 700ms across ~42s of call time (never fewer
+    /// than 700ms apart, so no 5 of them ever land inside the 4s burst
+    /// window) and asserts NONE of them fire.
+    func testScatteredTransientFailuresNeverSpuriouslyTrigger() {
+        let meter = AudioAeadFailureRekeyMeter()
+        var t: Int64 = 0
+        for _ in 0..<60 {
+            XCTAssertFalse(meter.noteFailure(nowMs: t), "spurious trigger at t=\(t)ms from scattered, non-bursty noise")
+            t += 700
+        }
+    }
+
+    /// The other side of the same calibration: failures spaced just OUTSIDE
+    /// the burst window (4001ms apart) individually never qualify even
+    /// though there are more than `failureBurstCount` of them in the call's
+    /// lifetime — the window, not a lifetime count, is what defines a burst.
+    func testFailuresJustOutsideTheBurstWindowNeverAccumulateAcrossACall() {
+        let meter = AudioAeadFailureRekeyMeter()
+        var t: Int64 = 0
+        for _ in 0..<20 {
+            XCTAssertFalse(meter.noteFailure(nowMs: t))
+            t += AudioAeadFailureRekeyPolicy.failureBurstWindowMs + 1
+        }
+    }
+
     func testResetClearsHistoryAndCooldown() {
         let meter = AudioAeadFailureRekeyMeter()
         for i: Int64 in 0..<4 { _ = meter.noteFailure(nowMs: i * 10) }

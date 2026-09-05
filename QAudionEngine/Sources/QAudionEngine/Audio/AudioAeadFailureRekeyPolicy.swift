@@ -56,20 +56,24 @@ public enum AudioAeadFailureRekeyPolicy {
     /// `AudioAeadFailureRekeyMeter`) is actually allowed to fire an audio
     /// re-key request (gated in `CallService.noteAudioAeadDecryptFailure`).
     /// The decision logic itself is pure and unit-tested
-    /// (`AudioAeadFailureRekeyPolicyTests`) and safe to always run, but the
-    /// trigger it feeds — coupling a decrypt-failure signal to
-    /// `ReKeyScheduler.forceReKey`, a real crypto re-handshake — has never
-    /// been exercised against a real call: no Mac/device this session (see
-    /// this item's report). Default OFF, same discipline
-    /// `CallKitWorkOffloadPolicy.audioEngineBackgroundQueueEnabled`
-    /// documents for its own never-verified-live mechanism: `false`
-    /// preserves EXACTLY today's behavior (AEAD failures keep counting
-    /// into `CallService.rxDecryptErrorCount`/telemetry; nothing acts on
-    /// them). Flip only after confirming on a device that a genuine
-    /// mid-call audio key mismatch actually recovers AND that ordinary
-    /// transient decrypt noise on a healthy call never spuriously crosses
-    /// the burst threshold.
-    public static let triggerEnabled: Bool = false
+    /// (`AudioAeadFailureRekeyPolicyTests`, including the 2026-09-05
+    /// scattered/just-outside-window calibration cases added alongside this
+    /// flip) and safe to always run.
+    ///
+    /// Enabled 2026-09-05 WITHOUT a live device/call verification (still no
+    /// Mac/device available that session — see this file's history for the
+    /// original never-verified caveat) — an explicit risk-accepted decision,
+    /// not a "confirmed working" one: the trigger it feeds,
+    /// `ReKeyScheduler.forceReKey`, is the SAME already-proven mid-call PQC
+    /// re-handshake mechanism `ContactVoiceVerifier`'s confidence signal
+    /// already drives in production (this only adds a second trigger
+    /// source into that existing, exercised path — no new handshake code),
+    /// and its own caller-only glare guard + 8s timeout bound the blast
+    /// radius of an unnecessary tick the same way any other spurious
+    /// `forceReKey` call already would. Re-disable (set back to `false`) if
+    /// a live call ever shows a rekey firing on ordinary transient network
+    /// noise rather than a genuine stuck key.
+    public static let triggerEnabled: Bool = true
 
     /// True when the last `failureBurstCount` entries of `failureTimesMs`
     /// (oldest first) all landed inside `failureBurstWindowMs` of `nowMs`.

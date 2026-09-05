@@ -2039,13 +2039,13 @@ final class CallService: @unchecked Sendable {
     func noteAudioAeadDecryptFailure() {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         audioAeadFailureLock.lock()
-        // The meter always runs (pure, tested logic) even while the kill
-        // switch is off, so its state stays correct for whenever
-        // AudioAeadFailureRekeyPolicy.triggerEnabled is flipped on.
+        // The meter always runs (pure, tested logic) regardless of the kill
+        // switch below, so its state stays correct even if
+        // AudioAeadFailureRekeyPolicy.triggerEnabled is ever flipped back off.
         let shouldTrigger = audioAeadFailureMeter.noteFailure(nowMs: nowMs)
         audioAeadFailureLock.unlock()
         // W-AUDIOAEADREKEY kill switch — see AudioAeadFailureRekeyPolicy
-        // .triggerEnabled's own doc: default OFF, never verified live.
+        // .triggerEnabled's own doc for the current on/off state and why.
         guard shouldTrigger, AudioAeadFailureRekeyPolicy.triggerEnabled else { return }
         onAudioAeadFailureBurst?()
     }
