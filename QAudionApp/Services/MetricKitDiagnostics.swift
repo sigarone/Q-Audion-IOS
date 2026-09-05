@@ -240,7 +240,32 @@ extension MetricKitDiagnostics {
             let dur: String = measurementString(h.hangDuration)
             let line: String = "[MetricKit] hang duration=" + dur + " " + meta
             print(line)
+            // W-MKHANGSTACK (2026-09-05) — a hang was always delivered with
+            // duration only, no location: a real freeze cluster (silent
+            // "Freeze all avionics"/"Blocco tart" reports, no exception —
+            // SIGKILL-by-watchdog is uncatchable, CrashReporter has nothing)
+            // turned out to be undiagnosable after the fact for exactly this
+            // reason. MXHangDiagnostic carries the SAME callStackTree shape
+            // as MXCrashDiagnostic (both are MXCallStackTree-backed) — the
+            // frame walk below just reuses emitFrames, unchanged.
+            emitHangStack(h)
         }
+    }
+
+    /// Same shape as `emitCrashStack`, for the main thread's frames at the
+    /// moment of a hang. Best-effort: any parse miss is silent — the
+    /// duration= line above still records that a hang happened.
+    @available(iOS 14.0, *)
+    private static func emitHangStack(_ h: MXHangDiagnostic) {
+        let data: Data = h.callStackTree.jsonRepresentation()
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        guard let stacks = root["callStacks"] as? [[String: Any]] else { return }
+        let chosen = stacks.first(where: { ($0["threadAttributed"] as? Bool) == true }) ?? stacks.first
+        guard let stack = chosen,
+              let roots = stack["callStackRootFrames"] as? [[String: Any]] else { return }
+        print("[MetricKit] hang stack:")
+        var emitted = 0
+        emitFrames(roots, depth: 0, count: &emitted)
     }
 
     @available(iOS 14.0, *)

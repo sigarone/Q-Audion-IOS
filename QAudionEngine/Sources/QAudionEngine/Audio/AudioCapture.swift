@@ -2423,6 +2423,18 @@ public final class AudioCapture {
     }
 
     deinit {
+        // W-VPIODEALLOC (2026-09-05) — live SIGSEGV: `-[AVAudioEngine dealloc]`
+        // -> `AURemoteIO::~AURemoteIO()` -> `AudioComponentInstanceDispose`
+        // crashing while disposing a VoiceIO AudioUnit. `stop()` already does
+        // this correctly (`engine?.stop()` before `engine = nil`), but deinit
+        // never did — if the LAST strong reference to this instance is ever
+        // dropped by any path that skips an explicit `stop()` call, ARC
+        // deallocates `engine` directly, tearing down a still-RUNNING
+        // VoiceIO unit out from under its own real-time render thread. This
+        // is the safety net: stopping an already-stopped/nil engine is a
+        // no-op, so this is safe unconditionally, not just for the path that
+        // triggered the crash.
+        engine?.stop()
         if let obs = interruptionObserver {
             NotificationCenter.default.removeObserver(obs)
         }

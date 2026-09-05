@@ -56,6 +56,15 @@ public final class AudioPlayback {
     public func stop() {
         playerNode?.stop(); engine?.stop(); engine = nil; playerNode = nil; format = nil; isRunning = false
     }
+
+    // W-VPIODEALLOC (2026-09-05) — same safety net as AudioCapture.deinit:
+    // if the last strong reference is ever dropped without an explicit
+    // stop() call, ARC must not dealloc a still-running AVAudioEngine.
+    // No-op when stop() already ran (engine is nil by then).
+    deinit {
+        engine?.stop()
+    }
+
     public var isPlaying: Bool { isRunning }
 }
 #endif
