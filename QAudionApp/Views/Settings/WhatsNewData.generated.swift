@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1088",
+              date: "2026-09-05",
+              title: "v1.0.1088",
+              bullets: [
+                "fix(audio): stop leaking a running AVAudioEngine into dealloc + close ringtone-player reconnect gap",
+                "fix(test): correct spacing in the scattered-noise AEAD-rekey calibration test",
+                "feat(webrtc): prime local ICE re-gather on the responder's request-first restart path (W-RESPONDERPRIME)",
+                "feat(audio): enable audio-AEAD-failure-burst rekey trigger (W-AUDIOAEADREKEY)",
+              ]),
         .init(id: "v1.0.1087",
               date: "2026-09-04",
               title: "v1.0.1087",
               bullets: [
+                "chore: regenerate changelog for v1.0.1087",
                 "fix(video): break the HevcEncoder.invalidate() self-deadlock that froze the app on hangup",
               ]),
         .init(id: "v1.0.1086",
@@ -189,17 +199,6 @@ extension ReleaseNote {
                 "feat(speaker-change): AS-Norm cohort scoring closes the hard-pair gap",
                 "tools(logs): ship-ios-logs.py authenticates with the SSH key (W-VPSKEYAUTH)",
                 "fix(call): keep the phone awake in a call, and make the loudspeaker follow the ear (W-CALLAWAKE, W-EARTOUCH-V2, W-SOFTSPKR)",
-              ]),
-        .init(id: "v1.0.1068",
-              date: "2026-09-01",
-              title: "v1.0.1068",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1068",
-                "fix(call): six verified corner-case fixes for peer network-change resilience",
-                "fix(call): every call opened by announcing \"no change\" to the peer (W-SPKCHGSPURIOUS)",
-                "fix(net): node selection probed liveness and called it readiness",
-                "fix(transport): REST and the WebSocket stopped agreeing on which node we are on",
-                "feat(call): act on the server's relays_updated push instead of ignoring it",
               ]),
     ]
 }
