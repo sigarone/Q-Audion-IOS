@@ -77,15 +77,20 @@ final class AudioAeadFailureRekeyPolicyTests: XCTestCase {
     /// decrypt noise on an otherwise-healthy call — the kind any real call
     /// sees occasionally (see `CallService`'s own RX catch-block comments) —
     /// must never accumulate to a spurious trigger. Simulates 60 isolated
-    /// failures spread every 700ms across ~42s of call time (never fewer
-    /// than 700ms apart, so no 5 of them ever land inside the 4s burst
-    /// window) and asserts NONE of them fire.
+    /// failures spread every 5s across a 5-minute call. Any gap strictly
+    /// greater than `failureBurstWindowMs` (4s) on its own already rules
+    /// out a burst for the 2 failures either side of it, so this is a
+    /// generous margin on top of the CI-caught arithmetic mistake in an
+    /// earlier draft of this test (700ms spacing: 4 gaps of 700ms span only
+    /// 2800ms, WELL inside the 4s window — that draft was asserting the
+    /// production code must ignore what its own documented threshold
+    /// correctly calls a burst, and CI's real XCTest run caught it).
     func testScatteredTransientFailuresNeverSpuriouslyTrigger() {
         let meter = AudioAeadFailureRekeyMeter()
         var t: Int64 = 0
         for _ in 0..<60 {
             XCTAssertFalse(meter.noteFailure(nowMs: t), "spurious trigger at t=\(t)ms from scattered, non-bursty noise")
-            t += 700
+            t += 5000
         }
     }
 
