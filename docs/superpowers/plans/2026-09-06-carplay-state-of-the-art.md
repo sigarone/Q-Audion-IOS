@@ -69,7 +69,7 @@ template reads from — no new data layer, only new presentation surfaces.
 
 ## Status
 
-- **S1 — IMPLEMENTED 2026-09-06, NOT YET BUILD-VERIFIED.** New
+- **S1 — SHIPPED to TestFlight 2026-09-06 (`v1.0.1092`).** New
   `QAudionIntents` app-extension target (`IntentHandler.swift`,
   `INStartCallIntentHandling` — resolve/confirm/handle, pure pass-through,
   zero `QAudionEngine` dependency by design); `com.apple.developer.siri`
@@ -84,14 +84,70 @@ template reads from — no new data layer, only new presentation surfaces.
   — no pepper/hash matching, see that file's own doc for the known gap).
   Every SiriKit API call was cross-checked against Apple's current
   documentation (initializer signatures, property optionality, enum case
-  names) — not written from memory. **Cannot be compiled locally** (no
-  macOS toolchain in this environment) — first real compiler feedback comes
-  from either `engine-tests.yml` (covers `SiriCallResolution` + its tests
-  only, runs on every push) or a manual `ios-ui-smoke.yml` dispatch (covers
-  the full `QAudionApp` + new `QAudionIntents` target, Simulator, no
-  signing — the right cheap gate for this slice, see the Gates section).
-  Not yet committed.
-- S2-S6: not started.
+  names) — not written from memory.
+  - Real build history: `v1.0.1090` failed at archive — `"QAudionIntents"
+    requires a provisioning profile` (new bundle id
+    `com.qaudion.app.intents` never registered with App Store Connect).
+    Fixed in `.github/workflows/ios-testflight.yml` (enable `SiriKit`
+    capability on the main bundle id + fetch a plain profile for the new
+    extension bundle id, same self-healing pattern already used for
+    Associated Domains/App Groups/Network Extensions). `v1.0.1091` archived
+    and uploaded clean (13m46s) — proves the Swift code itself compiled
+    correctly on the first real attempt.
+  - **Gap found AFTER v1.0.1091 shipped, fixed in `v1.0.1092`:** Apple's own
+    doc ("Requesting Authorization to Use Siri") states
+    `NSSiriUsageDescription` "is a requirement" and
+    `INPreferences.requestSiriAuthorization` must be called during the
+    app's execution — without both, the app's Siri authorization status
+    stays `.notDetermined` forever and the whole S1 feature is silently
+    unreachable regardless of how correctly the entitlement/extension are
+    configured. `v1.0.1091` shipped with neither. Added
+    `NSSiriUsageDescription` to `Info.plist` and a
+    `INPreferences.requestSiriAuthorization` call in `AppState.initialize()`
+    (right after the `CarPlayBridge` wiring). **Lesson for future slices:
+    verify the FULL "Requesting Authorization"/"required keys" doc page for
+    each new Intents domain before declaring a slice done — the entitlement
+    + extension + Info.plist activity-type trio is necessary but not
+    sufficient.**
+- **S2 (Siri messaging) — BLOCKED, needs an explicit decision before any
+  code is written.** Verified against Apple's own docs
+  (`INSendMessageIntentHandling`/`INSearchForMessagesIntentHandling`
+  `handle(intent:completion:)`): unlike `INStartCallIntent`, these intents'
+  `handle()` **must send the message / perform the search and return
+  results from inside the Intents Extension process itself** — there is no
+  `continueInApp`-style hand-off to defer the real work to the main app.
+  Apple's own doc for `.failureRequiringAppLaunch` explicitly says "Do not
+  use it... to force the user to launch your app", so using that code as a
+  universal safe dodge is a documented misuse, not a legitimate design
+  option. Doing this correctly means the Intents Extension needs live
+  access to decrypt and send/search this app's end-to-end-encrypted
+  messages — i.e. sharing ratchet/session key material across a process
+  boundary the S1 architecture deliberately never crosses. That is a
+  security-architecture decision (App Group-shared key material or
+  Keychain access group changes, and a real risk of ratchet-state
+  divergence if the extension and the main app ever run concurrently),
+  not a "same pattern as S1" slice — per this repo's own CLAUDE.md rule
+  ("qualsiasi PR che tocca crypto/ → skill obbligatoria prima di code
+  review"), this needs a `cybersec-skills` consultation and an explicit
+  go-ahead before implementation starts. **Not started, on purpose.**
+- **S3 (file the CarPlay entitlement request)** — still not filed; this is
+  a manual action at developer.apple.com/contact/request/carplay-entitlement
+  that only the Apple Developer account holder can do. Nothing in S4/S5 can
+  be verified end-to-end without it.
+- **S4 (partial) — SHIPPED alongside S1's fix, `v1.0.1092`.** Added
+  `CPAssistantCellConfiguration(position: .top, visibility: .always,
+  assistantAction: .startCall)` to the Recenti tab in `CarPlayScene.swift`
+  — this needed nothing beyond S1 (the assistant cell's only supported
+  action for a communication app is `.startCall`, and Apple's requirement
+  is just "an Intents Extension that handles" it, which already exists).
+  Deliberately did NOT add `CPContactTemplate`/`CPContactMessageButton` to
+  the Contatti tab in this pass: `CPContactMessageButton` only works once
+  S2 exists, and adding a contact-detail push screen with ONLY a call
+  button today would be a strict UX regression from the current one-tap
+  dial (extra tap, no new capability) — revisit once S2 is designed.
+  Untested on real CarPlay hardware — needs S3.
+- **S5 (CPMessageListItem) — not started, blocked on S2** (same intents).
+- S6: deferred, explicitly, no change.
 
 ## Current state (confirmed 2026-09-06, all via `Read`/`Grep`, not assumed)
 

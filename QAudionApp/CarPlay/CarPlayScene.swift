@@ -79,6 +79,23 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         messagesTemplate.tabTitle = "Messaggi"
         messagesTemplate.tabImage = UIImage(systemName: "message.fill")
 
+        // CarPlay/Siri state-of-the-art plan S4 — the assistant cell needs
+        // NOTHING beyond S1 (INStartCallIntent, already shipped): Apple's own
+        // doc says a communication app's assistant cell action must be
+        // `.startCall`, and "your app must include an Intents Extension that
+        // handles" that intent — QAudionIntents/IntentHandler.swift already
+        // does. Only on Recenti (mirrors a Phone app's own Recents tab); NOT
+        // added to Contatti/Messaggi in this slice — `CPContactTemplate` +
+        // `CPContactMessageButton` and `CPMessageListItem` both require
+        // `INSendMessageIntent`/`INSearchForMessagesIntent` (S2), which is
+        // NOT implemented yet (that work needs its own security-design pass:
+        // per Apple's docs those intents' `handle()` must send/search
+        // messages FROM the extension process itself, unlike calls, which
+        // would mean sharing this app's E2EE ratchet/session key material
+        // across a process boundary — deliberately not done in this slice).
+        recentsTemplate.assistantCellConfiguration = CPAssistantCellConfiguration(
+            position: .top, visibility: .always, assistantAction: .startCall)
+
         configureEmptyStates()
 
         let tabBar = CPTabBarTemplate(templates: [
