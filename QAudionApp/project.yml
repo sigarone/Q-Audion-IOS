@@ -106,7 +106,7 @@ targets:
         # unchanged. MUST be removed from this line before a public App
         # Store submission build (see SettingsScreen.swift's `#if
         # QAUDION_DEV_TOOLS` guard around sviluppatoreSection).
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) QAUDION_DEV_TOOLS
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited)
         # -lresolv: Reality.xcframework embeds a gomobile-compiled Go runtime
         # that needs libresolv's res_9_ninit/res_9_nsearch/res_9_nclose for DNS
         # resolution (engine-tests.yml passes the identical flag for the same
