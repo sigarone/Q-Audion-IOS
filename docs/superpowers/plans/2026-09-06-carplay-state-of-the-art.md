@@ -109,27 +109,59 @@ template reads from — no new data layer, only new presentation surfaces.
     each new Intents domain before declaring a slice done — the entitlement
     + extension + Info.plist activity-type trio is necessary but not
     sufficient.**
-- **S2 (Siri messaging) — BLOCKED, needs an explicit decision before any
-  code is written.** Verified against Apple's own docs
-  (`INSendMessageIntentHandling`/`INSearchForMessagesIntentHandling`
-  `handle(intent:completion:)`): unlike `INStartCallIntent`, these intents'
-  `handle()` **must send the message / perform the search and return
-  results from inside the Intents Extension process itself** — there is no
-  `continueInApp`-style hand-off to defer the real work to the main app.
-  Apple's own doc for `.failureRequiringAppLaunch` explicitly says "Do not
-  use it... to force the user to launch your app", so using that code as a
-  universal safe dodge is a documented misuse, not a legitimate design
-  option. Doing this correctly means the Intents Extension needs live
-  access to decrypt and send/search this app's end-to-end-encrypted
-  messages — i.e. sharing ratchet/session key material across a process
-  boundary the S1 architecture deliberately never crosses. That is a
-  security-architecture decision (App Group-shared key material or
-  Keychain access group changes, and a real risk of ratchet-state
-  divergence if the extension and the main app ever run concurrently),
-  not a "same pattern as S1" slice — per this repo's own CLAUDE.md rule
-  ("qualsiasi PR che tocca crypto/ → skill obbligatoria prima di code
-  review"), this needs a `cybersec-skills` consultation and an explicit
-  go-ahead before implementation starts. **Not started, on purpose.**
+- **S2 (Siri messaging) — IMPLEMENTED 2026-09-06, NOT YET RELEASED/
+  BUILD-VERIFIED.** `INSendMessageIntentHandling`/
+  `INSearchForMessagesIntentHandling`'s `handle()` cannot be a
+  `continueInApp` pass-through like calls (Apple's docs: both must
+  send/search from inside the Intents Extension process itself), which
+  would normally mean sharing E2EE ratchet/session material across a
+  process boundary. Resolved via a `cryptography-security-expert`
+  consultation (2026-09-06) into a narrower, reviewed design with NO
+  ratchet sharing at all:
+  - New `group.com.bcrypto.qaudion.siri` App Group (separate from vpn/
+    broadcast, this project's per-feature convention), new
+    `QAudionIntents.entitlements`.
+  - New `SiriMessageBridgeStore.swift` (`QAudionApp/Siri/`, compiled into
+    BOTH targets directly — Foundation + CryptoKit only, no
+    `QAudionEngine`) — two strictly single-writer, App-Group-encrypted
+    channels: `recentMessages` (main app writes plaintext it already
+    decrypted; extension reads, opt-in via `SiriMessagingConsent`, default
+    OFF — new "SIRI" section in `PrivacySettingsScreen`) and `outbox`
+    (extension appends raw `{handle, spokenName, text}`, never encrypts
+    anything; main app drains).
+  - `AppState.drainSiriOutbox()`: resolves each queued entry via
+    `SiriCallResolution` (same resolver as S1), then inserts a normal
+    outgoing `.sending` `Message` row via `ConversationStore
+    .appendMessage` + `resolveOrCreateConversationId` and kicks the
+    ALREADY-EXISTING `ChatOutboxDrain` — the real encrypt+send happens
+    through the app's one, single-writer send pipeline
+    (`ChatMessageSendService`), completely unchanged, exactly as if the
+    user had typed the message in `ChatDetailScreen`. Never calls the send
+    service directly. `handle()`'s response code is `.inProgress`
+    ("queued", Apple's own semantics for "not sent within a few seconds"),
+    never `.success` — no false confirmation to the user.
+  - `AppState.refreshSiriMessageCache()`: capped snapshot of recent 1:1
+    message history (`ConversationStore.loadMessages`), skips
+    `deletedAt`/`isViewOnce` rows. Both drain and refresh run on cold
+    launch (`initialize()`) and on every foreground
+    (`QAudionApp.swift`'s `handleScenePhase(.active)`).
+  - `QAudionIntents/Info.plist`: `IntentsSupported` gained both intents;
+    `IntentsRestrictedWhileLocked` gained `INSearchForMessagesIntent` only
+    (reading plaintext, even from the cache, requires an unlocked device —
+    matches this app's existing no-plaintext-while-locked posture; sending
+    is NOT restricted, same as calls).
+  - `.github/workflows/ios-testflight.yml`: `QAudionIntents` now has an
+    entitlements file (it didn't for S1), so its signing block gained the
+    same enable-capabilities/delete-stale-profile dance as the VPN/
+    broadcast extensions (App Groups only — no other capability needed).
+  - Every new SiriKit API call (both protocols' full resolve/confirm/
+    handle surface, `INMessage`, `INSendMessageIntentResponseCode
+    .inProgress`'s exact semantics) was cross-checked against Apple's
+    current docs, not written from memory — same discipline as S1.
+  - **Not yet committed/tagged.** Materially larger blast radius than S1
+    (touches the real `ConversationStore`/`ChatOutboxDrain` message
+    pipeline, even though only through brand-new, additive call sites) —
+    flagged to Pavel before cutting a release for this batch.
 - **S3 (file the CarPlay entitlement request)** — still not filed; this is
   a manual action at developer.apple.com/contact/request/carplay-entitlement
   that only the Apple Developer account holder can do. Nothing in S4/S5 can

@@ -24,12 +24,19 @@
 	<string>1.0.1089</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<!-- SiriKit Intents Extension descriptor. IntentsSupported lists the
-	     unified (iOS 13+) audio/video call intent — see IntentHandler.swift.
-	     IntentsRestrictedWhileLocked is deliberately EMPTY: Q-Audion's
-	     CallKit provider already runs with the device locked (same as any
-	     other CallKit VoIP app), so there is no reason to force an unlock
-	     before Siri hands the call off to the app. -->
+	<!-- SiriKit Intents Extension descriptor — see IntentHandler.swift.
+	     INStartCallIntent (S1): unified (iOS 13+) audio/video call intent.
+	     INSendMessageIntent / INSearchForMessagesIntent (S2): messaging via
+	     SiriMessageBridgeStore, never the live E2EE ratchet — see that
+	     file's header and docs/superpowers/plans/
+	     2026-09-06-carplay-state-of-the-art.md.
+	     IntentsRestrictedWhileLocked: INSearchForMessagesIntent only —
+	     reading message plaintext (even from the opt-in cache) requires an
+	     unlocked device, matching Apple's own stated default for this
+	     intent and this app's existing no-plaintext-while-locked posture.
+	     Calls and sending are NOT restricted: Q-Audion's CallKit provider
+	     and the outbox-queue send path already work with the device
+	     locked, same as any other CallKit VoIP app. -->
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
@@ -37,9 +44,13 @@
 			<key>IntentsSupported</key>
 			<array>
 				<string>INStartCallIntent</string>
+				<string>INSendMessageIntent</string>
+				<string>INSearchForMessagesIntent</string>
 			</array>
 			<key>IntentsRestrictedWhileLocked</key>
-			<array/>
+			<array>
+				<string>INSearchForMessagesIntent</string>
+			</array>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.intents-service</string>

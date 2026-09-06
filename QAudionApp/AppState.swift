@@ -2797,6 +2797,15 @@ final class AppState: ObservableObject {
             RTLog.info("call", "Siri authorization status: \(status.rawValue)")
         }
 
+        // CarPlay/Siri state-of-the-art plan S2 — cold-launch pass: pick up
+        // any message the Intents Extension queued while the app wasn't
+        // running, and refresh the opt-in search cache for the next time
+        // Siri is asked to read messages. Also re-run on every foreground
+        // (QAudionApp.swift's handleScenePhase) so a message queued while
+        // merely backgrounded doesn't wait for a full relaunch.
+        drainSiriOutbox()
+        refreshSiriMessageCache()
+
         // W541-3 — start structured telemetry pump (encrypted batch
         // POST every 5 s). Same primitives-only API constraint as
         // LiveLogStreamer per CLAUDE.md "Hard-won lesson 16".
@@ -13894,6 +13903,75 @@ final class AppState: ObservableObject {
                 RTLog.warn("call", "Siri donation failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    // MARK: - Siri messaging (S2)
+
+    /// Refreshes `SiriMessageBridgeStore`'s read-only search cache from this
+    /// device's own already-decrypted 1:1 message history — a periodic
+    /// snapshot, never a live feed (see that file's own security-design doc
+    /// for why the Intents Extension only ever reads a snapshot, never the
+    /// live ratchet). No-op-and-clear when the user hasn't opted in via
+    /// `SiriMessagingConsent` — a user who never turns this on never has a
+    /// second on-disk copy of their plaintext at all. Cheap enough to call
+    /// opportunistically: `ConversationStore.loadMessages` reads through the
+    /// same at-rest cipher the chat UI already pays for.
+    func refreshSiriMessageCache() {
+        guard SiriMessagingConsent.isEnabled else {
+            SiriMessageBridgeStore.shared.replaceRecentMessages([])
+            return
+        }
+        let store = ConversationStore()
+        var cached: [SiriMessageBridgeStore.CachedMessage] = []
+        for conv in store.loadConversations() where conv.kind == .oneToOne {
+            let recent = store.loadMessages(conversationId: conv.id).suffix(10)
+            // Never cache a view-once message — this second, persistent
+            // copy would defeat the whole point of that feature.
+            for msg in recent where msg.deletedAt == nil && !(msg.isViewOnce ?? false) {
+                cached.append(SiriMessageBridgeStore.CachedMessage(
+                    peerUserId: conv.peerUserId,
+                    peerDisplayName: conv.peerDisplayName,
+                    text: msg.plaintext,
+                    sentAt: msg.sentAt,
+                    isOutgoing: msg.direction == .outgoing))
+            }
+        }
+        SiriMessageBridgeStore.shared.replaceRecentMessages(cached)
+    }
+
+    /// Drains `SiriMessageBridgeStore`'s outbox (queued by
+    /// `QAudionIntents/IntentHandler.swift`'s `INSendMessageIntent` handler):
+    /// resolves each `{handle, spokenName, text}` to a real Q-Audion peer
+    /// via `SiriCallResolution` — the exact same resolver S1 already uses
+    /// for `INStartCallIntent` — then inserts a normal outgoing `.sending`
+    /// `Message` row via `ConversationStore.appendMessage` and kicks
+    /// `ChatOutboxDrain`. This NEVER calls `ChatMessageSendService`
+    /// directly: inserting the row and kicking the already-existing durable
+    /// outbox drainer is the hand-off — the real E2EE encrypt+send still
+    /// happens through the app's one, single-writer send pipeline, exactly
+    /// as if the user had typed the message in `ChatDetailScreen` (see the
+    /// `cryptography-security-expert` consultation recorded in the plan
+    /// doc for why this indirection matters).
+    func drainSiriOutbox() {
+        let pending = SiriMessageBridgeStore.shared.drainOutbox()
+        guard !pending.isEmpty else { return }
+        let store = ConversationStore()
+        for item in pending {
+            guard let match = SiriCallResolution.resolve(
+                handle: item.handle, displayName: item.spokenName, contacts: cachedContacts
+            ) else {
+                RTLog.warn("chat", "Siri outbox: no Q-Audion match for spoken name, dropped")
+                continue
+            }
+            let conversationId = resolveOrCreateConversationId(forPeerUserId: match.userId)
+            let messageId = UUID()
+            let message = Message(
+                id: messageId, conversationId: conversationId, direction: .outgoing,
+                plaintext: item.text, sentAt: item.queuedAt, deliveredAt: nil, readAt: nil,
+                status: .sending, clientMsgId: messageId.uuidString)
+            store.appendMessage(message)
+        }
+        ChatOutboxDrain.shared.kick(reason: "siri-outbox")
     }
 
     func startCall(contactId: String, video: Bool = false) async {

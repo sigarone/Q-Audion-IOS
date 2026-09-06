@@ -204,6 +204,41 @@ struct PrivacySettingsScreen: View {
         )
     }
 
+    // MARK: - CarPlay/Siri state-of-the-art plan S2 — messaging cache consent
+    //
+    // Gates SiriMessageBridgeStore.replaceRecentMessages (AppState
+    // .refreshSiriMessageCache): a second, App-Group-shared on-disk copy of
+    // recent 1:1 plaintext, readable by the QAudionIntents extension so
+    // "Chiedi a Q-Audion di leggermi i messaggi di X" works. Default OFF —
+    // this is a real privacy trade-off (see that file's own security-design
+    // doc, cryptography-security-expert consultation 2026-09-06), never
+    // silently enabled. Same real-`@State`-backing pattern as
+    // `operationalDiagnosticsEnabled` above (W-DIAGTOGGLE-DEAD) so the
+    // switch actually re-renders on tap. Sending a message via Siri
+    // (`INSendMessageIntent` → the outbox queue) is NOT gated by this flag —
+    // it never stores a second copy of anything, see AppState
+    // .drainSiriOutbox.
+    @State private var siriMessagingConsentToggleState: Bool = SiriMessagingConsent.isEnabled
+
+    private var siriMessagingConsentEnabled: Binding<Bool> {
+        Binding(
+            get: { siriMessagingConsentToggleState },
+            set: { newValue in
+                siriMessagingConsentToggleState = newValue
+                SiriMessagingConsent.setEnabled(newValue)
+                // Turning ON: the cache populates on the next foreground/
+                // launch pass (AppState.refreshSiriMessageCache, already
+                // wired there) — this screen holds no AppState reference to
+                // call it immediately, and a few seconds' delay is a fine
+                // trade-off. Turning OFF: clear any existing copy right now
+                // rather than waiting for that same pass.
+                if !newValue {
+                    SiriMessageBridgeStore.shared.replaceRecentMessages([])
+                }
+            }
+        )
+    }
+
     private var appLockTimeoutMs: Binding<Int> {
         Binding(
             get: { PrivacyGate.appLockTimeoutMs },
@@ -334,6 +369,16 @@ struct PrivacySettingsScreen: View {
                             title: "Log diagnostici in tempo reale",
                             subtitle: "Invia log applicativi redatti (tag, dimensioni, fingerprint troncati — mai chiavi, token o contenuto messaggi) al backend di diagnostica ogni pochi secondi mentre l'app è in uso. Canale separato dal precedente. Disattivato di default.",
                             isOn: liveLogStreamerEnabled
+                        )
+                    }
+
+                    // CarPlay/Siri state-of-the-art plan S2 (2026-09-06).
+                    SettingsSectionHeader("SIRI")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Siri può leggere i tuoi messaggi",
+                            subtitle: "Permette a Siri di risponderti a voce con i tuoi messaggi recenti (es. \"Chiedi a Q-Audion di leggermi i messaggi di Anna\"). Richiede di tenere una seconda copia cifrata dei messaggi recenti accessibile a Siri. Disattivato di default. L'invio di messaggi via Siri non è interessato da questa opzione.",
+                            isOn: siriMessagingConsentEnabled
                         )
                     }
 

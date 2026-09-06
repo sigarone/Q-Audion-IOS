@@ -660,20 +660,72 @@ jobs:
             echo "WARNING: could not resolve Broadcast Extension Bundle ID resource -- archive may fail."
           fi
 
-          # ── Intents extension: no extra capabilities ────────────────────
-          # CarPlay/Siri state-of-the-art plan S1 -- QAudionIntents
-          # (IntentHandler.swift, INStartCallIntent) ships no entitlements
-          # file of its own (Foundation + Intents.framework only, no App
-          # Groups/Network Extensions/etc.), so unlike the VPN and broadcast
-          # extensions above this only needs a plain profile -- no
-          # enable-capabilities / delete-stale-profile dance required.
+          # ── Intents extension: App Groups (S2 added QAudionIntents.entitlements) ─
+          # CarPlay/Siri state-of-the-art plan. S1 (INStartCallIntent) needed
+          # no entitlements file at all -- S2 (INSendMessageIntent/
+          # INSearchForMessagesIntent, SiriMessageBridgeStore.swift) added
+          # QAudionIntents.entitlements declaring
+          # group.com.bcrypto.qaudion.siri, so this now needs the same
+          # enable-capabilities / delete-stale-profile dance as the VPN and
+          # broadcast extensions above, not a plain profile.
           INTENTS_BID="com.qaudion.app.intents"
+
+          INTENTS_FETCH_TMP=$(mktemp)
           app-store-connect fetch-signing-files "$INTENTS_BID" \
             --type IOS_APP_STORE \
             --create \
             --platform IOS \
             --certificate-key "@file:$CERT_KEY_PATH" \
-            --strict-match-identifier
+            --strict-match-identifier 2>&1 | tee "$INTENTS_FETCH_TMP" || true
+          INTENTS_FETCH_OUT=$(cat "$INTENTS_FETCH_TMP")
+          rm -f "$INTENTS_FETCH_TMP"
+
+          INTENTS_PLAIN=$(printf '%s\n' "$INTENTS_FETCH_OUT" | sed 's/\x1b\[[0-9;]*m//g')
+
+          INTENTS_BID_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+            | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$INTENTS_BID_RES" ]; then
+            INTENTS_BID_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+              | grep -F "com.qaudion.app.intents" \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Intents Extension Bundle ID res-id: ${INTENTS_BID_RES:-UNKNOWN}"
+
+          INTENTS_PROF_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+            | grep -oE 'Created Profile [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$INTENTS_PROF_RES" ]; then
+            INTENTS_PROF_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+              | grep -E '^- IOS_APP_STORE' \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Intents Extension Profile res-id: ${INTENTS_PROF_RES:-UNKNOWN}"
+
+          if [ -n "$INTENTS_BID_RES" ]; then
+            echo "Enabling APP_GROUPS on $INTENTS_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$INTENTS_BID_RES" --capability "App Groups" 2>&1 \
+              && echo "  APP_GROUPS: done" \
+              || echo "  APP_GROUPS: WARN (may already be enabled)"
+
+            if [ -n "$INTENTS_PROF_RES" ]; then
+              echo "Deleting stale profile $INTENTS_PROF_RES (created without capabilities)..."
+              app-store-connect profiles delete "$INTENTS_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            fi
+
+            echo "Re-creating Intents extension signing files with capabilities..."
+            app-store-connect fetch-signing-files "$INTENTS_BID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "WARNING: could not resolve Intents Extension Bundle ID resource -- archive may fail."
+          fi
 
           keychain add-certificates
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"

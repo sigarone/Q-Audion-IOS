@@ -24,6 +24,13 @@
 	<array>
 		<string>group.com.bcrypto.qaudion.vpn</string>
 		<string>group.com.bcrypto.qaudion.broadcast</string>
+		<!-- CarPlay/Siri state-of-the-art plan S2 — dedicated App Group for
+		     SiriMessageBridgeStore.swift (QAudionApp/Siri/), shared with
+		     QAudionIntents. Deliberately SEPARATE from the vpn/broadcast
+		     groups (this project's per-feature App Group convention) and
+		     carries NO ratchet/session material — see that file's own
+		     security-design doc comment. -->
+		<string>group.com.bcrypto.qaudion.siri</string>
 	</array>
 	<!-- VPN: Network Extension capability (packet tunnel manager side) -->
 	<key>com.apple.developer.networking.networkextension</key>

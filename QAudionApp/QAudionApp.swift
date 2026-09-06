@@ -263,6 +263,11 @@ struct QAudionApp: App {
             } else {
                 lockService.handleForeground()
             }
+            // CarPlay/Siri state-of-the-art plan S2 — catch a message the
+            // Intents Extension queued while merely backgrounded (not just
+            // on cold launch, see AppState.initialize()'s own call).
+            appState.drainSiriOutbox()
+            appState.refreshSiriMessageCache()
         default:
             break
         }

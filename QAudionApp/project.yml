@@ -334,11 +334,18 @@ targets:
 
   # ------------------------------------------------------------------ #
   # QAudionIntents — SiriKit Intents Extension                          #
-  # CarPlay/Siri state-of-the-art plan, S1 (docs/superpowers/plans/     #
-  # 2026-09-06-carplay-state-of-the-art.md). Handles INStartCallIntent  #
-  # ("Hey Siri, chiama X su Q-Audion") and hands off to the main app —  #
-  # see IntentHandler.swift for why it stays a thin pass-through with   #
-  # no QAudionEngine/Contacts dependency at all.                        #
+  # CarPlay/Siri state-of-the-art plan (docs/superpowers/plans/         #
+  # 2026-09-06-carplay-state-of-the-art.md). S1: INStartCallIntent      #
+  # ("Hey Siri, chiama X su Q-Audion"), thin pass-through, hands off to #
+  # the main app. S2: INSendMessageIntent/INSearchForMessagesIntent —   #
+  # NOT a pass-through (Apple requires handle() to send/search from     #
+  # inside this process), so this target ALSO compiles                 #
+  # SiriMessageBridgeStore.swift directly from QAudionApp/Siri/ (a      #
+  # second source path below, NOT the whole QAudionApp target) — a      #
+  # single small Foundation+CryptoKit file shared by both targets so    #
+  # they speak the exact same App-Group-encrypted format, still with no #
+  # QAudionEngine dependency at all (that file carries no ratchet/      #
+  # session material by design — see its own header doc).              #
   # Bundle: com.qaudion.app.intents                                     #
   # ------------------------------------------------------------------ #
   QAudionIntents:
@@ -347,9 +354,11 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: ../QAudionIntents
+      - path: ../QAudionApp/Siri/SiriMessageBridgeStore.swift
     settings:
       base:
         INFOPLIST_FILE: ../QAudionIntents/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../QAudionIntents/QAudionIntents.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.intents
         PRODUCT_NAME: QAudionIntents
         SWIFT_VERSION: "5.9"
