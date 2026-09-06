@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1095",
+              date: "2026-09-06",
+              title: "v1.0.1095",
+              bullets: [
+                "fix(ios): strip dev/QA tools from public build (App Store 2.1)",
+              ]),
         .init(id: "v1.0.1094",
               date: "2026-09-06",
               title: "v1.0.1094",
               bullets: [
+                "chore: regenerate changelog for v1.0.1094",
                 "feat(carplay): S4/S5 — CPContactTemplate/CPContactMessageButton, CPMessageListItem",
               ]),
         .init(id: "v1.0.1093",
@@ -166,14 +173,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1076",
                 "fix(call): guard outgoing-ring player against a failed engine start",
-              ]),
-        .init(id: "v1.0.1075",
-              date: "2026-09-02",
-              title: "v1.0.1075",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1075",
-                "fix(call): fix likely crash-at-connection in the new ring-cue engine",
-                "fix(reality-core): bump grpc-go to 1.83.1, fixes CVE-2026-84304",
               ]),
     ]
 }
