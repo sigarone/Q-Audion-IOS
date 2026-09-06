@@ -447,6 +447,19 @@ jobs:
               && echo "  ASSOCIATED_DOMAINS: done" \
               || echo "  ASSOCIATED_DOMAINS: WARN (may already be enabled)"
 
+            # CarPlay/Siri state-of-the-art plan S1 (docs/superpowers/plans/
+            # 2026-09-06-carplay-state-of-the-art.md) -- QAudion.entitlements
+            # now declares com.apple.developer.siri, but the main app's App
+            # Store profile was created before that capability existed on
+            # the Bundle ID. Same self-healing pattern as Associated Domains
+            # above: enable it here, then Phase 2/3 below delete the stale
+            # profile and recreate it so the new profile actually includes it.
+            echo "Enabling SiriKit on $MAIN_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$MAIN_BID_RES" --capability "SiriKit" 2>&1 \
+              && echo "  SIRIKIT: done" \
+              || echo "  SIRIKIT: WARN (may already be enabled)"
+
             # Phase 2: delete the stale profile (created before the
             # capability existed) so --create below makes a fresh one that
             # actually includes it. `bundle-ids profiles` (not `profiles
@@ -646,6 +659,21 @@ jobs:
           else
             echo "WARNING: could not resolve Broadcast Extension Bundle ID resource -- archive may fail."
           fi
+
+          # ── Intents extension: no extra capabilities ────────────────────
+          # CarPlay/Siri state-of-the-art plan S1 -- QAudionIntents
+          # (IntentHandler.swift, INStartCallIntent) ships no entitlements
+          # file of its own (Foundation + Intents.framework only, no App
+          # Groups/Network Extensions/etc.), so unlike the VPN and broadcast
+          # extensions above this only needs a plain profile -- no
+          # enable-capabilities / delete-stale-profile dance required.
+          INTENTS_BID="com.qaudion.app.intents"
+          app-store-connect fetch-signing-files "$INTENTS_BID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier
 
           keychain add-certificates
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
