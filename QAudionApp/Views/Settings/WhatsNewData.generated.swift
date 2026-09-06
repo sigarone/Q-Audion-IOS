@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1090",
+              date: "2026-09-06",
+              title: "v1.0.1090",
+              bullets: [
+                "feat(carplay): add Siri calling foundation (S1 of CarPlay/Siri parity plan)",
+                "🎨 Palette: Replace duplicated tap-to-copy rows with shared component",
+                "🎨 Palette: [UX improvement] Add VoiceOver traits to shared TapCopyRow",
+              ]),
         .init(id: "v1.0.1089",
               date: "2026-09-06",
               title: "v1.0.1089",
               bullets: [
+                "chore: regenerate changelog for v1.0.1089",
                 "fix(net): self-heal the Reality/Xray tunnel once it goes stale (iOS parity)",
               ]),
         .init(id: "v1.0.1088",
@@ -167,20 +176,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1071",
                 "fix(security): remove redundant LP() length-prefix on wrapped_content_key in ATT-1 canon (ATT-1-followup)",
                 "fix(ci): SigsumVerifier.FailureReason missing Error conformance broke build",
-              ]),
-        .init(id: "v1.0.1070",
-              date: "2026-09-02",
-              title: "v1.0.1070",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1070",
-                "feat(trust): correct Sigsum key-transparency verifier (TRUST-1 residual)",
-                "fix(ci): two new KAT test files missing their private hexEncodedString helper",
-                "fix(tools): fetch-ios-live.py falls back to stale VPS_ACCESS.md when only 2/3 env vars set",
-                "fix(ci): MessageRatchet default-arg Self reference broke CI build",
-                "fix(call): AVAudioSession notifications raced AudioCapture.start() off-main (W-NOTIFYMAIN)",
-                "fix(security): signed remote-wipe command + opaque call-wakeup push (TRUST-2, TRUST-6)",
-                "fix(security): inner sealed-audio directional keys/AAD/replay + SFU/video key hardening (MEDIA-3/4/5/6/7/8, MSG-4)",
-                "fix(security): add a kill switch for transcriptBindV1, default off (CALL-4/HSID-002, CALL-3)",
               ]),
     ]
 }
