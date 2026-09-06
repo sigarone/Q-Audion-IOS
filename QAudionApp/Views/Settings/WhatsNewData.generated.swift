@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1089",
+              date: "2026-09-06",
+              title: "v1.0.1089",
+              bullets: [
+                "fix(net): self-heal the Reality/Xray tunnel once it goes stale (iOS parity)",
+              ]),
         .init(id: "v1.0.1088",
               date: "2026-09-05",
               title: "v1.0.1088",
               bullets: [
+                "chore: regenerate changelog for v1.0.1088",
                 "fix(audio): stop leaking a running AVAudioEngine into dealloc + close ringtone-player reconnect gap",
                 "fix(test): correct spacing in the scattered-noise AEAD-rekey calibration test",
                 "feat(webrtc): prime local ICE re-gather on the responder's request-first restart path (W-RESPONDERPRIME)",
@@ -174,31 +181,6 @@ extension ReleaseNote {
                 "fix(security): signed remote-wipe command + opaque call-wakeup push (TRUST-2, TRUST-6)",
                 "fix(security): inner sealed-audio directional keys/AAD/replay + SFU/video key hardening (MEDIA-3/4/5/6/7/8, MSG-4)",
                 "fix(security): add a kill switch for transcriptBindV1, default off (CALL-4/HSID-002, CALL-3)",
-              ]),
-        .init(id: "v1.0.1069",
-              date: "2026-09-02",
-              title: "v1.0.1069",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1069",
-                "fix(call): transcript-bound session key/SAS + signed re-key round freshness (CALL-4/HSID-002, CALL-3)",
-                "fix(call): consolidated AppState.swift changes from tonight's P1/P2 remediation round 2",
-                "fix(call): CallKit work off the delegate's main queue, hold support, audio AEAD-fail recovery hook (W-CALLKITOFFLOAD, W-CALLHOLD, W-AUDIOAEADREKEY)",
-                "fix(security): pin the last 3 auxiliary clients on voip.bcrypto.com (W-AUXPIN2)",
-                "fix(chat): show a connection-status banner on the chat list (W-CONNBANNER)",
-                "fix(entitlements): typed 402 error instead of a generic HTTP failure (W-402TYPED)",
-                "fix(privacy): screenshot protection ON by default, detect active screen recording, encrypt drafts at rest (W-PRIVACYDEFAULT, W-SCREENCAP, W-DRAFTCIPHER)",
-                "fix(crash): guard the remaining video/backend force-unwraps and preconditions (W-CRASHHARDEN)",
-                "fix(security): sign file-attachment/voice-note announce envelopes with device Ed25519 identity (ATT-1, W-ANNOUNCESIG)",
-                "fix(ci): SpeakerCohortNormalizer default-argument access-level build break (W-CIFIX)",
-                "fix(chat): durable outbox with retry for 1:1 messages, dedup on receive (W-OUTBOX)",
-                "fix(call): degrade to relay instead of ending the call on ICE grace expiry; stop swallowing call-signaling errors; thread-safe CallKit ledger; identity self-heal (W-ICEGRACEDEGRADE, W-CALLSIGNALERR, W-CKLEDGER, W-IDSELFHEAL)",
-                "fix(security): telemetry/bug-report/feedback/self-test clients now use certificate pinning (W-AUXPIN)",
-                "fix(crypto): Keychain identity/PSK/ratchet items readable while the device is locked (W-KCAFTERUNLOCK)",
-                "fix(audio): resume/rebuild the call audio session after interruptions and mediaserverd resets (W-AUDIORESUME, W-AUDIOBEACON)",
-                "fix(db): recover from a corrupt/full sqlite file instead of crashing on launch (W-DBRECOVER)",
-                "feat(speaker-change): AS-Norm cohort scoring closes the hard-pair gap",
-                "tools(logs): ship-ios-logs.py authenticates with the SSH key (W-VPSKEYAUTH)",
-                "fix(call): keep the phone awake in a call, and make the loudspeaker follow the ear (W-CALLAWAKE, W-EARTOUCH-V2, W-SOFTSPKR)",
               ]),
     ]
 }
