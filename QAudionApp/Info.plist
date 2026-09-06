@@ -71,6 +71,18 @@
 	<string>Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available.</string>
+	<!-- CarPlay/Siri state-of-the-art plan S1 (docs/superpowers/plans/
+	     2026-09-06-carplay-state-of-the-art.md) — declares that this app can
+	     continue an NSUserActivity of type "INStartCallIntent". SiriKit hands
+	     this activity to `.onContinueUserActivity` in QAudionApp.swift after
+	     the QAudionIntents extension (IntentHandler.swift) resolves a "Hey
+	     Siri, chiama X su Q-Audion" request. The string MUST be the literal
+	     Intents class name, not a custom identifier — this is Apple's own
+	     convention for every INStartCallIntent-based VoIP app. -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INStartCallIntent</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

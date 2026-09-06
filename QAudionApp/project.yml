@@ -136,6 +136,10 @@ targets:
       - sdk: CoreNFC.framework
       - sdk: Contacts.framework
       - sdk: ContactsUI.framework
+      # CarPlay/Siri state-of-the-art plan S1 — "Hey Siri, chiama X su
+      # Q-Audion" handoff (QAudionApp.swift's .onContinueUserActivity,
+      # AppState.handleSiriStartCall/donateStartCallInteraction).
+      - sdk: Intents.framework
       # W441: AppLockService uses LAContext for biometric / passcode auth.
       - sdk: LocalAuthentication.framework
       # VPN: NETunnelProviderManager — main app side of the packet tunnel.
@@ -145,6 +149,10 @@ targets:
         embed: true
       # Screen/window share: embed the ReplayKit broadcast upload extension.
       - target: QAudionBroadcastExtension
+        embed: true
+      # Siri calling (S1): embed the Intents Extension that handles
+      # INStartCallIntent. See QAudionIntents/IntentHandler.swift.
+      - target: QAudionIntents
         embed: true
     resources:
       - path: Assets.xcassets
@@ -323,3 +331,32 @@ targets:
       # actual manifest, not assumed).
       - package: LiveKitBroadcast
         product: LiveKit
+
+  # ------------------------------------------------------------------ #
+  # QAudionIntents — SiriKit Intents Extension                          #
+  # CarPlay/Siri state-of-the-art plan, S1 (docs/superpowers/plans/     #
+  # 2026-09-06-carplay-state-of-the-art.md). Handles INStartCallIntent  #
+  # ("Hey Siri, chiama X su Q-Audion") and hands off to the main app —  #
+  # see IntentHandler.swift for why it stays a thin pass-through with   #
+  # no QAudionEngine/Contacts dependency at all.                        #
+  # Bundle: com.qaudion.app.intents                                     #
+  # ------------------------------------------------------------------ #
+  QAudionIntents:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionIntents
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionIntents/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.intents
+        PRODUCT_NAME: QAudionIntents
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        # Extension-only: suppress "main" entry point and standard library
+        # linking that the OS handles for extensions.
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: Intents.framework

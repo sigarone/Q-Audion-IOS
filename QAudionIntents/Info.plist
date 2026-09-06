@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Q-Audion</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<!-- Must match the parent app's CFBundleVersion, same convention as
+	     QAudionPacketTunnel/QAudionBroadcastExtension's own Info.plist —
+	     Apple validation rejects an archive where extension and host
+	     disagree. Bump alongside QAudionApp/Info.plist on every release tag. -->
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.1089</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<!-- SiriKit Intents Extension descriptor. IntentsSupported lists the
+	     unified (iOS 13+) audio/video call intent — see IntentHandler.swift.
+	     IntentsRestrictedWhileLocked is deliberately EMPTY: Q-Audion's
+	     CallKit provider already runs with the device locked (same as any
+	     other CallKit VoIP app), so there is no reason to force an unlock
+	     before Siri hands the call off to the app. -->
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>IntentsSupported</key>
+			<array>
+				<string>INStartCallIntent</string>
+			</array>
+			<key>IntentsRestrictedWhileLocked</key>
+			<array/>
+		</dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.intents-service</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).IntentHandler</string>
+	</dict>
+</dict>
+</plist>

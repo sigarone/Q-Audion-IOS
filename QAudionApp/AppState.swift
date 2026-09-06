@@ -5,6 +5,7 @@ import CryptoKit
 import AVFoundation
 import AudioToolbox  // AudioServicesPlayAlertSound (in-app ringtone)
 import BackgroundTasks
+import Intents  // CarPlay/Siri state-of-the-art plan S1 — INStartCallIntent handoff + donation
 import QAudionEngine
 #if canImport(WebRTC)
 // W412: needed by the W411 RTCIceServer references inside the
@@ -13803,8 +13804,88 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Siri calling (CarPlay/Siri state-of-the-art plan, S1)
+
+    /// Handles the `NSUserActivity` SiriKit hands to
+    /// `.onContinueUserActivity` (QAudionApp.swift) after
+    /// `QAudionIntents/IntentHandler.swift` resolves an `INStartCallIntent`
+    /// ("Hey Siri, chiama X su Q-Audion"). The extension never resolves a
+    /// Q-Audion contact itself (see that file's header) — this is where the
+    /// resolved `INPerson` is actually matched against this device's
+    /// contacts (`SiriCallResolution`, QAudionEngine) and, on a hit, routed
+    /// through the exact same `startCall(contactId:)` path CarPlayBridge and
+    /// the in-app dial screen already use.
+    ///
+    /// No pepper/hash matching (see `SiriCallResolution`'s own doc for why):
+    /// a peer whose only local record is `phoneHash` (discover-v2 / QR-scan
+    /// import with no raw number ever learned) cannot be reached this way
+    /// yet — a known, tracked gap, not a silent omission.
+    ///
+    /// KNOWN S1 LIMITATION — `errorMessage` on a no-match is reliably
+    /// visible only on the screens that already poll it after their OWN
+    /// dial action (`ChatListScreen`, `CallHistoryView`, the login screens).
+    /// There is no app-wide toast/banner in this codebase today, so a Siri
+    /// failure while the app is elsewhere (or cold-launching) is recorded
+    /// via `RTLog.warn` (visible in `qa-logs`/live telemetry) but may not be
+    /// seen on-screen. Flagged here rather than silently assumed to work —
+    /// a global banner is a legitimate fast-follow, not part of this slice.
+    func handleSiriStartCall(_ userActivity: NSUserActivity) {
+        guard let interaction = userActivity.interaction,
+              let intent = interaction.intent as? INStartCallIntent,
+              let person = intent.contacts?.first else {
+            RTLog.warn("call", "Siri INStartCallIntent handoff missing a resolved contact")
+            return
+        }
+        let video = intent.callCapability == .videoCall
+        let spokenName = person.displayName
+        guard let match = SiriCallResolution.resolve(
+            handle: person.personHandle?.value,
+            displayName: spokenName,
+            contacts: cachedContacts
+        ) else {
+            RTLog.warn("call", "Siri INStartCallIntent: no Q-Audion match for spoken name")
+            errorMessage = "Nessun contatto Q-Audion trovato per \"\(spokenName)\"."
+            return
+        }
+        incomingCallerName = match.displayName
+        Task { @MainActor in
+            await startCall(contactId: match.userId, video: video)
+        }
+    }
+
+    /// Donates the call as an `INInteraction` so Siri Suggestions (and,
+    /// once the CarPlay entitlement lands — plan S3/S4 — the CarPlay
+    /// assistant cell) learn which contacts this device actually calls.
+    /// Apple's own guidance: donate only for a user-initiated interaction,
+    /// which every `startCall` caller already is (manual dial, CarPlay,
+    /// Siri itself) — donating on the Siri-originated path too is harmless,
+    /// it just reinforces the same ranking Siri already has.
+    private func donateStartCallInteraction(contactId: String, displayName: String, video: Bool) {
+        let handle = INPersonHandle(value: contactId, type: .unknown)
+        let person = INPerson(personHandle: handle,
+                              nameComponents: nil,
+                              displayName: displayName,
+                              image: nil,
+                              contactIdentifier: nil,
+                              customIdentifier: contactId)
+        let intent = INStartCallIntent(callRecordFilter: nil,
+                                       callRecordToCallBack: nil,
+                                       audioRoute: .unknown,
+                                       destinationType: .normal,
+                                       contacts: [person],
+                                       callCapability: video ? .videoCall : .audioCall)
+        let interaction = INInteraction(intent: intent, response: nil)
+        interaction.donate { error in
+            if let error {
+                RTLog.warn("call", "Siri donation failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func startCall(contactId: String, video: Bool = false) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        let siriDisplayName = cachedContacts.first(where: { $0.userId == contactId })?.displayName ?? contactId
+        donateStartCallInteraction(contactId: contactId, displayName: siriDisplayName, video: video)
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false

@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import BackgroundTasks
+import Intents  // CarPlay/Siri state-of-the-art plan S1 — INStartCallIntent handoff
 import QAudionEngine
 
 /// W-NOCALLKIT — minimal UIApplicationDelegate, attached via
@@ -153,6 +154,15 @@ struct QAudionApp: App {
             // host/path/token parsing so this stays a one-liner.
             .onOpenURL { url in
                 appState.handleIncomingUniversalLink(url)
+            }
+            // CarPlay/Siri state-of-the-art plan S1 — "Hey Siri, chiama X su
+            // Q-Audion" (docs/superpowers/plans/2026-09-06-carplay-state-of
+            // -the-art.md). QAudionIntents/IntentHandler.swift resolves the
+            // INStartCallIntent and hands off here; the activity type MUST
+            // be the literal Intents class name, matching Info.plist's
+            // NSUserActivityTypes entry.
+            .onContinueUserActivity(NSStringFromClass(INStartCallIntent.self)) { userActivity in
+                appState.handleSiriStartCall(userActivity)
             }
             .sheet(isPresented: Binding(
                 get: { appState.pendingEmailVerifyToken != nil },
