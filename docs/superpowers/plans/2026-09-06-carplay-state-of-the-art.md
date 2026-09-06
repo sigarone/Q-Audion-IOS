@@ -166,19 +166,34 @@ template reads from — no new data layer, only new presentation surfaces.
   a manual action at developer.apple.com/contact/request/carplay-entitlement
   that only the Apple Developer account holder can do. Nothing in S4/S5 can
   be verified end-to-end without it.
-- **S4 (partial) — SHIPPED alongside S1's fix, `v1.0.1092`.** Added
-  `CPAssistantCellConfiguration(position: .top, visibility: .always,
-  assistantAction: .startCall)` to the Recenti tab in `CarPlayScene.swift`
-  — this needed nothing beyond S1 (the assistant cell's only supported
-  action for a communication app is `.startCall`, and Apple's requirement
-  is just "an Intents Extension that handles" it, which already exists).
-  Deliberately did NOT add `CPContactTemplate`/`CPContactMessageButton` to
-  the Contatti tab in this pass: `CPContactMessageButton` only works once
-  S2 exists, and adding a contact-detail push screen with ONLY a call
-  button today would be a strict UX regression from the current one-tap
-  dial (extra tap, no new capability) — revisit once S2 is designed.
-  Untested on real CarPlay hardware — needs S3.
-- **S5 (CPMessageListItem) — not started, blocked on S2** (same intents).
+- **S4 — COMPLETE 2026-09-06** (assistant cell part shipped with S1's fix
+  in `v1.0.1092`; `CPContactTemplate`/`CPContactMessageButton` part added
+  right after S2 landed, same day, not yet tagged). Recenti tab keeps its
+  `CPAssistantCellConfiguration(.startCall)`. Contatti tab: a row tap now
+  pushes a `CPContactTemplate` (contact detail) instead of dialing
+  directly — `CPContactCallButton` (no Siri) always present,
+  `CPContactMessageButton` (Siri compose, needs S2) added only when the
+  contact has a known phone/email (`ContactsStore.StoredContact
+  .phoneNumber` — many Q-Audion contacts, discover-v2/QR-scan imports,
+  never learn one, so the button is genuinely conditional, not always
+  shown). This is a deliberate one-extra-tap UX change from the old
+  direct-dial row — accepted now that the detail screen has a real second
+  action to offer; it would have been a pure regression before S2 existed,
+  which is exactly why it was deferred that long.
+- **S5 — COMPLETE 2026-09-06**, same pass as S4. Messaggi tab: real
+  `CPMessageListItem` rows (conversation identifier + peer name + unread
+  count only — never message content) replace the old `CPListItem`-that-
+  calls-the-peer workaround. No `handler` — CarPlay itself decides
+  compose/read/reply based on the unread indicator, routing to
+  `IntentHandler`'s `INSendMessageIntentHandling`/
+  `INSearchForMessagesIntentHandling` (S2). The no-plaintext-on-screen
+  policy is unchanged — only what Siri may say aloud changed, not what the
+  screen draws.
+- **S4/S5 status: code complete, ZERO live verification possible** — both
+  still compile out entirely behind `QAUDION_CARPLAY` (off), so nothing
+  here has run on a simulator, a real head unit, or even been through a
+  single `xcodebuild` pass. Blocked on S3 (the entitlement) for the first
+  real signal.
 - S6: deferred, explicitly, no change.
 
 ## Current state (confirmed 2026-09-06, all via `Read`/`Grep`, not assumed)

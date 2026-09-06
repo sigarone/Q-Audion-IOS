@@ -14,11 +14,18 @@
 //
 //  ── TIER B (this file — custom in-car app, parity with Android Auto) ─────
 //  A CarPlay app icon on the head-unit home screen with a tab bar:
-//     • Recenti  — last secure calls            (mirrors Android CallListScreen)
-//     • Contatti — verified contacts, quick-dial (mirrors quick-dial rows)
-//     • Messaggi — read-only conversation list   (mirrors MessageListScreen;
-//                  plaintext is NEVER surfaced — driving-safety + privacy,
-//                  same rule as Android. Tap = call that peer.)
+//     • Recenti  — last secure calls + Siri assistant cell (S1/S4, mirrors
+//                  Android CallListScreen)
+//     • Contatti — verified contacts; tap pushes a CPContactTemplate with
+//                  a call button (direct, no Siri) and — when the contact
+//                  has a known phone/email — a CPContactMessageButton (S4,
+//                  Siri compose flow, needs S2's INSendMessageIntent)
+//     • Messaggi — CPMessageListItem rows (S5): plaintext is NEVER drawn on
+//                  screen (driving-safety + privacy, same rule as Android),
+//                  but Siri can read/reply to a selected conversation
+//                  through S2's INSearchForMessagesIntent/INSendMessageIntent
+//                  (SiriMessageBridgeStore's opt-in cache/outbox) — the
+//                  screen itself still shows only names/unread counts.
 //
 //  ── HOW TO ENABLE (after Apple grants the entitlement) ──────────────────
 //  1. Request entitlement:  developer.apple.com/contact/request/carplay-entitlement
@@ -80,19 +87,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         messagesTemplate.tabImage = UIImage(systemName: "message.fill")
 
         // CarPlay/Siri state-of-the-art plan S4 — the assistant cell needs
-        // NOTHING beyond S1 (INStartCallIntent, already shipped): Apple's own
-        // doc says a communication app's assistant cell action must be
-        // `.startCall`, and "your app must include an Intents Extension that
-        // handles" that intent — QAudionIntents/IntentHandler.swift already
-        // does. Only on Recenti (mirrors a Phone app's own Recents tab); NOT
-        // added to Contatti/Messaggi in this slice — `CPContactTemplate` +
-        // `CPContactMessageButton` and `CPMessageListItem` both require
-        // `INSendMessageIntent`/`INSearchForMessagesIntent` (S2), which is
-        // NOT implemented yet (that work needs its own security-design pass:
-        // per Apple's docs those intents' `handle()` must send/search
-        // messages FROM the extension process itself, unlike calls, which
-        // would mean sharing this app's E2EE ratchet/session key material
-        // across a process boundary — deliberately not done in this slice).
+        // nothing beyond S1 (INStartCallIntent): Apple's own doc says a
+        // communication app's assistant cell action must be `.startCall`,
+        // and "your app must include an Intents Extension that handles"
+        // that intent — QAudionIntents/IntentHandler.swift already does.
+        // Only on Recenti, mirroring a Phone app's own Recents tab.
         recentsTemplate.assistantCellConfiguration = CPAssistantCellConfiguration(
             position: .top, visibility: .always, assistantAction: .startCall)
 
@@ -216,13 +215,21 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // .forUser` instead (this file is gated behind `QAUDION_CARPLAY`,
         // off by default, but should not carry the same bug the moment it
         // ships).
+        //
+        // CarPlay/Siri state-of-the-art plan S4 — a row tap now PUSHES a
+        // CPContactTemplate (contact detail: call + optional message
+        // button) instead of dialing immediately. One extra tap versus the
+        // old direct-dial behavior, accepted deliberately now that the
+        // detail screen has a real second action to offer
+        // (CPContactMessageButton, S2) — pushing an extra tap for a screen
+        // with only a call button would have been a pure regression, which
+        // is why this was deferred until S2 existed.
         let items: [CPListItem] = contacts.map { c in
             let resolvedName = DisplayName.forUser(c.userId, contacts: [c])
             let item = CPListItem(text: resolvedName,
                                   detailText: c.isVerified ? "Verificato" : nil)
-            item.handler = { _, completion in
-                CarPlayBridge.shared.requestCall(
-                    peerUserId: c.userId, displayName: resolvedName)
+            item.handler = { [weak self] _, completion in
+                self?.pushContactDetail(userId: c.userId, displayName: resolvedName, phoneNumber: c.phoneNumber)
                 completion()
             }
             return item
@@ -230,28 +237,63 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         contactsTemplate.updateSections([CPListSection(items: items)])
     }
 
-    // MARK: - Messaggi (read-only; plaintext NEVER surfaced — tap calls peer)
+    /// CarPlay/Siri state-of-the-art plan S4 — contact-detail push screen.
+    /// `CPContactCallButton` calls directly (no Siri round-trip, same as
+    /// the old one-tap-dial handler). `CPContactMessageButton` only added
+    /// when a phone/email is actually known for this peer (many Q-Audion
+    /// contacts — discover-v2/QR-scan imports — never learn one, see
+    /// `ContactsStore.StoredContact.phoneNumber`'s own doc) — Siri resolves
+    /// it via `IntentHandler`'s `INSendMessageIntentHandling`
+    /// (`SiriMessageBridgeStore`'s outbox), never anything in this file.
+    private func pushContactDetail(userId: String, displayName: String, phoneNumber: String?) {
+        let placeholderImage = UIImage(systemName: "person.crop.circle.fill") ?? UIImage()
+        let contact = CPContact(name: displayName, image: placeholderImage)
+        var actions: [CPButton] = [
+            CPContactCallButton { _ in
+                CarPlayBridge.shared.requestCall(peerUserId: userId, displayName: displayName)
+            }
+        ]
+        if let phoneNumber, !phoneNumber.trimmingCharacters(in: .whitespaces).isEmpty {
+            actions.append(CPContactMessageButton(phoneOrEmail: phoneNumber))
+        }
+        contact.actions = actions
+        interfaceController?.pushTemplate(CPContactTemplate(contact: contact), animated: true, completion: nil)
+    }
 
+    // MARK: - Messaggi (screen NEVER draws plaintext; Siri may read it aloud via S2)
+
+    /// CarPlay/Siri state-of-the-art plan S5 — real `CPMessageListItem`
+    /// rows instead of the old `CPListItem`-that-just-calls-the-peer
+    /// workaround. `CPMessageListItem` has no `handler`: selecting a row
+    /// with no unread indicator launches Siri's REPLY flow (routes to
+    /// `IntentHandler`'s `INSendMessageIntentHandling`); one WITH an unread
+    /// indicator launches the READ flow (`INSearchForMessagesIntentHandling`,
+    /// reading from `SiriMessageBridgeStore`'s opt-in cache). Either way
+    /// Siri does the talking — this screen's own `text`/`detailText`
+    /// deliberately still carry only the peer's name and an unread count,
+    /// never message content, preserving the exact no-plaintext-on-screen
+    /// policy the old implementation already had.
     private func reloadMessages() {
-        // 1:1 only — tapping a row places a call to that peer, which has no
-        // meaning for a group conversation (no single callable peerUserId).
+        // 1:1 only — INSendMessageIntent/INSearchForMessagesIntent both key
+        // off a single peer; a group conversation has no single recipient.
         let convs = conversationStore.loadConversations()
             .filter { $0.kind == .oneToOne }
             .prefix(20)
-        let items: [CPListItem] = convs.map { conv in
-            let detail: String = conv.unreadCount > 0
-                ? "\(conv.unreadCount) non letti · Tocca per chiamare"
-                : "Tocca per chiamare"
+        let items: [CPMessageListItem] = convs.map { conv in
             let convTitle = DisplayName.looksLikeUUID(conv.peerDisplayName) || conv.peerDisplayName.isEmpty
                 ? DisplayName.forUser(conv.peerUserId)
                 : conv.peerDisplayName
-            let item = CPListItem(text: convTitle, detailText: detail)
-            item.handler = { _, completion in
-                CarPlayBridge.shared.requestCall(
-                    peerUserId: conv.peerUserId, displayName: conv.peerDisplayName)
-                completion()
-            }
-            return item
+            let unread = conv.unreadCount > 0
+            let leadingConfig = CPMessageListItemLeadingConfiguration(
+                leadingItem: .none, leadingImage: nil, unread: unread)
+            let detail = unread ? "\(conv.unreadCount) non letti" : nil
+            return CPMessageListItem(
+                conversationIdentifier: conv.peerUserId,
+                text: convTitle,
+                leadingConfiguration: leadingConfig,
+                trailingConfiguration: nil,
+                detailText: detail,
+                trailingText: nil)
         }
         messagesTemplate.updateSections([CPListSection(items: items)])
     }
@@ -267,7 +309,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             ["Aggiungi contatti dall'app sul telefono"]
         messagesTemplate.emptyViewTitleVariants = ["Nessuna conversazione"]
         messagesTemplate.emptyViewSubtitleVariants =
-            ["Tocca un contatto per chiamare in sicurezza"]
+            ["Le conversazioni cifrate compaiono qui"]
     }
 }
 #endif
