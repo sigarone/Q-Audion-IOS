@@ -71,6 +71,13 @@
 	<string>Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available.</string>
+	<!-- CarPlay/Siri state-of-the-art plan S1 — required by Apple whenever
+	     the app calls INPreferences.requestSiriAuthorization (AppState.
+	     initialize()); the system shows this exact string in the
+	     authorization alert. Apple's own doc: "This key is a requirement" —
+	     missing it is a hard App Review blocker, not just a style nit. -->
+	<key>NSSiriUsageDescription</key>
+	<string>Q-Audion condivide con Siri i nomi dei tuoi contatti per permetterti di avviare una chiamata cifrata dicendo "Chiama [nome] su Q-Audion".</string>
 	<!-- CarPlay/Siri state-of-the-art plan S1 (docs/superpowers/plans/
 	     2026-09-06-carplay-state-of-the-art.md) — declares that this app can
 	     continue an NSUserActivity of type "INStartCallIntent". SiriKit hands

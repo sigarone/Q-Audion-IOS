@@ -2783,6 +2783,20 @@ final class AppState: ObservableObject {
             }
         }
 
+        // CarPlay/Siri state-of-the-art plan S1 — request Siri authorization.
+        // Apple's own doc ("Requesting Authorization to Use Siri"): the
+        // Info.plist NSSiriUsageDescription key "is a requirement", and
+        // INPreferences.requestSiriAuthorization must be called "at some
+        // point during your iOS app's execution" — until this runs once,
+        // the app's Siri authorization status stays .notDetermined forever
+        // and QAudionIntents/IntentHandler.swift is never actually reachable
+        // by Siri, no matter how correctly the extension + entitlement are
+        // configured. Idempotent: after the first user decision, the system
+        // remembers it and this call is a silent no-op on every later launch.
+        INPreferences.requestSiriAuthorization { status in
+            RTLog.info("call", "Siri authorization status: \(status.rawValue)")
+        }
+
         // W541-3 — start structured telemetry pump (encrypted batch
         // POST every 5 s). Same primitives-only API constraint as
         // LiveLogStreamer per CLAUDE.md "Hard-won lesson 16".
