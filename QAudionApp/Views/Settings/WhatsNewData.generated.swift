@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1092",
+              date: "2026-09-06",
+              title: "v1.0.1092",
+              bullets: [
+                "fix(siri): add required NSSiriUsageDescription + requestSiriAuthorization",
+              ]),
         .init(id: "v1.0.1091",
               date: "2026-09-06",
               title: "v1.0.1091",
               bullets: [
+                "chore: regenerate changelog for v1.0.1091",
                 "fix(ci): provision SiriKit capability + QAudionIntents extension bundle id",
               ]),
         .init(id: "v1.0.1090",
@@ -166,15 +173,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1073",
                 "fix(call): document + stage fix for iOS UI freeze on remote hangup mid-call",
-              ]),
-        .init(id: "v1.0.1072",
-              date: "2026-09-02",
-              title: "v1.0.1072",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1072",
-                "fix(security): pin bcrypto-server's real wipe-signing public key (TRUST-2)",
-                "fix(call): go-live CALL-4/HSID-002 + CALL-3 transcript-bound session KDF/SAS",
-                "fix(security): reconcile transcript-bound KDF/SAS to Android canonical, fix rekeyNonce shape (CALL-4/HSID-002, CALL-3 followup)",
               ]),
     ]
 }
