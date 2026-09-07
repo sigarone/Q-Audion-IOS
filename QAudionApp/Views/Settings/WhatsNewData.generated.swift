@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1098",
+              date: "2026-09-07",
+              title: "v1.0.1098",
+              bullets: [
+                "fix(crypto): SAS confirm button read the wrong Keychain account (D11)",
+                "fix(ios): add Siri example phrases for it locale (ITMS-90626)",
+              ]),
         .init(id: "v1.0.1097",
               date: "2026-09-07",
               title: "v1.0.1097",
               bullets: [
+                "chore: regenerate changelog for v1.0.1097",
                 "fix(call): release the native audio-srtp sender before the manual fallback",
               ]),
         .init(id: "v1.0.1096",
@@ -168,13 +176,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1079",
                 "fix(call): group-call join retries were resending onto the same suspended socket",
-              ]),
-        .init(id: "v1.0.1078",
-              date: "2026-09-03",
-              title: "v1.0.1078",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1078",
-                "fix(call): group-call join retry/timeout was too tight for a long socket suspension",
               ]),
     ]
 }
