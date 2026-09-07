@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1099",
+              date: "2026-09-07",
+              title: "v1.0.1099",
+              bullets: [
+                "fix(call): detect and self-heal native audio capture that never engages",
+              ]),
         .init(id: "v1.0.1098",
               date: "2026-09-07",
               title: "v1.0.1098",
               bullets: [
+                "chore: regenerate changelog for v1.0.1098",
                 "fix(crypto): SAS confirm button read the wrong Keychain account (D11)",
                 "fix(ios): add Siri example phrases for it locale (ITMS-90626)",
               ]),
@@ -169,13 +176,6 @@ extension ReleaseNote {
                 "feat(key-exchange-ring): KeyExchangeRing SwiftUI component",
                 "docs(call): implementation plan for key-exchange avatar ring animation (iOS)",
                 "docs(call): design spec for key-exchange avatar ring animation (iOS port)",
-              ]),
-        .init(id: "v1.0.1079",
-              date: "2026-09-03",
-              title: "v1.0.1079",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1079",
-                "fix(call): group-call join retries were resending onto the same suspended socket",
               ]),
     ]
 }
