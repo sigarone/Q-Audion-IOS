@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1100",
+              date: "2026-09-07",
+              title: "v1.0.1100",
+              bullets: [
+                "fix(crash): guard player.play() NSException in AudioCapture.start()",
+              ]),
         .init(id: "v1.0.1099",
               date: "2026-09-07",
               title: "v1.0.1099",
               bullets: [
+                "chore: regenerate changelog for v1.0.1099",
                 "fix(call): detect and self-heal native audio capture that never engages",
               ]),
         .init(id: "v1.0.1098",
@@ -160,22 +167,6 @@ extension ReleaseNote {
                 "feat(sigsum): show kt-status on the Security Dashboard",
                 "fix(crypto): rename transcriptBindV1 wire capability to hsTranscriptBindV1",
                 "fix(call): reset stale PSK display metadata at call start and teardown",
-              ]),
-        .init(id: "v1.0.1080",
-              date: "2026-09-03",
-              title: "v1.0.1080",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1080",
-                "feat(call): handle the server's new VoIP call-cancel push",
-                "test(key-exchange-ring): unit tests for the OutgoingCallScreen.State to ring-phase mapping",
-                "feat(call): thread real PSK/fingerprint data into OutgoingCallScreen",
-                "docs+test(crypto): close the v3-transcript reconciliation-pass gate for real",
-                "docs(call): correct OutgoingCallScreen crystallize-timing in the ring spec",
-                "feat(call): IncomingCallScreen uses a settled KeyExchangeRing, removes duplicate AvatarHalo",
-                "feat(call): OutgoingCallScreen uses KeyExchangeRing instead of AvatarHalo",
-                "feat(key-exchange-ring): KeyExchangeRing SwiftUI component",
-                "docs(call): implementation plan for key-exchange avatar ring animation (iOS)",
-                "docs(call): design spec for key-exchange avatar ring animation (iOS port)",
               ]),
     ]
 }
