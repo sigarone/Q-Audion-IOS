@@ -467,6 +467,11 @@ final class AppState: ObservableObject {
             // system auto-lock must be held off for exactly as long as a
             // call lives, from whichever of the dozen sites flipped this.
             updateIdleTimer()
+            // W-CONNWANT — same choke point again: the persistent WS must
+            // stay up for exactly as long as a call lives, regardless of
+            // whether the screen is still on. Backgrounding mid-call must
+            // never let the socket go quiet.
+            if isInCall { acquireActiveCallConnectionToken() } else { releaseActiveCallConnectionToken() }
         }
     }
     @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
@@ -2260,6 +2265,83 @@ final class AppState: ObservableObject {
     /// caller just awaits the first's result instead of racing it.
     private var wakeSocketRefreshTask: Task<Void, Never>?
 
+    // MARK: - W-CONNWANT — named reasons to keep the persistent WS open
+    //
+    // Three independent reasons the socket should stay up, each held (or
+    // not) on its own — none of them needs to know about the others to
+    // avoid stepping on a release that's still needed elsewhere:
+    //   - foreground: the app is on screen and logged in.
+    //   - active call: a call is live, screen state notwithstanding —
+    //     armed/disarmed from the single `isInCall` choke point below,
+    //     the same one `startVideoBeacon`/`updateIdleTimer` already use,
+    //     for the same reason (a dozen call-start sites; hooking each one
+    //     individually is how the next one gets silently missed).
+    //   - bounded background window: a short, explicit grace period taken
+    //     out on backgrounding when no call is protecting the socket
+    //     already — released on its own before the window closes, never
+    //     left open hoping the process survives indefinitely.
+    private var foregroundConnectionToken: BCryptoWebSocketClient.ConnectionToken?
+    private var activeCallConnectionToken: BCryptoWebSocketClient.ConnectionToken?
+    private var backgroundConnectionWindowTask: Task<Void, Never>?
+
+    private func acquireForegroundConnectionToken() {
+        guard foregroundConnectionToken == nil, let ws = liveProvider?.getWebSocketClient() else { return }
+        foregroundConnectionToken = ws.requestConnection()
+    }
+
+    private func releaseForegroundConnectionToken() {
+        foregroundConnectionToken = nil
+    }
+
+    private func acquireActiveCallConnectionToken() {
+        guard activeCallConnectionToken == nil, let ws = liveProvider?.getWebSocketClient() else { return }
+        activeCallConnectionToken = ws.requestConnection()
+    }
+
+    private func releaseActiveCallConnectionToken() {
+        activeCallConnectionToken = nil
+    }
+
+    /// Entered on backgrounding when no call is already protecting the
+    /// socket. Cancelled outright (see `willEnterForeground`) the moment the
+    /// app comes back before the window naturally closes.
+    private func beginBoundedBackgroundConnectionWindow() {
+        backgroundConnectionWindowTask?.cancel()
+        backgroundConnectionWindowTask = Task { await self.runBoundedBackgroundConnectionWindow() }
+    }
+
+    private func cancelBoundedBackgroundConnectionWindow() {
+        backgroundConnectionWindowTask?.cancel()
+        backgroundConnectionWindowTask = nil
+    }
+
+    nonisolated private func runBoundedBackgroundConnectionWindow() async {
+        await BackgroundUploadTask.run(name: "qaudion.ws.background-window") { [weak self] in
+            await self?.holdConnectionForBoundedWindow()
+        }
+    }
+
+    /// The window's actual body, kept trivial and MainActor-isolated on its
+    /// own so the `operation` closure above stays a one-line hop instead of
+    /// a nested do/catch — CLAUDE.md sec 13's compile-time-budget rule.
+    private func holdConnectionForBoundedWindow() async {
+        guard let ws = liveProvider?.getWebSocketClient() else { return }
+        let token = ws.requestConnection()
+        defer { token.release() }
+        guard !Task.isCancelled else { return }
+        try? await Task.sleep(nanoseconds: 20_000_000_000)
+    }
+
+    /// The app just left the foreground. A live call already holds its own
+    /// reason to keep the socket up (see the `isInCall` choke point above);
+    /// otherwise take a short, explicit window to let anything already in
+    /// flight land before the process is suspended.
+    private func handleDidEnterBackground() {
+        releaseForegroundConnectionToken()
+        guard !isInCall else { return }
+        beginBoundedBackgroundConnectionWindow()
+    }
+
     // Swift 6 — nonisolated so the `@Sendable` device-renew fallback closure
     // (and persistAccessTokenTtl / the token-persist paths) can reference this
     // constant key without crossing main-actor isolation. It is an immutable
@@ -3049,6 +3131,22 @@ final class AppState: ObservableObject {
                 // with its `GroupCallController` wiring (see that
                 // function's kdoc for the live-confirmed evidence).
                 await self.ensureSocketFreshOnWake()
+                // W-CONNWANT — the app is back on screen: hold the socket
+                // open on that basis alone (a bounded background window, if
+                // one was still running from the last backgrounding, is no
+                // longer needed either way).
+                self.cancelBoundedBackgroundConnectionWindow()
+                self.acquireForegroundConnectionToken()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor [weak self] in
+                self?.handleDidEnterBackground()
             }
         }
         #endif
