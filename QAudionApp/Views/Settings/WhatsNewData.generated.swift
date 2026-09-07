@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1101",
+              date: "2026-09-07",
+              title: "v1.0.1101",
+              bullets: [
+                "fix(ios): ship it.lproj as a folder reference so ITMS-90626 fix actually lands",
+              ]),
         .init(id: "v1.0.1100",
               date: "2026-09-07",
               title: "v1.0.1100",
               bullets: [
+                "chore: regenerate changelog for v1.0.1100",
                 "fix(crash): guard player.play() NSException in AudioCapture.start()",
               ]),
         .init(id: "v1.0.1099",
@@ -158,15 +165,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1082",
                 "fix(call): qualify ringPhase(for:) call to unblock the TestFlight build",
-              ]),
-        .init(id: "v1.0.1081",
-              date: "2026-09-04",
-              title: "v1.0.1081",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1081",
-                "feat(sigsum): show kt-status on the Security Dashboard",
-                "fix(crypto): rename transcriptBindV1 wire capability to hsTranscriptBindV1",
-                "fix(call): reset stale PSK display metadata at call start and teardown",
               ]),
     ]
 }
