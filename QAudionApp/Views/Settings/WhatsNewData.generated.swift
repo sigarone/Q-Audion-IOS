@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1102",
+              date: "2026-09-07",
+              title: "v1.0.1102",
+              bullets: [
+                "chore(ci): remove ITMS-90626 diagnostic step, root cause confirmed",
+                "fix(ios): stop excluding it.lproj from sources sweep for ITMS-90626",
+                "debug(ci): dump project.pbxproj it.lproj resource entries for ITMS-90626",
+              ]),
         .init(id: "v1.0.1101",
               date: "2026-09-07",
               title: "v1.0.1101",
               bullets: [
+                "chore: regenerate changelog for v1.0.1101",
                 "fix(ios): ship it.lproj as a folder reference so ITMS-90626 fix actually lands",
               ]),
         .init(id: "v1.0.1100",
@@ -158,13 +167,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1083",
                 "fix(call): rename the shadowing ringPhase property, my qualified-call fix was wrong",
-              ]),
-        .init(id: "v1.0.1082",
-              date: "2026-09-04",
-              title: "v1.0.1082",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1082",
-                "fix(call): qualify ringPhase(for:) call to unblock the TestFlight build",
               ]),
     ]
 }
