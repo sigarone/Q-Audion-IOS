@@ -257,6 +257,129 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     ///   tasks fail ping together 50 s later.
     private var connectionGeneration: Int = 0
 
+    // MARK: - W-CONNWANT — declarative "who currently wants this socket open"
+    //
+    // Every internal path that used to decide FOR ITSELF whether to open a
+    // fresh socket (the backoff retry timer, the auth-recovery resume) now
+    // asks `shouldBeConnected()` first. That question is answered by a
+    // reference count, not a boolean flag, because more than one part of the
+    // app can have an independent reason to want the socket up at the same
+    // time (foreground UI, an active call, a bounded background window) and
+    // none of them should have to know about the others to avoid stepping on
+    // each other's `disconnect()`.
+    //
+    // `connect(viaSocksPort:)` keeps its existing public contract — it is
+    // still safe to call directly with no token in hand — but it now also
+    // holds one FOR the caller (`legacyStandingToken`) so a caller that never
+    // adopts the token API sees no behavior change: as long as nobody calls
+    // `disconnect()`, `shouldBeConnected()` stays true and every retry path
+    // keeps retrying exactly as before. The only NEW thing piece 1 buys is
+    // that a genuine `disconnect()` (today: rare, but the entry point every
+    // future "nobody needs this anymore" caller will use) now actually
+    // cancels the intent behind any backoff timer still in flight, instead
+    // of that timer blindly reopening a socket the app no longer wants.
+    public final class ConnectionToken {
+        fileprivate let id: Int
+        private weak var client: BCryptoWebSocketClient?
+        private let releaseLock = NSLock()
+        private var released = false
+
+        fileprivate init(id: Int, client: BCryptoWebSocketClient) {
+            self.id = id
+            self.client = client
+        }
+
+        deinit { releaseOnce() }
+
+        /// Explicit release. Safe to call more than once and safe to let the
+        /// token simply go out of scope instead — both paths converge on the
+        /// same idempotent teardown.
+        public func release() { releaseOnce() }
+
+        private func releaseOnce() {
+            releaseLock.lock()
+            let alreadyReleased = released
+            released = true
+            releaseLock.unlock()
+            guard !alreadyReleased else { return }
+            client?.releaseConnectionToken(id)
+        }
+    }
+
+    private var nextConnectionTokenId: Int = 0
+    private var activeConnectionTokenIds: Set<Int> = []
+    /// Holds the socket open on behalf of any caller that reaches the socket
+    /// through the legacy `connect()`/`disconnect()` pair instead of the
+    /// token API directly. Set on first `connect()`, cleared on
+    /// `disconnect()`.
+    private var legacyStandingToken: ConnectionToken?
+
+    /// Take out an explicit reason to keep this socket open. The socket
+    /// stays connected — and every internal retry keeps retrying — for as
+    /// long as at least one token (this one, or any other outstanding one)
+    /// is alive. Release it (explicitly, or just let it deinit) the moment
+    /// the reason goes away.
+    public func requestConnection() -> ConnectionToken {
+        lock.lock()
+        nextConnectionTokenId += 1
+        let id = nextConnectionTokenId
+        activeConnectionTokenIds.insert(id)
+        lock.unlock()
+        let token = ConnectionToken(id: id, client: self)
+        applyDesiredConnectionState()
+        return token
+    }
+
+    fileprivate func releaseConnectionToken(_ id: Int) {
+        lock.lock()
+        activeConnectionTokenIds.remove(id)
+        lock.unlock()
+        applyDesiredConnectionState()
+    }
+
+    private func shouldBeConnected() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !activeConnectionTokenIds.isEmpty
+    }
+
+    /// Reconciles actual socket state with `shouldBeConnected()`. Called
+    /// whenever the token set changes; every path that might otherwise open
+    /// or close the socket on its own initiative should route through this
+    /// instead once it has a reason (a token) to act on.
+    private func applyDesiredConnectionState() {
+        if shouldBeConnected() {
+            lock.lock()
+            let isDisconnected = (_state == .disconnected)
+            let socksPort = currentSocksPort
+            lock.unlock()
+            if isDisconnected {
+                connect(viaSocksPort: socksPort)
+            }
+        } else {
+            lock.lock()
+            let isAlreadyDisconnected = (_state == .disconnected)
+            lock.unlock()
+            if !isAlreadyDisconnected {
+                disconnect()
+            }
+        }
+    }
+
+    /// Used by the backoff retry timer instead of calling `connect()`
+    /// unconditionally: by the time the delay elapses, whatever wanted the
+    /// socket open may have released its token (or another path may already
+    /// have reconnected it). Retrying blind in either case would either
+    /// reopen a socket nobody wants anymore or race a second concurrent
+    /// connect attempt.
+    private func retryConnectIfStillDesired(viaSocksPort socksPort: Int?) {
+        guard shouldBeConnected() else { return }
+        lock.lock()
+        let isDisconnected = (_state == .disconnected)
+        lock.unlock()
+        guard isDisconnected else { return }
+        connect(viaSocksPort: socksPort)
+    }
+
     // MARK: - IOS-E1 — outbound WS media-frame bound
     //
     // Investigated + documented per playbook §IOS-E1 (verify OS buffering
@@ -851,7 +974,23 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     ///   `await RealityManager.shared.start(params:)`) before passing its port.
     public func connect(viaSocksPort socksPort: Int? = nil) {
         lock.lock()
-        guard _state == .disconnected else { lock.unlock(); return }
+        // W-CONNWANT — a caller that reaches the socket directly (no token
+        // in hand) still gets one held on its behalf, so shouldBeConnected()
+        // reflects reality for every internal retry path without requiring
+        // every existing call site to adopt the token API in the same pass.
+        // Done inside this same critical section so two concurrent connect()
+        // calls can't each observe "no standing token yet" and both mint one.
+        var newlyMintedTokenId: Int?
+        if legacyStandingToken == nil {
+            nextConnectionTokenId += 1
+            newlyMintedTokenId = nextConnectionTokenId
+            activeConnectionTokenIds.insert(nextConnectionTokenId)
+        }
+        guard _state == .disconnected else {
+            lock.unlock()
+            if let id = newlyMintedTokenId { legacyStandingToken = ConnectionToken(id: id, client: self) }
+            return
+        }
         _state = .connecting
         currentSocksPort = socksPort
         // IOS-E5 — any explicit connect() (forceReconnect, willEnterForeground,
@@ -883,6 +1022,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         webSocketTask = nil
         let listeners = stateListeners
         lock.unlock()
+        if let id = newlyMintedTokenId { legacyStandingToken = ConnectionToken(id: id, client: self) }
 
         // Cancel the old task AFTER releasing the lock.
         oldTask?.cancel(with: .goingAway, reason: nil)
@@ -983,6 +1123,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
+        // W-CONNWANT — an explicit disconnect() means the legacy caller no
+        // longer wants this socket; drop the token held on its behalf so
+        // shouldBeConnected() (and every retry gate that reads it) reflects
+        // that. (`_state` is already `.disconnected` above, so this cannot
+        // recurse back into a redundant disconnect() via the reconciler.)
+        legacyStandingToken = nil
     }
 
     /// Tear down any existing task and trigger a fresh `connect()`. Idempotent
@@ -994,6 +1140,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     ///   - `ensureAuthenticated(...)` when staleness is detected
     ///   - `AppState.willEnterForeground` after iOS resumes the app
     public func forceReconnect() {
+        // W-CONNWANT — nobody holds a reason to keep this socket open (a
+        // real disconnect() already ran, dropping the legacy standing token
+        // and any explicit ones with it): don't force one back up.
+        guard shouldBeConnected() else { return }
         lock.lock()
         if reconnectInFlight {
             lock.unlock()
@@ -2389,7 +2539,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // "offlinepark unpark reconnect_attempt=N" (prose-heavy, two
             // unrecognized words) does not, re-verified 2026-08-25.
             print("[BCryptoWS] net park=0 attempt=0")
-            connect(viaSocksPort: socksPortForUnpark)
+            retryConnectIfStillDesired(viaSocksPort: socksPortForUnpark)
             return
         }
 
@@ -2591,7 +2741,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let jitter = baseDelay * (Double.random(in: -0.25...0.25))
         let delay = max(0.5, baseDelay + jitter)
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.connect(viaSocksPort: socksPort)
+            self?.retryConnectIfStillDesired(viaSocksPort: socksPort)
         }
     }
 }
