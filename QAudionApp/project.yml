@@ -82,13 +82,22 @@ targets:
           # release, not just Reality). Remove this exclude in the same
           # change that adds the real `.binaryTarget`/`framework:` wiring.
           - "Vendor/Reality.xcframework"
-          # AppIntentVocabulary.plist (ITMS-90626 fix) is added as an
-          # explicit resource below, same reasoning as PrivacyInfo.xcprivacy
-          # above — a plain .plist under a loose `.lproj` folder picked up
-          # by the recursive sweep is not guaranteed to land in
-          # Copy-Bundle-Resources as a localization variant group the way
-          # Xcode's own "New File" flow would produce it.
-          - "it.lproj/AppIntentVocabulary.plist"
+          # it.lproj/ (ITMS-90626 fix) is added as an explicit folder
+          # resource below. First attempt (v1.0.1099/build 2840) listed the
+          # single file as a plain resource path and it was silently
+          # dropped entirely — confirmed by extracting that exact build's
+          # IPA (CFBundleVersion 2840) and finding zero .lproj directories
+          # anywhere in the bundle. Root cause: XcodeGen's localized-.lproj
+          # auto-detection (triggered any time a `.lproj` path is touched
+          # by the recursive `sources:` sweep or a bare-file resource
+          # entry) has a long history of silently mis-grouping or dropping
+          # files when `createIntermediateGroups: true` is also set (this
+          # project has it set above) — see yonaskolb/XcodeGen issues #69,
+          # #674, #763, #1210. Excluded here from the sweep entirely; added
+          # back below as a `type: folder` resource, which Xcode copies
+          # verbatim (no variant-group logic involved).
+          - "it.lproj"
+          - "it.lproj/**"
     settings:
       base:
         INFOPLIST_FILE: Info.plist
@@ -171,11 +180,16 @@ targets:
       # 2024. See QAudionApp/PrivacyInfo.xcprivacy for the full content
       # and the rationale for each declared API category / data type.
       - path: PrivacyInfo.xcprivacy
-      # ITMS-90626 fix (flagged on v1.0.1096/2830 and v1.0.1097/2833) — Siri
-      # example phrases for INStartCallIntent/INSendMessageIntent/
-      # INSearchForMessagesIntent in "it" (CFBundleDevelopmentRegion). See
-      # that file's own header comment for the full rationale.
-      - path: it.lproj/AppIntentVocabulary.plist
+      # ITMS-90626 fix (flagged on v1.0.1096/2830, v1.0.1097/2833, and again
+      # on v1.0.1099/2840 because the file never actually landed in the
+      # bundle — see the `sources.excludes` comment above for the root
+      # cause). `type: folder` makes XcodeGen add `it.lproj` as a folder
+      # reference so Xcode copies it verbatim to
+      # Payload/QAudionApp.app/it.lproj/AppIntentVocabulary.plist, matching
+      # exactly what App Store Connect's validator expects. See that file's
+      # own header comment for the phrase-content rationale.
+      - path: it.lproj
+        type: folder
 
   # ------------------------------------------------------------------ #
   # QAudionPacketTunnel — Network Extension (packet tunnel provider)    #
