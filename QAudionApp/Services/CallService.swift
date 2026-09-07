@@ -668,6 +668,13 @@ final class CallService: @unchecked Sendable {
     /// pattern and wiring site as the byte pair above.
     public var getAudioRtpPacketsSent: (() -> Int64)?
     public var getAudioRtpPacketsReceived: (() -> Int64)?
+    /// W-DEADTXRELEASE — mute/unmute the native audio-srtp sender track.
+    /// Wired once at login by AppState to
+    /// `webRtcController?.setNativeAudioSrtpMuted(_:)`, same live-setter
+    /// pattern as the getters above. `nil` (no wiring) leaves
+    /// `engageAudioSrtpFallback()` exactly as it behaved before this existed
+    /// — it just skips the release.
+    public var muteNativeAudioSrtpSender: ((Bool) -> Void)?
 
     /// W-SRTPCOUNTERS (2026-08-29) — "how much audio has this call actually
     /// protected and moved", answered from whichever path is really carrying
@@ -3138,12 +3145,21 @@ final class CallService: @unchecked Sendable {
         guard !audioSrtpFallbackActive else { return }
         audioSrtpFallbackActive = true
         RTLog.warn("call", "audiosrtpfb engage=1")
-        // Hand the mic/speaker back to the manual AVAudioEngine path for the
-        // outage: two capture stacks on one session is exactly the contention
-        // IOS-C4b exists to avoid, and ICE is down anyway so the native unit
-        // has nothing to carry. (W-ADMNOMANUAL: the unit is no longer stopped
-        // explicitly here — WebRTC owns its lifecycle — but the srtp track is
-        // dead for the duration of the outage regardless.)
+        // W-DEADTXRELEASE — the OLD reasoning here ("ICE is down anyway so
+        // the native unit has nothing to carry") only holds for a
+        // network-triggered outage. W-DEADTXNET also engages this same
+        // fallback while ICE is fully UP — the sender is enabled, attached,
+        // and negotiated, it simply never moved a packet (live evidence:
+        // call 4e6d4fa5, 2026-09-07, deadtx=2 with route tier=direct). In
+        // that shape the native audio unit is NOT idle — starting a second,
+        // manual AVAudioEngine capture on the same AVAudioSession is exactly
+        // the two-stacks contention IOS-C4b exists to avoid, and it is why
+        // the fallback itself went silent instead of restoring audio.
+        // Releasing the sender first (mute, not teardown — see
+        // setNativeAudioSrtpMuted's kdoc) is a no-op when the network
+        // genuinely is down (nothing to release) and the missing half of
+        // the fix when it is not.
+        muteNativeAudioSrtpSender?(true)
         startAudioIOIfReady()
     }
 
@@ -3156,6 +3172,9 @@ final class CallService: @unchecked Sendable {
         RTLog.warn("call", "audiosrtpfb recover=1")
         audioCapture?.stop()
         audioEnginesStarted = false
+        // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
+        // sole TX/RX owner, same as this function's own doc already says.
+        muteNativeAudioSrtpSender?(false)
     }
 
     /// W464 — CallKit activated the shared `AVAudioSession`. This is the

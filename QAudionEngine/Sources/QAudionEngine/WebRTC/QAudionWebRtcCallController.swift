@@ -3136,6 +3136,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         peerConnection?.peerNegotiated()
     }
 
+    /// W-DEADTXRELEASE — release (or restore) the native audio-srtp sender
+    /// track so `CallService.engageAudioSrtpFallback()` can start the manual
+    /// `AVAudioEngine` path without contending for the mic against a native
+    /// WebRTC audio unit that `W-DEADTXNET` already found isn't moving real
+    /// packets. Thin pass-through to `QAudionPeerConnection
+    /// .setNativeAudioSrtpMuted` — see that method's kdoc; harmless no-op
+    /// when this call never negotiated `audio-srtp-v1` (`peerConnection`
+    /// nil or `localAudioSrtpTrack` nil there).
+    public func setNativeAudioSrtpMuted(_ muted: Bool) {
+        peerConnection?.setNativeAudioSrtpMuted(muted)
+    }
+
     /// WIRE_SPEC §8.7 — one-shot latch for `onInboundVideoReady`. Set via
     /// the atomic test-and-set below (the controller is `@unchecked
     /// Sendable`: the receiver attach fires on the WebRTC signalling

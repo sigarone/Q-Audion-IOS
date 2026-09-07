@@ -4426,6 +4426,14 @@ final class AppState: ObservableObject {
         callService.getUsesNativeAudioSrtp = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true
         }
+        // W-DEADTXRELEASE — same live-setter pattern as the getter above:
+        // lets engageAudioSrtpFallback() release the native sender before
+        // starting the manual capture path instead of leaving both running
+        // against the same AVAudioSession. See CallService.engageAudioSrtpFallback's
+        // kdoc for the live call this closes.
+        callService.muteNativeAudioSrtpSender = { [weak self] muted in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(muted)
+        }
         // W-MEDIADEADSRTP (2026-08-29) — same live-getter pattern: hand the
         // media-dead watchdog the audio RX byte counter so an `audio-srtp-v1`
         // call has a liveness source at all. Without this it saw only the
