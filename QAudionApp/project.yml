@@ -82,6 +82,13 @@ targets:
           # release, not just Reality). Remove this exclude in the same
           # change that adds the real `.binaryTarget`/`framework:` wiring.
           - "Vendor/Reality.xcframework"
+          # AppIntentVocabulary.plist (ITMS-90626 fix) is added as an
+          # explicit resource below, same reasoning as PrivacyInfo.xcprivacy
+          # above — a plain .plist under a loose `.lproj` folder picked up
+          # by the recursive sweep is not guaranteed to land in
+          # Copy-Bundle-Resources as a localization variant group the way
+          # Xcode's own "New File" flow would produce it.
+          - "it.lproj/AppIntentVocabulary.plist"
     settings:
       base:
         INFOPLIST_FILE: Info.plist
@@ -164,6 +171,11 @@ targets:
       # 2024. See QAudionApp/PrivacyInfo.xcprivacy for the full content
       # and the rationale for each declared API category / data type.
       - path: PrivacyInfo.xcprivacy
+      # ITMS-90626 fix (flagged on v1.0.1096/2830 and v1.0.1097/2833) — Siri
+      # example phrases for INStartCallIntent/INSendMessageIntent/
+      # INSearchForMessagesIntent in "it" (CFBundleDevelopmentRegion). See
+      # that file's own header comment for the full rationale.
+      - path: it.lproj/AppIntentVocabulary.plist
 
   # ------------------------------------------------------------------ #
   # QAudionPacketTunnel — Network Extension (packet tunnel provider)    #
