@@ -140,7 +140,23 @@ public enum CallKitWorkOffloadPolicy {
     /// proper fix (serialize ALL of AudioCapture's engine mutations, start()
     /// included, through one queue — the audio-side twin of `captureQueue`
     /// on the video side, out of scope for this flip).
-    public static let voiceProcessingTeardownQueueEnabled: Bool = true
+    ///
+    /// FLIPPED BACK OFF (2026-09-07, build v1.0.1102) — the predicted risk
+    /// above materialized exactly as described: live crash telemetry
+    /// (`fetch-ios-live.py`, both a local-initiated and a remote-initiated
+    /// hangup) shows `CrashReporter` catching signal 11 (SIGSEGV,
+    /// MetricKit excType=1/excCode=1 = EXC_BAD_ACCESS) on a background
+    /// `libdispatch` worker thread, inside AVFAudio, called from exactly the
+    /// `voiceProcessingTeardownQueue.async { inputNode.
+    /// setVoiceProcessingEnabled(false) }` this flag enables — racing
+    /// `AudioCapture.stop()`'s synchronous `engine?.stop()` on the calling
+    /// thread right after. Following this kdoc's own prescribed first step:
+    /// byte-identical rollback to `false`. The original main-thread freeze
+    /// on remote hangup this flag was meant to fix is NOT re-fixed by this
+    /// revert — it returns until the "proper fix" named above (serialize
+    /// ALL of AudioCapture's engine mutations through one dedicated queue)
+    /// is actually done as its own change.
+    public static let voiceProcessingTeardownQueueEnabled: Bool = false
 
     /// What `AudioProcessingPipeline.disableVoiceProcessing(on:)` should do
     /// with `setVoiceProcessingEnabled(false)`.

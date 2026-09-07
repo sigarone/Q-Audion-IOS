@@ -15,15 +15,16 @@ final class CallKitWorkOffloadPolicyTests: XCTestCase {
     /// The video fix mirrors an ALREADY-SHIPPED in-file pattern (`start()`'s
     /// `startRunning()` hop) — default ON. `audioEngineBackgroundQueueEnabled`
     /// has no such precedent and was never verified live — stays OFF.
-    /// `voiceProcessingTeardownQueueEnabled` flipped ON 2026-09-04 (Pavel) —
-    /// see its own kdoc for the live freeze report that motivated turning it
-    /// on for on-device verification. Rule unchanged: any behaviour change
-    /// here is deliberate; a flipped default is a reviewed edit to this
-    /// test, never a silent regression.
+    /// `voiceProcessingTeardownQueueEnabled` flipped ON 2026-09-04 (Pavel),
+    /// then back OFF 2026-09-07 (v1.0.1102) after live crash telemetry
+    /// confirmed the exact race its own kdoc predicted (SIGSEGV racing
+    /// `AudioCapture.stop()`'s `engine?.stop()`) — see its own kdoc. Rule
+    /// unchanged: any behaviour change here is deliberate; a flipped default
+    /// is a reviewed edit to this test, never a silent regression.
     func test_defaults_videoOnTeardownOnAudioEngineOff() {
         XCTAssertTrue(Policy.asyncStopRunningEnabled)
         XCTAssertFalse(Policy.audioEngineBackgroundQueueEnabled)
-        XCTAssertTrue(Policy.voiceProcessingTeardownQueueEnabled)
+        XCTAssertFalse(Policy.voiceProcessingTeardownQueueEnabled)
     }
 
     // MARK: - stopRunningDispatch
@@ -58,9 +59,9 @@ final class CallKitWorkOffloadPolicyTests: XCTestCase {
         XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(enabled: false), .blockingSync)
     }
 
-    /// Calling with no argument uses the shipped default (ON as of
-    /// 2026-09-04 — see the kill switch's own kdoc).
+    /// Calling with no argument uses the shipped default (OFF again as of
+    /// 2026-09-07/v1.0.1102 — see the kill switch's own kdoc).
     func test_voiceProcessingTeardownDispatch_defaultArgumentMatchesTheKillSwitch() {
-        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(), .fireAndForgetAsync)
+        XCTAssertEqual(Policy.voiceProcessingTeardownDispatch(), .blockingSync)
     }
 }
