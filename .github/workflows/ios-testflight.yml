@@ -287,6 +287,19 @@ jobs:
           xcodegen generate
           echo "=== Schemes ==="
           xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+          # ITMS-90626 diagnostic (temporary, remove once it.lproj/
+          # AppIntentVocabulary.plist is confirmed present in a real
+          # built IPA): two prior fix attempts (plain file resource,
+          # then `type: folder`) both resulted in the file being
+          # completely absent from the shipped bundle -- confirmed by
+          # extracting the real IPA for v1.0.1099/2840 and v1.0.1101/2846.
+          # Dump exactly what XcodeGen wrote into project.pbxproj for this
+          # resource so the next fix is grounded in real evidence instead
+          # of a third guess.
+          echo "=== project.pbxproj: it.lproj / AppIntentVocabulary references ==="
+          grep -n -i "lproj\|AppIntentVocabulary" "$XCODE_PROJECT/project.pbxproj" || echo "NO MATCHES AT ALL"
+          echo "=== on-disk check: does XcodeGen see the source file? ==="
+          ls -la it.lproj/ 2>&1 || echo "it.lproj directory not found on disk"
 
       # ----------------------------------------------------------
       # 5) Bump marketing version + build number into Info.plist.
