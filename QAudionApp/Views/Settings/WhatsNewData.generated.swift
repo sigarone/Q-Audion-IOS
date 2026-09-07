@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1103",
+              date: "2026-09-07",
+              title: "v1.0.1103",
+              bullets: [
+                "fix(call): revert voiceProcessingTeardownQueueEnabled to false (SIGSEGV)",
+              ]),
         .init(id: "v1.0.1102",
               date: "2026-09-07",
               title: "v1.0.1102",
               bullets: [
+                "chore: regenerate changelog for v1.0.1102",
                 "chore(ci): remove ITMS-90626 diagnostic step, root cause confirmed",
                 "fix(ios): stop excluding it.lproj from sources sweep for ITMS-90626",
                 "debug(ci): dump project.pbxproj it.lproj resource entries for ITMS-90626",
@@ -160,13 +167,6 @@ extension ReleaseNote {
                 "feat(rekey): add media field to call_media_ready wire message",
                 "docs(rekey): iOS implementation plan for the media-deafness skew fix",
                 "docs(rekey): design for the media-deafness skew fix — iOS port",
-              ]),
-        .init(id: "v1.0.1083",
-              date: "2026-09-04",
-              title: "v1.0.1083",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1083",
-                "fix(call): rename the shadowing ringPhase property, my qualified-call fix was wrong",
               ]),
     ]
 }
