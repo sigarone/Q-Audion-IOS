@@ -490,8 +490,19 @@ struct LiveInCallScreen: View {
     /// pinned for the call's peer. `nil` when there is no pin, in which case
     /// nothing may be recorded or trusted: a confirmation with no identity to bind
     /// to is the state this finding was about.
+    ///
+    /// D11 fix — MUST pass the peer's device id: `commitTofuPinForDevice`
+    /// pins under the composite `"<peerId>|<deviceId>"` account whenever the
+    /// server stamped one (the normal case), and the bare-contactId lookup
+    /// this used to do checks a DIFFERENT account than the one the
+    /// handshake actually wrote to. That mismatch is why "CONFERMA
+    /// COINCIDONO" looked live but did nothing on every repeat call with an
+    /// already-trusted peer (2026-09-07 live report): the pin was there,
+    /// just under an account this lookup never checked.
     private func sasIdentityTag(for peerId: String) -> String? {
-        guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peerId) else { return nil }
+        guard let pinned = PeerIdentityPinStore().pinnedKey(
+            contactId: peerId, deviceId: appState.peerDeviceId(for: peerId)
+        ) else { return nil }
         return SasVerificationStore.identityTag(forPinnedKey: pinned)
     }
 

@@ -973,6 +973,19 @@ final class AppState: ObservableObject {
     /// and thread it into the per-device verdict when the bundle lands. Absent ⇒
     /// nil ⇒ legacy single-key + set-membership (never a fatal mismatch).
     private var senderDeviceIdByPeer: [String: String] = [:]
+
+    /// D11 — public accessor for `senderDeviceIdByPeer`. The TOFU pin this
+    /// call's handshake committed (`commitTofuPinForDevice`,
+    /// `applyAuthenticatedSideEffects`) is keyed per-(peer, device) using
+    /// exactly this value; a reader that omits it — `PeerIdentityPinStore
+    /// .pinnedKey(contactId:)` with no `deviceId` argument — checks only the
+    /// legacy bare-contactId account and misses a pin that was genuinely
+    /// committed under the composite one. Every UI read of the pin for an
+    /// in-call peer MUST pass this so it looks at the same account the
+    /// handshake wrote to.
+    func peerDeviceId(for peerId: String) -> String? {
+        senderDeviceIdByPeer[peerId]
+    }
     /// W478 — display name of the incoming caller, set when `call_incoming`
     /// is processed. Shown in the in-app ringing banner as a fallback when
     /// CallKit's system UI is suppressed (Focus / Silence Unknown Callers).
@@ -12077,7 +12090,14 @@ final class AppState: ObservableObject {
         // fingerprint (which is SHA-256(psk), never an identity key — see
         // `resolveNfcMixInputs`'s parameter doc for the failure this replaces).
         let capturedPeerIdentityKey = AppState.resolveNfcPeerIdentityKey(fingerprint: state.selectedFp)
-        let verifiedPeerIdentityKey = PeerIdentityPinStore().pinnedKey(contactId: state.peerId)
+        // D11 fix — pass the peer's device id, same reasoning as
+        // `peerDeviceId(for:)`'s own kdoc: the pin this call's handshake
+        // committed lives under the composite "<peerId>|<deviceId>" account
+        // whenever the server stamped one, and omitting it here checks a
+        // different (legacy bare-contactId) account than the one that pin
+        // actually landed in.
+        let verifiedPeerIdentityKey = PeerIdentityPinStore().pinnedKey(
+            contactId: state.peerId, deviceId: peerDeviceId(for: state.peerId))
         let priorPresenceAuth = existingContact?.presenceAuth
             .map { (peerIdentityKey: $0.peerIdentityKey, witnessTier: $0.witnessTier) }
         let (mixRoles, nfcBound, nfcWitnessOk) = AssuranceState.resolveNfcMixInputs(
@@ -12208,7 +12228,10 @@ final class AppState: ObservableObject {
     @MainActor
     private func applyPresenceAuthOutcomeIfAny(callId: String) {
         guard let final = finalAssuranceByCall[callId] else { return }
-        guard let peerIdentityKey = PeerIdentityPinStore().pinnedKey(contactId: final.peerId) else { return }
+        // D11 fix — see peerDeviceId(for:)'s kdoc.
+        guard let peerIdentityKey = PeerIdentityPinStore().pinnedKey(
+            contactId: final.peerId, deviceId: peerDeviceId(for: final.peerId)
+        ) else { return }
         guard let readyAt = kcCallStates[callId]?.readyAt else { return }
         let mediaDwellMs = Int(Date().timeIntervalSince(readyAt) * 1000)
         ContactsStore().applyAssuranceOutcome(
@@ -12913,6 +12936,15 @@ final class AppState: ObservableObject {
         // No pin (never contacted / wiped) => not verified. `SasVerificationStore.shared`
         // and `PeerIdentityPinStore` are both Keychain-backed — safe to read off-main.
         integration.isPeerVerifiedChannel = { peerId in
+            // D11 — deliberately NOT passing deviceId here (unlike the other
+            // pinnedKey call sites this same fix touched): this closure's
+            // declared type, `((String) -> Bool)?` with no actor/Sendable
+            // annotation, is called from QAudionCallIntegration's handshake
+            // path, which is not guaranteed to run on the main actor —
+            // reading AppState.peerDeviceId (a @MainActor member) from here
+            // would be a cross-actor access the type system can't verify
+            // from this Windows box. The bare-contactId lookup this already
+            // does is the pre-existing, safe behavior; left unchanged.
             guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peerId) else {
                 return false
             }
