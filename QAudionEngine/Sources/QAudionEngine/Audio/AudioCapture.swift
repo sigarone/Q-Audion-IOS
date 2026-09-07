@@ -1,6 +1,7 @@
 import Foundation
 #if canImport(AVFoundation)
 import AVFoundation
+import QAudionVPIOSafe
 
 public final class AudioCapture {
     public var onFrame: ((Data) -> Void)?
@@ -1120,7 +1121,29 @@ public final class AudioCapture {
         // 5. Start the engine, then the player node (single engine drives both).
         engine.prepare()
         try engine.start()
-        player.play()
+        // W-PLAYERSTATEGUARD (2026-09-07) — live crash, this exact build:
+        // `com.apple.coreaudio.avfaudio` / "player started when in a
+        // disconnected state" from THIS `player.play()`, raised as an
+        // uncaught NSException (AVAudioPlayerNode does not throw a Swift
+        // error for this — `engine.start()` above already does throw and
+        // is already covered). Same exception name/reason, same footgun
+        // `QAudionRingtonePlayer.swift` already guards for its own player
+        // nodes (`QAudionRunCatchingNSException`, the ObjC @try/@catch shim
+        // `AudioProcessingPipeline` also uses) — applying the identical,
+        // already-proven fix here: convert the exception into a genuine
+        // thrown Swift error so this function's EXISTING `throws` contract
+        // (already exercised by `try engine.start()` above) is what the
+        // caller sees, instead of the process terminating outright.
+        var playError: NSError?
+        let playRan = QAudionRunCatchingNSException({
+            player.play()
+        }, &playError)
+        guard playRan else {
+            throw playError ?? NSError(
+                domain: "com.qaudion.AudioCapture",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "player.play() raised an NSException in AudioCapture.start()"])
+        }
         self.engine = engine
         self.playerNode = player
         self.playFormat = format
