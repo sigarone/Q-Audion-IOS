@@ -2342,6 +2342,27 @@ final class AppState: ObservableObject {
         beginBoundedBackgroundConnectionWindow()
     }
 
+    /// `ReachabilityWakeService` just resumed this process specifically to
+    /// report that the network is reachable again — possibly after the
+    /// process was fully suspended, possibly for hours. Same reconciliation
+    /// `willEnterForeground` runs on a manual return to the app: refresh the
+    /// token if it's aged out, then bring the socket back if it isn't
+    /// already up. `isAuthenticated` guards it the same way, too — nothing
+    /// to reconnect for a signed-out install.
+    private func handleReachabilityWakeup() {
+        guard isAuthenticated else { return }
+        // The completion callback that got us resumed only guarantees a
+        // short window to process background-session events, not enough on
+        // its own for a full token-refresh + WS-connect + authenticate
+        // round trip. Ask for the same bounded extra time the background
+        // window (piece 2) already asks for, for the same reason.
+        Task { [weak self] in
+            await BackgroundUploadTask.run(name: "qaudion.ws.reachability-wakeup") {
+                await self?.ensureSocketFreshOnWake()
+            }
+        }
+    }
+
     // Swift 6 — nonisolated so the `@Sendable` device-renew fallback closure
     // (and persistAccessTokenTtl / the token-persist paths) can reference this
     // constant key without crossing main-actor isolation. It is an immutable
@@ -2928,6 +2949,17 @@ final class AppState: ObservableObject {
             serverUrl: serverUrl,
             getToken: { [weak self] in self?.authService.loadToken() }
         )
+
+        // W-CONNWANT (piece 3) — the leg the other two pieces don't cover:
+        // once iOS has actually suspended the process, nothing in it runs
+        // anymore, so nothing can notice the network coming back on its own.
+        // This arms an OS-level background wakeup the moment the network
+        // goes away; when it fires (network reachable again — the process
+        // may have been fully suspended in between), route through the same
+        // wake-reconciliation `willEnterForeground` already uses.
+        ReachabilityWakeService.shared.start(serverUrl: serverUrl) { [weak self] in
+            self?.handleReachabilityWakeup()
+        }
 
         // W559/W561 — cross-platform bug report service. Volume-gesture
         // trigger + auto-detection hook. Primitives-only API per CLAUDE.md

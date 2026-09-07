@@ -22,6 +22,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         print("[AppDelegate] APNs registration failed: \(error.localizedDescription)")
     }
+
+    /// W-CONNWANT (piece 3) — the OS resumed/relaunched the app to deliver
+    /// events for a background `URLSession` (`ReachabilityWakeService`'s
+    /// reachability-wake session). Per Apple's contract this completion
+    /// handler must be called once that session's delegate has finished
+    /// processing everything it has for us — stash it; the service's own
+    /// `urlSessionDidFinishEvents(forBackgroundURLSession:)` calls it.
+    func application(_ application: UIApplication,
+                     handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == ReachabilityWakeService.backgroundSessionIdentifier else {
+            completionHandler()
+            return
+        }
+        // Force the session (and its delegate hookup) to exist NOW — a
+        // background relaunch is not guaranteed to have reached AppState's
+        // normal `.onAppear` → `initialize()` → `start()` sequence yet.
+        ReachabilityWakeService.shared.ensureSessionExists()
+        ReachabilityWakeService.shared.pendingSystemCompletionHandler = completionHandler
+    }
 }
 
 @main
