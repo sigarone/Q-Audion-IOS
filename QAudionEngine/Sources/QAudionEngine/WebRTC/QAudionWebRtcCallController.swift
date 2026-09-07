@@ -115,6 +115,92 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// double-audio window).
     public var onAudioSrtpFallbackRecover: (() -> Void)?
 
+    // MARK: - W-CAPTURELIVE — confirm the native mic actually produced a
+    // frame, not just that attach/enable reported success
+    //
+    // `installAudioSrtpIfPossible`'s existing retry (see that method) only
+    // fires when `activateNativeAudioSrtp` itself returns `false` — a
+    // cryptor-attach failure. A live call (4e6d4fa5, 2026-09-07) hit a
+    // different, quieter shape: attach reported success (`en=1 att=1`,
+    // `audiosrtp tx=1` all logged) and yet the sender never moved a single
+    // real byte for the whole call — the underlying capture hardware simply
+    // never engaged, which every API call along the way is blind to. This
+    // is a documented Core Audio failure class, not specific to this app or
+    // to WebRTC: a tap can report a valid format and throw no error while
+    // delivering nothing (or all-silence) forever.
+    //
+    // The fix does not touch AVAudioSession/RTCAudioSession activation at
+    // all — that path was tried once already (see NativeAudioSessionGate's
+    // own history) and made capture worse. It instead watches the ONE
+    // signal that is unambiguous either way: whether `txSink` below —
+    // `NativeAudioPcmTap.render(pcmBuffer:)`'s own real-audio callback,
+    // firing roughly every 10-20 ms in the healthy case — has EVER actually
+    // delivered a frame. A bounded wait for that real event (not a blind
+    // retry on a timer regardless of outcome) is the whole mechanism:
+    // confirmed live → nothing to do; still silent → nudge the native
+    // sender once (mute/unmute, a track-level operation with no session
+    // bookkeeping involved) and check again on the same bounded terms;
+    // still nothing → hand off to the SAME relay fallback ICE-loss already
+    // uses (`onAudioSrtpFallbackEngage`), now that it releases the native
+    // sender first instead of contending with it for the mic.
+    private let captureLiveLock = NSLock()
+    private var hasConfirmedNativeAudioCaptureLive = false
+    private var captureLiveCheckGeneration = 0
+
+    private func markNativeAudioCaptureLive() {
+        captureLiveLock.lock()
+        let alreadyConfirmed = hasConfirmedNativeAudioCaptureLive
+        hasConfirmedNativeAudioCaptureLive = true
+        captureLiveLock.unlock()
+        if !alreadyConfirmed {
+            log?("audiosrtp capturelive=1")
+        }
+    }
+
+    /// Starts (or restarts) the bounded liveness check for the local
+    /// capture that `installAudioSrtpIfPossible` just reported as
+    /// installed. `generation` lets a later call — a rekey, or the same
+    /// check re-armed — invalidate an older in-flight check instead of two
+    /// overlapping ones racing to nudge/escalate independently.
+    private func armNativeAudioCaptureLiveCheck() {
+        captureLiveLock.lock()
+        hasConfirmedNativeAudioCaptureLive = false
+        captureLiveCheckGeneration += 1
+        let generation = captureLiveCheckGeneration
+        captureLiveLock.unlock()
+        Task { [weak self] in
+            await self?.verifyNativeAudioCaptureLiveOrRecover(generation: generation)
+        }
+    }
+
+    private func isCurrentCaptureLiveCheck(_ generation: Int) -> Bool {
+        captureLiveLock.lock(); defer { captureLiveLock.unlock() }
+        return generation == captureLiveCheckGeneration
+    }
+
+    private func hasConfirmedCaptureLive() -> Bool {
+        captureLiveLock.lock(); defer { captureLiveLock.unlock() }
+        return hasConfirmedNativeAudioCaptureLive
+    }
+
+    private func verifyNativeAudioCaptureLiveOrRecover(generation: Int) async {
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard isCurrentCaptureLiveCheck(generation) else { return }
+        guard !hasConfirmedCaptureLive() else { return }
+        log?("audiosrtp capturelive=0 nudge=1")
+        peerConnection?.setNativeAudioSrtpMuted(true)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        peerConnection?.setNativeAudioSrtpMuted(false)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        guard isCurrentCaptureLiveCheck(generation) else { return }
+        guard !hasConfirmedCaptureLive() else {
+            log?("audiosrtp capturelive=1 afternudge=1")
+            return
+        }
+        log?("audiosrtp capturelive=0 afternudge=0 fallback=1")
+        onAudioSrtpFallbackEngage?()
+    }
+
     /// W-UPGRADEICEWATCHDOG-ANCHOR (2026-08-24, mirrors Android's
     /// W-ICEANCHOR / `remoteDescriptionAppliedAtMs`) — fired once
     /// `setRemoteOffer` has actually succeeded inside
@@ -3093,6 +3179,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             participantId: participant,
             slot: slot,
             txSink: { [weak self] pcm in
+                // W-CAPTURELIVE — this closure firing AT ALL is the real
+                // signal: a genuinely dead capture never calls it, no
+                // matter what `activateNativeAudioSrtp`'s own return value
+                // claimed. See markNativeAudioCaptureLive's kdoc.
+                self?.markNativeAudioCaptureLive()
                 // PCM-TAP PARITY (TX/local mic) — mirrors Android's
                 // `feedOwnerContinuity` wiring on `audioSrtpTxSink`. Tier 1
                 // ("voce come chiave") is the only TX-side consumer; RX has
@@ -3117,6 +3208,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 armRekeySwitch(media: "audio", epoch: epoch)
             } else {
                 peerConnection?.nativeAudioCryptor?.switchSender(slot: slot)
+                // W-CAPTURELIVE — only the FIRST activation of a call needs
+                // this: a rekey (epoch > 0) is switching an already-proven
+                // live sender, `armRekeySwitch` above already confirms that
+                // switch on its own terms.
+                armNativeAudioCaptureLiveCheck()
             }
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
