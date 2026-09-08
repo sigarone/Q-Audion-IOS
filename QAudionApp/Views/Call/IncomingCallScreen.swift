@@ -121,8 +121,18 @@ struct IncomingCallScreen: View {
                             Text("Rispondi senza video").qaudionStyle(type.labelSmall)
                         }
                         .foregroundStyle(acceptWithoutVideo ? extras.trustEnterprise : scheme.onSurfaceVariant)
+                        // HIG minimum tap target is 44x44pt; the label's own
+                        // bounding box (~16-18pt tall) is far under that.
+                        // minHeight only grows the invisible hit area — the
+                        // icon/text keep their natural size, centered inside
+                        // it — and contentShape extends hit-testing to the
+                        // full frame instead of just the drawn glyphs.
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Rispondi senza video")
+                    .accessibilityValue(acceptWithoutVideo ? "Attivo" : "Non attivo")
                     .padding(.bottom, 24)
                 } else {
                     Text(subtitle ?? "Chiamata audio sicura")
