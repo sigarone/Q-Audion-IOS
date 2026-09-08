@@ -124,6 +124,14 @@ public final class QAudionPeerConnection: NSObject {
     private var relayCandidateCount: Int = 0
 
     private let factory: RTCPeerConnectionFactory
+    /// IOS-C4b TX-TAP FIX (2026-09-08) — the same-call `RTCDefaultAudioProcessingModule`
+    /// `QAudionPeerConnectionFactory.createFactory` minted `factory` with.
+    /// `nil` only for callers that never route through `createFactory`
+    /// (tests) — `activateNativeAudioSrtp`'s TX tap is then simply inert,
+    /// same fail-soft shape the RX tap already has when its track never
+    /// appears. See `NativeAudioCaptureTap`'s own doc for why the mic-side
+    /// tap needs this instead of `RTCAudioTrack.add(_:)`.
+    private let audioProcessingModule: RTCDefaultAudioProcessingModule?
     private var localAudioTrack: RTCAudioTrack?
     private var localVideoTrack: RTCVideoTrack?
 
@@ -183,7 +191,14 @@ public final class QAudionPeerConnection: NSObject {
     /// requires detaching it from the exact track it was added to; there is
     /// no "which track am I on" query on the renderer itself.
     private var audioRxTapTrack: RTCAudioTrack?
-    private var audioTxTap: NativeAudioPcmTap?
+    /// IOS-C4b TX-TAP FIX (2026-09-08) — was `NativeAudioPcmTap` (a track
+    /// renderer, `track.add(_:)`), which never fired for the LOCAL mic
+    /// (`LocalAudioSource::AddSink` is a no-op override in this pinned
+    /// libwebrtc). Now `NativeAudioCaptureTap`, attached to
+    /// `audioProcessingModule.capturePostProcessingDelegate` — see that
+    /// type's doc. Still doubles as the idempotency guard for "already
+    /// installed this call" below, same as before.
+    private var audioTxTap: NativeAudioCaptureTap?
     /// Mute state requested BEFORE the real mic track exists (mirrors
     /// Android's `pendingAudioSrtpMuted`) — latched here and applied the
     /// moment `activateNativeAudioSrtp` creates the track.
@@ -291,10 +306,12 @@ public final class QAudionPeerConnection: NSObject {
     public var onAudioDataChannelStateChange: ((Int) -> Void)?
 
     public init(factory: RTCPeerConnectionFactory,
+                audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
                 iceServers: [RTCIceServer],
                 iceTransportPolicy: RTCIceTransportPolicy = .all,
                 delegate: Delegate?) {
         self.factory = factory
+        self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
         super.init()
 
@@ -922,9 +939,6 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
             diagBr = 2
             print("[WebRTC] W-AUDIOSENDPICK: transceiver direction=\(transceiver.direction.rawValue) cannot send — promoted via addTrack")
-            let txTap = NativeAudioPcmTap(sink: txSink)
-            track.add(txTap)
-            audioTxTap = txTap
         } else if transceiver.sender.track == nil {
             let source = factory.audioSource(with: nil)
             let track = factory.audioTrack(with: source, trackId: audioTrackId)
@@ -948,19 +962,21 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioSender = transceiver.sender
             diagBr = 3
             print("[WebRTC] IOS-C4b: mic track attached to native audio transceiver (disabled pending cryptor confirm)")
-            let txTap = NativeAudioPcmTap(sink: txSink)
-            track.add(txTap)
-            audioTxTap = txTap
         }
         // W-PREATTACHMIC — the mic track now pre-exists from `init()` (so
-        // the FIRST SDP round negotiates sendRecv on both roles); its PCM
-        // tap could not be installed there because the tx sink only arrives
-        // here. Install it on first activation. The br=2/3 branches above
-        // set `audioTxTap` themselves, so this is a no-op for them.
-        if audioTxTap == nil, let preTrack = localAudioSrtpTrack {
-            let txTap = NativeAudioPcmTap(sink: txSink)
-            preTrack.add(txTap)
-            audioTxTap = txTap
+        // the FIRST SDP round negotiates sendRecv on both roles); the tap
+        // could not be installed there because the tx sink only arrives
+        // here. Install it on first activation, once a real local track
+        // exists for this call — mechanism is now the factory-level capture
+        // delegate, not a per-track renderer (see `NativeAudioCaptureTap`'s
+        // doc for why `RTCAudioTrack.add(_:)` never worked for the LOCAL
+        // track). `audioProcessingModule` is `nil` only for callers that
+        // bypass `QAudionPeerConnectionFactory.createFactory` (tests) — the
+        // tap is then a documented no-op, not a crash.
+        if audioTxTap == nil, localAudioSrtpTrack != nil, let apm = audioProcessingModule {
+            let tap = NativeAudioCaptureTap(sink: txSink)
+            apm.capturePostProcessingDelegate = tap
+            audioTxTap = tap
         }
         // W-AUDIOSENDPICK — attach to the sender that actually carries the
         // track: after an addTrack promotion that can differ from
@@ -1527,9 +1543,15 @@ public final class QAudionPeerConnection: NSObject {
         nativeVideoCryptor?.dispose()
         nativeVideoCryptor = nil
         // IOS-C4b — same ordering discipline for the audio cryptor. Taps are
-        // plain Swift objects (no native ref beyond the RTCAudioTrack's own
-        // renderer list, which is torn down with the track/PC itself) —
-        // dropping the strong references here is enough.
+        // plain Swift objects with no native ref of their own: `audioRxTap`
+        // holds a reference into the RTCAudioTrack's renderer list (torn
+        // down with the track/PC itself), and `audioTxTap` is held only by
+        // `capturePostProcessingDelegate` — a WEAK property on the per-call
+        // `RTCDefaultAudioProcessingModule` — so dropping the strong
+        // reference here is enough either way; nothing needs an explicit
+        // `capturePostProcessingDelegate = nil` because ARC clears the weak
+        // slot synchronously the moment `audioTxTap = nil` below drops the
+        // last strong owner.
         nativeAudioCryptor?.dispose()
         nativeAudioCryptor = nil
         audioRxTap = nil

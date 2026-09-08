@@ -1295,7 +1295,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard !intentionalShutdown else {
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
-        let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
+        let (factory, audioProcessingModule) = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
             // W539 — surface either SFrame or LiveKit sealer to the codec
             // decorator. The LiveKit path is the cross-platform default
             // (Desktop / Android emit this wire format); SFrame is kept
@@ -1308,6 +1308,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         })
         let pc = QAudionPeerConnection(
             factory: factory,
+            audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
@@ -1442,7 +1443,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard !intentionalShutdown else {
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
-        let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
+        let (factory, audioProcessingModule) = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
             // W539 — surface either SFrame or LiveKit sealer to the codec
             // decorator. The LiveKit path is the cross-platform default
             // (Desktop / Android emit this wire format); SFrame is kept
@@ -1455,6 +1456,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         })
         let pc = QAudionPeerConnection(
             factory: factory,
+            audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
@@ -1582,7 +1584,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard !intentionalShutdown else {
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
-        let factory = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
+        let (factory, audioProcessingModule) = QAudionPeerConnectionFactory.shared.createFactory(sealerProvider: { [weak self] in
             switch self?.videoSealer {
             case .sframe(let s):  return .sframe(s)
             case .livekit(let c): return .livekit(c)
@@ -1591,6 +1593,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         })
         let pc = QAudionPeerConnection(
             factory: factory,
+            audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self)
