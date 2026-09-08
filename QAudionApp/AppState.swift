@@ -21966,12 +21966,18 @@ extension AppState {
             guard let self = self else { return }
             if hasVideo {
                 self.isVideoCall = true
-                // Start the callee's WS video pipeline so that inbound
-                // video_frame envelopes are decoded + displayed and
-                // outbound frames from the camera are shipped to the peer.
-                // Mirrors the startVideoPipeline call on the caller side
-                // in startCall so both peers have symmetric transport.
-                await self.startVideoPipeline(for: cid)
+                // W-CAMARMEARLY fix (2026-09-08): do NOT start the video
+                // pipeline here — this closure runs at OFFER-RECEIPT time,
+                // before the user has answered. That's what armed the
+                // camera for a call nobody had accepted yet. The pipeline
+                // now starts from `performAcceptIncoming`, gated on the
+                // user's accept-with/without-video choice (see
+                // `evaluateVideoAnswerCaptureMode`). `useExternalVideoSource`
+                // stays set unconditionally above: it only makes
+                // `startCameraCapture` build an inert `WebRTCPixelBufferCapturer`
+                // placeholder (no AVCaptureSession touch — see that
+                // method's kdoc), so the SDP's m=video section still
+                // negotiates correctly regardless of what's chosen later.
             }
             do {
                 try await controller.acceptIncomingCall(callerId: cid,
