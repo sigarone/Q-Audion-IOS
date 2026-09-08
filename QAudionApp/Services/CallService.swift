@@ -3129,7 +3129,18 @@ final class CallService: @unchecked Sendable {
             // the real redact_body), not just scrub the offending part
             // — better a bare positive/negative signal that reliably
             // ships than a detailed one that silently doesn't.
-            RTLog.warn("call", "audioIO capfail=1")
+            //
+            // W-CAPFAILCODE (2026-09-08) — `capfail=1` alone was a dead
+            // end: live-reported recurring "one-way audio, nothing heard"
+            // traced to this exact catch firing, but with no error code
+            // shipped there was no way to tell WHICH of `configureForVoIP`
+            // / `enableVoiceProcessing` / `engine.start()` threw, or why.
+            // `code` is a plain Int (NSError.code — an AVAudioSession/
+            // CoreAudio OSStatus for the errors this throw site actually
+            // sees), so it survives the redactor same as every other
+            // numeric field on this line.
+            let nsError = error as NSError
+            RTLog.warn("call", "audioIO capfail=1 code=\(nsError.code)")
         }
     }
 

@@ -490,13 +490,34 @@ struct LiveInCallScreen: View {
     }
 
     private func handleConfirmSas() {
+        // W-SASNOFEEDBACK (2026-09-08) — live-reported: tapping the confirm
+        // button does nothing visible (no D11-style "SAS verificato" text,
+        // shield stays whatever color it was). D11 (2026-09-07) fixed ONE way
+        // this guard could silently no-op (wrong pinned-account lookup) but
+        // every branch below still returns with zero signal on failure — the
+        // tap either worked invisibly-but-correctly (liveSasVerified recomputes
+        // every TimelineView tick, so a genuine success should repaint within
+        // ~1s) or one of these three preconditions failed, and there was no
+        // way to tell which from a remote log pull. Numeric-only markers
+        // (matches the redactor's numeric-survives rule) so the next repro is
+        // conclusive instead of another dead end.
         let words = appState.callSasWords
-        guard !words.isEmpty,
-              let peer = appState.callContactId,
-              let identityTag = sasIdentityTag(for: peer) else { return }
+        guard !words.isEmpty else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=1")  // 1 = no SAS words yet
+            return
+        }
+        guard let peer = appState.callContactId else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=2")  // 2 = no call peer
+            return
+        }
+        guard let identityTag = sasIdentityTag(for: peer) else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=3")  // 3 = no pinned identity tag
+            return
+        }
         let fp = SasVerificationStore.fingerprint(forWords: words)
         SasVerificationStore.shared.recordVerified(
             peerUserId: peer, fingerprint: fp, identityTag: identityTag)
+        RTLog.info("call", "sasConfirm ok=1")
         // P0-3 — release whatever media (relay sealers / v4 bootstrap) AppState
         // held back for this call's unverified handshake identity, if any was.
         // No-op when the gate was never engaged (the common case).
