@@ -1126,17 +1126,63 @@ had just turned off, with no consent dialog and no notice — reported live as
 "peer's camera off/on causes my camera to activate without consent."
 
 Distinct from — and layered under — §8.9's beacon and §8.1's `media` gate:
-neither of those carries this distinction on the wire (there is no separate
-"resume" vs. "first upgrade" message type; the split is entirely receiver-
-local state), so every client's OWN re-offer handler is where this must be
-enforced, not the protocol.
+as of this subsection's writing there was no separate "resume" vs. "first
+upgrade" message type on the wire, and the split was entirely receiver-local
+state, so every client's OWN re-offer handler is where this had to be
+enforced, not the protocol. §8.11 below changes that premise for Android's
+SENDER side specifically — read it before assuming every resume is
+wire-visible.
+
+### 8.11 Sender-side resume shortcut (W-VIDRESUMEFAST, Android, v1.3, 2026-09-08)
+
+§8.10 is about a RESPONDER deciding whether to open its own camera on an
+incoming re-offer. This subsection is the mirror case: a REQUESTER (the side
+whose own camera is coming back on) deciding whether it needs to send a
+`call_upgrade_request` at all.
+
+`downgradeToAudio` never renegotiates — it only nulls the local sender's
+track (`RTCRtpSender.setTrack(null)`/equivalent); the video transceiver stays
+negotiated `sendrecv` on the same mid for the rest of the call. A later
+resume can therefore bind a fresh track onto that SAME sender with a bare
+setTrack and let RTP simply start flowing again — no new SDP needed, since
+nothing about the m-line changed. Android's `upgradeToVideo` takes exactly
+this shortcut once its own video has completed one full offer/answer this
+video session (tracked locally, e.g. Android's
+`localVideoTransceiverNegotiated`): **it sends NO `call_upgrade_request` at
+all for that resume.** The peer's `call_video_state` beacon receipt (§8.9,
+already required either way) is what tells it our camera is on again.
+
+This corrects §8.10's closing paragraph above: for Android specifically,
+"resume" now IS wire-distinguishable from "first upgrade" — a resume is the
+ABSENCE of a `call_upgrade_request` where a beacon alone flips
+`sending: true`. **NORMATIVE consequence for every peer:** do not build logic
+that assumes a `call_upgrade_request`/response pair is the only way a video
+lane starts flowing again mid-call — the §8.9 beacon must be treated as
+sufficient on its own to learn that a peer's camera resumed. This is
+Android-only today (an efficiency optimization, not a privacy or consent
+mechanism — §8.10's camera-authority rule is unaffected and still applies in
+full on whichever side answers the FIRST upgrade of a video session); Desktop
+does not need it (its camera mute keeps the sender attached throughout, so it
+never re-renegotiates a resume in the first place) and iOS has not been
+evaluated. A platform MAY adopt the same shortcut under the same precondition
+(this exact side's own video already completed one full offer/answer THIS
+video session, tracked independently of §8.9/§8.10's session-consent latch —
+see the false-positive risk called out in the Android reference
+implementation's kdoc, where session consent alone is NOT sufficient because
+a responder can gain consent without ever completing its own send-side
+negotiation) — it is not required to.
 
 ---
 
 Last reviewed: 2026-09-08 (§8.1 `call_video_pause_request` added to the
 message inventory — v1.3, shipped as Android wire message before this doc
 caught up; §8.10 added — session consent vs. local camera authority,
-NORMATIVE, closes the Android/Desktop W-CAMREVIVE-parity gap). Prior review
+NORMATIVE, closes the Android/Desktop W-CAMREVIVE-parity gap; §8.11 added —
+sender-side resume shortcut, Android-only today, corrects §8.10's original
+"no resume-vs-first-upgrade wire distinction" claim which W-VIDRESUMEFAST
+made false for Android specifically, and gives every peer the NORMATIVE
+consequence: a lone §8.9 beacon, with no `call_upgrade_request`, is a valid
+way to learn a peer's video resumed). Prior review
 2026-07-24 (§8.9 video-state beacon; §3.5/§3.6 de-collided —
 the four repo copies had drifted so that `### 3.5` meant "call acceptance
 gate" in the server copy and "base WebRTC SDP exchange" in the Desktop copy,
