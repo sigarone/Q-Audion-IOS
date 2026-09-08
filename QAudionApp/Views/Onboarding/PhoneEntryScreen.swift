@@ -53,7 +53,7 @@ struct PhoneEntryScreen: View {
     // in body per SWIFT6_PATTERNS.md §1.
     private static let attemptFormatter: DateFormatter = {
         let df = DateFormatter()
-        df.locale = Locale(identifier: "it_IT")
+        df.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         df.dateFormat = "HH:mm:ss"
         return df
     }()

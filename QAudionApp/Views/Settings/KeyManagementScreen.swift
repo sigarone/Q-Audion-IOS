@@ -79,7 +79,7 @@ struct KeyManagementScreen: View {
                     VStack(spacing: 8) {
                         if let last = coordinator.lastRotationDate {
                             kvRow(label: "Ultima rotazione",
-                                  value: last.formatted(.relative(presentation: .named)),
+                                  value: last.formatted(.relative(presentation: .named).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))),
                                   mono: false)
                         }
                         rotateButton

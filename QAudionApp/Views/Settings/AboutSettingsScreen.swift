@@ -601,7 +601,7 @@ struct AboutSettingsScreen: View {
         let bytes: UInt64 = ProcessInfo.processInfo.physicalMemory
         let gb: Double = Double(bytes) / (1024.0 * 1024.0 * 1024.0)
         let nf = NumberFormatter()
-        nf.locale = Locale(identifier: "it_IT")
+        nf.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         nf.minimumFractionDigits = 2
         nf.maximumFractionDigits = 2
         let formatted: String = nf.string(from: NSNumber(value: gb)) ?? "?"
@@ -814,7 +814,7 @@ struct AboutSettingsScreen: View {
         // locale-shenanigans of String(format:) which uses the user's
         // active locale (could be en_US in some sims).
         let nf = NumberFormatter()
-        nf.locale = Locale(identifier: "it_IT")
+        nf.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         nf.minimumFractionDigits = 1
         nf.maximumFractionDigits = 1
         let formatted: String = nf.string(from: NSNumber(value: mb)) ?? "?"
@@ -852,7 +852,8 @@ struct AboutSettingsScreen: View {
     /// W162: stamp the first-launch timestamp for THIS build number
     /// (so Settings can show "Build installato 3 giorni fa"). Keyed
     /// by `qaudion.buildSeen.<n>` so each build gets its own stamp.
-    /// Format: relative time-ago in Italian.
+    /// Format: relative time-ago, localized via String(localized:)
+    /// (W-L10N-BATCH1).
     private static func buildInstalledLabel(buildNumber: String) -> String {
         let key = "qaudion.buildSeen." + buildNumber
         let store = UserDefaults.standard
@@ -865,22 +866,33 @@ struct AboutSettingsScreen: View {
             return now
         }()
         let elapsed = Date().timeIntervalSince(date)
-        if elapsed < 60 { return "ora" }
+        if elapsed < 60 {
+            return String(localized: "about_settings.build_installed.now", defaultValue: "ora", comment: "About screen, 'Build installato' row — less than a minute ago")
+        }
         if elapsed < 3600 {
             let m = Int(elapsed / 60)
-            return m == 1 ? "1 minuto fa" : "\(m) minuti fa"
+            if m == 1 {
+                return String(localized: "about_settings.build_installed.one_minute_ago", defaultValue: "1 minuto fa", comment: "About screen, 'Build installato' row — exactly 1 minute ago")
+            }
+            return String(localized: "about_settings.build_installed.minutes_ago", defaultValue: "\(m) minuti fa", comment: "About screen, 'Build installato' row — N minutes ago")
         }
         if elapsed < 86400 {
             let h = Int(elapsed / 3600)
-            return h == 1 ? "1 ora fa" : "\(h) ore fa"
+            if h == 1 {
+                return String(localized: "about_settings.build_installed.one_hour_ago", defaultValue: "1 ora fa", comment: "About screen, 'Build installato' row — exactly 1 hour ago")
+            }
+            return String(localized: "about_settings.build_installed.hours_ago", defaultValue: "\(h) ore fa", comment: "About screen, 'Build installato' row — N hours ago")
         }
         let d = Int(elapsed / 86400)
-        return d == 1 ? "1 giorno fa" : "\(d) giorni fa"
+        if d == 1 {
+            return String(localized: "about_settings.build_installed.one_day_ago", defaultValue: "1 giorno fa", comment: "About screen, 'Build installato' row — exactly 1 day ago")
+        }
+        return String(localized: "about_settings.build_installed.days_ago", defaultValue: "\(d) giorni fa", comment: "About screen, 'Build installato' row — N days ago")
     }
 
     private static let aboutDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         f.timeStyle = .none
         return f
@@ -995,7 +1007,7 @@ struct AboutSettingsScreen: View {
             }
 
             if let last = updateChecker.lastChecked {
-                Text("Ultimo controllo \(last.formatted(.relative(presentation: .named)))")
+                Text("Ultimo controllo \(last.formatted(.relative(presentation: .named).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))))")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }

@@ -170,7 +170,7 @@ struct BackupSettingsScreen: View {
     private var lastBackupText: String {
         guard let date = container.viewModel.lastBackupAt else { return "Mai" }
         let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "it_IT")
+        formatter.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }

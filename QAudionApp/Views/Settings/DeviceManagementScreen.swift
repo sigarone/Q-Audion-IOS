@@ -97,7 +97,7 @@ public struct EnhancedDeviceItem: Identifiable, Equatable {
 
     private static func formatLastSeen(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .abbreviated
         return f.localizedString(for: date, relativeTo: Date())
     }
@@ -391,7 +391,7 @@ struct DeviceManagementScreen: View {
     /// the call site stays trivial — CLAUDE.md §13.
     private static func lastRefreshLabel(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
         return "Aggiornato " + rel

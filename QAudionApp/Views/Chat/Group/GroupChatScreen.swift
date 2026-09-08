@@ -611,6 +611,7 @@ struct GroupChatScreen: View {
     private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 

@@ -11,6 +11,25 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false
+    /// W-L10N-BATCH2 (2026-09-08) — explicit per-tab navigation path, reset
+    /// to root on a language change (see `.onChange(of: locale)` below).
+    /// TabView keeps every tab's UIHostingController alive off-screen, so a
+    /// screen sitting BELOW a push (e.g. SettingsScreen while
+    /// LanguageSettingsScreen is showing — exactly where the user is
+    /// standing when they pick a language) never gets a fresh render pass
+    /// and stays on the old language until they navigate back to it
+    /// manually or the app is relaunched — confirmed by a dedicated audit
+    /// after real device testing. Popping to root the moment the language
+    /// changes puts the just-updated root screen back in front immediately,
+    /// where normal SwiftUI environment propagation already re-renders it
+    /// correctly (the other 3 tabs self-heal on their own the next time the
+    /// user switches to them — verified by the same audit, no extra fix
+    /// needed there).
+    @Environment(\.locale) private var locale
+    @State private var chatsPath = NavigationPath()
+    @State private var contactsPath = NavigationPath()
+    @State private var callsPath = NavigationPath()
+    @State private var settingsPath = NavigationPath()
     /// W55: visibility del sidebar su iPad. Default `.all` mantiene la
     /// sidebar aperta di default su iPad — lo spazio disponibile la rende
     /// utile per accedere rapidamente a chat, chiamate e impostazioni.
@@ -25,7 +44,12 @@ struct HomeView: View {
 
         var id: Self { self }
 
-        var label: String {
+        // W-L10N-BATCH2 (2026-09-08) — was String: Label(tab.label, ...)/
+        // Text(tab.label) always resolved the verbatim StringProtocol
+        // overload, so the tab bar's 4 words never localized, in any
+        // language, ever. Every branch is a literal so this compiles
+        // unchanged at every call site.
+        var label: LocalizedStringKey {
             switch self {
             case .chats:    return "Chat"
             case .contacts: return "Contatti"
@@ -60,6 +84,18 @@ struct HomeView: View {
         // il default UIKit (grigio iOS) per leggibilità. Si applica
         // anche al sidebar selection highlight su iPad.
         .tint(scheme.primary)
+        // W-L10N-BATCH2 (2026-09-08) — see the path @State declarations'
+        // own doc above: pop every tab back to root the instant the
+        // in-app language changes, so whatever screen was covered by a
+        // push (almost always Settings, covered by the Lingua screen
+        // itself) gets a real render pass immediately instead of staying
+        // stale until the user navigates back to it manually.
+        .onChange(of: locale) { _ in
+            chatsPath = NavigationPath()
+            contactsPath = NavigationPath()
+            callsPath = NavigationPath()
+            settingsPath = NavigationPath()
+        }
         .overlay(alignment: .top) {
             // W-1TO1RING (2026-07-27) — the thin incomingCallBanner is retired:
             // ContentView's fullScreenCover now shows the full IncomingCallScreen
@@ -306,7 +342,7 @@ struct HomeView: View {
         // Data layer (`ConversationListContainer`) is unchanged: only the
         // presentation layer flipped, so the existing chat / search /
         // pin / delete / new-conversation flows keep working.
-        NavigationStack {
+        NavigationStack(path: $chatsPath) {
             ChatListScreen()
         }
     }
@@ -319,7 +355,7 @@ struct HomeView: View {
         // / MetadataCard / SecurityLog. Il legacy `ContactsListView`
         // resta ancora montato per i flow di scan/import (sheets) finché
         // non li portiamo alla nuova UI.
-        NavigationStack {
+        NavigationStack(path: $contactsPath) {
             ContactsScreen()
         }
     }
@@ -330,7 +366,7 @@ struct HomeView: View {
     /// audio/video CTAs). Il legacy `CallsTabView` resta come private
     /// struct nel file ma non è più routed.
     private var callsTab: some View {
-        NavigationStack {
+        NavigationStack(path: $callsPath) {
             CallHistoryView()
         }
     }
@@ -356,7 +392,7 @@ struct HomeView: View {
     /// pattern: NavigationStack { SettingsScreen() } — the only difference
     /// is the outer container (TabView vs NavigationSplitView.detail).
     private var settingsTab: some View {
-        NavigationStack {
+        NavigationStack(path: $settingsPath) {
             SettingsScreen()
         }
     }

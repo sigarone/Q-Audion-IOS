@@ -296,10 +296,19 @@ struct ChatListScreen: View {
     /// dependency aggiuntive solo per questa label.
     private nonisolated func formatRelative(_ date: Date) -> String {
         let delta = Int(Date().timeIntervalSince(date))
-        if delta < 60 { return "ora" }
-        if delta < 3600 { return "\(delta / 60) min fa" }
-        if delta < 86400 { return "\(delta / 3600) h fa" }
-        return "\(delta / 86400) g fa"
+        if delta < 60 {
+            return String(localized: "chat_list.relative.now", defaultValue: "ora", comment: "Admin security banner — the alert was reported less than a minute ago")
+        }
+        if delta < 3600 {
+            let minutes = delta / 60
+            return String(localized: "chat_list.relative.minutes_ago", defaultValue: "\(minutes) min fa", comment: "Admin security banner — the alert was reported N minutes ago")
+        }
+        if delta < 86400 {
+            let hours = delta / 3600
+            return String(localized: "chat_list.relative.hours_ago", defaultValue: "\(hours) h fa", comment: "Admin security banner — the alert was reported N hours ago")
+        }
+        let days = delta / 86400
+        return String(localized: "chat_list.relative.days_ago", defaultValue: "\(days) g fa", comment: "Admin security banner — the alert was reported N days ago")
     }
 
     var body: some View {
@@ -1200,12 +1209,13 @@ struct ChatListScreen: View {
     private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
     private static let timeFormatterEEE: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "EEE"
         return f
     }()
@@ -1213,12 +1223,14 @@ struct ChatListScreen: View {
     private static let timeFormatterDDMM: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "dd/MM"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
     private static let timeFormatterDDMMYY: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "dd/MM/yy"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
@@ -1234,13 +1246,13 @@ struct ChatListScreen: View {
         let now = Date()
         let elapsed = now.timeIntervalSince(date)
         if elapsed < 60, elapsed >= 0 {
-            return "ora"
+            return String(localized: "chat_list.time.now", defaultValue: "ora", comment: "Chat list row timestamp — the last message was sent less than a minute ago")
         }
         if cal.isDateInToday(date) {
             return Self.timeFormatterHHmm.string(from: date)
         }
         if cal.isDateInYesterday(date) {
-            return "ieri"
+            return String(localized: "chat_list.time.yesterday", defaultValue: "ieri", comment: "Chat list row timestamp — the last message was sent yesterday")
         }
         if let days = cal.dateComponents([.day], from: date, to: now).day,
            days < 7 {

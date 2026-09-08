@@ -515,12 +515,13 @@ struct GroupInfoScreen: View {
 
     // MARK: - Helpers
 
-    /// W321: builds "Aggiornato …" relative-time string with locale
-    /// it_IT. Static so its String formatting lives outside any
-    /// @ViewBuilder closure (SWIFT6_PATTERNS rule 1).
+    /// W321: builds "Aggiornato …" relative-time string with the
+    /// in-app language override locale (AppLanguageManager). Static
+    /// so its String formatting lives outside any @ViewBuilder
+    /// closure (SWIFT6_PATTERNS rule 1).
     private static func formatLastRefreshed(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
         return "Aggiornato " + rel

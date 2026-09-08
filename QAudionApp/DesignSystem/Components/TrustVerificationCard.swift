@@ -374,7 +374,7 @@ public struct TrustVerificationCard: View {
 
     private static let verificationDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         f.timeStyle = .short
         return f

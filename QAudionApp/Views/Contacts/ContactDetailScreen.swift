@@ -703,7 +703,7 @@ struct ContactDetailScreen: View {
 
     private static let voiceVerifiedDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         return f
     }()
@@ -765,14 +765,17 @@ struct ContactDetailScreen: View {
         }
     }
 
-    // Device-locale, no override — matches presenceAuthSummary's original
-    // behavior exactly. Kept separate from lastVerificationDateFormatter
-    // below (it_IT forced) — an earlier extraction merged the two into one
-    // formatter and silently switched this call site to it_IT regardless of
-    // device locale; two distinct call sites with two distinct locale
-    // requirements need two distinct static formatters, not one shared.
+    // In-app language override (AppLanguageManager.effectiveLanguageCode) —
+    // was previously device-locale-only, no override, to match
+    // presenceAuthSummary's original behavior exactly; now aligned with the
+    // rest of the app's formatters (see W-L10N-FORMATTERS). Kept as its own
+    // static formatter, separate from lastVerificationDateFormatter below —
+    // an earlier extraction merged the two into one formatter and silently
+    // switched this call site to it_IT regardless of locale; two distinct
+    // call sites still get two distinct static formatters, not one shared.
     private static let presenceAuthDateFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         return f
     }()
@@ -847,12 +850,11 @@ struct ContactDetailScreen: View {
         }
     }
 
-    // it_IT forced — matches lastVerificationLabel's original behavior
-    // exactly. See presenceAuthDateFormatter above for why this stays a
-    // separate formatter instead of a shared one.
+    // In-app language override (was it_IT forced). See presenceAuthDateFormatter
+    // above for why this stays a separate formatter instead of a shared one.
     private static let lastVerificationDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         return f
     }()
@@ -931,7 +933,7 @@ struct ContactDetailScreen: View {
 
     private static let eventDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         f.timeStyle = .short
         return f

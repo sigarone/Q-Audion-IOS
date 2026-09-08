@@ -231,7 +231,7 @@ struct TransportSettingsScreen: View {
                               mono: true)
                         if let lastChecked = container.diagnostics.lastChecked {
                             kvRow(label: "Ultimo controllo",
-                                  value: lastChecked.formatted(date: .omitted, time: .standard),
+                                  value: lastChecked.formatted(Date.FormatStyle(date: .omitted, time: .standard).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))),
                                   mono: true)
                         }
                         if let errMsg = container.diagnostics.errorMessage {

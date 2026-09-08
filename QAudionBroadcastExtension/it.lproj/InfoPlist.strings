@@ -1,0 +1,11 @@
+/* W-L10N-BATCH2 (2026-09-08) — the ReplayKit system broadcast picker
+   (RPSystemBroadcastPickerView, shown when starting screen share during a
+   group call) reads CFBundleDisplayName straight from THIS extension
+   bundle's own Info.plist/InfoPlist.strings — it is the OS itself doing
+   the rendering, not this app's process, so this follows the DEVICE's
+   system language (or iOS's own per-app-language Settings picker), never
+   the in-app AppLanguageManager override, which is process-local to the
+   main app and cannot reach here. Real per-language names are still worth
+   having: same rationale as it.lproj/AppIntentVocabulary.plist elsewhere
+   in this repo. */
+"CFBundleDisplayName" = "Condivisione schermo Q-Audion";

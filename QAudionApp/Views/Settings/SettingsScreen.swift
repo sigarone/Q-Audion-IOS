@@ -357,7 +357,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "person",
                             iconColor: scheme.primary,
                             title: "Profilo",
-                            subtitle: profileDisplayName)
+                            subtitle: LocalizedStringKey(profileDisplayName))
             }
             .buttonStyle(.plain)
 
@@ -560,7 +560,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "globe",
                             iconColor: scheme.primary,
                             title: "Lingua",
-                            subtitle: currentLanguageNativeName)
+                            subtitle: LocalizedStringKey(currentLanguageNativeName))
             }
             .buttonStyle(.plain)
 
@@ -695,7 +695,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "tray.2.fill",
                             iconColor: .orange,
                             title: "Svuota cache allegati",
-                            subtitle: cacheUsageSubtitle)
+                            subtitle: LocalizedStringKey(cacheUsageSubtitle))
             }
             .buttonStyle(.plain)
             // W460: unique id per sibling view — sharing the same id value
@@ -735,7 +735,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "doc.text.below.ecg",
                             iconColor: .orange,
                             title: "Cancella abbozzi",
-                            subtitle: Self.draftsSubtitle())
+                            subtitle: LocalizedStringKey(Self.draftsSubtitle()))
             }
             .buttonStyle(.plain)
             .id("drafts-row-\(cacheUsageRefreshTrigger)")
@@ -790,7 +790,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "eye.slash.fill",
                             iconColor: .orange,
                             title: "Cancella timestamp ultimo accesso",
-                            subtitle: Self.lastSeenSubtitle())
+                            subtitle: LocalizedStringKey(Self.lastSeenSubtitle()))
             }
             .buttonStyle(.plain)
             .id("lastseen-row-\(cacheUsageRefreshTrigger)")

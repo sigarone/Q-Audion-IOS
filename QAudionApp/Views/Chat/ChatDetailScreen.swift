@@ -1636,6 +1636,7 @@ struct ChatDetailScreen: View {
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 

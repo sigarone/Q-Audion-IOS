@@ -23,6 +23,7 @@ struct CrossPlatformBetaScreen: View {
     private static let betaTimeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 

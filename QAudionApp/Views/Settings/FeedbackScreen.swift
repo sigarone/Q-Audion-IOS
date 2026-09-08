@@ -321,7 +321,7 @@ struct FeedbackSettingsLink: View {
                 SettingsRow(icon: "bubble.left.and.bubble.right.fill",
                             iconColor: .blue,
                             title: "Feedback",
-                            subtitle: subtitle)
+                            subtitle: LocalizedStringKey(subtitle))
                 if n > 0 {
                     Circle()
                         .fill(Color.red)

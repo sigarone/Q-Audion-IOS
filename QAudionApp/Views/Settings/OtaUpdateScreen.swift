@@ -600,7 +600,7 @@ struct OtaUpdateScreen: View {
 
     private static let otaDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "d MMM"
         return f
     }()
@@ -613,7 +613,7 @@ struct OtaUpdateScreen: View {
     /// the call-site stays trivial — CLAUDE.md §13.
     private static func lastCheckedLabel(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
         return "Ultimo controllo " + rel

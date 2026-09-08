@@ -327,7 +327,7 @@ struct MyPhonesScreen: View {
     /// the call site closure remains trivial.
     private static func lastSavedLabel(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
         return "Aggiornato " + rel

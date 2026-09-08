@@ -169,7 +169,7 @@ final class DiagnosticsExportContainer: ObservableObject {
 
     private static let nowFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
         return f
     }()

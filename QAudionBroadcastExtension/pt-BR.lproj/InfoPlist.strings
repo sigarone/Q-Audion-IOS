@@ -1,0 +1,4 @@
+/* W-L10N-BATCH2 (2026-09-08) — see it.lproj/InfoPlist.strings for the
+   full rationale (this follows the device/OS language, not the in-app
+   override). */
+"CFBundleDisplayName" = "Compartilhamento de tela Q-Audion";

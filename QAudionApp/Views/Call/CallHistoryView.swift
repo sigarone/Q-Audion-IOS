@@ -676,28 +676,28 @@ private struct CallHistoryRow: View {
         if let dur = entry.durationSeconds {
             parts.append(String(format: "%d:%02d", dur / 60, dur % 60))
         } else if entry.direction == .missed {
-            parts.append("persa")
+            parts.append(String(localized: "call_history.missed", defaultValue: "persa", comment: "Call history row subtitle — appended when a call was missed and has no duration to show"))
         }
         return parts.joined(separator: " · ")
     }
 
     private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "HH:mm"
         return f
     }()
 
     private static let timeFormatterEEEHHmm: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "EEE HH:mm"
         return f
     }()
 
     private static let timeFormatterDDMMHHmm: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "dd/MM HH:mm"
         return f
     }()
@@ -707,7 +707,7 @@ private struct CallHistoryRow: View {
         if cal.isDateInToday(entry.startedAt) {
             return Self.timeFormatterHHmm.string(from: entry.startedAt)
         } else if cal.isDateInYesterday(entry.startedAt) {
-            return "Ieri"
+            return String(localized: "call_history.yesterday", defaultValue: "Ieri", comment: "Call history row subtitle — call happened yesterday")
         } else if let days = cal.dateComponents([.day], from: entry.startedAt, to: Date()).day,
                   days < 7 {
             return Self.timeFormatterEEEHHmm.string(from: entry.startedAt)
