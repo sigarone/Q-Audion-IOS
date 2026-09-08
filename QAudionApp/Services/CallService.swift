@@ -1718,6 +1718,12 @@ final class CallService: @unchecked Sendable {
         // answer handler, so the call is answered by definition. Unblock the
         // pre-answer mic gate before the (possibly deferred) engine start.
         peerAnswered = true
+        // W-MICBEFOREACCEPT-NATIVE (2026-09-08) — this gate only ever
+        // covered the legacy DataChannel/WS-relay mic. The native
+        // audio-srtp track (activated at ring time, see
+        // QAudionPeerConnection.pendingAudioSrtpMuted's kdoc) has its own,
+        // separate mute latch and needs its own explicit unblock here.
+        muteNativeAudioSrtpSender?(false)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
@@ -3323,6 +3329,12 @@ final class CallService: @unchecked Sendable {
     /// `handleAudioSessionActivated()` will complete the start once it fires.
     public func handleCallAnswered() {
         peerAnswered = true
+        // W-MICBEFOREACCEPT-NATIVE (2026-09-08) — see the matching comment
+        // in `activateIncomingCallAudio`: this is the caller-side half of
+        // the same native audio-srtp unmute, gated on the SAME genuine
+        // accept as the legacy mic (this method's only call site is
+        // `finalizeCallActive()`).
+        muteNativeAudioSrtpSender?(false)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // W574b — post-answer W469 fallback. The 1.5s timer in startCall

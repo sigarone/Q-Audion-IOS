@@ -202,7 +202,21 @@ public final class QAudionPeerConnection: NSObject {
     /// Mute state requested BEFORE the real mic track exists (mirrors
     /// Android's `pendingAudioSrtpMuted`) — latched here and applied the
     /// moment `activateNativeAudioSrtp` creates the track.
-    private var pendingAudioSrtpMuted: Bool = false
+    ///
+    /// W-MICBEFOREACCEPT-NATIVE (2026-09-08, live evidence calls 58af7891 /
+    /// a683e3cb) — defaults to `true` (muted). Unlike Android/Desktop, iOS
+    /// builds the WebRTC controller and activates native audio-srtp at RING
+    /// TIME on both roles (W-DCSTUCK, load-bearing, not being removed) —
+    /// `activateNativeAudioSrtp` was measured completing (cryptor attached,
+    /// track enabled) well under a second after the OFFER, on BOTH the
+    /// caller and the callee, before either side's human had touched the
+    /// screen: real, unmuted, bidirectional voice audible on both phones
+    /// during ringing. `setNativeAudioSrtpMuted(false)` is now called
+    /// explicitly at the same two genuine-accept points that already gate
+    /// the legacy DataChannel mic (`CallService.handleCallAnswered()` for
+    /// the caller, `CallService.activateIncomingCallAudio()` for the
+    /// callee) — see [[project_ios_native_mic_before_accept_2026_09_08]].
+    private var pendingAudioSrtpMuted: Bool = true
     /// True once the receiver-side branch of `didAdd rtpReceiver` has kept
     /// the inbound SRTP audio track enabled (peer negotiated the tag) —
     /// read by ``setMicrophoneMuted(_:)`` and the fallback machinery.
