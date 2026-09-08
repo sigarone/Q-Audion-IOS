@@ -4,6 +4,16 @@ appId: com.qaudion.app
 # without crashing (SplashScreen -> OnboardingRoot.welcome, ContentView.swift
 # mainStack, no authenticated session on a fresh simulator install).
 - launchApp
+# W-L10N-BATCH1 (2026-09-08) -- since the 2026-09-06 CarPlay/Siri work
+# (commit 40750ba9b), AppState.initialize() calls
+# INPreferences.requestSiriAuthorization on first launch, which the OS
+# answers with its own system permission dialog ("Vuoi utilizzare
+# Q-Audion con Siri?") covering the welcome screen. `optional: true`
+# since the OS only asks once per install -- a re-run against a
+# still-installed app (state not reset) never shows it again.
+- tapOn:
+    text: "Non consentire"
+    optional: true
 - assertVisible: "Benvenuto a Q-Audion."
 - assertVisible: "Hybrid PQC · Voice-first · Deepfake Guard"
 - takeScreenshot: onboarding-welcome
