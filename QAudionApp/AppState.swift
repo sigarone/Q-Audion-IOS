@@ -405,6 +405,13 @@ final class AppState: ObservableObject {
     /// route change (Bluetooth/wired connect or disconnect), not just the
     /// manual speaker toggle. See `updateProximityMonitoring()`.
     private var audioRouteChangeObserver: NSObjectProtocol?
+    /// W-CARPLAYVIDEOFIX (2026-09-08) — the app had ZERO CarPlay telemetry
+    /// anywhere (confirmed: 3-day server corpus + full crash/bug-report
+    /// corpus, zero "carplay" hits) — a head-unit-only incident was
+    /// undiagnosable by construction. This just logs on every route change
+    /// whether the route IS CarPlay right now, independent of Tier B's
+    /// `QAUDION_CARPLAY` flag (see `isCarPlayConnected()`).
+    private var carPlayRouteLogObserver: NSObjectProtocol?
 
     /// W-ORPHANPEER — peers the server has answered a definitive 404 for:
     /// accounts that no longer exist. Hidden from the address book and from
@@ -2752,6 +2759,19 @@ final class AppState: ObservableObject {
                 self?.updateProximityMonitoring()
             }
         }
+        // W-CARPLAYVIDEOFIX — see the property's own doc above: this is the
+        // ONLY CarPlay-state telemetry this app emits. Deliberately a
+        // separate observer from the proximity one above rather than folded
+        // in — same "multiple observers on the same notification are fine"
+        // note that justified the proximity one, and keeping them separate
+        // means this one can be deleted independently if it's ever noisy.
+        carPlayRouteLogObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("[AppState] W-CARPLAYVIDEOFIX route change carplay=\(Self.isCarPlayConnected() ? 1 : 0)")
+        }
         // W-CC: warm the contacts cache immediately so incoming-call and
         // message-receive paths have fresh data without a synchronous disk
         // decode. The notification observer keeps it current across the session.
@@ -3697,7 +3717,10 @@ final class AppState: ObservableObject {
                         fallbackName: payload.callerName
                     )
                 }
-                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId.uuidString.prefix(8))… hasVideo=\(payload.hasVideo) reportedHasVideo=true(forced)"
+                // W-CARPLAYVIDEOFIX — see below: the force is CarPlay-gated now.
+                let pkCarPlay: Bool = Self.isCarPlayConnected()
+                let pkReportedVideo: Bool = pkCarPlay ? payload.hasVideo : true
+                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId.uuidString.prefix(8))… hasVideo=\(payload.hasVideo) reportedHasVideo=\(pkReportedVideo)(forced=\(!pkCarPlay)) carplay=\(pkCarPlay ? 1 : 0)"
                 print(pkDiag)
                 // W-CALLKITVIDEOFORCE (2026-07-27, Pavel) — always report
                 // hasVideo=true to CallKit regardless of the real call type.
@@ -3712,10 +3735,23 @@ final class AppState: ObservableObject {
                 // CallKit itself is told is forced. Deliberate deviation
                 // from Apple's documented hasVideo semantics ("indicates
                 // whether the call includes video"); accepted knowingly.
+                //
+                // W-CARPLAYVIDEOFIX (2026-09-08) — NOT forced when CarPlay is
+                // the current audio route. The whole point of the force is
+                // to trigger iOS's video-call auto-foreground handoff — but
+                // while CarPlay is connected, iOS blocks foregrounding a
+                // non-CarPlay-entitled app for driving-safety reasons, so
+                // the handoff this flag requests can never complete. Forcing
+                // hasVideo=true there told CallKit "hand off to the app" for
+                // a transition the OS itself refuses, which is the leading
+                // hypothesis for a reported CarPlay incoming-call freeze
+                // (no device log line existed to prove it — see chat).
+                // Reporting the REAL call type in that case is always safe:
+                // it just means a plain voice call announces as voice.
                 await self.callKit?.reportIncomingCall(
                     uuid: payload.callId,
                     callerName: display,
-                    hasVideo: true
+                    hasVideo: pkReportedVideo
                 )
                 // CRITICAL: bring the signalling WS up NOW so the buffered
                 // call_offer redelivery + PQC handshake can flow (see
@@ -3744,17 +3780,24 @@ final class AppState: ObservableObject {
                 // multi-segment interpolation inside a closure).
                 let grpUuid: String = String(prepared.uuid.uuidString.prefix(8)) + "…"
                 let grpPresented: String = String(describing: prepared.presented)
-                let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented
+                // W-CARPLAYVIDEOFIX — same CarPlay gate as the 1:1 branch.
+                let grpCarPlay: Bool = Self.isCarPlayConnected()
+                let grpReportedVideo: Bool = grpCarPlay ? payload.hasVideo : true
+                let grpCarPlayFlag: String = grpCarPlay ? "1" : "0"
+                let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented + " carplay=" + grpCarPlayFlag
                 print(grpDiag)
                 // W-CALLKITVIDEOFORCE — same rationale as the 1:1 branch
                 // above: force hasVideo=true so answering a group call at
                 // screen-off auto-dismisses CallKit's native UI into the
                 // app. Real call type (payload.hasVideo) still drives
                 // everything else.
+                //
+                // W-CARPLAYVIDEOFIX (2026-09-08) — not forced on CarPlay,
+                // same reasoning as the 1:1 branch's kdoc above.
                 await self.callKit?.reportIncomingCall(
                     uuid: prepared.uuid,
                     callerName: prepared.display,
-                    hasVideo: true
+                    hasVideo: grpReportedVideo
                 )
                 guard prepared.presented else {
                     // The PushKit contract is satisfied (we reported), but there
@@ -3821,12 +3864,20 @@ final class AppState: ObservableObject {
                 let placeholderUuid = UUID()
                 let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
                 let shash8: String = String(payload.senderHash.prefix(8))
-                let diag: String = "[AppState] TRUST-6 PushKit→opaque call wakeup uuid=\(placeholderUuid8)… shash=\(shash8)…"
+                // W-CARPLAYVIDEOFIX — opaque wakeups carry no real call-type
+                // info by design (TRUST-6), so there is no "real" value to
+                // fall back to on CarPlay — report false (plain voice
+                // announce), the safe default, instead of forcing true into
+                // a foreground handoff CarPlay's driving-mode restriction
+                // would block. See the 1:1 branch's kdoc above for why the
+                // force is CarPlay-gated at all.
+                let opaqueCarPlay: Bool = Self.isCarPlayConnected()
+                let diag: String = "[AppState] TRUST-6 PushKit→opaque call wakeup uuid=\(placeholderUuid8)… shash=\(shash8)… carplay=\(opaqueCarPlay ? 1 : 0)"
                 print(diag)
                 await self.callKit?.reportIncomingCall(
                     uuid: placeholderUuid,
                     callerName: "Q-Audion",
-                    hasVideo: true
+                    hasVideo: !opaqueCarPlay
                 )
                 // CRITICAL (same rationale as the 1:1/group branches above):
                 // bring the signalling WS up NOW — this is the ONLY way the
@@ -5796,7 +5847,8 @@ final class AppState: ObservableObject {
                         UIApplication.shared.applicationState == .active
                     }
                     let wsDiagVideo: Bool = (callType == "video")
-                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground)"
+                    let wsCarPlay: Bool = Self.isCarPlayConnected()
+                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground) carplay=\(wsCarPlay ? 1 : 0)"
                     print(wsDiag)
                     let useCustomUI = CallsGate.callKitFreeMode
                     if !alreadyRegisteredByPushKit {
@@ -5840,10 +5892,13 @@ final class AppState: ObservableObject {
                                 if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                                 self.incomingCallRingVisible = true
                             }
+                            // W-CARPLAYVIDEOFIX (2026-09-08) — not forced on
+                            // CarPlay, same reasoning as the PushKit 1:1
+                            // branch's kdoc (prepareIncomingPushCall above).
                             await ck.reportIncomingCall(
                                 uuid: callUUID,
                                 callerName: resolvedCallerName,
-                                hasVideo: true
+                                hasVideo: wsCarPlay ? wsDiagVideo : true
                             )
                         }
                     }
@@ -13198,6 +13253,25 @@ final class AppState: ObservableObject {
     /// so the nested `MainActor.run` body is a single call (CLAUDE.md §13/§14
     /// type-checker hygiene). Stamps the active-call ids and returns the native
     /// CallKit display name (rubrica-resolved).
+    /// W-CARPLAYVIDEOFIX (2026-09-08) — true when the shared audio route is
+    /// currently CarPlay. Entitlement-free (`AVAudioSession.Port.carAudio` is
+    /// public API — the same signal `AudioCapture`'s route-code beacon
+    /// already uses for mid-call telemetry), so this works even with Tier
+    /// B's `CPTemplateApplicationScene` compiled out (`QAUDION_CARPLAY` off,
+    /// the default — see `CarPlayScene.swift`'s header). Checked BEFORE
+    /// every native CallKit report so the W-CALLKITVIDEOFORCE decision below
+    /// can take CarPlay into account instead of forcing blind.
+    /// `nonisolated` deliberately: `AppState` is `@MainActor`, but every
+    /// call site here runs inside PushKit/WS closures that are themselves
+    /// NOT MainActor-isolated (they hop via `await MainActor.run` only for
+    /// the specific state that needs it) — a plain `AVAudioSession` route
+    /// read is thread-safe Apple API and needs no isolation of its own, so
+    /// this stays callable synchronously from any of them without adding an
+    /// actor hop that isn't otherwise needed.
+    nonisolated private static func isCarPlayConnected() -> Bool {
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .carAudio }
+    }
+
     @MainActor
     private func prepareIncomingPushCall(callId: UUID, callerId: String, hasVideo: Bool, fallbackName: String) -> String {
         activeCallKitId = callId
