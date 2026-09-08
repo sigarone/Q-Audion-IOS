@@ -1387,6 +1387,7 @@ def main():
 
                 blob_ok = True
                 blob_too_old = False
+                blob_retryable_fail = False
                 for sub in _split_request_into_batches(request, args.batch):
                     status, resp_body = post_otlp(args.endpoint, token, sub)
                     http_results.append((path, status))
@@ -1403,12 +1404,20 @@ def main():
                         # doomed POSTs per invocation, forever.
                         if status == 400 and "too far behind" in (resp_body or ""):
                             blob_too_old = True
+                        else:
+                            # A timeout, a 5xx or a dropped connection is
+                            # retryable, and the blob must NOT be marked handled
+                            # or that batch is lost for good. Caught in review:
+                            # deciding "too old" from ANY too-old batch would
+                            # drop the retryable ones alongside it whenever a
+                            # multi-batch blob failed both ways at once.
+                            blob_retryable_fail = True
                         print("  POST %s -> HTTP %s %s"
                               % (path, status, _ascii(snippet[:200])),
                               file=sys.stderr)
                 if blob_ok:
                     record_shipped(state, path, sig, kept)
-                elif blob_too_old:
+                elif blob_too_old and not blob_retryable_fail:
                     # Recorded as handled so it is not retried. `--reset-state`
                     # brings it back if Loki's out-of-order window is ever
                     # widened and the backlog becomes shippable again.
