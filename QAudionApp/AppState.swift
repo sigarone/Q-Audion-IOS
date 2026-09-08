@@ -15870,15 +15870,21 @@ extension AppState {
         // for a call nobody had accepted yet.
         // W-VIDPRIVACY — only honor the latched choice if it was made FOR
         // this exact call. A mismatch (or no latch at all — the CallKit-
-        // native / notification-tap entry points never set one) means the
-        // caller of this function never went through `answerIncomingCall`,
-        // or the latch is a stale leftover from an interrupted prior call;
-        // either way default to full video (the pre-existing safe default).
+        // native / notification-tap entry points never set one, same gap
+        // Android closed for its own quick-answer paths via
+        // W-QUICKANSWERAUDIOONLY) means the caller of this function never
+        // went through the in-app toggle, or the latch is a stale leftover
+        // from an interrupted prior call; either way default to
+        // audio-only for a video call — a deliberate camera activation
+        // must come from an explicit in-app choice, never a bare tap on
+        // the lock-screen/native answer button. Live-reported 2026-09-08:
+        // answering from the native CallKit dialer while backgrounded
+        // always opened full video with no way to decline it first.
         let acceptWithoutVideo: Bool
         if let pending = self.pendingAnswerAudioOnlyCallId, pending.uuid == uuid {
             acceptWithoutVideo = pending.audioOnly
         } else {
-            acceptWithoutVideo = false
+            acceptWithoutVideo = true
         }
         self.pendingAnswerAudioOnlyCallId = nil
         let vidcapMode = evaluateVideoAnswerCaptureMode(hasVideo: self.isVideoCall, acceptWithoutVideo: acceptWithoutVideo)
@@ -15888,6 +15894,33 @@ extension AppState {
             case .none:
                 break
             case .receiveOnly:
+                // W-CAMBTNSRC follow-up (2026-09-08) — `.receiveOnly` means the
+                // LOCAL camera never opens (VideoAnswerCaptureMode's kdoc: only
+                // AVCaptureSession/permission are skipped; the peer's video still
+                // decodes/renders). `localVideoPaused` was left at its call-reset
+                // default `false` on this path, so `localCameraSending`
+                // (`isVideoCall && !localVideoPaused && !captureInterrupted`) read
+                // `true` for a call the user explicitly accepted WITHOUT video —
+                // the in-call camera toggle (VideoCallView/LiveInCallScreen,
+                // W-CAMBTNSRC) rendered ON while the camera was genuinely OFF.
+                // Live-reported symptom: "the video button appears ON, pressing
+                // it does nothing."
+                //
+                // Worse: `acceptPendingIncomingUpgrade`'s W-CAMREVIVE guard (this
+                // file, ~line 6780) reads THIS SAME flag to decide whether a
+                // peer's later `call_upgrade_request` re-offer (e.g. the peer
+                // toggling their own camera off then back on) may silently open
+                // OUR camera. With the flag stuck at `false`, that guard passed
+                // and did exactly that — reproducing the second live report,
+                // "video turns on on BOTH sides without consent." Explicitly
+                // stating the true paused=true here closes both.
+                self.localVideoPaused = true
+                // WIRE_SPEC §8.9 — correct the peer's view of our lane right away
+                // rather than waiting up to one 3s heartbeat: `startVideoBeacon()`
+                // fired its own first announce synchronously off `isInCall` a few
+                // lines above (before this branch ran), so that first beacon could
+                // have already gone out with the stale paused=false.
+                self.announceVideoState(force: false)
                 Task { @MainActor [weak self] in
                     await self?.startVideoPipeline(for: peerId, sourceMode: .external)
                 }
