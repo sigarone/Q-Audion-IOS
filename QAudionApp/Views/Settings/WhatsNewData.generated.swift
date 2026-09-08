@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1108",
+              date: "2026-09-08",
+              title: "v1.0.1108",
+              bullets: [
+                "fix(group): ship group-metadata/avatar diagnostics past the log redactor",
+                "chore(wire-spec): sync §8.11 (sender-side resume shortcut) + §8.10 correction",
+              ]),
         .init(id: "v1.0.1107",
               date: "2026-09-08",
               title: "v1.0.1107",
               bullets: [
+                "chore: regenerate changelog for v1.0.1107",
                 "fix(wire-spec): correct canonical hash to the LF-normalized blob value",
                 "diag(call): numeric error code on audio-capture failure + SAS-confirm no-op reasons",
                 "chore(wire-spec): sync §8.10 (session consent vs local camera authority) + call_video_pause_request",
@@ -164,16 +172,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1089",
                 "fix(net): self-heal the Reality/Xray tunnel once it goes stale (iOS parity)",
-              ]),
-        .init(id: "v1.0.1088",
-              date: "2026-09-05",
-              title: "v1.0.1088",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1088",
-                "fix(audio): stop leaking a running AVAudioEngine into dealloc + close ringtone-player reconnect gap",
-                "fix(test): correct spacing in the scattered-noise AEAD-rekey calibration test",
-                "feat(webrtc): prime local ICE re-gather on the responder's request-first restart path (W-RESPONDERPRIME)",
-                "feat(audio): enable audio-AEAD-failure-burst rekey trigger (W-AUDIOAEADREKEY)",
               ]),
     ]
 }
