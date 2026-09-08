@@ -44,10 +44,12 @@ final class CallSignalingFailurePolicyTests: XCTestCase {
 
     // MARK: - call_ready / call_processing: never retransmitted
 
-    /// `ws.onCallReady` on the caller sets `callState = .ringing` without
-    /// checking the current state — a late resend would knock an active call
-    /// back to "ringing". This must hold regardless of the accepted switch,
-    /// so a future "make it symmetric" edit fails here first.
+    /// `ws.onCallReady` on the caller sets `callState = .ringing` — a late
+    /// resend could knock an active call back to "ringing" (W-ANSWERBEFOREREADY,
+    /// 2026-09-08, now guards the RX handler itself against this, but the
+    /// send-side policy stays "never retransmit" as defense in depth). This
+    /// must hold regardless of the accepted switch, so a future "make it
+    /// symmetric" edit fails here first.
     func test_ready_neverArmsRetransmit_regardlessOfSwitch() {
         XCTAssertEqual(
             CallSignalingFailurePolicy.socketNotReadyAction(for: .callReady, acceptedRetransmitEnabled: true),

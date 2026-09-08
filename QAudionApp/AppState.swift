@@ -2161,6 +2161,15 @@ final class AppState: ObservableObject {
     /// `onCallAccepted` fires for a given callId (the callee's real user
     /// tapped Answer). See `localHandshakeReadyCallId`.
     private var callAcceptedCallId: String?
+    /// W-ANSWERBEFOREREADY (2026-09-08) — set once `finalizeCallActive()`
+    /// has run for a given callId. `callState == .active` means two
+    /// different things on the caller (the pre-ring state `startCall` sets
+    /// the instant its OFFER round-trip returns, AND one of
+    /// `finalizeCallActive()`'s own two outcomes) — this is what lets
+    /// `AcceptGateDecisions.shouldAcceptAnswer` tell them apart, so a
+    /// `call_answer` arriving before `call_ready` isn't dropped, while a
+    /// `call_answer` redelivered after finalizing doesn't re-open the latch.
+    private var callFinalizedCallId: String?
 
     /// Bug A guard — the call UUID for which `onAnswerCall` has already run.
     /// On the double-dialer second call (PushKit native UI + in-app banner
@@ -8279,8 +8288,29 @@ final class AppState: ObservableObject {
                 // for the SDP case left the caller stuck on "not started" with
                 // audio already flowing (live, 2026-08-14, call d8afbd8d).
                 // Both flags now speak the canonical wire id.
-                guard self.callState == .ringing,
-                      let callId = self.canonicalActiveCallId() else { return }
+                //
+                // W-ANSWERBEFOREREADY (2026-09-08) — `call_answer` and
+                // `call_ready` carry no ordering guarantee against each
+                // other (§3.5: the former "MAY be sent ... ahead of any
+                // real user action"). When the deferred-answer flow's SDP
+                // `call_answer` wins that race, the caller is still in its
+                // pre-ring `.active` (set the instant startCall's OFFER
+                // round-trip returns, BEFORE `call_ready` can possibly
+                // arrive — see `AcceptGateDecisions.shouldAcceptAnswer`), not
+                // yet `.ringing`. A `.ringing`-only guard here dropped that
+                // answer silently: neither `finalizeNow` nor either fallback
+                // net ever armed, so the caller never reached "connected"
+                // even with media already flowing (live, call bba2aeca).
+                // `callFinalizedCallId` rules out the OTHER thing `.active`
+                // means (this function's own non-PQC finalize outcome) so a
+                // redelivered answer can't re-open an already-closed latch.
+                guard let callId = self.canonicalActiveCallId(),
+                      AcceptGateDecisions.shouldAcceptAnswer(
+                          isRinging: self.callState == .ringing,
+                          isPreRingActive: self.callState == .active,
+                          alreadyFinalized: self.callFinalizedCallId == callId
+                      )
+                else { return }
                 // W-ACCEPTGATE-SDP (2026-08-14) — an SDP-bearing `call_answer`
                 // is a WebRTC handshake artifact, NOT a human accepting: since
                 // W-DCSTUCK the callee builds its controller at RING time and
@@ -14462,6 +14492,18 @@ final class AppState: ObservableObject {
                 ws.onCallReady = { [weak self] _, _, _ in
                     DispatchQueue.main.async {
                         guard let self else { return }
+                        // W-ANSWERBEFOREREADY (2026-09-08) — `call_ready` can
+                        // be redelivered (WS reconnect requeues call-setup
+                        // envelopes, same as `call_answer` — see
+                        // `CallSignalingFailurePolicy.SetupEnvelope.callReady`'s
+                        // own doc comment: "A resend landing after the caller
+                        // already received `call_answer` would knock an
+                        // active call back to 'ringing' on its screen").
+                        // Once `call_answer` has already accepted this call
+                        // for THIS call id — pre-ring `.active` counts, see
+                        // `AcceptGateDecisions.shouldAcceptAnswer` — a late or
+                        // duplicate `call_ready` is purely informational.
+                        guard self.callFinalizedCallId != self.canonicalActiveCallId() else { return }
                         // Peer finished PQC setup; flip UI to "Ringing".
                         self.callState = .ringing
                         // W-RINGBACKCONFIRMED — the far end's phone is
@@ -15546,6 +15588,11 @@ final class AppState: ObservableObject {
         // being the bound call).
         (liveProvider?.callingApi as? BCryptoCallingApiImpl)?
             .noteCallSetupProgressed(nil)
+        // W-ANSWERBEFOREREADY — latch BEFORE the state write below: this is
+        // what lets a later `.active` (this function's own non-PQC outcome)
+        // be told apart from the caller's pre-ring `.active`. See
+        // `AcceptGateDecisions.shouldAcceptAnswer`.
+        self.callFinalizedCallId = self.canonicalActiveCallId()
         if self.callSasKeySource == .mlKem {
             self.callState = .encrypted
             RTLog.info("call", "call_answer: PQC already done — .ringing → .encrypted")
@@ -16720,6 +16767,7 @@ extension AppState {
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
         localHandshakeReadyCallId = nil  // call_accepted latch — re-arm for the next call
         callAcceptedCallId = nil  // call_accepted latch — re-arm for the next call
+        callFinalizedCallId = nil  // W-ANSWERBEFOREREADY — re-arm for the next call
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
         pendingAnswerAudioOnlyCallId = nil  // W-VIDPRIVACY — re-arm for the next call

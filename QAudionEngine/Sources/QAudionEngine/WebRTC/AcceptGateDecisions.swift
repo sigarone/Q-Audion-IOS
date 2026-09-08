@@ -96,4 +96,59 @@ public enum AcceptGateDecisions {
         case .waitForAcceptWithRingSafety: return ringSafetyFallbackSeconds
         }
     }
+
+    /// W-ANSWERBEFOREREADY (2026-09-08) — whether a `call_answer` should be
+    /// handed to `resolve` at all, i.e. whether the caller's state machine
+    /// is somewhere `resolve`'s two-flag latch is allowed to run.
+    ///
+    /// ## The race
+    ///
+    /// `call_answer` "MAY be sent automatically ... ahead of any real user
+    /// action" (§3.5) — the deferred-answer flow ships an SDP-bearing
+    /// `call_answer` the instant a backgrounded callee receives the OFFER.
+    /// `call_ready` (peer finished its own PQC setup; the caller's RX flips
+    /// `.active` → `.ringing`, see `ws.onCallReady` in `AppState`) is a
+    /// SEPARATE message with no ordering guarantee against it — both leave
+    /// the callee around the same moment and only per-message delivery
+    /// order decides which the caller observes first. Before this call
+    /// existed, the caller only accepted a `call_answer` while already
+    /// `.ringing`; when `call_answer` won the race the message was dropped
+    /// silently — neither `finalizeNow` nor either fallback net ever armed,
+    /// and the caller never reached "connected" even though media was
+    /// already flowing (live, 2026-09-08, call bba2aeca).
+    ///
+    /// ## Why `isPreRingActive` is safe to accept
+    ///
+    /// The caller's `.active` state is set the instant its own OFFER
+    /// round-trip returns (`AppState.startCall`), strictly BEFORE
+    /// `call_ready` can arrive — a peer cannot finish PQC setup and reply
+    /// before it has even received the OFFER. So a `call_answer` seen while
+    /// pre-ring `.active` is exactly the early-`call_answer` case above, not
+    /// a different, unrelated state.
+    ///
+    /// ## Why `alreadyFinalized` is required
+    ///
+    /// `.active` is ALSO the state `finalizeCallActive()` itself sets on its
+    /// non-PQC branch — the caller's `callState` alone cannot tell "not
+    /// ringing yet" from "already connected". Without ruling that out, a
+    /// `call_answer` redelivered after finalizing (WS reconnect requeues
+    /// call-setup envelopes, a real and separately observed occurrence in
+    /// this app) would re-open a latch that already closed.
+    ///
+    /// - Parameters:
+    ///   - isRinging: caller's `callState == .ringing` (the case this
+    ///     latch was originally written for).
+    ///   - isPreRingActive: caller's `callState == .active` BEFORE
+    ///     `call_ready` has flipped it to `.ringing`. Ambiguous on its own —
+    ///     see above.
+    ///   - alreadyFinalized: `finalizeCallActive()` has already run for
+    ///     this exact call id.
+    public static func shouldAcceptAnswer(
+        isRinging: Bool,
+        isPreRingActive: Bool,
+        alreadyFinalized: Bool
+    ) -> Bool {
+        guard !alreadyFinalized else { return false }
+        return isRinging || isPreRingActive
+    }
 }

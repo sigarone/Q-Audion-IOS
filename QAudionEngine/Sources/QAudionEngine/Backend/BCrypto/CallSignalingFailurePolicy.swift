@@ -74,9 +74,12 @@ public enum CallSignalingFailurePolicy {
     ///   failure path can only recover an accept, never duplicate a state
     ///   transition. Gated by `acceptedRetransmitWhenSocketNotReady`.
     /// - `call_ready`: the caller's RX handler (`ws.onCallReady` in AppState)
-    ///   sets `callState = .ringing` UNCONDITIONALLY. A resend landing after
-    ///   the caller already received `call_answer` would knock an active
-    ///   call back to "ringing" on its screen. Never retransmit.
+    ///   sets `callState = .ringing`. W-ANSWERBEFOREREADY (2026-09-08) added
+    ///   a guard there against exactly the redelivery this note warns about
+    ///   (skip once `call_answer` already latched this call id) — kept here
+    ///   as defense in depth: still nothing worth a resend for, and a
+    ///   send-side retransmit is one extra frame the RX guard should never
+    ///   have to rely on being the only thing standing in the way.
     /// - `call_processing`: informational ack (advances the caller's
     ///   integration `.capabilitySent → .connecting`); losing it is not
     ///   fatal because the ACCEPT bundle drives the same machine to
