@@ -9,10 +9,29 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1105",
+              date: "2026-09-08",
+              title: "v1.0.1105",
+              bullets: [
+                "fix(ios): default the accept-without-video toggle to on for video calls (W-VIDEODEFAULTOFF)",
+                "fix(ios): scope audio-only-answer latch to call identity; bounded retry for pixel-buffer capturer wiring",
+                "fix(groupcall): build the key diagnostics under the lock, print after it (W-GRPKEYSILENT)",
+                "fix(groupcall): make a keyless group call say so (W-GRPKEYSILENT)",
+                "test(maestro): dismiss the first-launch Siri permission dialog",
+                "feat(ios): gate callee video capture on accept-without-video choice (W-VIDPRIVACY)",
+                "ci(ios-ui-smoke): ad-hoc-sign the simulator build so entitlements embed",
+                "fix(ios): reset accept-without-video toggle per call identity; add a11y label + larger tap target",
+                "feat(ios): video badge + accept-without-video toggle on incoming-call screen",
+                "fix(ios): stop arming callee camera at call-offer receipt (W-CAMARMEARLY)",
+                "ci(ios-ui-smoke): reboot simulator after locale write to avoid respring race",
+                "ci(ios-ui-smoke): pin simulator locale to Italian",
+                "feat(l10n): full localization infrastructure — en/es/fr/de/pt-BR + in-app language picker",
+              ]),
         .init(id: "v1.0.1104",
               date: "2026-09-08",
               title: "v1.0.1104",
               bullets: [
+                "chore: regenerate changelog for v1.0.1104",
                 "fix(carplay): stop forcing hasVideo=true when CarPlay is the audio route",
               ]),
         .init(id: "v1.0.1103",
@@ -151,14 +170,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1086",
                 "fix(call): enable async voice-processing teardown to stop the remote-hangup UI freeze",
-              ]),
-        .init(id: "v1.0.1085",
-              date: "2026-09-04",
-              title: "v1.0.1085",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1085",
-                "fix(call): close the last silent-throw + wrong-type blind spots in the dcmux audio fallback",
-                "fix(call): cap ICE-recovery watchdog retry duration (W-ICERECOVERYCAP)",
               ]),
     ]
 }
