@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1113",
+              date: "2026-09-08",
+              title: "v1.0.1113",
+              bullets: [
+                "fix(storage): send filename in tus Upload-Metadata for server-side telemetry tagging",
+                "fix(call): gate native audio-srtp mic on genuine accept, not ring-time activation",
+              ]),
         .init(id: "v1.0.1112",
               date: "2026-09-08",
               title: "v1.0.1112",
               bullets: [
+                "chore: regenerate changelog for v1.0.1112",
                 "fix(call): stop the caller's mic (and video) from unblocking before the callee genuinely accepts",
                 "fix(build): RTCAudioBuffer.rawBufferForChannel was renamed to rawBuffer(forChannel:)",
               ]),
@@ -168,14 +176,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1094",
                 "feat(carplay): S4/S5 — CPContactTemplate/CPContactMessageButton, CPMessageListItem",
-              ]),
-        .init(id: "v1.0.1093",
-              date: "2026-09-06",
-              title: "v1.0.1093",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1093",
-                "feat(carplay): S2 — Siri messaging via a ratchet-isolated App Group bridge",
-                "feat(carplay): S4 partial — assistant cell on Recenti; record S2 blocker",
               ]),
     ]
 }
