@@ -8286,22 +8286,33 @@ final class AppState: ObservableObject {
                     print("[AppState] call_answer ignored — group call active")
                     return
                 }
-                // W574b: unblock the mic UNCONDITIONALLY — before the
-                // .ringing guard. The guard below only protects the state
-                // transition; gating the mic unblock on it left the mic
-                // permanently off whenever callState wasn't .ringing at
-                // answer time (e.g. still .active from the outgoing flow).
-                self.callService.handleCallAnswered()
-                // Mirror of the mic unblock above, for video: the direct
-                // dial path starts the local video pipeline paused (see
-                // startVideoPipeline's startPaused call site in
-                // dialAndCall) — the peer has now genuinely answered, so
-                // resume real camera capture/transmission. No-op if this
-                // wasn't a video call (videoPipeline is nil) or already
-                // running (setVideoPaused(false) is idempotent).
-                if self.isVideoCall {
-                    self.videoPipeline?.setVideoPaused(false)
-                }
+                // W-MICBEFOREACCEPT (2026-09-08, live-reported) — W574b used
+                // to unblock the mic (and unpause video) HERE, unconditionally,
+                // for every `call_answer` regardless of whether it was a
+                // genuine human accept. It is not: W-ACCEPTGATE-SDP below
+                // documents that an SDP-bearing `call_answer` is sent by the
+                // callee's app the INSTANT it sees the OFFER — during
+                // ringing, before anyone has touched the screen — and W574b's
+                // own comment already recorded the consequence as an
+                // observed fact ("audio already flowing") without treating
+                // it as the defect it is: live evidence today (calls
+                // 94e11981/7e6a6f53) shows the CALLER's mic capturing and
+                // transmitting real, voiced audio within ~1s of dialing —
+                // 8 to 15 SECONDS before the callee's own CallKit session
+                // ever activates. W574b's actual concern (the mic staying
+                // off forever when `callState` wasn't `.ringing` at answer
+                // time) is now handled by W-ANSWERBEFOREREADY accepting the
+                // caller's pre-ring `.active` below, so the unconditional
+                // early unblock is no longer needed for that either.
+                //
+                // The mic/video unblock now happens inside
+                // `finalizeCallActive()` instead — the SAME event that
+                // flips the caller's own UI to "connected" (whether reached
+                // immediately below via `.finalizeNow`, later via a genuine
+                // `call_accepted`, or via the bounded safety-net timeout) —
+                // so real media can never start before this call is
+                // considered accepted by any of the three routes that
+                // already exist to decide that question.
                 // call_accepted two-flag latch (WIRE_SPEC §3.5): this is
                 // the "local handshake done" flag. If the callee's real-user
                 // accept already landed, finalize now; otherwise stash and
@@ -15729,9 +15740,23 @@ final class AppState: ObservableObject {
         // this exact transition. No-op for the callee (nothing was ever
         // started — `stopOutgoingRingCue`/`outgoingRingtone.play` are both
         // idempotent-safe either way).
+        //
+        // W-MICBEFOREACCEPT — the mic/video unblock moved HERE from the raw
+        // `call_answer` receipt (see that site's own comment): `caller`-only,
+        // same as the ring-cue handoff right above, because `handleCallAnswered`
+        // ("the peer I called has now answered ME") and the direct-dial
+        // video-pause are both meaningless outside the caller's own
+        // perspective of this call. This function fires exactly once a call
+        // is genuinely considered accepted — immediately, on a later real
+        // `call_accepted`, or on the bounded safety-net timeout — never
+        // before, so real media can no longer start during ringing.
         if self.originalCallRole == .caller {
             self.stopOutgoingRingCue()
             self.outgoingRingtone.play(.callConnected)
+            self.callService.handleCallAnswered()
+            if self.isVideoCall {
+                self.videoPipeline?.setVideoPaused(false)
+            }
         }
         maybeExchangeAvatarOnCallConnect()
     }
