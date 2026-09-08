@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1111",
+              date: "2026-09-08",
+              title: "v1.0.1111",
+              bullets: [
+                "fix(call): use the behavior-preserving ADM selector for the capture-tap fix",
+                "fix(call): route native-audio-srtp TX tap through capturePostProcessingDelegate",
+              ]),
         .init(id: "v1.0.1110",
               date: "2026-09-08",
               title: "v1.0.1110",
               bullets: [
+                "chore: regenerate changelog for v1.0.1110",
                 "fix(call): stale caller-side device id + unclosed controller on replace",
                 "fix(shipper): ship blobs and records oldest-first to stop within-run Loki bounces",
                 "fix(call): iOS ICE candidates can beat call_offer to the server",
@@ -167,13 +175,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1092",
                 "fix(siri): add required NSSiriUsageDescription + requestSiriAuthorization",
-              ]),
-        .init(id: "v1.0.1091",
-              date: "2026-09-06",
-              title: "v1.0.1091",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1091",
-                "fix(ci): provision SiriKit capability + QAudionIntents extension bundle id",
               ]),
     ]
 }
