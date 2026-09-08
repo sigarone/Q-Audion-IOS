@@ -867,6 +867,7 @@ result. This section is NORMATIVE for all three clients and the server.
 | `screen_share_state` | `{call_id, recipient_id, on}` | either | same |
 | `call_media_ready` (v1.1) | `{call_id, recipient_id, mid, key_epoch, dir}` | receiver→sender | same |
 | `video_keyframe_request` (v1.1) | `{call_id, recipient_id}` | receiver→sender | same |
+| `call_video_pause_request` (v1.3) | `{call_id}` | either→peer | stamp `sender_id`, resolve peer via `resolveCallPeer`, transparent relay |
 
 - `media` = `"camera"` (explicit consent dialog required) or `"screen"`
   (auto-accept). An UNKNOWN value MUST be treated as `"camera"`
@@ -875,6 +876,13 @@ result. This section is NORMATIVE for all three clients and the server.
 - `sdp` non-empty ⇒ WebRTC renegotiation. `sdp` empty ⇒ WS-relay rail
   (no live PC); `accepted=true` with empty `sdp` is an accept WITHOUT
   renegotiation, not a malformed response.
+- `call_video_pause_request` (v1.3) is deliberately OUTSIDE the consent model
+  above: it asks the receiver to turn off ITS OWN camera, never to turn one
+  on, so it carries no `media` field and needs no consent dialog — a receiver
+  auto-complies (drives the same local path as the user's own camera-off
+  toggle) and only surfaces a brief notice. No `recipient_id`/`sender_id` on
+  the wire (server resolves the peer via `resolveCallPeer`), same convention
+  as `call_accepted`.
 
 ### 8.2 Upgrade state machine (per side)
 
@@ -968,10 +976,9 @@ offerer-side only, per-platform, months apart; iOS never had it.)
   additionally run a periodic (~5 s) sender-side IDR forcer.
 - Rekey: `key_epoch` is monotonic per call, tracked INDEPENDENTLY per
   media kind (audio and video can be at different epochs at the same
-  instant on platforms that track them separately). Receivers keep the
-  PREVIOUS key valid for a grace window (mirror of the audio
-  `previousKey` fallback) so in-flight frames sealed under the old epoch
-  still decrypt.
+  instant). Receivers keep the PREVIOUS key valid for a grace window
+  (mirror of the audio `previousKey` fallback) so in-flight frames sealed
+  under the old epoch still decrypt.
 - **Re-key media-deafness fix (v1.2, 2026-09-04)** — `call_media_ready`
   gained a `media` field (`"audio" | "video"`, additive; a receiver that
   predates it treats an absent value as `"video"`, the only kind that
@@ -983,21 +990,18 @@ offerer-side only, per-platform, months apart; iOS never had it.)
   OWN sender to the new epoch until it receives the peer's
   `call_media_ready` for that exact `(media, key_epoch)` pair or the same
   **2 s** timeout elapses (identical signal-not-kill bound as the
-  original epoch-0 case — a peer that never sends a per-epoch ready
+  original epoch-0 case — an old peer that never sends a per-epoch ready
   always falls through this same timeout, so the fix degrades cleanly
-  against an unpatched peer). A `call_media_ready` with `key_epoch > 0`
-  means "I installed your new epoch, safe for you to switch to it" and
-  MUST NOT be conflated with the original epoch-0 semantics ("I'm bound,
-  force an IDR") — a receiving platform must only react to a
-  `key_epoch > 0` ready when it is the exact epoch that platform's own
-  re-key machinery is currently waiting on, not merely because the
-  number is nonzero (a legacy per-call reannounce for stall recovery can
-  also carry whatever the LIVE epoch happens to be at the time, not a
-  hardcoded 0 — this exact confusion was caught and fixed on Android by
-  a final pre-merge review, and independently guarded against on iOS via
-  an explicit epoch-match check before the new inbound branch fires).
-  Shipped: Android (`qaudion-android-new`, commit `98beab386`), iOS
-  (this repo, branch `fix/rekey-media-deafness-skew`). Desktop pending.
+  against an unpatched peer). This is why decode-readiness and switch
+  timing are two separate concerns on this field going forward: a
+  `call_media_ready` with `key_epoch > 0` means "I installed your new
+  epoch, safe for you to switch to it" and MUST NOT be conflated with the
+  original epoch-0 semantics ("I'm bound, force an IDR") — a receiving
+  platform needs its own equivalent of only reacting to a `key_epoch > 0`
+  ready when it is actually the epoch that platform's own re-key
+  machinery is waiting on, not merely because the number is nonzero (a
+  legacy per-call reannounce for stall recovery also carries whatever the
+  LIVE epoch happens to be at the time, not a hardcoded 0).
 
 ### 8.8 Transport rails & key custody
 
@@ -1090,10 +1094,50 @@ never worse off: the new client's extra fields are ignored by the old one,
 and the old one's seq-less announcements are always accepted. The ordering
 protection switches itself on once both sides ship.
 
+### 8.10 Session consent vs. local camera authority (v1.3, 2026-09-08)
+
+`videoConsentGranted` (§8.9's consent latch) and a re-sent `call_upgrade_request`
+answer two DIFFERENT questions that earlier client code conflated:
+
+- **Session consent** — "may video exist on this call at all" — is what lets a
+  responder auto-accept a re-offer (`media="camera"`, consent already granted
+  this call) WITHOUT re-showing the dialog. This is §8.9's latch.
+- **Local camera authority** — whether MY OWN camera hardware opens right now —
+  belongs SOLELY to the local user. Session consent is never a substitute for
+  it.
+
+A `call_upgrade_request` a responder auto-accepts under session consent MUST
+NOT, by itself, open a camera the local user has since turned off (via the
+in-call toggle / `downgradeToAudio` / `call_video_pause_request`). The peer's
+request is about THEIR video (or resuming a bidirectional lane THEY still
+think is live) — it carries no authority over a camera the local side
+deliberately paused. Concretely: on a consented re-offer, a responder MUST
+gate the camera-open on whether it is CURRENTLY sending locally (its own
+current video-lane state), and answer the peer's offer receive-only when it
+is not — the peer's video must still work either way.
+
+This is NORMATIVE for all three clients (`W-CAMREVIVE` on iOS —
+`acceptPendingIncomingUpgrade`'s `localVideoPaused` guard, predates this
+subsection by iOS shipping it first; `shouldOpenLocalCameraOnConsentedReupgrade`
+on Android/Desktop). Before this subsection existed the rule was implicit and
+two of three clients (Android, Desktop) did not enforce it: a peer re-toggling
+their OWN camera off/on mid-call could silently reopen a LOCAL camera the user
+had just turned off, with no consent dialog and no notice — reported live as
+"peer's camera off/on causes my camera to activate without consent."
+
+Distinct from — and layered under — §8.9's beacon and §8.1's `media` gate:
+neither of those carries this distinction on the wire (there is no separate
+"resume" vs. "first upgrade" message type; the split is entirely receiver-
+local state), so every client's OWN re-offer handler is where this must be
+enforced, not the protocol.
 
 ---
 
-Last reviewed: 2026-07-24 (§8.9 video-state beacon; §3.5/§3.6 de-collided —
+Last reviewed: 2026-09-08 (§8.1 `call_video_pause_request` added to the
+message inventory — v1.3, shipped as Android wire message before this doc
+caught up; §8.10 added — session consent vs. local camera authority,
+NORMATIVE, closes the Android/Desktop W-CAMREVIVE-parity gap). Prior review
+2026-07-24 (§8.9 video-state beacon; §3.5/§3.6 de-collided —
 the four repo copies had drifted so that `### 3.5` meant "call acceptance
 gate" in the server copy and "base WebRTC SDP exchange" in the Desktop copy,
 while EVERY code reference to §3.5 in all four repos means the acceptance
