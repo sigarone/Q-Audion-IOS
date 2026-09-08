@@ -2193,10 +2193,20 @@ final class AppState: ObservableObject {
     /// either accept path runs (CallKit-free direct call, or the native
     /// CXAnswerCallAction round trip back through `onAnswerCall`), since
     /// CallKit's own action object carries no app data across that hop.
-    /// Read-and-cleared by `performAcceptIncoming`. Defaults false, so the
-    /// CallKit-native and notification-tap entry points (no UI toggle
-    /// available there) keep answering with video unchanged.
-    private var pendingAnswerAudioOnly = false
+    /// Read-and-cleared by `performAcceptIncoming`. Keyed on the call UUID
+    /// the choice was made for, mirroring `answeredCallKitId`'s per-call
+    /// idempotency latch above: without the key, call A's
+    /// `answerIncomingCall(audioOnly: true)` could race an in-flight
+    /// CallKit transaction, be interrupted by call B, and then leak `true`
+    /// into call B if B reaches `performAcceptIncoming` via a path that
+    /// never calls `answerIncomingCall` (native CallKit accept, the
+    /// cold-start notification-latch path) — silently forcing B into
+    /// audio-only receive. `performAcceptIncoming` only honors the stored
+    /// choice when its uuid matches the call actually being accepted;
+    /// otherwise it's stale and treated as absent, so the CallKit-native
+    /// and notification-tap entry points (no UI toggle available there)
+    /// keep answering with video unchanged — same default as before.
+    private var pendingAnswerAudioOnlyCallId: (uuid: UUID, audioOnly: Bool)?
     /// True once the user has explicitly answered the current incoming call via
     /// CallKit (`onAnswerCall` sets `answeredCallKitId`). The app-lock scene gate
     /// uses this to drop the biometric lock the MOMENT the call is answered —
@@ -15858,8 +15868,19 @@ extension AppState {
         // video choice. Replaces the unconditional start that used to run at
         // OFFER-RECEIPT time (W-CAMARMEARLY, Task 1) — that armed the camera
         // for a call nobody had accepted yet.
-        let acceptWithoutVideo = self.pendingAnswerAudioOnly
-        self.pendingAnswerAudioOnly = false
+        // W-VIDPRIVACY — only honor the latched choice if it was made FOR
+        // this exact call. A mismatch (or no latch at all — the CallKit-
+        // native / notification-tap entry points never set one) means the
+        // caller of this function never went through `answerIncomingCall`,
+        // or the latch is a stale leftover from an interrupted prior call;
+        // either way default to full video (the pre-existing safe default).
+        let acceptWithoutVideo: Bool
+        if let pending = self.pendingAnswerAudioOnlyCallId, pending.uuid == uuid {
+            acceptWithoutVideo = pending.audioOnly
+        } else {
+            acceptWithoutVideo = false
+        }
+        self.pendingAnswerAudioOnlyCallId = nil
         let vidcapMode = evaluateVideoAnswerCaptureMode(hasVideo: self.isVideoCall, acceptWithoutVideo: acceptWithoutVideo)
         RTLog.info("call", "vidcap mode=\(vidcapMode) audioOnly=\(acceptWithoutVideo ? 1 : 0)")
         if let peerId = self.callContactId, !peerId.isEmpty {
@@ -15877,12 +15898,20 @@ extension AppState {
                     guard self.videoPipeline != nil else { return }
                     self.videoPipeline?.setVideoPaused(false)
                     #if os(iOS)
-                    if let controller = self.webRtcController as? QAudionWebRtcCallController,
-                       let capturer = controller.webrtcPixelBufferCapturer {
-                        self.videoPipeline?.onCapturedPixelBuffer = { [weak capturer] pixelBuffer, timestampNs in
-                            capturer?.push(pixelBuffer, rotation: ._0, timestampNs: timestampNs)
-                        }
-                    }
+                    // W-VIDPRIVACY pixel-buffer wiring race — `webrtcPixel
+                    // BufferCapturer` is created inside `handleIncoming
+                    // WebRtcOffer`'s own async Task (via startCameraCapture/
+                    // acceptIncomingCall, at offer-receipt time), which has
+                    // no happens-before relationship to THIS accept-
+                    // triggered Task now that video capture starts on user
+                    // accept instead of offer receipt. A fast Accept tap can
+                    // genuinely still find it nil here. Bounded retry
+                    // (5 x 300 ms, same budget as
+                    // `forwardPqcSessionKeyToController`/
+                    // `installAudioSrtpIfPossible`) instead of a silent
+                    // miss — local camera captures, frames never reach
+                    // WebRTC, black screen to peer, no retry.
+                    self.wirePixelBufferCapturerWithRetry(retriesRemaining: 5)
                     #endif
                 }
             }
@@ -15916,10 +15945,39 @@ extension AppState {
         // startIncomingCallAudioOnAnswer.
     }
 
+    #if os(iOS)
+    /// W-VIDPRIVACY pixel-buffer wiring race — see the call site in
+    /// `performAcceptIncoming`'s `.cameraConsented` branch. Bounded retry
+    /// (5 x 300 ms, matching `forwardPqcSessionKeyToController`'s own
+    /// budget — the same class of "wait for an async-initialized
+    /// dependency" problem) instead of a silent one-shot miss. Safe to
+    /// call unconditionally: re-wiring the same (still-live) pipeline/
+    /// capturer pair after a first success just reassigns the same
+    /// closure, a no-op in effect.
+    @MainActor
+    private func wirePixelBufferCapturerWithRetry(retriesRemaining: Int) {
+        guard let controller = self.webRtcController as? QAudionWebRtcCallController,
+              let capturer = controller.webrtcPixelBufferCapturer else {
+            guard retriesRemaining > 0 else {
+                RTLog.warn("call", "vidcap pixelbufferwire exhausted=1")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.wirePixelBufferCapturerWithRetry(retriesRemaining: retriesRemaining - 1)
+            }
+            return
+        }
+        self.videoPipeline?.onCapturedPixelBuffer = { [weak capturer] pixelBuffer, timestampNs in
+            capturer?.push(pixelBuffer, rotation: ._0, timestampNs: timestampNs)
+        }
+        RTLog.info("call", "vidcap pixelbufferwire ok=1 attempt=\(5 - retriesRemaining)")
+    }
+    #endif
+
     func answerIncomingCall(audioOnly: Bool = false) {
         stopInAppRingtone()
         guard let uuid = activeCallKitId else { return }
-        pendingAnswerAudioOnly = audioOnly
+        pendingAnswerAudioOnlyCallId = (uuid, audioOnly)
         if CallsGate.callKitFreeMode {
             // W-NOCALLKIT — no CallKit; run the accept path directly.
             performAcceptIncoming(uuid: uuid, dismissNativeUI: false)
@@ -16631,7 +16689,7 @@ extension AppState {
         callAcceptedCallId = nil  // call_accepted latch — re-arm for the next call
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
-        pendingAnswerAudioOnly = false  // W-VIDPRIVACY — re-arm for the next call
+        pendingAnswerAudioOnlyCallId = nil  // W-VIDPRIVACY — re-arm for the next call
         selfManagedAudioSession = false  // W-WAKEONLY — re-arm for the next call
         // earbud-relay-v1 — drop the one-shot counterparty state so the
         // next earbud call starts a fresh responder (fresh FW-H7 counter).
