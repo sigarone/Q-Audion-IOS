@@ -1331,12 +1331,18 @@ def main():
     state_path = Path(args.state_file) if args.state_file else default_state_path()
     state = {"blobs": {}} if args.reset_state else load_state(state_path)
 
-    print("=== bcrypto-server SSH @ %s (read-only) ===" % VPS_HOST)
+    # The host is resolved lazily by _ensure_creds() inside ssh_connect(), so
+    # printing VPS_HOST before connecting always said "None" — which is the one
+    # line that would have shown, instantly, that a run was talking to the
+    # decommissioned IONOS box instead of prod. Resolve first, then announce.
+    _ensure_creds()
+    print("=== bcrypto-server SSH @ %s as %s (read-only) ===" % (VPS_HOST, VPS_USER))
     client = ssh_connect()
     print("Connected.")
 
     blobs_read = 0
     blobs_skipped_state = 0
+    blobs_too_old = 0
     lines_shipped = 0
     lines_dropped = 0
     http_results = []  # (blob_path, status)
@@ -1380,17 +1386,34 @@ def main():
                     continue
 
                 blob_ok = True
+                blob_too_old = False
                 for sub in _split_request_into_batches(request, args.batch):
                     status, resp_body = post_otlp(args.endpoint, token, sub)
                     http_results.append((path, status))
                     if status != 204:
                         blob_ok = False
                         snippet = (resp_body or "").strip().replace("\n", " ")
+                        # Loki refuses any entry more than ~1h behind the newest
+                        # already in the stream ("entry too far behind"). That
+                        # verdict is PERMANENT: the window only moves forward,
+                        # so this blob can never be accepted, and leaving its
+                        # state unadvanced means re-reading and re-POSTing it on
+                        # every single future run. qa-logs.ps1 now ships on every
+                        # log read, which turned a one-off annoyance into 39
+                        # doomed POSTs per invocation, forever.
+                        if status == 400 and "too far behind" in (resp_body or ""):
+                            blob_too_old = True
                         print("  POST %s -> HTTP %s %s"
                               % (path, status, _ascii(snippet[:200])),
                               file=sys.stderr)
                 if blob_ok:
                     record_shipped(state, path, sig, kept)
+                elif blob_too_old:
+                    # Recorded as handled so it is not retried. `--reset-state`
+                    # brings it back if Loki's out-of-order window is ever
+                    # widened and the backlog becomes shippable again.
+                    record_shipped(state, path, sig, 0)
+                    blobs_too_old += 1
         finally:
             sftp.close()
     finally:
@@ -1418,11 +1441,22 @@ def main():
         out("  HTTP non-204 (failed):   %d" % bad)
         out("  blobs with no records:   %d" % noop)
         out("  state file:              %s" % state_path)
+        if blobs_too_old:
+            out("  blobs too old to ship:   %d  (state advanced, never retried)"
+                % blobs_too_old)
         if bad:
             out()
-            out("  NOTE: %d POST(s) did not return 204. State was NOT advanced"
-                % bad)
-            out("        for those blobs, so a re-run will retry them.")
+            retryable = bad - blobs_too_old
+            if retryable > 0:
+                out("  NOTE: %d POST(s) failed for a retryable reason. State was"
+                    % retryable)
+                out("        NOT advanced; a re-run will retry them.")
+            if blobs_too_old:
+                out("  NOTE: %d blob(s) rejected as 'entry too far behind'. Loki's"
+                    % blobs_too_old)
+                out("        window only moves forward, so that verdict is permanent:")
+                out("        recorded as handled, NOT retried. Use --reset-state if")
+                out("        the out-of-order window is ever widened.")
     else:
         out()
         out("  (dry-run: nothing shipped, state untouched. Eyeball the OTLP")

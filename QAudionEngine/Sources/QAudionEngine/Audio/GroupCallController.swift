@@ -1547,6 +1547,29 @@ public final class GroupCallController: @unchecked Sendable {
     /// deferred until AFTER `lock` is released, so a slow/blocking send
     /// never holds up a concurrent `sendOutgoingOpusFrame`/`handleIncomingFrame`
     /// on another queue.
+    /// W-GRPKEYSILENT — how many roster updates were dropped because this
+    /// device is in the call with no group session, and how many member-adds
+    /// threw. Both are counters rather than booleans so a single log line says
+    /// whether the condition is a one-off or the whole call.
+    private var noStateUpdates: Int = 0
+    private var addFailures: Int = 0
+
+    /// Short numeric code for a `GroupSession.SessionError`, for log lines that
+    /// have to survive the shipper's fail-closed redactor: it blobs any token
+    /// it cannot prove structured, and drops anything 12 characters or longer,
+    /// so an interpolated Swift error never reaches the server. Numbers do.
+    private static func keyErrCode(_ error: Error) -> Int {
+        guard let e = error as? GroupSession.SessionError else { return 9 }
+        switch e {
+        case .selfNotMember: return 1
+        case .envelopeMismatch: return 2
+        case .alreadyMember: return 3
+        case .notMember: return 4
+        case .rejectOwnSenderInstall: return 5
+        case .ratchet: return 6
+        }
+    }
+
     private func onUpdate(callId: String, participants: [String], senderKeysCapable: Set<String>, senderKeyEpoch: Int64) {
         let selfId = manager.selfUserId
         var initsToSend: [(peer: String, env: SenderKeyInitEnvelope)] = []
@@ -1557,8 +1580,23 @@ public final class GroupCallController: @unchecked Sendable {
             if let gs = groupState {
                 for peer in senderKeysCapable where peer != selfId {
                     if !gs.members.contains(peer) {
-                        if let pkg = try? groupSession.handleMemberAdded(state: gs, newMember: peer) {
+                        // W-GRPKEYSILENT (2026-09-08) — was `try?`, discarding
+                        // the error. Defensive rather than a known culprit:
+                        // `handleMemberAdded` can only throw `.alreadyMember`,
+                        // which the `!gs.members.contains(peer)` guard above
+                        // already excludes under the same lock, so today this
+                        // catch should be unreachable. It is here because the
+                        // failure would be unrecoverable if it ever became
+                        // reachable — the retry branch below only runs for a
+                        // peer ALREADY in `gs.members`, and a throw is exactly
+                        // what stops the peer being added, so every later roster
+                        // update would land on this line and be swallowed again.
+                        do {
+                            let pkg = try groupSession.handleMemberAdded(state: gs, newMember: peer)
                             initsToSend.append((peer, pkg.initForNewMember))
+                        } catch {
+                            addFailures += 1
+                            print("[GroupCallController] grpkeyadd err=1 code=\(Self.keyErrCode(error))")
                         }
                     } else if !initSentTo.contains(peer) {
                         // W-GRPSENDERKEY-RETRY: peer was added to the roster on
@@ -1641,7 +1679,29 @@ public final class GroupCallController: @unchecked Sendable {
                         }
                     }
                 }
+            } else {
+                // W-GRPKEYSILENT (2026-09-08) — bootstrap left `groupState`
+                // nil and this device is nonetheless IN the call: it joined the
+                // room, published audio and shows in everyone's roster, but has
+                // no group session, so it can never key with anyone and this
+                // whole block is skipped on every roster update for the rest of
+                // the call. See `bootstrapGroupSession`, which sets
+                // `activeCallId` even when `groupSession.create` throws.
+                //
+                // This is what a live 3-party call looked like from the other
+                // side on 2026-09-08 (d5c52ce0): this device sat in the roster
+                // for 31 s across five updates, sent zero envelopes, then left,
+                // while the two Android legs completed ten exchanges with each
+                // other. Nothing said why, because this branch did not exist.
+                noStateUpdates += 1
+                print("[GroupCallController] grpkeyskip why=2 cap=\(senderKeysCapable.count) n=\(noStateUpdates)")
             }
+        } else {
+            // Roster update for a call this controller is not serving. Benign
+            // in isolation (a late update for the previous call), but it is
+            // also what a stuck `activeCallId` looks like, and it silently
+            // suppresses every key exchange — so it is counted, not ignored.
+            print("[GroupCallController] grpkeyskip why=1 cap=\(senderKeysCapable.count)")
         }
         lock.unlock()
 
@@ -1723,6 +1783,14 @@ public final class GroupCallController: @unchecked Sendable {
                 selfId: selfId
             )
         } catch {
+            // W-GRPKEYSILENT (2026-09-08) — the prose line below never reached
+            // the server: the shipper's redactor blobs anything it cannot prove
+            // structured, and an interpolated Swift error is the definition of
+            // unstructured. So the ONE event that explains a device sitting in
+            // a call with no crypto was invisible in every remote log. The
+            // numeric line above it is the one that survives; the prose stays
+            // for on-device / Xcode reading.
+            print("[GroupCallController] grpboot fail=1 code=\(Self.keyErrCode(error))")
             print("[GroupCallController] GroupSession bootstrap failed — call has no E2E keying: \(error)")
             newState = nil
         }
