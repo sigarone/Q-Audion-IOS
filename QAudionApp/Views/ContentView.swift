@@ -286,7 +286,11 @@ struct ContentView: View {
             callType: invite.hasVideo ? .video : .audio,
             subtitle: Self.groupCallSubtitle(invite),
             showReplyAction: false,
-            onAccept: { appState.answerIncomingGroupCall() },
+            // W-VIDPRIVACY — accept-without-video is a 1:1-only feature
+            // (design non-goal for group calls); the toggle still renders on
+            // this shared component, but its result is intentionally ignored
+            // here.
+            onAccept: { _ in appState.answerIncomingGroupCall() },
             onReject: { appState.declineIncomingGroupCall() }
         )
     }
@@ -311,9 +315,27 @@ struct ContentView: View {
             avatarUrl: outgoingAvatarUrl,
             callType: appState.isVideoCall ? .video : .audio,
             peerShortNumber: outgoingShortNumber,
-            onAccept: { appState.answerIncomingCall() },
+            onAccept: { audioOnly in appState.answerIncomingCall(audioOnly: audioOnly) },
             onReject: { appState.declineIncomingCall() }
         )
+        // W-VIDPRIVACY follow-up — `IncomingCallScreen`'s own
+        // `acceptWithoutVideo` @State only resets when SwiftUI tears down
+        // and recreates the view instance. `incomingCallRingVisible` alone
+        // does NOT guarantee that: `prepareIncomingPushCall` (AppState.swift)
+        // unconditionally overwrites the incoming-call state — including
+        // `activeCallKitId` — when a PushKit wakeup for a DIFFERENT call
+        // arrives while this one is still ringing, without ever dipping
+        // `incomingCallRingVisible` back to false. Without an explicit
+        // identity key, SwiftUI would keep reusing the same view instance
+        // (same position in the view tree) across that swap, so a
+        // pre-checked "Rispondi senza video" from the first call would
+        // silently carry over to the second, different call's Accept
+        // button. Keying on `activeCallKitId` (nilled on call end, stamped
+        // fresh per call by both the PushKit and WS incoming-call paths)
+        // forces a brand-new `IncomingCallScreen` — and therefore fresh
+        // `@State` — every time the underlying call actually changes,
+        // independent of `incomingCallRingVisible`'s own transitions.
+        .id(appState.activeCallKitId?.uuidString ?? "no-active-call")
     }
 
     /// GAP FIX — group-call "room identity" avatar. `invite.groupId` is
