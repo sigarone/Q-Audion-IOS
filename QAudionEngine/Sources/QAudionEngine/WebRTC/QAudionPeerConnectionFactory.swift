@@ -61,32 +61,46 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///
     /// Getting an `audioProcessingModule` handle at all requires switching
     /// off the argument-less `RTCPeerConnectionFactory(encoderFactory:
-    /// decoderFactory:)` initializer this class used before: that path
-    /// constructs the ADM via `webrtc::CreateAudioDeviceModule(env)`
-    /// (`sdk/objc/native/api/audio_device_module.mm`), which builds
-    /// `ios_adm::AudioDeviceModuleIOS` — a class with NO ObjC initializer
-    /// that also accepts a custom `audioProcessingModule`. The only public
-    /// initializer that takes one,
+    /// decoderFactory:)` initializer this class used before, to
     /// `initWithAudioDeviceModuleType:bypassVoiceProcessing:...
-    /// audioProcessingModule:`, offers exactly two `RTCAudioDeviceModuleType`
-    /// values, neither of which is `AudioDeviceModuleIOS`:
-    /// `.audioEngine` builds `webrtc::AudioEngineDevice`
-    /// (`api/audio/create_audio_engine_device_module`), `.platformDefault`
-    /// builds `AudioDeviceModuleImpl(kPlatformDefaultAudio)`
-    /// (`api/audio/create_audio_device_module.cc`) — both confirmed via
-    /// `gh api` against the exact pinned `webrtc-sdk/webrtc@m144_release`
-    /// commit this binaryTarget builds from, not assumed. `.audioEngine` is
-    /// used here — it is the SAME ADM class this app's own `LiveKit`
-    /// dependency already runs in production for group calls
-    /// (`client-sdk-swift`'s `RTC.swift`: `admType: .audioEngine,
-    /// bypassVoiceProcessing: false`), so this is a proven-in-this-app
-    /// configuration, not a novel one. `bypassVoiceProcessing: false`
-    /// preserves hardware Voice-Processing-I/O (AEC+NS+AGC) exactly as this
-    /// class's own top-of-file doc has always promised ("hardware AEC +
-    /// NS"). Every 1:1 call's native audio device module changes with this
-    /// commit — flagged and approved explicitly (not a silent swap); a live
-    /// on-device echo/quality check is still warranted post-merge, CI
-    /// compiling green does not cover that.
+    /// audioProcessingModule:` — the only public initializer that accepts a
+    /// custom `audioProcessingModule` at all.
+    ///
+    /// W-ADMPARITY (adversarial review, 2026-09-08) — an EARLIER version of
+    /// this fix picked `.audioEngine` for that call, on the reasoning that
+    /// this app's own `LiveKit` dependency already runs it in production —
+    /// for GROUP calls. That reasoning does not carry over: `LiveKit` builds
+    /// and owns an entirely separate `RTCPeerConnectionFactory` internally
+    /// (see `LiveKitGroupCallRoom.swift`), with its own CallKit/session
+    /// integration this class's 1:1 path does not share, and this app
+    /// already fences the two apart precisely BECAUSE they cannot safely
+    /// share one hardware audio unit (`AudioCapture.start()`'s group-call
+    /// guard: "refusing 1:1 engine to avoid setVoiceProcessingEnabled
+    /// SIGABRT"; `NativeAudioSessionGate`'s own doc records three earlier,
+    /// independent attempts to hand this app's 1:1 session/ADM ownership to
+    /// something other than the plain default, each of which measurably
+    /// regressed a real call). `.audioEngine` selects a DIFFERENT concrete
+    /// audio-device implementation than the one this class's argument-less
+    /// initializer has always used — this app's entire 1:1 CallKit-activation
+    /// / route-handling / VP-IO contract has zero hours of production
+    /// history against it.
+    ///
+    /// `.platformDefault` is the behavior-preserving choice instead:
+    /// read directly against the pinned `webrtc-sdk/webrtc@m144_release`
+    /// factory source (`gh api`, not assumed), the SAME top-level
+    /// device-module constructor this class's argument-less initializer
+    /// already calls is the one `.platformDefault` reaches too — `.audioEngine`
+    /// is the only one of the two enum cases that diverges to a different
+    /// implementation. Selecting `.platformDefault` therefore gets the
+    /// `audioProcessingModule` handle this fix needs while keeping the exact
+    /// same underlying audio device this class shipped with before it — a
+    /// verified swap of the CONSTRUCTOR PATH, not of the audio backend
+    /// itself. `bypassVoiceProcessing: false` preserves hardware Voice-
+    /// Processing-I/O (AEC+NS+AGC) on that path exactly as this class's own
+    /// top-of-file doc has always promised ("hardware AEC + NS"). See
+    /// `project_ios_native_capture_tap_adm_choice_2026_09_08.md` (session
+    /// memory) for the full source-level verification this comment
+    /// summarizes.
     public func createFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil })
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
         // RTCInitializeSSL is idempotent — safe to call once on first use.
@@ -105,7 +119,7 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
             renderPreProcessingDelegate: nil)
 
         let factory = RTCPeerConnectionFactory(
-            audioDeviceModuleType: .audioEngine,
+            audioDeviceModuleType: .platformDefault,
             bypassVoiceProcessing: false,
             encoderFactory: encoderFactory,
             decoderFactory: decoderFactory,
