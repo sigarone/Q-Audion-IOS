@@ -18346,16 +18346,27 @@ extension AppState {
     fileprivate func applyGroupCreationResult(
         _ res: GroupFetchResult?, groupHex: String, publishedBlob: Bool, sealedEpoch: UInt32
     ) {
+        // W-GRPLOGSHAPE (2026-09-08) — reformatted from free-text sentences
+        // to a terse `r=<code>` shape; see `GroupMembershipVerifier.verify`'s
+        // kdoc for why AND why the codes are this short — a longer
+        // "result=<descriptive_name>" form was verified (against
+        // ship-ios-logs.py's own scrub functions, not by inspection) to
+        // survive the structured gate but still get its own tokens swept to
+        // `[REDACTED:blob]` by the 12+-char broad blob sweep. Same reasoning
+        // is why `reasonCode` below maps `verdict.reason` to a 3-char code
+        // instead of logging `.rawValue` directly — two of its four cases
+        // ("server-ignored-blob", "epoch-mismatch") are themselves long
+        // enough to trip that exact sweep.
         let gShort: String = String(groupHex.prefix(8))
         guard let res = res else {
-            let unreachableLine: String = "create unreachable (no response) g=" + gShort
+            let unreachableLine: String = "grp_create r=unrc g=" + gShort
             RTLog.warn("group", unreachableLine)
             return
         }
         guard res.isSuccess else {
             // Already-exists / other server error — local state stays.
             let statusText: String = String(describing: res.statusCode)
-            let failLine: String = "create rejected http=" + statusText + " g=" + gShort
+            let failLine: String = "grp_create r=rej http=" + statusText + " g=" + gShort
             RTLog.warn("group", failLine)
             return
         }
@@ -18367,7 +18378,7 @@ extension AppState {
             GroupRegistry.shared.setMetadataVersion(
                 groupId: groupHex, version: verdict.publishedVersion)
             let versionText: String = String(describing: verdict.publishedVersion)
-            let okLine: String = "create published name v=" + versionText + " g=" + gShort
+            let okLine: String = "grp_create r=npub v=" + versionText + " g=" + gShort
             RTLog.info("group", okLine)
         }
         if let rebuild = verdict.rebuildAtEpoch {
@@ -18380,14 +18391,23 @@ extension AppState {
             // actually hold.
             let serverText: String = String(describing: rebuild)
             let localText: String = String(describing: sealedEpoch)
-            let epochLine: String = "create epoch mismatch server=" + serverText + " sealed=" + localText + " g=" + gShort
+            let epochLine: String = "grp_create r=epmm sv=" + serverText + " sl=" + localText + " g=" + gShort
             RTLog.warn("group", epochLine)
         }
         if verdict.needsMetadataPut {
-            let reasonText: String = verdict.reason.rawValue
+            // Short code for Loki — `verdict.reason` itself for the actual
+            // decision below (`groupNameToPublishAtCreation`), never the
+            // long rawValue string. See this function's kdoc.
+            let reasonCode: String
+            switch verdict.reason {
+            case .published: reasonCode = "pub"
+            case .noBlob: reasonCode = "nob"
+            case .serverIgnoredBlob: reasonCode = "sib"
+            case .epochMismatch: reasonCode = "epm"
+            }
             let currentName: String = GroupRegistry.shared.entry(for: groupHex)?.name ?? ""
             if groupNameToPublishAtCreation(currentName) != nil {
-                let putLine: String = "create name unpublished (" + reasonText + ") — falling back to metadata PUT g=" + gShort
+                let putLine: String = "grp_create r=nupf rs=" + reasonCode + " g=" + gShort
                 RTLog.warn("group", putLine)
                 // `newName: nil` = keep the name already in the registry (the
                 // one the user typed), re-seal it, and PUT it — the same
@@ -18400,7 +18420,7 @@ extension AppState {
                 // applies just as much to the retry — otherwise the group ends
                 // up server-named "Gruppo a1b2c3d4…" for everybody, which is
                 // strictly worse than having no server-side name at all.
-                let noNameLine: String = "create name unpublished (" + reasonText + ") and nothing publishable to PUT g=" + gShort
+                let noNameLine: String = "grp_create r=nupn rs=" + reasonCode + " g=" + gShort
                 RTLog.warn("group", noNameLine)
             }
         }
@@ -18435,7 +18455,7 @@ extension AppState {
     ) -> (blobB64: String, epoch: UInt32)? {
         let gShort: String = String(groupHex.prefix(8))
         guard let publishName = groupNameToPublishAtCreation(name) else {
-            let skipLine: String = "create publishes no name (blank/placeholder) g=" + gShort
+            let skipLine: String = "grp_create r=nonm g=" + gShort
             RTLog.info("group", skipLine)
             return nil
         }
@@ -18444,14 +18464,14 @@ extension AppState {
         let payload = GroupMetadataPayload(name: publishName, avatarRef: nil)
         guard let payloadData = try? JSONEncoder().encode(payload),
               let payloadJson = String(data: payloadData, encoding: .utf8) else {
-            let encLine: String = "create metadata encode failed g=" + gShort
+            let encLine: String = "grp_create r=encf g=" + gShort
             RTLog.warn("group", encLine)
             return nil
         }
         guard let sealed = GroupChatService.shared.encryptForWire(
             plaintext: payloadJson, groupId: groupHex,
             members: members, selfId: selfId) else {
-            let sealLine: String = "create metadata seal failed g=" + gShort
+            let sealLine: String = "grp_create r=slf g=" + gShort
             RTLog.warn("group", sealLine)
             return nil
         }
@@ -19497,8 +19517,15 @@ extension AppState {
             if !attested {
                 // Pre-bound locals — SWIFT6_PATTERNS rule 1/2/4.
                 let gShortUnattested: String = String(groupHex.prefix(8))
-                let actorShort: String = String(actor.prefix(8))
-                let unattestedLine: String = "unattested membership frame g=" + gShortUnattested + " op=" + operation + " actor=" + actorShort
+                // W-GRPLOGSHAPE (2026-09-08) — see GroupMembershipVerifier.
+                // verify's kdoc. `op`/`actor` dropped here (not just
+                // shortened): `operation` can be "admin_remove"/
+                // "member_added" etc — long enough on their own to trip the
+                // 12+-char blob sweep — and this line's diagnostic value for
+                // THIS investigation (group name/avatar propagation) is
+                // already covered by `g=`; a raw actor id isn't worth the
+                // extra risk surface for a value this code doesn't need.
+                let unattestedLine: String = "grp_member r=unat g=" + gShortUnattested
                 RTLog.info("group", unattestedLine)
             }
             bootstrapGroupFromServer(
@@ -19538,7 +19565,7 @@ extension AppState {
         }
         guard let provider = liveProvider else {
             let gShortNoProvider: String = String(groupHex.prefix(8))
-            RTLog.warn("group", "group_membership_changed: no live provider, dropping unverifiable event g=" + gShortNoProvider)
+            RTLog.warn("group", "grp_member r=nolp g=" + gShortNoProvider)
             return
         }
         let envelopeB64: String = (data["envelope_canonical_b64"] as? String) ?? ""
@@ -19552,7 +19579,7 @@ extension AppState {
                 kmsClient: provider.kmsClient, sovereignIdentity: self.sovereignIdentity)
             guard verified else {
                 let gShortFailed: String = String(groupHex.prefix(8))
-                RTLog.warn("group", "group_membership_changed: signature verify failed, dropping event g=" + gShortFailed)
+                RTLog.warn("group", "grp_member r=vfyf g=" + gShortFailed)
                 return
             }
             self.applyVerifiedGroupMembershipChange(
@@ -19790,7 +19817,7 @@ extension AppState {
         // Pre-bound locals — SWIFT6_PATTERNS rule 1/2/4.
         let versionText: String = String(describing: version)
         let gShortInline: String = String(groupHex.prefix(8))
-        let inlineLine: String = "inline metadata v=" + versionText + " g=" + gShortInline
+        let inlineLine: String = "grp_meta r=inl v=" + versionText + " g=" + gShortInline
         RTLog.info("group", inlineLine)
         decryptAndApplyGroupMetadataBlob(
             groupHex: groupHex, blobB64: blobB64, version: version, selfId: selfId)
@@ -19903,7 +19930,13 @@ extension AppState {
                 }
             }
         }
-        print("[AppState] reconcileAllGroupsFromServer: reconciled \(entries.count) group(s)")
+        // W-GRPLOGSHAPE (2026-09-08) — was print(), device-console-only (the
+        // exact "was print()" gap W-TAGDROP's comment on the line below
+        // already fixed once for the sibling `metadata undec=1` case, just
+        // never swept here). Tagged "group" (allow-listed since 2026-08-02)
+        // with a terse `n=` count, verified under 12 chars so the blob sweep
+        // doesn't eat it (see GroupMembershipVerifier.verify's kdoc).
+        RTLog.info("group", "grp_recon n=\(entries.count)")
     }
 
     /// Fase 1C — `GET /api/v1/groups/{gid}` best-effort fetch + decrypt,
@@ -19969,7 +20002,9 @@ extension AppState {
         // wire header itself embeds `sender_id` (`GroupSenderKey`
         // wire layout, spec §2) — unpack it instead of guessing.
         guard let parsed = try? GroupSenderKey.unpackGroupWire(wire) else {
-            print("[AppState] decryptAndApplyGroupMetadataBlob: malformed wire g=\(groupHex.prefix(8))")
+            // W-GRPLOGSHAPE (2026-09-08) — was print(), same gap as the
+            // `grp_recon` fix above.
+            RTLog.warn("group", "grp_meta r=mwir g=\(groupHex.prefix(8))")
             return
         }
         guard let plaintext = GroupChatService.shared.decrypt(
@@ -20030,7 +20065,11 @@ extension AppState {
               !isSynthesizedGroupPlaceholderName(entry.name) else { return }
         if attemptedEpochReseal[groupHex] == liveEpoch { return }
         attemptedEpochReseal[groupHex] = liveEpoch
-        print("[AppState] proactively re-sealing stale group metadata g=\(groupHex.prefix(8)) wireEpoch=\(wireGroupEpoch) liveEpoch=\(liveEpoch)")
+        // W-GRPLOGSHAPE (2026-09-08) — was print(), same gap as the
+        // `grp_recon` fix above. `we=`/`le=` kept short since these are
+        // epoch numbers (small ints), safely under the 12-char blob-sweep
+        // threshold in practice.
+        RTLog.warn("group", "grp_meta r=prsl g=\(groupHex.prefix(8)) we=\(wireGroupEpoch) le=\(liveEpoch)")
         updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
     }
 
@@ -20065,11 +20104,11 @@ extension AppState {
               entry.admins.contains(selfId) else { return }
         let gShortReseal: String = String(groupHex.prefix(8))
         guard groupNameToPublishAtCreation(entry.name) != nil else {
-            let skipLine: String = "add re-seal skipped (no real name yet) g=" + gShortReseal
+            let skipLine: String = "grp_meta r=rssk g=" + gShortReseal
             RTLog.info("group", skipLine)
             return
         }
-        let sealLine: String = "re-sealing metadata for new member g=" + gShortReseal
+        let sealLine: String = "grp_meta r=rsnw g=" + gShortReseal
         RTLog.info("group", sealLine)
         updateGroupMetadata(groupId: groupHex, newName: nil, avatarData: nil)
     }
@@ -20208,12 +20247,23 @@ extension AppState {
     /// The AEAD decrypt below is itself an authentication check: only a
     /// client with a valid recv chain for `actor_user_id` can produce a
     /// plaintext at all — a forged/corrupted blob fails here and is dropped.
+    // W-GRPLOGSHAPE (2026-09-08) — this whole handler was print()-only,
+    // console-visible but invisible to ship-ios-logs.py (device-console-only
+    // like every W-TAGDROP-era line): investigating Pavel's group name/
+    // avatar-propagation report, THIS function is the iOS equivalent of
+    // Android's `HandleGroupMetadataChangeUseCase.handle` +
+    // `GroupMetadataApplier.applyIfNewer` combined, and had ZERO remote
+    // visibility on either the failure OR the success path — worse than the
+    // sibling lines fixed elsewhere in this file/`GroupMembershipVerifier
+    // .swift`, which were at least tagged "group" (just shaped wrong).
+    // Codes verified against ship-ios-logs.py's own scrub functions, same as
+    // those — see `GroupMembershipVerifier.verify`'s kdoc for the method.
     @MainActor
     fileprivate func handleGroupMetadataChanged(_ data: [String: Any]) {
         guard let rawGroupId = data["group_id"] as? String, !rawGroupId.isEmpty,
               let blobB64 = data["metadata_blob_b64"] as? String, !blobB64.isEmpty,
               let wire = Data(base64Encoded: blobB64) else {
-            print("[AppState] group_metadata_changed missing required fields: \(data.keys)")
+            RTLog.warn("group", "grp_meta r=nof")
             return
         }
         let groupHex = rawGroupId.replacingOccurrences(of: "-", with: "").lowercased()
@@ -20221,18 +20271,19 @@ extension AppState {
         let version = Self.uint32Field(data["metadata_version"])
         let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
         guard !selfId.isEmpty, !actor.isEmpty else { return }
+        let gShort: String = String(groupHex.prefix(8))
 
         guard let entry = GroupRegistry.shared.entry(for: groupHex) else {
             // Unknown group locally (no roster ⇒ no recv chain to decrypt
             // against). The next `group_membership_changed` bootstrap (or a
             // future GET-on-open) re-anchors us; nothing to apply yet.
-            print("[AppState] group_metadata_changed: unknown group \(groupHex.prefix(8))")
+            RTLog.warn("group", "grp_meta r=unkg g=" + gShort)
             return
         }
         guard let plaintext = GroupChatService.shared.decrypt(
             wire: wire, senderId: actor, groupId: groupHex,
             members: entry.members, selfId: selfId) else {
-            print("[AppState] group_metadata_changed: decrypt failed g=\(groupHex.prefix(8)) actor=\(actor.prefix(8))")
+            RTLog.warn("group", "grp_meta r=dec g=" + gShort + " a=" + String(actor.prefix(8)))
             // 2026-07-19 — same retroactive gap-close as the GET-recovery
             // path (`decryptAndApplyGroupMetadataBlob`): a live push can be
             // this stale for the identical reason (sealed at an epoch our
@@ -20250,9 +20301,10 @@ extension AppState {
     /// live WS consumer above and the GET-on-bootstrap recovery path).
     @MainActor
     fileprivate func applyGroupMetadataPayload(groupHex: String, json: String, version: UInt32) {
+        let gShort: String = String(groupHex.prefix(8))
         guard let jsonData = json.data(using: .utf8),
               let payload = try? JSONDecoder().decode(GroupMetadataPayload.self, from: jsonData) else {
-            print("[AppState] group_metadata_changed: undecodable payload for \(groupHex.prefix(8))")
+            RTLog.warn("group", "grp_meta r=bpay g=" + gShort)
             return
         }
         // Replay/downgrade defense — `setMetadataVersion` alone is monotonic,
@@ -20263,7 +20315,7 @@ extension AppState {
         if version > 0,
            let entry = GroupRegistry.shared.entry(for: groupHex),
            version <= entry.metadataVersion {
-            print("[AppState] group_metadata_changed: stale version \(version) <= \(entry.metadataVersion) for \(groupHex.prefix(8)), ignored")
+            RTLog.warn("group", "grp_meta r=stale v=" + String(version) + " lv=" + String(entry.metadataVersion) + " g=" + gShort)
             return
         }
         if !payload.name.isEmpty {
@@ -20273,6 +20325,12 @@ extension AppState {
         if version > 0 {
             GroupRegistry.shared.setMetadataVersion(groupId: groupHex, version: version)
         }
+        // W-GRPLOGSHAPE (2026-09-08) — there was no success confirmation at
+        // all before this (silent success, only failures were even
+        // console-visible). `av=` distinguishes "applied with an avatar" —
+        // the exact bit this investigation needs — from a name-only update.
+        let avFlag: String = payload.avatarRef != nil ? "1" : "0"
+        RTLog.warn("group", "grp_meta r=ok v=" + String(version) + " g=" + gShort + " av=" + avFlag)
         NotificationCenter.default.post(
             name: AppState.groupRegistryChangedNotification,
             object: nil,

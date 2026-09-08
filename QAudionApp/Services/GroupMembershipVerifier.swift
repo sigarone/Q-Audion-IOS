@@ -87,29 +87,48 @@ enum GroupMembershipVerifier {
     ) async -> Bool {
         let gShort: String = String(groupIdHex.prefix(8))
 
+        // W-GRPLOGSHAPE (2026-09-08) — these were free-text sentences
+        // ("verify: ... g=..."), which ship-ios-logs.py's structured-shape
+        // gate silently drops before it ever reaches Loki (same class of bug
+        // as W-TAGDROP, just at the body level instead of the tag level —
+        // the "group" tag itself has been allow-listed since 2026-08-02, but
+        // an allow-listed tag with a free-text body still never ships).
+        //
+        // Reformatted to a terse `r=<code> g=<short>` shape — NOT just
+        // "structured" but verified against ship-ios-logs.py's actual
+        // `_scrub_body`/`_passes_structured_gate` functions directly
+        // (imported and run against every line below before this landed):
+        // the first attempt used `result=<descriptive_code>` and PASSED the
+        // structured gate but got its own identifier tokens swept to
+        // `[REDACTED:blob]` by the separate 12+-char broad blob sweep
+        // (`RE_BASE64_BLOB` in STRENGTHEN_RULES, deliberately low-threshold
+        // to catch short PSK/ML-KEM fragments) — passing the gate is not
+        // enough, every space-delimited token must ALSO stay under 12 chars
+        // or the content ships as unreadable noise. Codes below are 3-4
+        // chars; see each call site for what it means.
         guard !envelopeCanonicalB64.isEmpty, !envelopeSignatureB64.isEmpty else {
-            RTLog.warn("group", "verify: missing envelope/signature g=" + gShort)
+            RTLog.warn("group", "grp_verify r=nenv g=" + gShort)  // no envelope/signature
             return false
         }
         guard let envelopeBytes = Data(base64Encoded: envelopeCanonicalB64),
               let signatureBytes = Data(base64Encoded: envelopeSignatureB64) else {
-            RTLog.warn("group", "verify: envelope/signature not valid base64 g=" + gShort)
+            RTLog.warn("group", "grp_verify r=b64 g=" + gShort)  // envelope/signature not valid base64
             return false
         }
         guard let actorPub = await kmsClient.fetchUserIdentityKey(userId: actorUserId),
               actorPub.count == 32 else {
-            RTLog.warn("group", "verify: no identity key for actor g=" + gShort)
+            RTLog.warn("group", "grp_verify r=noak g=" + gShort)  // no identity key for actor
             return false
         }
         let sigOk = sovereignIdentity.verifySignature(
             publicKey: actorPub, challenge: envelopeBytes, signature: signatureBytes)
         guard sigOk else {
-            RTLog.warn("group", "verify: signature check failed g=" + gShort)
+            RTLog.warn("group", "grp_verify r=sigf g=" + gShort)  // signature check failed
             return false
         }
         guard let parsedAny = try? JSONSerialization.jsonObject(with: envelopeBytes),
               let parsed = parsedAny as? [String: Any] else {
-            RTLog.warn("group", "verify: envelope not parseable JSON g=" + gShort)
+            RTLog.warn("group", "grp_verify r=json g=" + gShort)  // envelope not parseable JSON
             return false
         }
         let signedBy: String = (parsed["by"] as? String) ?? ""
@@ -122,18 +141,18 @@ enum GroupMembershipVerifier {
             signedUid == subjectUserId &&
             operationMatches(signedT: signedT, wireOperation: wireOperation)
         guard fieldsMatch else {
-            RTLog.warn("group", "verify: signed fields do not match outer frame g=" + gShort)
+            RTLog.warn("group", "grp_verify r=fldm g=" + gShort)  // signed fields don't match outer frame
             return false
         }
         guard let eProposedNum = parsed["e_proposed"] as? NSNumber,
               let tsNum = parsed["ts"] as? NSNumber else {
-            RTLog.warn("group", "verify: missing e_proposed/ts in signed envelope g=" + gShort)
+            RTLog.warn("group", "grp_verify r=nrep g=" + gShort)  // missing e_proposed/ts
             return false
         }
         let signedEProposed: Int64 = eProposedNum.int64Value
         let signedTs: Int64 = tsNum.int64Value
         guard signedEProposed >= 0, signedTs >= 0 else {
-            RTLog.warn("group", "verify: negative e_proposed/ts in signed envelope g=" + gShort)
+            RTLog.warn("group", "grp_verify r=negr g=" + gShort)  // negative e_proposed/ts
             return false
         }
         let admitted = GroupMembershipReplayGuard.shared.check(

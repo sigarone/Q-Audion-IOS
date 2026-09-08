@@ -174,7 +174,11 @@ public final class GroupMessageStore: ObservableObject {
         // reverting the whole group history to plaintext is not.
         let attempt: String?? = try? LocalStoreCipher.seal(json)
         guard let unwrapped = attempt, let sealed = unwrapped else {
-            RTLog.warn("group", "message store persist deferred sealed=0")
+            // W-GRPLOGSHAPE (2026-09-08) — 4 consecutive free words made this
+            // fail the structured-shape gate outright (MAX_FREEWORD_RUN=3);
+            // see GroupMembershipVerifier.verify's kdoc for the fix and why
+            // the replacement codes are this short specifically.
+            RTLog.warn("group", "grp_mstore r=pdef sealed=0")
             return
         }
         UserDefaults.standard.set(sealed, forKey: Self.storageKey)

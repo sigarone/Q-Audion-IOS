@@ -109,7 +109,12 @@ public final class GroupRegistry: ObservableObject {
                 // Never silent: a sealed blob that fails to open (e.g. a
                 // device restore, since the Keychain key does not migrate
                 // across devices) has to be greppable, not a quiet wipe.
-                RTLog.error("group", "registry load failed to decrypt sealed blob — entries reset to empty")
+                // W-GRPLOGSHAPE (2026-09-08) — the free-text form of this
+                // line failed the structured-shape gate outright, so the ONE
+                // event this comment insists must be greppable never actually
+                // reached Loki; see GroupMembershipVerifier.verify's kdoc for
+                // the fix and why the replacement code is this short.
+                RTLog.error("group", "grp_reg r=decf")
                 entries = []
                 return
             }
@@ -135,7 +140,8 @@ public final class GroupRegistry: ObservableObject {
         // persist retries.
         let attempt: String?? = try? LocalStoreCipher.seal(json)
         guard let unwrapped = attempt, let sealed = unwrapped else {
-            RTLog.warn("group", "registry persist deferred sealed=0")
+            // W-GRPLOGSHAPE (2026-09-08) — see GroupMembershipVerifier.verify's kdoc.
+            RTLog.warn("group", "grp_reg r=pdef sealed=0")
             return
         }
         UserDefaults.standard.set(sealed, forKey: Self.storageKey)
