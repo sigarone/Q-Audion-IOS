@@ -50,6 +50,16 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// alongside `activeCallId` on every bind so a new call never inherits
     /// the previous call's latch.
     private var _setupProgressed = false
+    /// W-ICEBEFOREOFFER (2026-09-08) — the call_id for which `call_offer`'s
+    /// own `ws.send()` has actually been made. `sendIceCandidate` waits on
+    /// this (bounded) before its own send so a trickled candidate — fired
+    /// from a synchronous WebRTC delegate via an unstructured `Task` with no
+    /// `ensureAuthenticated` gate of its own — can never physically reach
+    /// the wire ahead of the offer that creates the call, even when
+    /// `sendCallOffer`'s `ensureAuthenticated` wait takes real time (WS
+    /// reconnecting right at call start). Guarded by `callIdLock`, reset
+    /// alongside `activeCallId`.
+    private var _offerDispatchedCallId: String?
 
     init(ws: BCryptoWebSocketClient, rest: BCryptoRestClient) { self.ws = ws; self.rest = rest }
 
@@ -115,6 +125,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
             data["caller_display"] = cd
         }
         ws.send(type: "call_offer", data: data)
+        // W-ICEBEFOREOFFER — unblock any sendIceCandidate already waiting
+        // on this call_id (see isOfferDispatched's doc comment).
+        markOfferDispatched(cid)
         // W-SETUPRETRY (2026-08-25) — a single lost call_offer used to fail
         // the whole setup. Bounded retransmit; RX side dedups (the callee's
         // call_incoming handler drops/rescues duplicates by design). The
@@ -246,6 +259,32 @@ public final class BCryptoCallingApiImpl: CallingApi {
         guard let cid = activeCallIdOrNil() else {
             print("[BCryptoCalling] sendIceCandidate DROPPED — no active call_id bound")
             return
+        }
+        // W-ICEBEFOREOFFER (2026-09-08) — this fires from a synchronous
+        // WebRTC delegate (didDiscoverLocalIceCandidate) via an unstructured
+        // Task with no readiness gate of its own, so without this wait it
+        // can reach `ws.send()` — and therefore the server — before
+        // `sendCallOffer`/`sendCallOfferWithId`'s OWN send, which is stuck
+        // behind an async `ws.ensureAuthenticated(timeoutSec: 5)` whenever
+        // the persistent WS needs reconnecting right at call start (e.g.
+        // CallKit's audio-session takeover suspending the old
+        // URLSessionWebSocketTask — confirmed live, 3 `ws: opened` events
+        // inside ~1s at call launch). bcrypto-server's F4 gate has nothing
+        // to authorize an offer-less call_ice against and used to drop it
+        // for good. Bounded at the same 5s the offer's own gate uses; falls
+        // through afterward (fail-open) rather than dropping the candidate
+        // — the server now also buffers a short grace window as defense in
+        // depth (main.go bufferEarlyCallIce/drainEarlyCallIce), so a candidate
+        // that still beats the offer past this wait is not lost either.
+        if !isOfferDispatched(cid) {
+            let deadline = Date().addingTimeInterval(5)
+            while !isOfferDispatched(cid) && Date() < deadline {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                // The call may have ended, or a new one started, while we
+                // waited — never send a stale candidate under a call_id
+                // that is no longer (or no longer THIS) active call.
+                guard activeCallIdOrNil() == cid else { return }
+            }
         }
         var data: [String: Any] = [
             "call_id": cid,
@@ -380,6 +419,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
             data["caller_display"] = cd
         }
         ws.send(type: "call_offer", data: data)
+        // W-ICEBEFOREOFFER — unblock any sendIceCandidate already waiting
+        // on this call_id (see isOfferDispatched's doc comment).
+        markOfferDispatched(callId)
         // W-SETUPRETRY — same ladder as the minting overload above; this is
         // the externally-chosen-id path (Android-originator pipeline).
         scheduleSetupRetransmit(callId: callId, type: "call_offer", data: data, label: "call_offer")
@@ -984,7 +1026,21 @@ public final class BCryptoCallingApiImpl: CallingApi {
     private let keyframeRequestLock = NSLock()
 
     private func setActiveCallId(_ cid: String) {
-        callIdLock.lock(); activeCallId = cid; _setupProgressed = false; callIdLock.unlock()
+        callIdLock.lock(); activeCallId = cid; _setupProgressed = false; _offerDispatchedCallId = nil; callIdLock.unlock()
+    }
+
+    /// W-ICEBEFOREOFFER — call once call_offer's `ws.send()` has actually
+    /// been made for `callId`. Sync helper for the same Swift 6
+    /// NSLock-in-async rule as `checkAndMarkAnswerSent` above.
+    private func markOfferDispatched(_ callId: String) {
+        callIdLock.lock(); _offerDispatchedCallId = callId; callIdLock.unlock()
+    }
+
+    /// W-ICEBEFOREOFFER — `true` once `markOfferDispatched(callId)` has run
+    /// for this exact call_id.
+    private func isOfferDispatched(_ callId: String) -> Bool {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        return _offerDispatchedCallId == callId
     }
 
     /// W-ACTIVECALLASSERT — clear the bound id ONLY when it names the same
@@ -997,9 +1053,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
               bound.caseInsensitiveCompare(callId) == .orderedSame else { return }
         activeCallId = nil
         _answerSent = false
+        _offerDispatchedCallId = nil
     }
 
     private func clearActiveCallId() {
-        callIdLock.lock(); activeCallId = nil; _answerSent = false; _setupProgressed = false; callIdLock.unlock()
+        callIdLock.lock(); activeCallId = nil; _answerSent = false; _setupProgressed = false; _offerDispatchedCallId = nil; callIdLock.unlock()
     }
 }
