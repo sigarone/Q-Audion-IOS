@@ -24,8 +24,14 @@ import CryptoKit
 /// **What it does (only when consented):** every `flushIntervalSeconds`
 /// (default 3s) the streamer reads new entries from `RuntimeLogSink`
 /// since the last successful flush, formats them as a UTF-8 .log
-/// chunk, and POSTs to `/api/v1/files/upload`. Each chunk's filename
-/// is:
+/// chunk, and uploads it via `storageApi.uploadFile` — the shared
+/// tus-always pipeline (`/api/v1/files/tus`, see W-STORAGESPLIT on
+/// `BCryptoStorageApiImpl.uploadFile`), NOT the legacy multipart
+/// `/api/v1/files/upload` endpoint this comment used to (incorrectly)
+/// describe. That mismatch is what let these chunks slip past the
+/// server's SRV-M2 telemetry tagging for years (fixed W-TUSFILENAME,
+/// 2026-09-08, by finally sending `filename` in the tus create's
+/// Upload-Metadata). Each chunk's filename is:
 ///   `qaudion-live-<sessionHmac8>-<bootSession>-<seqZeroPad6>.log`
 /// The maintainer reconstructs the timeline by listing files
 /// matching the prefix sorted by name. The user-id prefix is an

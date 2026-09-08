@@ -112,6 +112,7 @@ public final class BCryptoStorageApiImpl: StorageApi {
         )
         return try await tusClient.upload(
             data: data,
+            filename: filename,
             onProgress: onProgress,
             onCreated: resumeContext?.onFileIdMinted
         )

@@ -186,6 +186,7 @@ public final class TusUploadClient {
     ///   those uploads.
     public func upload(
         data: Data,
+        filename: String? = nil,
         onProgress: ((Int64, Int64) -> Void)? = nil,
         onCreated: ((String) -> Void)? = nil
     ) async throws -> String {
@@ -204,7 +205,7 @@ public final class TusUploadClient {
         // like internally, rather than relying on every producer to
         // remember to do it.
         let normalized = Data(data)
-        let fileId = try await create(totalBytes: normalized.count)
+        let fileId = try await create(totalBytes: normalized.count, filename: filename)
         onCreated?(fileId)
         let total = Int64(normalized.count)
         try await runChunkLoop(fileId: fileId, data: normalized, startOffset: 0, total: total, onProgress: onProgress)
@@ -280,7 +281,27 @@ public final class TusUploadClient {
 
     // MARK: - Private steps
 
-    private func create(totalBytes: Int) async throws -> String {
+    // W-TUSFILENAME (2026-09-08) — `filename` was accepted by every caller
+    // in this file's own public API (`upload(data:filename:...)` etc.) but
+    // silently dropped here: `create()` never sent an `Upload-Metadata`
+    // header at all, so the server had zero visibility into what a tus
+    // upload actually was. Confirmed live: `LiveLogStreamer` (W417, opt-in
+    // diagnostics pump) uploads a `qaudion-live-*.log` chunk every ~3s
+    // through this exact path — the server DOES have a short-TTL/telemetry
+    // tag for that filename pattern (`SRV-M2`, `cmd/bcrypto-lite/main.go`),
+    // but it only ever looked at the LEGACY multipart endpoint's form
+    // filename, which this client stopped using entirely (W-STORAGESPLIT,
+    // "always route through tus"). The two fixes never met: telemetry
+    // chunks landed in the general-purpose tus bucket, invisible and
+    // retained at the full attachment TTL instead of the intended short
+    // one. Sending `filename` here (Android already sends `mime`/
+    // `sha256_b64` the same way, tus §11 base64-per-value) lets the server
+    // apply the SAME telemetry heuristic to tus uploads. Every existing
+    // caller in this codebase passes an already-synthetic, PII-free name
+    // (`voicenote-<uuid>.m4a`, `fa-<prefix>.bin`, `grpattach-<prefix>.bin`,
+    // `qaudion-live-<hmac>-<session>-<seq>.log`) — never a raw user/device
+    // filename — so exposing it server-side adds no new privacy surface.
+    private func create(totalBytes: Int, filename: String? = nil) async throws -> String {
         let base = serverUrl.hasSuffix("/") ? serverUrl : serverUrl + "/"
         let urlStr = base + "api/v1/files/tus"
         guard let url = URL(string: urlStr) else {
@@ -296,6 +317,9 @@ public final class TusUploadClient {
             req.setValue("0", forHTTPHeaderField: "Content-Length")
             if let tok = self.getToken() {
                 req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
+            }
+            if let filename, let nameData = filename.data(using: .utf8) {
+                req.setValue("filename " + nameData.base64EncodedString(), forHTTPHeaderField: "Upload-Metadata")
             }
             return req
         }) else {
