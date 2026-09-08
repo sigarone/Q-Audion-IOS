@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1107",
+              date: "2026-09-08",
+              title: "v1.0.1107",
+              bullets: [
+                "fix(wire-spec): correct canonical hash to the LF-normalized blob value",
+                "diag(call): numeric error code on audio-capture failure + SAS-confirm no-op reasons",
+                "chore(wire-spec): sync §8.10 (session consent vs local camera authority) + call_video_pause_request",
+                "fix(l10n): close the in-app-override coverage gaps found by real device testing",
+              ]),
         .init(id: "v1.0.1106",
               date: "2026-09-08",
               title: "v1.0.1106",
               bullets: [
+                "chore: regenerate changelog for v1.0.1106",
                 "fix(call): iOS video-answer defaults and reactivation (W-VIDPRIVACY follow-up)",
                 "fix(shipper): a mixed-failure blob must not be marked permanently handled (#98)",
               ]),
@@ -164,13 +174,6 @@ extension ReleaseNote {
                 "fix(test): correct spacing in the scattered-noise AEAD-rekey calibration test",
                 "feat(webrtc): prime local ICE re-gather on the responder's request-first restart path (W-RESPONDERPRIME)",
                 "feat(audio): enable audio-AEAD-failure-burst rekey trigger (W-AUDIOAEADREKEY)",
-              ]),
-        .init(id: "v1.0.1087",
-              date: "2026-09-04",
-              title: "v1.0.1087",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1087",
-                "fix(video): break the HevcEncoder.invalidate() self-deadlock that froze the app on hangup",
               ]),
     ]
 }
