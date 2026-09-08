@@ -84,7 +84,7 @@ public final class NativeAudioCaptureTap: NSObject, RTCAudioCustomProcessingDele
         var channels: [[Float]] = []
         channels.reserveCapacity(channelCount)
         for ch in 0..<channelCount {
-            channels.append(Array(UnsafeBufferPointer(start: audioBuffer.rawBufferForChannel(ch), count: frameCount)))
+            channels.append(Array(UnsafeBufferPointer(start: audioBuffer.rawBuffer(forChannel: ch), count: frameCount)))
         }
 
         guard let inBuffer = Self.planarFloatBuffer(channels: channels, sampleRate: processingSampleRate) else { return }
@@ -105,11 +105,11 @@ public final class NativeAudioCaptureTap: NSObject, RTCAudioCustomProcessingDele
     }
 
     /// Wraps planar (non-interleaved) Float32 channel data — the exact shape
-    /// `RTCAudioBuffer.rawBufferForChannel(_:)` exposes — into an
+    /// `RTCAudioBuffer.rawBuffer(forChannel:)` exposes — into an
     /// `AVAudioPCMBuffer`, so `NativeAudioPcmTap.int16LEData` can be reused
     /// unchanged for the resample/downmix/Int16 conversion.
     ///
-    /// `RTCAudioBuffer.rawBufferForChannel(_:)` indexes
+    /// `RTCAudioBuffer.rawBuffer(forChannel:)` indexes
     /// `webrtc::AudioBuffer::channels()` — the FULL-BAND, `num_frames()`-long
     /// per-channel buffer — not the split-band `split_channels()`/
     /// `num_bands()` representation those two extra properties expose (grep-
