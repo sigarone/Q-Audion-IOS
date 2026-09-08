@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1106",
+              date: "2026-09-08",
+              title: "v1.0.1106",
+              bullets: [
+                "fix(call): iOS video-answer defaults and reactivation (W-VIDPRIVACY follow-up)",
+                "fix(shipper): a mixed-failure blob must not be marked permanently handled (#98)",
+              ]),
         .init(id: "v1.0.1105",
               date: "2026-09-08",
               title: "v1.0.1105",
               bullets: [
+                "chore: regenerate changelog for v1.0.1105",
                 "fix(ios): default the accept-without-video toggle to on for video calls (W-VIDEODEFAULTOFF)",
                 "fix(ios): scope audio-only-answer latch to call identity; bounded retry for pixel-buffer capturer wiring",
                 "fix(groupcall): build the key diagnostics under the lock, print after it (W-GRPKEYSILENT)",
@@ -163,13 +171,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1087",
                 "fix(video): break the HevcEncoder.invalidate() self-deadlock that froze the app on hangup",
-              ]),
-        .init(id: "v1.0.1086",
-              date: "2026-09-04",
-              title: "v1.0.1086",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1086",
-                "fix(call): enable async voice-processing teardown to stop the remote-hangup UI freeze",
               ]),
     ]
 }
