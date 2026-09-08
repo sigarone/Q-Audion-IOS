@@ -72,7 +72,7 @@ final class MyPhonesContainer: ObservableObject {
         error = nil
         let trimmed = newPhone.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            error = "Inserisci un numero in formato E.164 (es. +393331234567)."
+            error = String(localized: "my_phones.error.number_empty", defaultValue: "Inserisci un numero in formato E.164 (es. +393331234567).", comment: "Error banner — user tapped add/verify without typing a phone number")
             return
         }
         // Normalize via the same helper FastSetup uses — keeps cross-
@@ -82,15 +82,15 @@ final class MyPhonesContainer: ObservableObject {
         do {
             normalized = try PhoneHashHelper.normalizeE164(trimmed)
         } catch {
-            self.error = "Numero non valido: \(error.localizedDescription)"
+            self.error = String(localized: "my_phones.error.number_invalid", defaultValue: "Numero non valido: \(error.localizedDescription)", comment: "Error banner — the phone number failed E.164 validation, %@ is the underlying error description")
             return
         }
         if phones.contains(normalized) {
-            self.error = "Numero già presente nella lista."
+            self.error = String(localized: "my_phones.error.number_already_present", defaultValue: "Numero già presente nella lista.", comment: "Error banner — the phone number being added already exists in the account's list")
             return
         }
         guard let token, !token.isEmpty else {
-            self.error = "Sessione non attiva — accedi per verificare un numero."
+            self.error = String(localized: "my_phones.error.session_inactive_add", defaultValue: "Sessione non attiva — accedi per verificare un numero.", comment: "Error banner — user attempted to add a phone number without an active session")
             return
         }
 
@@ -104,7 +104,7 @@ final class MyPhonesContainer: ObservableObject {
             otpCode = ""
             otpError = nil
         } catch {
-            self.error = "Richiesta codice fallita: \(error.localizedDescription)"
+            self.error = String(localized: "my_phones.error.otp_request_failed", defaultValue: "Richiesta codice fallita: \(error.localizedDescription)", comment: "Error banner — SMS OTP request for phone verification failed, %@ is the underlying error description")
         }
     }
 
@@ -117,11 +117,11 @@ final class MyPhonesContainer: ObservableObject {
         guard let phone = pendingOtpPhone else { return false }
         let trimmedCode = otpCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCode.isEmpty else {
-            otpError = "Inserisci il codice ricevuto via SMS."
+            otpError = String(localized: "my_phones.error.otp_code_empty", defaultValue: "Inserisci il codice ricevuto via SMS.", comment: "OTP error — user tapped verify without entering the SMS code")
             return false
         }
         guard let token, !token.isEmpty else {
-            otpError = "Sessione non attiva."
+            otpError = String(localized: "my_phones.error.otp_session_inactive", defaultValue: "Sessione non attiva.", comment: "OTP error — session token missing when verifying the SMS code")
             return false
         }
 
@@ -139,7 +139,7 @@ final class MyPhonesContainer: ObservableObject {
             otpError = nil
             return true
         } catch {
-            otpError = "Codice non valido o scaduto: \(error.localizedDescription)"
+            otpError = String(localized: "my_phones.error.otp_invalid_or_expired", defaultValue: "Codice non valido o scaduto: \(error.localizedDescription)", comment: "OTP error — SMS code verification failed (invalid or expired), %@ is the underlying error description")
             return false
         }
     }
@@ -187,7 +187,7 @@ final class MyPhonesContainer: ObservableObject {
         guard let token = token, !token.isEmpty else {
             // Local-only mode: lascia un info-banner nessun-token così l'utente
             // sa che la lista non è stata propagata al server.
-            self.error = "Sessione non attiva — numeri salvati solo localmente."
+            self.error = String(localized: "my_phones.error.session_inactive_save", defaultValue: "Sessione non attiva — numeri salvati solo localmente.", comment: "Error banner — saving phone numbers with no active session; numbers persisted locally only")
             return
         }
         let config = BackendConfig.pinned(serverUrl: serverUrl,
@@ -202,7 +202,7 @@ final class MyPhonesContainer: ObservableObject {
         do {
             let pepperData = try await rest.get("/api/v1/contacts/pepper")
             guard let json = try JSONSerialization.jsonObject(with: pepperData) as? [String: Any] else {
-                self.error = "Risposta pepper non valida."
+                self.error = String(localized: "my_phones.error.pepper_response_invalid", defaultValue: "Risposta pepper non valida.", comment: "Error banner — the server's pepper response could not be parsed as JSON")
                 return
             }
             if let b64 = json["pepper_b64"] as? String,
@@ -214,12 +214,12 @@ final class MyPhonesContainer: ObservableObject {
                 pepperBytes = Data(raw.utf8)
                 alg = "sha-256-pepper-prefix"
             } else {
-                self.error = "Pepper mancante nella risposta server."
+                self.error = String(localized: "my_phones.error.pepper_missing", defaultValue: "Pepper mancante nella risposta server.", comment: "Error banner — the server's pepper response JSON lacked both known pepper fields")
                 return
             }
         } catch {
             // Best-effort: server senza endpoint pepper → fallback locale.
-            self.error = "Server pepper non raggiungibile — numeri salvati solo localmente."
+            self.error = String(localized: "my_phones.error.pepper_unreachable", defaultValue: "Server pepper non raggiungibile — numeri salvati solo localmente.", comment: "Error banner — fetching the pepper from the server failed (network error or 404); numbers persisted locally only")
             return
         }
 
@@ -240,7 +240,7 @@ final class MyPhonesContainer: ObservableObject {
             let data = try JSONSerialization.data(withJSONObject: body)
             _ = try await rest.post("/api/v1/contacts/phones", body: data)
         } catch {
-            self.error = "Push numeri al server fallito: \(error.localizedDescription)"
+            self.error = String(localized: "my_phones.error.push_failed", defaultValue: "Push numeri al server fallito: \(error.localizedDescription)", comment: "Error banner — publishing peppered phone hashes to the server failed, %@ is the underlying error description")
         }
     }
 
@@ -313,7 +313,7 @@ struct MyPhonesScreen: View {
             Button("Rimuovi", role: .destructive) {
                 if let phone = pendingRemovePhone {
                     container.removePhone(phone)
-                    snackbar?.show(.init(text: "Numero rimosso.", severity: .info))
+                    snackbar?.show(.init(text: String(localized: "my_phones.number_removed", defaultValue: "Numero rimosso.", comment: "Snackbar — a phone number was removed from the account's list"), severity: .info))
                 }
                 pendingRemovePhone = nil
             }
@@ -407,7 +407,7 @@ struct MyPhonesScreen: View {
             Spacer(minLength: 0)
             Button {
                 UIPasteboard.general.string = String(ext)
-                snackbar?.show(.init(text: "Interno copiato.", severity: .info))
+                snackbar?.show(.init(text: String(localized: "my_phones.extension_copied", defaultValue: "Interno copiato.", comment: "Snackbar — the account's dial extension was copied to the clipboard"), severity: .info))
             } label: {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 14, weight: .regular))
@@ -529,7 +529,7 @@ struct MyPhonesScreen: View {
                             let ok = await container.confirmOtp(
                                 serverUrl: appState.serverUrl, token: appState.authService.loadToken())
                             if ok {
-                                snackbar?.show(.init(text: "Numero verificato e aggiunto.", severity: .info))
+                                snackbar?.show(.init(text: String(localized: "my_phones.number_verified_added", defaultValue: "Numero verificato e aggiunto.", comment: "Snackbar — phone number OTP verification succeeded and the number was added to the list"), severity: .info))
                             }
                         }
                     } label: {
@@ -569,7 +569,7 @@ struct MyPhonesScreen: View {
                 await container.savePhones(serverUrl: appState.serverUrl, token: appState.authService.loadToken())
                 if container.error == nil {
                     snackbar?.show(.init(
-                        text: "Numeri salvati e pubblicati al server.",
+                        text: String(localized: "my_phones.numbers_saved", defaultValue: "Numeri salvati e pubblicati al server.", comment: "Snackbar — the phone numbers list was saved locally and published to the server"),
                         severity: .info))
                 }
             }

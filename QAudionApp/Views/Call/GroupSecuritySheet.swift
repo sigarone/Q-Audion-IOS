@@ -148,10 +148,18 @@ struct GroupSecuritySheet: View {
     /// EPOCA / PARTECIPANTI are live values from the current call.
     private var overviewBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            infoRow("CIFRA MEDIA", "AES-256-GCM")
-            infoRow("HANDSHAKE", "ML-KEM-1024 + X25519")
-            infoRow("EPOCA", "\(epoch)")
-            infoRow("PARTECIPANTI", "\(participants.count)")
+            // W-L10N-BATCH1 (2026-09-08) — infoRow's `label:` (first
+            // positional arg) is a plain String, not LocalizedStringKey
+            // (see its signature below), so these literal row-name
+            // labels don't auto-localize. `value:` arguments are left
+            // untouched: "AES-256-GCM"/"ML-KEM-1024 + X25519" are
+            // never-translate protocol tokens, and EPOCA/PARTECIPANTI's
+            // values are live call state (\(epoch)/\(participants.count)),
+            // not fixed copy.
+            infoRow(String(localized: "group_security.overview.media_cipher_label", defaultValue: "CIFRA MEDIA", comment: "Group call security sheet — overview row label for the media encryption cipher"), "AES-256-GCM")
+            infoRow(String(localized: "group_security.overview.handshake_label", defaultValue: "HANDSHAKE", comment: "Group call security sheet — overview row label for the key-exchange handshake"), "ML-KEM-1024 + X25519")
+            infoRow(String(localized: "group_security.overview.epoch_label", defaultValue: "EPOCA", comment: "Group call security sheet — overview row label for the current sender-key epoch number"), "\(epoch)")
+            infoRow(String(localized: "group_security.overview.participants_label", defaultValue: "PARTECIPANTI", comment: "Group call security sheet — overview row label for the participant count"), "\(participants.count)")
         }
     }
 

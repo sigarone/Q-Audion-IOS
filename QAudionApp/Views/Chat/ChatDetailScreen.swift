@@ -314,11 +314,11 @@ struct ChatDetailScreen: View {
             // SwiftUI struct literal trips Swift 6 / Xcode 26.4 type-checker
             // timeouts. See CLAUDE.md §13. Keep this pattern.
             let reasonText: String = reason.localizedDescription
-            let snackbarText: String = "Messaggio non inviato — " + reasonText
+            let snackbarText: String = String(localized: "chat_detail.message_send_failed", defaultValue: "Messaggio non inviato — \(reasonText)", comment: "Snackbar shown when a message fails to send; %@ is the localized failure reason description.")
             snackbar?.show(.init(
                 text: snackbarText,
                 severity: .error,
-                actionLabel: "Riprova",
+                actionLabel: String(localized: "chat_detail.retry_action", defaultValue: "Riprova", comment: "Snackbar action button label to retry sending a failed message."),
                 onAction: { container.retryFailedMessage() },
                 durationSeconds: 6
             ))
@@ -358,7 +358,7 @@ struct ChatDetailScreen: View {
                         pendingAttachmentSend = .image(data)
                     } else {
                         snackbar?.show(.init(
-                            text: "Nessuna immagine valida negli appunti.",
+                            text: String(localized: "chat_detail.no_valid_clipboard_image", defaultValue: "Nessuna immagine valida negli appunti.", comment: "Snackbar warning shown when the user taps \"paste image\" but the clipboard image could not be decoded to JPEG."),
                             severity: .warning, durationSeconds: 3))
                     }
                 } label: {
@@ -415,7 +415,7 @@ struct ChatDetailScreen: View {
                 onCopy: {
                     copyMessage(messageId: msgIdWrapper.id)
                     snackbar?.show(.init(
-                        text: "Testo copiato negli appunti.",
+                        text: String(localized: "chat_detail.text_copied", defaultValue: "Testo copiato negli appunti.", comment: "Snackbar confirming a message's text was copied to the clipboard from the bubble action sheet."),
                         severity: .info,
                         durationSeconds: 2
                     ))
@@ -478,7 +478,7 @@ struct ChatDetailScreen: View {
                 }
                 container.deleteMessage(target)
                 snackbar?.show(.init(
-                    text: "Messaggio eliminato per tutti.",
+                    text: String(localized: "chat_detail.message_deleted_for_all", defaultValue: "Messaggio eliminato per tutti.", comment: "Snackbar confirming a message was deleted for everyone after the destructive confirmation dialog."),
                     severity: .info,
                     durationSeconds: 2
                 ))
@@ -502,7 +502,7 @@ struct ChatDetailScreen: View {
             Button("Svuota", role: .destructive) {
                 container.clearLocalHistory()
                 snackbar?.show(.init(
-                    text: "Cronologia locale cancellata.",
+                    text: String(localized: "chat_detail.local_history_cleared", defaultValue: "Cronologia locale cancellata.", comment: "Snackbar confirming the local conversation history was cleared after the confirmation dialog."),
                     severity: .info,
                     durationSeconds: 2))
             }
@@ -773,7 +773,7 @@ struct ChatDetailScreen: View {
                 if ssGranted == true {
                     Button {
                         container.revokeScreenshotPermission()
-                        snackbar?.show(.init(text: "Autorizzazione screenshot revocata.",
+                        snackbar?.show(.init(text: String(localized: "chat_detail.screenshot_permission_revoked", defaultValue: "Autorizzazione screenshot revocata.", comment: "Snackbar confirming the peer's screenshot permission was revoked from the chat overflow menu."),
                                              severity: .info))
                     } label: {
                         Label("Revoca screenshot", systemImage: "camera.badge.ellipsis")
@@ -781,7 +781,7 @@ struct ChatDetailScreen: View {
                 } else {
                     Button {
                         container.requestScreenshotPermission()
-                        snackbar?.show(.init(text: "Richiesta screenshot inviata.",
+                        snackbar?.show(.init(text: String(localized: "chat_detail.screenshot_request_sent", defaultValue: "Richiesta screenshot inviata.", comment: "Snackbar confirming a screenshot permission request was sent to the peer from the chat overflow menu."),
                                              severity: .info))
                     } label: {
                         Label("Richiedi screenshot", systemImage: "camera")
@@ -798,7 +798,9 @@ struct ChatDetailScreen: View {
                         let ok = await container.toggleBlock()
                         await MainActor.run {
                             snackbar?.show(.init(
-                                text: ok ? "Contatto bloccato." : "Operazione fallita.",
+                                text: ok
+                                    ? String(localized: "chat_detail.contact_blocked", defaultValue: "Contatto bloccato.", comment: "Snackbar confirming the contact was blocked from the chat overflow menu.")
+                                    : String(localized: "chat_detail.operation_failed", defaultValue: "Operazione fallita.", comment: "Generic snackbar error shown when the block/unblock contact action fails."),
                                 severity: ok ? .info : .error,
                                 durationSeconds: 2))
                         }
@@ -1228,7 +1230,7 @@ struct ChatDetailScreen: View {
             container.deleteMessageLocally(target)
         }
         snackbar?.show(.init(
-            text: "Messaggio eliminato per te.",
+            text: String(localized: "chat_detail.message_deleted_for_me", defaultValue: "Messaggio eliminato per te.", comment: "Snackbar confirming a message was deleted locally (for me only) from the bubble action sheet."),
             severity: .info,
             durationSeconds: 3
         ))
@@ -1310,7 +1312,7 @@ struct ChatDetailScreen: View {
         // Single-statement static method — minimal context, single
         // overload. Type-checker resolves instantly even when callers
         // are deep inside closure stacks.
-        return "\(failed) foto su \(total) non leggibili."
+        return String(localized: "chat_detail.photos_partial_unreadable", defaultValue: "\(failed) foto su \(total) non leggibili.", comment: "Snackbar warning when some of the selected photos could not be read from the picker; %lld/%lld = failed count / total count.")
     }
 
     /// W611: stage-2 counterpart to `photoFailureSnackbarText` above.
@@ -1321,9 +1323,9 @@ struct ChatDetailScreen: View {
     /// used to be a print-only silent drop with zero user feedback.
     private static func photoSendFailureSnackbarText(failed: Int, total: Int) -> String {
         if total == 1 {
-            return "Invio foto non riuscito: formato non valido o file troppo grande."
+            return String(localized: "chat_detail.photo_send_failed_single", defaultValue: "Invio foto non riuscito: formato non valido o file troppo grande.", comment: "Snackbar error when sending a single photo attachment fails because the format is invalid or the file is too large.")
         }
-        return "\(failed) foto su \(total) non inviate: formato non valido o file troppo grandi."
+        return String(localized: "chat_detail.photos_send_failed_multi", defaultValue: "\(failed) foto su \(total) non inviate: formato non valido o file troppo grandi.", comment: "Snackbar error when sending multiple photo attachments and some failed because the format is invalid or the files are too large; %lld/%lld = failed count / total count.")
     }
 
     // MARK: - W447: pre-send attachment timer dialog — dispatch

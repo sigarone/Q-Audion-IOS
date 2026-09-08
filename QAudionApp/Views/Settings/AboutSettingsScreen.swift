@@ -195,7 +195,15 @@ struct AboutSettingsScreen: View {
                               mono: true)
                     }
                     section("SICUREZZA") {
-                        statusRow("ML-KEM-1024 (PQC)",
+                        // W-L10N-BATCH1 (2026-09-08) — statusRow's
+                        // `label:` (first positional arg) is a plain
+                        // String, not LocalizedStringKey (see its
+                        // signature below), so this literal doesn't
+                        // auto-localize. The text is entirely protocol/
+                        // technical identifiers (ML-KEM-1024, PQC) —
+                        // must stay byte-for-byte identical in every
+                        // language, never translated.
+                        statusRow(String(localized: "about_settings.security.mlkem_pqc_label", defaultValue: "ML-KEM-1024 (PQC)", comment: "About screen, SICUREZZA section — status row label; contains ML-KEM-1024/PQC — do not translate those tokens"),
                                   enabled: container.viewModel.mlKem1024Enabled)
                         kvRow("ONNX Runtime", container.viewModel.onnxruntimeVersion, mono: true)
                     }

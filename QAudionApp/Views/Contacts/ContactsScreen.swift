@@ -190,11 +190,11 @@ struct ContactsScreen: View {
 
     private func saveNewContact(_ draft: ContactEditorScreen.Draft) {
         guard let ext = Int64(draft.extensionText) else {
-            snackbar?.show(.init(text: "Interno non valido.", severity: .error))
+            snackbar?.show(.init(text: String(localized: "contacts.extension_invalid", defaultValue: "Interno non valido.", comment: "Snackbar — the extension number typed while adding a contact is not valid"), severity: .error))
             return
         }
         guard let provider = appState.liveProvider else {
-            snackbar?.show(.init(text: "Non connesso al server — riprova.", severity: .error))
+            snackbar?.show(.init(text: String(localized: "contacts.not_connected", defaultValue: "Non connesso al server — riprova.", comment: "Snackbar — cannot add a contact because there is no live server connection"), severity: .error))
             return
         }
         Task {
@@ -202,7 +202,7 @@ struct ContactsScreen: View {
                 guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
                     await MainActor.run {
                         snackbar?.show(.init(
-                            text: "Interno \(ext) non assegnato — verifica il numero.",
+                            text: String(localized: "contacts.extension_not_assigned", defaultValue: "Interno \(ext) non assegnato — verifica il numero.", comment: "Snackbar — the extension number typed while adding a contact has no assigned account; %lld is the extension number"),
                             severity: .error
                         ))
                     }
@@ -220,14 +220,14 @@ struct ContactsScreen: View {
                 ContactsStore().upsert(contact)
                 await MainActor.run {
                     snackbar?.show(.init(
-                        text: "Contatto \(draft.displayName) salvato in rubrica.",
+                        text: String(localized: "contacts.contact_saved", defaultValue: "Contatto \(draft.displayName) salvato in rubrica.", comment: "Snackbar — a new contact was successfully saved to the address book; %@ is their display name"),
                         severity: .info
                     ))
                 }
             } catch {
                 await MainActor.run {
                     snackbar?.show(.init(
-                        text: "Salvataggio fallito: \(error.localizedDescription)",
+                        text: String(localized: "contacts.save_failed", defaultValue: "Salvataggio fallito: \(error.localizedDescription)", comment: "Snackbar — saving a new contact failed; %@ is the underlying error description"),
                         severity: .error
                     ))
                 }
@@ -498,7 +498,7 @@ struct ContactsScreen: View {
         if let provider = appState.liveProvider {
             Task { try? await provider.contactsApi.unblockContact(userId: uid) }
         }
-        snackbar?.show(.init(text: name + " sbloccato.", severity: .info))
+        snackbar?.show(.init(text: String(localized: "contact_detail.contact_unblocked", defaultValue: "\(name) sbloccato.", comment: "Snackbar — a contact was unblocked, %@ is their display name"), severity: .info))
     }
 
     private var emptyAll: some View {

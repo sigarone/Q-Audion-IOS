@@ -100,10 +100,18 @@ struct CallSecurityBadge: View {
                 )
             }
 
-            detailRow(label: "Re-key", value: "\(appState.rekeyCount) rotazioni")
-            detailRow(label: "Cifratura", value: appState.encryptionAlgo)
-            detailRow(label: "Trasporto", value: appState.transportType)
-            detailRow(label: "Latenza", value: "\(appState.latencyMs) ms", valueColor: latencyColor)
+            // W-L10N-BATCH1 (2026-09-08) — detailRow's `label:` is a plain
+            // String (see its signature below), not LocalizedStringKey, so
+            // literal field-name labels here don't auto-localize. "PSK"
+            // above is left as-is (protocol acronym, glossary
+            // never-translate). "Re-key" default is kept verbatim English
+            // (that's the current shipped text even under the Italian
+            // locale) — not silently rewritten to Italian here, translators
+            // pick each language's real equivalent.
+            detailRow(label: String(localized: "call_security.label.rekey", defaultValue: "Re-key", comment: "Call security detail panel — field label for key-rotation count"), value: "\(appState.rekeyCount) rotazioni")
+            detailRow(label: String(localized: "call_security.label.encryption", defaultValue: "Cifratura", comment: "Call security detail panel — field label for the active encryption algorithm"), value: appState.encryptionAlgo)
+            detailRow(label: String(localized: "call_security.label.transport", defaultValue: "Trasporto", comment: "Call security detail panel — field label for the media transport type"), value: appState.transportType)
+            detailRow(label: String(localized: "call_security.label.latency", defaultValue: "Latenza", comment: "Call security detail panel — field label for round-trip latency"), value: "\(appState.latencyMs) ms", valueColor: latencyColor)
         }
         .padding(16)
         .background(.ultraThinMaterial)

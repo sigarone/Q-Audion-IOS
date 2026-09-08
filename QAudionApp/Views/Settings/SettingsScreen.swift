@@ -116,7 +116,7 @@ struct SettingsScreen: View {
             #if canImport(UIKit)
             UIPasteboard.general.string = bundleSummary
             snackbar?.show(.init(
-                text: "Versione copiata: \(bundleSummary)",
+                text: String(localized: "settings.version_copied", defaultValue: "Versione copiata: \(bundleSummary)", comment: "Snackbar — app version and build string copied to the clipboard, %@ is the version/build summary text"),
                 severity: .info,
                 durationSeconds: 3
             ))
@@ -242,7 +242,7 @@ struct SettingsScreen: View {
                         ) {
                             Button("Esci", role: .destructive) {
                                 snackbar?.show(.init(
-                                    text: "Sessione chiusa.",
+                                    text: String(localized: "settings.session_closed", defaultValue: "Sessione chiusa.", comment: "Snackbar — the user confirmed sign-out and the session was closed"),
                                     severity: .info,
                                     durationSeconds: 3))
                                 appState.logout()
@@ -543,9 +543,27 @@ struct SettingsScreen: View {
         .padding(.horizontal, 16)
     }
 
+    /// Native name of the currently effective app language, for the
+    /// "Lingua" row subtitle. No AppState involved — reads
+    /// `AppLanguageManager` directly per CLAUDE.md §16.
+    private var currentLanguageNativeName: String {
+        let code = AppLanguageManager.effectiveLanguageCode
+        return AppLanguageManager.supportedLanguages.first(where: { $0.code == code })?.nativeName ?? code
+    }
+
     private var infoSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
+            NavigationLink {
+                LazyView { LanguageSettingsScreen() }
+            } label: {
+                SettingsRow(icon: "globe",
+                            iconColor: scheme.primary,
+                            title: "Lingua",
+                            subtitle: currentLanguageNativeName)
+            }
+            .buttonStyle(.plain)
+
             NavigationLink {
                 LazyView { AboutSettingsScreen(state: appState) }
             } label: {

@@ -184,8 +184,8 @@ struct ChatListScreen: View {
                 }
                 snackbar?.show(.init(
                     text: n > 0
-                        ? "Segnate \(n) conversazioni come lette."
-                        : "Nessuna conversazione non letta.",
+                        ? String(localized: "chat_list.marked_all_read", defaultValue: "Segnate \(n) conversazioni come lette.", comment: "Snackbar confirming N conversations were marked as read via the overflow menu; %lld = count.")
+                        : String(localized: "chat_list.no_unread_conversations", defaultValue: "Nessuna conversazione non letta.", comment: "Snackbar shown when \"mark all as read\" is tapped but there were no unread conversations."),
                     severity: .info))
             } label: {
                 Label("Segna tutti come letti",
@@ -555,7 +555,7 @@ struct ChatListScreen: View {
     /// Message body for the delete confirmation. Built here rather than
     /// inline in the `@ViewBuilder` closure — SWIFT6_PATTERNS rule 1.
     private static func groupDeleteWarning(for name: String) -> String {
-        return "\"" + name + "\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
+        return String(localized: "chat_list.group_delete_warning", defaultValue: "\"\(name)\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata.", comment: "Alert body confirming group chat deletion; %@ is the group name. Explains that deleting also leaves the group and cannot be undone.")
     }
 
     /// Run the delete. Any member may do this — it is deliberately not
@@ -577,7 +577,7 @@ struct ChatListScreen: View {
     private func confirmGroupDelete(_ row: GroupRowUi) {
         pendingGroupDelete = nil
         let groupHex = row.hex
-        snackbar?.show(.init(text: "Chat di gruppo eliminata.", severity: .info))
+        snackbar?.show(.init(text: String(localized: "chat_list.group_chat_deleted", defaultValue: "Chat di gruppo eliminata.", comment: "Snackbar confirming a group chat was deleted locally (and left) after the user confirms the delete dialog."), severity: .info))
         Task { @MainActor in
             let outcome = await appState.deleteGroupChatAndWait(groupId: groupHex)
             groupRefreshToken &+= 1
@@ -588,8 +588,7 @@ struct ChatListScreen: View {
 
     /// Copy for the "deleted here, but the server does not know yet" case.
     /// Bound as a static rather than inline — SWIFT6_PATTERNS rule 1.
-    private static let groupLeavePendingNotice =
-        "Chat eliminata da questo dispositivo. Non è stato possibile completare l'uscita dal gruppo: l'app riproverà automaticamente."
+    private static let groupLeavePendingNotice = String(localized: "chat_list.group_leave_pending", defaultValue: "Chat eliminata da questo dispositivo. Non è stato possibile completare l'uscita dal gruppo: l'app riproverà automaticamente.", comment: "Snackbar shown after deleting a group chat locally when the server-side \"leave group\" call did not succeed yet; the app will retry automatically.")
 
     private func requestGroupDelete(_ row: GroupRowUi) {
         pendingGroupDelete = row
@@ -660,7 +659,9 @@ struct ChatListScreen: View {
         guard let last = last else { return nil }
         if !last.text.isEmpty { return last.text }
         if let kind = last.attachmentKind {
-            return kind == GroupAttachmentEnvelope.kindImage ? "[Foto]" : "[File]"
+            return kind == GroupAttachmentEnvelope.kindImage
+                ? String(localized: "chat_list.group_preview_photo", defaultValue: "[Foto]", comment: "Group chat row preview placeholder for the newest message when it is an un-captioned photo attachment")
+                : String(localized: "chat_list.group_preview_file", defaultValue: "[File]", comment: "Group chat row preview placeholder for the newest message when it is an un-captioned file attachment")
         }
         return nil
     }
@@ -869,7 +870,7 @@ struct ChatListScreen: View {
         if let preview = row.preview, !preview.isEmpty {
             return preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
         }
-        return "\(row.memberCount) membri · epoch \(row.epoch)"
+        return String(localized: "chat_list.group_preview_member_epoch", defaultValue: "\(row.memberCount) membri · epoch \(row.epoch)", comment: "Group chat row subtitle shown when there is no message yet; %lld = member count, %lld = epoch number.")
     }
 
     // MARK: - Conversation row (1-to-1)
@@ -1130,7 +1131,7 @@ struct ChatListScreen: View {
                 #if canImport(UIKit)
                 UIPasteboard.general.string = item.peerUserId
                 snackbar?.show(.init(
-                    text: "ID utente copiato.",
+                    text: String(localized: "chat_list.user_id_copied", defaultValue: "ID utente copiato.", comment: "Snackbar confirming the peer's user id was copied to the clipboard from the conversation row's long-press menu."),
                     severity: .info,
                     durationSeconds: 2
                 ))
@@ -1159,7 +1160,7 @@ struct ChatListScreen: View {
             peerDisplayName: item.peerDisplayName
         ) else {
             snackbar?.show(.init(
-                text: "Esportazione fallita.",
+                text: String(localized: "chat_list.export_failed", defaultValue: "Esportazione fallita.", comment: "Snackbar error shown when exporting a conversation transcript to a file fails."),
                 severity: .error,
                 durationSeconds: 3
             ))

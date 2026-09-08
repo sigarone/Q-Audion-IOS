@@ -115,7 +115,7 @@ struct PhoneContactImportView: View {
                 let name = stored.displayName
                 onImported(name)
                 snackbar?.show(.init(
-                    text: "Contatto \(name) importato in rubrica.",
+                    text: String(localized: "phone_contact_import.contact_imported", defaultValue: "Contatto \(name) importato in rubrica.", comment: "Snackbar — a device-contact was successfully imported into the address book; %@ is their display name"),
                     severity: .info
                 ))
             }

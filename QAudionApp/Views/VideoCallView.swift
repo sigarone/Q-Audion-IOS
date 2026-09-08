@@ -305,7 +305,12 @@ struct VideoCallView: View {
                         .foregroundColor(sasVerified ? .green : .white)
                 }
                 .padding(.trailing, 8)
-                .accessibilityLabel(sasVerified ? "Identità verificata (SAS)" : "Verifica identità (SAS) in sospeso")
+                // W-L10N-BATCH1 — ternary-in-.accessibilityLabel(variable);
+                // explicit lookup to avoid relying on overload-resolution
+                // ambiguity between the LocalizedStringKey and String forms.
+                .accessibilityLabel(sasVerified
+                    ? String(localized: "sas.accessibility.verified", defaultValue: "Identità verificata (SAS)", comment: "Accessibility label — SAS identity verification completed")
+                    : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Accessibility label — SAS identity verification still pending"))
             }
 
             // W502: diagnostics toggle button.
@@ -396,7 +401,10 @@ struct VideoCallView: View {
                 Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(sasVerified ? .green : .cyan)
-                Text(sasVerified ? "SAS VERIFICATO" : "CONFRONTA PAROLE")
+                // W-L10N-SASCONSOLIDATE — shared keys with InCallScreen's SAS panel.
+                Text(sasVerified
+                     ? String(localized: "sas.header.verified", defaultValue: "SAS VERIFICATO", comment: "SAS verification panel header — words already confirmed")
+                     : String(localized: "sas.header.compare_words", defaultValue: "CONFRONTA PAROLE", comment: "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party"))
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.8)
                     .foregroundColor(sasVerified ? .green : .cyan)
@@ -415,7 +423,9 @@ struct VideoCallView: View {
 
             if !sasVerified {
                 Button(action: confirmSas) {
-                    Text("CONFERMO")
+                    // W-L10N-SASCONSOLIDATE — was "CONFERMO", now shares
+                    // InCallScreen's sas.confirm.button key/wording ("CONFERMA").
+                    Text(String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
                         .font(.system(size: 10, weight: .bold))
                         .tracking(1.0)
                         .foregroundColor(.black)
@@ -607,18 +617,18 @@ struct VideoCallView: View {
     /// no named bands of its own) — matches InCallScreen's
     /// stressStatusWord thresholds so the two surfaces never disagree.
     private static func videoStressWord(_ pct: Float) -> String {
-        if pct < 35 { return "calmo" }
-        if pct < 60 { return "elevato" }
-        return "agitato"
+        if pct < 35 { return String(localized: "video_call.stress_word_calm", defaultValue: "calmo", comment: "Video call diagnostics row — interpreted voice-stress band label for a low composite stress score") }
+        if pct < 60 { return String(localized: "video_call.stress_word_elevated", defaultValue: "elevato", comment: "Video call diagnostics row — interpreted voice-stress band label for a mid-range composite stress score") }
+        return String(localized: "video_call.stress_word_agitated", defaultValue: "agitato", comment: "Video call diagnostics row — interpreted voice-stress band label for a high composite stress score")
     }
 
     /// REAL threshold: VoiceHealthMonitor.analyze computes
     /// `breathiness = max(0, 1 - hnr/20)`, so >20dB clear / <10dB hoarse
     /// is a direct reading of that formula.
     private static func videoHnrWord(_ hnr: Float) -> String {
-        if hnr > 20 { return "chiara" }
-        if hnr < 10 { return "rauca" }
-        return "media"
+        if hnr > 20 { return String(localized: "video_call.hnr_word_clear", defaultValue: "chiara", comment: "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for a clear voice (HNR > 20dB)") }
+        if hnr < 10 { return String(localized: "video_call.hnr_word_hoarse", defaultValue: "rauca", comment: "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for a hoarse voice (HNR < 10dB)") }
+        return String(localized: "video_call.hnr_word_medium", defaultValue: "media", comment: "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for the mid-range (10-20dB)")
     }
 
     @ViewBuilder

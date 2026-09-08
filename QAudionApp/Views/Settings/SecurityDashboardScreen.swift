@@ -180,7 +180,15 @@ struct SecurityDashboardScreen: View {
 
                     SettingsSectionHeader("STATO CHIAVI")
                     VStack(spacing: 8) {
-                        statusRow(label: "Stato",
+                        // W-L10N-BATCH1 (2026-09-08) — statusRow's
+                        // `label:` is a plain String, not
+                        // LocalizedStringKey (see its signature below),
+                        // so this literal doesn't auto-localize.
+                        // `value:` is `keyHealthLabel`, a computed
+                        // property (live, not a call-site literal) —
+                        // left untouched, same as the kt-status row
+                        // below.
+                        statusRow(label: String(localized: "security_dashboard.status.label", defaultValue: "Stato", comment: "Security dashboard — generic status row label (reused for key health and key-transparency rows)"),
                                   value: keyHealthLabel,
                                   tone: keyHealthColor)
                         kvRow(label: "Ultima rotazione",
@@ -195,7 +203,12 @@ struct SecurityDashboardScreen: View {
                     // submission is actually working.
                     SettingsSectionHeader("TRASPARENZA CHIAVE")
                     VStack(spacing: 8) {
-                        statusRow(label: "Stato",
+                        // W-L10N-BATCH1 (2026-09-08) — reuses the same
+                        // "Stato" key as the STATO CHIAVI row above
+                        // (identical Italian source text). `value:` is
+                        // `ktStatusLabel`, a computed property (live),
+                        // left untouched.
+                        statusRow(label: String(localized: "security_dashboard.status.label", defaultValue: "Stato", comment: "Security dashboard — generic status row label (reused for key health and key-transparency rows)"),
                                   value: ktStatusLabel,
                                   tone: ktStatusColor)
                     }

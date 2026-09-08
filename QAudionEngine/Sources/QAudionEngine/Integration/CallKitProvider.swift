@@ -102,7 +102,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // Tag the native (cleartext) call UI as an encrypted Q-Audion call. The
         // caller name itself is resolved from the LOCAL address book by the call
         // sites (PushKit + WS), so this only appends the security marker.
-        update.localizedCallerName = callerName + " · 🔒 Cifrata"
+        // W-L10N-BATCH1 (2026-09-08) — this is a plain String property, not a
+        // SwiftUI LocalizedStringKey, so it needs an explicit lookup; the
+        // engine target has no `import UIKit`/app bundle assumption issue
+        // here since String(localized:) resolves against the main app
+        // bundle's own Localizable.xcstrings at runtime regardless of which
+        // module the call site lives in.
+        let encryptedTag = String(localized: "callkit.encrypted_tag", defaultValue: "Cifrata", comment: "Suffix appended to the caller name on the native CallKit incoming-call screen, e.g. 'Marco · 🔒 Encrypted'")
+        update.localizedCallerName = callerName + " · 🔒 " + encryptedTag
         // W-CALLDIAG: every native report attempt logged (uuid + hasVideo). Two
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit

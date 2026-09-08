@@ -180,7 +180,9 @@ struct GroupInfoScreen: View {
                     guard !ids.isEmpty else { return }
                     onAddMembers(ids)
                     snackbar?.show(.init(
-                        text: ids.count == 1 ? "Membro aggiunto." : "\(ids.count) membri aggiunti.",
+                        text: ids.count == 1
+                            ? String(localized: "group_info.member_added_one", defaultValue: "Membro aggiunto.", comment: "Snackbar — exactly one member was added to the group")
+                            : String(localized: "group_info.members_added_many", defaultValue: "\(ids.count) membri aggiunti.", comment: "Snackbar — more than one member was added to the group; the number is the count added"),
                         severity: .info))
                 },
                 onCancel: { showingAddMembers = false })
@@ -195,7 +197,7 @@ struct GroupInfoScreen: View {
             Button("Rimuovi", role: .destructive) {
                 if let m = pendingRemoveMember {
                     onRemoveMember(m.userId)
-                    snackbar?.show(.init(text: "Membro rimosso.", severity: .info))
+                    snackbar?.show(.init(text: String(localized: "group_info.member_removed", defaultValue: "Membro rimosso.", comment: "Snackbar — a member was removed from the group"), severity: .info))
                 }
                 pendingRemoveMember = nil
             }
@@ -212,7 +214,7 @@ struct GroupInfoScreen: View {
                 guard !trimmed.isEmpty, trimmed != state.name else { return }
                 onRename(trimmed)
                 state.name = trimmed
-                snackbar?.show(.init(text: "Gruppo rinominato.", severity: .info))
+                snackbar?.show(.init(text: String(localized: "group_info.group_renamed", defaultValue: "Gruppo rinominato.", comment: "Snackbar — the group was successfully renamed"), severity: .info))
             }
         }
         // Fase 1C — admin promote/demote confirmation.
@@ -228,10 +230,10 @@ struct GroupInfoScreen: View {
                 if let m = pendingAdminToggle {
                     if m.isAdmin {
                         onDemoteAdmin(m.userId)
-                        snackbar?.show(.init(text: "\(m.displayName) non è più admin.", severity: .info))
+                        snackbar?.show(.init(text: String(localized: "group_info.member_demoted", defaultValue: "\(m.displayName) non è più admin.", comment: "Snackbar — a group member was demoted from admin, %@ is their display name"), severity: .info))
                     } else {
                         onPromoteAdmin(m.userId)
-                        snackbar?.show(.init(text: "\(m.displayName) è ora admin.", severity: .info))
+                        snackbar?.show(.init(text: String(localized: "group_info.member_promoted", defaultValue: "\(m.displayName) è ora admin.", comment: "Snackbar — a group member was promoted to admin, %@ is their display name"), severity: .info))
                     }
                 }
                 pendingAdminToggle = nil
@@ -248,16 +250,16 @@ struct GroupInfoScreen: View {
         Task { @MainActor in
             guard let raw = try? await item.loadTransferable(type: Data.self),
                   let img = UIImage(data: raw) else {
-                snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                snackbar?.show(.init(text: String(localized: "group_info.image_unreadable", defaultValue: "Immagine non leggibile", comment: "Snackbar — the picked group avatar image could not be read"), severity: .warning))
                 return
             }
             let resized = Self.resizeAvatar(img, to: CGSize(width: 512, height: 512))
             guard let jpeg = resized.jpegData(compressionQuality: 0.85) else {
-                snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                snackbar?.show(.init(text: String(localized: "group_info.image_unreadable", defaultValue: "Immagine non leggibile", comment: "Snackbar — the picked group avatar image could not be read"), severity: .warning))
                 return
             }
             onSetAvatar(jpeg)
-            snackbar?.show(.init(text: "Immagine del gruppo aggiornata.", severity: .info))
+            snackbar?.show(.init(text: String(localized: "group_info.avatar_updated", defaultValue: "Immagine del gruppo aggiornata.", comment: "Snackbar — the group avatar was successfully updated"), severity: .info))
         }
     }
 
@@ -531,7 +533,7 @@ struct GroupInfoScreen: View {
         // local registry/session) to the caller, which has the
         // groupId in scope and wires AppState.leaveGroup.
         snackbar?.show(.init(
-            text: "Hai lasciato il gruppo.",
+            text: String(localized: "group_info.left_group", defaultValue: "Hai lasciato il gruppo.", comment: "Snackbar — confirms the user has left the group"),
             severity: .info
         ))
         dismiss()
@@ -545,7 +547,7 @@ struct GroupInfoScreen: View {
     /// always true.
     private func handleDelete() {
         snackbar?.show(.init(
-            text: "Chat di gruppo eliminata.",
+            text: String(localized: "group_info.chat_deleted", defaultValue: "Chat di gruppo eliminata.", comment: "Snackbar — confirms the group chat was deleted from this device"),
             severity: .info
         ))
         dismiss()

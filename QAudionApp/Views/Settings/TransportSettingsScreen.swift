@@ -213,7 +213,14 @@ struct TransportSettingsScreen: View {
 
                     SettingsSectionHeader("DIAGNOSTICA")
                     VStack(spacing: 8) {
-                        statusRow(label: "Stato server",
+                        // W-L10N-BATCH1 (2026-09-08) — statusRow's
+                        // `label:` is a plain String, not
+                        // LocalizedStringKey (see its signature below),
+                        // so this literal doesn't auto-localize.
+                        // `value:` is `container.diagnostics.
+                        // serverStatus.label`, a live diagnostic result
+                        // (not a call-site literal) — left untouched.
+                        statusRow(label: String(localized: "transport_settings.status.server_label", defaultValue: "Stato server", comment: "Transport settings, DIAGNOSTICA section — status row label for the server connectivity check"),
                                   value: container.diagnostics.serverStatus.label,
                                   tone: container.diagnostics.serverStatus.tone(extras: extras))
                         kvRow(label: "Ultimo TURN RTT",

@@ -433,7 +433,7 @@ struct CallHistoryView: View {
 
     private static func filterCountLabel(total: Int, visible: Int, filtered: Bool) -> String {
         if filtered {
-            return String(visible) + " di " + String(total)
+            return String(localized: "call_history.filter_count_of_total", defaultValue: "\(visible) di \(total)", comment: "Call history filter row — shows how many entries are visible out of the total when the missed-only filter is active; %lld/%lld = visible count / total count.")
         }
         return String(total)
     }

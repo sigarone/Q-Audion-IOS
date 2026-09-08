@@ -75,6 +75,20 @@ struct QAudionApp: App {
     /// reactive-UserDefaults machinery entirely.
     @State private var screenshotProtectionEnabled: Bool
 
+    /// In-app language override — bumped by `AppLanguageManager.onLanguageChanged`,
+    /// drives `.environment(\.locale, ...)` below so every SwiftUI `Text`/
+    /// `LocalizedStringKey` re-resolves on a language switch. Deliberately
+    /// NOT a `.id(...)`-based tree rebuild (an earlier version of this code
+    /// did that and was caught in review: it reset `ContentView`'s own
+    /// `@State` — `splashResolved`, every `NavigationStack` position,
+    /// in-call screen state — on every language switch, kicking the user
+    /// back to the splash screen and out of whatever they were doing the
+    /// instant they picked a language). `AppLanguageManager`'s Bundle
+    /// swizzle (installed below) separately covers every `String(localized:)`
+    /// call site that ISN'T a SwiftUI view — plain Swift/Foundation code
+    /// has no `\.locale` environment to read.
+    @State private var currentLanguageCode = AppLanguageManager.effectiveLanguageCode
+
     init() {
         _screenshotProtectionEnabled = State(initialValue: PrivacyGate.screenshotProtectionEnabled)
         // W472 — install the native-crash catcher as the very first
@@ -83,6 +97,23 @@ struct QAudionApp: App {
         // the W417 telemetry on the NEXT launch (see `flushPendingReport`
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
+
+        // In-app language override — must install its Bundle swizzle before
+        // WindowGroup's first `body` evaluation (right after this init()
+        // returns), so every LocalizedStringKey lookup in the very first
+        // frame already resolves against the overridden language.
+        AppLanguageManager.installOverrideIfNeeded()
+        // No DispatchQueue/Task hop needed: `onLanguageChanged` is only
+        // ever invoked from `AppLanguageManager.setOverride`, itself
+        // @MainActor-isolated (the class is `@MainActor`), so every call
+        // already runs on the main thread by construction — wrapping it
+        // would also force this closure's captured `Binding` through a
+        // `@Sendable` boundary (DispatchQueue/Task closures are
+        // `@Sendable` under Swift 6 strict concurrency) for no benefit.
+        let languageBinding = $currentLanguageCode
+        AppLanguageManager.onLanguageChanged = {
+            languageBinding.wrappedValue = AppLanguageManager.effectiveLanguageCode
+        }
 
         // W-DBOPENRECOVER (2026-09-01) — a local-database open/migration
         // failure no longer traps the process (audit memory
@@ -133,6 +164,13 @@ struct QAudionApp: App {
         WindowGroup {
             ZStack {
                 ContentView()
+                    // In-app language override — SwiftUI re-evaluates every
+                    // Text/LocalizedStringKey that reads this environment
+                    // value on change, WITHOUT discarding ContentView's own
+                    // @State (splash/navigation/in-call screen position).
+                    // Scoped to ContentView only, not the outer ZStack, so
+                    // it never touches AppLockGateView's own state below.
+                    .environment(\.locale, Locale(identifier: currentLanguageCode))
                     .environmentObject(appState)
                     // Entitlements Task 5 (whole-phase-review finding I4,
                     // 2026-08-17) — `capabilityGate` is a plain `lazy var` on

@@ -555,7 +555,7 @@ struct GroupChatScreen: View {
     /// W320: snackbar copy helper. Static so it has its own clean
     /// type-check scope and no `@ViewBuilder` constraints.
     private static func formatGroupIdCopiedMessage(prefix: String) -> String {
-        return "ID gruppo copiato (" + prefix + "…)"
+        return String(localized: "group_chat.group_id_copied", defaultValue: "ID gruppo copiato (\(prefix)…)", comment: "Snackbar confirming the group id was copied to the clipboard after a long-press on the group chat header; %@ is the first 8 hex characters of the id.")
     }
 
     // MARK: - W-GRPRING: start a group call from the group chat
@@ -587,7 +587,7 @@ struct GroupChatScreen: View {
     private func handleStartGroupCall(video: Bool) {
         let invitees = groupCallInvitees
         guard !invitees.isEmpty else {
-            snackbar?.show(.init(text: "Nessun altro membro nel gruppo", severity: .info))
+            snackbar?.show(.init(text: String(localized: "group_chat.no_other_members", defaultValue: "Nessun altro membro nel gruppo", comment: "Snackbar shown when trying to start a group call but no other group members are available to invite."), severity: .info))
             return
         }
         let name = state.name
@@ -599,7 +599,7 @@ struct GroupChatScreen: View {
             groupId: dashedGroupId,  // dashed UUID == server wire id
             groupName: name)
         if created == nil {
-            snackbar?.show(.init(text: "Chiamata di gruppo non disponibile ora", severity: .error))
+            snackbar?.show(.init(text: String(localized: "group_chat.group_call_unavailable", defaultValue: "Chiamata di gruppo non disponibile ora", comment: "Snackbar error shown when creating a group call fails."), severity: .error))
         } else {
             // In-call chat panel — bind this call to its persisted group so
             // `GroupCallView`'s chat panel knows which group's messages/
@@ -809,7 +809,7 @@ struct GroupChatScreen: View {
         if failures > 0 {
             await MainActor.run {
                 snackbar?.show(.init(
-                    text: "\(failures) foto su \(items.count) non leggibili.",
+                    text: String(localized: "group_chat.photos_partial_unreadable", defaultValue: "\(failures) foto su \(items.count) non leggibili.", comment: "Snackbar warning in group chat / in-call chat panel when some selected photos could not be read from the picker; %lld/%lld = failed count / total count."),
                     severity: .warning, durationSeconds: 3))
             }
         }
@@ -856,7 +856,7 @@ struct GroupChatScreen: View {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 guard let data = try? Data(contentsOf: url) else {
-                    snackbar?.show(.init(text: "File non leggibile", severity: .warning))
+                    snackbar?.show(.init(text: String(localized: "group_chat.file_unreadable", defaultValue: "File non leggibile", comment: "Snackbar warning in group chat / in-call chat panel when a picked file's contents could not be read from disk before sending."), severity: .warning))
                     return
                 }
                 let ext = url.pathExtension
@@ -906,7 +906,7 @@ struct GroupChatScreen: View {
                 members: memberIds, selfId: selfId,
                 timerOverrideSeconds: timerOverrideSeconds, exportBlocked: exportBlocked)
         } catch {
-            snackbar?.show(.init(text: "Allegato non inviato — \(error.localizedDescription)",
+            snackbar?.show(.init(text: String(localized: "group_chat.attachment_send_failed", defaultValue: "Allegato non inviato — \(error.localizedDescription)", comment: "Snackbar error in group chat / in-call chat panel when preparing or sending a group attachment throws; %@ is the underlying error's localized description."),
                                  severity: .error, durationSeconds: 5))
             return
         }
@@ -1045,7 +1045,7 @@ struct GroupChatScreen: View {
                 GroupMemberRowUi(userId: selfId, displayName: "Tu",
                                  isAdmin: true, isSelf: true)
             ],
-            error: "Elenco membri non ancora disponibile — in attesa di sincronizzazione."
+            error: String(localized: "group_chat.error.members_not_synced", defaultValue: "Elenco membri non ancora disponibile — in attesa di sincronizzazione.", comment: "Error banner (surfaced via GroupInfoUiState.error, rendered by GroupInfoScreen) — the local group registry entry isn't populated yet, shown while waiting for the invite to sync")
         )
     }
 }

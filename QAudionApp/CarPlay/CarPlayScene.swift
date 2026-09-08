@@ -66,9 +66,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     private let conversationStore = ConversationStore()
     private let contactsStore = ContactsStore()
 
-    private let recentsTemplate = CPListTemplate(title: "Recenti", sections: [])
-    private let contactsTemplate = CPListTemplate(title: "Contatti", sections: [])
-    private let messagesTemplate = CPListTemplate(title: "Messaggi", sections: [])
+    // W-L10N-BATCH1 (2026-09-08) — CPListTemplate/CPListItem/CPContact/
+    // CPMessageListItem all take plain `String`, not SwiftUI's
+    // `LocalizedStringKey` — none of this file auto-localizes just by a
+    // String Catalog existing, unlike the Text()/Button() literals
+    // elsewhere in the app. Every fixed UI-chrome string below is now
+    // routed through String(localized:) with a stable key; dynamic values
+    // (contact names, call-record display names) are left untouched.
+    private let recentsTemplate = CPListTemplate(
+        title: String(localized: "carplay.tab.recents", defaultValue: "Recenti", comment: "CarPlay tab title — recent calls list"),
+        sections: [])
+    private let contactsTemplate = CPListTemplate(
+        title: String(localized: "carplay.tab.contacts", defaultValue: "Contatti", comment: "CarPlay tab title — contacts list"),
+        sections: [])
+    private let messagesTemplate = CPListTemplate(
+        title: String(localized: "carplay.tab.messages", defaultValue: "Messaggi", comment: "CarPlay tab title — conversations list"),
+        sections: [])
 
     private var recordsCancellable: AnyCancellable?
     private var contactsObserver: NSObjectProtocol?
@@ -83,7 +96,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
         recentsTemplate.tabSystemItem = .recents
         contactsTemplate.tabSystemItem = .contacts
-        messagesTemplate.tabTitle = "Messaggi"
+        messagesTemplate.tabTitle = String(localized: "carplay.tab.messages", defaultValue: "Messaggi", comment: "CarPlay tab title — conversations list")
         messagesTemplate.tabImage = UIImage(systemName: "message.fill")
 
         // CarPlay/Siri state-of-the-art plan S4 — the assistant cell needs
@@ -175,14 +188,16 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     private static func recentSubtitle(_ rec: CallRecord) -> String {
         var parts: [String] = []
         switch rec.direction {
-        case .incoming: parts.append("In entrata")
-        case .outgoing: parts.append("In uscita")
-        case .missed:   parts.append("Persa")
+        case .incoming: parts.append(String(localized: "carplay.recents.direction.incoming", defaultValue: "In entrata", comment: "CarPlay recents row — call direction"))
+        case .outgoing: parts.append(String(localized: "carplay.recents.direction.outgoing", defaultValue: "In uscita", comment: "CarPlay recents row — call direction"))
+        case .missed:   parts.append(String(localized: "carplay.recents.direction.missed", defaultValue: "Persa", comment: "CarPlay recents row — call direction"))
         }
         if let d = rec.durationSeconds {
             parts.append(formatDuration(d))
         }
-        if rec.isVideo { parts.append("Video") }
+        if rec.isVideo {
+            parts.append(String(localized: "carplay.recents.video_tag", defaultValue: "Video", comment: "CarPlay recents row — tag marking a video call"))
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -227,7 +242,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let items: [CPListItem] = contacts.map { c in
             let resolvedName = DisplayName.forUser(c.userId, contacts: [c])
             let item = CPListItem(text: resolvedName,
-                                  detailText: c.isVerified ? "Verificato" : nil)
+                                  detailText: c.isVerified
+                                      ? String(localized: "carplay.contacts.verified", defaultValue: "Verificato", comment: "CarPlay contact row — verified badge")
+                                      : nil)
             item.handler = { [weak self] _, completion in
                 self?.pushContactDetail(userId: c.userId, displayName: resolvedName, phoneNumber: c.phoneNumber)
                 completion()
@@ -286,7 +303,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             let unread = conv.unreadCount > 0
             let leadingConfig = CPMessageListItemLeadingConfiguration(
                 leadingItem: .none, leadingImage: nil, unread: unread)
-            let detail = unread ? "\(conv.unreadCount) non letti" : nil
+            let detail = unread
+                ? String(localized: "carplay.messages.unread_count", defaultValue: "\(conv.unreadCount) non letti", comment: "CarPlay conversation row — unread message count, %lld is the count")
+                : nil
             return CPMessageListItem(
                 conversationIdentifier: conv.peerUserId,
                 text: convTitle,
@@ -301,15 +320,18 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     // MARK: - Empty states
 
     private func configureEmptyStates() {
-        recentsTemplate.emptyViewTitleVariants = ["Nessuna chiamata recente"]
+        recentsTemplate.emptyViewTitleVariants =
+            [String(localized: "carplay.recents.empty.title", defaultValue: "Nessuna chiamata recente", comment: "CarPlay recents tab — empty state title")]
         recentsTemplate.emptyViewSubtitleVariants =
-            ["Le chiamate sicure compaiono qui"]
-        contactsTemplate.emptyViewTitleVariants = ["Nessun contatto"]
+            [String(localized: "carplay.recents.empty.subtitle", defaultValue: "Le chiamate sicure compaiono qui", comment: "CarPlay recents tab — empty state subtitle")]
+        contactsTemplate.emptyViewTitleVariants =
+            [String(localized: "carplay.contacts.empty.title", defaultValue: "Nessun contatto", comment: "CarPlay contacts tab — empty state title")]
         contactsTemplate.emptyViewSubtitleVariants =
-            ["Aggiungi contatti dall'app sul telefono"]
-        messagesTemplate.emptyViewTitleVariants = ["Nessuna conversazione"]
+            [String(localized: "carplay.contacts.empty.subtitle", defaultValue: "Aggiungi contatti dall'app sul telefono", comment: "CarPlay contacts tab — empty state subtitle")]
+        messagesTemplate.emptyViewTitleVariants =
+            [String(localized: "carplay.messages.empty.title", defaultValue: "Nessuna conversazione", comment: "CarPlay messages tab — empty state title")]
         messagesTemplate.emptyViewSubtitleVariants =
-            ["Le conversazioni cifrate compaiono qui"]
+            [String(localized: "carplay.messages.empty.subtitle", defaultValue: "Le conversazioni cifrate compaiono qui", comment: "CarPlay messages tab — empty state subtitle")]
     }
 }
 #endif

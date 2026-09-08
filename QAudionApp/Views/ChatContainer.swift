@@ -41,20 +41,23 @@ final class ChatContainer: ObservableObject {
         case uploadFailure   = "upload_failure"
         case generic         = "send_error"
 
+        // W-L10N-BATCH1 (2026-09-08) — this drives a plain-String error
+        // banner (not a SwiftUI Text literal at the display site), so it
+        // needs an explicit lookup here at the point of construction.
         var localizedDescription: String {
             switch self {
             case .pskMissing:
-                return "Errore di cifratura. Contatto non verificato."
+                return String(localized: "chat.send_error.psk_missing", defaultValue: "Errore di cifratura. Contatto non verificato.", comment: "Message-send failure banner — recipient's key isn't verified")
             case .cryptoFailure:
-                return "Errore crittografico. Riprova."
+                return String(localized: "chat.send_error.crypto_failure", defaultValue: "Errore crittografico. Riprova.", comment: "Message-send failure banner — generic crypto failure")
             case .networkError:
-                return "Errore di rete. Controlla la connessione."
+                return String(localized: "chat.send_error.network_error", defaultValue: "Errore di rete. Controlla la connessione.", comment: "Message-send failure banner — network error")
             case .notAuthenticated:
-                return "Sessione scaduta. Effettua di nuovo l'accesso."
+                return String(localized: "chat.send_error.not_authenticated", defaultValue: "Sessione scaduta. Effettua di nuovo l'accesso.", comment: "Message-send failure banner — session expired")
             case .uploadFailure:
-                return "Caricamento allegato fallito. Riprova."
+                return String(localized: "chat.send_error.upload_failure", defaultValue: "Caricamento allegato fallito. Riprova.", comment: "Message-send failure banner — attachment upload failed")
             case .generic:
-                return "Invio fallito. Riprova più tardi."
+                return String(localized: "chat.send_error.generic", defaultValue: "Invio fallito. Riprova più tardi.", comment: "Message-send failure banner — generic send failure")
             }
         }
     }

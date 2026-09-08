@@ -432,7 +432,7 @@ struct DiagnosticsExportScreen: View {
         HStack(spacing: 10) {
             Button {
                 UIPasteboard.general.string = container.report
-                snackbar?.show(.init(text: "Report copiato.", severity: .info))
+                snackbar?.show(.init(text: String(localized: "diagnostics_export.report_copied", defaultValue: "Report copiato.", comment: "Snackbar — shown after copying the diagnostics report text to the clipboard"), severity: .info))
             } label: {
                 Label("Copia", systemImage: "doc.on.doc")
                     .qaudionStyle(type.labelMedium)

@@ -164,12 +164,17 @@ public struct TrustVerificationCard: View {
         }
     }
 
+    // W-L10N-BATCH1 (2026-09-08) — plain-String switch, not a Text literal
+    // at the display site; explicit lookup. "Pinned (TOFU)" is a fixed
+    // technical phrase (Trust On First Use) kept untranslated in every
+    // language, same convention as SAS/ML-KEM elsewhere — see the l10n
+    // glossary.
     private var headerLabel: String {
         switch state {
-        case .unverified:          return "Non verificato"
+        case .unverified:          return String(localized: "trust.header.unverified", defaultValue: "Non verificato", comment: "Contact trust badge — unverified state")
         case .identityPinnedTofu:  return "Pinned (TOFU)"
-        case .userVerified:        return "Verificato"
-        case .identityChanged:     return "🚨 Identità cambiata"
+        case .userVerified:        return String(localized: "trust.header.verified", defaultValue: "Verificato", comment: "Contact trust badge — verified state")
+        case .identityChanged:     return String(localized: "trust.header.identity_changed", defaultValue: "🚨 Identità cambiata", comment: "Contact trust badge — the peer's identity key changed since last verification")
         }
     }
 

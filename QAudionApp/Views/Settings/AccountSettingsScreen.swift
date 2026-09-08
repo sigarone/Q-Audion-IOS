@@ -135,7 +135,7 @@ final class AccountSettingsContainer: ObservableObject {
 
     func loadFromServer() {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             isLoading = false
             return
         }
@@ -234,7 +234,7 @@ final class AccountSettingsContainer: ObservableObject {
     @discardableResult
     func saveProfile() async -> Bool {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             return false
         }
         // Persist the local public phone on every save. The setter
@@ -274,7 +274,7 @@ final class AccountSettingsContainer: ObservableObject {
     /// to a desktop. Best-effort; errors surface as errorMessage.
     func exportMyData(presenting: UIViewController) {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             return
         }
         Task {
@@ -313,7 +313,7 @@ final class AccountSettingsContainer: ObservableObject {
     /// Caller wraps this in a confirmation alert per UX guidelines.
     func deleteAccount() {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             return
         }
         Task {
@@ -604,12 +604,12 @@ struct AccountSettingsScreen: View {
                 // shown anywhere.
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
-                        container.errorMessage = "Impossibile leggere la foto selezionata."
+                        container.errorMessage = String(localized: "account_settings.error.photo_read_failed", defaultValue: "Impossibile leggere la foto selezionata.", comment: "Error banner — the selected photo item could not be loaded as Data via PhotosPickerItem.loadTransferable")
                         selectedItem = nil
                         return
                     }
                     guard let img = UIImage(data: data) else {
-                        container.errorMessage = "Formato immagine non valido."
+                        container.errorMessage = String(localized: "account_settings.error.photo_format_invalid", defaultValue: "Formato immagine non valido.", comment: "Error banner — the loaded photo data could not be decoded into a UIImage")
                         selectedItem = nil
                         return
                     }
@@ -989,7 +989,7 @@ struct AccountSettingsScreen: View {
             Task {
                 if await container.saveProfile() {
                     snackbar?.show(.init(
-                        text: "Profilo aggiornato.",
+                        text: String(localized: "account_settings.profile_updated", defaultValue: "Profilo aggiornato.", comment: "Snackbar — shown after successfully saving profile changes (display name, status, phone)"),
                         severity: .info
                     ))
                 }

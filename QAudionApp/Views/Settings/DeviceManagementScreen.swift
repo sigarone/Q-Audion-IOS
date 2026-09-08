@@ -288,7 +288,7 @@ struct DeviceManagementScreen: View {
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     container.refresh()
-                    snackbar?.show(.init(text: "Lista aggiornata.", severity: .info,
+                    snackbar?.show(.init(text: String(localized: "device_management.list_refreshed", defaultValue: "Lista aggiornata.", comment: "Snackbar — shown after tapping the AGGIORNA (refresh) toolbar button on the device list"), severity: .info,
                                          durationSeconds: 2))
                 } label: {
                     Text("AGGIORNA")
@@ -305,7 +305,7 @@ struct DeviceManagementScreen: View {
                 if let id = showingRevokeConfirm {
                     container.revoke(deviceId: id)
                     snackbar?.show(.init(
-                        text: "Dispositivo revocato.",
+                        text: String(localized: "device_management.device_revoked", defaultValue: "Dispositivo revocato.", comment: "Snackbar — shown after confirming revocation of a linked device"),
                         severity: .info
                     ))
                 }
@@ -319,7 +319,7 @@ struct DeviceManagementScreen: View {
                 LinkNewDeviceScreen { newDeviceId in
                     showingLinkNew = false
                     snackbar?.show(.init(
-                        text: "Dispositivo collegato.",
+                        text: String(localized: "device_management.device_linked", defaultValue: "Dispositivo collegato.", comment: "Snackbar — shown after successfully linking a new device via QR"),
                         severity: .info
                     ))
                     // I8: truncate device id before it reaches the uploadable

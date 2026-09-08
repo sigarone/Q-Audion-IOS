@@ -2,14 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App Store metadata consistency: the entire UI is hardcoded Italian
-	     (no Localizable.strings/*.lproj, single-language app, not a
-	     rejection cause by itself). CFBundleDevelopmentRegion should match
-	     the actual shipped language. Separately, set the "Italian" primary
-	     language in App Store Connect's app metadata before submission,
-	     that's a dashboard setting, not derived from this key. -->
+	<!-- CFBundleDevelopmentRegion stays "it": that's the source language of
+	     Localizable.xcstrings (QAudionApp/Localizable.xcstrings) and the
+	     language every string was originally authored/reviewed in.
+	     Separately, set the "Italian" primary language in App Store
+	     Connect's app metadata, that's a dashboard setting, not derived
+	     from this key. -->
 	<key>CFBundleDevelopmentRegion</key>
 	<string>it</string>
+	<!-- W-L10N-BATCH1 (2026-09-08) — real supported-language set, so App
+	     Store Connect and iOS itself see it (affects the Settings.app
+	     per-app language picker and App Store listing language matching).
+	     Order: dev region first, then the rest alphabetical by code —
+	     matches no particular priority, iOS doesn't treat array order as
+	     ranking. Batch 2 (ru/ar/zh-Hans/ja/nl/tr/pl/ko) is deliberately
+	     NOT listed yet — see the l10n plan doc, this is Batch 1 only. -->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>it</string>
+		<string>en</string>
+		<string>es</string>
+		<string>fr</string>
+		<string>de</string>
+		<string>pt-BR</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Q-Audion</string>
 	<key>CFBundleExecutable</key>

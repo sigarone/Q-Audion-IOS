@@ -256,7 +256,7 @@ struct CreateGroupScreen: View {
 
     private func handleCreate() {
         guard canCreate else {
-            state.error = "Seleziona almeno un contatto"
+            state.error = String(localized: "create_group.error.no_members_selected", defaultValue: "Seleziona almeno un contatto", comment: "Error banner — user tapped Crea with no members selected")
             return
         }
         // W400: real path. AppState.createGroup persists in
@@ -277,7 +277,7 @@ struct CreateGroupScreen: View {
             name: displayName, members: memberIds, admins: []
         ) else {
             state.creating = false
-            state.error = "Impossibile creare il gruppo (utente non autenticato)"
+            state.error = String(localized: "create_group.error.not_authenticated", defaultValue: "Impossibile creare il gruppo (utente non autenticato)", comment: "Error banner — appState.createGroup returned nil because the user isn't authenticated")
             return
         }
         // Convert the gidHex back to UUID for the existing
@@ -290,7 +290,7 @@ struct CreateGroupScreen: View {
             try? await Task.sleep(nanoseconds: 200_000_000)
             state.creating = false
             snackbar?.show(.init(
-                text: "Gruppo \"\(displayName)\" creato. Invio inviti…",
+                text: String(localized: "create_group.group_created", defaultValue: "Gruppo \"\(displayName)\" creato. Invio inviti…", comment: "Snackbar confirming a new group was created and invites are being sent; %@ is the group's display name."),
                 severity: .info
             ))
             dismiss()

@@ -81,7 +81,7 @@ final class UpgradeSheetContainer: ObservableObject {
         guard verifyActivationCodeChecksum(trimmed) else {
             // Fails fast, entirely offline — no api/capabilityGate call of
             // any kind happens on this branch.
-            error = "Codice non valido — controlla di averlo copiato per intero."
+            error = String(localized: "upgrade_sheet.error.invalid_checksum", defaultValue: "Codice non valido — controlla di averlo copiato per intero.", comment: "Error text — the pasted activation code failed the local checksum validation before any network call")
             return
         }
         submitting = true
@@ -166,21 +166,21 @@ final class UpgradeSheetContainer: ObservableObject {
     /// needing a VPS log pull.
     private static func redemptionErrorMessage(_ error: Error) -> String {
         guard let bcError = error as? BCryptoError else {
-            return "Errore di rete — verifica la connessione e riprova."
+            return String(localized: "upgrade_sheet.error.network_generic", defaultValue: "Errore di rete — verifica la connessione e riprova.", comment: "Error text — redeem failed with a non-BCryptoError (generic network failure)")
         }
         switch bcError {
         case .httpError(let status):
             switch status {
-            case 0: return "Errore di connessione — verifica la rete e riprova."
-            case 400: return "Codice non valido."
-            case 401, 403: return "Sessione non attiva — accedi di nuovo."
-            case 409: return "Codice già utilizzato o non disponibile."
-            case 429: return "Troppi tentativi — riprova più tardi."
-            case 500...599: return "Errore del server — riprova più tardi."
-            default: return "Errore imprevisto (\(status))."
+            case 0: return String(localized: "upgrade_sheet.error.connection_failed", defaultValue: "Errore di connessione — verifica la rete e riprova.", comment: "Error text — redeem failed with httpError status 0 (transport did not return an HTTPURLResponse, connectivity glitch)")
+            case 400: return String(localized: "upgrade_sheet.error.code_invalid", defaultValue: "Codice non valido.", comment: "Error text — redeem failed with HTTP 400 (invalid/unknown/revoked/expired/bind-mismatch code)")
+            case 401, 403: return String(localized: "upgrade_sheet.error.session_inactive", defaultValue: "Sessione non attiva — accedi di nuovo.", comment: "Error text — redeem failed with HTTP 401/403 (session no longer valid)")
+            case 409: return String(localized: "upgrade_sheet.error.code_conflict", defaultValue: "Codice già utilizzato o non disponibile.", comment: "Error text — redeem failed with HTTP 409 (code already redeemed by a different account, exhausted, or grant revoked)")
+            case 429: return String(localized: "upgrade_sheet.error.rate_limited", defaultValue: "Troppi tentativi — riprova più tardi.", comment: "Error text — redeem failed with HTTP 429 (too many attempts, rate limited)")
+            case 500...599: return String(localized: "upgrade_sheet.error.server_error", defaultValue: "Errore del server — riprova più tardi.", comment: "Error text — redeem failed with HTTP 5xx (server-side error)")
+            default: return String(localized: "upgrade_sheet.error.unexpected_status", defaultValue: "Errore imprevisto (\(status)).", comment: "Error text — redeem failed with an unenumerated HTTP status, %lld is the raw status code")
             }
         case .unauthorized:
-            return "Sessione non attiva — accedi di nuovo."
+            return String(localized: "upgrade_sheet.error.session_inactive", defaultValue: "Sessione non attiva — accedi di nuovo.", comment: "Error text — redeem failed with BCryptoError.unauthorized (session no longer valid)")
         // W-B10PAYREQ (2026-09-02) — the redeem endpoint itself isn't
         // feat.*-gated today (verified: `redeemActivationCode`/
         // `fetchEntitlementsToken` in `CapabilityGate.swift` carry no
@@ -193,7 +193,7 @@ final class UpgradeSheetContainer: ObservableObject {
         case .paymentRequired:
             return bcError.userFacingMessage
         default:
-            return "Errore imprevisto."
+            return String(localized: "upgrade_sheet.error.unexpected_generic", defaultValue: "Errore imprevisto.", comment: "Error text — redeem failed with a BCryptoError case that has no specific message (fallback default)")
         }
     }
 }
@@ -249,7 +249,9 @@ struct UpgradeSheet: View {
         .onChange(of: container.success) { success in
             guard success else { return }
             snackbar?.show(.init(
-                text: container.alreadyRedeemed ? "Codice già attivo su questo account." : "Account attivato.",
+                text: container.alreadyRedeemed
+                    ? String(localized: "upgrade_sheet.already_redeemed", defaultValue: "Codice già attivo su questo account.", comment: "Snackbar — the activation code was already redeemed on this account (idempotent replay)")
+                    : String(localized: "upgrade_sheet.activated", defaultValue: "Account attivato.", comment: "Snackbar — Pro account activation succeeded after redeeming a code"),
                 severity: .info))
         }
     }

@@ -125,7 +125,7 @@ final class OtaUpdateContainer: ObservableObject {
 
         switch checker.lastResult {
         case .none:
-            error = "Nessuna risposta dal server."
+            error = String(localized: "ota_update.error.no_response", defaultValue: "Nessuna risposta dal server.", comment: "Error banner — the OTA catalog check returned no result from the server")
         case .noUpdate:
             // Mantieni la catalog list esistente; nessun nuovo entry.
             // Reload mock per coerenza con UX precedente.
@@ -150,7 +150,7 @@ final class OtaUpdateContainer: ObservableObject {
             allReleases = [serverEntry]
             applyChannel()
         case .error(let msg):
-            error = "Verifica fallita: \(msg)"
+            error = String(localized: "ota_update.error.check_failed", defaultValue: "Verifica fallita: \(msg)", comment: "Error banner — the OTA catalog check failed, %@ is the underlying error message")
         }
     }
 
@@ -229,7 +229,7 @@ struct OtaUpdateScreen: View {
                 Task {
                     await container.install()
                     snackbar?.show(.init(
-                        text: "Aggiornamento a \(release.versionName) avviato.",
+                        text: String(localized: "ota_update.update_started", defaultValue: "Aggiornamento a \(release.versionName) avviato.", comment: "Snackbar — OTA update install action started, %@ is the release version name"),
                         severity: .info))
                 }
             }
@@ -505,7 +505,7 @@ struct OtaUpdateScreen: View {
         HStack(spacing: 10) {
             Button {
                 Task { await container.check(serverUrl: appState.serverUrl) }
-                snackbar?.show(.init(text: "Verifica avviata.",
+                snackbar?.show(.init(text: String(localized: "ota_update.check_started", defaultValue: "Verifica avviata.", comment: "Snackbar — OTA catalog check request started"),
                                      severity: .info,
                                      durationSeconds: 2))
             } label: {

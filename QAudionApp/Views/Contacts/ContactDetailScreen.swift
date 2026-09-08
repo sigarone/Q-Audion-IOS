@@ -106,7 +106,7 @@ struct ContactDetailScreen: View {
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     snackbar?.show(.init(
-                        text: "\(removedName) rimosso dalla rubrica.",
+                        text: String(localized: "contact_detail.contact_removed", defaultValue: "\(removedName) rimosso dalla rubrica.", comment: "Snackbar — a contact was removed from the address book, %@ is their display name"),
                         severity: .info
                     ))
                 }
@@ -136,7 +136,7 @@ struct ContactDetailScreen: View {
                 PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
                 Task { await loadTrustEvaluation() }
                 snackbar?.show(.init(
-                    text: "\(item.displayName) verificato via \(method.localized).",
+                    text: String(localized: "contact_detail.contact_verified_via", defaultValue: "\(item.displayName) verificato via \(method.localized).", comment: "Snackbar — a contact was verified via SAS; first %@ is their display name, second %@ is the verification method"),
                     severity: .info
                 ))
             })
@@ -170,7 +170,7 @@ struct ContactDetailScreen: View {
                         // rebuild helpers use internally) and upsert it.
                         let store = ContactsStore()
                         guard let existing = store.load().first(where: { $0.userId == item.userId }) else {
-                            snackbar?.show(.init(text: "Contatto non trovato.", severity: .error))
+                            snackbar?.show(.init(text: String(localized: "contact_detail.contact_not_found", defaultValue: "Contatto non trovato.", comment: "Snackbar — the contact being edited could not be found in local storage"), severity: .error))
                             return
                         }
                         let updated = ContactsStore.StoredContact(
@@ -192,7 +192,7 @@ struct ContactDetailScreen: View {
                             voiceVerifiedAt: existing.voiceVerifiedAt
                         )
                         store.upsert(updated)
-                        snackbar?.show(.init(text: "Contatto aggiornato.", severity: .info))
+                        snackbar?.show(.init(text: String(localized: "contact_detail.contact_updated", defaultValue: "Contatto aggiornato.", comment: "Snackbar — contact edits were saved successfully"), severity: .info))
                     }
                 )
                 .navigationBarBackButtonHidden(true)
@@ -640,7 +640,7 @@ struct ContactDetailScreen: View {
                     PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
                     Task { await loadTrustEvaluation() }
                     snackbar?.show(.init(
-                        text: "Identità di \(item.displayName) marcata verificata via \(method.localized).",
+                        text: String(localized: "contact_detail.identity_marked_verified", defaultValue: "Identità di \(item.displayName) marcata verificata via \(method.localized).", comment: "Snackbar — the contact's identity was marked verified from the safety-number card; first %@ is their display name, second %@ is the verification method"),
                         severity: .info
                     ))
                 },
@@ -649,7 +649,7 @@ struct ContactDetailScreen: View {
                     PeerTrustEvaluator.acceptNewFingerprint(peerUserId: item.userId, newPeerIkEdPub: newKey)
                     Task { await loadTrustEvaluation() }
                     snackbar?.show(.init(
-                        text: "Nuova identità accettata.",
+                        text: String(localized: "contact_detail.new_identity_accepted", defaultValue: "Nuova identità accettata.", comment: "Snackbar — the contact's rotated identity key was accepted, re-pinning trust"),
                         severity: .warning
                     ))
                 }
@@ -967,7 +967,7 @@ struct ContactDetailScreen: View {
         if let provider = appState.liveProvider {
             Task { try? await provider.contactsApi.blockContact(userId: uid) }
         }
-        let msg: String = name + " bloccato."
+        let msg: String = String(localized: "contact_detail.contact_blocked", defaultValue: "\(name) bloccato.", comment: "Snackbar — a contact was blocked, %@ is their display name")
         snackbar?.show(.init(text: msg, severity: .info))
     }
 
@@ -979,14 +979,14 @@ struct ContactDetailScreen: View {
         if let provider = appState.liveProvider {
             Task { try? await provider.contactsApi.unblockContact(userId: uid) }
         }
-        let msg: String = name + " sbloccato."
+        let msg: String = String(localized: "contact_detail.contact_unblocked", defaultValue: "\(name) sbloccato.", comment: "Snackbar — a contact was unblocked, %@ is their display name")
         snackbar?.show(.init(text: msg, severity: .info))
     }
 
     /// W294: build the guidance snackbar text via static method to keep
     /// the closure body trivial. CLAUDE.md §13.
     private static func openChatGuidance(peer: String) -> String {
-        return "Apri la chat con " + peer + " dalla scheda Chat."
+        return String(localized: "contact_detail.open_chat_guidance", defaultValue: "Apri la chat con \(peer) dalla scheda Chat.", comment: "Snackbar — guidance shown after tapping the Chat quick action; %@ is the contact's display name")
     }
 }
 

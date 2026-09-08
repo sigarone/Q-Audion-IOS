@@ -110,7 +110,7 @@ struct KeyManagementScreen: View {
             Button("Ruota", role: .destructive) {
                 coordinator.rotate()
                 snackbar?.show(.init(
-                    text: "Rotazione chiavi avviata.",
+                    text: String(localized: "key_management.rotation_started", defaultValue: "Rotazione chiavi avviata.", comment: "Snackbar — X25519 ephemeral key rotation started after the user confirms the rotate-keys alert"),
                     severity: .warning,
                     durationSeconds: 5
                 ))

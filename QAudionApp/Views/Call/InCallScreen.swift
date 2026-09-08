@@ -1179,7 +1179,15 @@ struct InCallScreen: View {
                 Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(sasVerified ? extras.success : scheme.primary)
-                Text(sasVerified ? "SAS VERIFICATO" : "CONFRONTA QUESTE PAROLE")
+                // W-L10N-BATCH1 (2026-09-08) — ternary-in-Text(variable) does
+                // NOT auto-localize (confirmed for this codebase); explicit
+                // lookup. Shared key with VideoCallView's SAS mini panel —
+                // W-L10N-SASCONSOLIDATE also unifies the previously-different
+                // wording ("CONFRONTA QUESTE PAROLE" here vs "CONFRONTA
+                // PAROLE" there) into one canonical string, see the plan doc.
+                Text(sasVerified
+                     ? String(localized: "sas.header.verified", defaultValue: "SAS VERIFICATO", comment: "SAS verification panel header — words already confirmed")
+                     : String(localized: "sas.header.compare_words", defaultValue: "CONFRONTA PAROLE", comment: "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party"))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
                     .foregroundStyle(sasVerified ? extras.success : scheme.primary)
@@ -1199,7 +1207,19 @@ struct InCallScreen: View {
             }
 
             Button(action: onConfirmSas) {
-                Text(sasVerified ? "VERIFICATO" : "CONFERMA COINCIDONO")
+                // W-L10N-SASCONSOLIDATE — kept as its own key rather than
+                // reusing trust.header.verified: that key's default is
+                // title-case "Verificato" (TrustVerificationCard's own
+                // styling), while THIS button's label is literally ALL-CAPS
+                // in the source text (no .textCase modifier doing it) —
+                // reusing the title-case key would visually downgrade this
+                // button's emphasis. The action label DOES consolidate from
+                // "CONFERMA COINCIDONO" to "CONFERMA", shared with
+                // VideoCallView's SAS mini panel (previously "CONFERMO"
+                // there) — see the l10n plan doc.
+                Text(sasVerified
+                     ? String(localized: "sas.confirm.button_verified", defaultValue: "VERIFICATO", comment: "SAS verification button — disabled state after confirmation, ALL CAPS styling")
+                     : String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
                     .qaudionStyle(type.labelLarge)
                     .tracking(1.2)
                     .foregroundStyle(sasVerified ? extras.success : scheme.onPrimary)
@@ -2831,9 +2851,9 @@ struct InCallScreen: View {
     /// avatar-halo tone.
     private func confidenceWord(_ value: Float) -> String {
         switch ConfidenceThresholds.category(of: Double(value)) {
-        case 0:  return "genuina"
-        case 1:  return "verifica con SAS"
-        default: return "a rischio"
+        case 0:  return String(localized: "in_call.confidence_word_genuine", defaultValue: "genuina", comment: "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)")
+        case 1:  return String(localized: "in_call.confidence_word_verify_sas", defaultValue: "verifica con SAS", comment: "Biometrics row value — voice authenticity confidence label for the mid-range score, prompting an SAS compare")
+        default: return String(localized: "in_call.confidence_word_at_risk", defaultValue: "a rischio", comment: "Biometrics row value — voice authenticity confidence label when the score is below the red threshold (possible synthetic voice)")
         }
     }
     private func confidenceColorFor(_ value: Float) -> Color {

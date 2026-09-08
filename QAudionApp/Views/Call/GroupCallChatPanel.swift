@@ -422,7 +422,7 @@ struct GroupCallChatPanel: View {
             plaintext: plaintext, groupId: groupHex, members: members, selfId: selfId
         ) else {
             print("[GroupCallChatPanel] encrypt failed for group \(groupHex.prefix(8))…")
-            snackbar?.show(.init(text: "Messaggio non inviato", severity: .error))
+            snackbar?.show(.init(text: String(localized: "group_call_chat.message_not_sent", defaultValue: "Messaggio non inviato", comment: "Snackbar shown in the in-call group chat panel when encrypting or sending a text message to the group fails."), severity: .error))
             return
         }
         NotificationCenter.default.post(
@@ -464,7 +464,7 @@ struct GroupCallChatPanel: View {
         if failures > 0 {
             await MainActor.run {
                 snackbar?.show(.init(
-                    text: "\(failures) foto su \(items.count) non leggibili.",
+                    text: String(localized: "group_chat.photos_partial_unreadable", defaultValue: "\(failures) foto su \(items.count) non leggibili.", comment: "Snackbar warning in group chat / in-call chat panel when some selected photos could not be read from the picker; %lld/%lld = failed count / total count."),
                     severity: .warning, durationSeconds: 3))
             }
         }
@@ -510,7 +510,7 @@ struct GroupCallChatPanel: View {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 guard let data = try? Data(contentsOf: url) else {
-                    snackbar?.show(.init(text: "File non leggibile", severity: .warning))
+                    snackbar?.show(.init(text: String(localized: "group_chat.file_unreadable", defaultValue: "File non leggibile", comment: "Snackbar warning in group chat / in-call chat panel when a picked file's contents could not be read from disk before sending."), severity: .warning))
                     return
                 }
                 let ext = url.pathExtension
@@ -541,7 +541,7 @@ struct GroupCallChatPanel: View {
                 members: members, selfId: selfId,
                 timerOverrideSeconds: timerOverrideSeconds, exportBlocked: exportBlocked)
         } catch {
-            snackbar?.show(.init(text: "Allegato non inviato — \(error.localizedDescription)",
+            snackbar?.show(.init(text: String(localized: "group_chat.attachment_send_failed", defaultValue: "Allegato non inviato — \(error.localizedDescription)", comment: "Snackbar error in group chat / in-call chat panel when preparing or sending a group attachment throws; %@ is the underlying error's localized description."),
                                  severity: .error, durationSeconds: 5))
             return
         }

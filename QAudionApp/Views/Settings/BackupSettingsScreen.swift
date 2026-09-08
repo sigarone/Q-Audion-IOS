@@ -269,7 +269,7 @@ struct BackupSettingsScreen: View {
                         // riskHigh esistente fa il proprio lavoro).
                         if container.coordinator.errorMessage == nil {
                             snackbar?.show(.init(
-                                text: "Backup cifrato completato.",
+                                text: String(localized: "backup_settings.backup_completed", defaultValue: "Backup cifrato completato.", comment: "Snackbar — shown after a local encrypted backup completes successfully"),
                                 severity: .info))
                         }
                     }
@@ -290,7 +290,7 @@ struct BackupSettingsScreen: View {
                         await container.restore(password: pwd)
                         if container.coordinator.errorMessage == nil {
                             snackbar?.show(.init(
-                                text: "Backup ripristinato.",
+                                text: String(localized: "backup_settings.restore_completed", defaultValue: "Backup ripristinato.", comment: "Snackbar — shown after successfully restoring from a local encrypted backup"),
                                 severity: .info))
                         }
                     }

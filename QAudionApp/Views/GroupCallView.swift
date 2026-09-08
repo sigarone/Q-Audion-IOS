@@ -1581,7 +1581,7 @@ class GroupCallViewModel: ObservableObject {
                     // central chain (rubrica → "Utente a1b2c3d4…").
                     let displayName = self.participants.first(where: { $0.id == requesterId })?.displayName
                         ?? DisplayName.forUser(requesterId)
-                    self.muteRequestToastText = "\(displayName) ti ha silenziato"
+                    self.muteRequestToastText = String(localized: "group_call.mute_request_toast", defaultValue: "\(displayName) ti ha silenziato", comment: "Snackbar — one-shot toast shown when another participant force-mutes you in a group call; %@ is the requester's display name")
                 }
             }
         } else {
