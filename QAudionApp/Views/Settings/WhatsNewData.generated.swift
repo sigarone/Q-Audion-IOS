@@ -9,10 +9,20 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1110",
+              date: "2026-09-08",
+              title: "v1.0.1110",
+              bullets: [
+                "fix(call): stale caller-side device id + unclosed controller on replace",
+                "fix(shipper): ship blobs and records oldest-first to stop within-run Loki bounces",
+                "fix(call): iOS ICE candidates can beat call_offer to the server",
+                "fix(shipper): server-leg key-auth parity + dedicated least-privilege key",
+              ]),
         .init(id: "v1.0.1109",
               date: "2026-09-08",
               title: "v1.0.1109",
               bullets: [
+                "chore: regenerate changelog for v1.0.1109",
                 "fix(call): SAS confirm pins on server-anchored first contact; native-mic liveness by packet growth; reset srtp fallback latch per call",
                 "fix(call): caller-side call_answer/call_ready race dropped the accept latch",
               ]),
@@ -164,15 +174,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1091",
                 "fix(ci): provision SiriKit capability + QAudionIntents extension bundle id",
-              ]),
-        .init(id: "v1.0.1090",
-              date: "2026-09-06",
-              title: "v1.0.1090",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1090",
-                "feat(carplay): add Siri calling foundation (S1 of CarPlay/Siri parity plan)",
-                "🎨 Palette: Replace duplicated tap-to-copy rows with shared component",
-                "🎨 Palette: [UX improvement] Add VoiceOver traits to shared TapCopyRow",
               ]),
     ]
 }
