@@ -12938,7 +12938,73 @@ final class AppState: ObservableObject {
         // under it). D11: keyed per-(peer, device); a nil device id pins under
         // the legacy bare-contactId account inside the store.
         integration.commitTofuPinForDevice = { peerId, key, deviceId in
-            _ = pinStore.pinOrMatch(contactId: peerId, ed25519Pub: key, deviceId: deviceId)
+            let result = pinStore.pinOrMatch(contactId: peerId, ed25519Pub: key, deviceId: deviceId)
+            // W-SASPIN (2026-09-08) — the result used to be discarded, which is
+            // how "the pin was never written" stayed invisible for months.
+            // Numeric-only so the line survives the remote-log redactor:
+            // 1=pinnedNew 2=match 3=mismatch (different key, or the Keychain
+            // write failed — e.g. device locked at OFFER-verify time).
+            let code: Int
+            switch result {
+            case .pinnedNew: code = 1
+            case .match: code = 2
+            case .mismatch: code = 3
+            }
+            RTLog.info("call", "tofupin r=\(code)")
+        }
+        // W-SASPIN — set-proven rotation (D11 `.authenticatedRepinFromPublished`):
+        // the ONLY path allowed to overwrite an existing pin. `pinOrMatch` is
+        // write-once, so the previous wiring silently kept a stale pin across a
+        // legitimate reinstall; every SAS confirm then bound to a key the peer
+        // no longer had.
+        //
+        // W-VERIFIEDNOREPIN (adversarial review 2026-09-08) — a server-proven
+        // rotation is proof the SERVER published a new key for this device; it
+        // is NOT proof the human on the other end is still the same human, and
+        // it must never silently discard a verification the USER performed
+        // out-of-band. Mirrors Android's `EnsurePeerTrustPinnedUseCase`: a
+        // set-membership repin is allowed only when the account being replaced
+        // has no verified SAS binding for its current key; otherwise this
+        // refuses the overwrite and raises the same non-blocking "unauthenticated
+        // change" banner an outright `identity_key_mismatch` gets, so the user
+        // re-verifies explicitly instead of the app quietly adopting whatever
+        // the server now publishes. `pinnedKey` (not the raw exact-account read)
+        // is deliberately used to resolve the prior key: it is the SAME lookup
+        // `sasIdentityTag`/`PeerTrustEvaluator` use, so "is the record verified
+        // for what's about to be replaced" asks the identical question those
+        // readers would ask.
+        integration.commitSetProvenRepinForDevice = { [weak self] peerId, key, deviceId in
+            if let prior = pinStore.pinnedKey(contactId: peerId, deviceId: deviceId), prior != key {
+                let priorTag = SasVerificationStore.identityTag(forPinnedKey: prior)
+                if SasVerificationStore.shared.hasVerifiedBinding(peerUserId: peerId, currentIdentityTag: priorTag) {
+                    RTLog.warn("call", "tofupin repin=0 blocked=1")
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        if self.callContactId == nil || self.callContactId == peerId {
+                            self.callIdentityUnauthenticatedChange = true
+                        }
+                    }
+                    return
+                }
+            }
+            // W-SASPIN — `.added` (a genuinely NEW per-device account, the
+            // existing legacy/other-device pin untouched) must NEVER clear the
+            // peer-wide SAS record: `SasVerificationStore` is keyed per peer, not
+            // per device, so clearing on every additive pin would destroy an
+            // unrelated device's verification every time this peer's OTHER
+            // device is first seen. Only `.overwritten` — and by construction
+            // above, only when it was not carrying a verified binding — clears.
+            switch pinStore.repin(contactId: peerId, ed25519Pub: key, deviceId: deviceId) {
+            case .overwritten:
+                RTLog.info("call", "tofupin repin=1 ovw=1")
+                SasVerificationStore.shared.clear(peerUserId: peerId)
+            case .added:
+                RTLog.info("call", "tofupin repin=1 add=1")
+            case .unchanged:
+                RTLog.info("call", "tofupin repin=1 nop=1")
+            case .failed:
+                RTLog.warn("call", "tofupin repin=0 fail=1")
+            }
         }
 
         // D11 trust-on-publish floor: resolve the server's published per-device
@@ -15095,6 +15161,15 @@ final class AppState: ObservableObject {
                 }
                 controller.onNativeAudioSrtpTxPcm = { [weak self] pcm in
                     self?.callService.callIntegration?.feedNativeAudioSrtpTxPcm(pcm)
+                }
+                // W-CAPTURELIVE-SIGNAL (2026-09-08) — gate the controller's
+                // native-mic liveness check on "CallKit activated the session
+                // AND the peer answered": before that point nothing can
+                // capture, so a check that runs earlier can only false-negative.
+                // Invoked from the controller's own Task (off-main); reads two
+                // plain Bools on the `@unchecked Sendable` CallService.
+                controller.isNativeCaptureExpectedLive = { [weak self] in
+                    self?.callService.isNativeCaptureExpectedLive ?? true
                 }
                 // W-SRTPFALLBACK — re-engage/recover CallService's manual
                 // capture path across a native-audio-srtp ICE outage.
@@ -22123,6 +22198,12 @@ extension AppState {
         }
         controller.onNativeAudioSrtpTxPcm = { [weak self] pcm in
             self?.callService.callIntegration?.feedNativeAudioSrtpTxPcm(pcm)
+        }
+        // W-CAPTURELIVE-SIGNAL (2026-09-08) — responder side, mirror of the
+        // caller-side wiring: the liveness check waits for CallKit's session
+        // activation + the local answer before it may judge the native mic.
+        controller.isNativeCaptureExpectedLive = { [weak self] in
+            self?.callService.isNativeCaptureExpectedLive ?? true
         }
         controller.onAudioSrtpFallbackEngage = { [weak self] in
             Task { @MainActor [weak self] in

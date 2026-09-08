@@ -498,6 +498,14 @@ final class CallService: @unchecked Sendable {
     // and did the didActivate-fallback have to fire (CallKit skipped its own
     // didActivate). Emitted in the call.audio.counts summary on teardown.
     private var audioEnginesStarted = false
+    /// W-CAPFAILRETRY (2026-09-08) — true from the moment `startAudioIOIfReady`
+    /// actually tries to start the manual engine (`audioCapture != nil`),
+    /// success or failure. `audioEnginesStarted` above became success-only when
+    /// the retry was added, so a call whose engine THREW and moved no
+    /// DataChannel frames stopped satisfying the telemetry-emit condition
+    /// below — the exact calls whose `call.audio.counts`/`call.audio.diag`
+    /// (fallback_fired, session_active, pad_overflow) are most worth seeing.
+    private var audioEngineStartAttempted = false
     private var didActivateFallbackFired = false
     /// W-PADOVERFLOW — the engine that owns this call's audio, kept so the
     /// teardown summary can read its counters. Weak because the engine's
@@ -708,6 +716,16 @@ final class CallService: @unchecked Sendable {
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
     /// skip in `startAudioIOIfReady` for exactly as long as the outage lasts.
     private var audioSrtpFallbackActive: Bool = false
+    /// W-CAPTURELIVE-SIGNAL (2026-09-08) — read by the WebRTC controller's
+    /// native-mic liveness check (via AppState wiring), OFF the main thread:
+    /// the check may only start judging once CallKit has activated the
+    /// AVAudioSession AND the peer has answered — before that nothing can
+    /// capture and a verdict can only be a false negative. Plain nonisolated
+    /// reads of two Bools on this `@unchecked Sendable` class, same class of
+    /// access as every other live getter the controller already uses.
+    public var isNativeCaptureExpectedLive: Bool {
+        CaptureLiveDecisions.gateOpen(audioSessionActive: audioSessionActive, peerAnswered: peerAnswered)
+    }
     /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
     /// open; returns true if queued there, false to fall back to the WS relay.
     /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
@@ -1609,7 +1627,9 @@ final class CallService: @unchecked Sendable {
                 (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp)
             }
         // Defensive cleanup: stop any leftover capture from a previous call.
-        teardownAudioStack()
+        // W-SRTPFBRESET — keep the fallback latch: this runs at ANSWER time
+        // inside the incoming call (see teardownAudioStack's kdoc).
+        teardownAudioStack(resetSrtpFallback: false)
         if let cid = _savedSealerCallId, _savedSealerSend != nil {
             let active: String = getCallId?()?.lowercased() ?? ""
             // Restore when the sealer matches the active call, or when the
@@ -2544,7 +2564,16 @@ final class CallService: @unchecked Sendable {
     /// Also owns callIntegration lifecycle: fires onCallEnded and nils it
     /// so stale frames arriving after teardown can't be decrypted with
     /// an old session key (they hit the W481 pre-buffer instead).
-    private func teardownAudioStack() {
+    /// `resetSrtpFallback`: W-SRTPFBRESET (2026-09-08) — whether to clear the
+    /// native-audio-srtp fallback latch (`audioSrtpFallbackActive`) and the
+    /// W-DEADTXNET sample state. `true` at end-of-call and at the defensive
+    /// teardown of a NEW outgoing call (the previous call is gone either way);
+    /// `false` only from `activateIncomingCallAudio`, whose defensive teardown
+    /// runs AT ANSWER inside the same call — a ringing-time ICE-loss engage
+    /// there has already muted the native sender, and clearing the latch would
+    /// turn the later `recoverAudioSrtpFallback` into a no-op that never
+    /// un-mutes it (adversarial review of the fix, 2026-09-08).
+    private func teardownAudioStack(resetSrtpFallback: Bool = true) {
         // Diagnostic: emit the REAL audio frame counters BEFORE they reset.
         // call.media.summary's `suspect_silent` is a timer-only heuristic and
         // says nothing about audio — these counters are the ground truth that
@@ -2559,7 +2588,7 @@ final class CallService: @unchecked Sendable {
         //   engines_started=false                         → engines never ran.
         // Only emit when the call actually had an audio stack (skip the
         // defensive pre-call cleanups that would log all-zeros).
-        if audioEnginesStarted || framesReceivedRx > 0 || framesEncryptedTx > 0 {
+        if audioEngineStartAttempted || audioEnginesStarted || framesReceivedRx > 0 || framesEncryptedTx > 0 {
             let _callId = getCallId?()
             let _attrs: [String: Any] = [
                 "tx_enc":          framesEncryptedTx,
@@ -2827,6 +2856,7 @@ final class CallService: @unchecked Sendable {
             }
         }
         audioEnginesStarted = false
+        audioEngineStartAttempted = false
         didActivateFallbackFired = false
         callIntegration?.onCallEnded()
         callIntegration = nil
@@ -2901,6 +2931,28 @@ final class CallService: @unchecked Sendable {
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
+        capfailRetryArmed = false  // W-CAPFAILRETRY — one retry per call
+        if resetSrtpFallback {
+            // W-SRTPFBRESET (2026-09-08) — the fallback latch was the ONE piece
+            // of per-call audio state this teardown never cleared (set in
+            // engageAudioSrtpFallback, cleared only by recoverAudioSrtpFallback,
+            // which a capture-dead engage can never reach). Live evidence, six
+            // devices on 2026-09-08: the first call of every process logged the
+            // IOS-C4b `gate=4` skip, every later native-srtp call skipped
+            // straight past it into `startAudioIOIfReady`'s manual AVAudioEngine
+            // — contending with WebRTC's own audio unit 28 ms after `audiosrtp
+            // tx=1` — and logged `audioIO capfail=1` (code 2003329396 'what' +
+            // the VP-IO format NSException, `in=` empty). The stale latch also
+            // disarmed the W-DEADTXNET sentinel (`!audioSrtpFallbackActive`)
+            // for every one of those calls. Reset here so each call starts
+            // with the native path respected, exactly like the first one.
+            if audioSrtpFallbackActive {
+                RTLog.info("call", "audiosrtpfb reset=1")
+            }
+            audioSrtpFallbackActive = false
+            srtpDeadTxBeats = 0
+            srtpLastPtxSample = -1
+        }
         // W-SLOTLOCK — nil the cross-thread reference slots under the lock so an
         // in-flight tap (TX) or decode (RX) frame can't race the release-old ARC
         // write of these reference-typed slots (torn refcount → use-after-free).
@@ -3060,9 +3112,38 @@ final class CallService: @unchecked Sendable {
                 }
             }
         }
-        // Diagnostics: mark audio I/O live once the single engine has started.
+        // Diagnostics: `audioEnginesStarted` is now set inside
+        // `performAudioCaptureStart` on SUCCESS only (W-CAPFAILRETRY) — it used
+        // to be set here unconditionally, so `engines_started=true` shipped in
+        // the end-of-call telemetry of calls whose engine never started.
         if audioCapture != nil {
-            audioEnginesStarted = true
+            audioEngineStartAttempted = true
+        }
+    }
+
+    /// W-CAPFAILRETRY (2026-09-08) — one bounded retry of the manual engine
+    /// start after `AudioCapture.start()` threw. Live evidence 2026-09-08: on
+    /// every CALLER leg a single `capfail` left the manual path dead for the
+    /// whole call (nothing re-runs `startAudioIOIfReady` on that role once the
+    /// session is active and the peer has answered), while the CALLEE recovered
+    /// from the identical failure because CallKit's `didActivate` re-triggered
+    /// the start 0.3 s later (`capfail=1 code=1` → `started=1`, iPad 1fd97f9a,
+    /// 16:33:46). One retry, only while the call still needs the manual path;
+    /// `startAudioIOIfReady` re-applies every gate, so this cannot start the
+    /// engine on a call whose native audio-srtp path is healthy.
+    private var capfailRetryArmed = false
+
+    private func scheduleCapfailRetry() {
+        guard !capfailRetryArmed else { return }
+        capfailRetryArmed = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self,
+                  self.callIntegration != nil,
+                  self.audioSessionActive,
+                  self.peerAnswered,
+                  !self.audioEnginesStarted else { return }
+            RTLog.info("call", "audioIO retry=1")
+            self.startAudioIOIfReady()
         }
     }
 
@@ -3076,6 +3157,7 @@ final class CallService: @unchecked Sendable {
     private func performAudioCaptureStart(_ capture: AudioCapture) {
         do {
             try capture.start()
+            audioEnginesStarted = true  // W-CAPFAILRETRY — success only
             // W-AUDIOGATEDIAG (2026-08-03): confirms all three gates
             // above actually cleared and AVAudioEngine.start() itself
             // succeeded — the one line that, if present, rules out
@@ -3140,7 +3222,25 @@ final class CallService: @unchecked Sendable {
             // sees), so it survives the redactor same as every other
             // numeric field on this line.
             let nsError = error as NSError
-            RTLog.warn("call", "audioIO capfail=1 code=\(nsError.code)")
+            // W-CAPFAILROUTE (2026-09-08) — the route probe used to exist only
+            // on the gate=4 skip branch, so the state that actually failed was
+            // never logged: the 16:33:45 'what' capfail had `in=` EMPTY on the
+            // W556 line next to it and no way to see that from this one.
+            // `code` is split into two ≤5-digit halves as well because a
+            // 10-digit OSStatus (2003329396 = 'what') is blobbed by the
+            // redactor as a phone number — `ch`/`cl` always survive.
+            let sess = AVAudioSession.sharedInstance()
+            let code = nsError.code
+            let codeHi = code / 100_000
+            let codeLo = code % 100_000
+            let inputs = sess.currentRoute.inputs.count
+            let outputs = sess.currentRoute.outputs.count
+            let recordable = sess.isInputAvailable ? 1 : 0
+            let bufMs = Int(sess.ioBufferDuration * 1000)
+            // Single interpolated literal on precomputed locals (CLAUDE.md §13:
+            // no `+` chains at a log site).
+            RTLog.warn("call", "audioIO capfail=1 code=\(code) ch=\(codeHi) cl=\(codeLo) inp=\(inputs) outp=\(outputs) rec=\(recordable) buf=\(bufMs)")
+            scheduleCapfailRetry()
         }
     }
 

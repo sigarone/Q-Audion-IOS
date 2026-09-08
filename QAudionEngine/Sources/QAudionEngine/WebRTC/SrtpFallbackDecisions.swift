@@ -99,3 +99,68 @@ public enum SrtpFallbackDecisions {
         fallbackEngaged && !iceBad
     }
 }
+
+/// W-CAPTURELIVE-SIGNAL (2026-09-08) — pure decisions for the native-mic
+/// liveness check (`QAudionWebRtcCallController.verifyNativeAudioCaptureLiveOrRecover`).
+///
+/// ## Why the signal changed
+///
+/// W-CAPTURELIVE (2026-09-07) declared the native mic "live" only when the
+/// `NativeAudioPcmTap` registered on the LOCAL mic track had delivered a
+/// frame. In the pinned WebRTC build that renderer is never fed for a local
+/// track (`LocalAudioSource::AddSink` is an empty override upstream; the
+/// LiveKit SDK routes local renderers through the ADM's capture-post-
+/// processing hook instead, never through the track sink). Live corpus
+/// 2026-09-08, six devices / ~24 calls: 24 × `capturelive=0 … fallback=1`,
+/// zero `capturelive=1`, while the same legs' `outbound-rtp.packetsSent`
+/// was growing — the sender WAS moving audio and the watchdog muted it and
+/// re-engaged the manual capture path on every call anyway.
+///
+/// The replacement signal is the one already trusted everywhere else in this
+/// stack (W-DEADTXNET, W-SRTPRXDIAG): `outbound-rtp.packetsSent` growing
+/// after the check was armed. libwebrtc only emits audio send packets when the
+/// ADM delivers recorded frames to the send stream, and a disabled track
+/// stops them — ptx freezing exactly at every `audiosrtpfb engage=1` mute in
+/// the same corpus is the counter proving the same counter.
+///
+/// ## Why the gate exists
+///
+/// On the callee the media path is negotiated at OFFER receipt, seconds before
+/// the user taps Answer in CallKit and the AVAudioSession is activated; on the
+/// caller the session is active from dial time but the peer has not answered.
+/// Before both "session active" and "peer answered" hold there is nothing to
+/// judge — a check that runs earlier can only false-negative (same rule the
+/// W-DEADTXNET sentinel already applies).
+///
+/// Pure — no WebRTC / Date state — so the numbers and branches are pinned by
+/// unit tests (`CaptureLiveDecisionsTests`).
+public enum CaptureLiveDecisions {
+
+    /// How often the check re-asks whether the gate has opened.
+    public static let gatePollIntervalMs: Int64 = 250
+    /// Give-up ceiling for the gate wait (a call ringing this long has other
+    /// watchdogs). Logged as `audiosrtp caplive=9 wait=N` when hit.
+    public static let gateWaitCapMs: Int64 = 120_000
+    /// Sampling interval for the packet-growth window.
+    public static let growthPollIntervalMs: Int64 = 500
+    /// Window after the gate opens in which packet growth (or the tap) must
+    /// prove the mic live before the nudge (was a single sample at 1.5 s; the
+    /// stats poll is 1 Hz and its readout trails by up to a tick).
+    public static let growthWindowMs: Int64 = 3_000
+    /// Window after the mute/unmute nudge before escalating to the fallback.
+    public static let afterNudgeWindowMs: Int64 = 1_500
+
+    /// The check may start judging only once CallKit has activated the audio
+    /// session AND the peer has answered.
+    public static func gateOpen(audioSessionActive: Bool, peerAnswered: Bool) -> Bool {
+        audioSessionActive && peerAnswered
+    }
+
+    /// `outbound-rtp.packetsSent` proves capture when it is positive and has
+    /// grown since the check was armed. `-1` = no outbound row yet (never
+    /// live); a frozen non-zero count (`now == atArm`) is NOT live — that is
+    /// the dead-sender shape W-DEADTXNET exists for.
+    public static func packetsProveLive(packetsAtArm: Int64, packetsNow: Int64) -> Bool {
+        packetsNow > 0 && packetsNow > packetsAtArm
+    }
+}

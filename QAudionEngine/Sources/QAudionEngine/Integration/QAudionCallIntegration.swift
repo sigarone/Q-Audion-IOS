@@ -899,6 +899,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// overload below keeps the legacy 2-arg call sites compiling.
     public var commitTofuPinForDevice: ((String, Data, String?) -> Void)?
 
+    /// W-SASPIN (2026-09-08) — set-proven rotation commit for the D11
+    /// `.authenticatedRepinFromPublished` verdict: the key was proven ∈ the
+    /// server-published set AND self-signed, so the actuator may OVERWRITE an
+    /// existing per-(peer, device) pin with it. Kept separate from
+    /// `commitTofuPinForDevice` (which is write-once via `pinOrMatch`) so a plain
+    /// `.authenticated` verdict can never overwrite a pin. nil ⇒ falls back to the
+    /// write-once commit (the pre-fix behaviour: a no-op when a pin exists).
+    public var commitSetProvenRepinForDevice: ((String, Data, String?) -> Void)?
+
     /// Legacy 2-arg TOFU-pin shim (no device id). Kept so existing wiring /
     /// tests that set `commitTofuPin` still work; the integration prefers
     /// `commitTofuPinForDevice` when both are set.
@@ -1982,9 +1991,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // (e.g. identity_key_mismatch — bundle key ∉ the server-published set)
             // raises a non-blocking in-call alert and PROCEEDS WITHOUT pinning the
             // observed key — SAS is the terminal anti-MITM gate. `.authenticated`
-            // (key == pinned/server) and `.authenticatedRepinFromPublished` (a
-            // set-PROVEN rotation) commit the per-(peer,device) pin + v4 flag and
-            // yield the offer_binding the ACCEPT must carry (spec §3).
+            // (key == pinned/server; W-SASPIN: pins on the first verified contact
+            // whether the anchor was the bundle key or the server-published key)
+            // and `.authenticatedRepinFromPublished` (a set-PROVEN rotation,
+            // allowed to overwrite the pin) commit the per-(peer,device) pin + v4
+            // flag and yield the offer_binding the ACCEPT must carry (spec §3).
             // `.proceedUnsignedWarn` logs and continues with an EMPTY binding
             // (legacy/unsigned-peer migration path).
             var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
@@ -2078,7 +2089,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // re-pin per-(peer, device); NO banner. The binding is rebuilt
                     // under the SET-PROVEN device key (the key the policy verified).
                     print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true)
                     offerSigOk = true
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
@@ -2942,7 +2953,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // session (the policy already verified the ACCEPT signature
                     // under this set-proven device key).
                     print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true)
                     acceptSigOk = true
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
@@ -3998,10 +4009,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         deviceId: String?,
         tofuPinKey: Data?,
         v4Capable: Bool,
-        srtpDirKeyV1Capable: Bool = false
+        srtpDirKeyV1Capable: Bool = false,
+        setProven: Bool = false
     ) {
         if let pinKey = tofuPinKey {
-            if let perDevice = commitTofuPinForDevice {
+            // W-SASPIN — a set-proven rotation is the ONE case allowed to
+            // overwrite an existing pin; everything else stays write-once.
+            if setProven, let repin = commitSetProvenRepinForDevice {
+                repin(peerId, pinKey, deviceId)
+            } else if let perDevice = commitTofuPinForDevice {
                 perDevice(peerId, pinKey, deviceId)
             } else {
                 commitTofuPin?(peerId, pinKey)

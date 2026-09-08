@@ -115,6 +115,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// double-audio window).
     public var onAudioSrtpFallbackRecover: (() -> Void)?
 
+    /// W-CAPTURELIVE-SIGNAL (2026-09-08) — gate for the native-mic liveness
+    /// check below: `AppState` wires it to CallService's
+    /// `audioSessionActive && peerAnswered`. The check polls this (off-main,
+    /// from its own Task) and does not start judging until it returns true.
+    /// nil ⇒ treated as open (pre-wiring / video-only controllers, where
+    /// native audio-srtp is never installed anyway).
+    public var isNativeCaptureExpectedLive: (() -> Bool)?
+
     // MARK: - W-CAPTURELIVE — confirm the native mic actually produced a
     // frame, not just that attach/enable reported success
     //
@@ -153,7 +161,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         hasConfirmedNativeAudioCaptureLive = true
         captureLiveLock.unlock()
         if !alreadyConfirmed {
-            log?("audiosrtp capturelive=1")
+            // Token ≤ 11 chars on purpose: the remote-log redactor blobs any
+            // longer token ("capturelive=1" shipped as `[REDACTED:blob]`).
+            // via=1 = the local-track PCM tap fired (never observed on this
+            // WebRTC build so far — see CaptureLiveDecisions).
+            log?("audiosrtp caplive=1 via=1")
         }
     }
 
@@ -183,22 +195,108 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         return hasConfirmedNativeAudioCaptureLive
     }
 
+    /// W-CAPTURELIVE-SIGNAL (2026-09-08) — rewritten: see `CaptureLiveDecisions`
+    /// for why the tap-only signal was a 100% false negative on this WebRTC
+    /// build and why the check must wait for the audio session + answer.
+    ///
+    /// Shape: (1) poll `isNativeCaptureExpectedLive` until the gate opens
+    /// (bounded; every wait re-checks `generation` and the peer connection so
+    /// a check that outlives its call can never act on the NEXT call);
+    /// (2) snapshot `audioRtpPacketsSent`, then for up to `growthWindowMs`
+    /// accept EITHER the tap OR packet growth as proof of life; (3) only then
+    /// the mute/unmute nudge, one more window, and — still nothing — the same
+    /// relay fallback ICE-loss uses. Every log token ≤ 11 chars (redactor).
     private func verifyNativeAudioCaptureLiveOrRecover(generation: Int) async {
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        guard isCurrentCaptureLiveCheck(generation) else { return }
-        guard !hasConfirmedCaptureLive() else { return }
-        log?("audiosrtp capturelive=0 nudge=1")
+        var waitedMs: Int64 = 0
+        var gateWaits = 0
+        while !(isNativeCaptureExpectedLive?() ?? true) {
+            guard isCurrentCaptureLiveCheck(generation), peerConnection != nil else { return }
+            if waitedMs >= CaptureLiveDecisions.gateWaitCapMs {
+                log?("audiosrtp caplive=9 wait=\(gateWaits)")
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(CaptureLiveDecisions.gatePollIntervalMs) * 1_000_000)
+            waitedMs += CaptureLiveDecisions.gatePollIntervalMs
+            gateWaits += 1
+        }
+        guard isCurrentCaptureLiveCheck(generation), peerConnection != nil else { return }
+        // W-CAPTURELIVE-SIGNAL (adversarial review 2026-09-08) — freshen the
+        // stats row and let ONE poll interval land before snapshotting the
+        // growth baseline. Without this, `audioRtpPacketsSent` at arm time is
+        // whatever `pollMediaRttOnce` last wrote — possibly -1 (no report has
+        // ever landed; common on the callee, whose 1 Hz sampler starts only at
+        // the answer tap) or up to ~1 s stale. A sender that moved a few
+        // packets before the gate opened and then genuinely died would read
+        // `packetsNow > packetsAtArm` on the very first fresh poll and pass as
+        // "live" — exactly the shape W-DEADTXNET exists to catch.
+        pollMediaRttOnce()
+        try? await Task.sleep(nanoseconds: UInt64(CaptureLiveDecisions.growthPollIntervalMs) * 1_000_000)
+        guard isCurrentCaptureLiveCheck(generation), peerConnection != nil else { return }
+        let ptxAtArm = audioRtpPacketsSent
+        if await waitForNativeCaptureLive(
+            generation: generation, ptxAtArm: ptxAtArm,
+            windowMs: CaptureLiveDecisions.growthWindowMs, via: 2, gateWaits: gateWaits
+        ) { return }
+        guard isCurrentCaptureLiveCheck(generation), peerConnection != nil else { return }
+        // W-CAPTURELIVE-SIGNAL (adversarial review) — an ICE-owned outage
+        // already has its OWN engage/recover cycle (SrtpFallbackDecisions,
+        // srtpFallbackEngaged), which mutes the native sender via the exact
+        // same `setNativeAudioSrtpMuted`/`muteNativeAudioSrtpSender` latch this
+        // nudge would flip. Nudging (which force-UN-mutes) or escalating here
+        // while that outage owns the flag would re-enable a sender the ICE
+        // path deliberately released — the two-stack contention IOS-C4b and
+        // W-DEADTXRELEASE both exist to prevent. Back off; the ICE path's own
+        // debounce already decides this outage's fate.
+        guard !srtpFallbackEngaged, !isIceStateBad(lastIceConnectionState) else {
+            log?("audiosrtp caplive=8")
+            return
+        }
+        log?("audiosrtp caplive=0 nudge=1")
         peerConnection?.setNativeAudioSrtpMuted(true)
         try? await Task.sleep(nanoseconds: 150_000_000)
         peerConnection?.setNativeAudioSrtpMuted(false)
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        guard isCurrentCaptureLiveCheck(generation) else { return }
-        guard !hasConfirmedCaptureLive() else {
-            log?("audiosrtp capturelive=1 afternudge=1")
+        if await waitForNativeCaptureLive(
+            generation: generation, ptxAtArm: ptxAtArm,
+            windowMs: CaptureLiveDecisions.afterNudgeWindowMs, via: 3, gateWaits: gateWaits
+        ) { return }
+        guard isCurrentCaptureLiveCheck(generation), peerConnection != nil,
+              !srtpFallbackEngaged, !isIceStateBad(lastIceConnectionState) else {
+            log?("audiosrtp caplive=8")
             return
         }
-        log?("audiosrtp capturelive=0 afternudge=0 fallback=1")
+        log?("audiosrtp caplive=0 after=0 fb=1")
         onAudioSrtpFallbackEngage?()
+    }
+
+    /// One bounded observation window. Returns `true` when there is nothing
+    /// left to do — the mic proved live (tap or packet growth), or the check
+    /// was superseded / the call closed; `false` when the window expired with
+    /// no proof. `via` labels HOW it was proven in the log (2 = packet growth
+    /// before the nudge, 3 = after the nudge; 1 is the tap, logged by
+    /// `markNativeAudioCaptureLive` itself).
+    private func waitForNativeCaptureLive(
+        generation: Int, ptxAtArm: Int64, windowMs: Int64, via: Int, gateWaits: Int
+    ) async -> Bool {
+        var elapsedMs: Int64 = 0
+        while elapsedMs < windowMs {
+            try? await Task.sleep(nanoseconds: UInt64(CaptureLiveDecisions.growthPollIntervalMs) * 1_000_000)
+            elapsedMs += CaptureLiveDecisions.growthPollIntervalMs
+            guard isCurrentCaptureLiveCheck(generation), peerConnection != nil else { return true }
+            if hasConfirmedCaptureLive() { return true }
+            // Refresh the stats row ourselves instead of depending on the UI
+            // sampler's 1 Hz cadence (which on the callee only starts at the
+            // answer tap); the report lands asynchronously, so the value read
+            // on the NEXT iteration reflects this poll.
+            pollMediaRttOnce()
+            if CaptureLiveDecisions.packetsProveLive(packetsAtArm: ptxAtArm, packetsNow: audioRtpPacketsSent) {
+                captureLiveLock.lock()
+                hasConfirmedNativeAudioCaptureLive = true
+                captureLiveLock.unlock()
+                log?("audiosrtp caplive=1 via=\(via) wait=\(gateWaits)")
+                return true
+            }
+        }
+        return false
     }
 
     /// W-UPGRADEICEWATCHDOG-ANCHOR (2026-08-24, mirrors Android's
@@ -2120,6 +2218,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         restartPathMonitor = nil
         iceRecoveryWatchdogTask?.cancel()
         iceRecoveryWatchdogTask = nil
+        // W-CAPTURELIVE-SIGNAL — invalidate any in-flight native-mic liveness
+        // check. The check's Task retains `self` across waits of up to two
+        // minutes, and without this bump an old controller's check could open
+        // on the NEXT call's gate and mute/fall back that call. Unconditional,
+        // before the early-return below. Deliberately does NOT nil
+        // `onAudioSrtpFallbackEngage`/`onAudioSrtpFallbackRecover`/
+        // `isNativeCaptureExpectedLive` here (adversarial review 2026-09-08):
+        // those are plain `var` closures with no lock of their own, so writing
+        // them from this thread while the Task's loop reads
+        // `isNativeCaptureExpectedLive?()` at its head — BEFORE its own
+        // generation guard — would be an unsynchronized ARC race on the
+        // closure storage. The generation bump alone is sufficient: every
+        // point that actually INVOKES one of those closures is already gated
+        // on `isCurrentCaptureLiveCheck(generation)` immediately before the
+        // call, so a superseded Task returns there without ever firing them,
+        // whether or not the closures are still assigned.
+        captureLiveLock.lock()
+        captureLiveCheckGeneration += 1
+        hasConfirmedNativeAudioCaptureLive = false
+        captureLiveLock.unlock()
         // NOTE: `sendIceRestartOffer`'s own W-RESTARTOFFERPARK resend
         // (BCryptoCallingApiImpl) is intentionally NOT cancelled here — it
         // is a detached, fire-and-forget Task scoped to the CallingApi
