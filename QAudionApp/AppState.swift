@@ -981,6 +981,28 @@ final class AppState: ObservableObject {
     /// nil ⇒ legacy single-key + set-membership (never a fatal mismatch).
     private var senderDeviceIdByPeer: [String: String] = [:]
 
+    /// W-ACCEPTDEVSTALE (2026-09-08, adversarial review of W-SASPIN/
+    /// W-CAPTURELIVE-SIGNAL) — `senderDeviceIdByPeer` above is PEER-keyed and
+    /// never cleared, so it survives across calls. That is correct for the
+    /// OFFER/responder read (`routeInboundAndroidOffer`): the `call_incoming`
+    /// for THIS exact call always immediately precedes and overwrites it
+    /// before the OFFER lands. It is WRONG for the caller's ACCEPT read
+    /// (`routeInboundAndroidAccept`): if peer X last called us from device A
+    /// (stashing A) and we later call X ourselves and X answers from device
+    /// B, the peer-keyed stash still holds stale A — feeding A into
+    /// `HandshakeSigningPolicy.evaluate`/`applyAuthenticatedSideEffects`
+    /// would repin `peer|A` instead of `peer|B`. `PeerIdentityPinStore`'s
+    /// W-VERIFIEDNOREPIN guard refuses that write when `peer|A` already
+    /// carries a verified SAS binding, but an unverified `peer|A` account
+    /// would be silently corrupted. This CALL-keyed sibling closes that gap:
+    /// written at the same `call_incoming` site, alongside the peer-keyed
+    /// one, but only ever readable for the call it was actually stamped for.
+    /// A caller's own outgoing call never receives an inbound `call_incoming`
+    /// for itself, so this is correctly empty at ACCEPT time — the ACCEPT
+    /// path threads `nil` into the verdict, i.e. the legacy single-key +
+    /// set-membership floor, never a device id we cannot vouch for.
+    private var senderDeviceIdByCallId: [String: String] = [:]
+
     /// D11 — public accessor for `senderDeviceIdByPeer`. The TOFU pin this
     /// call's handshake committed (`commitTofuPinForDevice`,
     /// `applyAuthenticatedSideEffects`) is keyed per-(peer, device) using
@@ -5623,6 +5645,12 @@ final class AppState: ObservableObject {
             if let sdid = (data["sender_device_id"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !sdid.isEmpty {
                 self.senderDeviceIdByPeer[senderId] = sdid
+                // W-ACCEPTDEVSTALE — call-scoped sibling stash, see
+                // `senderDeviceIdByCallId`'s kdoc. Lowercased to survive the
+                // iOS-uppercase/Android-lowercase callId echo mismatch (W461).
+                if !callIdStr.isEmpty {
+                    self.senderDeviceIdByCallId[callIdStr.lowercased()] = sdid
+                }
             }
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
@@ -11801,10 +11829,20 @@ final class AppState: ObservableObject {
         print("[AppState] Android ACCEPT callId=\(parsed.callId.prefix(8))… from \(senderId.prefix(8))… integration.state=\(intState)")
         // D11: the ACCEPT (answer leg) carries no server-stamped device id — the
         // caller never receives a `call_incoming` for the callee's device — so
-        // this is typically nil ⇒ legacy single-key + set-membership floor (the
-        // callee's key ∈ its published set), NEVER a fatal mismatch. We still pass
-        // any stash we happen to hold for symmetry.
-        let senderDeviceId = senderDeviceIdByPeer[senderId]
+        // this is ALWAYS nil ⇒ legacy single-key + set-membership floor (the
+        // callee's key ∈ its published set), NEVER a fatal mismatch.
+        //
+        // W-ACCEPTDEVSTALE — deliberately NOT `senderDeviceIdByPeer[senderId]`
+        // here: that stash is peer-keyed and never cleared, so if this same
+        // peer called US earlier (a DIFFERENT, unrelated call) from some other
+        // device A, it would still hold A while THIS call's answerer may be a
+        // different device B — feeding A into the verdict below risks
+        // repinning `peer|A` instead of `peer|B` under a device id we cannot
+        // vouch for. `senderDeviceIdByCallId` is keyed by THIS call's id, which
+        // an outgoing call never receives an inbound `call_incoming` for, so
+        // this correctly resolves to nil rather than a stale cross-call value.
+        let senderDeviceId = AcceptDeviceIdResolution.callerAcceptDeviceId(
+            callId: parsed.callId, callScopedStash: senderDeviceIdByCallId)
         let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
             guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
             let payload = wireString.data(using: .utf8) ?? Data()
@@ -15047,6 +15085,17 @@ final class AppState: ObservableObject {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
         }
+                // W-CTRLLEAK (2026-09-08, adversarial review of W-SASPIN/
+                // W-CAPTURELIVE-SIGNAL) — same missing close-before-replace
+                // gap as `handleIncomingWebRtcOffer`'s identical fix; see
+                // that site's comment for the full incident. `startCall`'s
+                // `guard !isInCall` above should normally make this a no-op,
+                // but the guard is a state flag, not proof this controller is
+                // gone — closing defensively costs nothing when it is nil.
+                if let old = self.webRtcController as? QAudionWebRtcCallController {
+                    old.closeSynchronously()
+                    RTLog.warn("call", "callctrl replaced=1 site=outgoing")
+                }
                 webRtcController = controller
                 // W-CTRLBUILDDIAG — caller-path twin of the responder line
                 // (out=1 marks the outgoing build). Added after call
@@ -16967,6 +17016,16 @@ extension AppState {
         // behaviour change in a subsystem this work does not touch and cannot
         // compile or test, so it is left alone and reported instead.
         peerCapabilityBinding.clear()
+        // W-ACCEPTDEVSTALE — drop this call's entry from the call-scoped
+        // device-id stash (see `senderDeviceIdByCallId`'s kdoc) so it cannot
+        // accumulate one entry per call for the life of the session. Uses
+        // `endCallId` (captured above, BEFORE teardown clears the provider —
+        // same W-ENDCALLID reasoning as its own comment) rather than
+        // re-querying `getActiveCallId()` here, which by this point in
+        // teardown can already be nil.
+        if let endedId = endCallId {
+            senderDeviceIdByCallId.removeValue(forKey: endedId)
+        }
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.
         resetRemoteVideoRenderGate()
@@ -22094,6 +22153,21 @@ extension AppState {
         if let key = self.callPqcSessionKey {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
+        }
+        // W-CTRLLEAK (2026-09-08, adversarial review of W-SASPIN/
+        // W-CAPTURELIVE-SIGNAL) — unlike every other `webRtcController =`
+        // reassignment site in this file (see `makeUpgradeResponderController`
+        // ~L6548), this one used to overwrite a live controller without
+        // closing it first. A redelivered/glare OFFER landing here while a
+        // controller from an earlier call (or an earlier OFFER for the same
+        // call) is still up would leak it: its background work — the native-
+        // mic liveness check (W-CAPTURELIVE-SIGNAL), an ICE-restart watchdog —
+        // keeps running for up to its own timeout and can reach into the
+        // process-scoped `CallService` (mute the sender, engage fallback)
+        // for a call that is no longer the one on screen.
+        if let old = self.webRtcController as? QAudionWebRtcCallController {
+            old.closeSynchronously()
+            RTLog.warn("call", "callctrl replaced=1 site=offer")
         }
         webRtcController = controller
         // W-CTRLBUILDDIAG — remote-visible confirmation the responder
