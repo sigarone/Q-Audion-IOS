@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1109",
+              date: "2026-09-08",
+              title: "v1.0.1109",
+              bullets: [
+                "fix(call): SAS confirm pins on server-anchored first contact; native-mic liveness by packet growth; reset srtp fallback latch per call",
+                "fix(call): caller-side call_answer/call_ready race dropped the accept latch",
+              ]),
         .init(id: "v1.0.1108",
               date: "2026-09-08",
               title: "v1.0.1108",
               bullets: [
+                "chore: regenerate changelog for v1.0.1108",
                 "fix(group): ship group-metadata/avatar diagnostics past the log redactor",
                 "chore(wire-spec): sync §8.11 (sender-side resume shortcut) + §8.10 correction",
               ]),
@@ -165,13 +173,6 @@ extension ReleaseNote {
                 "feat(carplay): add Siri calling foundation (S1 of CarPlay/Siri parity plan)",
                 "🎨 Palette: Replace duplicated tap-to-copy rows with shared component",
                 "🎨 Palette: [UX improvement] Add VoiceOver traits to shared TapCopyRow",
-              ]),
-        .init(id: "v1.0.1089",
-              date: "2026-09-06",
-              title: "v1.0.1089",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1089",
-                "fix(net): self-heal the Reality/Xray tunnel once it goes stale (iOS parity)",
               ]),
     ]
 }
