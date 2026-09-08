@@ -1572,6 +1572,13 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func onUpdate(callId: String, participants: [String], senderKeysCapable: Set<String>, senderKeyEpoch: Int64) {
         let selfId = manager.selfUserId
+        // W-GRPKEYSILENT — the diagnostics below are BUILT under the lock and
+        // PRINTED after it. `print` goes through RuntimeLogSink's stdout tee,
+        // which redacts and appends to the upload ring buffer: real work, on the
+        // caller's thread. Doing that inside the critical section would let log
+        // contention stretch a lock that the audio path also takes — the same
+        // open-call-while-holding-a-lock shape this file already avoids.
+        var pendingDiag: [String] = []
         var initsToSend: [(peer: String, env: SenderKeyInitEnvelope)] = []
         var rotatesToSend: [(peer: String, env: SenderKeyRotateEnvelope)] = []
 
@@ -1596,7 +1603,7 @@ public final class GroupCallController: @unchecked Sendable {
                             initsToSend.append((peer, pkg.initForNewMember))
                         } catch {
                             addFailures += 1
-                            print("[GroupCallController] grpkeyadd err=1 code=\(Self.keyErrCode(error))")
+                            pendingDiag.append("grpkeyadd err=1 code=\(Self.keyErrCode(error))")
                         }
                     } else if !initSentTo.contains(peer) {
                         // W-GRPSENDERKEY-RETRY: peer was added to the roster on
@@ -1694,16 +1701,20 @@ public final class GroupCallController: @unchecked Sendable {
                 // while the two Android legs completed ten exchanges with each
                 // other. Nothing said why, because this branch did not exist.
                 noStateUpdates += 1
-                print("[GroupCallController] grpkeyskip why=2 cap=\(senderKeysCapable.count) n=\(noStateUpdates)")
+                pendingDiag.append("grpkeyskip why=2 cap=\(senderKeysCapable.count) n=\(noStateUpdates)")
             }
         } else {
             // Roster update for a call this controller is not serving. Benign
             // in isolation (a late update for the previous call), but it is
             // also what a stuck `activeCallId` looks like, and it silently
             // suppresses every key exchange — so it is counted, not ignored.
-            print("[GroupCallController] grpkeyskip why=1 cap=\(senderKeysCapable.count)")
+            pendingDiag.append("grpkeyskip why=1 cap=\(senderKeysCapable.count)")
         }
         lock.unlock()
+
+        for line in pendingDiag {
+            print("[GroupCallController] \(line)")
+        }
 
         for item in initsToSend {
             sendSenderKeyEnvelope(peer: item.peer, selfId: selfId, env: item.env)
