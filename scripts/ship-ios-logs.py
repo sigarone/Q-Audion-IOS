@@ -1026,6 +1026,23 @@ def list_device_chunks(client, minutes, limit):
     return files
 
 
+def order_blobs_oldest_first(files):
+    """Reorder list_device_chunks()'s newest-first selection to oldest-first.
+
+    Loki's out-of-order ingester tracks, per stream, the highest timestamp it
+    has accepted; any later POST older than (that high-water mark - window)
+    is bounced with "entry too far behind" and the verdict is permanent for
+    that stream. Shipping blobs newest-first means the very FIRST accepted
+    POST in a run jumps the watermark to the newest chunk's timestamp, which
+    then permanently dooms every older blob selected in the SAME run -- a
+    within-run version of the trap documented in
+    reference_ios_log_pipeline_limits.md. Shipping oldest-first instead lets
+    the watermark advance in the same direction the data does, so a blob is
+    only bounced if it is genuinely older than Loki's window, not merely
+    because a newer sibling from the same run went out first."""
+    return sorted(files, key=lambda f: f[0])
+
+
 def read_chunk_blob(sftp, path, size_s):
     """SFTP-read one blob. Returns the UTF-8 text, or None if it is not a
     parseable W417 chunk (too big, empty, binary, or wrong first line)."""
@@ -1077,6 +1094,12 @@ def parse_chunk(txt):
             "tag": obj.get("tag", ""),
             "msg": obj.get("msg", ""),
         })
+    # Stable-sort ascending by ts. The on-device ring buffer normally appends
+    # in order, but this is the same "ship oldest-first" invariant as
+    # order_blobs_oldest_first() applied one level down: a single POST's
+    # logRecords should never regress in time within a stream, or Loki can
+    # bounce the tail of an otherwise-acceptable blob.
+    records.sort(key=lambda r: r["ms"])
     return header, records
 
 
@@ -1269,6 +1292,24 @@ def run_selftest():
     must_drop_or_summary("crypto", "pin a1B2c3D4 state=active",
                          ["a1b2c3d4"], "bare_pin")
 
+    # 18. Blobs must ship oldest-first (ascending mtime): shipping newest-first
+    #     lets the first accepted POST jump Loki's per-stream watermark ahead,
+    #     permanently dooming every older blob picked in the SAME run.
+    fake_files = [(300.0, 10, "/c"), (100.0, 10, "/a"), (200.0, 10, "/b")]
+    ordered = order_blobs_oldest_first(fake_files)
+    if [p for _, _, p in ordered] != ["/a", "/b", "/c"]:
+        failures.append("ORDER[blobs]: not oldest-first: %r" % (ordered,))
+
+    # 19. Records within one blob must ship in ascending ts order even if the
+    #     on-device W417 chunk itself was appended out of order.
+    _hdr, _recs = parse_chunk(
+        '{"ts":"2026-01-01T00:00:03.000Z","lvl":"I","tag":"call","msg":"c"}\n'
+        '{"ts":"2026-01-01T00:00:01.000Z","lvl":"I","tag":"call","msg":"a"}\n'
+        '{"ts":"2026-01-01T00:00:02.000Z","lvl":"I","tag":"call","msg":"b"}\n'
+    )
+    if [r["msg"] for r in _recs] != ["a", "b", "c"]:
+        failures.append("ORDER[records]: not ascending ts: %r" % (_recs,))
+
     out("=" * 72)
     out("SELF-TEST: privacy redaction regression")
     out("=" * 72)
@@ -1278,10 +1319,11 @@ def run_selftest():
         out("")
         out("  RESULT: NO-GO (%d leak/regression)" % len(failures))
         return 1
-    out("  18/18 cases pass: no forbidden value survived; structured telemetry")
+    out("  20/20 cases pass: no forbidden value survived; structured telemetry")
     out("  still ships; call_id hashed; SSID/serial/SDP/SAS/plaintext blocked;")
     out("  join key matches the server leg incl. QUOTED form; 6/7-char floored;")
-    out("  bare mixed-alnum secret tokens (8-11 char) hard-failed.")
+    out("  bare mixed-alnum secret tokens (8-11 char) hard-failed; blob + record")
+    out("  ship order is oldest-first.")
     out("  RESULT: GO")
     return 0
 
@@ -1352,6 +1394,9 @@ def main():
               % (args.minutes, args.limit))
         files = list_device_chunks(client, args.minutes, args.limit)
         print("Found %d candidate blobs." % len(files))
+        # Ship oldest-first: see order_blobs_oldest_first() docstring. This
+        # only reorders the already-limited (newest-N) selection above.
+        files = order_blobs_oldest_first(files)
 
         sftp = client.open_sftp()
         try:
