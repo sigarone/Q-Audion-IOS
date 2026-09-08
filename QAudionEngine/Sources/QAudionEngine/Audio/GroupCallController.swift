@@ -1555,9 +1555,14 @@ public final class GroupCallController: @unchecked Sendable {
     private var addFailures: Int = 0
 
     /// Short numeric code for a `GroupSession.SessionError`, for log lines that
-    /// have to survive the shipper's fail-closed redactor: it blobs any token
-    /// it cannot prove structured, and drops anything 12 characters or longer,
-    /// so an interpolated Swift error never reaches the server. Numbers do.
+    /// have to survive the shipper's fail-closed redactor. That redactor is a
+    /// positive allow-list: a body reaches the server only if it can be PROVEN
+    /// structured (short key=value pairs, numbers, known enums), with an
+    /// entropy sweep on top that blobs anything resembling a hash, hex or
+    /// base64 run. An interpolated Swift error passes neither test and is
+    /// dropped whole; `code=6` passes both. Verify a candidate line by running
+    /// it through `redact_body` in `scripts/ship-ios-logs.py` before shipping
+    /// it — every line added here was checked that way, not assumed.
     private static func keyErrCode(_ error: Error) -> Int {
         guard let e = error as? GroupSession.SessionError else { return 9 }
         switch e {
