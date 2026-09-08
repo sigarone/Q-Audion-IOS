@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1104",
+              date: "2026-09-08",
+              title: "v1.0.1104",
+              bullets: [
+                "fix(carplay): stop forcing hasVideo=true when CarPlay is the audio route",
+              ]),
         .init(id: "v1.0.1103",
               date: "2026-09-07",
               title: "v1.0.1103",
               bullets: [
+                "chore: regenerate changelog for v1.0.1103",
                 "fix(call): revert voiceProcessingTeardownQueueEnabled to false (SIGSEGV)",
               ]),
         .init(id: "v1.0.1102",
@@ -152,21 +159,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1085",
                 "fix(call): close the last silent-throw + wrong-type blind spots in the dcmux audio fallback",
                 "fix(call): cap ICE-recovery watchdog retry duration (W-ICERECOVERYCAP)",
-              ]),
-        .init(id: "v1.0.1084",
-              date: "2026-09-04",
-              title: "v1.0.1084",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1084",
-                "fix(rekey): seed a recreated sender cryptor from the confirmed slot, not the installed one",
-                "docs(rekey): update WIRE_SPEC.md §8.7 for the per-epoch call_media_ready",
-                "fix(rekey): guard rekey-switch gate/timeout state with txHoldLock",
-                "feat(rekey): gate sender switch on peer readiness or 2s timeout, both directions",
-                "feat(rekey): split NativeVideoFrameCryptor/NativeAudioFrameCryptor setKey into install + switch",
-                "feat(rekey): add RekeySwitchGate, pure re-key sender-switch coordinator",
-                "feat(rekey): add media field to call_media_ready wire message",
-                "docs(rekey): iOS implementation plan for the media-deafness skew fix",
-                "docs(rekey): design for the media-deafness skew fix — iOS port",
               ]),
     ]
 }
