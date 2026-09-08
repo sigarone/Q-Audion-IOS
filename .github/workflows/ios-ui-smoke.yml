@@ -151,8 +151,21 @@ jobs:
           xcodegen generate
           xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
 
-      # No signing needed -- Simulator builds don't require a provisioning
-      # profile or distribution cert, unlike ios-testflight.yml's archive.
+      # Ad-hoc local signing (CODE_SIGN_IDENTITY="-"), NOT CODE_SIGNING_ALLOWED=NO.
+      # W-L10N-BATCH1 (2026-09-08) -- CODE_SIGNING_ALLOWED=NO strips ALL
+      # entitlements from the built .app, including self-service ones like
+      # com.apple.developer.siri that need zero Apple provisioning (declared
+      # in QAudion.entitlements, applied at build time only). Confirmed live
+      # (run 34190797840): INPreferences.requestSiriAuthorization
+      # (AppState.swift, added 2026-09-06 commit 40750ba9b) hard-crashes
+      # with NSInternalInconsistencyException the instant it's called
+      # without that entitlement present in the running process's own code
+      # signature -- Apple's own documented behavior, not a bug in our
+      # entitlements config (QAudion.entitlements has always declared it
+      # correctly; ios-testflight.yml's real signed builds were never
+      # affected). Ad-hoc signing still needs no Apple Developer account/
+      # cert/profile on Simulator, but DOES let Xcode embed the entitlements
+      # plist into the signature, same as a real device build would.
       - name: Build QAudionApp for Simulator
         working-directory: QAudionApp
         run: |
@@ -163,7 +176,12 @@ jobs:
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
             -derivedDataPath /tmp/dd-ios-ui \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
             2>&1 | tee build-sim.log \
           || (echo ""; echo "=== BUILD FAILED -- full build-sim.log ==="; cat build-sim.log; exit 1)
 
