@@ -42,7 +42,15 @@ struct IncomingCallScreen: View {
     /// W-VIDPRIVACY — "answer without video" toggle. Only consulted when
     /// `callType == .video`; not persisted (no "always audio-only" setting
     /// — design non-goal).
-    @State private var acceptWithoutVideo = false
+    ///
+    /// W-VIDEODEFAULTOFF (2026-09-08) — starts pre-set to true (audio-only)
+    /// for a video call, set from `init` below. Confirmed live on the
+    /// Android port of this same screen: tapping the main Accept action
+    /// with zero other interaction is the most common real path, and with
+    /// this toggle defaulting to false (wants video) that reflexive tap
+    /// silently opened the camera — defeating the entire point of the
+    /// feature. Getting video now requires actively turning this off.
+    @State private var acceptWithoutVideo: Bool
 
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
@@ -64,6 +72,7 @@ struct IncomingCallScreen: View {
         self.onAccept = onAccept
         self.onReject = onReject
         self.onReplyWithMessage = onReplyWithMessage
+        _acceptWithoutVideo = State(initialValue: callType == .video)
     }
 
     var body: some View {
