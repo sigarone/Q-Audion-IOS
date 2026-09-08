@@ -197,6 +197,19 @@ jobs:
 
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
+          # W-L10N-BATCH1 (2026-09-08) -- pin the simulator to Italian so
+          # this smoke test's assertions (maestro/*.yaml, written against
+          # the app's Italian source strings) stay meaningful regardless of
+          # whatever locale the CI runner's simulator defaults to. Before
+          # Localizable.xcstrings existed this didn't matter (every locale
+          # showed the same hardcoded Italian text); now that the catalog
+          # is real, an English-default simulator genuinely shows English
+          # UI text and the old Italian-literal assertions fail -- not a
+          # regression, but the test needs to pin its own expected locale
+          # rather than assume the runner's default. Must run before
+          # install/first-launch so the app picks it up on cold start.
+          xcrun simctl spawn "$UDID" defaults write "Apple Global Domain" AppleLanguages -array it
+          xcrun simctl spawn "$UDID" defaults write "Apple Global Domain" AppleLocale -string "it_IT"
           xcrun simctl install "$UDID" "$APP_PATH"
           # Verbose CFNetwork/URLSession logging -- only matters for flows
           # that skip their own launchApp (e.g. diag-register.yaml), since
