@@ -286,7 +286,11 @@ struct ContentView: View {
             callType: invite.hasVideo ? .video : .audio,
             subtitle: Self.groupCallSubtitle(invite),
             showReplyAction: false,
-            onAccept: { appState.answerIncomingGroupCall() },
+            // W-VIDPRIVACY — accept-without-video is a 1:1-only feature
+            // (design non-goal for group calls); the toggle still renders on
+            // this shared component, but its result is intentionally ignored
+            // here.
+            onAccept: { _ in appState.answerIncomingGroupCall() },
             onReject: { appState.declineIncomingGroupCall() }
         )
     }
@@ -311,7 +315,7 @@ struct ContentView: View {
             avatarUrl: outgoingAvatarUrl,
             callType: appState.isVideoCall ? .video : .audio,
             peerShortNumber: outgoingShortNumber,
-            onAccept: { appState.answerIncomingCall() },
+            onAccept: { audioOnly in appState.answerIncomingCall(audioOnly: audioOnly) },
             onReject: { appState.declineIncomingCall() }
         )
         // W-VIDPRIVACY follow-up — `IncomingCallScreen`'s own

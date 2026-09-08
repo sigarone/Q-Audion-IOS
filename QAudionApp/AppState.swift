@@ -2189,6 +2189,14 @@ final class AppState: ObservableObject {
     /// (hangup sent, no provisioning, no ring) the moment it lands. Decline wins
     /// over a concurrently-latched answer. Cleared on consume + call reset.
     private var pendingNotificationDecline = false
+    /// W-VIDPRIVACY — set by `answerIncomingCall(audioOnly:)` right before
+    /// either accept path runs (CallKit-free direct call, or the native
+    /// CXAnswerCallAction round trip back through `onAnswerCall`), since
+    /// CallKit's own action object carries no app data across that hop.
+    /// Read-and-cleared by `performAcceptIncoming`. Defaults false, so the
+    /// CallKit-native and notification-tap entry points (no UI toggle
+    /// available there) keep answering with video unchanged.
+    private var pendingAnswerAudioOnly = false
     /// True once the user has explicitly answered the current incoming call via
     /// CallKit (`onAnswerCall` sets `answeredCallKitId`). The app-lock scene gate
     /// uses this to drop the biometric lock the MOMENT the call is answered —
@@ -15712,6 +15720,17 @@ func evaluateNoCallInFlight(
     return true
 }
 
+/// W-VIDPRIVACY — pure decision for the callee's video-capture mode on
+/// answer. `.external` sourceMode (receiveOnly) still decodes/renders the
+/// caller's inbound video — see VideoCallPipeline.start()'s kdoc — it only
+/// skips AVCaptureSession/permission, so the caller's video is never lost.
+enum VideoAnswerCaptureMode: Equatable { case none, cameraConsented, receiveOnly }
+
+func evaluateVideoAnswerCaptureMode(hasVideo: Bool, acceptWithoutVideo: Bool) -> VideoAnswerCaptureMode {
+    guard hasVideo else { return .none }
+    return acceptWithoutVideo ? .receiveOnly : .cameraConsented
+}
+
 extension AppState {
 
     /// call_accepted rollout-safety net (WIRE_SPEC §3.5) — bounded fallback
@@ -15834,6 +15853,40 @@ extension AppState {
                 }
             }
         }
+        // W-VIDPRIVACY — start the callee's video-capture pipeline now that
+        // the user has actually accepted, gated on their accept-with/without-
+        // video choice. Replaces the unconditional start that used to run at
+        // OFFER-RECEIPT time (W-CAMARMEARLY, Task 1) — that armed the camera
+        // for a call nobody had accepted yet.
+        let acceptWithoutVideo = self.pendingAnswerAudioOnly
+        self.pendingAnswerAudioOnly = false
+        let vidcapMode = evaluateVideoAnswerCaptureMode(hasVideo: self.isVideoCall, acceptWithoutVideo: acceptWithoutVideo)
+        RTLog.info("call", "vidcap mode=\(vidcapMode) audioOnly=\(acceptWithoutVideo ? 1 : 0)")
+        if let peerId = self.callContactId, !peerId.isEmpty {
+            switch vidcapMode {
+            case .none:
+                break
+            case .receiveOnly:
+                Task { @MainActor [weak self] in
+                    await self?.startVideoPipeline(for: peerId, sourceMode: .external)
+                }
+            case .cameraConsented:
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.startVideoPipeline(for: peerId, startPaused: true)
+                    guard self.videoPipeline != nil else { return }
+                    self.videoPipeline?.setVideoPaused(false)
+                    #if os(iOS)
+                    if let controller = self.webRtcController as? QAudionWebRtcCallController,
+                       let capturer = controller.webrtcPixelBufferCapturer {
+                        self.videoPipeline?.onCapturedPixelBuffer = { [weak capturer] pixelBuffer, timestampNs in
+                            capturer?.push(pixelBuffer, rotation: ._0, timestampNs: timestampNs)
+                        }
+                    }
+                    #endif
+                }
+            }
+        }
         // W-AVATARCALLEE (2026-08-01): the CALLEE's avatar hook. Until now
         // `maybeExchangeAvatarOnCallConnect()` was reachable ONLY from
         // `finalizeCallActive()`, whose three inbound edges (the call_answer
@@ -15863,9 +15916,10 @@ extension AppState {
         // startIncomingCallAudioOnAnswer.
     }
 
-    func answerIncomingCall() {
+    func answerIncomingCall(audioOnly: Bool = false) {
         stopInAppRingtone()
         guard let uuid = activeCallKitId else { return }
+        pendingAnswerAudioOnly = audioOnly
         if CallsGate.callKitFreeMode {
             // W-NOCALLKIT — no CallKit; run the accept path directly.
             performAcceptIncoming(uuid: uuid, dismissNativeUI: false)
@@ -16577,6 +16631,7 @@ extension AppState {
         callAcceptedCallId = nil  // call_accepted latch — re-arm for the next call
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
+        pendingAnswerAudioOnly = false  // W-VIDPRIVACY — re-arm for the next call
         selfManagedAudioSession = false  // W-WAKEONLY — re-arm for the next call
         // earbud-relay-v1 — drop the one-shot counterparty state so the
         // next earbud call starts a fresh responder (fresh FW-H7 counter).
@@ -21994,17 +22049,13 @@ extension AppState {
                 // I8 FIX: cid is a full userId — truncate to match this
                 // file's established identifier convention.
                 print("[AppState] WebRTC: accepted incoming call from \(cid.prefix(8))… (video=\(hasVideo), peerCaps=\(caps ?? []))")
-                // Wire VideoCallPipeline → RTCVideoSource (callee side) so
-                // Android sees iOS camera video over WebRTC RTP.
-                #if os(iOS)
-                if hasVideo, let capturer = controller.webrtcPixelBufferCapturer {
-                    self.videoPipeline?.onCapturedPixelBuffer = {
-                        [weak capturer] pixelBuffer, timestampNs in
-                        capturer?.push(pixelBuffer, rotation: ._0,
-                                       timestampNs: timestampNs)
-                    }
-                }
-                #endif
+                // W-VIDPRIVACY — the VideoCallPipeline → RTCVideoSource bridge
+                // (callee side) moved to `performAcceptIncoming`'s
+                // `.cameraConsented` branch: this closure runs at OFFER-
+                // ACCEPT time, before the user has chosen accept-with/
+                // without-video, and `self.videoPipeline` is nil here post-
+                // Task-1 (W-CAMARMEARLY) since the pipeline no longer starts
+                // this early.
             } catch {
                 // W-DCSTUCK-DIAG (2026-08-13): was print()-only, sitting one
                 // line away from the ICE-candidate-queue RTLog calls below
