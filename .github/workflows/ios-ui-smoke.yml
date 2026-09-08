@@ -206,10 +206,20 @@ jobs:
           # is real, an English-default simulator genuinely shows English
           # UI text and the old Italian-literal assertions fail -- not a
           # regression, but the test needs to pin its own expected locale
-          # rather than assume the runner's default. Must run before
-          # install/first-launch so the app picks it up on cold start.
+          # rather than assume the runner's default.
+          #
+          # A locale `defaults write` on an ALREADY-BOOTED simulator triggers
+          # a SpringBoard respring in the background -- confirmed live
+          # (run 34189976694): install+launch raced that respring and the
+          # just-launched app got killed as collateral, landing back on the
+          # home screen instead of showing the welcome text. Fix: shutdown +
+          # reboot the simulator AFTER writing the locale so the respring
+          # fully completes before anything is installed/launched.
           xcrun simctl spawn "$UDID" defaults write "Apple Global Domain" AppleLanguages -array it
           xcrun simctl spawn "$UDID" defaults write "Apple Global Domain" AppleLocale -string "it_IT"
+          xcrun simctl shutdown "$UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" "$APP_PATH"
           # Verbose CFNetwork/URLSession logging -- only matters for flows
           # that skip their own launchApp (e.g. diag-register.yaml), since
