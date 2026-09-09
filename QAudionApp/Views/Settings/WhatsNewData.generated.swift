@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1125",
+              date: "2026-09-09",
+              title: "v1.0.1125",
+              bullets: [
+                "fix(call): migrate app self-activation through RTCAudioSession's own lock",
+              ]),
         .init(id: "v1.0.1124",
               date: "2026-09-09",
               title: "v1.0.1124",
               bullets: [
+                "chore: regenerate changelog for v1.0.1124",
                 "feat(call): re-enable native audio-srtp with the AudioUnit settle-wait fix",
                 "fix(call): settle-wait before minting a fresh WebRTC factory on a fast call",
               ]),
@@ -155,25 +162,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1106",
                 "fix(call): iOS video-answer defaults and reactivation (W-VIDPRIVACY follow-up)",
                 "fix(shipper): a mixed-failure blob must not be marked permanently handled (#98)",
-              ]),
-        .init(id: "v1.0.1105",
-              date: "2026-09-08",
-              title: "v1.0.1105",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1105",
-                "fix(ios): default the accept-without-video toggle to on for video calls (W-VIDEODEFAULTOFF)",
-                "fix(ios): scope audio-only-answer latch to call identity; bounded retry for pixel-buffer capturer wiring",
-                "fix(groupcall): build the key diagnostics under the lock, print after it (W-GRPKEYSILENT)",
-                "fix(groupcall): make a keyless group call say so (W-GRPKEYSILENT)",
-                "test(maestro): dismiss the first-launch Siri permission dialog",
-                "feat(ios): gate callee video capture on accept-without-video choice (W-VIDPRIVACY)",
-                "ci(ios-ui-smoke): ad-hoc-sign the simulator build so entitlements embed",
-                "fix(ios): reset accept-without-video toggle per call identity; add a11y label + larger tap target",
-                "feat(ios): video badge + accept-without-video toggle on incoming-call screen",
-                "fix(ios): stop arming callee camera at call-offer receipt (W-CAMARMEARLY)",
-                "ci(ios-ui-smoke): reboot simulator after locale write to avoid respring race",
-                "ci(ios-ui-smoke): pin simulator locale to Italian",
-                "feat(l10n): full localization infrastructure — en/es/fr/de/pt-BR + in-app language picker",
               ]),
     ]
 }
