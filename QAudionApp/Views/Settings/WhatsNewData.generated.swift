@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1124",
+              date: "2026-09-09",
+              title: "v1.0.1124",
+              bullets: [
+                "feat(call): re-enable native audio-srtp with the AudioUnit settle-wait fix",
+                "fix(call): settle-wait before minting a fresh WebRTC factory on a fast call",
+              ]),
         .init(id: "v1.0.1123",
               date: "2026-09-09",
               title: "v1.0.1123",
               bullets: [
+                "chore: regenerate changelog for v1.0.1123",
                 "fix(call): disable native audio-srtp again — two boundary fixes, both disproven",
               ]),
         .init(id: "v1.0.1122",
@@ -166,13 +174,6 @@ extension ReleaseNote {
                 "ci(ios-ui-smoke): reboot simulator after locale write to avoid respring race",
                 "ci(ios-ui-smoke): pin simulator locale to Italian",
                 "feat(l10n): full localization infrastructure — en/es/fr/de/pt-BR + in-app language picker",
-              ]),
-        .init(id: "v1.0.1104",
-              date: "2026-09-08",
-              title: "v1.0.1104",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1104",
-                "fix(carplay): stop forcing hasVideo=true when CarPlay is the audio route",
               ]),
     ]
 }
