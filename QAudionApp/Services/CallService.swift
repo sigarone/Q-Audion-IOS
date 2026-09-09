@@ -1315,7 +1315,7 @@ final class CallService: @unchecked Sendable {
 
     func startCall(engine: QAudionEngine, contactId: String) throws {
         // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
-        teardownAudioStack()
+        teardownAudioStack(resetDcCounters: true)
         // W-PADOVERFLOW — after the defensive teardown, so that teardown
         // reports the PREVIOUS call rather than this one's empty counters.
         audioEngineRef = engine
@@ -1645,7 +1645,7 @@ final class CallService: @unchecked Sendable {
         // Defensive cleanup: stop any leftover capture from a previous call.
         // W-SRTPFBRESET — keep the fallback latch: this runs at ANSWER time
         // inside the incoming call (see teardownAudioStack's kdoc).
-        teardownAudioStack(resetSrtpFallback: false)
+        teardownAudioStack(resetSrtpFallback: false, resetDcCounters: true)
         if let cid = _savedSealerCallId, _savedSealerSend != nil {
             let active: String = getCallId?()?.lowercased() ?? ""
             // Restore when the sealer matches the active call, or when the
@@ -2595,7 +2595,7 @@ final class CallService: @unchecked Sendable {
     /// there has already muted the native sender, and clearing the latch would
     /// turn the later `recoverAudioSrtpFallback` into a no-op that never
     /// un-mutes it (adversarial review of the fix, 2026-09-08).
-    private func teardownAudioStack(resetSrtpFallback: Bool = true) {
+    private func teardownAudioStack(resetSrtpFallback: Bool = true, resetDcCounters: Bool = false) {
         // Diagnostic: emit the REAL audio frame counters BEFORE they reset.
         // call.media.summary's `suspect_silent` is a timer-only heuristic and
         // says nothing about audio — these counters are the ground truth that
@@ -2940,14 +2940,26 @@ final class CallService: @unchecked Sendable {
         // W-DCMUX — per-call, like every counter above. A second call must not
         // open showing the previous call's transport split: "rx dc=812" carried
         // over from a call that DID use the DataChannel would be read as proof
-        // about a call that never touched it.
-        txFramesDc = 0
-        txFramesWs = 0
-        rxFramesDc = 0
-        rxFramesWs = 0
+        // about a call that never touched it. BUT this same teardown also runs
+        // synchronously from endCall() for the call that just ENDED, while
+        // `noteAudioDataChannelState()` logs these same counters from the
+        // WebRTC signalling thread's async close callback (closing/closed),
+        // which lands ~100-300ms later. Zeroing here unconditionally made
+        // every locally-hung-up call print a false "tx=0 rx=0" at its own
+        // closing line — real traffic (confirmed via the TX/RX
+        // encrypt/decrypt log lines) got reported as a dead call. Only the
+        // defensive pre-call teardown (startCall/activateIncomingCallAudio,
+        // resetDcCounters=true) needs the clean slate; endCall()'s teardown
+        // must leave these readable for its own closing-state log.
+        if resetDcCounters {
+            txFramesDc = 0
+            txFramesWs = 0
+            rxFramesDc = 0
+            rxFramesWs = 0
+            loggedFirstTxOnDc = false
+            loggedFirstRxOnDc = false
+        }
         txFallbackCount = 0
-        loggedFirstTxOnDc = false
-        loggedFirstRxOnDc = false
         rxPreBuffer.removeAll()  // W481
         // W-SETUPRETRY + W-MEDIADEAD — per-call RX liveness state. The
         // one-shot first-decode latch re-arms for the next call, the decode
