@@ -1579,6 +1579,11 @@ public final class QAudionPeerConnection: NSObject {
         usingNativeAudioSrtp = false
         peerConnection?.close()
         peerConnection = nil
+        // W-ADUNITRACE (2026-09-09) — see QAudionPeerConnectionFactory.
+        // createFactory()'s kdoc: RTCPeerConnection.close() returning is not
+        // proof the native AudioUnit underneath has actually stopped, so the
+        // NEXT call's fresh factory needs to know when this teardown started.
+        QAudionPeerConnectionFactory.shared.noteTeardownStarted()
         localAudioTrack = nil
         localVideoTrack = nil
         videoSender = nil

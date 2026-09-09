@@ -6,9 +6,9 @@ import WebRTC
 
 final class QAudionPeerConnectionFactoryTests: XCTestCase {
     #if canImport(WebRTC)
-    func testFactoryIsLazyAndIdempotent() {
-        let f1 = QAudionPeerConnectionFactory.shared.factory
-        let f2 = QAudionPeerConnectionFactory.shared.factory
+    func testFactoryIsLazyAndIdempotent() async {
+        let f1 = await QAudionPeerConnectionFactory.shared.factory()
+        let f2 = await QAudionPeerConnectionFactory.shared.factory()
         XCTAssertTrue(f1 === f2, "factory must be a singleton")
     }
 

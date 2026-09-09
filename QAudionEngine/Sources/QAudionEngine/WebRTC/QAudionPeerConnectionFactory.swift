@@ -19,17 +19,44 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     private let lock = NSLock()
     private var _factory: RTCPeerConnectionFactory?
 
+    /// W-ADUNITRACE (2026-09-09) — see `createFactory()`'s kdoc for the full
+    /// story. Timestamp of the most recent `close()`-triggered teardown
+    /// (`noteTeardownStarted()`), so the next `createFactory()` on a fast
+    /// back-to-back call knows whether to wait.
+    private var lastTeardownAt: Date?
+
     private init() {}
+
+    /// W-ADUNITRACE (2026-09-09) — called from `QAudionPeerConnection.close()`
+    /// the instant the native `RTCPeerConnection.close()` returns. That
+    /// return is NOT proof the underlying platform AudioUnit has actually
+    /// finished stopping — libwebrtc dispatches that teardown onto its own
+    /// internal threads and gives this app no completion signal. Recording
+    /// when teardown STARTED is the only data `createFactory()` has to work
+    /// with; see its kdoc for what it does with this.
+    public func noteTeardownStarted() {
+        lock.lock()
+        lastTeardownAt = Date()
+        lock.unlock()
+    }
 
     /// Lazy accessor for the underlying RTCPeerConnectionFactory. Callers
     /// that need the TX capture tap (native-audio-srtp) must go through
     /// `createFactory` instead — this cached instance has no reachable
     /// `RTCDefaultAudioProcessingModule` handle to attach one to.
-    public var factory: RTCPeerConnectionFactory {
-        lock.lock(); defer { lock.unlock() }
-        if let f = _factory { return f }
-        let f = createFactory().factory
-        _factory = f
+    public func factory() async -> RTCPeerConnectionFactory {
+        let cached: RTCPeerConnectionFactory? = {
+            lock.lock(); defer { lock.unlock() }
+            return _factory
+        }()
+        if let cached { return cached }
+        // W-ADUNITRACE (2026-09-09) — createFactory() is now async (settle-wait
+        // for the fresh-factory-per-call race, see its kdoc); this is a
+        // one-time-ever lazy init with no prior teardown to race against, so
+        // the wait it might add here is harmless (elapsed-since-teardown is
+        // nil on first use, per createFactory()'s own guard).
+        let f = await createFactory().factory
+        lock.lock(); _factory = f; lock.unlock()
         return f
     }
 
@@ -101,8 +128,45 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// `project_ios_native_capture_tap_adm_choice_2026_09_08.md` (session
     /// memory) for the full source-level verification this comment
     /// summarizes.
-    public func createFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil })
+    ///
+    /// W-ADUNITRACE (2026-09-09) — every call gets a FRESH factory (this
+    /// function), and therefore a fresh native AudioDeviceModule/AudioUnit,
+    /// never the previous call's. `close()` returning is not proof the
+    /// PRIOR call's AudioUnit finished stopping — libwebrtc dispatches that
+    /// teardown onto its own internal threads with no completion signal
+    /// this app can observe (no callback, no pollable state; confirmed by
+    /// grep: this codebase has never once checked an AudioUnit busy/
+    /// cannot-do-in-current-context OSStatus). Live evidence tonight: two
+    /// independent CallKit/AVAudioSession-layer fixes both landed and both
+    /// executed correctly, yet a call placed 6-9s after a previous one
+    /// still reproduced a permanently dead sender — the race is one layer
+    /// below AVAudioSession, at the AudioUnit itself.
+    ///
+    /// The documented production mitigation for exactly this class of race
+    /// (no platform completion signal exists) is a settle delay before the
+    /// next start — heuristic, not a guarantee, because no better signal
+    /// exists to wait on. `settleDelayNanos` below is deliberately more
+    /// generous than the ~100-500ms cited in that documented practice,
+    /// because tonight's own reproductions show total TX starvation
+    /// persisting far longer than that (up to ~70s in one case) — a
+    /// fixed short delay may still be insufficient if what's actually
+    /// happening is closer to a stuck teardown than a brief async lag; this
+    /// is a mitigation grounded in the best documented technique available,
+    /// not a proven fix, and needs its own live call-to-call verification
+    /// before being trusted, same as everything else tonight.
+    public func createFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil }) async
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
+        let settleDelayNanos: UInt64 = 1_500_000_000  // 1.5s
+        let sinceLastTeardown: TimeInterval? = {
+            lock.lock(); defer { lock.unlock() }
+            guard let last = lastTeardownAt else { return nil }
+            return Date().timeIntervalSince(last)
+        }()
+        if let elapsed = sinceLastTeardown, elapsed < 1.5 {
+            let remainingNanos = settleDelayNanos - UInt64(elapsed * 1_000_000_000)
+            print("[QAudionPeerConnectionFactory] W-ADUNITRACE settling \(remainingNanos / 1_000_000)ms — prior call's teardown was only \(Int(elapsed * 1000))ms ago")
+            try? await Task.sleep(nanoseconds: remainingNanos)
+        }
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
 
