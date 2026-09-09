@@ -639,6 +639,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public private(set) var audioRtpPacketsReceived: Int64 = -1
     public private(set) var audioRtpPacketsSent: Int64 = -1
 
+    /// W-SRTPLOSSDIAG (2026-09-09, best-practices audit) — the audio
+    /// `inbound-rtp` row's own `packetsLost` (RFC 3550 cumulative count) and
+    /// `jitter` (RFC 3550 interarrival jitter estimate, seconds), plus the
+    /// two standard WebRTC audio concealment counters. Before this, the
+    /// only signal available for "audio sounded choppy" was the raw
+    /// tx/rx byte/packet counters sampled every 5s — those cannot tell
+    /// real network loss, cleanly-absorbed reordering, and an undersized
+    /// jitter buffer apart from each other. -1 = no audio inbound-rtp row
+    /// (every call on the sealed DataChannel/WS relay), same convention as
+    /// every other field on this report.
+    public private(set) var audioRtpPacketsLost: Int64 = -1
+    public private(set) var audioRtpJitterSec: Double = -1
+    public private(set) var audioRtpConcealedSamples: Int64 = -1
+    public private(set) var audioRtpConcealmentEvents: Int64 = -1
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -684,12 +699,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // the sealed DataChannel there.
             var audioRxPackets: Int64 = -1
             var audioTxPackets: Int64 = -1
+            // W-SRTPLOSSDIAG — see the property kdocs above.
+            var audioPacketsLost: Int64 = -1
+            var audioJitterSec: Double = -1
+            var audioConcealedSamples: Int64 = -1
+            var audioConcealmentEvents: Int64 = -1
             for (_, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
                     jbEmitted = (s.values["jitterBufferEmittedCount"] as? NSNumber)?.int64Value ?? 0
                     audioRxBytes = (s.values["bytesReceived"] as? NSNumber)?.int64Value ?? -1
                     audioRxPackets = (s.values["packetsReceived"] as? NSNumber)?.int64Value ?? -1
+                    audioPacketsLost = (s.values["packetsLost"] as? NSNumber)?.int64Value ?? -1
+                    audioJitterSec = (s.values["jitter"] as? NSNumber)?.doubleValue ?? -1
+                    audioConcealedSamples = (s.values["concealedSamples"] as? NSNumber)?.int64Value ?? -1
+                    audioConcealmentEvents = (s.values["concealmentEvents"] as? NSNumber)?.int64Value ?? -1
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
@@ -720,6 +744,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-SRTPCOUNTERS — see `audioRxPackets` above.
             self.audioRtpPacketsReceived = audioRxPackets
             self.audioRtpPacketsSent = audioTxPackets
+            // W-SRTPLOSSDIAG — see the property kdocs above.
+            self.audioRtpPacketsLost = audioPacketsLost
+            self.audioRtpJitterSec = audioJitterSec
+            self.audioRtpConcealedSamples = audioConcealedSamples
+            self.audioRtpConcealmentEvents = audioConcealmentEvents
             self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
         }
     }

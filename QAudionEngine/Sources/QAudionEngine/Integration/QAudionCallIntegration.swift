@@ -1448,6 +1448,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             retrySenderClosure = sendOpaqueRaw
         }
         try await sendOpaqueRaw(jsonWire)
+        // W-HSROUNDTIMING (2026-09-09) — first of three round-boundary
+        // breadcrumbs (offer-send-confirmed / accept-received /
+        // derive-complete). Before this, a stuck handshake only had two
+        // observable points — "offer sent" and "30s later, still nothing"
+        // — with no way to tell whether the offer never left the device,
+        // never reached the peer, the peer never answered, or the ACCEPT
+        // came back but decapsulation/derivation failed silently. This
+        // marks the `sendOpaqueRaw` call actually returning (local
+        // dispatch confirmed, not just attempted) — see the paired
+        // breadcrumbs at the `.accept` case entry and after
+        // `engine.initSession` below.
+        logTiming("hs-offer-sent", msInt: 0, ok: true)
         // W529: arm the 5 s idempotent retry loop. Cancels on
         // session-key install (success) or call end (handshake.reset).
         armOfferRetryTimer()
@@ -2824,6 +2836,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // already relies on).
             let rekeyAttempt = lock.withLock { pendingReKeyAttempt }
             let isReKeyAccept = rekeyAttempt != nil
+            // W-HSROUNDTIMING — second breadcrumb: ACCEPT reached this
+            // side's dispatch. Skipped for re-key rounds (`handshakeStartedAt`
+            // times the ORIGINAL handshake only, not each re-key round) so
+            // this stays a clean signal for "did the peer's ACCEPT for the
+            // opening handshake ever arrive" — see the send-confirmed and
+            // derive-complete siblings.
+            if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
+                logTiming("hs-accept-received", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
+            }
             let localKeys = rekeyAttempt?.localKeys
                          ?? localHybridKeysByCall[callId]
                          ?? localHybridKeysByCall[callId.lowercased()]
@@ -3238,6 +3259,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
+            // W-HSROUNDTIMING — third breadcrumb: decapsulation + session-key
+            // derivation actually completed (engine.initSession didn't
+            // throw). Paired with hs-offer-sent/hs-accept-received above —
+            // a stuck-in-.fallback call missing ONLY this one now points
+            // straight at decap/derivation, not the network legs.
+            if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
+                logTiming("hs-derive-complete", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
+            }
             onRelaySessionReady?(combined, callId)
             lock.withLock {
                 state = .active

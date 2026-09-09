@@ -2400,7 +2400,23 @@ public final class AudioCapture {
         }
     }
 
-    public func stop() {
+    /// W-SESSIONOWNER (2026-09-09) — `deactivateSession` defaults to `false`
+    /// (fail-safe: a caller must opt in). On a CallKit-managed call, only
+    /// CallKit's own `didDeactivate` should ever `setActive(false)` the
+    /// shared session — Apple's own CallKit guidance says an app calling
+    /// `setActive` itself "can prevent CallKit from doing the necessary
+    /// work", and this exact app-owned deactivation, racing CallKit's async
+    /// release of the SAME session, was one of two concrete causes found
+    /// (best-practices audit, 2026-09-09) behind real `inp=0`/`'what'`
+    /// mic-route failures on a call placed seconds after a prior one ended.
+    /// `stop()` is also called mid-call from `recoverAudioSrtpFallback()`
+    /// (native audio-srtp resuming ownership from the manual fallback) —
+    /// deactivating there would tear down the category/mode of a call that
+    /// is still live, a second, independent bug this same default closes.
+    /// The one caller that DOES need self-owned deactivation is
+    /// `CallsGate.callKitFreeMode` (no CallKit involved, nobody else will
+    /// ever release this session) — that caller passes `true` explicitly.
+    public func stop(deactivateSession: Bool = false) {
         // W-AUDIODEATH (2026-07-24) — latch whether the engine was still alive at
         // teardown, BEFORE we tear it down ourselves. `false` here on a call that
         // reported healthy rx_dec counts is the fingerprint of a dead-playout call
@@ -2441,7 +2457,9 @@ public final class AudioCapture {
         // W-AEC-FIX — clear the watchdog fallback so the NEXT call retries VP-IO
         // AEC fresh (a starve will just re-trigger the fallback if it recurs).
         audioPipeline.forceDisableVoiceProcessing = false
-        audioPipeline.deactivateSession()
+        if deactivateSession {
+            audioPipeline.deactivateSession()
+        }
         isRunning = false
     }
 

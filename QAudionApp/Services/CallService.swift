@@ -382,7 +382,14 @@ final class CallService: @unchecked Sendable {
         if getCallId?() != nil, srtpHbSampleCounter % 5 == 0 {
             let ptx = getAudioRtpPacketsSent?() ?? -1
             let prx = getAudioRtpPacketsReceived?() ?? -1
-            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx)")
+            // W-SRTPLOSSDIAG (2026-09-09) — lost is a plain Int64, ok
+            // numeric per this line's own redactor discipline; jitter is
+            // seconds from the stats API, shipped as whole milliseconds
+            // (still numeric, finer than ms is not useful here) so it
+            // survives the same shipper rule as `buf=` elsewhere in this file.
+            let lost = getAudioRtpPacketsLost?() ?? -1
+            let jitterMs = Int((getAudioRtpJitterSec?() ?? -1) * 1000)
+            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs)")
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
         // outbound-rtp row still does not exist after ~8 s of samples (was
@@ -676,6 +683,15 @@ final class CallService: @unchecked Sendable {
     /// pattern and wiring site as the byte pair above.
     public var getAudioRtpPacketsSent: (() -> Int64)?
     public var getAudioRtpPacketsReceived: (() -> Int64)?
+    /// W-SRTPLOSSDIAG (2026-09-09, best-practices audit) — audio
+    /// `inbound-rtp.packetsLost`/`jitter` from the live PeerConnection, or
+    /// -1 when there is no audio RTP leg. Same live-getter pattern and
+    /// wiring site as the pair above. Without these, "audio sounded
+    /// choppy" had only tx/rx byte/packet counters to go on — enough to
+    /// see growth was uneven, not enough to tell real network loss from
+    /// reordering the jitter buffer already absorbed cleanly.
+    public var getAudioRtpPacketsLost: (() -> Int64)?
+    public var getAudioRtpJitterSec: (() -> Double)?
     /// W-DEADTXRELEASE — mute/unmute the native audio-srtp sender track.
     /// Wired once at login by AppState to
     /// `webRtcController?.setNativeAudioSrtpMuted(_:)`, same live-setter
@@ -2866,11 +2882,19 @@ final class CallService: @unchecked Sendable {
         didActivateFallbackFired = false
         callIntegration?.onCallEnded()
         callIntegration = nil
-        audioCapture?.stop()
+        // W-SESSIONOWNER (2026-09-09) — deactivate the shared AVAudioSession
+        // ourselves ONLY in callKitFreeMode (no CallKit involved, nobody
+        // else will ever release it). On a normal CallKit-managed call,
+        // leave that to CallKit's own didDeactivate — see AudioCapture
+        // .stop()'s kdoc for the live evidence behind this. The separate,
+        // unconditional `audioPipeline?.deactivateSession()` that used to
+        // run right here was fully redundant with AudioCapture.stop()'s own
+        // internal call AND raced CallKit's async release every single
+        // call teardown; removed rather than made conditional twice.
+        audioCapture?.stop(deactivateSession: CallsGate.callKitFreeMode)
         audioCapture = nil
         audioPlayback?.stop()
         audioPlayback = nil
-        audioPipeline?.deactivateSession()
         audioPipeline = nil
         framesEncryptedTx = 0
         framesDecryptedRx = 0
@@ -3161,6 +3185,31 @@ final class CallService: @unchecked Sendable {
     /// to `@MainActor` internally when not already on it; `print` is
     /// stdlib-serialized), so this needs no completion hop of its own.
     private func performAudioCaptureStart(_ capture: AudioCapture) {
+        // W-ROUTEPRECHECK (2026-09-09) — sample the session's live route
+        // BEFORE attempting the engine start, instead of only reading it
+        // from the `catch` below after a throw. Best-practices audit the
+        // same night: production CallKit+AVAudioEngine stacks check
+        // `currentRoute.inputs` at activation time rather than gating only
+        // on a generic thrown error code — a doomed attempt (no input
+        // route yet) reliably throws the same uninformative
+        // `AVAudioSessionErrorCodeUnspecified`/'what' this file already
+        // has to special-case (W-CAPFAILROUTE). Skipping the attempt here
+        // and reusing the existing bounded retry (`scheduleCapfailRetry`)
+        // avoids that wasted, indistinguishable failure — this does not
+        // replace `scheduleCapfailRetry`'s own catch-side handling for a
+        // genuine engine/hardware fault, it only stops an attempt we can
+        // already tell will fail before it does.
+        let preflightRoute = AVAudioSession.sharedInstance()
+        guard preflightRoute.currentRoute.inputs.count > 0 else {
+            RTLog.warn(
+                "call",
+                "audioIO noinput=1 inp=\(preflightRoute.currentRoute.inputs.count)"
+                    + " outp=\(preflightRoute.currentRoute.outputs.count)"
+                    + " rec=\(preflightRoute.isInputAvailable ? 1 : 0)"
+            )
+            scheduleCapfailRetry()
+            return
+        }
         do {
             try capture.start()
             audioEnginesStarted = true  // W-CAPFAILRETRY — success only
@@ -3287,7 +3336,11 @@ final class CallService: @unchecked Sendable {
         guard audioSrtpFallbackActive else { return }
         audioSrtpFallbackActive = false
         RTLog.warn("call", "audiosrtpfb recover=1")
-        audioCapture?.stop()
+        // W-SESSIONOWNER — explicit `false`: the call is still live here,
+        // only the manual fallback engine is stepping aside for native
+        // audio-srtp to resume. Deactivating the shared session mid-call
+        // would tear down its category/mode for no reason.
+        audioCapture?.stop(deactivateSession: false)
         audioEnginesStarted = false
         // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
         // sole TX/RX owner, same as this function's own doc already says.
