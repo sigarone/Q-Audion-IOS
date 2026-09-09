@@ -712,6 +712,15 @@ final class CallService: @unchecked Sendable {
     /// `engageAudioSrtpFallback()` exactly as it behaved before this existed
     /// — it just skips the release.
     public var muteNativeAudioSrtpSender: ((Bool) -> Void)?
+    /// W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as
+    /// `muteNativeAudioSrtpSender` above, kept out of this file for the same
+    /// reason: `CallService` deliberately never imports WebRTC directly.
+    /// Wired once at login by AppState to
+    /// `QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()`. `nil`
+    /// (no wiring) just skips the mid-process factory-rebuild safety net —
+    /// see `consecutiveAudioSrtpWedges`'s own kdoc for what this recovers
+    /// from.
+    public var resetAudioSrtpFactory: (() -> Void)?
 
     /// W-SRTPCOUNTERS (2026-08-29) — "how much audio has this call actually
     /// protected and moved", answered from whichever path is really carrying
@@ -745,6 +754,22 @@ final class CallService: @unchecked Sendable {
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
     /// skip in `startAudioIOIfReady` for exactly as long as the outage lasts.
     private var audioSrtpFallbackActive: Bool = false
+    /// W-ADMWEDGERESET (2026-09-09) — survives across calls, unlike
+    /// `srtpDeadTxBeats`/`audioSrtpFallbackActive` (both per-call, reset in
+    /// `teardownAudioStack`). Counts CONSECUTIVE calls that tripped the
+    /// dead-TX fallback (`engageAudioSrtpFallback`); reset to 0 by any call
+    /// that completes without tripping it. At 2 consecutive trips,
+    /// `teardownAudioStack` calls `resetAudioSrtpFactory` (wired by AppState
+    /// to `QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()`) so
+    /// the NEXT call rebuilds the native factory/ADM from scratch — this
+    /// app's coarser equivalent of WebRTC's own upstream escape hatch for a
+    /// wedged native audio unit (see `QAudionPeerConnectionFactory`'s own
+    /// kdoc). The persistent-factory
+    /// redesign (W-PERSISTENTFACTORY) removes the per-call teardown/rebuild
+    /// that used to give every call a clean slate for free; this is the
+    /// deliberate safety net that replaces it for the rare case the
+    /// persistent audio unit wedges anyway.
+    private var consecutiveAudioSrtpWedges: Int = 0
     /// W-CAPTURELIVE-SIGNAL (2026-09-08) — read by the WebRTC controller's
     /// native-mic liveness check (via AppState wiring), OFF the main thread:
     /// the check may only start judging once CallKit has activated the
@@ -3003,6 +3028,17 @@ final class CallService: @unchecked Sendable {
             // with the native path respected, exactly like the first one.
             if audioSrtpFallbackActive {
                 RTLog.info("call", "audiosrtpfb reset=1")
+                // W-ADMWEDGERESET — this call tripped the dead-TX fallback;
+                // count it toward the cross-call wedge counter (see that
+                // property's own kdoc).
+                consecutiveAudioSrtpWedges &+= 1
+                if consecutiveAudioSrtpWedges >= 2 {
+                    RTLog.warn("call", "audiosrtpfb admreset=1 wedges=\(consecutiveAudioSrtpWedges)")
+                    resetAudioSrtpFactory?()
+                    consecutiveAudioSrtpWedges = 0
+                }
+            } else {
+                consecutiveAudioSrtpWedges = 0
             }
             audioSrtpFallbackActive = false
             srtpDeadTxBeats = 0

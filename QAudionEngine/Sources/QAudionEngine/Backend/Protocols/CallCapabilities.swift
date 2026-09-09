@@ -409,6 +409,37 @@ public enum CallCapabilities {
     /// app's own locked activate ran, independent of CallKit's native-UI
     /// ledger. See `CallKitCallLedger`'s kdoc and `reportCallEnded`'s for
     /// the full trace of both the original bug and this one's own bug.
+    ///
+    /// EIGHTH — the sixth/seventh fix's own live retest (same session) showed
+    /// the answering side's `activationCount` now balances perfectly (2→0),
+    /// yet the audio-srtp TX/RX symptom itself was UNCHANGED: one side's
+    /// sender stayed dead the whole call, direction-flipped from the prior
+    /// test, with the dead-call gap now 22-25s — far past any brief async
+    /// race and past the 1.5s settle-wait from the third attempt. This
+    /// proved `RTCAudioSession`/CallKit activation bookkeeping was real and
+    /// worth fixing but NOT the load-bearing cause of the audio symptom.
+    /// Widened, best-practices-researched investigation (not a ninth guess
+    /// at the same boundary) found: `QAudionPeerConnectionFactory.
+    /// createFactory()` minted a brand-new native AudioDeviceModule/AudioUnit
+    /// on every call — the per-call teardown/recreate cycle itself repeats a
+    /// maintainer-acknowledged libwebrtc iOS audio-unit stop race (bug
+    /// webrtc:5993) once per call, and WebRTC's own upstream abandoned the
+    /// one structural fix that would have addressed it inside the library
+    /// (a 2021-2022 "separate audio units for playout & recording" change,
+    /// status ABANDONED). Sequential `RTCPeerConnection`s sharing one
+    /// long-lived factory is WebRTC's own documented normal usage, and this
+    /// app's per-call fresh-factory pattern was the actual anomaly, not an
+    /// inherent WebRTC limitation — confirmed by checking how the library's
+    /// own audio-session wrapper and its `useManualAudio`/`isAudioEnabled`
+    /// pair are designed (process-lifetime by construction). Fixed by making
+    /// `QAudionPeerConnectionFactory` build its factory+ADM ONCE per process
+    /// (`sharedFactory()`, replacing the old per-call `createFactory()`) —
+    /// see that class's own W-PERSISTENTFACTORY kdoc for the full mechanism
+    /// and for why `useManualAudio` deliberately stays `false`. This
+    /// capability flag itself did not need to move for this fix — the defect
+    /// was architectural, one layer below anything a flag flip could reach —
+    /// and stays `true` here, unverified live until the next real
+    /// call-to-call test, same discipline as every attempt above.
     public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform

@@ -14,7 +14,7 @@ import WebRTC
 /// zero PCM for the whole life of every native-audio-srtp call. This type is
 /// the real TX hook: an `RTCAudioCustomProcessingDelegate` attached to
 /// `RTCDefaultAudioProcessingModule.capturePostProcessingDelegate`
-/// (`QAudionPeerConnectionFactory.createFactory`'s returned module), which
+/// (`QAudionPeerConnectionFactory.sharedFactory`'s returned module), which
 /// fires on the ACTUAL capture-side APM output — i.e. after hardware
 /// AEC/NS/AGC, the same signal that gets encoded and sent — once per ~10 ms
 /// audio-processing callback, on WebRTC's own audio-processing thread
@@ -30,12 +30,18 @@ import WebRTC
 /// `RTCAudioBuffer`'s native planar-Float32 shape into the
 /// `AVAudioPCMBuffer` that function operates on.
 ///
-/// PER-CALL, NOT GLOBAL — `capturePostProcessingDelegate` lives on the
-/// per-call `RTCDefaultAudioProcessingModule` `QAudionPeerConnectionFactory.
-/// createFactory` mints (a fresh factory/ADM/APM triple per call, matching
-/// `QAudionWebRtcCallController`'s existing per-call `createFactory` calls —
-/// not the cached `.factory` singleton), so there is no cross-call
-/// interference: two calls never share one APM instance.
+/// W-PERSISTENTFACTORY (2026-09-09) — `capturePostProcessingDelegate` now
+/// lives on the PROCESS-LIFETIME `RTCDefaultAudioProcessingModule`
+/// `QAudionPeerConnectionFactory.sharedFactory` builds once and reuses for
+/// every call (previously a fresh factory/ADM/APM triple per call — that
+/// per-call teardown/recreate cycle is what caused a permanent native-
+/// capture latch starting at call #2, see `QAudionPeerConnectionFactory`'s
+/// own kdoc). This is still safe across calls without extra bookkeeping:
+/// the property is `weak`, each call's `addLocalAudioTrack()` assigns its
+/// OWN fresh `NativeAudioCaptureTap` instance to it, and this app only ever
+/// runs one 1:1 call at a time — so a new call's assignment simply replaces
+/// the previous call's (already-closed) tap in that one weak slot, with no
+/// two calls ever contending for it concurrently.
 public final class NativeAudioCaptureTap: NSObject, RTCAudioCustomProcessingDelegate, @unchecked Sendable {
     private let sink: (Data) -> Void
     private let targetSampleRate: Double

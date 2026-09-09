@@ -4563,6 +4563,13 @@ final class AppState: ObservableObject {
         callService.muteNativeAudioSrtpSender = { [weak self] muted in
             (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(muted)
         }
+        // W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as above.
+        // See `CallService.consecutiveAudioSrtpWedges`'s kdoc for what this
+        // recovers from (the persistent-factory redesign's safety net for a
+        // wedged native audio unit that survives more than one call).
+        callService.resetAudioSrtpFactory = {
+            QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()
+        }
         // W-MEDIADEADSRTP (2026-08-29) — same live-getter pattern: hand the
         // media-dead watchdog the audio RX byte counter so an `audio-srtp-v1`
         // call has a liveness source at all. Without this it saw only the

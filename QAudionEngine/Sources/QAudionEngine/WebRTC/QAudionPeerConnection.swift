@@ -124,9 +124,11 @@ public final class QAudionPeerConnection: NSObject {
     private var relayCandidateCount: Int = 0
 
     private let factory: RTCPeerConnectionFactory
-    /// IOS-C4b TX-TAP FIX (2026-09-08) — the same-call `RTCDefaultAudioProcessingModule`
-    /// `QAudionPeerConnectionFactory.createFactory` minted `factory` with.
-    /// `nil` only for callers that never route through `createFactory`
+    /// IOS-C4b TX-TAP FIX (2026-09-08) — the `RTCDefaultAudioProcessingModule`
+    /// `QAudionPeerConnectionFactory.sharedFactory` minted `factory` with
+    /// (process-lifetime as of W-PERSISTENTFACTORY, 2026-09-09 — same
+    /// instance across every call, not a fresh one per call).
+    /// `nil` only for callers that never route through `sharedFactory`
     /// (tests) — `activateNativeAudioSrtp`'s TX tap is then simply inert,
     /// same fail-soft shape the RX tap already has when its track never
     /// appears. See `NativeAudioCaptureTap`'s own doc for why the mic-side
@@ -985,7 +987,7 @@ public final class QAudionPeerConnection: NSObject {
         // delegate, not a per-track renderer (see `NativeAudioCaptureTap`'s
         // doc for why `RTCAudioTrack.add(_:)` never worked for the LOCAL
         // track). `audioProcessingModule` is `nil` only for callers that
-        // bypass `QAudionPeerConnectionFactory.createFactory` (tests) — the
+        // bypass `QAudionPeerConnectionFactory.sharedFactory` (tests) — the
         // tap is then a documented no-op, not a crash.
         if audioTxTap == nil, localAudioSrtpTrack != nil, let apm = audioProcessingModule {
             let tap = NativeAudioCaptureTap(sink: txSink)
@@ -1579,11 +1581,10 @@ public final class QAudionPeerConnection: NSObject {
         usingNativeAudioSrtp = false
         peerConnection?.close()
         peerConnection = nil
-        // W-ADUNITRACE (2026-09-09) — see QAudionPeerConnectionFactory.
-        // createFactory()'s kdoc: RTCPeerConnection.close() returning is not
-        // proof the native AudioUnit underneath has actually stopped, so the
-        // NEXT call's fresh factory needs to know when this teardown started.
-        QAudionPeerConnectionFactory.shared.noteTeardownStarted()
+        // W-PERSISTENTFACTORY (2026-09-09) — closing this RTCPeerConnection
+        // no longer tears down the factory/ADM underneath it (see
+        // QAudionPeerConnectionFactory's own kdoc); the shared factory
+        // survives for the next call, so there is nothing to note here.
         localAudioTrack = nil
         localVideoTrack = nil
         videoSender = nil
