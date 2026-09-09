@@ -4570,6 +4570,19 @@ final class AppState: ObservableObject {
         callService.resetAudioSrtpFactory = {
             QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()
         }
+        // W-AUNITTRACE (2026-09-10) — forwards WebRTC's own native
+        // AudioDeviceIOS lifecycle events (short, numeric-tailed so the
+        // redactor doesn't blob them, per reference_ios_log_pipeline_limits)
+        // into the same `RTLog` "call" stream every other audio diagnostic
+        // line already reaches Loki through. See
+        // QAudionPeerConnectionFactory.onNativeAudioLifecycleEvent's kdoc.
+        QAudionPeerConnectionFactory.shared.onNativeAudioLifecycleEvent = { kind, code in
+            if let code {
+                RTLog.info("call", "aunit \(kind)=1 code=\(code)")
+            } else {
+                RTLog.info("call", "aunit \(kind)=1")
+            }
+        }
         // W-MEDIADEADSRTP (2026-08-29) — same live-getter pattern: hand the
         // media-dead watchdog the audio RX byte counter so an `audio-srtp-v1`
         // call has a liveness source at all. Without this it saw only the

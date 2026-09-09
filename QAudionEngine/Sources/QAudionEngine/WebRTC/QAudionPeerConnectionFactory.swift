@@ -19,6 +19,19 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     private let lock = NSLock()
     private var _factory: RTCPeerConnectionFactory?
     private var _audioProcessingModule: RTCDefaultAudioProcessingModule?
+    private var callbackLogger: RTCCallbackLogger?
+
+    /// W-AUNITTRACE (2026-09-10) — fires for the native AudioDeviceIOS
+    /// lifecycle events this session's live tests need to actually SEE:
+    /// "init"/"shutdown" (the create/destroy-per-call cycle itself,
+    /// confirmed from WebRTC's own source to run once per call regardless
+    /// of this factory's own persistence), "started" (the audio unit
+    /// actually reached the started state), and "fail" (with the real
+    /// OSStatus in `code`) when starting it failed outright. Wired by
+    /// AppState to `RTLog.info("call", "aunit <kind>=1 [code=<n>]")` — kept
+    /// out of this file the same way `muteNativeAudioSrtpSender` etc. are,
+    /// since `QAudionApp`'s `RTLog` isn't reachable from this module.
+    public var onNativeAudioLifecycleEvent: ((_ kind: String, _ code: Int32?) -> Void)?
 
     private init() {}
 
@@ -138,6 +151,7 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
+        installNativeAudioUnitLogBridge()
 
         let encoderFactory = HevcPreferredVideoEncoderFactory()
         let decoderFactory = HevcPreferredVideoDecoderFactory()
@@ -158,6 +172,54 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
             decoderFactory: decoderFactory,
             audioProcessingModule: audioProcessingModule)
         return (factory, audioProcessingModule)
+    }
+
+    /// W-AUNITTRACE (2026-09-10) — the persistent-factory fix (this file's
+    /// own W-PERSISTENTFACTORY, shipped and live-tested v1.0.1129) did NOT
+    /// resolve the dead-TX-at-call-2 defect: the same symptom reproduced
+    /// identically. Direct re-reading of WebRTC's own `audio_device_ios.mm`
+    /// confirmed why — `ShutdownPlayOrRecord()`/`InitPlayOrRecord()` destroy
+    /// and recreate the real native AudioUnit once per call, driven by the
+    /// call-level Start/StopPlayout/Recording state machine, entirely
+    /// independent of this factory/ADM Swift object's own lifetime. That
+    /// cycle is invisible today: nothing in this app observes it. This
+    /// bridges WebRTC's own internal diagnostic logging (public API,
+    /// `RTCSetMinDebugLogLevel`/`RTCCallbackLogger` — this app's own direct
+    /// dependency, not a foreign library's internals) so the NEXT live
+    /// repro can show exactly when init/shutdown/start/failure happen,
+    /// correlated with the app's own `audiosrtp hb=` heartbeat — evidence no
+    /// Swift-level code change can substitute for, per that investigation's
+    /// own conclusion. Pure instrumentation: emits short, numeric-tailed
+    /// lines only for four specific known messages (see `handleNativeLogLine`),
+    /// changes no audio behavior.
+    private func installNativeAudioUnitLogBridge() {
+        RTCSetMinDebugLogLevel(.info)
+        let logger = RTCCallbackLogger()
+        logger.severity = .info
+        logger.start { [weak self] message in
+            self?.handleNativeLogLine(message)
+        }
+        callbackLogger = logger
+    }
+
+    /// Runs on whichever thread WebRTC logs from (the callback's own
+    /// contract, per `RTCCallbackLogger`'s header) — kept to cheap substring
+    /// checks and a closure call, no locking needed here since it only reads
+    /// the `onNativeAudioLifecycleEvent` var (a simple optional-closure
+    /// read/call, same pattern every other live-setter closure in this
+    /// codebase already relies on being safe for).
+    private func handleNativeLogLine(_ message: String) {
+        if message.contains("InitPlayOrRecord") && !message.contains("failed") {
+            onNativeAudioLifecycleEvent?("init", nil)
+        } else if message.contains("ShutdownPlayOrRecord") {
+            onNativeAudioLifecycleEvent?("shutdown", nil)
+        } else if message.contains("Voice-Processing I/O audio unit is now started") {
+            onNativeAudioLifecycleEvent?("started", nil)
+        } else if let range = message.range(of: "failed to start audio unit, reason ") {
+            let tail = message[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            let code = Int32(tail.prefix(while: { $0 == "-" || $0.isNumber }))
+            onNativeAudioLifecycleEvent?("fail", code)
+        }
     }
 
     /// Returns the process-lifetime factory + ADM, building them once on
