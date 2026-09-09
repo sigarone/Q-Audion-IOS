@@ -169,17 +169,29 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // process restart. `reportCallEnded` is the one choke point every
         // call-end path (local hangup, remote hangup, unanswered) already
         // funnels through, mirroring the two call-start paths this balances.
-        let rtcSession = RTCAudioSession.sharedInstance()
-        rtcSession.lockForConfiguration()
-        do {
-            try rtcSession.setActive(false)
-            print("[CallKitProvider] reportCallEnded audio session INACTIVE activationCount=\(rtcSession.activationCount)")
-        } catch {
-            print("[CallKitProvider] setActive(false) fail site=reportCallEnded code=\((error as NSError).code) err=\(error.localizedDescription)")
+        //
+        // W-DOUBLEDECR (2026-09-09) — the balance above shipped with its own
+        // bug: `reportCallEnded` fires more than once for the same logical
+        // call end on real devices (confirmed live: `activationCount` went
+        // 2 -> 1 -> -1 for one call — a SECOND `reportCallEnded` decremented
+        // again, past zero, outside the documented valid range entirely).
+        // `ledger.forget(uuid)` already tracks exactly this — whether this
+        // uuid was still outstanding, i.e. whether this is the first
+        // `reportCallEnded` for it — reused here instead of inventing a
+        // second dedup mechanism, so the deactivate can only ever fire once
+        // per call, matching the one activate it balances.
+        let wasOutstanding = ledger.forget(uuid)
+        if wasOutstanding {
+            let rtcSession = RTCAudioSession.sharedInstance()
+            rtcSession.lockForConfiguration()
+            do {
+                try rtcSession.setActive(false)
+                print("[CallKitProvider] reportCallEnded audio session INACTIVE activationCount=\(rtcSession.activationCount)")
+            } catch {
+                print("[CallKitProvider] setActive(false) fail site=reportCallEnded code=\((error as NSError).code) err=\(error.localizedDescription)")
+            }
+            rtcSession.unlockForConfiguration()
         }
-        rtcSession.unlockForConfiguration()
-        // W495 + W-WAKEONLY — clean up every ledger entry on call end.
-        ledger.forget(uuid)
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded

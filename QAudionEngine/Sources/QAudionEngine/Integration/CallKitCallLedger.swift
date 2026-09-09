@@ -118,12 +118,20 @@ final class CallKitCallLedger: @unchecked Sendable {
     }
 
     /// Call ended: drop the uuid from every set (W495 + W-WAKEONLY cleanup).
-    func forget(_ uuid: UUID) {
+    /// W-RTCLOCKMIGRATE (2026-09-09) — returns whether `uuid` was actually
+    /// still outstanding, i.e. whether this is the FIRST `forget` for it.
+    /// `reportCallEnded` is called more than once for the same logical call
+    /// end on real devices (confirmed live: two calls for the same UUID on
+    /// one test call) — callers that do work meant to happen exactly once
+    /// per call (like balancing an `RTCAudioSession` activate/deactivate
+    /// pair) need this to avoid acting on the same call end twice.
+    @discardableResult
+    func forget(_ uuid: UUID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         callKitRejectedUUIDs.remove(uuid)
         nativelyReportedUUIDs.remove(uuid)
-        outstandingUUIDs.remove(uuid)
+        return outstandingUUIDs.remove(uuid) != nil
     }
 
     /// `endAllOutstanding` — take every outstanding uuid out of all three sets
