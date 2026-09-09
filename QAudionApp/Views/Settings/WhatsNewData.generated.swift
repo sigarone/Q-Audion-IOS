@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1119",
+              date: "2026-09-09",
+              title: "v1.0.1119",
+              bullets: [
+                "diag(call): output-route/volume visibility + reportCallEnded/deactivate timing",
+              ]),
         .init(id: "v1.0.1118",
               date: "2026-09-09",
               title: "v1.0.1118",
               bullets: [
+                "chore: regenerate changelog for v1.0.1118",
                 "feat(call): re-enable native audio-srtp for live verification pass",
                 "fix(call): stop dcmux tx/rx counter reset racing the async DC-close log",
               ]),
@@ -167,13 +174,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1100",
                 "fix(crash): guard player.play() NSException in AudioCapture.start()",
-              ]),
-        .init(id: "v1.0.1099",
-              date: "2026-09-07",
-              title: "v1.0.1099",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1099",
-                "fix(call): detect and self-heal native audio capture that never engages",
               ]),
     ]
 }
