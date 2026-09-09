@@ -242,21 +242,26 @@ public enum CallCapabilities {
     /// IOS-C4b task report). `VoiceUnlockController` was confirmed local-mic
     /// only, unaffected either way.
     ///
-    /// What is NOT yet closed, and remains a real risk carried forward: this
-    /// build has never compiled (no Xcode/Swift toolchain on the authoring
-    /// machine) and has zero live-call verification, unlike Android's own
-    /// `true` (device-verified 2026-08-25 — 4 real A36↔S26 calls, though
-    /// AND-6's underlying mic-race is itself recorded as inconclusive, not
-    /// proven fixed) and desktop's `true` (full local typecheck+vitest
-    /// green, still no live cross-platform call either). The FIRST real
-    /// build of this flag must be a TestFlight build exercised call-to-call
-    /// against Android/desktop before wider distribution — watch specifically
-    /// for the ontrack-before-negotiation race (mitigated but not proven to
-    /// the depth of the video path's phantom-transceiver state machine, per
-    /// the IOS-C4b report) and the AND-6 failure class (one-way audio on
-    /// initiator) — same discipline as ``longAudioRecvAdvertiseEnabled``/
-    /// ``longAudioSendEnabled``.
-    public static let audioSrtpSendEnabled: Bool = true
+    /// FLIPPED BACK TO `false` 2026-09-09 (W-AUDIOSRTPOFF) — the "zero
+    /// live-call verification" risk this doc already carried forward from
+    /// 2026-08-26 never actually closed. In the 10 days since, this single
+    /// switch drove 30+ follow-up commits (native-mic mute gating, CallKit
+    /// activation relay added then reverted, manual-audio-mode tried for a
+    /// full day then reverted — see git log on this file and
+    /// `NativeAudioSessionGate.swift`'s own kdoc) and, on the same evening
+    /// this comment was written, three consecutive real iOS↔iOS test calls
+    /// each failed a DIFFERENT way with the latest fix already shipped:
+    /// uneven/jittery inbound RX, a total local mic-route failure
+    /// (`AVAudioSessionErrorCodeUnspecified`/'what', `inp=0`, both the
+    /// native path AND its manual-engine fallback), and a PQC handshake
+    /// that never left `.fallback` for a full 30s. Three different failure
+    /// shapes from the same subsystem, still occurring after the mute-gate
+    /// fix, is the "question the architecture, not the next patch" signal —
+    /// the pre-8/26 legacy DataChannel/WS-relay path is what every one of
+    /// tonight's calls actually recovered onto, and it worked. Re-enabling
+    /// this needs the live call-to-call verification the original comment
+    /// already said was required and never happened — not another point fix.
+    public static let audioSrtpSendEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
