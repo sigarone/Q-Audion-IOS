@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1116",
+              date: "2026-09-09",
+              title: "v1.0.1116",
+              bullets: [
+                "fix(ui): debounce the red WS-disconnected banner, stop it flashing on every normal reconnect blip",
+              ]),
         .init(id: "v1.0.1115",
               date: "2026-09-09",
               title: "v1.0.1115",
               bullets: [
+                "chore: regenerate changelog for v1.0.1115",
                 "fix(call): handshake round timing, session-deactivation ownership, mic route pre-check, RX loss/jitter diagnostics",
               ]),
         .init(id: "v1.0.1114",
@@ -167,15 +174,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1097",
                 "fix(call): release the native audio-srtp sender before the manual fallback",
-              ]),
-        .init(id: "v1.0.1096",
-              date: "2026-09-07",
-              title: "v1.0.1096",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1096",
-                "fix(net): background-URLSession reachability wake for a suspended WS",
-                "fix(net): wire named connection tokens for foreground/call/background",
-                "fix(net): declarative connection-token model for the persistent WS",
               ]),
     ]
 }
