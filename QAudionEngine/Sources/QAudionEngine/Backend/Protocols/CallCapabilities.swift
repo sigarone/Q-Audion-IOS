@@ -334,7 +334,30 @@ public enum CallCapabilities {
     /// instrumentation of WebRTC's own audio-unit start/stop sequence
     /// across calls before another attempt — not a third guess at the same
     /// boundary.
-    public static let audioSrtpSendEnabled: Bool = false
+    ///
+    /// FLIPPED BACK TO `true` 2026-09-09, same night — that instrumentation
+    /// landed. A deep audit (graphify-verified) traced the real mechanism:
+    /// `QAudionPeerConnectionFactory.createFactory()` mints a brand-new
+    /// native AudioDeviceModule/AudioUnit on every call, never reusing the
+    /// previous one, and `RTCPeerConnection.close()` returning is not proof
+    /// the prior call's AudioUnit has actually stopped (libwebrtc tears it
+    /// down on its own internal threads with zero completion signal exposed
+    /// to this app — confirmed absent, not assumed: this codebase has never
+    /// once checked an AudioUnit busy/cannot-do-in-current-context OSStatus).
+    /// `createFactory()` is now async and settles up to 1.5s if the previous
+    /// call's teardown was more recent than that (`QAudionPeerConnection
+    /// .close()` now calls `noteTeardownStarted()`) — the documented
+    /// production mitigation for this exact no-completion-signal race, per
+    /// public WebRTC/CoreAudio design docs and real-world VoIP SDK issue
+    /// reports (see `QAudionPeerConnectionFactory.swift`'s kdoc for sources).
+    /// The 1.5s figure itself is NOT sourced — cited practice tops out
+    /// around 500ms, disclosed as heuristic there too — extended here
+    /// because tonight's own reproductions showed TX starvation lasting far
+    /// longer than 500ms. Unverified live until the next real call-to-call
+    /// test; this is the third attempt at the actual mechanism (the first
+    /// two identified and fixed a different, real, but not load-bearing
+    /// bottleneck one layer up).
+    public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
