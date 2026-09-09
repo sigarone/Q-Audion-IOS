@@ -339,15 +339,42 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// the asymmetry itself was the bug, not a new mechanism to invent.
     /// `logSite` is cosmetic (keeps the two callers' log lines
     /// distinguishable); the retry/forward logic is identical either way.
+    ///
+    /// W-RTCLOCKMIGRATE (2026-09-09) — this used to mutate the raw
+    /// `AVAudioSession.sharedInstance()` directly, then tell `RTCAudioSession`
+    /// about it after the fact via `audioSessionDidActivate` (the "outside"
+    /// notification). That channel is for genuinely-outside activation — its
+    /// own header doc: "used to inform RTCAudioSession when the audio session
+    /// activation state has changed outside of RTCAudioSession... when
+    /// CallKit activates the audio session for the application." This
+    /// function is OUR OWN app code doing the activating, not CallKit, so it
+    /// was using the wrong half of the API — and the header is explicit
+    /// about the right half: "Callers should not call setters on
+    /// AVAudioSession directly." `RTCAudioSession` tracks its own
+    /// `isActive`/`activationCount` ONLY through calls that go through its
+    /// own `lockForConfiguration`/`setCategory`/`setActive` proxies; a direct
+    /// `AVAudioSession.setActive(true)` is invisible to that bookkeeping
+    /// regardless of any notification sent afterward. This is exactly the
+    /// gap `reference_ios_callkit_webrtc_audio_activation_race_2026_09_08.md`
+    /// (session memory, written the night before tonight's audio-srtp work)
+    /// already named as the real fix and flagged as unimplemented: "the only
+    /// architecturally sound fix is migrating EVERY session mutation... the
+    /// app's own category/mode/buffer-duration calls AND the CallKit-
+    /// activation relay — through the wrapper's lock." Confirmed against the
+    /// actual pinned `webrtc-sdk/webrtc@m144_release` header (fetched, not
+    /// assumed) before writing this. `useManualAudio` is still never touched
+    /// — this is the automatic-mode-compatible half of the fix, not the
+    /// 1053/1056/1066 manual-mode regression class.
     private func activateAudioSession(logSite: String) async {
-        let session = AVAudioSession.sharedInstance()
+        let rtcSession = RTCAudioSession.sharedInstance()
         #if !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
         #else
         let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
         #endif
+        rtcSession.lockForConfiguration()
         do {
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+            try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         } catch {
             // W-SIGSWALLOW (2026-09-01) — was `try?`: a refused category is
             // the first link in a silent-call chain and left no line (audit
@@ -357,20 +384,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
         for attempt in 0..<4 {
             do {
-                try session.setActive(true)
-                print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt))")
-                // W-CKAUDIOFORWARD (2026-09-09) — CallKit's own activation of
-                // this session is invisible to WebRTC otherwise: there is no
-                // system notification for "someone else called setActive",
-                // only interruption/route-change, neither of which fires
-                // here. This is the documented CallKit+WebRTC integration
-                // call (independent of useManualAudio, which stays untouched
-                // at its default false — see NativeAudioSessionGate's kdoc
-                // for why manual mode itself is a separate, larger change
-                // this is not attempting). Forwarding this one notification
-                // is the piece that was missing, not a repeat of what broke
-                // 1.0.1053/1056/1066.
-                RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
+                try rtcSession.setActive(true)
+                print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt)) activationCount=\(rtcSession.activationCount)")
+                rtcSession.unlockForConfiguration()
                 onAudioSessionActivated?()
                 return
             } catch {
@@ -388,6 +404,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // and eventually a call-quality banner. This is the lesser evil vs.
         // a silent dead call.
         print("[CallKitProvider] setActive never confirmed after 4 attempts site=\(logSite) — forcing engine start (session may be marginal)")
+        rtcSession.unlockForConfiguration()
         onAudioSessionActivated?()
     }
 

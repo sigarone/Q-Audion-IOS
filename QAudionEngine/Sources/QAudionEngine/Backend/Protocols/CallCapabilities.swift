@@ -357,6 +357,29 @@ public enum CallCapabilities {
     /// test; this is the third attempt at the actual mechanism (the first
     /// two identified and fixed a different, real, but not load-bearing
     /// bottleneck one layer up).
+    ///
+    /// FOURTH ATTEMPT, same session — a call to the 3-call v1.0.1124 test
+    /// above found a real signaling instability (`call_answer`/
+    /// `call_accepted` WS retransmits, "setup still pending") on the call
+    /// immediately BEFORE the one that broke, matching the user's own
+    /// hypothesis that a prior call's connection trouble is what poisons the
+    /// next one — not pure back-to-back timing (two calls with the same ~6s
+    /// gap, one healthy, one dead). That pointed at `RTCAudioSession`
+    /// (WebRTC's own AVAudioSession wrapper) specifically, since it is the
+    /// one object that persists across calls in this whole picture — and a
+    /// session memory from the night before this one
+    /// (`reference_ios_callkit_webrtc_audio_activation_race_2026_09_08.md`)
+    /// had ALREADY identified the exact fix and flagged it as never
+    /// implemented: this app's own session self-activation
+    /// (`CallKitProvider.activateAudioSession(logSite:)`) mutated the raw
+    /// `AVAudioSession` directly instead of through `RTCAudioSession`'s own
+    /// `lockForConfiguration`/`setCategory`/`setActive` — invisible to its
+    /// `isActive`/`activationCount` bookkeeping regardless of the
+    /// W-CKAUDIOFORWARD notification added earlier tonight, which is the
+    /// wrong channel for app-initiated (not CallKit-initiated) activation
+    /// per the pinned `webrtc-sdk/webrtc@m144_release` header's own doc.
+    /// Migrated now. Still `useManualAudio = false`. This is the specific,
+    /// previously-identified gap, not a fifth guess.
     public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
