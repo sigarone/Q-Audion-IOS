@@ -155,6 +155,29 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func reportCallEnded(uuid: UUID, reason: CallEndReason) async {
+        // W-RTCLOCKMIGRATE (2026-09-09) — balances every `activateAudioSession`
+        // call. Live evidence this was missing: `RTCAudioSession.activationCount`
+        // on a real device climbed 1 -> 3 across a start-then-answer pair of
+        // calls (should climb by exactly 1 per call if each is balanced) —
+        // `activateAudioSession` called the locked `setActive(true)` on every
+        // call start/answer, but nothing ever called the matching
+        // `setActive(false)` through the SAME counted API, so the count (and
+        // whatever internal state WebRTC's automatic mode derives from it)
+        // could only ever climb, never return to the balanced baseline a
+        // fresh, single call assumes — a real candidate for why this exact
+        // symptom compounds across a session and only clears on a full
+        // process restart. `reportCallEnded` is the one choke point every
+        // call-end path (local hangup, remote hangup, unanswered) already
+        // funnels through, mirroring the two call-start paths this balances.
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.lockForConfiguration()
+        do {
+            try rtcSession.setActive(false)
+            print("[CallKitProvider] reportCallEnded audio session INACTIVE activationCount=\(rtcSession.activationCount)")
+        } catch {
+            print("[CallKitProvider] setActive(false) fail site=reportCallEnded code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
+        rtcSession.unlockForConfiguration()
         // W495 + W-WAKEONLY — clean up every ledger entry on call end.
         ledger.forget(uuid)
         let cxReason: CXCallEndedReason

@@ -380,6 +380,18 @@ public enum CallCapabilities {
     /// per the pinned `webrtc-sdk/webrtc@m144_release` header's own doc.
     /// Migrated now. Still `useManualAudio = false`. This is the specific,
     /// previously-identified gap, not a fifth guess.
+    ///
+    /// FIFTH ATTEMPT, same session — the fourth's own live test showed the
+    /// bug: `RTCAudioSession.activationCount` climbed 1→3 across a
+    /// start-then-answer call pair on one device (should climb by exactly
+    /// +1 per balanced call). The fourth attempt added the locked
+    /// `setActive(true)` on activation but never added the matching
+    /// `setActive(false)` through the same counted API — `reportCallEnded`
+    /// now does, so every activate this app makes is balanced by a
+    /// deactivate at the one choke point every call-end path already
+    /// shares. This directly explains why the fault compounds and only a
+    /// full process restart clears it: an ever-climbing count never returns
+    /// to the balanced baseline a fresh call assumes.
     public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
