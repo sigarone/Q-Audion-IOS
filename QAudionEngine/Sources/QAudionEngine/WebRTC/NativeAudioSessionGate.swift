@@ -44,6 +44,21 @@ import WebRTC
 /// Both entry points are deliberately kept and deliberately do nothing, so
 /// the call sites keep documenting where the audio unit's lifecycle would be
 /// controlled if this is ever revisited WITH the full contract in hand.
+///
+/// W-CKAUDIOFORWARD (2026-09-09) — a narrower, separate change landed in
+/// `CallKitProvider` (both `didActivate`/`didDeactivate` and the
+/// self-activation fallback): forwarding CallKit's own activation/
+/// deactivation into `RTCAudioSession` so it isn't purely inferring session
+/// state from its own passive observation. This is NOT the same attempt as
+/// 1053/1056/1066 above — `useManualAudio` stays `false` (this file's two
+/// entry points are untouched, still no-ops) and `isAudioEnabled` is never
+/// set. Those three attempts all coupled the relay to manual mode, which is
+/// what the analysis above pins the actual regression on (the app's own
+/// direct session ownership fighting the SDK's manual-mode reconfiguration);
+/// this change only informs automatic mode of an event it has no other way
+/// to observe. Still needs its own live call-to-call verification before
+/// being trusted — a different variable than 1056 is not a proof, only a
+/// reason to expect a different result.
 public enum NativeAudioSessionGate {
 
     /// No-op. See the type's note: manual audio mode is not used.

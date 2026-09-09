@@ -3,6 +3,7 @@ import Foundation
 @preconcurrency import CallKit
 import AVFoundation
 import UIKit
+import WebRTC
 
 public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegate, @unchecked Sendable {
 
@@ -343,6 +344,18 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             do {
                 try session.setActive(true)
                 print("[CallKitProvider] answer audio session ACTIVE (attempt \(attempt))")
+                // W-CKAUDIOFORWARD (2026-09-09) — CallKit's own activation of
+                // this session is invisible to WebRTC otherwise: there is no
+                // system notification for "someone else called setActive",
+                // only interruption/route-change, neither of which fires
+                // here. This is the documented CallKit+WebRTC integration
+                // call (independent of useManualAudio, which stays untouched
+                // at its default false — see NativeAudioSessionGate's kdoc
+                // for why manual mode itself is a separate, larger change
+                // this is not attempting). Forwarding this one notification
+                // is the piece that was missing, not a repeat of what broke
+                // 1.0.1053/1056/1066.
+                RTCAudioSession.sharedInstance().audioSessionDidActivate(session)
                 onAudioSessionActivated?()
                 return
             } catch {
@@ -460,12 +473,22 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // the engine start surfaces the real failure in its own log.
             print("[CallKitProvider] setActive fail site=didActivate code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
+        // W-CKAUDIOFORWARD (2026-09-09) — this delegate callback IS CallKit
+        // telling us the session just activated; forward it to WebRTC's
+        // audio session the same way activateAudioSessionForAnswer() above
+        // does for the self-activation path, so both routes into an active
+        // session reach WebRTC identically. useManualAudio is untouched.
+        RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
         // W464 — the session is now active: this is the moment
         // CallService may safely start its AVAudioEngine capture/playback.
         onAudioSessionActivated?()
     }
 
     public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        // W-CKAUDIOFORWARD (2026-09-09) — symmetric with the activate side;
+        // WebRTC's audio session needs to hear this deactivation too, not
+        // just this app's own onAudioSessionDeactivated flag flip.
+        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
         // System took the audio session — engine should pause mic capture.
         onAudioSessionDeactivated?()
     }
