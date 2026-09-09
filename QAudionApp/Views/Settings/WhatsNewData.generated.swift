@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1121",
+              date: "2026-09-09",
+              title: "v1.0.1121",
+              bullets: [
+                "feat(call): re-enable native audio-srtp with the CallKit-audio-session forward",
+                "feat(call): forward CallKit audio-session activate/deactivate to RTCAudioSession",
+              ]),
         .init(id: "v1.0.1120",
               date: "2026-09-09",
               title: "v1.0.1120",
               bullets: [
+                "chore: regenerate changelog for v1.0.1120",
                 "fix(call): disable native audio-srtp again — live repro of dead-TX stall",
               ]),
         .init(id: "v1.0.1119",
@@ -167,13 +175,6 @@ extension ReleaseNote {
                 "chore(ci): remove ITMS-90626 diagnostic step, root cause confirmed",
                 "fix(ios): stop excluding it.lproj from sources sweep for ITMS-90626",
                 "debug(ci): dump project.pbxproj it.lproj resource entries for ITMS-90626",
-              ]),
-        .init(id: "v1.0.1101",
-              date: "2026-09-07",
-              title: "v1.0.1101",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1101",
-                "fix(ios): ship it.lproj as a folder reference so ITMS-90626 fix actually lands",
               ]),
     ]
 }
