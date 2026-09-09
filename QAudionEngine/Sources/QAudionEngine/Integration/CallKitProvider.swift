@@ -262,7 +262,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// Reuses the proven answer-time activation (retry + fire
     /// onAudioSessionActivated → CallService restarts the engines if needed).
     public func reactivateAudioSessionForSelfManagedCall() async {
-        await activateAudioSessionForAnswer()
+        await activateAudioSession(logSite: "answer")
     }
 
     /// W478 — answer an incoming call via the CallKit CXCallController.
@@ -295,8 +295,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // single `try? setActive(true)` could fail silently (swallowed) and
             // then onAudioSessionActivated() started the engine on an INACTIVE
             // session → capture.start() failed → silent call. See
-            // activateAudioSessionForAnswer().
-            await activateAudioSessionForAnswer()
+            // activateAudioSession(logSite:).
+            await activateAudioSession(logSite: "answer")
             return
         }
         let action = CXAnswerCallAction(call: uuid)
@@ -324,7 +324,22 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// the session is genuinely active so the engine start sees a live session.
     /// Idempotent: if `didActivate` DOES arrive too, `onAudioSessionActivated`
     /// re-runs harmlessly (the engine guards on its own `isRunning`).
-    private func activateAudioSessionForAnswer() async {
+    ///
+    /// W-CKSTARTACTIVATE (2026-09-09) — this was answer-only until tonight.
+    /// The exact same root cause ("a session left active by a prior call...
+    /// skips [didActivate]") applies identically to the OUTGOING/caller side
+    /// on a back-to-back call — live evidence: call e7e8e96a, iPad placing a
+    /// call 8s after its own previous call ended, native audio-srtp's sender
+    /// activates but `AVAudioSession.currentRoute.inputs.count` is 0 the
+    /// whole call (`audioIO noinput=1 inp=0`), and `handleAudioSessionDeactivated`
+    /// never fired even once for the prior call — CallKit kept the session
+    /// continuously "active" across the gap and, on THIS path only, nothing
+    /// ever re-asserted it. `provider(_:perform: CXStartCallAction)` set the
+    /// category and just trusted `didActivate` to follow, with no fallback —
+    /// the asymmetry itself was the bug, not a new mechanism to invent.
+    /// `logSite` is cosmetic (keeps the two callers' log lines
+    /// distinguishable); the retry/forward logic is identical either way.
+    private func activateAudioSession(logSite: String) async {
         let session = AVAudioSession.sharedInstance()
         #if !targetEnvironment(simulator)
         let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
@@ -338,12 +353,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // the first link in a silent-call chain and left no line (audit
             // memory reference_ios_stability_audit_2026_09_01, P1 item 7).
             // Flow unchanged; the setActive retry loop below still runs.
-            print("[CallKitProvider] setCategory fail site=answer code=\((error as NSError).code) err=\(error.localizedDescription)")
+            print("[CallKitProvider] setCategory fail site=\(logSite) code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
         for attempt in 0..<4 {
             do {
                 try session.setActive(true)
-                print("[CallKitProvider] answer audio session ACTIVE (attempt \(attempt))")
+                print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt))")
                 // W-CKAUDIOFORWARD (2026-09-09) — CallKit's own activation of
                 // this session is invisible to WebRTC otherwise: there is no
                 // system notification for "someone else called setActive",
@@ -359,7 +374,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 onAudioSessionActivated?()
                 return
             } catch {
-                print("[CallKitProvider] setActive retry \(attempt): \(error.localizedDescription)")
+                print("[CallKitProvider] setActive retry \(attempt) site=\(logSite): \(error.localizedDescription)")
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
             }
         }
@@ -372,7 +387,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // AudioCapture.start() throwing, which produces a user-visible log
         // and eventually a call-quality banner. This is the lesser evil vs.
         // a silent dead call.
-        print("[CallKitProvider] setActive never confirmed after 4 attempts — forcing engine start (session may be marginal)")
+        print("[CallKitProvider] setActive never confirmed after 4 attempts site=\(logSite) — forcing engine start (session may be marginal)")
         onAudioSessionActivated?()
     }
 
@@ -404,6 +419,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
+        // W-CKSTARTACTIVATE (2026-09-09) — the answer side has had this
+        // exact self-activation fallback since build 597 (see
+        // activateAudioSession's kdoc for the root cause it was built for);
+        // this side never got it. Same asymmetry-is-the-bug reasoning
+        // applies unchanged: fulfill() has already closed the start
+        // transaction, so setActive(true) no longer races it.
+        Task {
+            await activateAudioSession(logSite: "start")
+        }
     }
 
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
@@ -418,7 +442,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // to self-activate AFTER fulfill: the answer transaction is closed,
             // so setActive(true) no longer hits the "session activation failed"
             // race. Idempotent with didActivate if it does arrive.
-            await activateAudioSessionForAnswer()
+            await activateAudioSession(logSite: "answer")
         }
     }
 
@@ -475,7 +499,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
         // W-CKAUDIOFORWARD (2026-09-09) — this delegate callback IS CallKit
         // telling us the session just activated; forward it to WebRTC's
-        // audio session the same way activateAudioSessionForAnswer() above
+        // audio session the same way activateAudioSession(logSite:) above
         // does for the self-activation path, so both routes into an active
         // session reach WebRTC identically. useManualAudio is untouched.
         RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
