@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1114",
+              date: "2026-09-09",
+              title: "v1.0.1114",
+              bullets: [
+                "fix(call): disable native-RTP audio (audioSrtpSendEnabled), revert to legacy relay",
+              ]),
         .init(id: "v1.0.1113",
               date: "2026-09-08",
               title: "v1.0.1113",
               bullets: [
+                "chore: regenerate changelog for v1.0.1113",
                 "fix(storage): send filename in tus Upload-Metadata for server-side telemetry tagging",
                 "fix(call): gate native audio-srtp mic on genuine accept, not ring-time activation",
               ]),
@@ -169,13 +176,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1095",
                 "fix(ios): strip dev/QA tools from public build (App Store 2.1)",
-              ]),
-        .init(id: "v1.0.1094",
-              date: "2026-09-06",
-              title: "v1.0.1094",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1094",
-                "feat(carplay): S4/S5 — CPContactTemplate/CPContactMessageButton, CPMessageListItem",
               ]),
     ]
 }
