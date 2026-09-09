@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1129",
+              date: "2026-09-09",
+              title: "v1.0.1129",
+              bullets: [
+                "fix(ios): persistent RTCPeerConnectionFactory/ADM to close native audio-srtp capture latch",
+              ]),
         .init(id: "v1.0.1128",
               date: "2026-09-09",
               title: "v1.0.1128",
               bullets: [
+                "chore: regenerate changelog for v1.0.1128",
                 "fix(call): track our own RTCAudioSession activation, not CallKit's ledger",
               ]),
         .init(id: "v1.0.1127",
@@ -149,14 +156,6 @@ extension ReleaseNote {
                 "fix(shipper): ship blobs and records oldest-first to stop within-run Loki bounces",
                 "fix(call): iOS ICE candidates can beat call_offer to the server",
                 "fix(shipper): server-leg key-auth parity + dedicated least-privilege key",
-              ]),
-        .init(id: "v1.0.1109",
-              date: "2026-09-08",
-              title: "v1.0.1109",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1109",
-                "fix(call): SAS confirm pins on server-anchored first contact; native-mic liveness by packet growth; reset srtp fallback latch per call",
-                "fix(call): caller-side call_answer/call_ready race dropped the accept latch",
               ]),
     ]
 }
