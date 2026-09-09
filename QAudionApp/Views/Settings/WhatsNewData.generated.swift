@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1126",
+              date: "2026-09-09",
+              title: "v1.0.1126",
+              bullets: [
+                "fix(call): balance every RTCAudioSession activate with a deactivate",
+              ]),
         .init(id: "v1.0.1125",
               date: "2026-09-09",
               title: "v1.0.1125",
               bullets: [
+                "chore: regenerate changelog for v1.0.1125",
                 "fix(call): migrate app self-activation through RTCAudioSession's own lock",
               ]),
         .init(id: "v1.0.1124",
@@ -154,14 +161,6 @@ extension ReleaseNote {
                 "diag(call): numeric error code on audio-capture failure + SAS-confirm no-op reasons",
                 "chore(wire-spec): sync §8.10 (session consent vs local camera authority) + call_video_pause_request",
                 "fix(l10n): close the in-app-override coverage gaps found by real device testing",
-              ]),
-        .init(id: "v1.0.1106",
-              date: "2026-09-08",
-              title: "v1.0.1106",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1106",
-                "fix(call): iOS video-answer defaults and reactivation (W-VIDPRIVACY follow-up)",
-                "fix(shipper): a mixed-failure blob must not be marked permanently handled (#98)",
               ]),
     ]
 }
