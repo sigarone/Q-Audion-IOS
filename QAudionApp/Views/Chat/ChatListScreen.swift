@@ -62,6 +62,12 @@ struct ChatListScreen: View {
     @State private var deepLinkItem: ConversationListViewModel.Item? = nil
     @State private var deepLinkActive: Bool = false
     @State private var adminBannerDismissed = false
+    /// W-WSBANNERDEBOUNCE (2026-09-09) — see the `onChange` below and
+    /// `connectionStatusBanner`'s kdoc: the red "Connessione persa" banner
+    /// only appears after `.disconnected` has held for
+    /// `disconnectedBannerGraceSec`, not on the raw state transition.
+    @State private var showDisconnectedBanner = false
+    @State private var disconnectedBannerTask: Task<Void, Never>?
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
     /// W139: pending conversation export — non-nil triggers the share
@@ -397,6 +403,21 @@ struct ChatListScreen: View {
             // scoped to this one value so it never fires on unrelated
             // re-renders of the List above (e.g. a new message arriving).
             .animation(.easeInOut(duration: 0.2), value: appState.wsConnectionState)
+            // W-WSBANNERDEBOUNCE — see `connectionStatusBanner`'s kdoc.
+            // iOS 16 single-param onChange (deployment target is iOS 16.0,
+            // per project.yml) — do not switch to the two-param iOS 17 form.
+            .onChange(of: appState.wsConnectionState) { newState in
+                disconnectedBannerTask?.cancel()
+                if newState == .disconnected {
+                    disconnectedBannerTask = Task {
+                        try? await Task.sleep(nanoseconds: Self.disconnectedBannerGraceSec * 1_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        showDisconnectedBanner = true
+                    }
+                } else {
+                    showDisconnectedBanner = false
+                }
+            }
 
             fabStack
                 .padding(.trailing, 16)
@@ -764,13 +785,36 @@ struct ChatListScreen: View {
     /// `ConnectionStatusBannerPolicy`, tested independently of SwiftUI).
     /// The only thing added here is the theme tint, which needs `extras`
     /// from the environment.
+    /// W-WSBANNERDEBOUNCE (2026-09-09) — live evidence the same night: a
+    /// device locking/unlocking every few minutes closes the WS with a
+    /// normal iOS background-triggered "Going Away" and reconnects within
+    /// 1-2s every time, but `wsConnectionState` passes through
+    /// `.disconnected` as a real (if brief) step on every one of those
+    /// cycles — and `ConnectionStatusBannerPolicy` had no notion of
+    /// "briefly" vs. "genuinely stuck": the alarming red "Connessione al
+    /// server persa" flashed on every single blip, read by the user as a
+    /// continuously broken connection when the underlying reconnects were
+    /// actually all succeeding fast. `.connecting` ("Riconnessione in
+    /// corso…") is informational, not alarming, and still shows
+    /// immediately — only the red state is gated on `showDisconnectedBanner`,
+    /// flipped true by the `onChange` below only after the state has held
+    /// `.disconnected` continuously for `disconnectedBannerGraceSec`.
     private var connectionStatusBanner: (title: String, icon: String, tint: Color)? {
-        guard let policy = ConnectionStatusBannerPolicy.select(appState.wsConnectionState) else {
-            return nil
+        switch appState.wsConnectionState {
+        case .disconnected:
+            guard showDisconnectedBanner else { return nil }
+            return (ConnectionStatusBannerPolicy.disconnected.title,
+                    ConnectionStatusBannerPolicy.disconnected.systemImage,
+                    extras.riskHigh)
+        default:
+            guard let policy = ConnectionStatusBannerPolicy.select(appState.wsConnectionState) else {
+                return nil
+            }
+            return (policy.title, policy.systemImage, extras.warning)
         }
-        let tint = policy == .disconnected ? extras.riskHigh : extras.warning
-        return (policy.title, policy.systemImage, tint)
     }
+
+    private static let disconnectedBannerGraceSec: UInt64 = 4
 
     /// Same visual language as `adminBannerView` above (12pt corner radius,
     /// tint@0.18 fill / tint@0.45 stroke) and `QAudionSnackbarHost`'s pill
