@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1122",
+              date: "2026-09-09",
+              title: "v1.0.1122",
+              bullets: [
+                "fix(call): self-activate audio session on outgoing calls too (caller-side gap)",
+              ]),
         .init(id: "v1.0.1121",
               date: "2026-09-09",
               title: "v1.0.1121",
               bullets: [
+                "chore: regenerate changelog for v1.0.1121",
                 "feat(call): re-enable native audio-srtp with the CallKit-audio-session forward",
                 "feat(call): forward CallKit audio-session activate/deactivate to RTCAudioSession",
               ]),
@@ -166,15 +173,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1103",
                 "fix(call): revert voiceProcessingTeardownQueueEnabled to false (SIGSEGV)",
-              ]),
-        .init(id: "v1.0.1102",
-              date: "2026-09-07",
-              title: "v1.0.1102",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1102",
-                "chore(ci): remove ITMS-90626 diagnostic step, root cause confirmed",
-                "fix(ios): stop excluding it.lproj from sources sweep for ITMS-90626",
-                "debug(ci): dump project.pbxproj it.lproj resource entries for ITMS-90626",
               ]),
     ]
 }
