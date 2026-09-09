@@ -261,7 +261,30 @@ public enum CallCapabilities {
     /// tonight's calls actually recovered onto, and it worked. Re-enabling
     /// this needs the live call-to-call verification the original comment
     /// already said was required and never happened — not another point fix.
-    public static let audioSrtpSendEnabled: Bool = false
+    ///
+    /// FLIPPED BACK TO `true` 2026-09-09, same night, on explicit user
+    /// request — this IS that verification pass, not a repeat of the
+    /// original unverified rollout. Before flipping back, a best-practices
+    /// audit (`reference_audiosrtp_killswitch_decision_2026_09_09.md` and
+    /// its deep-dive workflow) landed 4 of its 7 fixes: handshake
+    /// round-trip timestamps (`QAudionCallIntegration.swift`, so a stuck
+    /// handshake now shows WHICH of 4 stages failed instead of only "30s,
+    /// nothing"), `teardownAudioStack()` no longer calls its own
+    /// `setActive(false)` racing CallKit's async `didDeactivate`
+    /// (`AudioCapture.stop(deactivateSession:)`, the exact pattern
+    /// documented elsewhere as causing "next call has no audio"), a route
+    /// availability check before every capture attempt instead of only
+    /// after the throw, and `packetsLost`/`jitter` added to the stats poll
+    /// so a bursty RX counter can finally be told apart from real loss.
+    /// Three items from that same audit remain open (route-change/
+    /// interruption-driven capfail retry instead of a flat timer;
+    /// `endCall()` still races `reportCallEnded` against
+    /// `callService.endCall()` instead of waiting for CallKit's
+    /// `didDeactivate`; the flat 15s/50s handshake deadlines are not yet
+    /// RTT-adaptive) — none of the three blocks this pass, they are the
+    /// next round if tonight's calls still show any of the original 3
+    /// failure shapes.
+    public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
