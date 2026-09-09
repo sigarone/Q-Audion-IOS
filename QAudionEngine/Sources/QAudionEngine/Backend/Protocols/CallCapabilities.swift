@@ -284,7 +284,24 @@ public enum CallCapabilities {
     /// RTT-adaptive) — none of the three blocks this pass, they are the
     /// next round if tonight's calls still show any of the original 3
     /// failure shapes.
-    public static let audioSrtpSendEnabled: Bool = true
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-09, same night, ~40 minutes after
+    /// the re-enable above — the verification pass caught a live repro of
+    /// exactly the pre-existing `W-DEADTXNET` shape (`engageAudioSrtpFallback`
+    /// kdoc below, first documented from call 4e6d4fa5 on 2026-09-07): the
+    /// native sender activates identically to a healthy call (same
+    /// IOS-C4b JSEP-rewire/cryptor-attach sequence, confirmed byte-for-byte
+    /// against a working call in the same log) but transmits zero packets
+    /// (`ptx=0`) for ~11s while RX grows normally, on a 16s call. The
+    /// `srtpDeadTxBeats`-driven fallback (line ~446 below) does catch it and
+    /// does hand off to the legacy path with real audio — but only at the
+    /// 11s mark, leaving a real call under ~15s with no outbound audio for
+    /// most or all of its length. This is a WebRTC audio-device-module-level
+    /// stall (the sender reports armed; the audio unit underneath doesn't
+    /// push frames), not something any of the 4 landed diagnostic fixes
+    /// touches — it needs its own investigation before another live
+    /// verification attempt, not a repeat of tonight's pass.
+    public static let audioSrtpSendEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
