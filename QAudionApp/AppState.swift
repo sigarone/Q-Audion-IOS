@@ -250,6 +250,22 @@ final class AppState: ObservableObject {
     /// the time, which broke the presence dot end-to-end. Recreated on
     /// logout so the next session starts fresh.
     @Published private(set) var wsConnectionState: ConnectionState = .disconnected
+    /// W-WSSTUCKWATCHDOG (2026-09-09) — last-resort self-heal, independent
+    /// of `BCryptoWebSocketClient`'s own ping/pong keepalive timer and
+    /// backoff reconnect. Live report (Pavel, same night): a stuck
+    /// connection has occasionally needed a force-quit + relaunch to
+    /// recover — which works because it rebuilds every timer and task from
+    /// nothing, so if the client's own periodic keepalive timer is ever the
+    /// thing that's wedged (`ensureSocketFreshOnWake`'s own comment: "a
+    /// DispatchSourceTimer is not guaranteed to survive [background
+    /// suspension]"), nothing inside the client can ever notice again on
+    /// its own. This watchdog is a SEPARATE clock, armed by the state
+    /// listener below, that does not depend on that timer still running.
+    private var wsStuckWatchdogTask: Task<Void, Never>?
+    /// Generous on purpose — must never fire during a normal backoff
+    /// recovery (which this app's own W550 caps at 30s between attempts),
+    /// only after that has clearly had enough chances and failed.
+    private static let wsStuckWatchdogGraceSec: UInt64 = 90
     /// Persistent backend provider. Internal-visible (was `private`)
     /// so ChatContainer can access `messageApi` for read-receipt
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
@@ -5091,6 +5107,23 @@ final class AppState: ObservableObject {
                     TelemetryService.shared.emit(kind: "ws.state", attrs: attrs)
                 }
                 self?.wsConnectionState = state
+                // W-WSSTUCKWATCHDOG — see the property kdoc. Cancel on every
+                // transition; only re-arm while genuinely disconnected. Any
+                // progress at all (connecting/connected/authenticated)
+                // proves SOMETHING is still alive and retrying, so the
+                // last-resort reset stays purely a backstop for a wedge
+                // that produces no progress at all, not a race against the
+                // normal backoff.
+                self?.wsStuckWatchdogTask?.cancel()
+                if state == .disconnected {
+                    self?.wsStuckWatchdogTask = Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: AppState.wsStuckWatchdogGraceSec * 1_000_000_000)
+                        guard !Task.isCancelled, let self else { return }
+                        guard self.wsConnectionState == .disconnected else { return }
+                        print("[AppState] W-WSSTUCKWATCHDOG — disconnected for \(AppState.wsStuckWatchdogGraceSec)s straight, forcing a full socket rebuild")
+                        self.forceReconnectPersistentSocket(reason: "stuck-watchdog")
+                    }
+                }
                 if state == .connected || state == .authenticated {
                     // (re-)bind presence now that the transport is live —
                     // the previous provider may have been torn down on
@@ -13412,6 +13445,25 @@ final class AppState: ObservableObject {
         wakeSocketRefreshTask = task
         await task.value
         wakeSocketRefreshTask = nil
+    }
+
+    /// W-WSSTUCKWATCHDOG (2026-09-09) — the actual reset, shared by the
+    /// automatic 90s-stuck watchdog (state listener above) and the manual
+    /// "Riconnetti ora" escape hatch on the red banner. Deliberately the
+    /// SAME reset `ensureSocketFreshOnWake` already uses for its own
+    /// `.disconnected` branch — discard `liveProvider` outright and rebuild
+    /// from `connectPersistentSocket()`, rather than only calling the WS
+    /// client's own `forceReconnect()`: if the wedge this exists for is the
+    /// client's own periodic keepalive timer having stopped firing (a real,
+    /// documented risk — see `ensureSocketFreshOnWake`'s comment), the whole
+    /// object holding that dead timer needs to go, not just its socket.
+    /// Idempotent: a genuinely healthy connection just gets rebuilt for no
+    /// visible reason, no worse than any other reconnect.
+    @MainActor
+    func forceReconnectPersistentSocket(reason: String) {
+        print("[AppState] forceReconnectPersistentSocket (\(reason))")
+        liveProvider = nil
+        connectPersistentSocket()
     }
 
     /// Resolve the incoming-call display name for the native CallKit UI,

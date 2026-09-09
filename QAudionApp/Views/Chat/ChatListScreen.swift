@@ -799,18 +799,24 @@ struct ChatListScreen: View {
     /// immediately — only the red state is gated on `showDisconnectedBanner`,
     /// flipped true by the `onChange` below only after the state has held
     /// `.disconnected` continuously for `disconnectedBannerGraceSec`.
-    private var connectionStatusBanner: (title: String, icon: String, tint: Color)? {
+    private var connectionStatusBanner: (title: String, icon: String, tint: Color, showsRetry: Bool)? {
         switch appState.wsConnectionState {
         case .disconnected:
             guard showDisconnectedBanner else { return nil }
+            // W-WSMANUALRETRY (2026-09-09, direct user request) — the
+            // automatic W-WSSTUCKWATCHDOG (AppState) already tries a full
+            // reset after 90s of continuous disconnection, on its own, with
+            // no user action needed — this button is explicitly the LAST
+            // resort the user asked for in case that still isn't enough,
+            // so they never have to force-quit the whole app again.
             return (ConnectionStatusBannerPolicy.disconnected.title,
                     ConnectionStatusBannerPolicy.disconnected.systemImage,
-                    extras.riskHigh)
+                    extras.riskHigh, true)
         default:
             guard let policy = ConnectionStatusBannerPolicy.select(appState.wsConnectionState) else {
                 return nil
             }
-            return (policy.title, policy.systemImage, extras.warning)
+            return (policy.title, policy.systemImage, extras.warning, false)
         }
     }
 
@@ -823,7 +829,7 @@ struct ChatListScreen: View {
     /// live connection state rather than a one-time user choice, so it has
     /// nothing to dismiss to.
     private func connectionStatusBannerView(
-        _ status: (title: String, icon: String, tint: Color)
+        _ status: (title: String, icon: String, tint: Color, showsRetry: Bool)
     ) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: status.icon)
@@ -833,6 +839,23 @@ struct ChatListScreen: View {
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurface)
             Spacer(minLength: 8)
+            // W-WSMANUALRETRY — last-resort manual reset, only on the
+            // genuinely-stuck (debounced) red state. Same action the
+            // automatic 90s watchdog already takes on its own; this just
+            // lets the user trigger it immediately instead of waiting, or
+            // if that automatic pass still wasn't enough.
+            if status.showsRetry {
+                Button {
+                    Task { @MainActor in
+                        appState.forceReconnectPersistentSocket(reason: "manual-button")
+                    }
+                } label: {
+                    Text("Riconnetti ora")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(status.tint)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(
