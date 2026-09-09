@@ -173,15 +173,18 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // W-DOUBLEDECR (2026-09-09) — the balance above shipped with its own
         // bug: `reportCallEnded` fires more than once for the same logical
         // call end on real devices (confirmed live: `activationCount` went
-        // 2 -> 1 -> -1 for one call — a SECOND `reportCallEnded` decremented
-        // again, past zero, outside the documented valid range entirely).
-        // `ledger.forget(uuid)` already tracks exactly this — whether this
-        // uuid was still outstanding, i.e. whether this is the first
-        // `reportCallEnded` for it — reused here instead of inventing a
-        // second dedup mechanism, so the deactivate can only ever fire once
-        // per call, matching the one activate it balances.
-        let wasOutstanding = ledger.forget(uuid)
-        if wasOutstanding {
+        // 2 -> 1 -> -1 for one call). Originally guarded with
+        // `ledger.forget(uuid)`'s "was outstanding" result — WRONG signal,
+        // caught by a second live test: the foreground/W520 answer path
+        // (`AppState.swift`) deliberately never calls `reportIncomingCall`,
+        // so `outstandingUUIDs` never has that call's uuid on the answering
+        // side AT ALL — the deactivate silently never fired there, in
+        // exactly the two-devices-foregrounded scenario every test tonight
+        // used. `consumeAudioSelfActivation()` tracks the actual thing that
+        // matters — did THIS app call the locked `setActive(true)` for the
+        // current call — independent of CallKit's own native-UI bookkeeping.
+        // See `CallKitCallLedger`'s kdoc for the full trace of both bugs.
+        if ledger.consumeAudioSelfActivation() {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
             do {
@@ -192,6 +195,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             }
             rtcSession.unlockForConfiguration()
         }
+        ledger.forget(uuid)
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded
@@ -422,6 +426,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 try rtcSession.setActive(true)
                 print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt)) activationCount=\(rtcSession.activationCount)")
                 rtcSession.unlockForConfiguration()
+                // W-SELFACTIVATED (2026-09-09) — mark that this call now owes
+                // a matching setActive(false), independent of whether
+                // CallKit's own native UI/ledger ever heard about this call
+                // (it deliberately doesn't for a foreground/W520 answer —
+                // see the ledger's own kdoc for why that distinction is the
+                // whole point of this flag).
+                ledger.markAudioSelfActivated()
                 onAudioSessionActivated?()
                 return
             } catch {

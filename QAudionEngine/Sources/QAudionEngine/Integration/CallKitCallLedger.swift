@@ -57,7 +57,58 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// nothing on screen says why.
     private var outstandingUUIDs: Set<UUID> = []
 
+    /// W-SELFACTIVATED (2026-09-09) — separate from all three sets above on
+    /// purpose. Those track whether CallKit's NATIVE UI/ledger knows about a
+    /// call; this tracks something CallKit has no visibility into at all:
+    /// whether THIS APP called `RTCAudioSession`'s own locked `setActive(true)`
+    /// for the current call (`CallKitProvider.activateAudioSession`) and
+    /// therefore owes it a matching `setActive(false)`.
+    ///
+    /// Live evidence this distinction is real, not cosmetic: the foreground
+    /// answer path (`AppState.swift`, W520 "single-dialer") deliberately
+    /// SKIPS `reportIncomingCall` to avoid a double system dialer — so
+    /// `outstandingUUIDs` never gets that call's uuid at all, on the
+    /// answering side, for the exact scenario two devices testing calls
+    /// foregrounded next to each other hit on every single call. An earlier
+    /// version of this fix reused `outstandingUUIDs`/`forget(_:)` as the
+    /// idempotency guard for the `RTCAudioSession` deactivate — silently
+    /// correct for the caller side (always outstanding via
+    /// `recordOutstanding`) and silently WRONG for the answering side in
+    /// this exact foreground scenario, so the answering device's
+    /// `activationCount` climbed every call with no way back down. This
+    /// flag is a boolean, not a per-uuid set, because the 1:1 call model
+    /// this app assumes throughout (`state == .idle` guards before a new
+    /// call starts) never has more than one call's activation pending at
+    /// once.
+    private var audioSelfActivated = false
+
     init() {}
+
+    /// Called the instant `activateAudioSession` successfully calls
+    /// `RTCAudioSession`'s locked `setActive(true)`. Marks that a matching
+    /// deactivate is now owed, independent of whatever CallKit's own native
+    /// UI/ledger state for this call happens to be.
+    func markAudioSelfActivated() {
+        lock.lock()
+        defer { lock.unlock() }
+        audioSelfActivated = true
+    }
+
+    /// Atomically checks AND clears the flag — call exactly once per call
+    /// end, right before deciding whether to balance the activate with a
+    /// `setActive(false)`. Returns `true` only the first time this is
+    /// called after a successful self-activation, so a duplicate
+    /// `reportCallEnded` (confirmed to happen on real devices) cannot
+    /// double-decrement `RTCAudioSession.activationCount` the same way the
+    /// `outstandingUUIDs`-based guard was meant to prevent, but for the
+    /// right piece of state this time.
+    func consumeAudioSelfActivation() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard audioSelfActivated else { return false }
+        audioSelfActivated = false
+        return true
+    }
 
     /// Whether `reportNewIncomingCall` already succeeded for this uuid. Read
     /// BEFORE the provider awaits CallKit, so a second report of the same

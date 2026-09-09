@@ -392,6 +392,23 @@ public enum CallCapabilities {
     /// shares. This directly explains why the fault compounds and only a
     /// full process restart clears it: an ever-climbing count never returns
     /// to the balanced baseline a fresh call assumes.
+    ///
+    /// SIXTH fix, same investigation, then SEVENTH — the fifth's own double-
+    /// decrement guard (`ledger.forget`'s "was outstanding") turned out to
+    /// be watching the wrong signal, found by fetching `RTCAudioSession.mm`'s
+    /// actual implementation (not just the header) from the pinned
+    /// `webrtc-sdk/webrtc@m144_release` source: `audioSessionDidActivate:`/
+    /// `didDeactivate:` DO touch the same `activationCount` a locked
+    /// `setActive:` call does, confirming the counter is real and shared —
+    /// but `AppState.swift`'s W520 "single-dialer" foreground-answer path
+    /// deliberately never calls `reportIncomingCall`, so
+    /// `CallKitCallLedger.outstandingUUIDs` never has the answering side's
+    /// uuid at all in exactly the two-devices-foregrounded scenario every
+    /// test tonight used — the deactivate silently never fired there. New
+    /// guard (`CallKitCallLedger.audioSelfActivated`) tracks whether THIS
+    /// app's own locked activate ran, independent of CallKit's native-UI
+    /// ledger. See `CallKitCallLedger`'s kdoc and `reportCallEnded`'s for
+    /// the full trace of both the original bug and this one's own bug.
     public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
