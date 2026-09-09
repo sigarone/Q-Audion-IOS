@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1123",
+              date: "2026-09-09",
+              title: "v1.0.1123",
+              bullets: [
+                "fix(call): disable native audio-srtp again — two boundary fixes, both disproven",
+              ]),
         .init(id: "v1.0.1122",
               date: "2026-09-09",
               title: "v1.0.1122",
               bullets: [
+                "chore: regenerate changelog for v1.0.1122",
                 "fix(call): self-activate audio session on outgoing calls too (caller-side gap)",
               ]),
         .init(id: "v1.0.1121",
@@ -166,13 +173,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1104",
                 "fix(carplay): stop forcing hasVideo=true when CarPlay is the audio route",
-              ]),
-        .init(id: "v1.0.1103",
-              date: "2026-09-07",
-              title: "v1.0.1103",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1103",
-                "fix(call): revert voiceProcessingTeardownQueueEnabled to false (SIGSEGV)",
               ]),
     ]
 }
