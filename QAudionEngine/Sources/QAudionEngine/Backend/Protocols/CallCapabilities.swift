@@ -314,7 +314,27 @@ public enum CallCapabilities {
     /// the manual-mode-vs-app-owned-session conflict those three attempts
     /// hit does not apply here. Still unverified live until the next real
     /// call-to-call test.
-    public static let audioSrtpSendEnabled: Bool = true
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-09, same night — two independent
+    /// fixes at the CallKit/AVAudioSession boundary (the forward above, then
+    /// a caller-side self-activation fix mirroring the answer-side one)
+    /// BOTH landed, BOTH executed and succeeded exactly as designed on the
+    /// next live test (`[CallKitProvider] start audio session ACTIVE
+    /// (attempt 0)` fires immediately, well before the sender even tries to
+    /// arm), and the identical dead-TX-on-the-call-that-follows-another
+    /// symptom reproduced anyway, this time with the caller/callee roles
+    /// swapped from the previous test. Session activation was never the
+    /// bottleneck — both hypotheses were wrong, disproven directly by log
+    /// evidence rather than assumed. Two clean, reasoned, individually
+    /// falsified fixes on the same mechanism is the "stop patching, question
+    /// the architecture" signal: whatever actually stalls the native audio
+    /// unit on a rapid second call lives inside WebRTC's own audio-device-
+    /// module lifecycle across successive calls, not at the CallKit
+    /// integration boundary either of tonight's fixes touched. Needs
+    /// instrumentation of WebRTC's own audio-unit start/stop sequence
+    /// across calls before another attempt — not a third guess at the same
+    /// boundary.
+    public static let audioSrtpSendEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
