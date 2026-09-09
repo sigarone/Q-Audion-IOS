@@ -301,7 +301,20 @@ public enum CallCapabilities {
     /// push frames), not something any of the 4 landed diagnostic fixes
     /// touches — it needs its own investigation before another live
     /// verification attempt, not a repeat of tonight's pass.
-    public static let audioSrtpSendEnabled: Bool = false
+    ///
+    /// FLIPPED BACK TO `true` 2026-09-09, same night — the investigation the
+    /// note above asked for landed: `CallKitProvider` now forwards CallKit's
+    /// own didActivate/didDeactivate into `RTCAudioSession`
+    /// (W-CKAUDIOFORWARD, `CallKitProvider.swift`), which automatic-mode
+    /// WebRTC had no other way to observe (no system notification exists
+    /// for "someone else called setActive" — only interruption/route-change
+    /// fire). `NativeAudioSessionGate`'s kdoc has the full comparison against
+    /// 1053/1056/1066: this is deliberately NOT that same attempt —
+    /// `useManualAudio` stays `false`, `isAudioEnabled` is never touched, so
+    /// the manual-mode-vs-app-owned-session conflict those three attempts
+    /// hit does not apply here. Still unverified live until the next real
+    /// call-to-call test.
+    public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
