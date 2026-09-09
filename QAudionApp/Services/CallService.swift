@@ -389,7 +389,20 @@ final class CallService: @unchecked Sendable {
             // survives the same shipper rule as `buf=` elsewhere in this file.
             let lost = getAudioRtpPacketsLost?() ?? -1
             let jitterMs = Int((getAudioRtpJitterSec?() ?? -1) * 1000)
-            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs)")
+            // W-AUDIOOUTDIAG (2026-09-09) — tx/rx byte counters only prove the
+            // RTP/SRTP layer moved bytes; they say nothing about whether the
+            // decoded PCM ever reached hardware output once native audio-srtp
+            // hands capture+playout to WebRTC's own ADM (the app's manual
+            // AudioCapture/AudioProcessingPipeline route logging is bypassed
+            // entirely on this path — see the gate=4 skip below). Route port
+            // type + output volume close that half of the diagnostic split
+            // this heartbeat already does for tx/rx: real audio-srtp traffic
+            // with outp=none or vol=0 means the network side worked and the
+            // output side is the actual failure, not a guess either way.
+            let outSess = AVAudioSession.sharedInstance()
+            let outPorts = outSess.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
+            let outVol = Int(outSess.outputVolume * 100)
+            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)")
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
         // outbound-rtp row still does not exist after ~8 s of samples (was
@@ -3096,11 +3109,18 @@ final class CallService: @unchecked Sendable {
             // (inp=1 buf=5, then inp=0 buf=20), and it costs one log line
             // per call.
             let sess = AVAudioSession.sharedInstance()
+            // W-AUDIOOUTDIAG (2026-09-09) — outp count alone can't tell "1
+            // output port, correctly the speaker/earpiece" from "1 output
+            // port, stuck on a stale Bluetooth route nothing is connected
+            // to" — both log outp=1. Port type name is one more field on an
+            // already-cheap, one-per-call log line.
+            let outPorts = sess.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
             RTLog.info(
                 "call",
                 "audioIO skip=1 gate=4 adm=1"
                     + " inp=\(sess.currentRoute.inputs.count)"
                     + " outp=\(sess.currentRoute.outputs.count)"
+                    + " outt=\(outPorts.isEmpty ? "none" : outPorts)"
                     + " rec=\(sess.isInputAvailable ? 1 : 0)"
                     + " buf=\(Int(sess.ioBufferDuration * 1000))"
             )
@@ -3384,6 +3404,16 @@ final class CallService: @unchecked Sendable {
     /// interrupted). Future audio-engine starts must wait for the next
     /// `didActivate`. Wired from `CallKitProvider.onAudioSessionDeactivated`.
     public func handleAudioSessionDeactivated() {
+        // W-AUDIOOUTDIAG (2026-09-09) — this callback previously left zero
+        // trace. A CallKit didDeactivate landing for a call that just ended
+        // right as the NEXT call's own didActivate fires (back-to-back
+        // calls a few seconds apart) is exactly the race the endCall()
+        // sequencing gap (AppState.swift, reportCallEnded fired from an
+        // unawaited detached Task) could produce — but with no timestamp on
+        // either side, that race was structurally invisible in every log
+        // pulled so far. One line, so the next back-to-back test either
+        // shows the clash or rules it out.
+        RTLog.info("call", "audioSessionDeactivated callId=" + Self.short8(getCallId?()))
         audioSessionActive = false
     }
 

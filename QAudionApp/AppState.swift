@@ -16810,8 +16810,23 @@ extension AppState {
         // call was never reported to CallKit, so reportCallEnded would target a
         // UUID CXProvider never saw. Flag OFF path is byte-identical to before.
         if let uuid = activeCallKitId, !CallsGate.callKitFreeMode {
+            // W-AUDIOOUTDIAG (2026-09-09) — reportCallEnded (and the
+            // didDeactivate it eventually triggers) previously logged
+            // nothing, on either end. This Task is unawaited by design
+            // (endCall() stays synchronous — see callService.endCall()
+            // below, which does NOT wait for this), so a slow CallKit
+            // round-trip here can in principle still be pending when a
+            // fast next incoming call activates its own session a few
+            // seconds later — a plausible, previously unverifiable cause
+            // of a back-to-back call losing audio. Timestamped start/end
+            // is the minimum needed to see that clash in a real log
+            // instead of reasoning about it in the abstract.
+            let reportStartMs = Date().timeIntervalSince1970 * 1000
+            RTLog.info("call", "reportCallEnded start uuid=\(uuid.uuidString.prefix(8))")
             Task { [weak self] in
                 await self?.callKit?.reportCallEnded(uuid: uuid, reason: .userEnded)
+                let elapsedMs = Int(Date().timeIntervalSince1970 * 1000 - reportStartMs)
+                RTLog.info("call", "reportCallEnded done uuid=\(uuid.uuidString.prefix(8)) elapsedMs=\(elapsedMs)")
                 // Then close anything else this process still has open with
                 // CallKit. Ending only the id this teardown happens to know
                 // about is how a call outlives the app's own: the id it did not
