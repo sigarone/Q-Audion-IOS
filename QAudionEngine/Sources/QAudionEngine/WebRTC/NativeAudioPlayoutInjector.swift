@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 #if canImport(WebRTC)
 import WebRTC
 
@@ -105,6 +106,29 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
     private var processCallsTotal: Int64 = 0
     private var mixCallsTotal: Int64 = 0
 
+    /// W-RXINJECTRATE (2026-09-10) — live test confirmed audio finally
+    /// audible (checkpoint fix landed) but DISTORTED, on a call where
+    /// `outt=Receiver` (earpiece route). `audioProcessingInitialize`'s own
+    /// `sampleRate` was previously ignored entirely, on the assumption the
+    /// APM always negotiates `AudioConstants.sampleRate` (48 kHz) — the SAME
+    /// wrong assumption `NativeAudioPcmTap`'s own doc already documents as
+    /// false for exactly this route: "the built-in EARPIECE route commonly
+    /// negotiates 24 kHz for a voice-mode AVAudioSession... a real, everyday
+    /// mismatch, not a corner case." Injecting 48 kHz-paced samples into a
+    /// buffer actually running at a different rate plays back sped up/
+    /// pitch-shifted — i.e. exactly "distorted audio never heard before".
+    /// `processingSampleRate` now holds the REAL negotiated rate, and
+    /// `inject(_:)` resamples to it before queuing whenever it differs from
+    /// `AudioConstants.sampleRate`, reusing `NativeAudioPcmTap.int16LEData`'s
+    /// already-hardened `AVAudioConverter` logic (same BUGFIX-tested
+    /// persistent-converter/`.noDataNow` handling) rather than
+    /// reimplementing conversion from scratch.
+    private var processingSampleRate: Double = Double(AudioConstants.sampleRate)
+    private var resampleConverter: AVAudioConverter?
+    private var resampleConverterInputFormat: AVAudioFormat?
+    private var resampleConsecutiveEmptyConversions = 0
+    private let resampleLock = NSLock()
+
     /// - Parameter capacitySamples: bound on how much queued audio this can
     ///   hold before dropping the OLDEST sample to make room (same
     ///   drop-oldest-never-block-the-producer policy every other jitter
@@ -122,16 +146,29 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
     }
 
     /// Called from `CallService.playDecodedLegacyPcm` with little-endian
-    /// Int16 mono PCM at `AudioConstants.sampleRate` (48 kHz) — the same
-    /// format `QAudionCallIntegration.processIncomingAudio` always returns,
-    /// so no resample is needed here; `audioProcessingProcess` below writes
-    /// samples straight into the native render buffer at whatever rate the
-    /// APM actually negotiated, which matches 48 kHz on every real call this
-    /// app makes (see `AudioConstants`). MUST NOT block for long.
+    /// Int16 mono PCM at `AudioConstants.sampleRate` (48 kHz) — the format
+    /// `QAudionCallIntegration.processIncomingAudio` always returns. Resamples
+    /// to the APM's actual negotiated rate first when it differs (see
+    /// `processingSampleRate`'s own W-RXINJECTRATE note — a real, common case
+    /// on the earpiece route, not an edge case). MUST NOT block for long.
     public func inject(_ pcm: Data) {
-        let sampleCount = pcm.count / MemoryLayout<Int16>.size
+        guard pcm.count >= MemoryLayout<Int16>.size else { return }
+
+        lock.lock()
+        let targetRate = processingSampleRate
+        lock.unlock()
+
+        let effective: Data
+        if targetRate == Double(AudioConstants.sampleRate) {
+            effective = pcm
+        } else {
+            guard let resampled = resample(pcm, targetSampleRate: targetRate) else { return }
+            effective = resampled
+        }
+
+        let sampleCount = effective.count / MemoryLayout<Int16>.size
         guard sampleCount > 0 else { return }
-        pcm.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+        effective.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             push(raw.bindMemory(to: Int16.self))
         }
         lock.lock()
@@ -141,6 +178,35 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         if n == 1 || n % 250 == 0 {
             onEvent?("inj", n)
         }
+    }
+
+    /// Wraps the raw 48 kHz little-endian Int16 mono `pcm` into an
+    /// `AVAudioPCMBuffer` and hands it to `NativeAudioPcmTap.int16LEData` for
+    /// the actual resample — see W-RXINJECTRATE for why this reuses that
+    /// function instead of a fresh `AVAudioConverter` call site (its
+    /// persistent-converter/no-reset handling was hard-won against a real
+    /// silent-output bug on the TX side; a naive new implementation here
+    /// would risk exactly that regression on the RX side instead).
+    func resample(_ pcm: Data, targetSampleRate: Double) -> Data? {
+        let sampleCount = pcm.count / MemoryLayout<Int16>.size
+        guard sampleCount > 0,
+              let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                               sampleRate: Double(AudioConstants.sampleRate),
+                                               channels: 1,
+                                               interleaved: true),
+              let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(sampleCount)),
+              let dst = buffer.int16ChannelData else { return nil }
+        buffer.frameLength = AVAudioFrameCount(sampleCount)
+        pcm.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.baseAddress else { return }
+            dst[0].update(from: base.assumingMemoryBound(to: Int16.self), count: sampleCount)
+        }
+        return NativeAudioPcmTap.int16LEData(from: buffer,
+                                             targetSampleRate: targetSampleRate,
+                                             converter: &resampleConverter,
+                                             converterInputFormat: &resampleConverterInputFormat,
+                                             consecutiveEmptyConversions: &resampleConsecutiveEmptyConversions,
+                                             lock: resampleLock)
     }
 
     /// Drops any audio queued by a call that just ended, so it cannot bleed
@@ -155,11 +221,27 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         processCallsTotal = 0
         mixCallsTotal = 0
         lock.unlock()
+        resampleLock.lock()
+        resampleConverter = nil
+        resampleConverterInputFormat = nil
+        resampleConsecutiveEmptyConversions = 0
+        resampleLock.unlock()
     }
 
     public func audioProcessingInitialize(sampleRate: Int, channels: Int) {
-        // No per-call state depends on the negotiated rate/channel count —
-        // see this type's own doc for why no resample step is needed here.
+        // W-RXINJECTRATE — capture the REAL negotiated rate; a route change
+        // mid-process (e.g. speaker <-> earpiece) re-fires this with a new
+        // value, same "(re-)initialize means the pipeline rate changed"
+        // reset point `NativeAudioCaptureTap.audioProcessingInitialize`
+        // already documents for the TX side.
+        lock.lock()
+        processingSampleRate = Double(sampleRate)
+        lock.unlock()
+        resampleLock.lock()
+        resampleConverter = nil
+        resampleConverterInputFormat = nil
+        resampleConsecutiveEmptyConversions = 0
+        resampleLock.unlock()
     }
 
     public func audioProcessingProcess(audioBuffer: RTCAudioBuffer) {
