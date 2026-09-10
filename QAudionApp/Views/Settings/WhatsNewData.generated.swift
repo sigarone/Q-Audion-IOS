@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1139",
+              date: "2026-09-10",
+              title: "v1.0.1139",
+              bullets: [
+                "fix(audio): wire renderPreProcessingDelegate via the setter, not the initializer",
+              ]),
         .init(id: "v1.0.1138",
               date: "2026-09-10",
               title: "v1.0.1138",
               bullets: [
+                "chore: regenerate changelog for v1.0.1138",
                 "diag(audio): instrument the RX fallback-injection path end to end",
               ]),
         .init(id: "v1.0.1137",
@@ -143,13 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1120",
                 "fix(call): disable native audio-srtp again — live repro of dead-TX stall",
-              ]),
-        .init(id: "v1.0.1119",
-              date: "2026-09-09",
-              title: "v1.0.1119",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1119",
-                "diag(call): output-route/volume visibility + reportCallEnded/deactivate timing",
               ]),
     ]
 }
