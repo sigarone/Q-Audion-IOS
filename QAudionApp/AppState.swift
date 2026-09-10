@@ -4593,6 +4593,14 @@ final class AppState: ObservableObject {
         callService.resetNativePlayoutInjector = {
             QAudionPeerConnectionFactory.shared.playoutInjector.resetForNewCall()
         }
+        // W-RXFALLBACKINJECT diag (2026-09-10) — checkpoints 2/3 (inj, proc,
+        // mix), see NativeAudioPlayoutInjector.onEvent's own kdoc. `proc`
+        // fires from WebRTC's own real-time audio thread — RTLog hops to
+        // @MainActor internally, same already-relied-upon pattern as
+        // QAudionPeerConnectionFactory's onNativeAudioLifecycleEvent below.
+        QAudionPeerConnectionFactory.shared.playoutInjector.onEvent = { kind, n in
+            RTLog.info("call", "rxinj \(kind)=1 n=\(n)")
+        }
         // W-MEDIADEADSRTP (2026-08-29) — same live-getter pattern: hand the
         // media-dead watchdog the audio RX byte counter so an `audio-srtp-v1`
         // call has a liveness source at all. Without this it saw only the

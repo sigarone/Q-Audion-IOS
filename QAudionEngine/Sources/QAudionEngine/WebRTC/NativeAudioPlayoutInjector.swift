@@ -83,6 +83,28 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
     private var writeIndex = 0
     private var filledCount = 0
 
+    /// W-RXFALLBACKINJECT diag (2026-09-10) — checkpoints 2 and 3 of 3 (see
+    /// `CallService.rxInjectRouteCount`'s own kdoc for checkpoint 1 and why
+    /// all three exist). `inj` fires from `inject(_:)` (proves
+    /// `CallService.injectNativePlayoutPCM` is wired and reaching this
+    /// object). `proc` fires from `audioProcessingProcess` on EVERY call,
+    /// starting from the very first — this is the one genuinely unverified
+    /// link: whether WebRTC's real render pipeline invokes
+    /// `renderPreProcessingDelegate` AT ALL for this call's APM instance.
+    /// `mix` fires only when `audioProcessingProcess` actually had queued
+    /// samples to mix in (i.e. `inject`'s queue and `audioProcessingProcess`'s
+    /// pulls are actually overlapping in time, not just each independently
+    /// happening). Kept as an event closure (not RTLog directly) because
+    /// this module doesn't depend on QAudionApp — see
+    /// `QAudionPeerConnectionFactory.onNativeAudioLifecycleEvent`'s own kdoc
+    /// for the same constraint. Fired OUTSIDE `lock` (after reading the
+    /// counter under it) to keep the real-time-thread critical section to
+    /// the same short, fixed-cost shape `pop`/`push` already have.
+    public var onEvent: ((_ kind: String, _ n: Int64) -> Void)?
+    private var injectCallsTotal: Int64 = 0
+    private var processCallsTotal: Int64 = 0
+    private var mixCallsTotal: Int64 = 0
+
     /// - Parameter capacitySamples: bound on how much queued audio this can
     ///   hold before dropping the OLDEST sample to make room (same
     ///   drop-oldest-never-block-the-producer policy every other jitter
@@ -112,6 +134,13 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         pcm.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             push(raw.bindMemory(to: Int16.self))
         }
+        lock.lock()
+        injectCallsTotal += 1
+        let n = injectCallsTotal
+        lock.unlock()
+        if n == 1 || n % 250 == 0 {
+            onEvent?("inj", n)
+        }
     }
 
     /// Drops any audio queued by a call that just ended, so it cannot bleed
@@ -122,6 +151,9 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         readIndex = 0
         writeIndex = 0
         filledCount = 0
+        injectCallsTotal = 0
+        processCallsTotal = 0
+        mixCallsTotal = 0
         lock.unlock()
     }
 
@@ -134,8 +166,24 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         let frameCount = audioBuffer.frames
         guard frameCount > 0, audioBuffer.channels > 0 else { return }
 
+        lock.lock()
+        processCallsTotal += 1
+        let processN = processCallsTotal
+        lock.unlock()
+        if processN == 1 || processN % 250 == 0 {
+            onEvent?("proc", processN)
+        }
+
         let popped = pop(maxCount: frameCount)
         guard !popped.isEmpty else { return }
+
+        lock.lock()
+        mixCallsTotal += 1
+        let mixN = mixCallsTotal
+        lock.unlock()
+        if mixN == 1 || mixN % 250 == 0 {
+            onEvent?("mix", mixN)
+        }
 
         // Mix (add, not replace) so this coexists correctly with whatever
         // the native unit is already rendering — silence/comfort noise on

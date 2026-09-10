@@ -549,6 +549,16 @@ final class CallService: @unchecked Sendable {
     private var loggedFirstRxDecrypt = false
     private var loggedRxNoPlayback = false
     private var loggedFirstStaleDrop = false
+    /// W-RXFALLBACKINJECT diag (2026-09-10) — counts calls to
+    /// `playDecodedLegacyPcm` that took the native-injector branch (as
+    /// opposed to the legacy-engine branch). See that method's own kdoc:
+    /// this is the FIRST of three checkpoints (app-level routing decision →
+    /// `NativeAudioPlayoutInjector.inject` → `audioProcessingProcess`) added
+    /// after a live test showed clean end-to-end decode (RX heartbeat
+    /// climbing to 9250, near-zero decrypt errors) but zero audible output —
+    /// with no instrumentation on any of the three, there was no way to tell
+    /// which one silently failed.
+    private var rxInjectRouteCount: Int64 = 0
 
     // W481 — pre-bind RX frame buffer.
     // The PQC handshake and callIntegration binding are async; audio frames
@@ -2425,6 +2435,13 @@ final class CallService: @unchecked Sendable {
     /// thrown away, never a decode failure.
     private func playDecodedLegacyPcm(_ pcm: Data) {
         if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
+            // W-RXFALLBACKINJECT diag — checkpoint 1/3, see
+            // `rxInjectRouteCount`'s own kdoc. Same first+every-250th
+            // cadence as the RX heartbeat above.
+            rxInjectRouteCount &+= 1
+            if rxInjectRouteCount == 1 || rxInjectRouteCount % 250 == 0 {
+                RTLog.info("call", "rxinject n=" + rxInjectRouteCount.description)
+            }
             injectNativePlayoutPCM?(pcm)
             return
         }
@@ -2976,6 +2993,7 @@ final class CallService: @unchecked Sendable {
         audioEnginesStarted = false
         audioEngineStartAttempted = false
         didActivateFallbackFired = false
+        rxInjectRouteCount = 0
         callIntegration?.onCallEnded()
         callIntegration = nil
         // W-SESSIONOWNER (2026-09-09) — deactivate the shared AVAudioSession
