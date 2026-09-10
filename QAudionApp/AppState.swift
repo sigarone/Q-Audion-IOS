@@ -8404,13 +8404,23 @@ final class AppState: ObservableObject {
                 // `callFinalizedCallId` rules out the OTHER thing `.active`
                 // means (this function's own non-PQC finalize outcome) so a
                 // redelivered answer can't re-open an already-closed latch.
-                guard let callId = self.canonicalActiveCallId(),
-                      AcceptGateDecisions.shouldAcceptAnswer(
-                          isRinging: self.callState == .ringing,
-                          isPreRingActive: self.callState == .active,
-                          alreadyFinalized: self.callFinalizedCallId == callId
-                      )
-                else { return }
+                guard let callId = self.canonicalActiveCallId() else {
+                    // W-ACCEPTEDBEFOREREADY (2026-09-10) — this branch was
+                    // silent before; live logs tonight showed the SIBLING
+                    // guard below (handleCallAccepted) dropping every
+                    // progression signal with zero trace, so this one gets
+                    // the same visibility rather than being trusted blind.
+                    RTLog.warn("call", "callanswer dropped=1 reason=nocallid")
+                    return
+                }
+                guard AcceptGateDecisions.shouldAcceptAnswer(
+                    isRinging: self.callState == .ringing,
+                    isPreRingActive: self.callState == .active,
+                    alreadyFinalized: self.callFinalizedCallId == callId
+                ) else {
+                    RTLog.warn("call", "callanswer dropped=1 reason=gate ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) finalized=\(self.callFinalizedCallId == callId ? 1 : 0)")
+                    return
+                }
                 // W-ACCEPTGATE-SDP (2026-08-14) — an SDP-bearing `call_answer`
                 // is a WebRTC handshake artifact, NOT a human accepting: since
                 // W-DCSTUCK the callee builds its controller at RING time and
@@ -15959,7 +15969,33 @@ final class AppState: ObservableObject {
         // closing the next time it drifts.
         let wireId = callId.lowercased()
         self.callAcceptedCallId = wireId
-        guard self.callState == .ringing, self.localHandshakeReadyCallId == wireId else { return }
+        // W-ACCEPTEDBEFOREREADY (2026-09-10) — live raw-log evidence (two
+        // separate real calls, iOS↔iOS WS-relay, both devices foregrounded):
+        // `call_ready` never arrives at all on this call shape, so the
+        // caller's `callState` never leaves the pre-ring `.active` set by
+        // `startCall()` and never reaches `.ringing`. This guard's old
+        // `callState == .ringing`-only check therefore silently dropped
+        // EVERY `call_accepted` on both real test calls tonight — zero
+        // `finalizeCallActive()` runs, the outgoing key-exchange ring cue
+        // (`QAudionRingtonePlayer`) never stopped, even with real WebRTC
+        // media already flowing both ways. Exactly the same race
+        // `AcceptGateDecisions.shouldAcceptAnswer` was already fixed for
+        // (W-ANSWERBEFOREREADY, 2026-09-08) on its sibling inbound edge —
+        // that fix was never extended to this one. Reusing the same,
+        // already-reviewed decision function instead of duplicating its
+        // three-state logic here.
+        guard AcceptGateDecisions.shouldAcceptAnswer(
+            isRinging: self.callState == .ringing,
+            isPreRingActive: self.callState == .active,
+            alreadyFinalized: self.callFinalizedCallId == wireId
+        ), self.localHandshakeReadyCallId == wireId else {
+            // W-ACCEPTEDBEFOREREADY — this used to be a silent `return`,
+            // which is exactly why the bug above went unnoticed until raw
+            // device logs were pulled by hand. Short, numeric-tailed so it
+            // survives the remote-log redactor (reference_ios_log_pipeline_limits).
+            RTLog.warn("call", "callaccepted dropped=1 ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) handshakeready=\(self.localHandshakeReadyCallId == wireId ? 1 : 0)")
+            return
+        }
         self.finalizeCallActive()
     }
 
