@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1140",
+              date: "2026-09-10",
+              title: "v1.0.1140",
+              bullets: [
+                "fix(audio): resample RX-injected PCM to the APM's actual negotiated rate",
+                "fix(net): let LiveLogStreamer recover from an expired token instead of failing 401 forever",
+              ]),
         .init(id: "v1.0.1139",
               date: "2026-09-10",
               title: "v1.0.1139",
               bullets: [
+                "chore: regenerate changelog for v1.0.1139",
                 "fix(audio): wire renderPreProcessingDelegate via the setter, not the initializer",
               ]),
         .init(id: "v1.0.1138",
@@ -143,13 +151,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1121",
                 "feat(call): re-enable native audio-srtp with the CallKit-audio-session forward",
                 "feat(call): forward CallKit audio-session activate/deactivate to RTCAudioSession",
-              ]),
-        .init(id: "v1.0.1120",
-              date: "2026-09-09",
-              title: "v1.0.1120",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1120",
-                "fix(call): disable native audio-srtp again — live repro of dead-TX stall",
               ]),
     ]
 }
