@@ -3,35 +3,24 @@ import Foundation
 /// MASVS-CRYPTO remediation (2026-08-20/21) — Swift port of Android's
 /// `feature/feature-call/domain/ReKeyScheduler.kt`.
 ///
-/// ⚠️ **UNVERIFIED — not tested on a live call.** This session has no Mac /
-/// physical iOS device available (see `docs/security/
-/// MASVS_ASSESSMENT_2026-08-20.md` item I3), so nothing below has been
-/// exercised against a real call. The scheduler class itself (state machine:
-/// adaptive deadline, confidence-driven period, tick emission) is a faithful,
-/// self-contained port of the Android original and should be safe — it does
-/// no I/O and touches no crypto material directly, only ever publishes
-/// `ReKeyTick` events for a caller to act on.
+/// **UPDATE (2026-09-10) — the paragraph below is STALE, kept only as a
+/// dated record of the 2026-08-21 state; do not trust it for current
+/// behavior.** The FSM surgery it says was never attempted DID land (I3 §5,
+/// see `docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md`, cross-repo doc in
+/// `qaudion-android-new`): `AppState`'s `onReKeyTick` wiring drives a real
+/// mid-call PQC re-handshake via `QAudionCallIntegration.performPqcReKey`,
+/// and `QAudionCallIntegration`'s inbound-OFFER handler re-keys an
+/// already-`.active` session in place (`engine.initSession` again, skipping
+/// `engine.initialize()`) rather than throwing `invalidState`. Ticks are
+/// NOT merely logged — see `AppState.swift`'s `reKeyScheduler.onReKeyTick`
+/// closure for the actual call. This class itself does no I/O and touches
+/// no crypto material directly, only ever publishes `ReKeyTick` events for
+/// a caller to act on.
 ///
-/// **What this does NOT yet do — the actual gap this port closes only
-/// partially:** Android's `CallController.performReKey` (the consumer of
-/// these ticks) drives a genuine mid-call ML-KEM re-handshake — a fresh
-/// OFFER/ACCEPT round-trip via the signaller, an atomic dual-key-grace swap
-/// of both the audio and video session keys, with separate initiator/
-/// responder roles and a glare guard. On iOS, `QAudionCallIntegration`'s
-/// call-state machine (`onCallSetupStarted` et al.) is a strict one-shot
-/// `.idle → .capabilitySent → … → .active` lifecycle — it throws
-/// `invalidState` if re-entered mid-call, so it is NOT safely re-invocable
-/// as a mid-call re-handshake trigger without real FSM surgery. Building
-/// that surgery blind, with no way to test it against a live call or verify
-/// wire compatibility with Android/desktop/server, was judged too risky to
-/// attempt in this pass (see the session's MASVS remediation notes for the
-/// reasoning). AppState currently logs every tick it receives instead of
-/// acting on it — see `AppState`'s wiring for the loud, explicit warning.
-/// **Closing this gap for real needs a scoped follow-up**: either a genuine
-/// new `.reKeying` state in `QAudionCallIntegration`'s FSM that can coexist
-/// with `.active`, or a parallel lightweight re-key primitive that reuses
-/// `PqcKeyExchange`/`CallSessionKeyBroker` directly without touching the
-/// one-shot setup FSM — reviewed and tested on a real device before it ships.
+/// Original 2026-08-21 note, for history: "AppState currently logs every
+/// tick it receives instead of acting on it — a genuine new `.reKeying`
+/// state in `QAudionCallIntegration`'s FSM, or a parallel lightweight
+/// re-key primitive, needs a scoped follow-up." That follow-up is done.
 ///
 /// The next re-key deadline is a function of the live Confidence Index C
 /// emitted by `ContactVoiceVerifier` (via `onScoreUpdated`, relayed through
@@ -91,17 +80,49 @@ public final class ReKeyScheduler: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var lastConfidence: Float = 1.0
     private var deadlineMs: Int64
+    /// W-REKEYFREEZE (2026-09-10) — the period [deadlineMs] was last (re)armed
+    /// with. Port of Android's `ReKeyScheduler.armedPeriodMs` (same file/class
+    /// name, `feature/feature-call/domain/ReKeyScheduler.kt`): live evidence
+    /// there was a real, otherwise-healthy call whose on-screen RE-KEY
+    /// countdown froze at the same value the whole call, because
+    /// `observeConfidence` compared each sample's freshly-computed period
+    /// against `remaining` (the countdown itself, shrinking every tick by
+    /// construction) — routine confidence-score jitter made `newPeriod`
+    /// fractionally lower than whatever was left almost every sample, so the
+    /// deadline reset to a fresh full period essentially every tick and the
+    /// countdown could never visibly drain. Comparing against the period the
+    /// deadline was actually armed with (this field), not the live
+    /// countdown, means only a genuine drop below that basis contracts it.
+    private var armedPeriodMs: Int64
     private var reKeyCount: Int = 0
     private var lastTriggerReason: String?
 
     public init() {
-        deadlineMs = Self.nowMs() + Self.basePeriodMs
+        let initialPeriod = Self.basePeriodMs
+        deadlineMs = Self.nowMs() + initialPeriod
+        armedPeriodMs = initialPeriod
     }
 
-    public func start() {
+    /// - Parameters:
+    ///   - syncedDeadlineMs / syncedPeriodMs: W-REKEYSYNC (2026-09-10) — when
+    ///     BOTH are given (this device adopting the peer's real advertised
+    ///     next-rekey period off the wire, see `AndroidHandshakeBundle
+    ///     .rekeyNextPeriodMs`'s doc), the countdown is armed directly from
+    ///     them instead of this device's own confidence guess. Mirrors
+    ///     Android's `ReKeyScheduler.start(syncedDeadlineMs:syncedPeriodMs:)`.
+    ///     Either omitted (the call's first handshake, or a peer that hasn't
+    ///     sent the field) falls back to the original confidence-based
+    ///     `resetDeadlineLocked`, unchanged.
+    public func start(syncedDeadlineMs: Int64? = nil, syncedPeriodMs: Int64? = nil) {
         stop()
         lock.lock()
-        resetDeadlineLocked(confidence: lastConfidence, reason: "session-start")
+        if let syncedDeadlineMs, let syncedPeriodMs, syncedPeriodMs > 0 {
+            deadlineMs = syncedDeadlineMs
+            armedPeriodMs = syncedPeriodMs
+            lastTriggerReason = "peer-synced"
+        } else {
+            resetDeadlineLocked(confidence: lastConfidence, reason: "session-start")
+        }
         lock.unlock()
 
         let t = DispatchSource.makeTimerSource(queue: tickQueue)
@@ -113,10 +134,13 @@ public final class ReKeyScheduler: @unchecked Sendable {
             var status: Status?
             self.lock.lock()
             let remaining = max(0, self.deadlineMs - now)
+            // W-REKEYFREEZE — armedPeriodMs (the stable basis), not a fresh
+            // periodForLocked(lastConfidence) recompute every tick; see that
+            // field's kdoc for why the latter froze the on-screen countdown.
             status = Status(
                 confidence: self.lastConfidence,
                 remainingMs: remaining,
-                periodMs: self.periodForLocked(self.lastConfidence),
+                periodMs: self.armedPeriodMs,
                 reKeyCount: self.reKeyCount,
                 lastTriggerReason: self.lastTriggerReason)
             if remaining == 0 { shouldTrigger = true }
@@ -133,6 +157,23 @@ public final class ReKeyScheduler: @unchecked Sendable {
         timer = nil
     }
 
+    /// Current status, readable synchronously at any time — e.g. so a
+    /// caller about to send a re-key OFFER can advertise the period THIS
+    /// device's scheduler is actually armed with (see
+    /// `AndroidHandshakeBundle.rekeyNextPeriodMs`'s doc). Mirrors Android's
+    /// `reKeyScheduler.status.value` (a `StateFlow`, readable the same way).
+    public var currentStatus: Status {
+        lock.lock()
+        defer { lock.unlock() }
+        let remaining = max(0, deadlineMs - Self.nowMs())
+        return Status(
+            confidence: lastConfidence,
+            remainingMs: remaining,
+            periodMs: armedPeriodMs,
+            reKeyCount: reKeyCount,
+            lastTriggerReason: lastTriggerReason)
+    }
+
     /// Feed the current Confidence Index (0..1). Low values shrink the
     /// deadline (faster re-key pace); see the class kdoc's formula.
     public func observeConfidence(_ c: Float) {
@@ -141,9 +182,13 @@ public final class ReKeyScheduler: @unchecked Sendable {
         lastConfidence = clamped
         let now = Self.nowMs()
         let newPeriod = periodForLocked(clamped)
-        let remaining = deadlineMs - now
-        if newPeriod < remaining {
+        // W-REKEYFREEZE — shrink the deadline only on a genuine drop below
+        // the period it was actually armed with, not against the live
+        // countdown (see `armedPeriodMs`'s kdoc for why that froze the
+        // on-screen timer).
+        if newPeriod < armedPeriodMs {
             deadlineMs = now + newPeriod
+            armedPeriodMs = newPeriod
         }
         lock.unlock()
     }
@@ -161,6 +206,7 @@ public final class ReKeyScheduler: @unchecked Sendable {
         lock.lock()
         let newPeriod = periodForLocked(lastConfidence)
         deadlineMs = now + newPeriod
+        armedPeriodMs = newPeriod
         reKeyCount += 1
         lastTriggerReason = reason
         let sequence = reKeyCount
@@ -178,6 +224,7 @@ public final class ReKeyScheduler: @unchecked Sendable {
     private func resetDeadlineLocked(confidence: Float, reason: String) {
         let newPeriod = periodForLocked(confidence)
         deadlineMs = Self.nowMs() + newPeriod
+        armedPeriodMs = newPeriod
         lastTriggerReason = reason
     }
 

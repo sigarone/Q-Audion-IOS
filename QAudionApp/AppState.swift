@@ -3458,7 +3458,13 @@ final class AppState: ObservableObject {
                     RTLog.warn("rekey", "tick #" + seq + " skipped — no active call/integration/peer")
                     return
                 }
-                let ok = await integration.performPqcReKey(callId: cid, peerId: peerId)
+                // W-REKEYSYNC (2026-09-10) — echo THIS device's own armed
+                // period on the OFFER so the responder can track the same
+                // real deadline instead of guessing independently. Read
+                // AFTER the tick (not the stale value from when the tick
+                // fired) so it reflects whatever `trigger()` just armed.
+                let armedPeriodMs = self.reKeyScheduler.currentStatus.periodMs
+                let ok = await integration.performPqcReKey(callId: cid, peerId: peerId, armedPeriodMs: armedPeriodMs)
                 RTLog.info("rekey", "tick #" + seq + " performPqcReKey result=" + String(ok))
             }
         }
@@ -12953,6 +12959,20 @@ final class AppState: ObservableObject {
                     ctrl.videoContactPsk = self.callVideoPsk
                 }
                 #endif
+            }
+        }
+        // W-REKEYSYNC (2026-09-10) — responder JSON path: adopt the
+        // initiator's real armed period instead of continuing to display
+        // this device's own independent confidence guess. DISPLAY-ONLY —
+        // the actual re-key already completed by the time this fires (see
+        // `onPeerRekeyPeriodAdvertised`'s doc). `start()` internally calls
+        // `stop()` first, so this is safe to call while the scheduler's
+        // main-call timer is already running.
+        integration.onPeerRekeyPeriodAdvertised = { [weak self] peerPeriodMs in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let deadline = Int64(Date().timeIntervalSince1970 * 1000) + peerPeriodMs
+                self.reKeyScheduler.start(syncedDeadlineMs: deadline, syncedPeriodMs: peerPeriodMs)
             }
         }
         // Phase 18 — v4 ratchet bootstrap from the call handshake (matches

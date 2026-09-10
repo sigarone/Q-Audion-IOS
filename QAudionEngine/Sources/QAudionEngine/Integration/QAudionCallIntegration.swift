@@ -577,6 +577,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// surface — does NOT affect any derivation. No-op when nil.
     public var onPqcSessionKeyEstablishedWithPsk: ((Data, String?) -> Void)?
 
+    /// W-REKEYSYNC (2026-09-10) — fires ONLY on the RESPONDER leg of a
+    /// re-key round (never round 1, never the initiator leg — this device
+    /// already knows its own armed period there) when the inbound OFFER
+    /// carried a validated `rekeyNextPeriodMs`. The app layer uses this to
+    /// arm its own `ReKeyScheduler` from the SAME real deadline the
+    /// initiator is acting on (`start(syncedDeadlineMs:syncedPeriodMs:)`),
+    /// instead of continuing to display an independent local guess. See
+    /// `AndroidHandshakeBundle.rekeyNextPeriodMs`'s doc for the full
+    /// rationale and the live divergence this closes. DISPLAY-ONLY — never
+    /// gates the actual re-key, which has already completed by the time
+    /// this fires.
+    public var onPeerRekeyPeriodAdvertised: ((Int64) -> Void)?
+
     /// Phase 18 — v4 bootstrap signal. Fires at every JSON handshake-completion
     /// site (OFFER accepted = responder, ACCEPT decapsulated = originator) AFTER
     /// ``onPqcSessionKeyEstablished``. Carries
@@ -1542,8 +1555,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// the key derived from it — the swap is naturally deferred, not
     /// optimistic, so there is nothing to revert if the ACCEPT never
     /// arrives.
+    /// - Parameter armedPeriodMs: W-REKEYSYNC (2026-09-10) — this device's
+    ///   own `ReKeyScheduler` period (ms) at the moment this round starts,
+    ///   i.e. how long until this device's OWN scheduler would next fire.
+    ///   Echoed on the OFFER as `rekeyNextPeriodMs` so the responder can
+    ///   track the SAME real deadline instead of guessing independently —
+    ///   see `AndroidHandshakeBundle.rekeyNextPeriodMs`'s doc. `nil` omits
+    ///   the field (byte-identical wire to a peer that hasn't shipped this).
     @discardableResult
-    public func performPqcReKey(callId: String, peerId: String, timeoutSec: Double = 8.0) async -> Bool {
+    public func performPqcReKey(callId: String, peerId: String, timeoutSec: Double = 8.0, armedPeriodMs: Int64? = nil) async -> Bool {
         let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
             guard isCaller, state == .active, pendingReKeyAttempt == nil else { return (false, nil) }
             return (true, retrySenderClosure)
@@ -1636,7 +1656,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `HandshakeTranscript.offerV3`'s doc for why the prior "round 1 only"
             // shape broke cross-platform transcript-hash equality.
             rekeyNonce: thisRoundNonce.base64EncodedString(),
-            rekeyRound: Int(thisRound)
+            rekeyRound: Int(thisRound),
+            // W-REKEYSYNC — see this function's `armedPeriodMs` param doc.
+            // Untrusted-input clamp mirrors Android: no legitimate
+            // ReKeyScheduler period ever falls outside (0, basePeriodMs].
+            rekeyNextPeriodMs: armedPeriodMs.flatMap { p -> Int? in
+                guard p > 0, p <= ReKeyScheduler.basePeriodMs else { return nil }
+                return Int(p)
+            }
         )
         // Stash the advert list (KCMAC needs it, same as the original
         // handshake) and sign the OFFER — same steps as
@@ -2693,6 +2720,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // DISPLAY-ONLY: surface the PSK fingerprint negotiated on this
             // responder OFFER path (`selectedFp`, in scope from step 4).
             onPqcSessionKeyEstablishedWithPsk?(combined, selectedFp)
+            // W-REKEYSYNC — only on a re-key round (never round 1, both
+            // sides already share the same ReKeyScheduler default there),
+            // and only when the peer sent a validated period. Untrusted
+            // network input: clamp to the same (0, basePeriodMs] range
+            // Android enforces before treating it as absent/fall back.
+            if isReKeyRound, let peerPeriod = bundle.rekeyNextPeriodMs,
+               peerPeriod > 0, Int64(peerPeriod) <= ReKeyScheduler.basePeriodMs {
+                onPeerRekeyPeriodAdvertised?(Int64(peerPeriod))
+            }
             // Phase 18 — v4 bootstrap (responder leg). Mirrors Android
             // PqcHandshake.kt:819-826 (`v4Ready`): self = our identity, peer = the
             // OFFER's signerIdentityKey (base64-decoded), transcriptHash = the
@@ -3948,7 +3984,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // CALL-3 — carried through verbatim from the input bundle, which
             // the OFFER/ACCEPT builders set BEFORE calling this function.
             rekeyNonce: bundle.rekeyNonce,
-            rekeyRound: bundle.rekeyRound
+            rekeyRound: bundle.rekeyRound,
+            // W-REKEYSYNC — same "carried through verbatim" rule; omitting
+            // this here would silently drop it from every SIGNED OFFER
+            // (the only kind actually sent when signing is enabled), since
+            // this function reconstructs the bundle field-by-field rather
+            // than copying it.
+            rekeyNextPeriodMs: bundle.rekeyNextPeriodMs
         )
     }
 

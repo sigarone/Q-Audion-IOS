@@ -291,6 +291,29 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     /// that hasn't shipped this fix.
     public let rekeyRound: Int?
 
+    /// W-REKEYSYNC (2026-09-10) — the INITIATOR's own `ReKeyScheduler`
+    /// period (ms) this OFFER was armed with, i.e. how long until this
+    /// device would schedule the NEXT periodic re-key after this one.
+    /// Purely informational, display-only: not part of any signed
+    /// transcript, carries no anti-replay or authentication weight, and
+    /// tampering with it in transit can only make the on-screen countdown
+    /// wrong — it cannot affect the actual key material, its rotation, or
+    /// when a real re-key runs. Mirrors Android's
+    /// `HandshakeBundleCodec.HandshakeBundle.rekeyNextPeriodMs` field
+    /// exactly (same name, same semantics) — added because the RESPONDER
+    /// previously ran its own independent confidence-scaled guess for what
+    /// it displays, with no relation to the timeline the initiator alone
+    /// actually acts on (live-observed 100+ second on-screen divergence
+    /// between two genuinely healthy devices on the same call). A responder
+    /// that understands this field adopts it directly via
+    /// `ReKeyScheduler.start(syncedDeadlineMs:syncedPeriodMs:)` instead of
+    /// guessing; one that doesn't (older iOS/Android/Desktop) simply never
+    /// sees the key — same "JSONEncoder omits nil" backward-compat
+    /// convention as every optional field above. `nil` on the call's first
+    /// (non-re-key) handshake, where both sides start from the same
+    /// `ReKeyScheduler` default and this class of drift cannot yet exist.
+    public let rekeyNextPeriodMs: Int?
+
     public init(
         kind: Kind,
         callId: String,
@@ -308,7 +331,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         sigV2: String? = nil,
         sigV3: String? = nil,
         rekeyNonce: String? = nil,
-        rekeyRound: Int? = nil
+        rekeyRound: Int? = nil,
+        rekeyNextPeriodMs: Int? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -327,6 +351,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.sigV3 = sigV3
         self.rekeyNonce = rekeyNonce
         self.rekeyRound = rekeyRound
+        self.rekeyNextPeriodMs = rekeyNextPeriodMs
     }
 }
 
