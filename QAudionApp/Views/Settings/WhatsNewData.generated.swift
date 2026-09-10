@@ -9,10 +9,18 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1143",
+              date: "2026-09-10",
+              title: "v1.0.1143",
+              bullets: [
+                "feat(audio): NACK/RTX loss repair for the custom sealed-audio wire",
+                "fix(call): port Android's rekey countdown freeze + cross-leg desync fix to iOS",
+              ]),
         .init(id: "v1.0.1142",
               date: "2026-09-10",
               title: "v1.0.1142",
               bullets: [
+                "chore: regenerate changelog for v1.0.1142",
                 "fix(audio): flip audio-srtp-v1 kill switch off, isolate defect vs legacy protocol",
               ]),
         .init(id: "v1.0.1141",
@@ -145,13 +153,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1124",
                 "feat(call): re-enable native audio-srtp with the AudioUnit settle-wait fix",
                 "fix(call): settle-wait before minting a fresh WebRTC factory on a fast call",
-              ]),
-        .init(id: "v1.0.1123",
-              date: "2026-09-09",
-              title: "v1.0.1123",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1123",
-                "fix(call): disable native audio-srtp again — two boundary fixes, both disproven",
               ]),
     ]
 }
