@@ -440,7 +440,21 @@ public enum CallCapabilities {
     /// was architectural, one layer below anything a flag flip could reach —
     /// and stays `true` here, unverified live until the next real
     /// call-to-call test, same discipline as every attempt above.
-    public static let audioSrtpSendEnabled: Bool = true
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-10, per user request — the whole
+    /// audio-srtp-v1 subsystem got a real, verified fix chain tonight (RX
+    /// playout injector wiring, resample, comfort-noise overwrite-not-add)
+    /// and the asymmetric-no-audio defect this session is chasing STILL
+    /// reproduced afterward on both iOS and Android, including Android↔Android
+    /// where this tag never applies at all. That raises a real, untested
+    /// question: whether the same class of defect predates audio-srtp-v1
+    /// entirely and already existed on the legacy sealed-DataChannel/WS-relay
+    /// path. Flipping this off forces every iOS call back onto that legacy
+    /// path regardless of what the peer advertises (symmetric intersection —
+    /// the tag can't appear in the agreed set if iOS never offers it), which
+    /// is exactly what isolates the two hypotheses. Not a verdict either way;
+    /// a controlled test. Revert to `true` once this comparison is done.
+    public static let audioSrtpSendEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
