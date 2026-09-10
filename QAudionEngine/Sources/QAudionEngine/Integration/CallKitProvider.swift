@@ -436,7 +436,21 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 onAudioSessionActivated?()
                 return
             } catch {
-                print("[CallKitProvider] setActive retry \(attempt) site=\(logSite): \(error.localizedDescription)")
+                // W-SETACTIVEFAIL (2026-09-10) — the live device trace that
+                // led here showed OUR OWN setActive(true) failing with real,
+                // never-before-diagnosed AVAudioSession errors ("Session
+                // activation failed", "Must call ... before calling this
+                // method") right as `RTCAudioSession`'s shared
+                // activationCount climbed anyway from an INDEPENDENT
+                // increment (WebRTC's own internal InitPlayOrRecord) —
+                // exactly the state a later native AudioUnit Start() then
+                // rejected with a generic CoreAudio error. Only
+                // `localizedDescription` was logged before, which is
+                // apparently redacted client-side for some of these
+                // messages — the numeric code and the session's own
+                // activationCount/isActive at the moment of failure are not.
+                let nsErr = error as NSError
+                print("[CallKitProvider] setActive retry \(attempt) site=\(logSite) code=\(nsErr.code) activationCount=\(rtcSession.activationCount) isActive=\(rtcSession.isActive ? 1 : 0): \(error.localizedDescription)")
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
             }
         }
