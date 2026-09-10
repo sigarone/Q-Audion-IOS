@@ -85,4 +85,49 @@ final class CallCapabilitiesAudioSrtpEarbudInvariantTests: XCTestCase {
     func test_audioSrtpV1_matchesAndroidsByteExactWireString() {
         XCTAssertEqual(CallCapabilities.audioSrtpV1, "audio-srtp-v1")
     }
+
+    // MARK: - W-AUDIOSRTPDEBUGTOGGLE
+
+    /// `audioSrtpDebugOverride` is shared mutable state (a `static var`,
+    /// deliberately not per-instance — see its own doc). Every test that
+    /// touches it MUST leave it at `nil` afterward, or it leaks into
+    /// `test_nonEarbudCaps_trackAudioSrtpSendEnabledsOwnValue_...` above
+    /// (which asserts the NO-override default) and every other test in this
+    /// file — this teardown is not optional cleanliness, it is correctness.
+    override func tearDown() {
+        CallCapabilities.audioSrtpDebugOverride = nil
+        super.tearDown()
+    }
+
+    func test_debugOverrideTrue_forcesAudioSrtpV1IntoLocalCaps_onANonEarbudCall() {
+        CallCapabilities.audioSrtpDebugOverride = true
+        let caps = CallCapabilities.localCaps(earbudActive: false)
+        XCTAssertTrue(caps.contains(CallCapabilities.audioSrtpV1))
+    }
+
+    func test_debugOverrideFalse_removesAudioSrtpV1FromLocalCaps_onANonEarbudCall() {
+        CallCapabilities.audioSrtpDebugOverride = false
+        let caps = CallCapabilities.localCaps(earbudActive: false)
+        XCTAssertFalse(caps.contains(CallCapabilities.audioSrtpV1))
+    }
+
+    /// The one invariant this feature must never break: an earbud call's
+    /// incompatibility with native RTP audio is a HARDWARE fact, not a
+    /// preference — the debug override must not be able to force it back on
+    /// for an earbud call under any circumstance.
+    func test_debugOverrideTrue_doesNotResurrectAudioSrtpV1_onAnEarbudCall() {
+        CallCapabilities.audioSrtpDebugOverride = true
+        let caps = CallCapabilities.localCaps(earbudActive: true, earbudPaired: true)
+        XCTAssertFalse(
+            caps.contains(CallCapabilities.audioSrtpV1),
+            "earbud incompatibility must win over the debug override"
+        )
+    }
+
+    func test_clearingTheDebugOverrideBackToNil_revertsToTheCompiledDefault() {
+        CallCapabilities.audioSrtpDebugOverride = !CallCapabilities.audioSrtpSendEnabled
+        CallCapabilities.audioSrtpDebugOverride = nil
+        let caps = CallCapabilities.localCaps(earbudActive: false)
+        XCTAssertEqual(CallCapabilities.audioSrtpSendEnabled, caps.contains(CallCapabilities.audioSrtpV1))
+    }
 }

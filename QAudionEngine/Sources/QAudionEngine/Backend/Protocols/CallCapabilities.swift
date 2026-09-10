@@ -773,8 +773,38 @@ public enum CallCapabilities {
         if paired {
             caps = caps.filter { $0 != audioSrtpV1 }
         }
+        // W-AUDIOSRTPDEBUGTOGGLE (2026-09-10) — runtime override so
+        // audio-srtp-v1 vs the custom sealed-audio wire can be A/B tested
+        // without a new TestFlight build. Applied AFTER the earbud gate
+        // above, never before: an earbud call's structural incompatibility
+        // with native RTP audio is a hardware fact (no frame-content
+        // observation hook on the zero-knowledge relay path), not a
+        // preference, and must never be overridable. Mirrors Android
+        // `CallCapabilities.localCaps`'s identical ordering.
+        if !paired, let override = audioSrtpDebugOverride {
+            caps = override
+                ? (caps.contains(audioSrtpV1) ? caps : caps + [audioSrtpV1])
+                : caps.filter { $0 != audioSrtpV1 }
+        }
         return earbudActive ? caps + [earbudRelayV1] : caps
     }
+
+    /// W-AUDIOSRTPDEBUGTOGGLE — in-memory-only runtime override for whether
+    /// THIS build advertises ``audioSrtpV1``, read by
+    /// ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``
+    /// on every call. `nil` (the default) means "follow
+    /// ``audioSrtpSendEnabled`` as compiled," exactly today's behavior.
+    /// `true`/`false` forces the advertisement on/off for every call from
+    /// this device until changed again or the process restarts —
+    /// deliberately NOT persisted to `UserDefaults`: this is a live A/B
+    /// testing knob, not a standing preference, and resetting to the
+    /// compiled default on a fresh process is the safer failure mode for a
+    /// flag this sensitive. Exposed unconditionally in the Settings
+    /// "SVILUPPATORE" section (not `#if DEBUG`-gated): unlike the Android
+    /// twin, this build reaches testers ONLY via TestFlight, which builds
+    /// Release — a `#if DEBUG` gate would make the control unreachable in
+    /// the exact build this exists to test with.
+    public static var audioSrtpDebugOverride: Bool?
 
     /// #2a gate (Android parity): did the PEER advertise
     /// ``earbudRelayV1`` in its RAW call-setup capability list,
