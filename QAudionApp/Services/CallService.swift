@@ -750,6 +750,20 @@ final class CallService: @unchecked Sendable {
     /// injector's own ring buffer is small (default 1s) and a call boundary
     /// without this is a cosmetic risk, not a crash.
     public var resetNativePlayoutInjector: (() -> Void)?
+    /// W-AUNITCALLDIDINIT (2026-09-10) — fired once per call teardown so
+    /// AppState can log whether WebRTC's own native audio unit ever
+    /// actually reached the "started" state THIS call, cheaply (no WebRTC
+    /// fork patch/rebuild needed): the live-test correlation this closes is
+    /// that on the SAME device, call #2 never re-entered WebRTC's own
+    /// per-call audio-session configuration path at all — no
+    /// InitPlayOrRecord/aunit init/StartPlayout/StartRecording — while call
+    /// #1 (and the recovery-corrected activationCount arithmetic
+    /// immediately preceding call #2's setup) did. That was found by manual
+    /// cross-referencing of already-bridged `aunit` log lines against call
+    /// boundaries in a raw log pull; this makes it a single line per call
+    /// end instead of a manual log-diving session every time. `nil` (no
+    /// wiring) just skips the diagnostic.
+    public var onAudioTeardownDiag: (() -> Void)?
 
     /// W-SRTPCOUNTERS (2026-08-29) — "how much audio has this call actually
     /// protected and moved", answered from whichever path is really carrying
@@ -3011,6 +3025,7 @@ final class CallService: @unchecked Sendable {
         audioPlayback = nil
         audioPipeline = nil
         resetNativePlayoutInjector?()
+        onAudioTeardownDiag?()
         framesEncryptedTx = 0
         framesDecryptedRx = 0
         // W-NETVIS — reset the wire-byte counters AND the derived readouts, so

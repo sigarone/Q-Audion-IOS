@@ -542,6 +542,17 @@ final class AppState: ObservableObject {
     /// (`endCall` reset and the speaker toggle), so `private(set)` is exact.
     @Published private(set) var callSpeakerOn: Bool = false
 
+    /// W-AUNITCALLDIDINIT (2026-09-10) — accumulates the `kind`s of every
+    /// `aunit` native-audio-lifecycle event bridged during the CURRENT call
+    /// (see `onNativeAudioLifecycleEvent`'s wiring below), checked and
+    /// cleared once per call at `CallService.onAudioTeardownDiag`'s own
+    /// kdoc for why: a live-test correlation found call #2 in a two-call
+    /// test never re-entered WebRTC's own per-call audio-session
+    /// configuration path at all (no InitPlayOrRecord/StartPlayout/
+    /// StartRecording), while call #1 did — this turns that manual raw-log
+    /// cross-reference into one log line per call end.
+    private var aunitEventsSeenThisCall: Set<String> = []
+
     /// W-MUTEBTNSRC (2026-07-24) — the observable mirror of `CallService.isMuted`,
     /// the same shape `callSpeakerOn` already has for the route.
     ///
@@ -4585,12 +4596,30 @@ final class AppState: ObservableObject {
         // into the same `RTLog` "call" stream every other audio diagnostic
         // line already reaches Loki through. See
         // QAudionPeerConnectionFactory.onNativeAudioLifecycleEvent's kdoc.
-        QAudionPeerConnectionFactory.shared.onNativeAudioLifecycleEvent = { kind, code in
+        QAudionPeerConnectionFactory.shared.onNativeAudioLifecycleEvent = { [weak self] kind, code in
+            self?.aunitEventsSeenThisCall.insert(kind)
             if let code {
                 RTLog.info("call", "aunit \(kind)=1 code=\(code)")
             } else {
                 RTLog.info("call", "aunit \(kind)=1")
             }
+        }
+        // W-AUNITCALLDIDINIT (2026-09-10) — see `aunitEventsSeenThisCall`'s
+        // own kdoc. `started` is the definitive "the real native VoIP audio
+        // unit actually came up" signal (WebRTC's own "Voice-Processing I/O
+        // audio unit is now started" line) — distinct from `init`, which
+        // some failure shapes reach without ever completing.
+        callService.onAudioTeardownDiag = { [weak self] in
+            guard let self else { return }
+            // "cdi" (call-did-init), not the longer spelled-out key: the
+            // token "calldidinit=1" is 13 characters and would trip the
+            // shipper's RE_RESIDUAL_B64 12-char-run redactor (see the
+            // "12-CHARACTER RULE" comment on CallService's own RX heartbeat
+            // for the full explanation) — same reason every other numeric
+            // diagnostic key in this codebase stays terse.
+            let started = self.aunitEventsSeenThisCall.contains("started")
+            RTLog.warn("call", "aunit cdi=\(started ? 1 : 0)")
+            self.aunitEventsSeenThisCall.removeAll()
         }
         // W-RXFALLBACKINJECT (2026-09-10) — no per-call `webRtcController`
         // lookup needed, unlike the live-getters above: the injector lives
@@ -18402,10 +18431,15 @@ extension AppState {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 let sender = ChatMessageSendService(appState: self)
+                // W-CTLNORATCHET (2026-09-10) — sender_key_init/rotate must
+                // never share the real-chat ratchet's chain/skip-key state
+                // with this peer. See encryptForWire's forceStatelessFormat
+                // doc for the live incident this closes.
                 let outcome = await sender.sendEncrypted(
                     messageId: UUID(),
                     peerUserId: recipient,
-                    plaintext: envelopeJson)
+                    plaintext: envelopeJson,
+                    forceStatelessFormat: true)
                 switch outcome {
                 case .delivered, .sent:
                     break
