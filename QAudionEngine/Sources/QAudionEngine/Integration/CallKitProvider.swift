@@ -458,6 +458,40 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
         #endif
         rtcSession.lockForConfiguration()
+        // W-NEGATIVEFLOOR (2026-09-10) — live evidence tonight, right after
+        // W-DRAINACTIVATION shipped: `activationCount` went NEGATIVE (-1)
+        // between one call ending and the next starting. Confirmed from
+        // WebRTC's own `RTCAudioSession.mm` source: `decrementActivationCount`
+        // has NO floor at 0 — `reportCallEnded`'s drain loop correctly
+        // stopped at exactly 0, but WebRTC's OWN internal deactivate
+        // (`ShutdownPlayOrRecord`/`UnconfigureAudioSession`, tied to the
+        // peer connection's async native teardown) fired a moment LATER,
+        // after the drain had already returned, decrementing an
+        // already-zeroed counter below 0 — exactly the race the drain
+        // fix's own external review flagged as a residual risk. Waiting for
+        // that teardown to finish first is not an option (confirmed
+        // repeatedly tonight: no completion signal exists for it).
+        // Symmetric fix instead: pay off any such deficit HERE, at the one
+        // point every call-start path already funnels through, rather than
+        // chasing the unpredictable tail end of the previous call. Same
+        // safe idiom as the drain loop — `setActive(true)`'s own
+        // `shouldSetActive` only depends on `!isActive`, not the exact
+        // count, so redundant activate calls from a negative baseline are
+        // still no-ops against real hardware beyond the first.
+        if rtcSession.activationCount < 0 {
+            let maxCorrectionIterations = 10
+            var corrected = 0
+            while rtcSession.activationCount < 0 && corrected < maxCorrectionIterations {
+                do {
+                    try rtcSession.setActive(true)
+                } catch {
+                    print("[CallKitProvider] setActive(true) floor-correction fail site=\(logSite) iter=\(corrected) code=\((error as NSError).code) err=\(error.localizedDescription)")
+                    break
+                }
+                corrected += 1
+            }
+            print("[CallKitProvider] \(logSite) corrected negative activationCount iterations=\(corrected) activationCount=\(rtcSession.activationCount)")
+        }
         do {
             try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         } catch {
