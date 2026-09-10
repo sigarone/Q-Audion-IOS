@@ -4583,6 +4583,16 @@ final class AppState: ObservableObject {
                 RTLog.info("call", "aunit \(kind)=1")
             }
         }
+        // W-RXFALLBACKINJECT (2026-09-10) — no per-call `webRtcController`
+        // lookup needed, unlike the live-getters above: the injector lives
+        // on the shared, process-lifetime factory. See
+        // `CallService.playDecodedLegacyPcm`'s kdoc for what this closes.
+        callService.injectNativePlayoutPCM = { pcm in
+            QAudionPeerConnectionFactory.shared.playoutInjector.inject(pcm)
+        }
+        callService.resetNativePlayoutInjector = {
+            QAudionPeerConnectionFactory.shared.playoutInjector.resetForNewCall()
+        }
         // W-MEDIADEADSRTP (2026-08-29) — same live-getter pattern: hand the
         // media-dead watchdog the audio RX byte counter so an `audio-srtp-v1`
         // call has a liveness source at all. Without this it saw only the

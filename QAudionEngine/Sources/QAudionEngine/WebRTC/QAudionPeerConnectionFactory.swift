@@ -33,6 +33,16 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// since `QAudionApp`'s `RTLog` isn't reachable from this module.
     public var onNativeAudioLifecycleEvent: ((_ kind: String, _ code: Int32?) -> Void)?
 
+    /// W-RXFALLBACKINJECT (2026-09-10) — process-lifetime, attached as
+    /// `renderPreProcessingDelegate` in `buildFactory()` below. Unlike
+    /// `NativeAudioCaptureTap` (a fresh per-call instance on the strictly
+    /// per-call `QAudionPeerConnection`, since its `sink` closure captures
+    /// per-call TX routing state), this needs no per-call state of its own —
+    /// see `NativeAudioPlayoutInjector`'s own doc for the full rationale and
+    /// the failure this closes. `CallService.injectNativePlayoutPCM` is
+    /// wired straight to `playoutInjector.inject(_:)` by AppState at login.
+    public let playoutInjector = NativeAudioPlayoutInjector()
+
     private init() {}
 
     /// Lazy accessor for the underlying RTCPeerConnectionFactory. Callers
@@ -155,15 +165,22 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
 
         let encoderFactory = HevcPreferredVideoEncoderFactory()
         let decoderFactory = HevcPreferredVideoDecoderFactory()
-        // nil config/delegates = APM defaults (unchanged AEC/NS/AGC/HPF
-        // toggle state versus today — same as LiveKit's own `.init()`, whose
-        // designated initializer's params are all nullable so this is
-        // equivalent). Delegates are attached later, per-call, via
-        // `capturePostProcessingDelegate` — see `NativeAudioCaptureTap`.
+        // nil config = APM defaults (unchanged AEC/NS/AGC/HPF toggle state
+        // versus today — same as LiveKit's own `.init()`, whose designated
+        // initializer's params are all nullable so this is equivalent).
+        // `capturePostProcessingDelegate` is attached later, per-call — see
+        // `NativeAudioCaptureTap`'s own doc for why that one needs a fresh
+        // instance per call while `renderPreProcessingDelegate` below does
+        // not.
         let audioProcessingModule = RTCDefaultAudioProcessingModule(
             config: nil,
             capturePostProcessingDelegate: nil,
-            renderPreProcessingDelegate: nil)
+            // W-RXFALLBACKINJECT (2026-09-10) — was `nil`; see
+            // `playoutInjector`'s own doc and `NativeAudioPlayoutInjector`'s
+            // file-level doc for why this process-lifetime delegate is safe
+            // to attach unconditionally (a no-op on every call until
+            // something is actually queued via `inject(_:)`).
+            renderPreProcessingDelegate: playoutInjector)
 
         let factory = RTCPeerConnectionFactory(
             audioDeviceModuleType: .platformDefault,

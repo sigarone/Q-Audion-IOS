@@ -90,7 +90,8 @@ public final class NativeAudioCaptureTap: NSObject, RTCAudioCustomProcessingDele
         var channels: [[Float]] = []
         channels.reserveCapacity(channelCount)
         for ch in 0..<channelCount {
-            channels.append(Array(UnsafeBufferPointer(start: audioBuffer.rawBuffer(forChannel: ch), count: frameCount)))
+            let raw = UnsafeBufferPointer(start: audioBuffer.rawBuffer(forChannel: ch), count: frameCount)
+            channels.append(Self.floatS16ToNormalized(raw))
         }
 
         guard let inBuffer = Self.planarFloatBuffer(channels: channels, sampleRate: processingSampleRate) else { return }
@@ -108,6 +109,35 @@ public final class NativeAudioCaptureTap: NSObject, RTCAudioCustomProcessingDele
         converter = nil
         converterInputFormat = nil
         lock.unlock()
+    }
+
+    /// W-CAPSCALEFIX (2026-09-10) — `RTCAudioBuffer.rawBuffer(forChannel:)`
+    /// returns `webrtc::AudioBuffer::channels()` UNSCALED (grep-verified
+    /// against `RTCAudioBuffer.mm`'s real implementation at the pinned
+    /// commit: `return _audioBuffer->channels()[channel];`, no rescale). That
+    /// C++ class stores samples in WebRTC's own "FloatS16" convention —
+    /// `float [-32768.0, 32768.0]`, the SAME scale as an `int16_t` sample
+    /// just widened to `float` — per `common_audio/include/audio_util.h`'s
+    /// own documented naming convention for every `S16`/`Float`/`FloatS16`
+    /// conversion helper in that file. `planarFloatBuffer` below packages
+    /// its input into an `AVAudioPCMBuffer` tagged `.pcmFormatFloat32`, and
+    /// `NativeAudioPcmTap.int16LEData`'s `AVAudioConverter` step (reused
+    /// here) treats ANY `.pcmFormatFloat32` buffer as Core Audio's own
+    /// normalized convention — `float [-1.0, 1.0]` — when it rescales to
+    /// Int16. Feeding it raw FloatS16 samples unscaled meant real speech
+    /// (routinely hundreds to low thousands in FloatS16 units) was ~32768x
+    /// louder than the converter's assumed full scale, so it hard-clipped to
+    /// +/-32767 for nearly every non-near-zero sample — this file's own test
+    /// suite (`NativeAudioCaptureTapTests`, `[0.1, -0.2, 0.3...]`/sine*0.5)
+    /// only ever exercised `planarFloatBuffer` directly with already-
+    /// normalized input, so this never had coverage. This divide-by-32768
+    /// step is the missing FloatS16 -> normalized-Float32 conversion,
+    /// applied once, right at the point the raw native buffer is read —
+    /// everything downstream (`planarFloatBuffer`, `int16LEData`) already
+    /// expects Core Audio's normalized convention and needs no other change.
+    static func floatS16ToNormalized(_ samples: UnsafeBufferPointer<Float>) -> [Float] {
+        let scale: Float = 1.0 / 32768.0
+        return samples.map { $0 * scale }
     }
 
     /// Wraps planar (non-interleaved) Float32 channel data — the exact shape

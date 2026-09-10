@@ -68,6 +68,36 @@ final class NativeAudioCaptureTapTests: XCTestCase {
         XCTAssertNil(NativeAudioCaptureTap.planarFloatBuffer(channels: [[1, 2, 3]], sampleRate: 0))
     }
 
+    // MARK: - floatS16ToNormalized (W-CAPSCALEFIX)
+
+    /// `RTCAudioBuffer.rawBuffer(forChannel:)` returns WebRTC's native
+    /// "FloatS16" scale (`float [-32768, 32768]`, verified against
+    /// `RTCAudioBuffer.mm`'s real source — see the fix's own doc comment).
+    /// A real speech sample near full scale must land close to +/-1.0 after
+    /// this conversion, matching Core Audio's normalized Float32 convention
+    /// that `planarFloatBuffer`/`int16LEData` downstream both assume.
+    func test_floatS16ToNormalized_scalesFullRangeToUnitRange() {
+        let samples: [Float] = [32768, -32768, 16384, -16384, 0]
+        let result = samples.withUnsafeBufferPointer { NativeAudioCaptureTap.floatS16ToNormalized($0) }
+
+        XCTAssertEqual(result, [1.0, -1.0, 0.5, -0.5, 0.0])
+    }
+
+    /// A typical real speech-level FloatS16 sample (a few thousand, not
+    /// full-scale) must NOT already be clipped/out-of-range after scaling —
+    /// this is exactly the case the pre-fix code hard-clipped to +/-32767
+    /// on the Int16 conversion, since it left samples like these unscaled
+    /// (thousands) where the downstream converter expected <= 1.0.
+    func test_floatS16ToNormalized_typicalSpeechSampleStaysWithinUnitRange() {
+        let samples: [Float] = [3000, -3000]
+        let result = samples.withUnsafeBufferPointer { NativeAudioCaptureTap.floatS16ToNormalized($0) }
+
+        for value in result {
+            XCTAssertLessThanOrEqual(abs(value), 1.0, "a normalized sample must never exceed Core Audio's +/-1.0 Float32 convention")
+        }
+        XCTAssertEqual(result[0], 3000.0 / 32768.0, accuracy: 0.0001)
+    }
+
     // MARK: - End-to-end: planarFloatBuffer -> int16LEData (the real audioProcessingProcess path)
 
     /// The scenario `audioProcessingProcess` hits on every real call: mono

@@ -721,6 +721,25 @@ final class CallService: @unchecked Sendable {
     /// see `consecutiveAudioSrtpWedges`'s own kdoc for what this recovers
     /// from.
     public var resetAudioSrtpFactory: (() -> Void)?
+    /// W-RXFALLBACKINJECT (2026-09-10) — hand a decoded legacy-relay PCM
+    /// frame to WebRTC's own still-live native audio pipeline instead of
+    /// this device's (never started) `AudioCapture` engine. Wired once at
+    /// login by AppState straight to `QAudionPeerConnectionFactory.shared`'s
+    /// process-lifetime `NativeAudioPlayoutInjector` — unlike
+    /// `muteNativeAudioSrtpSender`/`getUsesNativeAudioSrtp` above, this needs
+    /// no per-call `webRtcController` lookup, because the injector lives on
+    /// the shared factory, not on any per-call object. See
+    /// `playDecodedLegacyPcm`'s own kdoc for the failure this closes. `nil`
+    /// (no wiring, e.g. a test double) makes `playDecodedLegacyPcm`
+    /// byte-for-byte what it was before this existed.
+    public var injectNativePlayoutPCM: ((Data) -> Void)?
+    /// W-RXFALLBACKINJECT (2026-09-10) — drops any audio the injector above
+    /// still has queued when a call ends, so it cannot bleed into the next
+    /// call's render stream. Wired once at login, called from
+    /// `teardownAudioStack`. `nil` (no wiring) just skips the reset — the
+    /// injector's own ring buffer is small (default 1s) and a call boundary
+    /// without this is a cosmetic risk, not a crash.
+    public var resetNativePlayoutInjector: (() -> Void)?
 
     /// W-SRTPCOUNTERS (2026-08-29) — "how much audio has this call actually
     /// protected and moved", answered from whichever path is really carrying
@@ -1573,7 +1592,7 @@ final class CallService: @unchecked Sendable {
         // playout is entirely local to this service, unlike the wire
         // announces above.
         integration.onFecRecoveredAudio = { [weak self] pcm in
-            self?.audioCapture?.playFrame(pcm)
+            self?.playDecodedLegacyPcm(pcm)
         }
 
         // NOTE: do NOT call `integration.onCallSetupStarted` here.
@@ -1818,7 +1837,7 @@ final class CallService: @unchecked Sendable {
         // W-FECDECODE — mirror the outgoing-side wiring 1:1, same reasoning
         // as `onOwnerContinuityStateChanged` above.
         integration.onFecRecoveredAudio = { [weak self] pcm in
-            self?.audioCapture?.playFrame(pcm)
+            self?.playDecodedLegacyPcm(pcm)
         }
         // For incoming calls the PQC handshake started before answer, so
         // engine.initialize() has already run — apply tuner prefs now.
@@ -2077,7 +2096,7 @@ final class CallService: @unchecked Sendable {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 framesDecryptedRx &+= 1
                 noteRealInboundDecode()
-                audioCapture?.playFrame(pcm)  // single-engine: playback lives on the capture engine
+                playDecodedLegacyPcm(pcm)  // single-engine: playback lives on the capture engine (or native, see kdoc)
             } catch {
                 rxDecryptErrorCount &+= 1
                 noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
@@ -2377,6 +2396,48 @@ final class CallService: @unchecked Sendable {
         RTLog.info("call", line)
     }
 
+    /// W-RXFALLBACKINJECT (2026-09-10) — single chokepoint for every decoded
+    /// legacy-relay PCM frame that needs to reach a speaker. Two real
+    /// destinations exist:
+    ///
+    /// 1. `audioCapture`'s own `AVAudioEngine` — the legacy pipeline's
+    ///    player node, already running whenever this device's own capture+
+    ///    playback engine is live (`audioSrtpFallbackActive`, or no native
+    ///    audio-srtp negotiated at all — see `startAudioIOIfReady`'s
+    ///    IOS-C4b guard).
+    /// 2. `injectNativePlayoutPCM` — WebRTC's own still-live native
+    ///    VoiceProcessingIO unit (`NativeAudioPlayoutInjector`, attached as
+    ///    `RTCDefaultAudioProcessingModule.renderPreProcessingDelegate`),
+    ///    for the device whose OWN native audio-srtp is healthy — so IOS-C4b
+    ///    never starts `audioCapture`'s engine, correctly avoiding a second
+    ///    duplex audio stack fighting the live native unit for the mic/
+    ///    speaker — but which is still receiving REAL relayed audio because
+    ///    the PEER's own send fell back to the legacy path.
+    ///
+    /// Before this existed, case 2 had no destination: the PCM reached
+    /// `audioCapture?.playFrame(pcm)` with the engine never running and was
+    /// silently dropped at `AudioCapture.scheduleForPlayout`'s guard —
+    /// confirmed live via `call.audio.diag` telemetry across 3 independent
+    /// test calls: the receiving device showed `playout_dropped` in the
+    /// thousands and `speaker_route_ever=false`, while its OWN `va_results`
+    /// (Guardian voice-analysis, fed from the SAME decoded PCM) confirmed
+    /// decode was genuinely succeeding — the audio was decoded correctly and
+    /// thrown away, never a decode failure.
+    private func playDecodedLegacyPcm(_ pcm: Data) {
+        if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
+            injectNativePlayoutPCM?(pcm)
+            return
+        }
+        guard let cap = audioCapture else {
+            if !loggedRxNoPlayback {
+                loggedRxNoPlayback = true
+                print("[CallService] RX: decrypted frame but audioCapture is nil — not audible")
+            }
+            return
+        }
+        cap.playFrame(pcm)
+    }
+
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data,
                                              callId: String? = nil,
                                              rxTransport: AudioRxTransport = .wsRelay) {
@@ -2496,13 +2557,10 @@ final class CallService: @unchecked Sendable {
                     self.loggedFirstRxDecrypt = true
                     print("[CallService] RX: first frame DECRYPTED ok — AEAD+Opus decode live")
                 }
-                if let cap = self.audioCapture {
-                    // single-engine: playback runs on the capture engine's player node
-                    cap.playFrame(pcm)
-                } else if !self.loggedRxNoPlayback {
-                    self.loggedRxNoPlayback = true
-                    print("[CallService] RX: decrypted frame but audioCapture is nil — not audible")
-                }
+                // single-engine: playback runs on the capture engine's player
+                // node, or on WebRTC's own native pipeline — see
+                // playDecodedLegacyPcm's kdoc for the routing decision.
+                self.playDecodedLegacyPcm(pcm)
                 if self.framesDecryptedRx % 250 == 0 {
                     // W-IOSAUDIOSTARVE (2026-08-02): was
                     // "<n> frames decrypted+played" — prose, which
@@ -2934,6 +2992,7 @@ final class CallService: @unchecked Sendable {
         audioPlayback?.stop()
         audioPlayback = nil
         audioPipeline = nil
+        resetNativePlayoutInjector?()
         framesEncryptedTx = 0
         framesDecryptedRx = 0
         // W-NETVIS — reset the wire-byte counters AND the derived readouts, so
