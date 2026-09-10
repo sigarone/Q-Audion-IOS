@@ -452,10 +452,21 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// 1053/1056/1066 manual-mode regression class.
     private func activateAudioSession(logSite: String) async {
         let rtcSession = RTCAudioSession.sharedInstance()
+        // W-NOMIXOPTION (2026-09-10) — best-practices audit: `.interruptSpoken
+        // AudioAndMixWithOthers` is Apple's documented option for apps whose
+        // OWN audio is occasional and spoken over background audio
+        // (navigation, exercise) — never intended for continuous full-duplex
+        // telephony, and Apple's own docs say to pair it with `duckOthers`
+        // "unless you have a specific reason not to", which this app never
+        // did. It also asks iOS to treat the session as mixable/non-exclusive,
+        // in tension with what a voice-processing (echo-cancelling) I/O unit
+        // needs to do its job. The vendored WebRTC engine's own default
+        // `RTCAudioSessionConfiguration` never sets it — only
+        // `allowBluetoothHFP`/`allowBluetooth`. Matching that default exactly.
         #if !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
         rtcSession.lockForConfiguration()
         // W-NEGATIVEFLOOR (2026-09-10) — live evidence tonight, right after
@@ -562,18 +573,36 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
-        let audioSession = AVAudioSession.sharedInstance()
+        // W-RTCLOCKMIGRATE-2 (2026-09-10) — this was the one remaining raw
+        // `AVAudioSession.sharedInstance().setCategory(...)` call in this
+        // file made OUTSIDE both `provider(_:didActivate:)` (CallKit's own
+        // blessed "outside" channel, forwarded via `audioSessionDidActivate`)
+        // and `RTCAudioSession`'s lock — invisible to its bookkeeping
+        // regardless of the locked `activateAudioSession` call moments
+        // later. Found via a best-practices audit matching a pattern
+        // several Apple Developer Forums threads describe: an app's own
+        // AVAudioSession mutation outside both the CallKit delegate
+        // callbacks and RTCAudioSession's lock can race CallKit's own
+        // internal activation — silently no-op'ing it, or leaving a later
+        // AudioUnit Start() blocked against a HAL state that never
+        // converged. Matches two of the three failure signatures
+        // reproduced live tonight. Migrated to the same locked path
+        // `activateAudioSession` already uses; timing is unchanged — this
+        // still runs before `reportOutgoingCall`/`fulfill()`.
+        let rtcSession = RTCAudioSession.sharedInstance()
         #if !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
+        rtcSession.lockForConfiguration()
         do {
-            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+            try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         } catch {
             // W-SIGSWALLOW (2026-09-01) — was `try?`; log the OSStatus, keep the flow.
             print("[CallKitProvider] setCategory fail site=start code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
+        rtcSession.unlockForConfiguration()
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
         // W-CKSTARTACTIVATE (2026-09-09) — the answer side has had this
@@ -636,10 +665,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // AudioProcessingPipeline.configureForVoIP(): if CallKit installs
         // a poorer category (e.g. no .defaultToSpeaker) it silently
         // downgrades the routing the app just configured.
+        // W-NOMIXOPTION (2026-09-10) — see `activateAudioSession`'s own kdoc;
+        // kept in sync per this method's own W464 comment above.
         #if !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
         do {
             try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)

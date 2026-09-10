@@ -159,10 +159,12 @@ public final class AudioProcessingPipeline {
         // environment, they can enable AEC in Settings → Chiamate →
         // Echo Cancellation to re-activate VP-IO. For the common
         // earpiece case, no AEC is needed.
+        // W-NOMIXOPTION (2026-09-10) — see `CallKitProvider.activateAudioSession`'s
+        // kdoc; kept in sync per this method's own W464-referenced invariant.
         #if os(iOS) && !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
 
