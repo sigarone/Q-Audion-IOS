@@ -44,7 +44,8 @@ import CryptoKit
 /// parameter TYPE in a method signature on a new file BREAKS THE
 /// BUILD silently (Swift 6 strict concurrency Sendable inference
 /// explodes on AppState's many @Published properties). The closure
-/// approach captures only the specific values needed (token, userId)
+/// approach captures only the specific values/behaviors needed (token,
+/// userId, and — since 2026-09-10 — a way to ask for a token refresh)
 /// without dragging the whole AppState type into the signature.
 /// See CLAUDE.md "Hard-won lesson 16" for the full story.
 ///
@@ -132,10 +133,23 @@ public final class LiveLogStreamer {
 
     public typealias TokenProvider = @MainActor () -> String?
     public typealias UserIdProvider = @MainActor () -> String?
+    /// W-LIVELOGAUTHREFRESH (2026-09-10) — ask the caller (AppState) to run
+    /// its OWN existing, single-flight-coalesced refresh cascade
+    /// (`runProactiveRefresh()`) and returns once it settles, success or
+    /// failure either way. Deliberately does NOT hand this streamer a
+    /// refresh token or a way to run its own refresh cascade — this
+    /// process already has exactly one coalesced refresh path guarding a
+    /// single-use refresh token against replay (see `runProactiveRefresh`'s
+    /// own kdoc); a second, independent refresh attempt from this
+    /// low-priority telemetry pipeline could race it and burn that
+    /// single-use token out from under a real, in-flight refresh. See
+    /// [uploadChunk] for how a 401 uses this.
+    public typealias RefreshRequestProvider = @MainActor () async -> Void
 
     private var serverUrl: String?
     private var tokenProvider: TokenProvider?
     private var userIdProvider: UserIdProvider?
+    private var refreshRequestProvider: RefreshRequestProvider?
     private var timer: Timer?
     private var lastSeq: Int64 = 0
     private var chunkSeq: Int = 0
@@ -165,21 +179,24 @@ public final class LiveLogStreamer {
     /// — NEVER AppState directly (see file header for why).
     public func start(serverUrl: String,
                       getToken: @escaping TokenProvider,
-                      getUserId: @escaping UserIdProvider) {
+                      getUserId: @escaping UserIdProvider,
+                      requestTokenRefresh: @escaping RefreshRequestProvider) {
         // W-CONSENTLATESTART (2026-08-29) — retain the endpoint and the two
         // provider closures BEFORE the consent gate, so consent granted
         // later in the same launch can start the pump without waiting for a
         // relaunch. This is deliberately not a weakening of SECURITY C-10:
         // the gate below still returns before ANY observable side effect —
         // no tee, no timer, no path monitor, no upload, no network of any
-        // kind. What is kept is three references already held elsewhere in
-        // this process (the server URL the app is talking to anyway, and two
-        // closures reading state AppState owns), which produce nothing on
-        // their own. Without them `setEnabled(true)` has no endpoint to ship
-        // to and the toggle stays inert for the rest of the launch.
+        // kind. What is kept is four references already held elsewhere in
+        // this process (the server URL the app is talking to anyway, and
+        // three closures reading/driving state AppState owns), which
+        // produce nothing on their own. Without them `setEnabled(true)` has
+        // no endpoint to ship to and the toggle stays inert for the rest of
+        // the launch.
         self.serverUrl = serverUrl
         self.tokenProvider = getToken
         self.userIdProvider = getUserId
+        self.refreshRequestProvider = requestTokenRefresh
         // SECURITY C-10 — consent gate. No consent ⇒ no tee, no
         // upload, no timer, no path monitor. Returns BEFORE any
         // side effect. Default is false (key absent ⇒ false).
@@ -213,8 +230,9 @@ public final class LiveLogStreamer {
         guard LiveLogStreamer.isEnabled, !isStarted else { return }
         guard let url = serverUrl,
               let token = tokenProvider,
-              let user = userIdProvider else { return }
-        start(serverUrl: url, getToken: token, getUserId: user)
+              let user = userIdProvider,
+              let refresh = refreshRequestProvider else { return }
+        start(serverUrl: url, getToken: token, getUserId: user, requestTokenRefresh: refresh)
     }
 
     /// Fully tear down the pump. Safe to call when not started.
@@ -385,14 +403,19 @@ public final class LiveLogStreamer {
     /// failure with any other status (network drop, 401, 404, ...) is left
     /// on the normal flushIntervalSeconds cadence instead.
     private static func isThrottleStatus(_ error: Error) -> Bool {
-        let code: Int
+        httpStatus(of: error).map { $0 == 429 || (500...599).contains($0) } ?? false
+    }
+
+    /// W-LIVELOGAUTHREFRESH — extracted out of `isThrottleStatus` so the
+    /// 401 check in `uploadChunk` shares the same status-code extraction
+    /// instead of duplicating the switch.
+    private static func httpStatus(of error: Error) -> Int? {
         switch error {
-        case TusUploadClient.TusError.createFailed(let c): code = c
-        case TusUploadClient.TusError.patchFailed(let c): code = c
-        case TusUploadClient.TusError.headFailed(let c): code = c
-        default: return false
+        case TusUploadClient.TusError.createFailed(let c): return c
+        case TusUploadClient.TusError.patchFailed(let c): return c
+        case TusUploadClient.TusError.headFailed(let c): return c
+        default: return nil
         }
-        return code == 429 || (500...599).contains(code)
     }
 
     private func uploadChunk(serverUrl: String,
@@ -401,7 +424,8 @@ public final class LiveLogStreamer {
                              data: Data,
                              chunkBytes: Int,
                              seq: Int,
-                             highestSeqInChunk: Int64) async {
+                             highestSeqInChunk: Int64,
+                             isRetryAfterRefresh: Bool = false) async {
         let cfg: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: cfg)
         do {
@@ -439,6 +463,32 @@ public final class LiveLogStreamer {
             // one the pump is waiting on, so a late-arriving failure after
             // a watchdog timeout doesn't double-count.
             guard chunkSeq == seq else { return }
+            // W-LIVELOGAUTHREFRESH (2026-09-10) — a 401 here almost always
+            // means this process's access token expired with no unrelated
+            // API call around to trigger AppState's own reactive refresh:
+            // this throwaway per-chunk provider (`BackendConfig.pinned`,
+            // just above) has no refresh token and no device-renew fallback
+            // of its own, by design (see `RefreshRequestProvider`'s kdoc for
+            // why it stays that way). Ask AppState to run its EXISTING
+            // single-flight-coalesced refresh instead of trying to refresh
+            // independently, then retry this one chunk once with whatever
+            // token comes out the other side. `isRetryAfterRefresh` bounds
+            // this to exactly one attempt — a device whose refresh token is
+            // ALSO dead (or offline) falls straight through to the normal
+            // failure/backoff path below instead of looping.
+            if !isRetryAfterRefresh,
+               LiveLogStreamer.httpStatus(of: error) == 401,
+               let refresh = refreshRequestProvider,
+               let getToken = tokenProvider {
+                await refresh()
+                if let freshToken = getToken(), freshToken != token {
+                    await uploadChunk(
+                        serverUrl: serverUrl, token: freshToken, filename: filename,
+                        data: data, chunkBytes: chunkBytes, seq: seq,
+                        highestSeqInChunk: highestSeqInChunk, isRetryAfterRefresh: true)
+                    return
+                }
+            }
             failedUploads += 1
             inflight = false
             if LiveLogStreamer.isThrottleStatus(error) {

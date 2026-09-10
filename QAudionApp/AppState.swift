@@ -2910,7 +2910,16 @@ final class AppState: ObservableObject {
         LiveLogStreamer.shared.start(
             serverUrl: serverUrl,
             getToken: { [weak self] in self?.authService.loadToken() },
-            getUserId: { [weak self] in self?.currentUserId }
+            getUserId: { [weak self] in self?.currentUserId },
+            // W-LIVELOGAUTHREFRESH (2026-09-10) — the streamer's own
+            // throwaway per-chunk upload provider has no refresh path of
+            // its own; on a 401 it awaits THIS existing single-flight
+            // refresh cascade instead, then re-reads getToken() and retries
+            // once. See LiveLogStreamer.RefreshRequestProvider's kdoc.
+            requestTokenRefresh: { [weak self] in
+                guard let self else { return }
+                await self.runProactiveRefresh()
+            }
         )
 
         // Per-user / per-group feature flags. The public flags.json the app
