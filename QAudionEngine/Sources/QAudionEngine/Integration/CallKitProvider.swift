@@ -184,15 +184,61 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // matters — did THIS app call the locked `setActive(true)` for the
         // current call — independent of CallKit's own native-UI bookkeeping.
         // See `CallKitCallLedger`'s kdoc for the full trace of both bugs.
+        // W-DRAINACTIVATION (2026-09-10) — raw device traces from tonight's
+        // live tests (two separate builds, both confirmed via unredacted
+        // SSH pulls, not the Loki-redacted view) show `activationCount`
+        // climbing net +1 to +2 across consecutive back-to-back calls and
+        // NEVER returning to a clean 0 baseline — directly correlated with
+        // the native AudioUnit's later Start() failing with CoreAudio's
+        // generic 'what' error and with WebRTC's own InitPlayOrRecord
+        // failing outright on the next call. Root cause: at least THREE
+        // independent code paths can each increment this ONE shared
+        // counter for what is logically a single call — (1) this app's own
+        // explicit self-activation above, now called unconditionally after
+        // every answer/start regardless of whether didActivate will also
+        // fire; (2) CallKit's own native `provider(_:didActivate:)`, when
+        // it DOES also fire for the same call (`audioSessionDidActivate:`
+        // increments too); (3) WebRTC's own internal
+        // `AudioDeviceIOS::InitPlayOrRecord`/`beginWebRTCSession:`, which
+        // activates independently the moment the local audio track starts.
+        // A single boolean-gated `setActive(false)` here only ever
+        // balanced source (1) — sources (2) and (3) are meant to
+        // self-balance via their own paired deactivate (`didDeactivate`,
+        // `ShutdownPlayOrRecord`/`UnconfigureAudioSession`), but real
+        // device evidence shows that pairing is not reliable enough in
+        // practice for back-to-back calls to prevent a net leak.
+        //
+        // Fix (external second opinion sought and confirmed, given this
+        // exact code path's history of three prior production regressions):
+        // drain the counter fully at this one choke point instead of
+        // decrementing by a fixed amount. `RTCAudioSession.setActive(false)`
+        // only touches the real OS session when its own internal
+        // `shouldSetActive` is true (activationCount == 1) — every extra
+        // call beyond that is a documented no-op against the hardware, so
+        // looping it is safe. Bounded (not `while true`) as a defensive cap
+        // against a genuine future bug elsewhere holding the count up
+        // indefinitely; this app's own architecture guarantees at most one
+        // active 1:1 call, so nothing legitimate should still be holding
+        // an activation when a call is genuinely ending. Runs entirely
+        // inside the existing `lockForConfiguration`/`unlockForConfiguration`
+        // pair, serializing the drain against any concurrent activation
+        // (including the next call's own) the same way every other mutation
+        // of this shared session already is.
         if ledger.consumeAudioSelfActivation() {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
-            do {
-                try rtcSession.setActive(false)
-                print("[CallKitProvider] reportCallEnded audio session INACTIVE activationCount=\(rtcSession.activationCount)")
-            } catch {
-                print("[CallKitProvider] setActive(false) fail site=reportCallEnded code=\((error as NSError).code) err=\(error.localizedDescription)")
+            let maxDrainIterations = 10
+            var drainedCount = 0
+            while rtcSession.activationCount > 0 && drainedCount < maxDrainIterations {
+                do {
+                    try rtcSession.setActive(false)
+                } catch {
+                    print("[CallKitProvider] setActive(false) fail site=reportCallEnded iter=\(drainedCount) code=\((error as NSError).code) err=\(error.localizedDescription)")
+                    break
+                }
+                drainedCount += 1
             }
+            print("[CallKitProvider] reportCallEnded audio session drained iterations=\(drainedCount) activationCount=\(rtcSession.activationCount)")
             rtcSession.unlockForConfiguration()
         }
         ledger.forget(uuid)
