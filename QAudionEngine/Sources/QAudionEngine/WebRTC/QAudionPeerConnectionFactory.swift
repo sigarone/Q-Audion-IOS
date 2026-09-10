@@ -168,19 +168,32 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         // nil config = APM defaults (unchanged AEC/NS/AGC/HPF toggle state
         // versus today — same as LiveKit's own `.init()`, whose designated
         // initializer's params are all nullable so this is equivalent).
-        // `capturePostProcessingDelegate` is attached later, per-call — see
-        // `NativeAudioCaptureTap`'s own doc for why that one needs a fresh
-        // instance per call while `renderPreProcessingDelegate` below does
-        // not.
+        // BOTH delegate params are deliberately left `nil` here — see
+        // W-RXFALLBACKINJECT-2 below for why passing either through this
+        // initializer is silently a no-op on this pinned fork.
         let audioProcessingModule = RTCDefaultAudioProcessingModule(
             config: nil,
             capturePostProcessingDelegate: nil,
-            // W-RXFALLBACKINJECT (2026-09-10) — was `nil`; see
-            // `playoutInjector`'s own doc and `NativeAudioPlayoutInjector`'s
-            // file-level doc for why this process-lifetime delegate is safe
-            // to attach unconditionally (a no-op on every call until
-            // something is actually queued via `inject(_:)`).
-            renderPreProcessingDelegate: playoutInjector)
+            renderPreProcessingDelegate: nil)
+
+        // W-RXFALLBACKINJECT-2 (2026-09-10) — was passed directly into the
+        // initializer above (`renderPreProcessingDelegate: playoutInjector`),
+        // which is a confirmed bug in this pinned fork: `RTCAudioCustom
+        // ProcessingAdapter.mm`'s own `initWithDelegate:` constructs the
+        // native `webrtc::AudioCustomProcessingAdapter` but NEVER calls its
+        // `SetDelegate` — the parameter is silently dropped. Only the
+        // property SETTER (`-setAudioCustomProcessingDelegate:`, which this
+        // property forwards to) calls `SetDelegate` on the native adapter.
+        // A live test with per-call diagnostics (see
+        // `NativeAudioPlayoutInjector.onEvent`'s "proc"/"mix" checkpoints)
+        // confirmed `audioProcessingProcess` was never invoked ONCE across
+        // 500+ real decoded frames queued via `inject(_:)` — this is why.
+        // `NativeAudioCaptureTap`'s capture-side delegate already avoided
+        // this bug by construction: `QAudionPeerConnection.swift` sets
+        // `apm.capturePostProcessingDelegate = tap` via the setter, per-call,
+        // never through this initializer. Assigning the setter here once,
+        // right after construction, is the process-lifetime equivalent.
+        audioProcessingModule.renderPreProcessingDelegate = playoutInjector
 
         let factory = RTCPeerConnectionFactory(
             audioDeviceModuleType: .platformDefault,
