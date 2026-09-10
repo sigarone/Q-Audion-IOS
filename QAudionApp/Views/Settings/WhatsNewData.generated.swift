@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1142",
+              date: "2026-09-10",
+              title: "v1.0.1142",
+              bullets: [
+                "fix(audio): flip audio-srtp-v1 kill switch off, isolate defect vs legacy protocol",
+              ]),
         .init(id: "v1.0.1141",
               date: "2026-09-10",
               title: "v1.0.1141",
               bullets: [
+                "chore: regenerate changelog for v1.0.1141",
                 "fix(audio): overwrite the render buffer instead of adding to it (W-RXGHOSTFIX)",
                 "fix(crypto): stop group/protocol control envelopes from sharing the real-chat ratchet, widen skipped-key cache",
                 "diag(audio): add per-call cdi (call-did-init) native-audio-unit checkpoint",
@@ -145,13 +152,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1123",
                 "fix(call): disable native audio-srtp again — two boundary fixes, both disproven",
-              ]),
-        .init(id: "v1.0.1122",
-              date: "2026-09-09",
-              title: "v1.0.1122",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1122",
-                "fix(call): self-activate audio session on outgoing calls too (caller-side gap)",
               ]),
     ]
 }
