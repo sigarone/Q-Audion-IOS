@@ -17,27 +17,31 @@ import WebRTC
 final class NativeAudioPlayoutInjectorTests: XCTestCase {
     #if canImport(WebRTC)
 
-    // MARK: - mixed (pure add-and-clamp)
+    // MARK: - overwritten (pure overwrite-and-clamp, W-RXGHOSTFIX)
 
-    func test_mixed_addsSamplesOntoDestination() {
-        let destination: [Float] = [0, 100, -100]
+    /// Was additive ("mix") — changed after a live test found real relayed
+    /// audio audible but blended with a "ghost" underneath, traced to
+    /// WebRTC's own NetEQ concealment/comfort-noise filler for the peer's
+    /// muted native sender still occupying the buffer we were adding onto.
+    func test_overwritten_replacesDestinationRatherThanAdding() {
+        let destination: [Float] = [500, 100, -100]
         let samples: [Int16] = [10, 20, -30]
-        let result = NativeAudioPlayoutInjector.mixed(destination: destination, adding: samples)
-        XCTAssertEqual(result, [10, 120, -130])
+        let result = NativeAudioPlayoutInjector.overwritten(destination: destination, with: samples)
+        XCTAssertEqual(result, [10, 20, -30], "must REPLACE the ghost/comfort-noise filler, not blend with it")
     }
 
-    func test_mixed_clampsToFloatS16Range() {
-        let destination: [Float] = [32000, -32000]
+    func test_overwritten_clampsToFloatS16Range() {
+        let destination: [Float] = [0, 0]
         let samples: [Int16] = [32767, -32768]
-        let result = NativeAudioPlayoutInjector.mixed(destination: destination, adding: samples)
-        XCTAssertEqual(result, [32768.0, -32768.0], "sum must clamp to WebRTC's own FloatS16 range, never wrap")
+        let result = NativeAudioPlayoutInjector.overwritten(destination: destination, with: samples)
+        XCTAssertEqual(result, [32767.0, -32768.0])
     }
 
-    func test_mixed_leavesTrailingDestinationUntouchedWhenFewerSamples() {
+    func test_overwritten_leavesTrailingDestinationUntouchedWhenFewerSamples() {
         let destination: [Float] = [1, 2, 3, 4]
         let samples: [Int16] = [10]
-        let result = NativeAudioPlayoutInjector.mixed(destination: destination, adding: samples)
-        XCTAssertEqual(result, [11, 2, 3, 4])
+        let result = NativeAudioPlayoutInjector.overwritten(destination: destination, with: samples)
+        XCTAssertEqual(result, [10, 2, 3, 4], "positions beyond what we have queued must stay untouched, not zeroed")
     }
 
     // MARK: - push / pop (ring buffer)

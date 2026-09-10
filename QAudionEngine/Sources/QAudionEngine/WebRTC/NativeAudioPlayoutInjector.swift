@@ -267,18 +267,35 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
             onEvent?("mix", mixN)
         }
 
-        // Mix (add, not replace) so this coexists correctly with whatever
-        // the native unit is already rendering — silence/comfort noise on
-        // the common path this exists for (the peer muted its native
-        // sender), but additive stays correct even when it isn't. See this
-        // type's own SCALE note: a direct cast, never a division, because
-        // this writes straight into WebRTC's own FloatS16-scale buffer.
+        // W-RXGHOSTFIX (2026-09-10) — OVERWRITE, not add. This used to add
+        // our samples onto whatever the native unit was already rendering,
+        // reasoning that would "coexist correctly" with silence/comfort
+        // noise on the common path this exists for. Live test found real
+        // audio finally audible but with a "lower tone, like a ghost, as if
+        // something else is still using the system" underneath it — traced
+        // to source: `AudioProcessingImpl::ProcessRenderStreamLocked`
+        // (audio_processing_impl.cc) shows nothing between our hook and the
+        // hardware mutates render samples further (the only other step,
+        // `echo_controller->AnalyzeRender`, is read-only by its own name —
+        // it captures the AEC reference, it doesn't touch the buffer), so
+        // whatever was already in that buffer when we added to it was real,
+        // audible content: every SDP for this call negotiates the CN
+        // (Comfort Noise, payload 13) codec, and `engageAudioSrtpFallback()`
+        // only mutes the peer's native SENDER — it never stops WebRTC's own
+        // NetEQ jitter-buffer/concealment engine on the RECEIVE side from
+        // synthesizing comfort-noise/concealment audio to cover the
+        // now-silent incoming native RTP stream. Adding our real relayed
+        // voice on top of that synthesized filler is exactly "someone
+        // else's ghost" bleeding through underneath. Since the whole reason
+        // this code path runs is that the peer's native audio is not real
+        // (muted), replacing rather than blending is correct here — there
+        // is no real native content this could clobber while it's active.
         for channel in 0..<audioBuffer.channels {
             let dst = audioBuffer.rawBuffer(forChannel: channel)
             let existing = Array(UnsafeBufferPointer(start: dst, count: popped.count))
-            let mixed = Self.mixed(destination: existing, adding: popped)
+            let overwritten = Self.overwritten(destination: existing, with: popped)
             for i in 0..<popped.count {
-                dst[i] = mixed[i]
+                dst[i] = overwritten[i]
             }
         }
     }
@@ -323,18 +340,20 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         return popped
     }
 
-    /// Pure add-and-clamp mix, split out from `audioProcessingProcess` so it
-    /// is directly unit-testable without a real (test-unconstructible)
+    /// Pure overwrite-and-clamp, split out from `audioProcessingProcess` so
+    /// it is directly unit-testable without a real (test-unconstructible)
     /// `RTCAudioBuffer` — same testability pattern as
-    /// `NativeAudioCaptureTap.planarFloatBuffer`. Clamps to WebRTC's own
-    /// FloatS16 range (`[-32768, 32768]`, see this type's SCALE note) so a
-    /// loud injected sample landing on top of real native signal can't wrap
-    /// or otherwise corrupt the buffer.
-    static func mixed(destination: [Float], adding samples: [Int16]) -> [Float] {
+    /// `NativeAudioCaptureTap.planarFloatBuffer`. See this type's
+    /// W-RXGHOSTFIX note for why this REPLACES rather than adds: whatever
+    /// was already in `destination` at the overwritten positions is WebRTC's
+    /// own NetEQ concealment/comfort-noise filler for the peer's now-muted
+    /// native sender, not real content worth preserving. Clamps to WebRTC's
+    /// own FloatS16 range (`[-32768, 32768]`, see this type's SCALE note)
+    /// purely as a defensive bound on the cast, not to combine two signals.
+    static func overwritten(destination: [Float], with samples: [Int16]) -> [Float] {
         var result = destination
         for i in 0..<min(destination.count, samples.count) {
-            let sum = destination[i] + Float(samples[i])
-            result[i] = min(32768.0, max(-32768.0, sum))
+            result[i] = min(32768.0, max(-32768.0, Float(samples[i])))
         }
         return result
     }
