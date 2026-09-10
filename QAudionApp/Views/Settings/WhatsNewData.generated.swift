@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1131",
+              date: "2026-09-10",
+              title: "v1.0.1131",
+              bullets: [
+                "diag(ios): widen aunit log bridge to catch the silent CreateAudioUnit guard",
+              ]),
         .init(id: "v1.0.1130",
               date: "2026-09-10",
               title: "v1.0.1130",
               bullets: [
+                "chore: regenerate changelog for v1.0.1130",
                 "diag(ios): bridge WebRTC's native AudioDeviceIOS log lines into Loki",
               ]),
         .init(id: "v1.0.1129",
@@ -145,14 +152,6 @@ extension ReleaseNote {
                 "chore: regenerate changelog for v1.0.1112",
                 "fix(call): stop the caller's mic (and video) from unblocking before the callee genuinely accepts",
                 "fix(build): RTCAudioBuffer.rawBufferForChannel was renamed to rawBuffer(forChannel:)",
-              ]),
-        .init(id: "v1.0.1111",
-              date: "2026-09-08",
-              title: "v1.0.1111",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1111",
-                "fix(call): use the behavior-preserving ADM selector for the capture-tap fix",
-                "fix(call): route native-audio-srtp TX tap through capturePostProcessingDelegate",
               ]),
     ]
 }
