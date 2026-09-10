@@ -190,8 +190,8 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// correlated with the app's own `audiosrtp hb=` heartbeat — evidence no
     /// Swift-level code change can substitute for, per that investigation's
     /// own conclusion. Pure instrumentation: emits short, numeric-tailed
-    /// lines only for four specific known messages (see `handleNativeLogLine`),
-    /// changes no audio behavior.
+    /// lines only for a small set of known messages (see
+    /// `handleNativeLogLine`), changes no audio behavior.
     private func installNativeAudioUnitLogBridge() {
         RTCSetMinDebugLogLevel(.info)
         let logger = RTCCallbackLogger()
@@ -209,16 +209,39 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// read/call, same pattern every other live-setter closure in this
     /// codebase already relies on being safe for).
     private func handleNativeLogLine(_ message: String) {
-        if message.contains("InitPlayOrRecord") && !message.contains("failed") {
+        // W-AUNITTRACE follow-up (2026-09-10) — the first live test with this
+        // bridge found the callee's side of a dead-TX call 2 emits NONE of
+        // the four original signals at all (no init/started/fail) despite
+        // logging its own call-1 shutdown cleanly. `AudioDeviceIOS::
+        // CreateAudioUnit()`'s own guard (`if (audio_unit_ ||
+        // audio_is_initialized_) return false;`) fails COMPLETELY SILENTLY
+        // — no log line anywhere on that path — which would exactly produce
+        // this signature. These extra branches exist to tell that silent
+        // guard apart from "this code path never ran at all": if
+        // startplayout/startrecording fire but init/started/fail never
+        // follow, the silent guard is the culprit; if even those never
+        // fire, the defect is further upstream, before WebRTC's ADM is
+        // touched at all. Ordering matters — check the sentence-form
+        // failure messages BEFORE the bare substring checks they'd
+        // otherwise also match.
+        if let range = message.range(of: "failed to start audio unit, reason ") {
+            let tail = message[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            let code = Int32(tail.prefix(while: { $0 == "-" || $0.isNumber }))
+            onNativeAudioLifecycleEvent?("fail", code)
+        } else if message.contains("InitPlayOrRecord failed for Init") {
+            onNativeAudioLifecycleEvent?("initfail", nil)
+        } else if message.contains("Failed to begin WebRTC session") {
+            onNativeAudioLifecycleEvent?("sessionfail", nil)
+        } else if message.contains("InitPlayOrRecord") {
             onNativeAudioLifecycleEvent?("init", nil)
         } else if message.contains("ShutdownPlayOrRecord") {
             onNativeAudioLifecycleEvent?("shutdown", nil)
         } else if message.contains("Voice-Processing I/O audio unit is now started") {
             onNativeAudioLifecycleEvent?("started", nil)
-        } else if let range = message.range(of: "failed to start audio unit, reason ") {
-            let tail = message[range.upperBound...].trimmingCharacters(in: .whitespaces)
-            let code = Int32(tail.prefix(while: { $0 == "-" || $0.isNumber }))
-            onNativeAudioLifecycleEvent?("fail", code)
+        } else if message.contains("StartPlayout") {
+            onNativeAudioLifecycleEvent?("spo", nil)
+        } else if message.contains("StartRecording") {
+            onNativeAudioLifecycleEvent?("sre", nil)
         }
     }
 
