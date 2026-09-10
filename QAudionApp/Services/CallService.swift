@@ -180,6 +180,32 @@ final class CallService: @unchecked Sendable {
     public private(set) var framesEncryptedTx: Int64 = 0
     public private(set) var framesDecryptedRx: Int64 = 0
 
+    /// W-AUDIONACK — TX-side cache of recently-sent sealed audio frames (so
+    /// a peer's retransmit request can be answered), RX-side gap/duplicate
+    /// tracking (so a request is only sent once per genuine loss and a
+    /// retransmit racing a late original never double-plays), and a bound
+    /// on how many retransmits a single peer can force per second. Cleared
+    /// on every re-key alongside the audio session's own reset — see
+    /// `NackRetransmitRing`'s doc comment for why that clear is
+    /// security-load-bearing, not just tidiness.
+    private let nackRing = NackRetransmitRing()
+    private let nackRxTracker = NackRxTracker()
+    private let nackRateLimiter = NackResendRateLimiter()
+
+    /// W-AUDIONACK — clear the retransmit ring and gap tracker. Call on
+    /// every session-key install (initial handshake AND every re-key —
+    /// `QAudionCallIntegration.onPqcSessionKeyEstablished` fires for both,
+    /// see its call sites next to every `engine.initSession(...)`). A frame
+    /// cached in the ring was sealed under the key that just rotated away;
+    /// see `NackRetransmitRing`'s doc comment for why this clear is
+    /// security-load-bearing, not just tidiness. Also called from
+    /// `teardownAudioStack()` so a new call never starts holding the
+    /// previous call's frames.
+    func resetNackState() {
+        nackRing.clear()
+        nackRxTracker.reset()
+    }
+
     /// W-VIDTRANS (2026-07-24) — live read of the same three counters that
     /// `call.audio.counts` ships at teardown, so `call.video.transition` can
     /// carry audio liveness AT the moment of a lane flip. Teardown-only
@@ -2277,6 +2303,10 @@ final class CallService: @unchecked Sendable {
             print("[CallService] RX control frame decode failed (\(inner.count) bytes) — dropped")
             return
         }
+        if kind == WireRelayFrameCodec.controlKindNackRequest {
+            handleInboundNackRequest(body)
+            return
+        }
         guard kind == WireRelayFrameCodec.controlKindHangup else {
             print("[CallService] RX control frame unknown kind=\(Int(kind)) — dropped")
             return
@@ -2345,6 +2375,70 @@ final class CallService: @unchecked Sendable {
         }
         let dcFlag: String = sentOnDc ? "1" : "0"
         RTLog.info("call", "dchangup tx=1 dc=" + dcFlag + " rlen=" + String(reason.count))
+    }
+
+    /// W-AUDIONACK (2026-09-10) — RX: ask the peer to replay one specific
+    /// missing sealed-audio frame. Same shape as `sendControlHangup`:
+    /// symmetric intersection on `audio-nack-v1`, same leg preference
+    /// (DataChannel then WS relay), same outer seal. Never throws, never
+    /// blocks: a request that cannot be sent simply means this one loss
+    /// goes unrepaired, exactly as it always did before this feature
+    /// existed.
+    private func sendNackRequest(seq: Int64) {
+        let cid = getCallId?()
+        let peerCaps = getPeerCapabilities?(cid)
+        guard peerCaps?.contains(CallCapabilities.audioNackV1) == true else { return }
+        var body = Data(count: 8)
+        body.withUnsafeMutableBytes { raw in
+            let p = raw.bindMemory(to: UInt8.self)
+            for i in 0..<8 {
+                p[i] = UInt8((seq >> (56 - 8 * i)) & 0xFF)
+            }
+        }
+        let frame = WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindNackRequest,
+            body: body
+        )
+        let sealed: Data
+        if let sealer = relaySlotLock.withLock({ relaySealerSend }) {
+            sealed = (try? sealer.seal(frame)) ?? frame
+        } else {
+            sealed = frame
+        }
+        let sentOnDc: Bool = sendAudioOverDataChannel?(sealed) ?? false
+        if !sentOnDc {
+            let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
+                relaySlotLock.withLock { (wsClient, peerUserId) }
+            let effectiveWs = getWsClient?() ?? cachedWs
+            let effectivePeer = cachedPeer ?? getPeerId?()
+            guard let ws = effectiveWs, let peer = effectivePeer else { return }
+            ws.sendAudioFrame(recipientId: peer, frame: sealed, callId: cid)
+        }
+        RTLog.info("call", "audionack tx=1 seq=" + String(seq))
+    }
+
+    /// W-AUDIONACK — TX side of loss repair: the peer told us it never got
+    /// frame `seq`. Replay the EXACT bytes already sent — `nackRing` stores
+    /// the final fully-sealed `Data` that actually went on the wire, so
+    /// this is never a new encryption. A miss (evicted, or a seq we never
+    /// sent this call) is silently ignored — best-effort, matching every
+    /// other control frame in this codebase.
+    private func handleInboundNackRequest(_ body: Data) {
+        guard body.count == 8 else { return }
+        var seq: Int64 = 0
+        for byte in body { seq = (seq << 8) | Int64(byte) }
+        guard let envelope = nackRing.lookup(seq: seq) else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        guard nackRateLimiter.tryAcquire(nowMs: nowMs) else { return }
+        let cid = getCallId?()
+        let sentOnDc: Bool = sendAudioOverDataChannel?(envelope) ?? false
+        if !sentOnDc {
+            let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
+                relaySlotLock.withLock { (wsClient, peerUserId) }
+            guard let ws = getWsClient?() ?? cachedWs, let peer = cachedPeer ?? getPeerId?() else { return }
+            ws.sendAudioFrame(recipientId: peer, frame: envelope, callId: cid)
+        }
+        RTLog.info("call", "audionack resend=1 seq=" + String(seq))
     }
 
     /// W66+W67: ingresso per il RX path. Chiamato dal handler "audio_frame"
@@ -2580,6 +2674,27 @@ final class CallService: @unchecked Sendable {
             // `unsealRelayFrame` is the same operation as `openInbound`,
             // pass-through until the recv sealer is installed.
             self.wireRxBytes &+= Int64(inner.count)
+            // W-AUDIONACK — duplicate guard FIRST, before decrypt: a
+            // retransmit racing a late original must never reach playback
+            // twice (this wire has no replay window of its own on the
+            // legacy no-AAD path — see NackRxTracker's kdoc). Also the
+            // gap-aging clock: any arrival, decryptable or not, can retire
+            // or start a pending gap. `inner`'s wire shape follows the same
+            // `androidAudioWireCompat` choice `encodeAudioForWire` makes on
+            // TX, so the same flag picks the right decoder here.
+            let nackSeq: Int64?
+            if self.androidAudioWireCompat {
+                nackSeq = (try? WireRelayFrameCodec.decode(inner)).map { Int64($0.frame.sequenceNumber) }
+            } else {
+                nackSeq = (try? FrameEncoder.deserialize(inner)).map { Int64($0.sequenceNumber) }
+            }
+            if let seq = nackSeq {
+                let nowMsForNack = Int64(Date().timeIntervalSince1970 * 1000)
+                guard self.nackRxTracker.accept(seq, nowMs: nowMsForNack) else { return }
+                for missingSeq in self.nackRxTracker.gapsReadyToNack(nowMs: nowMsForNack) {
+                    self.sendNackRequest(seq: missingSeq)
+                }
+            }
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
                 self.framesDecryptedRx &+= 1
@@ -3028,6 +3143,7 @@ final class CallService: @unchecked Sendable {
         onAudioTeardownDiag?()
         framesEncryptedTx = 0
         framesDecryptedRx = 0
+        resetNackState()
         // W-NETVIS — reset the wire-byte counters AND the derived readouts, so
         // a second call never opens showing the previous call's rate. Android
         // has exactly that bug: nothing clears `txKbps`/`rxKbps` on Ended
@@ -3725,6 +3841,17 @@ final class CallService: @unchecked Sendable {
                     sealedFrame = (try? sealer.seal(wireFrame)) ?? wireFrame
                 } else {
                     sealedFrame = wireFrame
+                }
+                // W-AUDIONACK — cache the EXACT final wire bytes, keyed by
+                // the inner wire sequence number, so a peer's retransmit
+                // request can be answered by replaying them verbatim (never
+                // a new seal). Extracted from `encrypted` (always the
+                // native FrameEncoder container at this point, before
+                // `encodeAudioForWire`'s optional recontainerization) —
+                // cheap, and reuses an already-tested deserializer instead
+                // of threading the seq out through another layer.
+                if let fe = try? FrameEncoder.deserialize(encrypted) {
+                    nackRing.record(seq: Int64(fe.sequenceNumber), envelope: sealedFrame)
                 }
                 // W525: include the call_id so Android/Desktop accept
                 // the frame. Their filter drops envelopes whose

@@ -12917,6 +12917,11 @@ final class AppState: ObservableObject {
                 // otherwise a stale/cross-call handshake completion
                 // could race a different call's key into the broker.
                 guard self.callContactId == peerId else { return }
+                // W-AUDIONACK — every session-key install (initial handshake
+                // AND every re-key) must invalidate any cached retransmit
+                // frames sealed under the OLD key. This closure is the one
+                // signal that fires for both.
+                self.callService.resetNackState()
                 // W574e/g — M-15 relay sealer install moved to the race-free
                 // integration.onRelaySessionReady callback (wired below); the
                 // callContactId guard here raced the inbound OFFER on the
@@ -15038,6 +15043,12 @@ final class AppState: ObservableObject {
                         // M-9: only register the key for the call that
                         // is actually in progress for this peer.
                         guard strongSelf.callContactId == peerId else { return }
+                        // W-AUDIONACK — see the responder-side wiring's
+                        // identical comment: every session-key install
+                        // (initial handshake AND every re-key) must
+                        // invalidate any cached retransmit frames sealed
+                        // under the OLD key.
+                        strongSelf.callService.resetNackState()
                         // W574e/g — M-15 sealer install moved to the race-free
                         // integration.onRelaySessionReady callback (wired below).
                         // Bind broker on first use; idempotent.

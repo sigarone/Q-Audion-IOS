@@ -50,6 +50,11 @@ public enum WireRelayFrameCodec {
     /// `FrameRelayTransport.ControlFrame.KIND_HANGUP` (0x01). Body is the
     /// UTF-8 hangup reason, at most 255 bytes.
     public static let controlKindHangup: UInt8 = 0x01
+    /// W-AUDIONACK (2026-09-10) — control frame kind: request retransmission
+    /// of one lost audio frame. Mirrors Android `FrameRelayTransport
+    /// .ControlFrame.KIND_NACK_REQUEST` (0x02). Body is the missing frame's
+    /// wire sequence number as an 8-byte big-endian integer.
+    public static let controlKindNackRequest: UInt8 = 0x02
 
     public static let nonceSize = 12
     public static let tagSize = 16

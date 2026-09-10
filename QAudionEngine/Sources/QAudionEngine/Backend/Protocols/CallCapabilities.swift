@@ -511,6 +511,27 @@ public enum CallCapabilities {
     /// hangup time, this is the one that arrives.
     public static let dcHangupV1: String = "dc-hangup-v1"
 
+    // ── W-AUDIONACK (2026-09-10): sealed-audio retransmit-request v1 ────────
+
+    /// Retransmission-request control frame for the sealed-audio wire
+    /// (`audio-nack-v1`). Mirrors Android `CallCapabilities.AUDIO_NACK_V1`.
+    /// Byte-exact string, plain ASCII — compared with string equality on
+    /// every platform, so a rename or re-case is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE
+    /// ``WireRelayFrameCodec/controlKindNackRequest`` and reply by replaying
+    /// the exact already-sealed bytes for the requested sequence number, if
+    /// still held. The custom audio path (active whenever ``audioSrtpV1``
+    /// is not the negotiated media path — earbud calls, a legacy peer, or a
+    /// build with the native path disabled) had loss repair via Opus
+    /// in-band FEC only; this adds a NACK/RTX equivalent without any new
+    /// crypto — see ``NackRetransmitRing``'s doc comment for the security
+    /// review this went through before implementation. Symmetric
+    /// intersection: a request is only ever SENT when both peers advertise
+    /// this tag; an older peer simply never receives one, and the call
+    /// behaves exactly as it does today.
+    public static let audioNackV1: String = "audio-nack-v1"
+
     // ── W-LONGAUDIO (2026-08-10): the negotiated 60 ms / 256-byte profile ──
     //
     // Two tags, byte-exact, identical on Android, iOS, Desktop. They are
@@ -666,7 +687,7 @@ public enum CallCapabilities {
         // teardown as call_hangup), so advertising is honest; ungated and
         // never stripped, matching Android's registry (`add(DC_HANGUP_V1)`,
         // no kill switch — sending is itself best-effort and additive).
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1]
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1, audioNackV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         // W-LONGAUDIO — receive support, then send support. Both gated; both
         // ship absent. See the two kill switches above for why the RECEIVE one
@@ -843,6 +864,14 @@ public enum CallCapabilities {
         /// `Negotiated.useRestartIceRequest`.
         public var useRestartIceRequest: Bool {
             agreedTags.contains(CallCapabilities.restartIceReqV1)
+        }
+
+        /// W-AUDIONACK — true iff both sides advertised
+        /// ``CallCapabilities/audioNackV1`` — a receiver may ask the sender
+        /// to replay one specific missing sealed-audio frame. Mirrors
+        /// Android `Negotiated.useAudioNack`.
+        public var useAudioNack: Bool {
+            agreedTags.contains(CallCapabilities.audioNackV1)
         }
     }
 
