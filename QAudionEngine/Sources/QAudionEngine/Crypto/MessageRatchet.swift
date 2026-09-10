@@ -129,7 +129,19 @@ public final class MessageRatchet {
     /// Hard cap on `(incoming_idx - last_seen_recv_idx - 1)` per spec §9.
     public static let maxSkipAhead: UInt64 = 10_000
     /// LRU bound on the per-session skipped-keys cache.
-    public static let skippedKeysCacheMax = 256
+    ///
+    /// W-SKIPCACHEWIDEN (2026-09-10) — was 256, widened 16x as defense-in-
+    /// depth alongside the Android fix for the same class of risk (see
+    /// Android's `MessageRatchet.SKIPPED_KEYS_CACHE_MAX` kdoc for the full
+    /// incident writeup). iOS itself is no longer exposed to THAT specific
+    /// trigger — control/protocol envelopes were moved off this ratchet
+    /// entirely (`ChatMessageSendService.encryptForWire`'s
+    /// `forceStatelessFormat`, same date) — but a large-enough burst of
+    /// genuine real-content messages arriving out of order could still
+    /// exhaust a small cache the same way, so the wider margin is kept
+    /// here too. Pure capacity change, no cryptographic construction
+    /// touched.
+    public static let skippedKeysCacheMax = 4096
     /// TTL for skipped-key cache entries (7 days, in ms).
     public static let skippedKeysTtlMs: Int64 = 7 * 24 * 3600 * 1000
 

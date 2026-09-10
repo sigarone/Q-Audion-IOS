@@ -199,8 +199,14 @@ final class AvatarAnnounceCoordinator {
         do {
             let json = try await AvatarAnnounceSender(appState: appState).prepareEnvelopeJson(
                 avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
+            // W-CTLNORATCHET (2026-09-10) — avatar_announce is a protocol
+            // envelope, never real chat text: it must not share the real-
+            // chat ratchet's chain/skip-key state with this peer. See
+            // ChatMessageSendService.encryptForWire's forceStatelessFormat
+            // doc for the live incident this closes.
             let outcome = await ChatMessageSendService(appState: appState).sendEncrypted(
-                messageId: UUID(), peerUserId: peerId, plaintext: json)
+                messageId: UUID(), peerUserId: peerId, plaintext: json,
+                forceStatelessFormat: true)
             // `sendEncrypted` NEVER throws — every failure (WS down, auth
             // timeout, PSK missing, crypto error) is a RETURNED `.failed`.
             // Only an outcome that actually left the device may be marked.

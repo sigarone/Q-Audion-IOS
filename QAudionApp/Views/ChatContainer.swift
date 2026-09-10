@@ -914,10 +914,15 @@ final class ChatContainer: ObservableObject {
             // it via handleControlEnvelope INSTEAD of appending a row.
             // We don't store the envelope locally either (would clutter
             // the chat with unrenderable JSON).
+            // W-CTLNORATCHET (2026-09-10) — a qa_ctl envelope must never
+            // share the real-chat ratchet's chain/skip-key state with this
+            // peer. See ChatMessageSendService.encryptForWire's
+            // forceStatelessFormat doc.
             let outcome = await sendService.sendEncrypted(
                 messageId: envelopeId,
                 peerUserId: peerId,
-                plaintext: json
+                plaintext: json,
+                forceStatelessFormat: true
             )
             if case .failed(let reason) = outcome {
                 print("[ChatContainer] envelope send failed: \(reason)")
@@ -2305,9 +2310,14 @@ final class ChatContainer: ObservableObject {
         guard let sender = sendService else { return }
         let msgId = UUID()
         Task { [peerUserId = peerUserId] in
+            // W-CTLNORATCHET (2026-09-10) — a qa_ctl envelope must never
+            // share the real-chat ratchet's chain/skip-key state with this
+            // peer. See ChatMessageSendService.encryptForWire's
+            // forceStatelessFormat doc.
             _ = await sender.sendEncrypted(messageId: msgId,
                                            peerUserId: peerUserId,
-                                           plaintext: payload)
+                                           plaintext: payload,
+                                           forceStatelessFormat: true)
         }
     }
 }

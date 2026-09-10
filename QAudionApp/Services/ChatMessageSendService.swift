@@ -54,10 +54,14 @@ final class ChatMessageSendService {
 
     /// Encrypts and sends a chat message. Idempotent on `messageId` —
     /// the same id is forwarded to the server so retries don't duplicate.
+    /// - Parameter forceStatelessFormat: see `encryptForWire`'s doc — pass
+    ///   `true` for a protocol/control envelope (sender_key_init/rotate,
+    ///   avatar_announce), never for real user text.
     func sendEncrypted(
         messageId: UUID,
         peerUserId: String,
-        plaintext: String
+        plaintext: String,
+        forceStatelessFormat: Bool = false
     ) async -> Outcome {
         // Authentication gate — without a token we can't talk to the
         // server. The container will surface `.notAuthenticated`.
@@ -65,7 +69,10 @@ final class ChatMessageSendService {
             return .failed(reason: .notAuthenticated)
         }
         let wireBlob: Data
-        switch await encryptForWire(messageId: messageId, peerUserId: peerUserId, plaintext: plaintext) {
+        switch await encryptForWire(
+            messageId: messageId, peerUserId: peerUserId, plaintext: plaintext,
+            forceStatelessFormat: forceStatelessFormat
+        ) {
         case .success(let blob):
             wireBlob = blob
         case .failure(let reason):
@@ -200,11 +207,46 @@ final class ChatMessageSendService {
     ///   The mesh passes the public packet header here so a relay cannot
     ///   re-address a packet it forwards; v3.1 and v4 rebuild their own AAD
     ///   internally and ignore it, exactly as on Android.
+    /// - Parameter forceStatelessFormat: W-CTLNORATCHET (2026-09-10) — true
+    ///   for protocol/control envelopes ONLY (`qa_grp` sender_key_init /
+    ///   sender_key_rotate / member_added / member_removed / member_left /
+    ///   group_invite, `qa_ctl` avatar_announce / delete / edit / reaction /
+    ///   ephemeral_timer / screenshot_lock — never real user chat text).
+    ///   Skips the v4/v3 ratchet entirely and always encrypts on the
+    ///   legacy, stateless per-message PSK-AEAD path (random salt per
+    ///   message, no chain index, no shared skipped-key cache).
+    ///
+    ///   Live incident: control envelopes rode the SAME v3.1 ratchet chain
+    ///   as real chat text to a peer. A burst of many control sends
+    ///   (deleting and recreating every group chat fans one sender_key_init
+    ///   out per group per member) can push the ratchet's per-peer 256-slot
+    ///   skipped-key LRU (`MessageRatchet.skippedKeysCacheMax`) to evict a
+    ///   key before its matching out-of-order ciphertext — control OR real
+    ///   text — arrives. That failure is PERMANENT (the key material is
+    ///   gone), and after one buffered retry also fails, the existing
+    ///   "[messaggio cifrato non leggibile]" placeholder gets persisted as
+    ///   a real, visible row — for a REAL message, just because unrelated
+    ///   control traffic to the same peer burned through the shared cache.
+    ///
+    ///   The stateless legacy format has no chain/skip-key state to share,
+    ///   so once control traffic stops touching the ratchet at all, it can
+    ///   never again cause this collateral damage to real content. The
+    ///   receiver needs no changes: `MessageWireFormat.detect(cipher)`
+    ///   already dispatches purely on the ciphertext's own first byte
+    ///   (AppState.swift, `attemptDecrypt`), independent of any per-peer
+    ///   "this peer uses v3 now" memory, so a legacy-format control
+    ///   envelope decrypts correctly on any receiver build that already
+    ///   supports the legacy format (every build does — it's the original
+    ///   wire format). The group-session layer's own replay defense
+    ///   (`GroupSession.handleSenderKeyInit`/`handleSenderKeyRotate`
+    ///   requiring `env.e == state.groupEpoch`) is unchanged and orthogonal
+    ///   to which 1:1 transport format carried the envelope.
     func encryptForWire(
         messageId: UUID,
         peerUserId: String,
         plaintext: String,
-        aadOverride: Data? = nil
+        aadOverride: Data? = nil,
+        forceStatelessFormat: Bool = false
     ) async -> Result<Data, ChatContainer.SendFailureReason> {
         guard let senderId = appState.currentUserId else {
             return .failure(.notAuthenticated)
@@ -222,7 +264,12 @@ final class ChatMessageSendService {
         // Android `MessageCrypto.kt` which dispatches on `ratchetVersion == 4`
         // before any v3/v2 PSK lookup). The 0xE5 frame is OPAQUE — emitted by the
         // engine-routed method; we never build it here.
-        let useV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
+        //
+        // W-CTLNORATCHET — forceStatelessFormat skips this gate unconditionally,
+        // regardless of hasV4Session: a control envelope must never touch EITHER
+        // ratchet, v3 or v4, both of which are stateful chain designs this fix
+        // exists to keep control traffic away from.
+        let useV4 = !forceStatelessFormat && AppState.sharedV4Ratchet.hasV4Session(peerUserId)
         print("[PQC_DIAG_V4] send peer=\(peerUserId.prefix(8))… useV4=\(useV4) hasV4Session=\(useV4)")
 
         let wireBlob: Data
@@ -301,7 +348,11 @@ final class ChatMessageSendService {
             // from this peer (PeerCapabilityRegistry.probeInbound writes
             // the flag). This means v3 lights up incrementally as peers
             // upgrade, without any manual coordination per device.
-            let useV3 = PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
+            //
+            // W-CTLNORATCHET — forced to false for a control envelope
+            // regardless of this peer's capability, so it always takes the
+            // `else` branch below (the stateless legacy path) instead.
+            let useV3 = !forceStatelessFormat && PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
             do {
                 if useV3 {
                     wireBlob = try Self.ratchetEncryptV3(
