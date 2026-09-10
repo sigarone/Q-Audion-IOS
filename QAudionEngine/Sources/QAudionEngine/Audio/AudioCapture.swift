@@ -1190,7 +1190,11 @@ public final class AudioCapture {
     /// SINGLE-ENGINE FIX — schedule a decoded PCM frame for playback on the
     /// player node that lives on THIS capture engine. Replaces the old separate
     /// `AudioPlayback`, which ran a SECOND AVAudioEngine and was therefore mute.
-    public func playFrame(_ pcmData: Data) {
+    /// - Parameter seq: W-JBREORDER (2026-09-10) — this frame's wire
+    ///   sequence number, or `nil` if unknown/not applicable. Passed
+    ///   straight through to `playoutJitter.push` for reorder detection;
+    ///   never affects anything in this function itself.
+    public func playFrame(_ pcmData: Data, seq: Int64? = nil) {
         // W-IOSECHO (2026-07-22) — update the "far end recently audible"
         // proxy the mic-tap callback reads to grade echo-cancellation
         // effectiveness (see `EchoBucketTotals` above). Cheap Σx² scan on
@@ -1244,7 +1248,7 @@ public final class AudioCapture {
         // No negotiation state is consulted, deliberately: this is correct on an
         // endpoint that never negotiated anything.
         noteInboundFrameDuration(pcmBytes: pcmData.count)
-        playoutJitter.push(pcmData)
+        playoutJitter.push(pcmData, seq: seq)
         // W-PLAYOUTRACE (2026-07-26) — hop to main BEFORE touching the engine.
         //
         // Live incident, first call on a build carrying this pump: user tapped the

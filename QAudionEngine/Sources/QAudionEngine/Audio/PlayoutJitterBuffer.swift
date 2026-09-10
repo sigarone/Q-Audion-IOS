@@ -292,6 +292,18 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// before the first arrival / since the last `reset()`.
     private var lastPushMonotonic: Double?
 
+    /// W-JBREORDER (2026-09-10) — highest wire sequence number seen so far
+    /// this call, or `nil` before the first known-seq arrival. Caller
+    /// (`push`) already holds `lock`. Ported from Android's `JitterBuffer
+    /// .highestSeqSeen` — see that property's kdoc for the full rationale
+    /// (best-practices audit `reference_jitterbuffer_reorder_audit_2026_09_10.md`,
+    /// external memory, competitor names quarantined there): this
+    /// architecture genuinely reorders (the resilient dual-leg transport,
+    /// and the W-AUDIONACK retransmit feature deliberately re-delivering an
+    /// old sequence number), and the adaptive target was blind to it,
+    /// driven by inter-arrival lateness alone.
+    private var highestSeqSeen: Int64?
+
     /// Ring of recent per-arrival LATENESS values, in ms: how much later
     /// than the nominal cadence each frame arrived, floored at 0. Lateness
     /// rather than raw gap, because depth only has to cover frames that
@@ -411,8 +423,25 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// A gap while the pipeline was stopped is excluded structurally:
     /// `reset()` clears `lastPushMonotonic`, so the first frame of a
     /// (re)started stream records nothing.
-    private func recordArrival() {
+    ///
+    /// W-JBREORDER — `seq` (`nil` if unknown) adds a second, independent
+    /// component on top of lateness: when this arrival is at or behind
+    /// `highestSeqSeen` (the standard definition of "reordered" — the
+    /// stream already progressed past this position), the distance behind
+    /// it, in frames, is converted to ms and ADDED to whatever lateness
+    /// this arrival would otherwise record — capped at the same ceiling.
+    /// Ported from Android's `JitterBuffer.recordArrival`.
+    private func recordArrival(seq: Int64?) {
         let now = nowSeconds()
+        var reorderPenaltyMs = 0
+        if let seq = seq {
+            if let highest = highestSeqSeen, seq <= highest {
+                let framesBehind = highest - seq + 1
+                reorderPenaltyMs = min(Int(framesBehind) * frameMs, Self.adaptTargetMaxMs)
+            } else {
+                highestSeqSeen = seq
+            }
+        }
         guard let prev = lastPushMonotonic else {
             lastPushMonotonic = now
             return
@@ -420,7 +449,8 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         lastPushMonotonic = now
         let gapMs = Int(((now - prev) * 1000.0).rounded())
         guard gapMs >= 0 else { return } // injected/broken clock went backwards: skip the sample
-        let lateness = min(max(gapMs - frameMs, 0), Self.adaptTargetMaxMs)
+        let rawLateness = max(gapMs - frameMs, 0)
+        let lateness = min(rawLateness + reorderPenaltyMs, Self.adaptTargetMaxMs)
         latenessRing[latenessCount % latenessRing.count] = lateness
         latenessCount += 1
         if latenessCount >= Self.adaptMinSamples, latenessCount % Self.adaptRecomputeEvery == 0 {
@@ -552,12 +582,18 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         lastPushMonotonic = nil
     }
 
-    public func push(_ frame: Data) {
+    /// - Parameter seq: W-JBREORDER (2026-09-10) — this frame's wire
+    ///   sequence number, or `nil` if unknown/not applicable (FEC-recovered
+    ///   frames, comfort noise, or any caller that predates this
+    ///   parameter). Used ONLY to detect reordering for `recordArrival`'s
+    ///   target-depth calculation — never affects queueing/ordering here,
+    ///   which stays pure FIFO.
+    public func push(_ frame: Data, seq: Int64? = nil) {
         lock.lock(); defer { lock.unlock() }
         // W-JBADAPT — feed the arrival tracker before any drop decision, so
         // the cadence statistics describe the LINK, not this buffer's own
         // overrun policy.
-        recordArrival()
+        recordArrival(seq: seq)
         if queue.count >= capFrames {
             queue.removeFirst()
             _overruns += 1

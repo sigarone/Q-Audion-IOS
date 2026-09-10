@@ -2541,7 +2541,12 @@ final class CallService: @unchecked Sendable {
     /// (Guardian voice-analysis, fed from the SAME decoded PCM) confirmed
     /// decode was genuinely succeeding — the audio was decoded correctly and
     /// thrown away, never a decode failure.
-    private func playDecodedLegacyPcm(_ pcm: Data) {
+    /// - Parameter seq: W-JBREORDER (2026-09-10) — this frame's wire
+    ///   sequence number, or `nil` if unknown/not applicable (only the main
+    ///   `handleIncomingEncryptedFrame` call site currently has a real one
+    ///   to pass; the FEC-recovered and pre-buffer-drain call sites pass
+    ///   `nil`, same best-effort scope as the rest of W-JBREORDER).
+    private func playDecodedLegacyPcm(_ pcm: Data, seq: Int64? = nil) {
         if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
             // W-RXFALLBACKINJECT diag — checkpoint 1/3, see
             // `rxInjectRouteCount`'s own kdoc. Same first+every-250th
@@ -2560,7 +2565,7 @@ final class CallService: @unchecked Sendable {
             }
             return
         }
-        cap.playFrame(pcm)
+        cap.playFrame(pcm, seq: seq)
     }
 
     public func handleIncomingEncryptedFrame(_ serializedFrame: Data,
@@ -2706,7 +2711,7 @@ final class CallService: @unchecked Sendable {
                 // single-engine: playback runs on the capture engine's player
                 // node, or on WebRTC's own native pipeline — see
                 // playDecodedLegacyPcm's kdoc for the routing decision.
-                self.playDecodedLegacyPcm(pcm)
+                self.playDecodedLegacyPcm(pcm, seq: nackSeq)
                 if self.framesDecryptedRx % 250 == 0 {
                     // W-IOSAUDIOSTARVE (2026-08-02): was
                     // "<n> frames decrypted+played" — prose, which
