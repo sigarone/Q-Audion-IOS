@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1135",
+              date: "2026-09-10",
+              title: "v1.0.1135",
+              bullets: [
+                "fix(ios): accept call_accepted while caller is still pre-ring .active",
+              ]),
         .init(id: "v1.0.1134",
               date: "2026-09-10",
               title: "v1.0.1134",
               bullets: [
+                "chore: regenerate changelog for v1.0.1134",
                 "fix(ios): correct a negative RTCAudioSession.activationCount before activating",
               ]),
         .init(id: "v1.0.1133",
@@ -143,13 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1116",
                 "fix(ui): debounce the red WS-disconnected banner, stop it flashing on every normal reconnect blip",
-              ]),
-        .init(id: "v1.0.1115",
-              date: "2026-09-09",
-              title: "v1.0.1115",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1115",
-                "fix(call): handshake round timing, session-deactivation ownership, mic route pre-check, RX loss/jitter diagnostics",
               ]),
     ]
 }
