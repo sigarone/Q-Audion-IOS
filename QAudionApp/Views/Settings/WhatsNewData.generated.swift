@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1133",
+              date: "2026-09-10",
+              title: "v1.0.1133",
+              bullets: [
+                "fix(ios): drain RTCAudioSession.activationCount fully at call end",
+              ]),
         .init(id: "v1.0.1132",
               date: "2026-09-10",
               title: "v1.0.1132",
               bullets: [
+                "chore: regenerate changelog for v1.0.1132",
                 "diag(ios): log the real error code behind activateAudioSession's setActive failures",
               ]),
         .init(id: "v1.0.1131",
@@ -143,14 +150,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1114",
                 "fix(call): disable native-RTP audio (audioSrtpSendEnabled), revert to legacy relay",
-              ]),
-        .init(id: "v1.0.1113",
-              date: "2026-09-08",
-              title: "v1.0.1113",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1113",
-                "fix(storage): send filename in tus Upload-Metadata for server-side telemetry tagging",
-                "fix(call): gate native audio-srtp mic on genuine accept, not ring-time activation",
               ]),
     ]
 }
