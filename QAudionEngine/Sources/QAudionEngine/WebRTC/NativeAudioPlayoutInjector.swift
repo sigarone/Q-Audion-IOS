@@ -89,8 +89,12 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
     ///   buffer in this app already uses). Default is 1 second at
     ///   `AudioConstants.sampleRate` — generous headroom for the decode
     ///   path's own delivery jitter without letting latency creep unbounded.
+    ///   Only floored at 1 (never 0, to avoid a modulo-by-zero on the ring
+    ///   index math below) — no larger minimum, so a caller (including a
+    ///   test exercising the overflow/drop-oldest path directly) gets
+    ///   exactly the capacity it asked for.
     public init(capacitySamples: Int = AudioConstants.sampleRate) {
-        self.capacity = max(capacitySamples, AudioConstants.samplesPerFrame * 4)
+        self.capacity = max(capacitySamples, 1)
         self.ringBuffer = [Int16](repeating: 0, count: self.capacity)
         super.init()
     }
