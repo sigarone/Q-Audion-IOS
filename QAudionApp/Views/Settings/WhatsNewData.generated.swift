@@ -9,10 +9,19 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1141",
+              date: "2026-09-10",
+              title: "v1.0.1141",
+              bullets: [
+                "fix(audio): overwrite the render buffer instead of adding to it (W-RXGHOSTFIX)",
+                "fix(crypto): stop group/protocol control envelopes from sharing the real-chat ratchet, widen skipped-key cache",
+                "diag(audio): add per-call cdi (call-did-init) native-audio-unit checkpoint",
+              ]),
         .init(id: "v1.0.1140",
               date: "2026-09-10",
               title: "v1.0.1140",
               bullets: [
+                "chore: regenerate changelog for v1.0.1140",
                 "fix(audio): resample RX-injected PCM to the APM's actual negotiated rate",
                 "fix(net): let LiveLogStreamer recover from an expired token instead of failing 401 forever",
               ]),
@@ -143,14 +152,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1122",
                 "fix(call): self-activate audio session on outgoing calls too (caller-side gap)",
-              ]),
-        .init(id: "v1.0.1121",
-              date: "2026-09-09",
-              title: "v1.0.1121",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1121",
-                "feat(call): re-enable native audio-srtp with the CallKit-audio-session forward",
-                "feat(call): forward CallKit audio-session activate/deactivate to RTCAudioSession",
               ]),
     ]
 }
