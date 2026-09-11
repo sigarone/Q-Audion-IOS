@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1145",
+              date: "2026-09-11",
+              title: "v1.0.1145",
+              bullets: [
+                "feat(net): backward-trip circuit breaker for the Reality censorship-bypass fallback",
+              ]),
         .init(id: "v1.0.1144",
               date: "2026-09-11",
               title: "v1.0.1144",
               bullets: [
+                "chore: regenerate changelog for v1.0.1144",
                 "feat(settings): runtime A/B toggle for audio-srtp-v1 vs the custom wire",
                 "feat(audio): reorder-aware jitter-buffer target depth (W-JBREORDER)",
               ]),
@@ -146,13 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1126",
                 "fix(call): balance every RTCAudioSession activate with a deactivate",
-              ]),
-        .init(id: "v1.0.1125",
-              date: "2026-09-09",
-              title: "v1.0.1125",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1125",
-                "fix(call): migrate app self-activation through RTCAudioSession's own lock",
               ]),
     ]
 }
