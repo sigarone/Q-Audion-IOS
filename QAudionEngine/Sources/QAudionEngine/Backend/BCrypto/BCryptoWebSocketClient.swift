@@ -167,6 +167,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// failures the device went silently un-connected and only the next
     /// foreground/app-event could revive it.
     private let maxReconnectDelaySec: TimeInterval = 30
+    /// W-CONNECTINGWATCHDOG (2026-09-11) — see `scheduleConnectingWatchdog`'s
+    /// doc. How long `_state` may sit at `.connecting` with NEITHER a
+    /// successful `authenticated` NOR a `handleDisconnect()` before this
+    /// class stops trusting its own state machine and forces a hard reset.
+    /// Generous over a real TLS+auth round trip (which the fast path of a
+    /// healthy network completes in well under a second) so this never fires
+    /// on ordinary slow-but-alive connects — it exists for the case neither
+    /// callback EVER arrives at all.
+    private let connectingWatchdogTimeoutSec: TimeInterval = 20
     /// Run-once guard for the silent token-recovery cascade. Set true the
     /// first time `auth_failed` triggers `onAuthFailedRecover`; reset to false
     /// on a successful `authenticated` so a *later* token expiry can recover
@@ -1104,6 +1113,76 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         lock.unlock()
         task.resume()
         receiveLoop(generation: gen)
+        scheduleConnectingWatchdog(generation: gen)
+    }
+
+    /// W-CONNECTINGWATCHDOG (2026-09-11) — the backstop this class never had:
+    /// live incident (2026-09-11, iOS device 4ffd5614) showed `_state` stuck
+    /// at `.connecting` — "Riconnessione in corso…" — for 36+ minutes at
+    /// rest, with no call active and no network transition to trigger a
+    /// retry, requiring an app restart to clear. Root cause, confirmed by
+    /// reading this class's own state machine (not guessed): `connect()`'s
+    /// entry guard only proceeds from `_state == .disconnected`, and NOTHING
+    /// in `connect()` itself ever bounds how long a `URLSessionWebSocketTask`
+    /// is allowed to sit unresolved — if the underlying task NEVER delivers
+    /// either an open+authenticate success or a `receive()` failure (a real,
+    /// previously-documented iOS failure mode — see `forceReconnect()`'s own
+    /// `expireReconnectGuardIfStuck` comment for the sibling case this
+    /// mirrors), neither `handleMessage("authenticated")` nor
+    /// `handleDisconnect()` ever fires, so `_state` never moves and nothing
+    /// ever calls `connect()` again on its own. `forceReconnect()` already
+    /// had a 10 s failsafe for its OWN `reconnectInFlight` flag, but that
+    /// failsafe never touched `_state` — a plain `connect()` call (from
+    /// `applyDesiredConnectionState`, initial launch, or anywhere else that
+    /// doesn't route through `forceReconnect()`) had no failsafe at all.
+    /// Scheduling this here, unconditionally, from `connect()` itself closes
+    /// that gap for every call site uniformly.
+    ///
+    /// Deliberately a HARD reset, not a gentle nudge: past this deadline the
+    /// class stops trying to diagnose WHICH internal flag is stuck (recovery
+    /// cascade hung? auth wrongly latched permanently-rejected? the task
+    /// itself ghosted?) and just clears all of them, exactly the class of
+    /// "device decides to reset on its own when something looks wrong"
+    /// resilience this was asked to add — see
+    /// reference_ws_reconnect_watchdog_audit_2026_09_11.md.
+    private func scheduleConnectingWatchdog(generation: Int) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + connectingWatchdogTimeoutSec) { [weak self] in
+            self?.fireConnectingWatchdogIfStuck(generation: generation)
+        }
+    }
+
+    private func fireConnectingWatchdogIfStuck(generation: Int) {
+        lock.lock()
+        // A NEWER connect() attempt (or a clean disconnect) already moved
+        // past this one — this watchdog's job here is done, nothing to do.
+        guard generation == connectionGeneration, _state == .connecting else {
+            lock.unlock()
+            return
+        }
+        let stuckTask = webSocketTask
+        webSocketTask = nil
+        // Unconditionally clear every flag that could otherwise block the
+        // reconnect this is about to trigger — see the class-level doc
+        // above: diagnosing which one is stuck is not the point, recovering
+        // is. `authPermanentlyRejected` in particular would otherwise make
+        // handleDisconnect() below refuse to schedule anything at all.
+        reconnectInFlight = false
+        authRecoveryInFlight = false
+        authPermanentlyRejected = false
+        // Bump the generation so the cancel below (and any late callback
+        // from the stuck task) is unambiguously stale by the time
+        // handleDisconnect's own generation check runs.
+        connectionGeneration &+= 1
+        let reason = "connecting-watchdog: stuck in .connecting for \(Int(connectingWatchdogTimeoutSec))s — forcing hard reset"
+        lock.unlock()
+        print("[BCryptoWS] \(reason)")
+        stuckTask?.cancel(with: .abnormalClosure, reason: nil)
+        // Reuses the existing, proven backoff-reconnect machinery instead of
+        // re-deriving retry logic here — handleDisconnect() sets `_state =
+        // .disconnected`, increments the attempt counter (so this does not
+        // reset backoff to the fast 1 s floor on a repeatedly-stuck path),
+        // and schedules the next attempt.
+        handleDisconnect(generation: nil, reason: reason)
     }
 
     public func disconnect() {
