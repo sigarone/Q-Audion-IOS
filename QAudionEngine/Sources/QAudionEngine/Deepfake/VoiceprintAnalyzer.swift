@@ -17,6 +17,28 @@ public final class VoiceprintAnalyzer {
     private static let samplesPerFrame = 960 // 20ms at 48kHz
     private static let framesNeeded = 202 // ~4.04s at 48kHz / 20ms
 
+    /// W-GUARDIANVAD (2026-09-11) — same normalized-float RMS threshold as
+    /// `SpeakerVerifier.voiceActivityRmsThreshold` (360.0/32768.0), reused
+    /// here for the identical reason: a live incident showed this badge
+    /// reading 0.14 with the mic MUTED — AASIST was never trained on
+    /// silence, so feeding it silence swings the score toward "not
+    /// bonafide" for reasons that have nothing to do with a real deepfake.
+    /// Android's `DeepfakeMonitor`/`OnnxDeepfakeClassifier` and this
+    /// engine's own `ContactVoiceVerifier` (Tier 2) both gate the ENTIRE
+    /// scoring tick on this same check; this class — Tier 1, a much older,
+    /// single-signal pipeline — never did.
+    private static let vadRmsThreshold: Float = 360.0 / 32_768.0
+    /// Same calibration shape as Android's `DeepfakeMonitor.calibrate()`
+    /// and this engine's own `ContactVoiceVerifier.calibrate()` — raw
+    /// AASIST output for genuine speech does not cluster near 1.0 by
+    /// design (live-observed on this exact model: ~0.46 for ordinary
+    /// speech), so leaving it unremapped reads as alarmingly low for a
+    /// perfectly genuine caller. Below `genuineFloor` is left unchanged
+    /// (deepfake zone — never inflate a real attack signal); at/above it,
+    /// linearly remapped to `[displayFloor, 1.0]`.
+    private static let genuineFloor: Float = 0.20
+    private static let displayFloor: Float = 0.95
+
     private var sampleBuffer: [Float]
     private var sampleCount = 0
     private let bufferLock = NSLock()
@@ -50,6 +72,15 @@ public final class VoiceprintAnalyzer {
 
         let floatSamples = pcmBytesToFloat(pcmFrame)
 
+        // W-GUARDIANVAD — silence/muted-mic frames contribute NOTHING: not
+        // to the inference window, not to a score this tick. Mirrors the
+        // "hold the last value, never fabricate/degrade on silence"
+        // discipline this class's own `analyze`/`performInference` kdoc
+        // already applies to the "not ready yet" and "inference failed"
+        // cases — this is the same contract extended to "no real audio to
+        // judge in the first place".
+        guard rms(floatSamples) >= Self.vadRmsThreshold else { return nil }
+
         bufferLock.lock()
         let spaceLeft = sampleBuffer.count - sampleCount
         let toCopy = min(floatSamples.count, spaceLeft)
@@ -62,7 +93,7 @@ public final class VoiceprintAnalyzer {
 
         guard ready else { return nil }
 
-        let score = performInference()
+        let score = performInference().map(Self.calibrate)
 
         // Slide buffer: keep last half for overlap
         bufferLock.lock()
@@ -114,6 +145,21 @@ public final class VoiceprintAnalyzer {
 
     private func sigmoid(_ x: Float) -> Float {
         1.0 / (1.0 + exp(-x))
+    }
+
+    private func rms(_ pcm: [Float]) -> Float {
+        guard !pcm.isEmpty else { return 0 }
+        var sumSquares: Float = 0
+        for v in pcm { sumSquares += v * v }
+        return (sumSquares / Float(pcm.count)).squareRoot()
+    }
+
+    /// See `genuineFloor`/`displayFloor`'s kdoc. Verbatim port of the same
+    /// remap Android's `DeepfakeMonitor.calibrate()` and this engine's
+    /// `ContactVoiceVerifier.calibrate()` already use.
+    private static func calibrate(_ raw: Float) -> Float {
+        guard raw >= genuineFloor else { return raw }
+        return displayFloor + (raw - genuineFloor) / (1 - genuineFloor) * (1 - displayFloor)
     }
 
     private func pcmBytesToFloat(_ data: Data) -> [Float] {

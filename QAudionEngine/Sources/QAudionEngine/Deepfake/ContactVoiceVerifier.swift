@@ -135,6 +135,16 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// carries into its own `ReKeyScheduler.observeConfidence` call.
     public var onScoreUpdated: ((Float) -> Void)?
 
+    /// W-GUARDIAN3SIG (2026-09-11) — pure diagnostics, fired alongside
+    /// [onScoreUpdated] on the same tick with the individual RAW (pre-
+    /// `calibrate()`) sub-scores plus the final calibrated combine, in the
+    /// order (deepfake, liveness, voiceprint, combined). Exists ONLY so the
+    /// re-key-facing confidence — which has no on-screen display anywhere,
+    /// unlike Tier 1's badge — can be verified live instead of inferred
+    /// indirectly from re-key timing. Never touches `onScoreUpdated`'s own
+    /// behavior or value.
+    public var onScoreBreakdown: ((_ deepfake: Float, _ liveness: Float, _ voiceprint: Float, _ combined: Float) -> Void)?
+
     /// Fires on `scoreQueue` whenever the speaker-change verdict actually
     /// changes. Informational: the app layer shows it and does nothing else
     /// with it — no muting, no teardown, no key action.
@@ -352,6 +362,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
 
             self.scoreQueue.async {
                 self.onScoreUpdated?(combined)
+                self.onScoreBreakdown?(genuineProb, liveness, vp, combined)
                 self.lock.lock()
                 self.tickInFlight = false
                 self.lock.unlock()

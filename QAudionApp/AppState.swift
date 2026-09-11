@@ -3517,6 +3517,22 @@ final class AppState: ObservableObject {
             self.vcaLastLocalConfidence = score
             self.reKeyScheduler.observeConfidence(score)
         }
+        // W-GUARDIAN3SIG (2026-09-11) — the re-key-facing confidence has no
+        // on-screen display anywhere (unlike Tier 1's `CallSecurityBadge`,
+        // which reads a completely different, unrelated score) — this is
+        // the only way to verify it live instead of inferring it from
+        // re-key timing. `RTLog.info` (not `print`) because plain stdout
+        // never reaches the shipped Loki pipeline — see
+        // `reference_ios_log_pipeline_limits.md`.
+        callService.onContactVoiceScoreBreakdown = { df, lv, vp, combined in
+            RTLog.info(
+                "rekey",
+                "guardian3sig df=" + String(format: "%.2f", df) +
+                    " lv=" + String(format: "%.2f", lv) +
+                    " vp=" + String(format: "%.2f", vp) +
+                    " combined=" + String(format: "%.2f", combined)
+            )
+        }
         // W-PLPFEEDBACK (2026-08-25) — CallService's own timer measured a
         // fresh windowed inbound-loss percentage; ship it to the peer. Same
         // defensive hop as `onOwnerContinuityStateChanged` above rather than
