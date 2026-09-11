@@ -81,7 +81,13 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// `AudioConstants` VAD constant to derive this from at this layer, so
     /// the same already-validated NUMERIC value is used directly rather
     /// than re-deriving/guessing a new one.
-    private static let voiceActivityRmsThreshold: Float = 360.0 / 32_768.0
+    ///
+    /// W-GUARDIAN3SIG (2026-09-11) — widened from `private` to `internal` so
+    /// `ContactVoiceVerifier`'s whole-tick VAD gate (mirroring Android's
+    /// `DeepfakeMonitor.feed()` silence skip) compares against the SAME
+    /// normalized-float threshold this class already uses, instead of a
+    /// second hand-duplicated magic number.
+    static let voiceActivityRmsThreshold: Float = 360.0 / 32_768.0
 
     private let embedder: any SpeakerEmbedding
     private let lock = NSLock()
@@ -456,7 +462,13 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// filter; acceptable for a speaker-embedding frontend the same way
     /// it's acceptable for the deepfake models that already do this. No-op
     /// if already at 16kHz.
-    private static func resampleTo16k(_ signal: [Float], fromHz: Int) -> [Float] {
+    ///
+    /// W-GUARDIAN3SIG (2026-09-11) — widened from `private` to `internal`
+    /// so `ContactVoiceVerifier` (same module, different file) can reuse
+    /// this exact, already-accepted resampler for the deepfake classifier's
+    /// own 16kHz input requirement instead of duplicating the block-average
+    /// logic a second time. No behavior change to this function itself.
+    static func resampleTo16k(_ signal: [Float], fromHz: Int) -> [Float] {
         guard fromHz != KaldiFbankExtractor.sampleRate, !signal.isEmpty else { return signal }
         let factor = max(fromHz / KaldiFbankExtractor.sampleRate, 1)
         let outLen = signal.count / factor
@@ -471,7 +483,11 @@ public final class SpeakerVerifier: @unchecked Sendable {
         return out
     }
 
-    private static func pcmToFloat(_ data: Data) -> [Float] {
+    /// W-GUARDIAN3SIG (2026-09-11) — widened from `private` to `internal` so
+    /// `ContactVoiceVerifier` (same module, different file) can reuse this
+    /// exact Int16→Float conversion for its own 16kHz rolling buffer instead
+    /// of duplicating it. No behavior change to this function itself.
+    static func pcmToFloat(_ data: Data) -> [Float] {
         let count = data.count / 2
         guard count > 0 else { return [] }
         var floats = [Float](repeating: 0, count: count)

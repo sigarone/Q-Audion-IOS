@@ -519,6 +519,22 @@ public enum CallPiggyBack: Equatable {
     /// Android's `WsCallSignaller.PLP_PAYLOAD_PREFIX` byte for byte.
     case plp(callId: String, percent: Int)
 
+    /// `<callId>|VCONF:<base64(nonce||ciphertext+tag)>` — W-VOICECONFSYNC
+    /// (2026-09-11): the RESPONDER's periodic advisory that the CALLER's
+    /// voice looks suspicious, so the caller's re-key scheduler (the only
+    /// side whose confidence has ever had a real effect on when a re-key
+    /// actually fires) can react. UNLIKE every other case on this list,
+    /// `sealedPayload` is genuinely E2E encrypted, not plaintext to the
+    /// relay — see `VoiceConfidenceAnnounceCipher`'s kdoc for why this one
+    /// needed real encryption where PLP/OWNER_CONT/etc. did not (it reveals
+    /// "a deepfake-suspicion event happened on this call, with this
+    /// score," not a network stat). Mirrors Android's
+    /// `WsCallSignaller.VOICE_CONFIDENCE_PAYLOAD_PREFIX` byte for byte.
+    /// This enum has no key material, so it only carries the still-sealed
+    /// blob through — `AppState` (which does hold `activeKey`/the PQC
+    /// session key) decrypts and validates it.
+    case voiceConfidence(callId: String, sealedPayload: String)
+
     /// `<callId>|EARBUDPDU:<base64>` — opaque earbud-firmware handshake
     /// PDU (earbud-relay-v1). The earbud-side phone relays HSRESP
     /// fragments from the firmware; iOS (always the SW counterparty)
@@ -627,6 +643,14 @@ public enum CallPiggyBack: Equatable {
             else { return nil }
             return .plp(callId: callId, percent: pct)
         }
+        // VCONF:<base64> — sealed, only structurally validated here (a
+        // non-empty base64-looking blob). Decryption/AEAD verification
+        // happens in AppState, which holds the session key this enum
+        // never sees. An empty body is the only thing worth dropping at
+        // this layer.
+        if let v = stripPrefix(payload, "VCONF:"), !v.isEmpty {
+            return .voiceConfidence(callId: callId, sealedPayload: v)
+        }
         // EARBUDPDU:<base64> — earbud-relay-v1 handshake PDU. Malformed
         // base64 is dropped fail-closed (handshake simply won't complete),
         // mirroring the Android receive site.
@@ -717,6 +741,16 @@ public enum CallPiggyBack: Equatable {
     /// value the PEER's parser would then have to reject.
     public static func serializePlp(callId: String, percent: Int) -> String {
         "\(callId)|PLP:\(min(max(percent, 0), 100))"
+    }
+
+    /// Build a wire string for a VCONF announce — the inverse of the
+    /// `.voiceConfidence` parse branch. `sealedPayload` must already be
+    /// the base64 output of `VoiceConfidenceAnnounceCipher.seal` — this
+    /// function does no encryption itself, it only frames an
+    /// already-sealed blob, mirroring Android's `WsCallSignaller`'s own
+    /// separation (the signaller frames, `CallController` seals).
+    public static func serializeVoiceConfidence(callId: String, sealedPayload: String) -> String {
+        "\(callId)|VCONF:\(sealedPayload)"
     }
 
     /// Build a wire string for an OWNER_CONT announce — the inverse of the

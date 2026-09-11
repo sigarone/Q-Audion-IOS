@@ -1145,6 +1145,51 @@ final class AppState: ObservableObject {
     /// W-KEYSLOTROTATE v3 — the last key VALUE the epoch counter charged;
     /// dedupes sasReady's many re-firings per call.
     var lastCountedPqcKey: Data?
+
+    // MARK: - W-VOICECONFSYNC (2026-09-11) — voice-confidence-announce state
+    //
+    // Port of Android's `CallController` `vca*` fields (same names, `vca`
+    // prefix kept for cross-reading the two implementations side by side).
+    // See `VoiceConfidenceAnnounceCipher`'s kdoc for the wire format and
+    // `routeInboundCallPiggyBack`'s `.voiceConfidence` case / the
+    // `onContactVoiceScoreUpdated` responder branch for how these are used.
+    //
+    // Send-side fields (`vcaLowStreak`/`vcaLastSentAtMs`/`vcaSendSeq`) are
+    // touched ONLY from `ContactVoiceVerifier.onScoreUpdated`'s closure,
+    // which always fires serialized on that class's own `scoreQueue` — safe
+    // as plain vars, single writer. Receive-side fields
+    // (`vcaLastSeenPeerSeq`/`vcaLastEffectAtMs`/`vcaPeerDropsCount`) are
+    // touched ONLY from `routeInboundCallPiggyBack`, which always runs
+    // `@MainActor` — also safe as plain vars. `vcaLastLocalConfidence` is
+    // the one field BOTH sides touch (written off-main by the initiator
+    // branch, read on-MainActor by the receive-side combine), so it alone
+    // gets a real lock rather than relying on either side's isolation.
+    private var vcaLowStreak: Int = 0
+    private var vcaLastSentAtMs: Int64 = 0
+    private var vcaSendSeq: Int32 = 0
+    private var vcaLastSeenPeerSeq: Int32 = -1
+    private var vcaLastEffectAtMs: Int64 = 0
+    private var vcaPeerDropsCount: Int = 0
+    private let vcaLock = NSLock()
+    private var _vcaLastLocalConfidence: Float = 1
+    private var vcaLastLocalConfidence: Float {
+        get { vcaLock.lock(); defer { vcaLock.unlock() }; return _vcaLastLocalConfidence }
+        set { vcaLock.lock(); defer { vcaLock.unlock() }; _vcaLastLocalConfidence = newValue }
+    }
+
+    /// Debounce (never a trust boundary on its own — see the send-side call
+    /// site's comment): consecutive low-confidence ticks required before an
+    /// announce is even considered. Same value as `AUDIT_BAD_FRAMES_THRESHOLD`
+    /// Android reuses for this same purpose.
+    private let vcaAuditBadFramesThreshold = 3
+    private let vcaLowThreshold: Float = 0.6
+    private let vcaSendThrottleMs: Int64 = 10_000
+    /// Real security-relevant bound (receive side): an untrusted peer can
+    /// never drag the combined confidence below this floor, however low its
+    /// self-reported score claims to be.
+    private let vcaPeerFloor: Float = 0.10
+    private let vcaPeerEffectThrottleMs: Int64 = 30_000
+    private let vcaMaxPeerDropsPerCall = 5
     /// Task 10 — the video PQC sealer's `(callId, selfIsRoleA)` identity,
     /// pinned ONCE at `startVideoPipeline` and reused verbatim by the later
     /// `wireSasReadyToController` rotate. Two independently-computed
@@ -3436,7 +3481,40 @@ final class AppState: ObservableObject {
         // continuity UI and audit paths elsewhere (unaffected — they don't
         // go through reKeyScheduler).
         callService.onContactVoiceScoreUpdated = { [weak self] score in
-            guard let self, self.callService.callIntegration?.currentIsCaller == true else { return }
+            guard let self else { return }
+            guard self.callService.callIntegration?.currentIsCaller == true else {
+                // W-VOICECONFSYNC (2026-09-11) — the asymmetry the block
+                // above leaves open: a responder that distrusts the
+                // CALLER's voice now gets a real, bounded lever. Debounced
+                // on the same threshold/streak shape as Android's audit
+                // hysteresis (never fire on a single-frame ~2% FPR dip),
+                // then throttled to at most one announce per
+                // `vcaSendThrottleMs` — the RECEIVE side (below, in
+                // `routeInboundCallPiggyBack`'s `.voiceConfidence` case)
+                // applies the real security-relevant bounds (peer floor,
+                // effect-throttle, hard cap); this send-side throttle only
+                // avoids spamming the wire. Designed with nim.ps1 -Mode
+                // security + an independent Gemini pass (Android original,
+                // this port carries the same design forward unchanged).
+                if score < self.vcaLowThreshold {
+                    self.vcaLowStreak += 1
+                } else {
+                    self.vcaLowStreak = 0
+                }
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                if self.vcaLowStreak >= self.vcaAuditBadFramesThreshold,
+                   now - self.vcaLastSentAtMs >= self.vcaSendThrottleMs {
+                    self.vcaSendSeq += 1
+                    let seq = self.vcaSendSeq
+                    self.vcaLastSentAtMs = now
+                    Task { @MainActor [weak self] in
+                        guard let self, let peerId = self.callContactId else { return }
+                        await self.sendVoiceConfidenceAnnounce(seq: seq, confidence: score, atEpochMs: now, peerId: peerId)
+                    }
+                }
+                return
+            }
+            self.vcaLastLocalConfidence = score
             self.reKeyScheduler.observeConfidence(score)
         }
         // W-PLPFEEDBACK (2026-08-25) — CallService's own timer measured a
@@ -12125,6 +12203,47 @@ final class AppState: ObservableObject {
             }
             callService.applyPeerPacketLossReport(percent)
             print("[AppState] PLP received callId=\(callId.prefix(8))… percent=\(percent) from=\(senderId.prefix(8))…")
+        case .voiceConfidence(let callId, let sealedPayload):
+            // W-VOICECONFSYNC (2026-09-11) — the responder's sealed
+            // voice-confidence advisory about OUR (the caller's) voice.
+            // Only meaningful on the initiator leg (only the initiator's
+            // `reKeyScheduler` ever drives a real re-key — see
+            // `onContactVoiceScoreUpdated`'s guard above), but harmless to
+            // run unconditionally: on the responder leg `currentIsCaller`
+            // is false so `reKeyScheduler.observeConfidence` below is
+            // simply never reached. Sender guard mirrors every other
+            // per-call-peer opaque above (PLP/VOICE_KEY/OWNER_CONT/SPKCHG).
+            guard callContactId == senderId else {
+                print("[AppState] VCONF dropped — sender \(senderId.prefix(8))… is not the call peer")
+                return
+            }
+            guard callService.callIntegration?.currentIsCaller == true else { return }
+            guard let sessionKey = callPqcSessionKey,
+                  let announce = VoiceConfidenceAnnounceCipher.open(sessionKey: sessionKey, callId: callId, payload: sealedPayload)
+            else {
+                print("[AppState] VCONF failed to open (bad tag/format) call=\(callId.prefix(8))…")
+                return
+            }
+            // Anti-replay: strictly increasing seq only. An AES-GCM
+            // ciphertext still decrypts successfully if a MITM (or the
+            // relay) blindly replays an OLD blob it observed earlier — the
+            // tag alone proves integrity+authenticity, not freshness.
+            guard announce.seq > vcaLastSeenPeerSeq else {
+                print("[AppState] VCONF stale/replayed seq=\(announce.seq) (last=\(vcaLastSeenPeerSeq)) call=\(callId.prefix(8))…")
+                return
+            }
+            vcaLastSeenPeerSeq = announce.seq
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            guard now - vcaLastEffectAtMs >= vcaPeerEffectThrottleMs else { return }
+            guard vcaPeerDropsCount < vcaMaxPeerDropsPerCall else { return }
+            let peerEffective = max(min(announce.confidence, 1), vcaPeerFloor)
+            let combined = min(vcaLastLocalConfidence, peerEffective)
+            if combined < vcaLastLocalConfidence {
+                vcaLastEffectAtMs = now
+                vcaPeerDropsCount += 1
+                print("[AppState] voice-confidence peer-driven re-key acceleration call=\(callId.prefix(8))… peerConf=\(announce.confidence) local=\(vcaLastLocalConfidence) combined=\(combined) drops=\(vcaPeerDropsCount)/\(vcaMaxPeerDropsPerCall)")
+                reKeyScheduler.observeConfidence(combined)
+            }
         case .earbudPdu(let callId, let pdu):
             // earbud-relay-v1 — HSRESP fragments relayed by the
             // earbud-side phone. Sender must be the active call peer
@@ -17023,6 +17142,33 @@ extension AppState {
         }
     }
 
+    /// W-VOICECONFSYNC (2026-09-11) — ship one sealed voice-confidence
+    /// advisory. Mirrors `sendPlpAnnounce`'s shape (same active-call-id
+    /// guard, same fire-and-forget error handling, same `OpaqueSelfEchoFilter`
+    /// self-echo guard) but E2E-encrypts the payload first — see
+    /// `VoiceConfidenceAnnounceCipher`'s kdoc for why this channel can't
+    /// reuse PLP's cleartext pattern. `nil` session key or missing call id
+    /// silently skips the send, same "best-effort control report" contract
+    /// every sibling announce on this channel already has.
+    @MainActor
+    private func sendVoiceConfidenceAnnounce(seq: Int32, confidence: Float, atEpochMs: Int64, peerId: String) async {
+        guard callContactId == peerId else { return }
+        guard let provider = liveProvider,
+              let impl = provider.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(), !callId.isEmpty,
+              let sessionKey = callPqcSessionKey
+        else { return }
+        let announce = VoiceConfidenceAnnounceCipher.Announce(seq: seq, confidence: confidence, atEpochMs: atEpochMs)
+        guard let sealed = VoiceConfidenceAnnounceCipher.seal(sessionKey: sessionKey, callId: callId, announce: announce) else { return }
+        let wire = CallPiggyBack.serializeVoiceConfidence(callId: callId, sealedPayload: sealed)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        do {
+            try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+        } catch {
+            print("[AppState] voice-confidence announce failed: \(error)")
+        }
+    }
+
     /// `notifyPeerInBand`: whether to fire the W-DCHANGUP in-band control
     /// frame at the peer before teardown. `true` (default) for every
     /// locally-initiated ending; `false` when the ending was learned FROM the
@@ -17317,6 +17463,16 @@ extension AppState {
         callPqcSessionKey = nil
         callPqcRekeyEpoch = -1
         lastCountedPqcKey = nil
+        // W-VOICECONFSYNC — per-call announce/anti-replay state must not
+        // leak into the next call (a stale vcaLastSeenPeerSeq would reject
+        // the new call's first legitimate announce as "replayed").
+        vcaLowStreak = 0
+        vcaLastSentAtMs = 0
+        vcaSendSeq = 0
+        vcaLastLocalConfidence = 1
+        vcaLastSeenPeerSeq = -1
+        vcaLastEffectAtMs = 0
+        vcaPeerDropsCount = 0
         // Same reasoning as callPqcSessionKey above, extended to the PSK
         // display metadata it's paired with in the UI (LiveInCallScreen's
         // KeyInfo panel, OutgoingCallScreen's PSK pill): without this, a
