@@ -13945,6 +13945,16 @@ final class AppState: ObservableObject {
         // AFTER clearnet is exhausted — Reality is never the default route.
         if newWss == nil {
             await activateRealityFallback(reason: "auto-clearnet-block")
+            // W-REALITYBREAKER (2026-09-11) — only for the AUTO trigger, never
+            // for a manual force (setForceRealityTransport has its own ON/OFF
+            // path and must not be silently abandoned once direct recovers —
+            // see startRealityRecoveryWatch's own doc). transportIsReality
+            // only actually flips true here if activateRealityFallback
+            // succeeded; a failed activation (no config, engine unavailable,
+            // never reached Ready) correctly starts nothing.
+            if transportIsReality {
+                startRealityRecoveryWatch()
+            }
         }
     }
 
@@ -14056,6 +14066,8 @@ final class AppState: ObservableObject {
                 await self.activateRealityFallback(reason: "manual-force")
             } else {
                 // Revert to clearnet: drop the tunnel + re-dial direct.
+                self.realityRecoveryTask?.cancel()
+                self.realityRecoveryTask = nil
                 ws.disconnect()
                 await RealityManager.shared.stop()
                 self.transportIsReality = false
@@ -14064,6 +14076,118 @@ final class AppState: ObservableObject {
             }
         }
     }
+
+    /// W-REALITYBREAKER (2026-09-11) — the backward trip AppState never had:
+    /// once `activateRealityFallback` latched `transportIsReality = true` via
+    /// the AUTO path, nothing ever reverted it short of this manual toggle or
+    /// a full app restart, even after direct clearnet genuinely recovered.
+    /// Mirrors Android's `NetworkProtocolRouter.startRecoveryWatch` — see
+    /// reference_reality_circuitbreaker_audit_2026_09_11.md for the full
+    /// design rationale, confirmed via `nim.ps1 -Mode security` on the
+    /// Android side and ported here unchanged. Two properties that are NOT
+    /// decorative:
+    ///  - Keys OFF ONLY the direct path's own independently-proven health,
+    ///    NEVER off Reality's own reported health — an adversary who can
+    ///    interfere with OUR Reality tunnel specifically must not be able to
+    ///    force repeated fake "Reality failed" signals to bounce us back onto
+    ///    the very clearnet path they want to keep blocking.
+    ///  - `probeDirectRecovered` proves a real APPLICATION-layer round trip,
+    ///    not merely a completed TLS handshake — a censor can transparently
+    ///    forward the TCP handshake then silently drop the stream, which
+    ///    would otherwise fake exactly the signal this breaker looks for.
+    ///
+    /// Only started from `handleNodeStalled`'s AUTO trigger (never for a
+    /// manual force); the trip-back branch below still checks
+    /// `AppState.forceRealityEnabled` a second time in case a tester forces
+    /// Reality on WHILE this loop is already running from an earlier auto
+    /// activation — that manual override must survive direct recovering,
+    /// same separation `setForceRealityTransport`'s own OFF branch respects
+    /// in reverse (never silently drops an auto fallback that is still
+    /// needed).
+    private var realityRecoveryTask: Task<Void, Never>?
+
+    @MainActor
+    private func startRealityRecoveryWatch() {
+        realityRecoveryTask?.cancel()
+        realityRecoveryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: AppState.recoveryMinDwellNs)
+            var consecutiveOk = 0
+            while !Task.isCancelled, self.transportIsReality {
+                let ok = await AppState.probeDirectRecovered()
+                if Task.isCancelled { return }
+                if ok {
+                    consecutiveOk += 1
+                    print("[AppState] Recovery probe: direct path reachable (\(consecutiveOk)/\(AppState.recoveryHysteresisSamples))")
+                    if consecutiveOk >= AppState.recoveryHysteresisSamples {
+                        print("[AppState] Direct clearnet path recovered (\(consecutiveOk) consecutive real successes) — abandoning Reality")
+                        if !AppState.forceRealityEnabled {
+                            if let prov = self.liveProvider {
+                                let ws = prov.getWebSocketClient()
+                                await RealityManager.shared.stop()
+                                self.transportIsReality = false
+                                ws.disconnect()
+                                ws.connect()
+                            } else {
+                                await RealityManager.shared.stop()
+                                self.transportIsReality = false
+                            }
+                            print("[AppState] Reality fallback abandoned — direct clearnet path recovered")
+                        } else {
+                            print("[AppState] Direct recovered but Reality force is still on — leaving Reality up")
+                        }
+                        return
+                    }
+                } else {
+                    if consecutiveOk > 0 {
+                        print("[AppState] Recovery probe: direct path failed — resetting after \(consecutiveOk) consecutive success(es)")
+                    }
+                    consecutiveOk = 0
+                }
+                try? await Task.sleep(nanoseconds: AppState.recoveryProbeIntervalNs)
+            }
+        }
+    }
+
+    /// Deep, real DIRECT-path probe used ONLY by `startRealityRecoveryWatch`
+    /// — see its doc above for why this must go past a completed TLS
+    /// handshake. A real HTTPS GET to this app's own production endpoint,
+    /// same host/path every other request uses, so it is not distinguishable
+    /// from ordinary app traffic by SNI/host. Deliberately `URLSession`
+    /// rather than a raw socket (contrast `RealityManager.probeSocks5Sync`,
+    /// which must speak SOCKS5 to a local proxy and can't use the app's
+    /// normal HTTP stack) — there is no proxy here, this IS the plain
+    /// clearnet path, so the app's own real request stack is both simpler
+    /// and more representative of genuine app traffic than a hand-rolled
+    /// socket would be. An ephemeral session with no configured proxy
+    /// guarantees this never accidentally reads Reality's own SOCKS state.
+    private static func probeDirectRecovered() async -> Bool {
+        guard let url = URL(string: "https://\(recoveryProbeHost)\(recoveryProbePath)") else { return false }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: recoveryProbeTimeoutSec)
+        request.httpMethod = "GET"
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = recoveryProbeTimeoutSec
+        config.timeoutIntervalForResource = recoveryProbeTimeoutSec
+        config.connectionProxyDictionary = [:]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+            guard let body = String(data: data, encoding: .utf8) else { return false }
+            return body.contains(recoveryProbeBodyMarker)
+        } catch {
+            return false
+        }
+    }
+
+    private static let recoveryProbeHost = "voip.bcrypto.com"
+    private static let recoveryProbePath = "/api/v1/health"
+    private static let recoveryProbeBodyMarker = "\"status\":\"ok\""
+    private static let recoveryProbeTimeoutSec: TimeInterval = 6
+    private static let recoveryMinDwellNs: UInt64 = 120 * 1_000_000_000
+    private static let recoveryProbeIntervalNs: UInt64 = 60 * 1_000_000_000
+    private static let recoveryHysteresisSamples = 3
 
     func logout() {
         authService.clearToken()
