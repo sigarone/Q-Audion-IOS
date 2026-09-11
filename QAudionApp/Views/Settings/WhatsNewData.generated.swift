@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1148",
+              date: "2026-09-11",
+              title: "v1.0.1148",
+              bullets: [
+                "fix(guardian): VAD-gate + calibrate Tier-1 deepfake badge, expose Tier-2 confidence breakdown",
+              ]),
         .init(id: "v1.0.1147",
               date: "2026-09-11",
               title: "v1.0.1147",
               bullets: [
+                "chore: regenerate changelog for v1.0.1147",
                 "feat(guardian): wire deepfake+liveness into 3-signal confidence, port voice-confidence-announce",
               ]),
         .init(id: "v1.0.1146",
@@ -146,13 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1129",
                 "fix(ios): persistent RTCPeerConnectionFactory/ADM to close native audio-srtp capture latch",
-              ]),
-        .init(id: "v1.0.1128",
-              date: "2026-09-09",
-              title: "v1.0.1128",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1128",
-                "fix(call): track our own RTCAudioSession activation, not CallKit's ledger",
               ]),
     ]
 }
