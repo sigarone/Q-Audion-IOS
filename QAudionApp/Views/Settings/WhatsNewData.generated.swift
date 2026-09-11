@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1149",
+              date: "2026-09-11",
+              title: "v1.0.1149",
+              bullets: [
+                "fix(guardian): visible C badge now reads Tier-2's 3-signal combine, matches Android",
+              ]),
         .init(id: "v1.0.1148",
               date: "2026-09-11",
               title: "v1.0.1148",
               bullets: [
+                "chore: regenerate changelog for v1.0.1148",
                 "fix(guardian): VAD-gate + calibrate Tier-1 deepfake badge, expose Tier-2 confidence breakdown",
               ]),
         .init(id: "v1.0.1147",
@@ -146,13 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1130",
                 "diag(ios): bridge WebRTC's native AudioDeviceIOS log lines into Loki",
-              ]),
-        .init(id: "v1.0.1129",
-              date: "2026-09-09",
-              title: "v1.0.1129",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1129",
-                "fix(ios): persistent RTCPeerConnectionFactory/ADM to close native audio-srtp capture latch",
               ]),
     ]
 }
