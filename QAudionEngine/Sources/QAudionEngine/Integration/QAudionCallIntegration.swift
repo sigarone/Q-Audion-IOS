@@ -252,6 +252,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// current call. Used to gate pre-negotiation event handling.
     private var isCaller: Bool = false
 
+    /// W-REKEYDISPSYNC (2026-09-11) — thread-safe read of [isCaller] for
+    /// callers outside this class (AppState's confidence-feed gate). Mirrors
+    /// Android's `CallController.currentIsInitiator()`. Same value
+    /// `performPqcReKey`'s own guard already enforces — this just lets a
+    /// caller check it BEFORE doing work that would otherwise be wasted on
+    /// the responder leg (see that property's own doc for why responder-side
+    /// confidence has no effect on a real re-key).
+    public var currentIsCaller: Bool { lock.withLock { isCaller } }
+
     /// W574x — go-live gate for directional per-direction PQC RTP sealer keys
     /// (fixes the bidirectional AES-GCM nonce reuse on the relay path). Mirrors
     /// Android `PqcHandshake.SRTP_DIR_KEYS_ENABLED` / Desktop

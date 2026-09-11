@@ -3419,8 +3419,25 @@ final class AppState: ObservableObject {
         // continuity score into the re-key scheduler's adaptive deadline.
         // Off-main is fine here: `observeConfidence` is thread-safe (own
         // lock) and touches no `@MainActor` state.
+        //
+        // W-REKEYDISPSYNC (2026-09-11) — gated on currentIsCaller, port of
+        // Android's identical fix (CallController.kt). performPqcReKey's own
+        // isCaller guard already makes the responder's confidence-driven
+        // trigger a no-op for any REAL re-key (see that guard's doc a few
+        // lines below) — but feeding it in here still shrank the
+        // responder's OWN displayed countdown with zero effect on when a
+        // real re-key happens, live-observed on Android as the two call
+        // legs' RE-KEY numbers drifting apart after every local confidence
+        // dip on either side, even right after the peer-sync mechanism had
+        // them matching. Skipping this on the responder leaves its
+        // countdown a pure real-time mirror between synced updates —
+        // matches what performPqcReKey already enforces functionally. The
+        // raw score still flows unconditionally to speaker-verification/
+        // continuity UI and audit paths elsewhere (unaffected — they don't
+        // go through reKeyScheduler).
         callService.onContactVoiceScoreUpdated = { [weak self] score in
-            self?.reKeyScheduler.observeConfidence(score)
+            guard let self, self.callService.callIntegration?.currentIsCaller == true else { return }
+            self.reKeyScheduler.observeConfidence(score)
         }
         // W-PLPFEEDBACK (2026-08-25) — CallService's own timer measured a
         // fresh windowed inbound-loss percentage; ship it to the peer. Same
