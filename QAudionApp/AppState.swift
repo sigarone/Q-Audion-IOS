@@ -1108,6 +1108,15 @@ final class AppState: ObservableObject {
     /// a dash when this is negative, mirroring Android, where the same field
     /// uses -1f for exactly this reason.
     @Published var confidenceScore: Float = -1
+    /// W-GUARDIAN3SIG (2026-09-11) — EMA of Tier-2's RAW 3-signal combine,
+    /// purely for THIS display. `reKeyScheduler.observeConfidence` (a few
+    /// lines above) intentionally gets the raw, un-smoothed value every
+    /// tick — mirrors Android's own split (`ConfidenceIndex.value` feeds
+    /// the scheduler, `.smoothedValue` feeds the "C=" badge). Same
+    /// `EMA_ALPHA = 0.15` as Android's `DeepfakeMonitor`. `-1` sentinel
+    /// unused here (this EMA only starts once the first real tick
+    /// arrives, same "no score yet" contract `confidenceScore` already has).
+    private var contactVoiceConfidenceEma: Float = 1
 
     /// Actual media transport in use for the current call.
     /// "p2p"    — WebRTC ICE direct (host or srflx candidate pair)
@@ -3366,21 +3375,23 @@ final class AppState: ObservableObject {
             }
         }
 
-        callService.onDeepfakeScore = { [weak self] level, score in
+        callService.onDeepfakeScore = { [weak self] _, _ in
             Task { @MainActor in
                 guard let self else { return }
                 // M-32: a score arrived ⇒ the ONNX model was loaded
                 // and run on this call; mark it so endCall() releases it.
+                // W-GUARDIAN3SIG (2026-09-11) — `confidenceScore`/
+                // `confidenceLevel` (the visible "C=" badge) moved OFF this
+                // Tier-1, single-signal (deepfake-only, uncalibrated at the
+                // badge layer until today) pipeline and onto Tier-2's
+                // calibrated 3-signal combine — see the
+                // `onContactVoiceScoreBreakdown` wiring below. This closure
+                // now only keeps the M-32 cleanup bookkeeping; `deepfakeAlert`
+                // (the separate sustained-red ALARM, wired just above) is
+                // untouched — that is a genuinely different signal
+                // (GuardianMode's own 5s-sustained-red trigger), not the
+                // numeric badge.
                 self.deepfakeClassifierUsed = true
-                self.confidenceScore = score
-                switch level {
-                case .red:
-                    self.confidenceLevel = "red"
-                case .yellow:
-                    self.confidenceLevel = "yellow"
-                case .green:
-                    self.confidenceLevel = "green"
-                }
             }
         }
 
@@ -3524,7 +3535,7 @@ final class AppState: ObservableObject {
         // re-key timing. `RTLog.info` (not `print`) because plain stdout
         // never reaches the shipped Loki pipeline — see
         // `reference_ios_log_pipeline_limits.md`.
-        callService.onContactVoiceScoreBreakdown = { df, lv, vp, combined in
+        callService.onContactVoiceScoreBreakdown = { [weak self] df, lv, vp, combined in
             RTLog.info(
                 "rekey",
                 "guardian3sig df=" + String(format: "%.2f", df) +
@@ -3532,6 +3543,27 @@ final class AppState: ObservableObject {
                     " vp=" + String(format: "%.2f", vp) +
                     " combined=" + String(format: "%.2f", combined)
             )
+            // W-GUARDIAN3SIG (2026-09-11) — this is now what drives the
+            // visible "C=" badge, matching Android exactly: same source
+            // (the 3-signal combine), same EMA alpha (0.15), same
+            // green/yellow/red thresholds (`classifyVoiceTrust()` on
+            // Android — 0.72/0.40). Runs unconditionally, same role as
+            // Android's `guardian.index` read for display: BOTH call
+            // roles show their own local reading, independent of whether
+            // this device's confidence has any real effect on re-key
+            // timing (see the `observeConfidence` gate above).
+            Task { @MainActor in
+                guard let self else { return }
+                self.contactVoiceConfidenceEma = 0.15 * combined + 0.85 * self.contactVoiceConfidenceEma
+                self.confidenceScore = self.contactVoiceConfidenceEma
+                if self.contactVoiceConfidenceEma >= 0.72 {
+                    self.confidenceLevel = "green"
+                } else if self.contactVoiceConfidenceEma >= 0.40 {
+                    self.confidenceLevel = "yellow"
+                } else {
+                    self.confidenceLevel = "red"
+                }
+            }
         }
         // W-PLPFEEDBACK (2026-08-25) — CallService's own timer measured a
         // fresh windowed inbound-loss percentage; ship it to the peer. Same
@@ -17489,6 +17521,12 @@ extension AppState {
         vcaLastSeenPeerSeq = -1
         vcaLastEffectAtMs = 0
         vcaPeerDropsCount = 0
+        // W-GUARDIAN3SIG — same reasoning: a stale EMA from the last call
+        // must not seed the next call's "C=" badge (would show a confident
+        // 90%+ read before this call's own first real tick arrives).
+        contactVoiceConfidenceEma = 1
+        confidenceScore = -1
+        confidenceLevel = "green"
         // Same reasoning as callPqcSessionKey above, extended to the PSK
         // display metadata it's paired with in the UI (LiveInCallScreen's
         // KeyInfo panel, OutgoingCallScreen's PSK pill): without this, a
