@@ -66,6 +66,10 @@ enum ReportCrypto {
     /// (the admin report LIST view — never the encrypted body). Max 500
     /// chars. Strips PII patterns (UUIDs, IPs, phone-like numbers) — mirrors
     /// Android's `buildDiagSummary` exactly, same patterns, same caps.
+    /// `@MainActor` because `RuntimeLogSink.redactStructured` is isolated to
+    /// the main actor (the sink is a `@MainActor` class); the only caller,
+    /// `BugReporter.uploadReport`, already runs there.
+    @MainActor
     static func buildDiagSummary(logs: String, note: String, trigger: String) -> String {
         // FIX-11 (2026-09-12): this 200-char tail is stored PLAINTEXT
         // server-side (report_routes.go keeps diag_summary verbatim), so
