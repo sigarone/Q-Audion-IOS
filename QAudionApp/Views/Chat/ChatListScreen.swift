@@ -68,6 +68,22 @@ struct ChatListScreen: View {
     /// `disconnectedBannerGraceSec`, not on the raw state transition.
     @State private var showDisconnectedBanner = false
     @State private var disconnectedBannerTask: Task<Void, Never>?
+    /// W-WSCONNECTINGDEBOUNCE (2026-09-12) — same principle extended to
+    /// `.connecting`, which W-WSBANNERDEBOUNCE deliberately left ungated
+    /// ("informational, not alarming, still shows immediately" — see the
+    /// superseded comment this change replaces below). Live evidence
+    /// (2026-09-12, user-reported): a phone lock/unlock is exactly the
+    /// "closes the WS, reconnects in 1-2s" blip this file already
+    /// documented for the disconnected case — the connecting banner was
+    /// flashing on every one of those, many times a day, for something
+    /// that resolves on its own before a human could act on it anyway.
+    /// Server + device evidence the same day (12h Loki sample, 2026-09-12)
+    /// found zero stuck-in-connecting watchdog fires and no call/message
+    /// loss correlated with these blips — confirming this is a display-only
+    /// fix, not a connectivity one; see the audit memory file this change
+    /// cites in its own commit for the full evidence trail.
+    @State private var showConnectingBanner = false
+    @State private var connectingBannerTask: Task<Void, Never>?
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
     /// W139: pending conversation export — non-nil triggers the share
@@ -416,6 +432,16 @@ struct ChatListScreen: View {
                     }
                 } else {
                     showDisconnectedBanner = false
+                }
+                connectingBannerTask?.cancel()
+                if newState == .connecting {
+                    connectingBannerTask = Task {
+                        try? await Task.sleep(nanoseconds: Self.connectingBannerGraceSec * 1_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        showConnectingBanner = true
+                    }
+                } else {
+                    showConnectingBanner = false
                 }
             }
 
@@ -794,11 +820,18 @@ struct ChatListScreen: View {
     /// "briefly" vs. "genuinely stuck": the alarming red "Connessione al
     /// server persa" flashed on every single blip, read by the user as a
     /// continuously broken connection when the underlying reconnects were
-    /// actually all succeeding fast. `.connecting` ("Riconnessione in
-    /// corso…") is informational, not alarming, and still shows
-    /// immediately — only the red state is gated on `showDisconnectedBanner`,
+    /// actually all succeeding fast. Gated on `showDisconnectedBanner`,
     /// flipped true by the `onChange` below only after the state has held
     /// `.disconnected` continuously for `disconnectedBannerGraceSec`.
+    ///
+    /// W-WSCONNECTINGDEBOUNCE (2026-09-12) — `.connecting` used to be
+    /// exempt from this on the reasoning that "Riconnessione in corso…" is
+    /// informational, not alarming, so showing it immediately was harmless.
+    /// Live user reports (2026-09-12) said otherwise: the SAME lock/unlock
+    /// blip this file already documented for `.disconnected` flashes
+    /// "Riconnessione in corso…" too, many times a day, for something that
+    /// resolves before a human can act on it. Same fix, same shape: gated
+    /// on `showConnectingBanner`, held behind `connectingBannerGraceSec`.
     private var connectionStatusBanner: (title: String, icon: String, tint: Color, showsRetry: Bool)? {
         switch appState.wsConnectionState {
         case .disconnected:
@@ -812,6 +845,11 @@ struct ChatListScreen: View {
             return (ConnectionStatusBannerPolicy.disconnected.title,
                     ConnectionStatusBannerPolicy.disconnected.systemImage,
                     extras.riskHigh, true)
+        case .connecting:
+            guard showConnectingBanner else { return nil }
+            return (ConnectionStatusBannerPolicy.reconnecting.title,
+                    ConnectionStatusBannerPolicy.reconnecting.systemImage,
+                    extras.warning, false)
         default:
             guard let policy = ConnectionStatusBannerPolicy.select(appState.wsConnectionState) else {
                 return nil
@@ -821,6 +859,11 @@ struct ChatListScreen: View {
     }
 
     private static let disconnectedBannerGraceSec: UInt64 = 4
+    /// W-WSCONNECTINGDEBOUNCE — longer than the documented "1-2s every
+    /// time" lock/unlock blip so that routine case never paints anything,
+    /// short enough that a genuinely slow reconnect is still visible well
+    /// before W-CONNECTINGWATCHDOG's own 20s hard-reset backstop fires.
+    private static let connectingBannerGraceSec: UInt64 = 2
 
     /// Same visual language as `adminBannerView` above (12pt corner radius,
     /// tint@0.18 fill / tint@0.45 stroke) and `QAudionSnackbarHost`'s pill
