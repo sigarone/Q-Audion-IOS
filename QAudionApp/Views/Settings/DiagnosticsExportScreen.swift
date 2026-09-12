@@ -381,7 +381,7 @@ struct DiagnosticsExportScreen: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .tracking(1.5)
                 .foregroundStyle(extras.warning)
-            Text("Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a bug-report TestFlight.")
+            Text("Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a una segnalazione al supporto.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurface)
         }

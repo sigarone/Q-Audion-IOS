@@ -144,7 +144,7 @@ struct WhatsNewScreen: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
-            Text("Lista delle ultime release TestFlight con i cambiamenti principali. Aggiornata manualmente a ogni tag — la versione canonica del changelog vive nel repository git su `feature/ios-android-parity`.")
+            Text("Novità delle ultime versioni, con i cambiamenti principali di ogni aggiornamento.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurface)
             // W285: surface the count of release entries. Helps testers

@@ -67,7 +67,12 @@ enum ReportCrypto {
     /// chars. Strips PII patterns (UUIDs, IPs, phone-like numbers) — mirrors
     /// Android's `buildDiagSummary` exactly, same patterns, same caps.
     static func buildDiagSummary(logs: String, note: String, trigger: String) -> String {
-        let recentLogs = logs.count > 200 ? String(logs.suffix(200)) : logs
+        // FIX-11 (2026-09-12): this 200-char tail is stored PLAINTEXT
+        // server-side (report_routes.go keeps diag_summary verbatim), so
+        // it gets the same structured redaction (bearer/JWT/psk/base64
+        // runs) as every other log egress before the PII patterns below.
+        let scrubbed = RuntimeLogSink.redactStructured(logs)
+        let recentLogs = scrubbed.count > 200 ? String(scrubbed.suffix(200)) : scrubbed
         let safeNote = String(note.prefix(100))
 
         var stripped = recentLogs

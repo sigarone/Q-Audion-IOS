@@ -43,6 +43,11 @@ struct ContactDetailScreen: View {
     @State private var sharingVCard: VCardShareItem? = nil
     /// Local block state — initialised from BlockedContactsStore on .onAppear.
     @State private var isBlocked: Bool = false
+    /// App Store 1.2 / Play UGC — "Segnala" next to "Blocca". The dialog
+    /// picks a category, the report goes through BugReporter's E2EE
+    /// pipeline (trigger=abuse), then the user is offered to block too.
+    @State private var showingReportDialog: Bool = false
+    @State private var showingPostReportBlock: Bool = false
     /// Internal extension number for this peer, bare digits, no prefix —
     /// resolved via the canonical `DisplayName.resolvedExtension`, not by
     /// parsing `item.displayName` (see `extractExtension`'s old kdoc: that
@@ -204,6 +209,26 @@ struct ContactDetailScreen: View {
         .sheet(item: $upgradeSheetCapability) { capability in
             UpgradeSheet(capability: capability)
                 .environmentObject(appState)
+        }
+        // App Store 1.2 — report flow (category picker -> E2EE report ->
+        // offer to block). Same three categories as Android.
+        .confirmationDialog("Segnala \(item.displayName)",
+                            isPresented: $showingReportDialog,
+                            titleVisibility: .visible) {
+            Button("Spam") { performReport(category: "spam") }
+            Button("Abuso o molestie") { performReport(category: "abuse") }
+            Button("Altro") { performReport(category: "other") }
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi.")
+        }
+        .alert("Segnalazione inviata", isPresented: $showingPostReportBlock) {
+            Button("Blocca \(item.displayName)", role: .destructive) {
+                if !isBlocked { performBlock() }
+            }
+            Button("Non ora", role: .cancel) {}
+        } message: {
+            Text("Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti.")
         }
     }
 
@@ -447,6 +472,9 @@ struct ContactDetailScreen: View {
                          tint: extras.riskHigh) {
                 if isBlocked { performUnblock() } else { performBlock() }
             }
+            actionButton(icon: "flag",
+                         caption: "Segnala",
+                         tint: extras.riskHigh) { showingReportDialog = true }
         }
     }
 
@@ -957,6 +985,17 @@ struct ContactDetailScreen: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    // MARK: - Report (App Store 1.2)
+
+    private func performReport(category: String) {
+        BugReporter.shared.reportAbuse(reportedUserId: item.userId,
+                                       reportedGroupId: nil,
+                                       reportedName: item.displayName,
+                                       category: category,
+                                       note: "")
+        showingPostReportBlock = true
     }
 
     // MARK: - Block / Unblock

@@ -307,9 +307,13 @@ final class AccountSettingsContainer: ObservableObject {
     }
 
     // MARK: - Audit P0 #2.12 — GDPR right-to-be-forgotten
-    /// Fires DELETE /api/v1/account first, then triggers local logout
-    /// via AuthService regardless of server response. The user wants
-    /// to be forgotten — a server 5xx must not block the local wipe.
+    /// Fires DELETE /api/v1/account first; the local wipe follows only
+    /// when the server confirmed the deletion (2xx) or reports the
+    /// account already gone (404). App Store readiness audit 2026-09-12
+    /// (FIX-18): the previous `try?` wiped locally on ANY error, so a
+    /// network blip or 5xx left the account alive server-side while the
+    /// user believed it deleted — the opposite of 5.1.1(v). On failure
+    /// the user sees an error and keeps the session, so they can retry.
     /// Caller wraps this in a confirmation alert per UX guidelines.
     func deleteAccount() {
         guard let provider = makeProvider() else {
@@ -318,10 +322,20 @@ final class AccountSettingsContainer: ObservableObject {
         }
         Task {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
-            // Best-effort server delete; ignore errors — BCryptoAccountApiImpl's
-            // own doc says the caller "MUST treat the JWT as invalidated even
-            // on error", so a failure here doesn't change what we do next.
-            try? await provider.accountApi.deleteAccount()
+            do {
+                try await provider.accountApi.deleteAccount()
+            } catch BCryptoError.notFound {
+                // Already gone server-side — proceed with the local wipe.
+            } catch BCryptoError.httpError(404) {
+                // Same as above, older client mapping.
+            } catch {
+                RTLog.warn("account", "deleteAccount failed: " + String(describing: error))
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = String(localized: "account_settings.error.delete_failed", defaultValue: "Eliminazione non riuscita. Riprova tra qualche istante o scrivi a support@qaudion.app.", comment: "Error banner — the server did not confirm the account deletion; nothing was wiped locally")
+                }
+                return
+            }
             // Server-side session invalidation (DELETE /api/v1/auth/logout).
             // Best-effort too now (was a throwing call that gated everything
             // below it): a 401 here is actually the EXPECTED shape right after
@@ -931,8 +945,25 @@ struct AccountSettingsScreen: View {
 
     /// App Store 5.1.1(v) — permanent, in-app account deletion. Same visual
     /// treatment as logoutButton (both destructive-risk actions) but placed
-    /// below it since it's the more severe of the two.
+    /// below it since it's the more severe of the two. The link under it
+    /// opens the public deletion page (same URL as the App Store Connect
+    /// "account deletion" field) so what gets erased is documented.
     private var deleteAccountButton: some View {
+        VStack(spacing: 8) {
+            deleteAccountTrigger
+            Button {
+                LegalLinks.open(LegalLinks.deleteAccount())
+            } label: {
+                Text("Cosa viene eliminato — informativa")
+                    .qaudionStyle(type.labelSmall)
+                    .underline()
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var deleteAccountTrigger: some View {
         Button {
             showDeleteAccountConfirm = true
         } label: {

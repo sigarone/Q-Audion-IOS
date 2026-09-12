@@ -82,8 +82,8 @@ public final class LiveLogStreamer {
     /// sites anywhere in the app — i.e. the pump was silently on for every
     /// real user with no way to see or disable it, contradicting this very
     /// file's "opt-in" framing. See
-    /// `docs/security/MASVS_ASSESSMENT_2026-08-20.md` §1.1 for the full
-    /// writeup. A real Settings toggle now exists (`PrivacySettingsScreen`,
+    /// the MASVS-PRIVACY remediation of 2026-08-20 (assessment §1.1) for
+    /// the full writeup. A real Settings toggle now exists (`PrivacySettingsScreen`,
     /// "Log diagnostici in tempo reale" under DIAGNOSTICA) and is the only
     /// way this ever becomes `true`.
     public static var isEnabled: Bool {
@@ -272,7 +272,12 @@ public final class LiveLogStreamer {
         // (`RuntimeLogSink.entriesSince` -> `redactStructured`) is the
         // load-bearing privacy control and stays UNCONDITIONAL: returning
         // here skips an UPLOAD, never a scrub. Redaction is never flagged.
-        guard FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", LiveLogStreamer.isEnabled) else { return }
+        // FIX-19 (2026-09-12): consent is ANDed with the remote flag, not
+        // used as its default — a remote `true` could otherwise replace a
+        // local `false` (FeatureFlags overlay wins). Harmless today because
+        // the timer only exists past the consent guard in start(), but a
+        // future refactor must not be able to flip a non-consented device on.
+        guard LiveLogStreamer.isEnabled, FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", true) else { return }
         if inflight {
             skippedDueToInflight += 1
             return

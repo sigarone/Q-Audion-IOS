@@ -1578,9 +1578,13 @@ struct ChatListScreen: View {
     /// W293: open the admin banner's CTA URL (if any). Static helper
     /// kept on the struct so the call site closure body is a single
     /// statement — type-checker safe per CLAUDE.md §13.
+    /// Allow-listed: the URL is server-controlled, so only https links to
+    /// our own sites are opened. Anything else is dropped silently — an
+    /// arbitrary off-app destination pushed from the server would be both
+    /// a phishing surface and, under review, an external call-to-action.
     fileprivate static func openAdminCtaURL(_ url: URL?) {
         #if canImport(UIKit)
-        guard let target = url else { return }
+        guard let target = url, LegalLinks.isAllowedExternalLink(target) else { return }
         UIApplication.shared.open(target)
         #endif
     }

@@ -1,6 +1,11 @@
 import SwiftUI
 import QAudionEngine
 
+// App Store 2.1 (2026-09-12): internal rollout toggles for testers, not a
+// user feature. Compiled out of the store build together with its sole
+// caller (SettingsScreen.privacySection).
+#if QAUDION_DEV_TOOLS
+
 /// W379 — UI surface for the cross-platform parity rollover flags.
 ///
 /// All toggles default OFF and are guarded by per-peer auto-detection
@@ -202,3 +207,4 @@ struct CrossPlatformBetaScreen: View {
             .qAudionTheme(dark: true)
     }
 }
+#endif

@@ -106,6 +106,11 @@ public final class RuntimeLogSink: ObservableObject {
 
     /// Snapshot of the current buffer formatted for log export.
     /// One line per entry, ISO8601-ish timestamp, level, tag, body.
+    /// Every message goes through `redactStructured` (FIX-11, 2026-09-12):
+    /// the export is shared by the user with support and the bug-report
+    /// tail is uploaded; the incremental shipper (`entriesSince`) already
+    /// scrubbed, and the three egress paths must not differ in what they
+    /// strip.
     public func snapshot() -> String {
         lock.lock()
         let copy = entries
@@ -119,7 +124,7 @@ public final class RuntimeLogSink: ObservableObject {
             out.append(" [")
             out.append(e.tag)
             out.append("] ")
-            out.append(e.message)
+            out.append(RuntimeLogSink.redactStructured(e.message))
             out.append("\n")
         }
         return out
@@ -143,7 +148,7 @@ public final class RuntimeLogSink: ObservableObject {
             out.append("] [")
             out.append(e.tag)
             out.append("] ")
-            out.append(e.message)
+            out.append(RuntimeLogSink.redactStructured(e.message))
             out.append("\n")
         }
         return out

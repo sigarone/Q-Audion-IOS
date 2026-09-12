@@ -19,7 +19,8 @@
 	<!-- Must match the parent app's CFBundleVersion, same convention as
 	     QAudionPacketTunnel/QAudionBroadcastExtension's own Info.plist —
 	     Apple validation rejects an archive where extension and host
-	     disagree. Bump alongside QAudionApp/Info.plist on every release tag. -->
+	     disagree. Placeholder in git: ios-testflight.yml's version-bump
+	     step plutil-replaces it on every tag build (INTENTS_PLIST block). -->
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.1089</string>
 	<key>CFBundleVersion</key>

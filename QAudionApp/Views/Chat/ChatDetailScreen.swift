@@ -123,6 +123,9 @@ struct ChatDetailScreen: View {
     /// rather than UUID since the action is screen-scoped — there's
     /// only one history per chat detail view.
     @State private var showClearHistoryConfirm: Bool = false
+    /// App Store 1.2 — "Segnala contatto" next to "Blocca contatto" in the
+    /// overflow menu; see ContactDetailScreen for the same flow.
+    @State private var showReportDialog: Bool = false
     /// W445: Screenshot lock — local user preference. Toggled from
     /// PrivacySettingsScreen; read here to activate/deactivate on
     /// chat open/close.
@@ -613,6 +616,32 @@ struct ChatDetailScreen: View {
             UpgradeSheet(capability: capability)
                 .environmentObject(appState)
         }
+        // App Store 1.2 — report flow from the chat overflow menu.
+        .confirmationDialog("Segnala contatto",
+                            isPresented: $showReportDialog,
+                            titleVisibility: .visible) {
+            Button("Spam") { sendAbuseReport(category: "spam") }
+            Button("Abuso o molestie") { sendAbuseReport(category: "abuse") }
+            Button("Altro") { sendAbuseReport(category: "other") }
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi. Puoi anche bloccare il contatto dal menu.")
+        }
+    }
+
+    /// App Store 1.2 — E2EE abuse report for the peer of this chat.
+    private func sendAbuseReport(category: String) {
+        let peerId: String = container.viewModel.conversation.peerUserId
+        let peerName: String = container.viewModel.conversation.peerDisplayName
+        BugReporter.shared.reportAbuse(reportedUserId: peerId,
+                                       reportedGroupId: nil,
+                                       reportedName: peerName,
+                                       category: category,
+                                       note: "")
+        snackbar?.show(.init(
+            text: String(localized: "chat_detail.report_sent", defaultValue: "Segnalazione inviata.", comment: "Snackbar — an abuse report about the chat peer was sent"),
+            severity: .info,
+            durationSeconds: 2))
     }
 
     // MARK: - BLE mesh sheet callbacks (branch claude/ble-mesh-cleanroom-spike)
@@ -792,6 +821,11 @@ struct ChatDetailScreen: View {
                     showClearHistoryConfirm = true
                 } label: {
                     Label("Svuota cronologia", systemImage: "tray")
+                }
+                Button(role: .destructive) {
+                    showReportDialog = true
+                } label: {
+                    Label("Segnala contatto", systemImage: "flag")
                 }
                 Button(role: .destructive) {
                     Task {

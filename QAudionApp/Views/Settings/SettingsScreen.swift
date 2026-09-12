@@ -328,11 +328,15 @@ struct SettingsScreen: View {
                 } label: {
                     Label("Apri Impostazioni iOS", systemImage: "gear")
                 }
+                // App Store 2.1/2.3 — TestFlight-only surface, compiled out
+                // of the store build (no beta wording, no itms links).
+                #if QAUDION_DEV_TOOLS
                 Button {
                     openTestFlightFeedback()
                 } label: {
                     Label("Feedback TestFlight", systemImage: "ant.fill")
                 }
+                #endif
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .semibold))
@@ -519,7 +523,10 @@ struct SettingsScreen: View {
 
             // W379: rollover toggles for cross-platform parity flags.
             // Lives under "Conversazioni" so testers can find it next to
-            // the chat-related settings.
+            // the chat-related settings. Tester-only (App Store 2.1): the
+            // toggles are internal rollout switches, compiled out of the
+            // store build together with the screen itself.
+            #if QAUDION_DEV_TOOLS
             NavigationLink {
                 LazyView { CrossPlatformBetaScreen() }
             } label: {
@@ -529,6 +536,7 @@ struct SettingsScreen: View {
                             subtitle: "Wire-format v3 · attach_announce · capability per peer")
             }
             .buttonStyle(.plain)
+            #endif
         }
         .padding(.horizontal, 16)
     }
@@ -582,9 +590,27 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // App Store 5.1.1(i) — the privacy policy must be reachable
+            // from inside the app, not only from the store listing. Same
+            // page family entered in App Store Connect (App Information >
+            // Privacy Policy URL); see `LegalLinks` for the locale rule.
+            Button {
+                LegalLinks.open(LegalLinks.privacyPolicy())
+            } label: {
+                SettingsRow(icon: "hand.raised.fill",
+                            iconColor: scheme.primary,
+                            title: "Informativa privacy",
+                            subtitle: "q-audion.com · dati trattati · cancellazione account")
+            }
+            .buttonStyle(.plain)
+
             // W42: Aggiornamento firmato OTA. Stub UI con mock catalog —
             // l'engine wirerà il vero fetch + Ed25519 verify quando lands.
-            // 1:1 visual port di Android `OtaUpdateScreen.kt`.
+            // 1:1 visual port di Android `OtaUpdateScreen.kt`. On iOS the
+            // only real update path is the App Store (AboutSettingsScreen's
+            // "Controlla aggiornamenti"); this screen redirects to
+            // TestFlight, so it is compiled out of the store build.
+            #if QAUDION_DEV_TOOLS
             NavigationLink {
                 LazyView { OtaUpdateScreen() }
             } label: {
@@ -594,6 +620,7 @@ struct SettingsScreen: View {
                             subtitle: "Catalogo firmato · Ed25519 · canali")
             }
             .buttonStyle(.plain)
+            #endif
 
             // W49: Cosa c'è di nuovo — changelog viewer per i tester.
             // Lista hardcoded delle release con bullet di feature, così
@@ -989,7 +1016,10 @@ struct SettingsScreen: View {
         #endif
     }
 
+    #if QAUDION_DEV_TOOLS
     /// W292: open the public TestFlight feedback page. Sister of W288.
+    /// Dev/TestFlight builds only — the store build has no TestFlight
+    /// wording or links anywhere (App Store 2.1/2.3).
     private func openTestFlightFeedback() {
         #if canImport(UIKit)
         if let url = URL(string: "https://testflight.apple.com/v1/app/6762266299") {
@@ -997,6 +1027,7 @@ struct SettingsScreen: View {
         }
         #endif
     }
+    #endif
 
     // MARK: - PQC self-test (W268)
 

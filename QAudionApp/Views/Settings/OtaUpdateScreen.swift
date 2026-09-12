@@ -1,6 +1,13 @@
 import SwiftUI
 import QAudionEngine
 
+// App Store 2.1/2.3 (2026-09-12): this screen redirects to TestFlight
+// (itms-beta://) and exposes a beta channel toggle. On iOS the only real
+// update path is the App Store, so the whole file is compiled out of the
+// store build; its sole caller (SettingsScreen.infoSection) is gated the
+// same way.
+#if QAUDION_DEV_TOOLS
+
 /// Modello UI per una singola release firmata OTA. 1:1 mapping di
 /// Android `VerifiedRelease` (core-domain). Engine pending: il vero
 /// catalog fetch + Ed25519 signature verification per release sarà
@@ -633,3 +640,4 @@ private struct MonoSmall: ViewModifier {
     }
     .qAudionTheme(dark: true)
 }
+#endif

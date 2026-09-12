@@ -154,7 +154,7 @@ struct WelcomeScreen: View {
                         )
                         QAudionButton(
                             action: onStartExtensionOnlyRegister,
-                            label: "Registrati senza numero (solo interno)",
+                            label: "Registrati con interno e email (senza numero)",
                             variant: .text
                         )
                         QAudionButton(
@@ -164,7 +164,22 @@ struct WelcomeScreen: View {
                         )
                     }
 
-                    Spacer().frame(height: 24)
+                    Spacer().frame(height: 12)
+
+                    // App Store 5.1.1(i) — privacy policy reachable before
+                    // any account is created, not only from Settings.
+                    Button {
+                        LegalLinks.open(LegalLinks.privacyPolicy())
+                    } label: {
+                        Text("Continuando accetti l'Informativa privacy")
+                            .qaudionStyle(type.labelSmall)
+                            .underline()
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer().frame(height: 12)
 
                     Text("Hybrid PQC · Voice-first · Deepfake Guard")
                         .qaudionStyle(type.labelSmall)

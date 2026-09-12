@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PrivacyInfo.xcprivacy - QAudionPacketTunnel (Network Extension) extension.
+
+  Runs the WireGuard tunnel (WireGuardKit) the user enabled in the host app; first-party code here calls no required-reason API.
+  No tracking and no data collection of its own: everything the extension
+  handles is either on-device or already declared by the host app's
+  manifest. Picked up by the target's recursive `sources:` sweep in
+  QAudionApp/project.yml, same as the host app's manifest (no explicit
+  resources: entry - see the project.yml comment on why that pattern
+  silently dropped the file from the IPA).
+-->
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+    </array>
+</dict>
+</plist>

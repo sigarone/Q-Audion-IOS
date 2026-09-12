@@ -26,6 +26,9 @@ struct GroupInfoScreen: View {
 
     @State private var state: GroupInfoUiState
     @State private var showingLeaveConfirm = false
+    /// App Store 1.2 — "Segnala gruppo" row (E2EE abuse report with the
+    /// group id; category picker like the 1:1 flows).
+    @State private var showingReportDialog = false
     /// W52: presenta il sheet QR di invito al gruppo. Engine wiring per
     /// `GroupChatRepository.createInvite(groupId:)` deferred — oggi
     /// genera un payload pure-locale (groupId + name).
@@ -127,6 +130,9 @@ struct GroupInfoScreen: View {
                             .padding(.horizontal, 16)
                         Spacer().frame(height: 10)
                         deleteRow
+                            .padding(.horizontal, 16)
+                        Spacer().frame(height: 10)
+                        reportRow
                             .padding(.horizontal, 16)
 
                         if let err = state.error {
@@ -511,6 +517,56 @@ struct GroupInfoScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Elimina chat di gruppo")
+    }
+
+    /// App Store 1.2 — report this group (spam / abuse / other). Same
+    /// visual treatment as deleteRow; the report goes through
+    /// BugReporter's E2EE pipeline with the group id attached.
+    private var reportRow: some View {
+        Button {
+            showingReportDialog = true
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(extras.riskHigh.opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "flag")
+                        .foregroundStyle(extras.riskHigh)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                Text("Segnala gruppo")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(extras.riskHigh)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Segnala gruppo")
+        .confirmationDialog("Segnala gruppo",
+                            isPresented: $showingReportDialog,
+                            titleVisibility: .visible) {
+            Button("Spam") { sendGroupReport(category: "spam") }
+            Button("Abuso o molestie") { sendGroupReport(category: "abuse") }
+            Button("Altro") { sendGroupReport(category: "other") }
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i messaggi del gruppo.")
+        }
+    }
+
+    private func sendGroupReport(category: String) {
+        BugReporter.shared.reportAbuse(reportedUserId: nil,
+                                       reportedGroupId: state.groupId.uuidString,
+                                       reportedName: state.name,
+                                       category: category,
+                                       note: "")
+        snackbar?.show(.init(text: String(localized: "group_info.report_sent", defaultValue: "Segnalazione inviata.", comment: "Snackbar — an abuse report about the group was sent"), severity: .info))
     }
 
     // MARK: - Helpers

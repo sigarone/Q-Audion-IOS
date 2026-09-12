@@ -51,7 +51,20 @@ struct ChatMessage: Identifiable {
 @MainActor
 final class AppState: ObservableObject {
     // MARK: - Auth state
-    @Published var isAuthenticated: Bool = false
+    /// App Store readiness audit 2026-09-12 (FIX-09): the Siri
+    /// authorization prompt used to fire unconditionally from
+    /// `initialize()`, i.e. over the Welcome screen before any sign-in —
+    /// the first thing a reviewer saw was a system alert for a feature
+    /// they could not yet use. It now follows the session: requested on
+    /// the false->true transition (login, session restore, OTP activation
+    /// — every path funnels through this one property), and only while
+    /// the status is still `.notDetermined`, so it is a one-shot per
+    /// install exactly as before.
+    @Published var isAuthenticated: Bool = false {
+        didSet {
+            if isAuthenticated && !oldValue { requestSiriAuthorizationIfNeeded() }
+        }
+    }
     /// Entitlements Task 3 (2026-08-17) — `didSet` fires on EVERY
     /// assignment (login, logout, cold-launch cache-fill, profile refresh,
     /// account switch), so this is the single reactive hook that mirrors
@@ -2098,12 +2111,27 @@ final class AppState: ObservableObject {
     /// rather than silently constructing a `CapabilityGate` that could
     /// never verify anything.
     lazy var capabilityGate: CapabilityGate = {
-        guard let verifier = EntitlementPublicKey.makeVerifier() else {
-            preconditionFailure("EntitlementPublicKey.makeVerifier() failed — pinned EGT pubkey asset (bcrypto_entitlement_pubkey.pem) missing or corrupt; this is a packaging bug, not a runtime condition")
-        }
         let api = BCryptoEntitlementsApiClient()
         api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
-        return CapabilityGate(verifier: verifier, api: api)
+        if let verifier = EntitlementPublicKey.makeVerifier() {
+            return CapabilityGate(verifier: verifier, api: api)
+        }
+        // App Store readiness audit 2026-09-12 (FIX-20): a missing/corrupt
+        // pinned-key asset IS a packaging bug — but crashing on the first
+        // `body` evaluation (this is forced from QAudionApp.swift's
+        // environment injection) turns a resource-copy regression into a
+        // launch crash in front of a reviewer. Degrade fail-CLOSED instead:
+        // bind the verifier to a throwaway key so every real token is
+        // rejected (claims stay nil, server-side 402s still apply), log it
+        // loudly, and let the app run. Ed25519 keys are always 32 raw
+        // bytes, so the second initializer cannot fail in practice; the
+        // precondition below is unreachable defence, not a runtime path.
+        RTLog.error("entitlements", "EntitlementPublicKey.makeVerifier() failed — pinned EGT pubkey asset missing or corrupt (packaging bug); entitlement verification degraded to reject-all")
+        let throwaway = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        guard let rejectAll = EgtVerifier(pinnedPublicKeyRaw: throwaway) else {
+            preconditionFailure("EgtVerifier could not be built even from a fresh 32-byte Ed25519 key")
+        }
+        return CapabilityGate(verifier: rejectAll, api: api)
     }()
 
     /// TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — Ed25519 verifier bound
@@ -2969,8 +2997,11 @@ final class AppState: ObservableObject {
             return
         }
 
-        // W417 — start always-on telemetry pump. Pass primitive
-        // serverUrl + closures (NOT AppState directly — see
+        // W417 — wire the live-log shipper. It is OPT-IN (default OFF,
+        // Settings > Privacy > Diagnostica > "Log diagnostici in tempo
+        // reale"; `LiveLogStreamer.isEnabled`): `start` installs the
+        // plumbing, nothing leaves the device without the consent flag.
+        // Pass primitive serverUrl + closures (NOT AppState directly — see
         // LiveLogStreamer.swift header + CLAUDE.md "Hard-won lesson 16").
         LiveLogStreamer.shared.start(
             serverUrl: serverUrl,
@@ -3066,11 +3097,11 @@ final class AppState: ObservableObject {
         // the app's Siri authorization status stays .notDetermined forever
         // and QAudionIntents/IntentHandler.swift is never actually reachable
         // by Siri, no matter how correctly the extension + entitlement are
-        // configured. Idempotent: after the first user decision, the system
-        // remembers it and this call is a silent no-op on every later launch.
-        INPreferences.requestSiriAuthorization { status in
-            RTLog.info("call", "Siri authorization status: \(status.rawValue)")
-        }
+        // configured. Since 2026-09-12 (FIX-09) the request is tied to the
+        // session (see `isAuthenticated.didSet`) instead of firing here
+        // over the Welcome screen; this call only covers the case where a
+        // session was already live before this point.
+        if isAuthenticated { requestSiriAuthorizationIfNeeded() }
 
         // CarPlay/Siri state-of-the-art plan S2 — cold-launch pass: pick up
         // any message the Intents Extension queued while the app wasn't
@@ -4532,6 +4563,16 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(extStr, forKey: "currentUserDialExtension")
         }
         errorMessage = nil
+    }
+
+    /// One-shot Siri authorization request (FIX-09, see `isAuthenticated`).
+    /// Safe to call repeatedly: returns immediately once the user has
+    /// answered (status != .notDetermined), which iOS persists per install.
+    func requestSiriAuthorizationIfNeeded() {
+        guard INPreferences.siriAuthorizationStatus() == .notDetermined else { return }
+        INPreferences.requestSiriAuthorization { status in
+            RTLog.info("call", "Siri authorization status: \(status.rawValue)")
+        }
     }
 
     /// Finishes activating a session started by `completeOtpAuth(_:)` —

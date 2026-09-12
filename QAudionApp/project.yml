@@ -61,12 +61,13 @@ targets:
           # rationale as PrivacyInfo.xcprivacy). Excluded from the recursive
           # `sources:` enumeration to avoid a double "Multiple commands produce".
           - "*.caf"
-          # PrivacyInfo.xcprivacy is added as an explicit resource below
-          # so XcodeGen places it in the Copy-Bundle-Resources phase. We
-          # exclude it from the recursive `sources:` enumeration to keep
-          # the build phase classification unambiguous (Apple requires
-          # the file at the bundle root to silence ITMS-91061).
-          - "PrivacyInfo.xcprivacy"
+          # PrivacyInfo.xcprivacy is deliberately NOT excluded (and has no
+          # explicit `resources:` entry below) — see the NOTE further down:
+          # the exclude-then-re-add pattern silently dropped it from the
+          # real IPA (verified by extracting v1.0.1101's bundle). Left to
+          # the plain recursive sweep, XcodeGen classifies .xcprivacy as a
+          # bundle resource and it lands at Payload/QAudionApp.app/
+          # PrivacyInfo.xcprivacy, which ios-testflight.yml now asserts.
           # Reality.xcframework (VLESS+REALITY, built by
           # scripts/build-reality-xcframework.sh into Vendor/) is NOT YET
           # wired as a real dependency anywhere (no `framework:` entry
@@ -90,14 +91,16 @@ targets:
           # of the generated project.pbxproj that this produced ZERO
           # references anywhere in the project, i.e. XcodeGen silently
           # dropped the resource entirely rather than mis-grouping it.
-          # Control check: PrivacyInfo.xcprivacy, which uses the exact same
-          # exclude-then-re-add pattern, is ALSO absent from the real built
+          # Control check: PrivacyInfo.xcprivacy, which used the exact same
+          # exclude-then-re-add pattern, was ALSO absent from the real built
           # IPA (verified by extracting v1.0.1101's bundle) -- so this is
           # not a `.lproj`-specific or `type: folder`-specific bug, it's
           # this exclude+explicit-resource pattern itself failing silently
           # on this project/XcodeGen version for both files. Leaving
           # it.lproj OUT of excludes lets the plain recursive sweep pick it
-          # up directly instead.
+          # up directly instead. 2026-09-12: PrivacyInfo.xcprivacy moved to
+          # the same sweep-only treatment (App Store readiness audit,
+          # FIX-01) and the CI now fails the build if it is missing.
     settings:
       base:
         INFOPLIST_FILE: Info.plist
@@ -108,20 +111,24 @@ targets:
         SWIFT_VERSION: "5.9"
         DEVELOPMENT_TEAM: 5G22P9239N
         CODE_SIGN_STYLE: Automatic
-        # Universal iOS app: 1 = iPhone, 2 = iPad. Without this explicit
-        # value XcodeGen leaves the build setting at Xcode's default,
-        # which has historically been "1,2" but is not guaranteed across
-        # toolchain rotations. Pin it so TestFlight/App Store always
-        # accepts iPad installs alongside iPhone.
-        TARGETED_DEVICE_FAMILY: "1,2"
-        # App Store 2.1 App Completeness — gates SettingsScreen's
-        # "SVILUPPATORE" section (P3ControlScreen/EarbudDiagScreen/
-        # CallDesignShowcase/NetworkSimulatorScreen/DevResetScreen), which
-        # was shipping unguarded in every build including TestFlight.
-        # ON by default so current TestFlight Internal QA workflow is
-        # unchanged. MUST be removed from this line before a public App
-        # Store submission build (see SettingsScreen.swift's `#if
-        # QAUDION_DEV_TOOLS` guard around sviluppatoreSection).
+        # 1 = iPhone only (2026-09-12, App Store readiness audit FIX-12).
+        # Was "1,2" so TestFlight accepted iPad installs, but a declared
+        # iPad target makes 13-inch iPad screenshots mandatory and puts
+        # Split View / Stage Manager on the reviewer's checklist (2.4.1)
+        # while nothing here has been tested on iPad and
+        # VideoCallPipeline forces portrait. iPad still runs the app in
+        # iPhone-compatibility mode. Re-enable "1,2" only after real iPad
+        # testing (ios-ui-smoke) and iPad screenshots exist.
+        TARGETED_DEVICE_FAMILY: "1"
+        # App Store 2.1 App Completeness — QAUDION_DEV_TOOLS gates
+        # SettingsScreen's "SVILUPPATORE" section (P3ControlScreen/
+        # EarbudDiagScreen/CallDesignShowcase/NetworkSimulatorScreen/
+        # DevResetScreen) plus every TestFlight-facing surface (OTA screen,
+        # cross-platform beta toggles, "Feedback TestFlight" links, the
+        # screenshot-lock bypass in BugReporter). It is OFF here — the
+        # store/TestFlight build ships without them. For a local dev build
+        # add `-DQAUDION_DEV_TOOLS` via OTHER_SWIFT_FLAGS or append the
+        # condition to this line on a throwaway branch; never commit it.
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited)
         # -lresolv: Reality.xcframework embeds a gomobile-compiled Go runtime
         # that needs libresolv's res_9_ninit/res_9_nsearch/res_9_nclose for DNS
@@ -174,15 +181,10 @@ targets:
       - path: Assets.xcassets
       # Custom incoming-call ringtone (CallKit cfg.ringtoneSound). Bundle root.
       - path: Resources/qaudion_ringtone.caf
-      # Apple privacy manifest. Placed at the root of the app bundle by
-      # XcodeGen's Copy-Bundle-Resources phase. Required to silence
-      # ITMS-91061 ("Missing privacy manifest") on uploads after May 1
-      # 2024. See QAudionApp/PrivacyInfo.xcprivacy for the full content
-      # and the rationale for each declared API category / data type.
-      - path: PrivacyInfo.xcprivacy
-      # ITMS-90626: it.lproj/AppIntentVocabulary.plist deliberately has NO
-      # explicit resources: entry here (see `sources.excludes` comment
-      # above for why two earlier attempts using one both failed silently).
+      # Apple privacy manifest (PrivacyInfo.xcprivacy) and ITMS-90626's
+      # it.lproj/AppIntentVocabulary.plist deliberately have NO explicit
+      # resources: entry here (see `sources.excludes` comment above for
+      # why the exclude+re-add pattern silently dropped both from the IPA).
       # it.lproj is left untouched by the recursive `sources: path: .`
       # sweep, so XcodeGen's own built-in `.lproj` handling picks the file
       # up on its own. See that file's own header comment for the

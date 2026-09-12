@@ -259,6 +259,39 @@ struct AboutSettingsScreen: View {
                         }
                         .buttonStyle(.plain)
 
+                        // App Store 5.1.1(i) — in-app privacy policy link
+                        // (same page entered as Privacy Policy URL in App
+                        // Store Connect). Same row style as the mailto above.
+                        Button {
+                            LegalLinks.open(LegalLinks.privacyPolicy())
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "hand.raised.fill")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Informativa privacy")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Dati trattati, conservazione, cancellazione account")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
+
                         // W291: open the public Q-Audion-IOS GitHub
                         // repo in browser. Useful for testers who want
                         // to see release tags / commit history /
@@ -302,6 +335,9 @@ struct AboutSettingsScreen: View {
                         // The standard public TestFlight feedback URL
                         // for an app uses the App Apple ID; ours is
                         // 6762266299 (see ios-testflight.yml's APP_APPLE_ID).
+                        // Dev/TestFlight builds only (App Store 2.1/2.3):
+                        // the store build carries no TestFlight surface.
+                        #if QAUDION_DEV_TOOLS
                         Button {
                             #if canImport(UIKit)
                             // Hardcode the public feedback URL since
@@ -338,6 +374,7 @@ struct AboutSettingsScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        #endif
 
                         // W179: copy a compact build-ID blob (version,
                         // build, device, iOS) to the clipboard so testers

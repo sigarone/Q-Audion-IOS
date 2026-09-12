@@ -3,12 +3,15 @@ import QAudionEngine
 
 /// Entitlements Task 4 (2026-08-17) — the ENTIRE Pro-unlock UX on iOS
 /// (design doc §7.5/§14.2, hard constraint): an invite-code-only redeem
-/// sheet. **No price shown anywhere. No purchase flow. No StoreKit.** This
-/// app ships through internal TestFlight today, where App Store guideline
-/// 3.1.1 does not yet apply, but building a purchase-flow-shaped UI now
-/// would need tearing out the moment external distribution starts — so the
-/// neutral version is built now, once, rather than under deadline pressure
-/// later.
+/// sheet. **No price shown anywhere. No purchase flow. No StoreKit.**
+///
+/// App Store status (2026-09-12): App Review 2.1(b)/3.1.1 DOES apply — the
+/// first submission (c6432fb4, 2026-08-22) was rejected because the
+/// reviewer read the activation-code field as an external purchase path.
+/// The code field is therefore double-gated (see `codeEntryEnabled`): it
+/// exists only in non-App-Store installs (TestFlight/dev receipt) AND only
+/// when the remote flag says so. An App Store install can never show it;
+/// it shows a plain "not enabled" notice with no off-app call-to-action.
 ///
 /// Presentation: designed to be shown via `.sheet(isPresented:)` — this
 /// app's real convention for a short, self-contained form (confirmed by
@@ -202,6 +205,7 @@ final class UpgradeSheetContainer: ObservableObject {
 /// user tapped through — used only for the benefit-framed description
 /// text, never as a client-side unlock decision (the server, not this
 /// enum case, decides what the redeemed code actually grants).
+@MainActor
 struct UpgradeSheet: View {
     let capability: Capability
 
@@ -212,6 +216,33 @@ struct UpgradeSheet: View {
     @Environment(\.qaudionSnackbar) private var snackbar
     @Environment(\.dismiss) private var dismiss
     @StateObject private var container = UpgradeSheetContainer()
+
+    /// App Review 2.1(b)/3.1.1 (submission c6432fb4, 2026-08-22): the
+    /// reviewer read the activation-code field as an external purchase
+    /// path. Codes were never sold, but the field must not exist in the
+    /// store build. Two gates, BOTH required:
+    ///   1. `isNonStoreBuild` — the install carries a TestFlight/dev
+    ///      receipt (`sandboxReceipt`), never an App Store one (`receipt`).
+    ///      A remote flag flip can therefore never re-enable the field on
+    ///      a store install, which is what a reviewer would see.
+    ///   2. the remote flag `ENTITLEMENTS_CODE_UI_ENABLED` (compiled
+    ///      default OFF) — lets internal/beta builds keep the redeem flow.
+    private var codeEntryEnabled: Bool {
+        Self.isNonStoreBuild && FeatureFlags.bool("ENTITLEMENTS_CODE_UI_ENABLED", false)
+    }
+
+    /// True for TestFlight and Xcode/simulator installs, false for an App
+    /// Store install. `appStoreReceiptURL` is the documented way to tell
+    /// the two apart without StoreKit (the app has no StoreKit at all);
+    /// the store copy of the receipt is named `receipt`, every sandbox
+    /// copy is `sandboxReceipt`. Evaluated once per process.
+    private static let isNonStoreBuild: Bool = {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+        #endif
+    }()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -227,7 +258,17 @@ struct UpgradeSheet: View {
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(scheme.onSurface)
                     .fixedSize(horizontal: false, vertical: true)
-                codeField
+                if codeEntryEnabled {
+                    codeField
+                } else {
+                    // No off-app pointer here on purpose: "ask for it on
+                    // our website" is the external call-to-action 3.1.1/
+                    // 3.1.3 forbids and is what the reviewer objected to.
+                    Text("Questa funzione non è abilitata sul tuo account e non è in vendita nell'app.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let error = container.error {
                     Text(error)
                         .qaudionStyle(type.labelSmall)
@@ -238,7 +279,11 @@ struct UpgradeSheet: View {
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.primary)
                 }
-                submitButton
+                if codeEntryEnabled {
+                    submitButton
+                } else {
+                    closeButton
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
@@ -265,10 +310,10 @@ struct UpgradeSheet: View {
                 .background(scheme.primary.opacity(0.15))
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text("Account Pro")
+                Text(codeEntryEnabled ? "Account Pro" : "Funzione non attiva")
                     .qaudionStyle(type.titleSmall)
                     .foregroundStyle(scheme.onSurface)
-                Text("Inserisci il codice di attivazione del tuo account Pro")
+                Text(codeEntryEnabled ? "Inserisci il codice di attivazione del tuo account Pro" : "Disponibile solo per gli account abilitati")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
@@ -315,6 +360,23 @@ struct UpgradeSheet: View {
                 )
         }
         .disabled(container.submitting || container.success || container.codeInput.isEmpty)
+    }
+
+    /// Store-build replacement for `submitButton`: no code entry, just
+    /// dismiss (see `codeEntryEnabled`).
+    private var closeButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Text("Chiudi")
+                .qaudionStyle(type.titleSmall)
+                .foregroundStyle(scheme.onPrimary)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(scheme.primary)
+                )
+        }
     }
 
     /// Builds a fresh `EntitlementsApiClient` wired to the live
