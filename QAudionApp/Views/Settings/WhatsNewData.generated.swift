@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1150",
+              date: "2026-09-12",
+              title: "v1.0.1150",
+              bullets: [
+                "fix(net): add a hard-reset watchdog for a WS connection stuck in .connecting",
+              ]),
         .init(id: "v1.0.1149",
               date: "2026-09-11",
               title: "v1.0.1149",
               bullets: [
+                "chore: regenerate changelog for v1.0.1149",
                 "fix(guardian): visible C badge now reads Tier-2's 3-signal combine, matches Android",
               ]),
         .init(id: "v1.0.1148",
@@ -146,13 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1131",
                 "diag(ios): widen aunit log bridge to catch the silent CreateAudioUnit guard",
-              ]),
-        .init(id: "v1.0.1130",
-              date: "2026-09-10",
-              title: "v1.0.1130",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1130",
-                "diag(ios): bridge WebRTC's native AudioDeviceIOS log lines into Loki",
               ]),
     ]
 }
