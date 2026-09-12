@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1153",
+              date: "2026-09-12",
+              title: "v1.0.1153",
+              bullets: [
+                "Isolate buildDiagSummary to the main actor (v1.0.1152 build break)",
+              ]),
         .init(id: "v1.0.1152",
               date: "2026-09-12",
               title: "v1.0.1152",
@@ -125,12 +131,6 @@ extension ReleaseNote {
               title: "v1.0.1130",
               bullets: [
                 "Diag(ios): bridge WebRTC's native AudioDeviceIOS log lines into Loki",
-              ]),
-        .init(id: "v1.0.1129",
-              date: "2026-09-09",
-              title: "v1.0.1129",
-              bullets: [
-                "Persistent RTCPeerConnectionFactory/ADM to close native audio-srtp capture latch",
               ]),
     ]
 }
