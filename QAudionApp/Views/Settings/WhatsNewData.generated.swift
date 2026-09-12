@@ -9,10 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1151",
+              date: "2026-09-12",
+              title: "v1.0.1151",
+              bullets: [
+                "fix(ui): debounce the \"Riconnessione in corso\" banner like the disconnected one",
+              ]),
         .init(id: "v1.0.1150",
               date: "2026-09-12",
               title: "v1.0.1150",
               bullets: [
+                "chore: regenerate changelog for v1.0.1150",
                 "fix(net): add a hard-reset watchdog for a WS connection stuck in .connecting",
               ]),
         .init(id: "v1.0.1149",
@@ -146,13 +153,6 @@ extension ReleaseNote {
               bullets: [
                 "chore: regenerate changelog for v1.0.1132",
                 "diag(ios): log the real error code behind activateAudioSession's setActive failures",
-              ]),
-        .init(id: "v1.0.1131",
-              date: "2026-09-10",
-              title: "v1.0.1131",
-              bullets: [
-                "chore: regenerate changelog for v1.0.1131",
-                "diag(ios): widen aunit log bridge to catch the silent CreateAudioUnit guard",
               ]),
     ]
 }
