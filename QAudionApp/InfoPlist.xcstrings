@@ -1,0 +1,384 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSMicrophoneUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Microphone access: calls, voice messages, voice auth",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and for voice authentication."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa il microfono per le chiamate vocali e video cifrate end-to-end, per i messaggi vocali nelle chat e per l'autenticazione vocale."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa el micrófono para llamadas de voz y vídeo cifradas de extremo a extremo, para mensajes de voz en los chats y para la autenticación por voz."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion utilise le microphone pour les appels vocaux et vidéo chiffrés de bout en bout, pour les messages vocaux dans les discussions et pour l'authentification vocale."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion verwendet das Mikrofon für Ende-zu-Ende-verschlüsselte Sprach- und Videoanrufe, für Sprachnachrichten in Chats und für die Sprachauthentifizierung."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion usa o microfone para chamadas de voz e vídeo com criptografia de ponta a ponta, para mensagens de voz nas conversas e para autenticação por voz."
+          }
+        }
+      }
+    },
+    "NFCReaderUsageDescription": {
+      "extractionState": "manual",
+      "comment": "NFC: import encryption keys from a paired Android device",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion reads NFC tags to securely import encryption keys from Android devices."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion legge i tag NFC per importare in modo sicuro le chiavi di cifratura da dispositivi Android."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion lee etiquetas NFC para importar de forma segura claves de cifrado desde dispositivos Android."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion lit les tags NFC pour importer en toute sécurité des clés de chiffrement depuis des appareils Android."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion liest NFC-Tags, um Verschlüsselungsschlüssel sicher von Android-Geräten zu importieren."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion lê tags NFC para importar com segurança chaves de criptografia de dispositivos Android."
+          }
+        }
+      }
+    },
+    "NSCameraUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Camera: video calls, chat photos/avatar, QR pairing",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion uses the camera for end-to-end encrypted video calls, to take photos you send in chats or set as your avatar, and to scan QR codes when pairing contacts or importing keys."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa la fotocamera per le videochiamate cifrate end-to-end, per scattare foto da inviare in chat o impostare come immagine del profilo, e per scansionare i codici QR durante l'associazione dei contatti o l'importazione delle chiavi."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa la cámara para las videollamadas cifradas de extremo a extremo, para tomar fotos que envías en los chats o que estableces como tu avatar, y para escanear códigos QR al vincular contactos o importar claves."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion utilise l'appareil photo pour les appels vidéo chiffrés de bout en bout, pour prendre des photos que vous envoyez dans les discussions ou définissez comme avatar, et pour scanner les codes QR lors de l'association de contacts ou de l'importation de clés."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion verwendet die Kamera für Ende-zu-Ende-verschlüsselte Videoanrufe, um Fotos aufzunehmen, die du in Chats sendest oder als Profilbild festlegst, und um QR-Codes beim Verknüpfen von Kontakten oder Importieren von Schlüsseln zu scannen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion usa a câmera para chamadas de vídeo com criptografia de ponta a ponta, para tirar fotos que você envia nas conversas ou define como avatar, e para escanear códigos QR ao parear contatos ou importar chaves."
+          }
+        }
+      }
+    },
+    "NSContactsUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Contacts: optional address-book import, hashed on device",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion can use your contacts so you can import them into your encrypted address book, and to automatically show the name and photo of a phone contact when they call you or you call them. To find contacts already on Q-Audion, phone numbers are hashed on your device before matching; names and photos never leave your phone."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion può usare i tuoi contatti per importarli nella rubrica cifrata e per mostrare automaticamente nome e foto di un contatto quando ti chiama o lo chiami. Per trovare i contatti già su Q-Audion, i numeri di telefono vengono sottoposti ad hash sul dispositivo prima del confronto; nomi e foto non lasciano mai il telefono."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion puede usar tus contactos para importarlos a tu agenda cifrada y para mostrar automáticamente el nombre y la foto de un contacto cuando te llama o lo llamas. Para encontrar contactos que ya usan Q-Audion, los números de teléfono se cifran con hash en tu dispositivo antes de la comparación; los nombres y las fotos nunca salen de tu teléfono."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion peut utiliser vos contacts pour les importer dans votre carnet d'adresses chiffré, et pour afficher automatiquement le nom et la photo d'un contact lorsqu'il vous appelle ou que vous l'appelez. Pour trouver les contacts déjà présents sur Q-Audion, les numéros de téléphone sont hachés sur votre appareil avant la comparaison ; les noms et les photos ne quittent jamais votre téléphone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion kann deine Kontakte verwenden, um sie in dein verschlüsseltes Adressbuch zu importieren und um Name und Foto eines Kontakts automatisch anzuzeigen, wenn er dich anruft oder du ihn anrufst. Um Kontakte zu finden, die Q-Audion bereits nutzen, werden Telefonnummern vor dem Abgleich auf deinem Gerät gehasht; Namen und Fotos verlassen dein Telefon nie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion pode usar seus contatos para importá-los para sua agenda criptografada e para mostrar automaticamente o nome e a foto de um contato quando ele liga para você ou você liga para ele. Para encontrar contatos que já usam o Q-Audion, os números de telefone recebem hash no seu dispositivo antes da comparação; nomes e fotos nunca saem do seu telefone."
+          }
+        }
+      }
+    },
+    "NSPhotoLibraryAddUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Photo library: save-to-Photos for chat images",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion saves chat images you choose to keep into your Photos library."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion salva nella libreria Foto le immagini della chat che scegli di conservare."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion guarda en tu biblioteca de Fotos las imágenes del chat que decides conservar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion enregistre dans votre photothèque les images de discussion que vous choisissez de conserver."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion speichert Chatbilder, die du behalten möchtest, in deiner Fotomediathek."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion salva na sua biblioteca de Fotos as imagens do chat que você optar por manter."
+          }
+        }
+      }
+    },
+    "NSFaceIDUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Face ID: unlock the app when app-lock is enabled",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion uses Face ID to unlock the app when the app lock feature is enabled."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa Face ID per sbloccare l'app quando la funzione di blocco app è attiva."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa Face ID para desbloquear la app cuando la función de bloqueo de app está activada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion utilise Face ID pour déverrouiller l'application lorsque la fonction de verrouillage d'application est activée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion verwendet Face ID, um die App zu entsperren, wenn die App-Sperre aktiviert ist."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion usa o Face ID para desbloquear o app quando o recurso de bloqueio de app está ativado."
+          }
+        }
+      }
+    },
+    "NSBluetoothAlwaysUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Bluetooth: earbud key custody + optional BLE mesh relay",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion uses Bluetooth to pair with Q-Audion earbuds for hardware-backed key custody and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa il Bluetooth per abbinarsi agli auricolari Q-Audion per la custodia hardware delle chiavi e, solo quando attivi l'antenna mesh in una chat, per inoltrare messaggi cifrati ai dispositivi Q-Audion vicini quando non c'è rete disponibile."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa Bluetooth para emparejarse con los auriculares Q-Audion para la custodia de claves respaldada por hardware y, solo cuando activas la antena mesh en un chat, para retransmitir mensajes cifrados a dispositivos Q-Audion cercanos cuando no hay red disponible."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion utilise le Bluetooth pour s'associer aux écouteurs Q-Audion afin d'assurer la conservation matérielle des clés et, uniquement lorsque vous activez l'antenne mesh dans une discussion, pour relayer des messages chiffrés vers des appareils Q-Audion à proximité en l'absence de réseau."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion verwendet Bluetooth, um sich mit Q-Audion-Ohrhörern für die hardwaregestützte Schlüsselverwahrung zu verbinden, und – nur wenn du die Mesh-Antenne in einem Chat aktivierst – um verschlüsselte Nachrichten an nahegelegene Q-Audion-Geräte weiterzuleiten, wenn kein Netzwerk verfügbar ist."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion usa Bluetooth para parear com os fones Q-Audion para a custódia de chaves apoiada por hardware e, somente quando você ativa a antena mesh em uma conversa, para retransmitir mensagens criptografadas para dispositivos Q-Audion próximos quando não há rede disponível."
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Local network: direct P2P calls on the same Wi-Fi (host ICE candidates)",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion connects directly to other Q-Audion devices on your local network for lower-latency encrypted calls."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion si collega direttamente ad altri dispositivi Q-Audion sulla tua rete locale per chiamate cifrate con latenza più bassa."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion se conecta directamente con otros dispositivos Q-Audion en tu red local para llamadas cifradas con menor latencia."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion se connecte directement à d'autres appareils Q-Audion sur votre réseau local pour des appels chiffrés à latence réduite."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion verbindet sich direkt mit anderen Q-Audion-Geräten in deinem lokalen Netzwerk für verschlüsselte Anrufe mit geringerer Latenz."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion se conecta diretamente a outros dispositivos Q-Audion na sua rede local para chamadas criptografadas com menor latência."
+          }
+        }
+      }
+    },
+    "NSSiriUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Siri: start a call by contact name (on-device only)",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion shares your contact names with Siri so you can start an encrypted call by saying \"Call [name] on Q-Audion\"."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion condivide con Siri i nomi dei tuoi contatti per permetterti di avviare una chiamata cifrata dicendo \"Chiama [nome] su Q-Audion\"."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion comparte los nombres de tus contactos con Siri para que puedas iniciar una llamada cifrada diciendo \"Llama a [nombre] en Q-Audion\"."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion partage les noms de vos contacts avec Siri afin que vous puissiez lancer un appel chiffré en disant « Appelle [nom] sur Q-Audion »."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion teilt deine Kontaktnamen mit Siri, damit du einen verschlüsselten Anruf starten kannst, indem du „Rufe [Name] auf Q-Audion an\" sagst."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion compartilha os nomes dos seus contatos com a Siri para que você possa iniciar uma chamada criptografada dizendo \"Ligar para [nome] no Q-Audion\"."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
