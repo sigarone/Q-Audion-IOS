@@ -111,15 +111,19 @@ targets:
         SWIFT_VERSION: "5.9"
         DEVELOPMENT_TEAM: 5G22P9239N
         CODE_SIGN_STYLE: Automatic
-        # 1 = iPhone only (2026-09-12, App Store readiness audit FIX-12).
-        # Was "1,2" so TestFlight accepted iPad installs, but a declared
-        # iPad target makes 13-inch iPad screenshots mandatory and puts
-        # Split View / Stage Manager on the reviewer's checklist (2.4.1)
-        # while nothing here has been tested on iPad and
-        # VideoCallPipeline forces portrait. iPad still runs the app in
-        # iPhone-compatibility mode. Re-enable "1,2" only after real iPad
-        # testing (ios-ui-smoke) and iPad screenshots exist.
-        TARGETED_DEVICE_FAMILY: "1"
+        # 1 = iPhone, 2 = iPad. Reverted 2026-09-13: FIX-12 (2026-09-12
+        # App Store readiness audit) restricted this to "1" on the false
+        # premise that iPad was untested — this project's own memory
+        # (project_ios_sas_pin_and_capturelive_2026_09_08,
+        # project_ios_mic_before_accept_fix_2026_09_08,
+        # project_answerbeforeready_fix_ios) already recorded real live
+        # calls placed and answered from a real iPad (device 1fd97f9a,
+        # builds 1.0.1108/1.0.1110, 2026-09-08) — that was never checked
+        # before FIX-12 shipped. iPad stays a supported device family;
+        # 13-inch iPad screenshots are required in App Store Connect
+        # (Version Information > Screenshots) before this build's version
+        # can be released with iPad enabled.
+        TARGETED_DEVICE_FAMILY: "1,2"
         # App Store 2.1 App Completeness — QAUDION_DEV_TOOLS gates
         # SettingsScreen's "SVILUPPATORE" section (P3ControlScreen/
         # EarbudDiagScreen/CallDesignShowcase/NetworkSimulatorScreen/
