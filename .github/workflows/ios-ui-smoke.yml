@@ -43,6 +43,10 @@ on:
         description: 'Maestro flow file to run (relative to maestro/). Leave empty to run all flows in the directory.'
         required: false
         default: 'smoke-launch.yaml'
+      simulator_name:
+        description: 'Simulator device to boot (must be preinstalled on the runner image, or discoverable as an iPad Pro device type -- see the boot step). Default keeps the normal iPhone smoke-test lane unchanged.'
+        required: false
+        default: 'iPhone 17'
 
 jobs:
   ui-smoke:
@@ -168,13 +172,17 @@ jobs:
       # plist into the signature, same as a real device build would.
       - name: Build QAudionApp for Simulator
         working-directory: QAudionApp
+        env:
+          # SEC (same rule as FLOW_INPUT above): env var, never spliced
+          # via ${{ }} straight into the script.
+          SIM_NAME: ${{ github.event.inputs.simulator_name || 'iPhone 17' }}
         run: |
           set -o pipefail
           xcodebuild build \
             -project "$XCODE_PROJECT" \
             -scheme QAudionApp \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -destination "platform=iOS Simulator,name=$SIM_NAME,OS=latest" \
             -derivedDataPath /tmp/dd-ios-ui \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \

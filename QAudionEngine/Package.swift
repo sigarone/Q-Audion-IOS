@@ -236,15 +236,23 @@ let package = Package(
         // Group-call native-PLI parity now shipped: this pin closes the gap
         // the direct-call WebRTC binaryTarget below already had.
         .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw6"),
-        // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
-        // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
-        // GitHub Actions — the repo does not exist at that path. Dependency
-        // temporarily removed; EmbeddedTorManager compiles against the stub branch
-        // (#else of #if canImport(Tor)) which throws TorError.notAvailable so
-        // TorObfsTransport falls back to external Orbot (port 9050).
-        // TODO: locate the correct SPM-compatible Tor XCFramework URL and re-add.
-        // Candidates: https://github.com/iCepa/Tor.framework (Obj-C, needs wrapper)
-        //             or a third-party SPM mirror of the Tor binary.
+        // W610 (REMOVED 2026-09-14): embedded Tor support for iOS has been
+        // removed entirely, on every platform, not just deprioritized here.
+        // Product decision: this app's censorship-bypass need is bypassing
+        // blocked/closed networks, not anonymity — Tor's fixed ~300-800ms
+        // per-hop latency (3-hop onion circuit) materially degrades
+        // real-time voice, and the app shipped no pluggable-transport
+        // bridges (no obfs4/meek/snowflake), so plain Tor was often blocked
+        // outright by real state-level censorship anyway (well-known guard-
+        // relay IPs get blocklisted) while Reality's TLS-disguise approach
+        // is comparably or more resistant AND single-hop. `EmbeddedTorManager`
+        // and `TorObfsTransport` were deleted along with this dependency
+        // entry (they only ever compiled against the `#else` stub branch —
+        // the SPM package URL https://github.com/iCepa/Tor.swift 404s, so a
+        // working embedded Tor build never actually shipped on iOS). Reality
+        // (VLESS+REALITY over xray-core) is now the sole censorship-bypass
+        // mechanism, on every platform, for consistency. Do not re-attempt
+        // sourcing a working Tor SPM package — this line of work is closed.
         //
         // REALITY: RealityManager.swift's real `#if canImport(Reality)` branch is wired
         // below — see `hasRealityXcframework` at the top of this file for how the
@@ -365,7 +373,7 @@ let package = Package(
                 // dependency comment above for the dual-WebRTC coexistence
                 // rationale (LK-prefixed symbols, renamed framework bundle).
                 .product(name: "LiveKit", package: "client-sdk-swift"),
-                // Tor.swift removed — see W610 note in dependencies above.
+                // Tor.swift removed entirely (W610, 2026-09-14) — see note in dependencies above.
             ] + (hasRealityXcframework ? [.target(name: "Reality", condition: .when(platforms: [.iOS]))] : []),
             path: "Sources/QAudionEngine",
             resources: [

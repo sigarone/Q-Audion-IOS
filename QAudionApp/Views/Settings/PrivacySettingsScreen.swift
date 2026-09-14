@@ -19,24 +19,25 @@ final class PrivacySettingsContainer: ObservableObject {
         //     container and by nothing else. No SOCKS / Tor path ever
         //     consulted it, so the subtitle ("tutte le connessioni passano
         //     per la rete Tor") was a false anonymisation claim on a privacy
-        //     screen. The honest, explicitly-disabled row on Impostazioni →
-        //     Trasporto (TransportSettingsScreen) is the surviving statement
-        //     about Tor on iOS.
+        //     screen. (2026-09-14: embedded Tor was removed from the app
+        //     entirely — see EmbeddedTorManager/TorObfsTransport history —
+        //     and the `torEnabled` field itself was deleted from
+        //     PrivacySettingsViewModel/TransportSettingsViewModel along with
+        //     it; Reality is now the sole censorship-bypass mechanism on iOS.)
         //   • "Messaggi a scadenza / Scadenza": PrivacyGate.disappearingSeconds
         //     was likewise read only here. The TTL that actually ships is the
         //     per-conversation Conversation.ephemeralTimerSeconds
         //     (ChatContainer / ChatDetailScreen), set from the chat itself.
-        // Both ViewModel fields are still hydrated from — and saved back to —
-        // the legacy SettingsStore blob, so no stored user value is migrated
-        // or deleted; they are simply no longer read by anything.
+        // The disappearing-duration field is still hydrated from — and saved
+        // back to — the legacy SettingsStore blob, so no stored user value is
+        // migrated or deleted; it is simply no longer read by anything.
         let legacy = store.loadPrivacy()
         self.viewModel = PrivacySettingsViewModel(
             readReceiptsEnabled: PrivacyGate.readReceiptsEnabled,
             typingIndicatorEnabled: PrivacyGate.typingIndicatorEnabled,
             presenceVisibleToContacts: PrivacyGate.presenceVisibleToContacts,
             disappearingMessagesDuration: legacy.disappearingMessagesDuration,
-            blockedUserIds: legacy.blockedUserIds,
-            torEnabled: legacy.torEnabled
+            blockedUserIds: legacy.blockedUserIds
         )
     }
 
@@ -71,8 +72,7 @@ final class PrivacySettingsContainer: ObservableObject {
             typingIndicatorEnabled: typing ?? viewModel.typingIndicatorEnabled,
             presenceVisibleToContacts: presence ?? viewModel.presenceVisibleToContacts,
             disappearingMessagesDuration: viewModel.disappearingMessagesDuration,
-            blockedUserIds: viewModel.blockedUserIds,
-            torEnabled: viewModel.torEnabled
+            blockedUserIds: viewModel.blockedUserIds
         )
     }
 }

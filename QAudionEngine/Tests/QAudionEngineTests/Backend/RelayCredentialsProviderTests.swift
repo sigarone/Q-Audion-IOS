@@ -85,15 +85,13 @@ final class RelayCredentialsProviderTests: XCTestCase {
         let json = Data("""
         {
           "relays": [{"urls": ["turn:r.example:3478"], "username": "u", "credential": "c", "ttl_seconds": 1800}],
-          "wss_turn_url": "wss://wss-turn.example",
-          "onion_address": "abc.onion"
+          "wss_turn_url": "wss://wss-turn.example"
         }
         """.utf8)
         let resp = try JSONDecoder().decode(RelayResponse.self, from: json)
         XCTAssertEqual(resp.relays.count, 1)
         XCTAssertEqual(resp.relays[0].ttl, 1800)
         XCTAssertEqual(resp.wssTurnUrl, "wss://wss-turn.example")
-        XCTAssertEqual(resp.onionAddress, "abc.onion")
     }
 
     /// W-RELAYFLEET (2026-08-25) — the deployed `/api/v1/calling/relays`

@@ -18,7 +18,6 @@ final class TransportDiagnostics: ObservableObject {
 
     /// Last-known TURN round-trip (set when /calling/relays returned).
     @Published private(set) var lastTurnRoundTripMs: Int = 0
-    @Published private(set) var torEnabled: Bool = false
     @Published private(set) var preferredTurnUrl: URL?
 
     private let appState: AppState
@@ -30,7 +29,6 @@ final class TransportDiagnostics: ObservableObject {
         // Load from SettingsStore so the displayed values match what the user
         // configured in W9.A wiring.
         let stored = SettingsStore().loadTransport()
-        self.torEnabled = stored.torEnabled
         self.preferredTurnUrl = stored.preferredTurnServerUrl
     }
 
@@ -82,23 +80,20 @@ final class TransportDiagnostics: ObservableObject {
         }
     }
 
-    /// Persist user transport changes (mode + Tor toggle + URL) into SettingsStore.
+    /// Persist user transport changes (mode + URL) into SettingsStore.
     /// W411: also writes to TransportGate so the WebRTC bridge sees
     /// the user's choice at peer-connection creation time.
     func saveTransport(mode: TransportSettingsViewModel.Mode,
-                       torEnabled: Bool,
                        preferredUrl: URL?) {
         let store = SettingsStore()
         let current = store.loadTransport()
         let updated = TransportSettingsViewModel(
             mode: mode,
-            torEnabled: torEnabled,
             preferredTurnServerUrl: preferredUrl,
             lastConnectionMs: current.lastConnectionMs,
             lastTurnRoundTripMs: lastTurnRoundTripMs
         )
         store.saveTransport(updated)
-        self.torEnabled = torEnabled
         self.preferredTurnUrl = preferredUrl
         // W411: surface to TransportGate for live consumption.
         TransportGate.setPreferredTurnUrl(preferredUrl)

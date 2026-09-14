@@ -222,9 +222,10 @@ jobs:
       # ----------------------------------------------------------
       # 3c) Build Reality.xcframework -- VLESS+REALITY-over-xray-core
       #     censorship-bypass transport (github.com/xtls/libxray), the
-      #     PRIMARY bypass mechanism per bcrypto-server's
-      #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md (Tor stays, additive,
-      #     unchanged -- design doc §7). Source lives in ../RealityCore (this
+      #     SOLE bypass mechanism per bcrypto-server's
+      #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md -- embedded Tor was
+      #     removed entirely 2026-09-14, on every platform (was additive,
+      #     design doc §7). Source lives in ../RealityCore (this
       #     repo, not an external clone); cache key is that module's own
       #     go.sum + this build script, since there is no external ref to pin.
       #     Produces QAudionApp/Vendor/Reality.xcframework (the `Reality`

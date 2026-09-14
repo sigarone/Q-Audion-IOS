@@ -3868,7 +3868,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
            }),
            firstTurn.username != nil,
            firstTurn.credential != nil {
-            // Route this bridge's WSS-TURN socket through the SAME Reality/Tor
+            // Route this bridge's WSS-TURN socket through the SAME Reality
             // tunnel the signaling socket uses when active (see
             // WssTurnBridge.socksPort doc) — otherwise a call's TURN media
             // traffic dials clearnet directly even while signaling is

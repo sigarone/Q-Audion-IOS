@@ -976,11 +976,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
     /// - Parameter viaSocksPort: when set, routes the WS connection through a
     ///   local loopback SOCKS5 proxy on `127.0.0.1:<port>` instead of dialing
-    ///   directly — same shape `TorObfsTransport.connectViaSocks(port:)`
-    ///   already uses for Tor. Additive, second backend (RealityManager);
-    ///   default `nil` preserves today's direct-dial behavior unchanged.
-    ///   Caller is responsible for having the tunnel already up (e.g.
-    ///   `await RealityManager.shared.start(params:)`) before passing its port.
+    ///   directly — used by the Reality censorship-bypass backend
+    ///   (RealityManager); default `nil` preserves today's direct-dial
+    ///   behavior unchanged. Caller is responsible for having the tunnel
+    ///   already up (e.g. `await RealityManager.shared.start(params:)`)
+    ///   before passing its port.
     public func connect(viaSocksPort socksPort: Int? = nil) {
         lock.lock()
         // W-CONNWANT — a caller that reaches the socket directly (no token
@@ -1060,7 +1060,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // RealityManager.swift / bcrypto-server's CENSORSHIP_RESISTANT_
         // TRANSPORT_DESIGN.md §4.4). The WSS handshake + cert pinning below
         // runs UNCHANGED through this tunnel — nothing above the transport
-        // layer needs to know Reality exists, same as Tor's SOCKS5 override.
+        // layer needs to know Reality exists.
         if let socksPort {
             sessionConfig.connectionProxyDictionary = [
                 "SOCKSEnable": true,

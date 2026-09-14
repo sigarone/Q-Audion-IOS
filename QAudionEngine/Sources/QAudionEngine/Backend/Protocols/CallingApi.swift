@@ -198,9 +198,10 @@ public protocol CallingApi {
     func getRelays() async throws -> [RelayServer]
 
     /// Get the full relay response including the optional WS-TURN URL and
-    /// Tor onion address used by transport fallback selectors. Default impl
-    /// wraps `getRelays()` and leaves the top-level fields nil — backends
-    /// that decode a full `RelayResponse` SHOULD override to preserve them.
+    /// Reality censorship-bypass params used by transport fallback
+    /// selectors. Default impl wraps `getRelays()` and leaves the top-level
+    /// fields nil — backends that decode a full `RelayResponse` SHOULD
+    /// override to preserve them.
     func getRelaysResponse() async throws -> RelayResponse
 
     /// W-AUXPIN (2026-09-02) — this backend's already cert-pinned REST
@@ -242,11 +243,11 @@ public extension CallingApi {
 
     /// Default impl — wraps `getRelays()` into a `RelayResponse` with nil
     /// top-level fields. Backends that decode the full server response SHOULD
-    /// override to preserve wssTurnUrl / onionAddress so the transport fallback
-    /// selectors can use WS-TURN and Tor paths.
+    /// override to preserve wssTurnUrl / reality so the transport fallback
+    /// selectors can use the WS-TURN and Reality paths.
     func getRelaysResponse() async throws -> RelayResponse {
         let servers = try await getRelays()
-        return RelayResponse(relays: servers, wssTurnUrl: nil, onionAddress: nil)
+        return RelayResponse(relays: servers, wssTurnUrl: nil)
     }
 
     /// Default impl — no pinned session available (test stubs, future
@@ -405,8 +406,9 @@ public extension CallingApi {
 /// - `username` and `credential` are **optional** (STUN-only relays omit
 ///   them); previous iOS revs declared them non-optional, which made the
 ///   JSON decoder reject any STUN-only entry with `keyNotFound`.
-/// - `wssTurnUrl` / `onionAddress` are top-level fields used by the
-///   transport selector for the WS-TURN and Tor onion fallbacks.
+/// - `wssTurnUrl` is a top-level field used by the transport selector for
+///   the WS-TURN fallback; `reality` is the equivalent for the Reality
+///   censorship-bypass fallback.
 public struct RelayServer: Decodable, Equatable {
     public let urls: [String]
     public let username: String?
@@ -465,20 +467,17 @@ public struct RelayServer: Decodable, Equatable {
 public struct RelayResponse: Decodable, Equatable {
     public let relays: [RelayServer]
     public let wssTurnUrl: String?
-    public let onionAddress: String?
     /// Top-level `reality` block — the VLESS+REALITY censorship-bypass front
     /// parameters (design doc §4 / bcrypto-server
     /// CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Present ONLY when the server
     /// has provisioned a Reality front; nil on un-provisioned / older
     /// deployments (the whole Reality path stays inert when this is nil).
-    /// Consumed by the transport-fallback selector, exactly like
-    /// `onionAddress` — never a default route.
+    /// Consumed by the transport-fallback selector — never a default route.
     public let reality: RealityRelayParams?
 
-    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, reality: RealityRelayParams? = nil) {
+    public init(relays: [RelayServer], wssTurnUrl: String? = nil, reality: RealityRelayParams? = nil) {
         self.relays = relays
         self.wssTurnUrl = wssTurnUrl
-        self.onionAddress = onionAddress
         self.reality = reality
     }
 
@@ -487,8 +486,6 @@ public struct RelayResponse: Decodable, Equatable {
         self.relays = try c.decodeIfPresent([RelayServer].self, forKey: .relays) ?? []
         self.wssTurnUrl = try c.decodeIfPresent(String.self, forKey: .wssTurnUrl)
             ?? c.decodeIfPresent(String.self, forKey: .wssTurnUrlSnake)
-        self.onionAddress = try c.decodeIfPresent(String.self, forKey: .onionAddress)
-            ?? c.decodeIfPresent(String.self, forKey: .onionAddressSnake)
         self.reality = try c.decodeIfPresent(RealityRelayParams.self, forKey: .reality)
     }
 
@@ -496,8 +493,6 @@ public struct RelayResponse: Decodable, Equatable {
         case relays
         case wssTurnUrl
         case wssTurnUrlSnake = "wss_turn_url"
-        case onionAddress
-        case onionAddressSnake = "onion_address"
         case reality
     }
 }

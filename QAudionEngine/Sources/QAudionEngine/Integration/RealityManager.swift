@@ -8,21 +8,22 @@ import Darwin
 #endif
 
 /// Embedded Reality (VLESS+REALITY over xray-core, via github.com/xtls/libxray)
-/// client for iOS — the primary censorship-bypass transport per
-/// bcrypto-server's docs/CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md §4/§4.4.
-/// Tor stays exactly as-is for its own separate purposes (design doc §7) —
-/// this is an ADDITIVE second backend, not a replacement.
+/// client for iOS — the SOLE censorship-bypass transport per bcrypto-server's
+/// docs/CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md §4/§4.4. Embedded Tor
+/// (EmbeddedTorManager / TorObfsTransport) was removed entirely 2026-09-14,
+/// on every platform — Tor's fixed per-hop latency degraded real-time voice
+/// and, with no pluggable-transport bridges shipped, offered no censorship
+/// resistance advantage over Reality's single-hop TLS-disguise approach.
 ///
 /// Wraps the RealityCore Go module (`../../RealityCore`, built to
 /// `Reality.xcframework` by `scripts/build-reality-xcframework.sh`) — a thin
 /// binding over `github.com/xtls/libxray`. `start()` returns the local
 /// loopback SOCKS5 port the tunnel is listening on;
-/// `BCryptoWebSocketClient.connect(viaSocksPort:)` is the intended consumer,
-/// same shape `TorObfsTransport.connectViaSocks(port:)` already uses for Tor.
+/// `BCryptoWebSocketClient.connect(viaSocksPort:)` is the intended consumer.
 ///
-/// **Mirrors:** `EmbeddedTorManager`'s actor/singleton/`start()-throws-port`
-/// shape exactly — a second, independent backend that does not touch Tor's
-/// code path (TorObfsTransport / EmbeddedTorManager are untouched).
+/// **Shape:** actor singleton exposing an idempotent, async
+/// `start()-throws-port` lifecycle (`start()` / `stop()` / `isRunning` /
+/// `activeSocksPort`).
 public actor RealityManager {
 
     // MARK: - Types
@@ -36,7 +37,7 @@ public actor RealityManager {
     /// `serverName`/`publicKey` describe the disguise-target deployment the
     /// SERVER picked (design doc §4.2/§10.3) — NOT hardcoded here, and NOT
     /// something this app decides; fetch from the server the same way
-    /// `RelayCredentialsProvider` already fetches `onionAddress`.
+    /// `RelayCredentialsProvider` already fetches `wssTurnUrl`.
     public struct Params: Sendable {
         public let serverAddress: String
         public let serverPort: Int
@@ -126,7 +127,7 @@ public actor RealityManager {
         ).first!.appendingPathComponent("reality-data", isDirectory: true)
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
-        // Same ephemeral-port pattern EmbeddedTorManager uses for its SocksPort.
+        // Ephemeral local SOCKS5 port — avoids colliding with a fixed one.
         let localPort = UInt16.random(in: 49_152...65_535)
 
         let payload: [String: Any] = [
@@ -383,14 +384,13 @@ public actor RealityManager {
 
 // ─── Stub when Reality.xcframework is not linked ─────────────────────────────
 //
-// Same maturity level as EmbeddedTorManager's `#else` branch today: the
-// RealityCore Go module and scripts/build-reality-xcframework.sh exist, but
+// The RealityCore Go module and scripts/build-reality-xcframework.sh exist, but
 // Reality.xcframework is NOT YET wired as a QAudionEngine dependency (see the
 // TODO next to CQaudionCryptoCore/WebRTC in QAudionEngine/Package.swift) — it
 // needs a real CI/macOS build to produce the artifact and confirm the SPM
 // wiring doesn't regress engine-tests.yml before that's safe to add. Until
 // then this stub keeps every call site compiling; `start()` always throws
-// `.notAvailable`, exactly like EmbeddedTorManager's stub does for Tor.
+// `.notAvailable`.
 public actor RealityManager {
 
     public enum RealityError: Error {

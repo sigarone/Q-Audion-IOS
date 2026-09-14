@@ -292,9 +292,9 @@ final class AppState: ObservableObject {
     // Reality (VLESS+REALITY over xray-core, via RealityManager) is a SECOND
     // signaling backend, activated ONLY as a fallback after clearnet is
     // exhausted — never the default route (design doc §6, bcrypto-server
-    // CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Tor's own paths
-    // (EmbeddedTorManager / TorObfsTransport) are untouched — this is
-    // additive, not a replacement.
+    // CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Reality is the SOLE
+    // censorship-bypass mechanism on iOS — embedded Tor (EmbeddedTorManager /
+    // TorObfsTransport) was removed entirely 2026-09-14, on every platform.
 
     /// UserDefaults key for the MANUAL force toggle (TransportSettingsScreen).
     /// When set, the persistent socket brings Reality up BEFORE trying
@@ -14184,10 +14184,9 @@ final class AppState: ObservableObject {
     }
 
     /// Bring up the Reality censorship-bypass tunnel and re-point the persistent
-    /// signaling WebSocket through its local SOCKS5. Mirrors
-    /// `EmbeddedTorManager`'s activation shape (start() → local SOCKS5 port →
-    /// dial the WSS through it) — but for the app's real
-    /// `wss://voip.bcrypto.com` transport, not the .onion signaling side.
+    /// signaling WebSocket through its local SOCKS5 (start() → local SOCKS5
+    /// port → dial the WSS through it), for the app's real
+    /// `wss://voip.bcrypto.com` transport.
     ///
     /// Reuses the EXISTING `RealityManager` + its xray config builder: this only
     /// sources the server-issued params and feeds them in. The WSS TLS + cert
@@ -14195,7 +14194,7 @@ final class AppState: ObservableObject {
     /// `BCryptoWebSocketClient.connect(viaSocksPort:)`), so nothing above the
     /// transport layer knows Reality exists.
     ///
-    /// Params come from the SAME `/calling/relays` bundle the TURN/onion
+    /// Params come from the SAME `/calling/relays` bundle the TURN
     /// selectors already use: the warm in-memory cache first (populated while
     /// clearnet was healthy — covers a mid-session block), then a best-effort
     /// fresh fetch (works on the open network of the manual-force test path). On

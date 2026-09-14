@@ -21693,47 +21693,6 @@
         }
       }
     },
-    "Non disponibile su iOS in questa versione: la piattaforma non espone un proxy SOCKS di sistema. Verrà riattivato quando l'app integrerà un client Tor bundled.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Non disponibile su iOS in questa versione: la piattaforma non espone un proxy SOCKS di sistema. Verrà riattivato quando l'app integrerà un client Tor bundled."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not available on iOS in this version: the platform doesn't expose a system SOCKS proxy. It will be re-enabled once the app bundles a Tor client."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No disponible en iOS en esta versión: la plataforma no expone un proxy SOCKS del sistema. Se reactivará cuando la app integre un cliente Tor incluido."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Indisponible sur iOS dans cette version : la plateforme n'expose pas de proxy SOCKS système. Sera réactivé quand l'app intégrera un client Tor embarqué."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In dieser Version unter iOS nicht verfügbar: Die Plattform stellt keinen System-SOCKS-Proxy bereit. Wird reaktiviert, sobald die App einen gebündelten Tor-Client integriert."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não disponível no iOS nesta versão: a plataforma não expõe um proxy SOCKS do sistema. Será reativado quando o app integrar um cliente Tor embutido."
-          }
-        }
-      }
-    },
     "Non necessario: già autenticato via NFC": {
       "extractionState": "manual",
       "localizations": {

@@ -53,15 +53,15 @@ public final class WssTurnBridge: @unchecked Sendable {
     private let credential: String?
     private let accessToken: String?
     /// Local loopback SOCKS5 port to dial THIS bridge's WebSocket through
-    /// (Reality/Tor active) — same shape as
+    /// (Reality active) — same shape as
     /// `BCryptoWebSocketClient.connect(viaSocksPort:)`'s `currentSocksPort`.
     /// `nil` (the default) preserves today's direct-dial behavior
     /// byte-for-byte: the signaling socket already tunnels through
-    /// Reality/Tor when active (see `BCryptoWebSocketClient`), but this
+    /// Reality when active (see `BCryptoWebSocketClient`), but this
     /// TURN-fallback bridge used to always dial clearnet regardless —
     /// leaking the call's TURN traffic outside the tunnel. Caller resolves
-    /// the port from `RealityManager.shared.activeSocksPort` (or an
-    /// equivalent Tor port) before constructing the bridge.
+    /// the port from `RealityManager.shared.activeSocksPort` before
+    /// constructing the bridge.
     private let socksPort: Int?
     /// W-AUXPIN (2026-09-02) — the caller's already cert-pinned REST
     /// `URLSession` (SECURITY C-6), reused for this bridge's WSS-TURN
@@ -234,11 +234,11 @@ public final class WssTurnBridge: @unchecked Sendable {
         if let tok = accessToken {
             req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         }
-        // Reality/Tor censorship-bypass path (additive, default off — mirrors
+        // Reality censorship-bypass path (additive, default off — mirrors
         // BCryptoWebSocketClient.connect(viaSocksPort:)). When SOCKS is set,
         // route this bridge's WSS-TURN socket through the SAME local tunnel
         // the signaling socket already uses, so a call's TURN relay traffic
-        // doesn't leak outside Reality/Tor while signaling does — a custom
+        // doesn't leak outside Reality while signaling does — a custom
         // proxy config, so it cannot reuse `pinnedSession` below (that
         // session was built with no proxy) without risking exactly the kind
         // of behavior change this bridge's happy path must not get.

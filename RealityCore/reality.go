@@ -15,8 +15,8 @@
 //
 // libxray holds ONE package-level *core.Instance (xray/xray.go: coreServer) —
 // only one tunnel can run per process. That matches this project's existing
-// single-embedded-Tor-thread model (EmbeddedTorManager.swift), so it is not a
-// new constraint we are introducing.
+// single-tunnel-per-process model for other embedded transports, so it is
+// not a new constraint we are introducing.
 package reality
 
 import (

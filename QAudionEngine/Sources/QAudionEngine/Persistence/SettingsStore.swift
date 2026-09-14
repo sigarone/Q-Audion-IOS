@@ -30,8 +30,7 @@ public final class SettingsStore {
             typingIndicatorEnabled: true,
             presenceVisibleToContacts: true,
             disappearingMessagesDuration: 0,
-            blockedUserIds: [],
-            torEnabled: false
+            blockedUserIds: []
         ))
     }
 
@@ -93,7 +92,6 @@ public final class SettingsStore {
     public func loadTransport() -> TransportSettingsViewModel {
         load(forKey: Key.transport, default: TransportSettingsViewModel(
             mode: .auto,
-            torEnabled: false,
             preferredTurnServerUrl: nil,
             lastConnectionMs: 0,
             lastTurnRoundTripMs: 0
