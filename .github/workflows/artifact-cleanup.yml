@@ -47,6 +47,14 @@ jobs:
               });
               if (data.artifacts.length === 0) break;
               for (const a of data.artifacts) {
+                // Symbolication and reproducibility artifacts carry their
+                // own (longer) retention set by ios-testflight.yml: dSYMs
+                // 90 days, Package.resolved 30 days. Without this skip the
+                // 7-day sweep deleted every dsyms-<version> zip, leaving
+                // App Store crash reports from the review period
+                // unsymbolicatable (audit FIX-14, live check:
+                // dsyms-1.0.1085 total=0).
+                if (/^(dsyms-|package-resolved-)/.test(a.name)) { kept += 1; continue; }
                 const age = now - new Date(a.created_at).getTime();
                 if (age >= ageThresholdMs && !a.expired) {
                   try {

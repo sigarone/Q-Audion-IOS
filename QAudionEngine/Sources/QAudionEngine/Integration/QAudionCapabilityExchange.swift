@@ -45,7 +45,19 @@ public enum QAudionCapabilityExchange {
     public enum Message {
         case offer(publicKey: Data, features: UInt8, pskFingerprints: [String])
         case accept(ciphertext: Data, pskFingerprint: String?)
-        case audioData(frame: Data)
+        /// W-GRPFALLBACKAUDIO-IOS (2026-08-27) — carries EVERY sealed frame
+        /// batched into this envelope by `createAudioData(frames:)`, not just
+        /// the first one. Before this fix, `parseBinary`'s `.audioData` case
+        /// returned the WHOLE multi-frame payload (2B frameCount header +
+        /// [2B len + frame] * N) as if it were a single opaque `frame: Data`
+        /// — a caller feeding that straight into an AEAD `open()` would fail
+        /// every single time (the count/length headers corrupt the
+        /// ciphertext), and nothing in this file exercised the round trip
+        /// end-to-end before now to catch it (`QAudionCapabilityExchangeTests`
+        /// only covered offer/accept). Never shipped to any call site — this
+        /// message type had zero application-layer callers on iOS until the
+        /// group-call SFU-outage fallback-audio receive path.
+        case audioData(frames: [Data])
         case voiceAnalysis(data: Data)
         case dcSdpOffer(sdp: String)
         case dcSdpAnswer(sdp: String)
@@ -137,6 +149,45 @@ public enum QAudionCapabilityExchange {
             payload.append(frame)
         }
         return wrapSimpleMessage(type: .audioData, payload: payload)
+    }
+
+    /// Reverse of `createAudioData(frames:)`'s batch layout:
+    /// `[2B frameCount BE][for each: 2B frameLen BE + frame bytes]`.
+    /// Returns `nil` on any truncation/overrun rather than throwing — mirrors
+    /// this file's existing `parseBinary` posture (malformed wire input is a
+    /// silent drop, never a crash).
+    static func parseAudioDataBatch(_ payload: Data) -> [Data]? {
+        guard payload.count >= 2 else { return nil }
+        let base = payload.startIndex
+        let count = Int(readUInt16BE(payload, offset: base))
+        var offset = base + 2
+        var frames: [Data] = []
+        frames.reserveCapacity(count)
+        for _ in 0..<count {
+            guard offset + 2 <= payload.endIndex else { return nil }
+            let len = Int(readUInt16BE(payload, offset: offset))
+            offset += 2
+            guard offset + len <= payload.endIndex else { return nil }
+            frames.append(Data(payload[offset..<(offset + len)]))
+            offset += len
+        }
+        return frames
+    }
+
+    /// Cheap magic-byte sniff so a receive path that shares a channel with
+    /// another wire format (e.g. `GroupCallController`'s `group_call_frame`
+    /// broadcast, which also carries `GroupSenderKey`-sealed ciphertext) can
+    /// tell a QUAD-wrapped envelope apart from that other format BEFORE
+    /// attempting to parse or decrypt it — same dual-detection pattern
+    /// `QAudionEngine.processIncomingAudio` already uses for
+    /// `FrameEncoder.isValid` vs `WireRelayFrameCodec.decode`. A random
+    /// AES-GCM ciphertext colliding with these 4 bytes is a 1-in-2^32 event,
+    /// not a realistic false-positive source.
+    public static func isQuadEnvelope(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        let base = data.startIndex
+        return data[base] == magic[0] && data[base + 1] == magic[1]
+            && data[base + 2] == magic[2] && data[base + 3] == magic[3]
     }
 
     /// Creates a VOICE_ANALYSIS message (68-byte wire format).
@@ -247,7 +298,8 @@ public enum QAudionCapabilityExchange {
             return .accept(ciphertext: Data(kemData), pskFingerprint: selectedFp)
 
         case .audioData:
-            return .audioData(frame: Data(pubKey))
+            guard let frames = parseAudioDataBatch(Data(pubKey)) else { return nil }
+            return .audioData(frames: frames)
 
         case .voiceAnalysis:
             return .voiceAnalysis(data: Data(pubKey))

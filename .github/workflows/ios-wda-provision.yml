@@ -64,11 +64,19 @@ jobs:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # SEC (Aikido, 2026-08-21): env, not ${{ }} spliced into the
+          # script -- workflow_dispatch text inputs reinterpolated directly
+          # into run: are spliced into the script BEFORE bash parses it, so
+          # a malicious device_name/device_udid could execute arbitrary
+          # commands on this runner. $DEVICE_NAME/$DEVICE_UDID below are
+          # normal shell variable reads, immune to that.
+          DEVICE_NAME: ${{ github.event.inputs.device_name }}
+          DEVICE_UDID: ${{ github.event.inputs.device_udid }}
         run: |
           set +e
           OUT=$(app-store-connect devices register \
-            --name "${{ github.event.inputs.device_name }}" \
-            --udid "${{ github.event.inputs.device_udid }}" 2>&1)
+            --name "$DEVICE_NAME" \
+            --udid "$DEVICE_UDID" 2>&1)
           rc=$?
           echo "$OUT"
           if [ $rc -eq 0 ]; then

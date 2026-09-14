@@ -1,4 +1,5 @@
 import SwiftUI
+import QAudionEngine
 
 /// Phone-entry screen — visual replica of Android
 /// `qaudion-android-new/feature/feature-auth/ui/PhoneEntryScreen.kt`.
@@ -6,7 +7,8 @@ import SwiftUI
 /// 2026-07-29: the server now has a real SMS-OTP register/login flow
 /// (`POST /api/v1/auth/otp/request` + `/otp/verify`). This screen collects
 /// + validates the phone number (unchanged) and, for `.register`, an
-/// optional invite code; `OnboardingRoot` routes `onContinue`'s output to
+/// invite code — required, `registration_mode = "invite"` on the server
+/// (2026-08-18); `OnboardingRoot` routes `onContinue`'s output to
 /// `OtpVerificationScreen`, which requests the code and completes the
 /// register/login itself. This screen stays a pure input screen — it does
 /// not touch the network.
@@ -51,7 +53,7 @@ struct PhoneEntryScreen: View {
     // in body per SWIFT6_PATTERNS.md §1.
     private static let attemptFormatter: DateFormatter = {
         let df = DateFormatter()
-        df.locale = Locale(identifier: "it_IT")
+        df.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         df.dateFormat = "HH:mm:ss"
         return df
     }()
@@ -62,7 +64,11 @@ struct PhoneEntryScreen: View {
     }
 
     private var isValid: Bool {
-        PhoneHashHelper.isValid(raw)
+        // Server's registration_mode is "invite" — /auth/otp/verify 403s
+        // "invite_code required" without one. Block submit client-side
+        // for the register mode instead of round-tripping to find out.
+        let inviteOk = mode != .register || !inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return PhoneHashHelper.isValid(raw) && inviteOk
     }
 
     var body: some View {
@@ -135,12 +141,16 @@ struct PhoneEntryScreen: View {
                 if mode == .register {
                     Spacer().frame(height: 16)
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Codice invito (opzionale)")
+                        Text("Codice invito")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.white.opacity(0.7))
                         TextField("Codice invito", text: $inviteCode)
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
+                            .onChange(of: inviteCode) { newValue in
+                                let formatted = liveFormatActivationCodeInput(newValue)
+                                if formatted != inviteCode { inviteCode = formatted }
+                            }
                             .foregroundStyle(.white)
                             .padding(14)
                             .background(

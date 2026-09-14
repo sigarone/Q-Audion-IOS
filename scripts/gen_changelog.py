@@ -56,6 +56,35 @@ OUTPUT_PATH = REPO_ROOT / "QAudionApp" / "Views" / "Settings" / "WhatsNewData.ge
 # the entry's `id`.
 BUMP_COMMIT_RE = re.compile(r"^chore:\s*bump version to\s+[\d.]+\s*$", re.IGNORECASE)
 
+# App Store readiness audit 2026-09-12 (FIX-13): the generated list is
+# user-facing (Settings > Cosa c'e' di nuovo, and the source for the store
+# "What's New" text), so pure engineering traffic and internal mechanism
+# names must not reach it. Two filters:
+#   SKIP_RE   - drop the whole subject: housekeeping types (chore/ci/build/
+#               test/docs/refactor/style/perf) and subjects naming internal
+#               machinery a user cannot act on and a reviewer should not
+#               have to interpret (censorship bypass, Reality/xray, Tor,
+#               ratchet internals, deepfake scorer wiring, watchdogs).
+#   PREFIX_RE - strip the conventional-commit "type(scope): " prefix from
+#               what survives, so a bullet reads as a sentence.
+SKIP_RE = re.compile(
+    r"^(chore|ci|build|test|tests|docs|refactor|style|perf)(\(.*?\))?!?:"
+    r"|censorship|bypass|deepfake|ratchet|\bReality\b|xray|\bTor\b|watchdog"
+    r"|\bW-[A-Z0-9]+\b|regenerate changelog",
+    re.IGNORECASE,
+)
+PREFIX_RE = re.compile(r"^(feat|fix|hotfix|security|sec|ui|net|audio|video|call|chat)(\(.*?\))?!?:\s*", re.IGNORECASE)
+
+
+def user_facing(subject):
+    """Return the cleaned subject, or None if it should not be shown."""
+    if BUMP_COMMIT_RE.match(subject) or SKIP_RE.search(subject):
+        return None
+    cleaned = PREFIX_RE.sub("", subject).strip()
+    if not cleaned:
+        return None
+    return cleaned[0].upper() + cleaned[1:]
+
 
 def run_git(args):
     # NOTE: do NOT use subprocess' text=True here. On Windows it decodes
@@ -106,7 +135,7 @@ def build_entries(tags, limit):
         commit_range = f"{prev_tag}..{tag}" if prev_tag else tag
         out = run_git(["log", commit_range, "--no-merges", "--pretty=%s"])
         subjects = [s.strip() for s in out.splitlines() if s.strip()]
-        changes = [s for s in subjects if not BUMP_COMMIT_RE.match(s)]
+        changes = [c for c in (user_facing(s) for s in subjects) if c]
         if not changes:
             continue
         entries.append({

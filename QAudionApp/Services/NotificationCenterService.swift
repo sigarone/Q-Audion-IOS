@@ -222,11 +222,19 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
                           groupCall: Bool = false, creatorName: String = "",
                           groupId: String = "", groupName: String = "") async {
         let content = UNMutableNotificationContent()
-        content.title = callerName.isEmpty ? "Chiamata in arrivo" : callerName
+        // W-L10N-BATCH1 (2026-09-08) — UNMutableNotificationContent.title/
+        // body are plain String, not LocalizedStringKey; explicit lookup.
+        content.title = callerName.isEmpty
+            ? String(localized: "notification.incoming_call.title", defaultValue: "Chiamata in arrivo", comment: "Local notification title when the caller name is unknown")
+            : callerName
         if groupCall {
-            content.body = hasVideo ? "Videochiamata di gruppo Q-Audion" : "Chiamata di gruppo Q-Audion"
+            content.body = hasVideo
+                ? String(localized: "notification.incoming_call.body.group_video", defaultValue: "Videochiamata di gruppo Q-Audion", comment: "Local notification body — incoming group video call")
+                : String(localized: "notification.incoming_call.body.group_audio", defaultValue: "Chiamata di gruppo Q-Audion", comment: "Local notification body — incoming group audio call")
         } else {
-            content.body = hasVideo ? "Videochiamata Q-Audion" : "Chiamata Q-Audion"
+            content.body = hasVideo
+                ? String(localized: "notification.incoming_call.body.video", defaultValue: "Videochiamata Q-Audion", comment: "Local notification body — incoming 1:1 video call")
+                : String(localized: "notification.incoming_call.body.audio", defaultValue: "Chiamata Q-Audion", comment: "Local notification body — incoming 1:1 audio call")
         }
         // Ring sound. defaultRingtone (iOS 15.2+) loops like a call; else default.
         if #available(iOS 15.2, *) {

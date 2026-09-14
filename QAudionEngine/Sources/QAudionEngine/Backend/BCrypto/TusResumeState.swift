@@ -1,5 +1,8 @@
 import Foundation
 import CryptoKit
+#if canImport(Security)
+import Security
+#endif
 
 /// W-TUSRESUME — persisted state for a previously-attempted-but-not-
 /// completed TUS upload, keyed by the outbound message's `clientMsgId`.
@@ -167,20 +170,54 @@ public struct TusResumeState: Codable, Equatable {
     }
 }
 
-/// UserDefaults-backed store for `[clientMsgId: TusResumeState]`. Single
+/// Keychain-backed store for `[clientMsgId: TusResumeState]`. Single
 /// key (not one-key-per-upload) — mirrors `PendingGroupInviteStore`'s
 /// rationale: avoids key-sprawl and makes "is there anything in flight"
-/// trivial to answer without enumerating `UserDefaults.dictionaryRepresentation()`.
+/// trivial to answer without enumerating.
+///
+/// Moved off UserDefaults (2026-08-21, security review) — the map holds
+/// `recipientUserId` (peer identity) and `pskFingerprintHex` (a one-way
+/// SHA-256 of the PSK, not the key itself) per pending upload, both of
+/// which are readable from an unencrypted UserDefaults plist via jailbreak
+/// or local backup extraction. `kSecUseDataProtectionKeychain` is set on
+/// every query: without it, SecItemAdd/SecItemUpdate/SecItemCopyMatching
+/// silently fail with errSecMissingEntitlement in a bare SPM test host
+/// (no app-level keychain-access-group entitlement) — Apple's documented
+/// fix, and unconditionally correct for the real signed app target too.
 public enum TusResumeStateStore {
 
-    private static let key = "qaudion.tus.resumeState.v1"
+    private static let keychainService = "com.bcrypto.qaudion.tusresume"
+    private static let keychainAccount = "resume_state_v1"
+    private static let legacyUserDefaultsKey = "qaudion.tus.resumeState.v1"
 
     /// Load the full map. Corrupted/missing data decodes to an empty
     /// map rather than throwing — this is best-effort local bookkeeping,
     /// never a hard dependency (see the corruption-check / graceful-
     /// degradation contract on the caller side in `TusUploadClient`).
     public static func loadAll() -> [String: TusResumeState] {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return [:] }
+        #if canImport(Security)
+        // One-time sweep of the pre-migration plaintext store so it
+        // doesn't linger after the first Keychain-backed launch.
+        UserDefaults.standard.removeObject(forKey: legacyUserDefaultsKey)
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else {
+            return [:]
+        }
+        #else
+        guard let data = UserDefaults.standard.data(forKey: legacyUserDefaultsKey) else { return [:] }
+        #endif
+
         guard let decoded = try? JSONDecoder().decode([String: TusResumeState].self, from: data) else {
             return [:]
         }
@@ -214,7 +251,42 @@ public enum TusResumeStateStore {
 
     private static func write(_ all: [String: TusResumeState]) {
         guard let data = try? JSONEncoder().encode(all) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+
+        #if canImport(Security)
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return
+        }
+        if updateStatus == errSecItemNotFound {
+            for (k, v) in attributes { query[k] = v }
+            let addStatus = SecItemAdd(query as CFDictionary, nil)
+            if addStatus != errSecSuccess {
+                print("[TusResumeStateStore] SecItemAdd failed: \(addStatus)")
+            }
+            return
+        }
+        // Any other status: hard-reset.
+        SecItemDelete(query as CFDictionary)
+        for (k, v) in attributes { query[k] = v }
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            print("[TusResumeStateStore] SecItemAdd (after reset) failed: \(addStatus)")
+        }
+        #else
+        UserDefaults.standard.set(data, forKey: legacyUserDefaultsKey)
+        #endif
     }
 
     // MARK: - Corruption check

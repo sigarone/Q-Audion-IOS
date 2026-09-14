@@ -193,6 +193,55 @@ public final class BCryptoKmsClient {
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
 
+    /// Sigsum key-transparency submit status (2026-09-04) for the CALLING
+    /// user's own currently-published identity key. Purely informational —
+    /// mirrors Android `BCryptoApi.getKtStatus` / `KtStatusResponse` — never
+    /// read by any trust or call decision, only by the Security Dashboard.
+    public enum KtStatus: Equatable {
+        case confirmed(logName: String, leafIndex: Int64, treeSize: Int64, cosignatureCount: Int, verifiedAtMs: Int64)
+        case pending(enqueuedAtMs: Int64)
+        case failed(lastAttemptMs: Int64, lastError: String)
+        case notSubmitted
+        /// Client-side fetch failure (offline, transport error, malformed
+        /// response) — distinct from the server's own "failed" status, which
+        /// means a real submit attempt completed and errored.
+        case unknown
+    }
+
+    /// GET /api/v1/users/me/identity-key/kt-status. Never throws — any
+    /// failure (offline, transport, decode) resolves to `.unknown` so the
+    /// dashboard always has something to render.
+    public func fetchKtStatus() async -> KtStatus {
+        guard !rest.isOffline else { return .unknown }
+        do {
+            let data = try await rest.get("/api/v1/users/me/identity-key/kt-status")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let status = json["status"] as? String else {
+                return .unknown
+            }
+            switch status {
+            case "confirmed":
+                let logName = json["log_name"] as? String ?? ""
+                let leafIndex = (json["leaf_index"] as? NSNumber)?.int64Value ?? 0
+                let treeSize = (json["tree_size"] as? NSNumber)?.int64Value ?? 0
+                let cosigCount = (json["cosignature_count"] as? NSNumber)?.intValue ?? 0
+                let verifiedAtMs = (json["verified_at_ms"] as? NSNumber)?.int64Value ?? 0
+                return .confirmed(logName: logName, leafIndex: leafIndex, treeSize: treeSize, cosignatureCount: cosigCount, verifiedAtMs: verifiedAtMs)
+            case "pending":
+                let enqueuedAtMs = (json["enqueued_at_ms"] as? NSNumber)?.int64Value ?? 0
+                return .pending(enqueuedAtMs: enqueuedAtMs)
+            case "failed":
+                let lastAttemptMs = (json["last_attempt_ms"] as? NSNumber)?.int64Value ?? 0
+                let lastError = json["last_error"] as? String ?? ""
+                return .failed(lastAttemptMs: lastAttemptMs, lastError: lastError)
+            default:
+                return .notSubmitted
+            }
+        } catch {
+            return .unknown
+        }
+    }
+
     /// Fetch a peer's published long-term Ed25519 identity key (RAW 32 bytes),
     /// or `nil` when the peer has not published one (404) or on any transport /
     /// decode error. This is the iOS mirror of Android
@@ -221,6 +270,15 @@ public final class BCryptoKmsClient {
     /// (caller falls through to bundle-TOFU on first contact rather than aborting).
     public func fetchUserIdentityKey(userId: String, deviceId: String?) async -> Data? {
         guard !userId.isEmpty else { return nil }
+        // IOS-E2 leg (3) — offline-aware + bounded: this is the exact
+        // endpoint that hung 47.7 s on Android's zombie pooled connection
+        // (StaleConnectionEvictor.kt kdoc). When the device has no network
+        // transport at all, `rest`'s bounded 15 s request timeout would
+        // still burn its full duration finding that out; `rest.isOffline`
+        // (NWPathMonitor-backed) answers it for free, in-process, with zero
+        // network round trips. Caller already treats a nil return as
+        // "fall through to bundle-TOFU" — identical to a genuine 404/error.
+        guard !rest.isOffline else { return nil }
         var path = "/api/v1/users/\(userId)/identity-key"
         if let d = deviceId, !d.isEmpty {
             // device_id is a server-stamped UUID (`sender_device_id`), URL-safe,
@@ -262,6 +320,11 @@ public final class BCryptoKmsClient {
     /// `fetchIdentityKey({all:true})`.
     public func fetchUserIdentityKeySet(userId: String) async -> Set<Data> {
         guard !userId.isEmpty else { return [] }
+        // IOS-E2 leg (3) — see the offline-gate kdoc on
+        // `fetchUserIdentityKey(userId:deviceId:)` above; same reasoning,
+        // caller already treats an empty set as "no floor" so nil-network
+        // degrades identically to a transport error.
+        guard !rest.isOffline else { return [] }
         do {
             let data = try await rest.get("/api/v1/users/\(userId)/identity-key?all=1")
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -323,6 +386,11 @@ public final class BCryptoKmsClient {
 
     public func fetchUserIdentityBundleV2(userId: String) async -> IdentityBundleV2? {
         guard !userId.isEmpty else { return nil }
+        // IOS-E2 leg (3) — see the offline-gate kdoc on
+        // `fetchUserIdentityKey(userId:deviceId:)` above; the group-call
+        // KMS-prebootstrap caller already falls back to the default flow on
+        // any nil, identical to a transport error.
+        guard !rest.isOffline else { return nil }
         do {
             let data = try await rest.get("/api/v1/users/\(userId)/identity-key")
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {

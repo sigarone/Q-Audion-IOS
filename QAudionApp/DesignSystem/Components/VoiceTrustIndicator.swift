@@ -74,11 +74,12 @@ struct VoiceTrustIndicator: View {
         }
     }
 
+    // W-L10N-BATCH1 (2026-09-08) — plain-String switch, explicit lookup.
     private var toneLabel: String {
         switch toneCategory {
-        case 0:  return "Voce verificata"
-        case 1:  return "Voce incerta"
-        default: return "Voce sconosciuta"
+        case 0:  return String(localized: "voice_trust.verified", defaultValue: "Voce verificata", comment: "Voice-trust badge — high confidence")
+        case 1:  return String(localized: "voice_trust.uncertain", defaultValue: "Voce incerta", comment: "Voice-trust badge — medium confidence")
+        default: return String(localized: "voice_trust.unknown", defaultValue: "Voce sconosciuta", comment: "Voice-trust badge — low/no confidence")
         }
     }
 }

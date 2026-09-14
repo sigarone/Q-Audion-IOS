@@ -108,8 +108,12 @@ def _load_vps_creds():
     host = os.environ.get("QAUDION_VPS_HOST")
     user = os.environ.get("QAUDION_VPS_USER")
     password = os.environ.get("QAUDION_VPS_PASS")
-    if host and user and password:
-        return host, user, password
+    # W-VPSKEYAUTH (2026-09-02): the prod VPS accepts publickey only since
+    # the post-migration hardening (password auth disabled) — host+user are
+    # enough when a key is available (see _vps_key_path); password stays an
+    # optional fallback for any box that still allows it.
+    if host and user and (password or _vps_key_path()):
+        return host, user, password or ""
 
     candidates = [
         Path(__file__).parent.parent.parent / "bcrypto-server" / "VPS_ACCESS.md",
@@ -144,11 +148,33 @@ def _ensure_creds():
         VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
 
 
+def _vps_key_path():
+    """Private key for the prod VPS: env QAUDION_VPS_KEY / VPS_SSH_KEY, else
+    the dev-box default the other prod tools (phone-debug, deploy.py) use.
+    Returns None when no readable key exists so callers can fall back."""
+    for cand in (os.environ.get("QAUDION_VPS_KEY"), os.environ.get("VPS_SSH_KEY"),
+                 str(Path.home() / ".claude" / "bin" / "bcrypto_vps_ed25519")):
+        if cand:
+            p = Path(os.path.expanduser(cand))
+            if p.is_file():
+                return str(p)
+    return None
+
+
 def ssh_connect():
     _ensure_creds()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
+    # W-VPSKEYAUTH (2026-09-02): key first (the prod VPS is publickey-only
+    # after the migration hardening — password auth returned
+    # "Bad authentication type; allowed types: ['publickey']"), password only
+    # as a fallback when no key is present.
+    key = _vps_key_path()
+    if key:
+        client.connect(VPS_HOST, username=VPS_USER, key_filename=key,
+                       look_for_keys=False, allow_agent=False, timeout=15)
+    else:
+        client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
     return client
 
 
@@ -1000,6 +1026,23 @@ def list_device_chunks(client, minutes, limit):
     return files
 
 
+def order_blobs_oldest_first(files):
+    """Reorder list_device_chunks()'s newest-first selection to oldest-first.
+
+    Loki's out-of-order ingester tracks, per stream, the highest timestamp it
+    has accepted; any later POST older than (that high-water mark - window)
+    is bounced with "entry too far behind" and the verdict is permanent for
+    that stream. Shipping blobs newest-first means the very FIRST accepted
+    POST in a run jumps the watermark to the newest chunk's timestamp, which
+    then permanently dooms every older blob selected in the SAME run -- a
+    within-run version of the trap documented in
+    reference_ios_log_pipeline_limits.md. Shipping oldest-first instead lets
+    the watermark advance in the same direction the data does, so a blob is
+    only bounced if it is genuinely older than Loki's window, not merely
+    because a newer sibling from the same run went out first."""
+    return sorted(files, key=lambda f: f[0])
+
+
 def read_chunk_blob(sftp, path, size_s):
     """SFTP-read one blob. Returns the UTF-8 text, or None if it is not a
     parseable W417 chunk (too big, empty, binary, or wrong first line)."""
@@ -1051,6 +1094,12 @@ def parse_chunk(txt):
             "tag": obj.get("tag", ""),
             "msg": obj.get("msg", ""),
         })
+    # Stable-sort ascending by ts. The on-device ring buffer normally appends
+    # in order, but this is the same "ship oldest-first" invariant as
+    # order_blobs_oldest_first() applied one level down: a single POST's
+    # logRecords should never regress in time within a stream, or Loki can
+    # bounce the tail of an otherwise-acceptable blob.
+    records.sort(key=lambda r: r["ms"])
     return header, records
 
 
@@ -1243,6 +1292,24 @@ def run_selftest():
     must_drop_or_summary("crypto", "pin a1B2c3D4 state=active",
                          ["a1b2c3d4"], "bare_pin")
 
+    # 18. Blobs must ship oldest-first (ascending mtime): shipping newest-first
+    #     lets the first accepted POST jump Loki's per-stream watermark ahead,
+    #     permanently dooming every older blob picked in the SAME run.
+    fake_files = [(300.0, 10, "/c"), (100.0, 10, "/a"), (200.0, 10, "/b")]
+    ordered = order_blobs_oldest_first(fake_files)
+    if [p for _, _, p in ordered] != ["/a", "/b", "/c"]:
+        failures.append("ORDER[blobs]: not oldest-first: %r" % (ordered,))
+
+    # 19. Records within one blob must ship in ascending ts order even if the
+    #     on-device W417 chunk itself was appended out of order.
+    _hdr, _recs = parse_chunk(
+        '{"ts":"2026-01-01T00:00:03.000Z","lvl":"I","tag":"call","msg":"c"}\n'
+        '{"ts":"2026-01-01T00:00:01.000Z","lvl":"I","tag":"call","msg":"a"}\n'
+        '{"ts":"2026-01-01T00:00:02.000Z","lvl":"I","tag":"call","msg":"b"}\n'
+    )
+    if [r["msg"] for r in _recs] != ["a", "b", "c"]:
+        failures.append("ORDER[records]: not ascending ts: %r" % (_recs,))
+
     out("=" * 72)
     out("SELF-TEST: privacy redaction regression")
     out("=" * 72)
@@ -1252,10 +1319,11 @@ def run_selftest():
         out("")
         out("  RESULT: NO-GO (%d leak/regression)" % len(failures))
         return 1
-    out("  18/18 cases pass: no forbidden value survived; structured telemetry")
+    out("  20/20 cases pass: no forbidden value survived; structured telemetry")
     out("  still ships; call_id hashed; SSID/serial/SDP/SAS/plaintext blocked;")
     out("  join key matches the server leg incl. QUOTED form; 6/7-char floored;")
-    out("  bare mixed-alnum secret tokens (8-11 char) hard-failed.")
+    out("  bare mixed-alnum secret tokens (8-11 char) hard-failed; blob + record")
+    out("  ship order is oldest-first.")
     out("  RESULT: GO")
     return 0
 
@@ -1305,12 +1373,18 @@ def main():
     state_path = Path(args.state_file) if args.state_file else default_state_path()
     state = {"blobs": {}} if args.reset_state else load_state(state_path)
 
-    print("=== bcrypto-server SSH @ %s (read-only) ===" % VPS_HOST)
+    # The host is resolved lazily by _ensure_creds() inside ssh_connect(), so
+    # printing VPS_HOST before connecting always said "None" — which is the one
+    # line that would have shown, instantly, that a run was talking to the
+    # decommissioned IONOS box instead of prod. Resolve first, then announce.
+    _ensure_creds()
+    print("=== bcrypto-server SSH @ %s as %s (read-only) ===" % (VPS_HOST, VPS_USER))
     client = ssh_connect()
     print("Connected.")
 
     blobs_read = 0
     blobs_skipped_state = 0
+    blobs_too_old = 0
     lines_shipped = 0
     lines_dropped = 0
     http_results = []  # (blob_path, status)
@@ -1320,6 +1394,9 @@ def main():
               % (args.minutes, args.limit))
         files = list_device_chunks(client, args.minutes, args.limit)
         print("Found %d candidate blobs." % len(files))
+        # Ship oldest-first: see order_blobs_oldest_first() docstring. This
+        # only reorders the already-limited (newest-N) selection above.
+        files = order_blobs_oldest_first(files)
 
         sftp = client.open_sftp()
         try:
@@ -1354,17 +1431,43 @@ def main():
                     continue
 
                 blob_ok = True
+                blob_too_old = False
+                blob_retryable_fail = False
                 for sub in _split_request_into_batches(request, args.batch):
                     status, resp_body = post_otlp(args.endpoint, token, sub)
                     http_results.append((path, status))
                     if status != 204:
                         blob_ok = False
                         snippet = (resp_body or "").strip().replace("\n", " ")
+                        # Loki refuses any entry more than ~1h behind the newest
+                        # already in the stream ("entry too far behind"). That
+                        # verdict is PERMANENT: the window only moves forward,
+                        # so this blob can never be accepted, and leaving its
+                        # state unadvanced means re-reading and re-POSTing it on
+                        # every single future run. qa-logs.ps1 now ships on every
+                        # log read, which turned a one-off annoyance into 39
+                        # doomed POSTs per invocation, forever.
+                        if status == 400 and "too far behind" in (resp_body or ""):
+                            blob_too_old = True
+                        else:
+                            # A timeout, a 5xx or a dropped connection is
+                            # retryable, and the blob must NOT be marked handled
+                            # or that batch is lost for good. Caught in review:
+                            # deciding "too old" from ANY too-old batch would
+                            # drop the retryable ones alongside it whenever a
+                            # multi-batch blob failed both ways at once.
+                            blob_retryable_fail = True
                         print("  POST %s -> HTTP %s %s"
                               % (path, status, _ascii(snippet[:200])),
                               file=sys.stderr)
                 if blob_ok:
                     record_shipped(state, path, sig, kept)
+                elif blob_too_old and not blob_retryable_fail:
+                    # Recorded as handled so it is not retried. `--reset-state`
+                    # brings it back if Loki's out-of-order window is ever
+                    # widened and the backlog becomes shippable again.
+                    record_shipped(state, path, sig, 0)
+                    blobs_too_old += 1
         finally:
             sftp.close()
     finally:
@@ -1392,11 +1495,22 @@ def main():
         out("  HTTP non-204 (failed):   %d" % bad)
         out("  blobs with no records:   %d" % noop)
         out("  state file:              %s" % state_path)
+        if blobs_too_old:
+            out("  blobs too old to ship:   %d  (state advanced, never retried)"
+                % blobs_too_old)
         if bad:
             out()
-            out("  NOTE: %d POST(s) did not return 204. State was NOT advanced"
-                % bad)
-            out("        for those blobs, so a re-run will retry them.")
+            retryable = bad - blobs_too_old
+            if retryable > 0:
+                out("  NOTE: %d POST(s) failed for a retryable reason. State was"
+                    % retryable)
+                out("        NOT advanced; a re-run will retry them.")
+            if blobs_too_old:
+                out("  NOTE: %d blob(s) rejected as 'entry too far behind'. Loki's"
+                    % blobs_too_old)
+                out("        window only moves forward, so that verdict is permanent:")
+                out("        recorded as handled, NOT retried. Use --reset-state if")
+                out("        the out-of-order window is ever widened.")
     else:
         out()
         out("  (dry-run: nothing shipped, state untouched. Eyeball the OTLP")

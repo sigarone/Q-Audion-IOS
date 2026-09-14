@@ -33,7 +33,6 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertTrue(p.presenceVisibleToContacts)
         XCTAssertEqual(p.disappearingMessagesDuration, 0)
         XCTAssertEqual(p.blockedUserIds, [])
-        XCTAssertFalse(p.torEnabled)
     }
 
     func test_privacy_saveAndLoadRoundTrip() {
@@ -42,8 +41,7 @@ final class SettingsStoreTests: XCTestCase {
             typingIndicatorEnabled: false,
             presenceVisibleToContacts: false,
             disappearingMessagesDuration: 3600,
-            blockedUserIds: ["user-x", "user-y"],
-            torEnabled: true
+            blockedUserIds: ["user-x", "user-y"]
         )
         store.savePrivacy(saved)
         let loaded = store.loadPrivacy()
@@ -97,14 +95,12 @@ final class SettingsStoreTests: XCTestCase {
     func test_transport_defaultsToAutoMode() {
         let t = store.loadTransport()
         XCTAssertEqual(t.mode, .auto)
-        XCTAssertFalse(t.torEnabled)
         XCTAssertNil(t.preferredTurnServerUrl)
     }
 
     func test_transport_roundTrip() {
         let saved = TransportSettingsViewModel(
             mode: .turn,
-            torEnabled: true,
             preferredTurnServerUrl: URL(string: "turn://relay.example.com:3478"),
             lastConnectionMs: 200,
             lastTurnRoundTripMs: 50

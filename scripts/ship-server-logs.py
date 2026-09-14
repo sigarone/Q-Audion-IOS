@@ -128,12 +128,19 @@ def _load_vps_creds():
     Same precedence + same regexes as fetch-ios-live.py / correlate-call.py:
     env first, then the sibling bcrypto-server/VPS_ACCESS.md (values may be
     wrapped in markdown backticks).
+
+    W-VPSKEYAUTH (2026-09-08, server leg): parity fix with ship-ios-logs.py's
+    2026-09-02 change. The prod VPS has been publickey-only since the
+    post-migration hardening (password auth disabled), so QAUDION_VPS_PASS is
+    optional once a key is available (see _vps_key_path()) -- this script had
+    been left on the password-only path, which is why it silently kept
+    reading a stale/dead host instead of failing loudly or working at all.
     """
     host = os.environ.get("QAUDION_VPS_HOST")
     user = os.environ.get("QAUDION_VPS_USER")
     password = os.environ.get("QAUDION_VPS_PASS")
-    if host and user and password:
-        return host, user, password
+    if host and user and (password or _vps_key_path()):
+        return host, user, password or ""
 
     candidates = [
         Path(__file__).parent.parent.parent / "bcrypto-server" / "VPS_ACCESS.md",
@@ -145,11 +152,12 @@ def _load_vps_creds():
             h = re.search(r"\*\*IP\*\*:\s*`?([^`\s]+)", text)
             u = re.search(r"\*\*SSH\*\*:\s*`?(\w+)@", text)
             pw = re.search(r"\*\*Password root\*\*:\s*`?([^`\s]+)", text)
-            if h and u and pw:
-                return h.group(1), u.group(1), pw.group(1)
+            if h and u and (pw or _vps_key_path()):
+                return h.group(1), u.group(1), (pw.group(1) if pw else "")
 
     print("ERROR: VPS credentials not found.", file=sys.stderr)
-    print("Set env vars QAUDION_VPS_HOST / QAUDION_VPS_USER / QAUDION_VPS_PASS", file=sys.stderr)
+    print("Set env vars QAUDION_VPS_HOST / QAUDION_VPS_USER (+ QAUDION_VPS_PASS if no SSH key)",
+          file=sys.stderr)
     print("or place VPS_ACCESS.md in the bcrypto-server sibling repo.", file=sys.stderr)
     sys.exit(1)
 
@@ -167,11 +175,43 @@ def _ensure_creds():
         VPS_HOST, VPS_USER, VPS_PASS = _load_vps_creds()
 
 
+def _vps_key_path():
+    """Private key for the prod VPS.
+
+    QAUDION_VPS_SERVER_KEY takes priority: this leg is meant to run under a
+    DEDICATED, least-privilege key (forced-command restricted server-side to
+    `journalctl -u bcrypto-server` only, see
+    /usr/local/sbin/qaudion-shipper-journal-ro.sh on the VPS) rather than the
+    shared root-capable QAUDION_VPS_KEY/bcrypto_vps_ed25519 the other prod
+    tools use -- the shipper cron box should never hold a key that can do
+    more than read this one unit's journal. Falls back to the shared
+    QAUDION_VPS_KEY / VPS_SSH_KEY / dev-box default for parity with
+    ship-ios-logs.py when no dedicated key is configured. Returns None when no
+    readable key exists so callers can fall back to password auth."""
+    for cand in (os.environ.get("QAUDION_VPS_SERVER_KEY"),
+                 os.environ.get("QAUDION_VPS_KEY"), os.environ.get("VPS_SSH_KEY"),
+                 str(Path.home() / ".claude" / "bin" / "bcrypto_vps_ed25519")):
+        if cand:
+            p = Path(os.path.expanduser(cand))
+            if p.is_file():
+                return str(p)
+    return None
+
+
 def ssh_connect():
     _ensure_creds()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
+    # W-VPSKEYAUTH (2026-09-08): key first (the prod VPS is publickey-only
+    # after the migration hardening -- password auth returns "Bad
+    # authentication type; allowed types: ['publickey']"), password only as a
+    # fallback when no key is present. Parity with ship-ios-logs.py.
+    key = _vps_key_path()
+    if key:
+        client.connect(VPS_HOST, username=VPS_USER, key_filename=key,
+                       look_for_keys=False, allow_agent=False, timeout=15)
+    else:
+        client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
     return client
 
 

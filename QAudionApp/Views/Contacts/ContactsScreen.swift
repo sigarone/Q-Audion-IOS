@@ -27,6 +27,10 @@ struct ContactsScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var searchText: String = ""
     @State private var selectedTab: Tab = .all
@@ -37,6 +41,8 @@ struct ContactsScreen: View {
     /// Locally persisted blocked contact IDs — refreshed on .onAppear
     /// and after each block/unblock action.
     @State private var blockedIds: Set<String> = BlockedContactsStore.loadBlockedIds()
+
+    @State private var sortedContacts: [ContactsListViewModel.Item] = []
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -99,6 +105,7 @@ struct ContactsScreen: View {
             scheme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                QAudionBrandBanner()
                 topBar
                 searchField.padding(.horizontal, 16).padding(.bottom, 12)
                 tabRow.padding(.horizontal, 16).padding(.bottom, 8)
@@ -113,14 +120,46 @@ struct ContactsScreen: View {
                 .frame(maxHeight: .infinity)
             }
         }
+        // One labelled primary action, always present, instead of a bare
+        // glyph in the header whose only word lived in .accessibilityLabel.
+        // Placed on the ZStack rather than inside a tab branch so it sits
+        // over TUTTI, SCOPRI and BLOCCATI alike.
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                showingNewContact = true
+            } label: {
+                Label("Aggiungi contatto", systemImage: "person.badge.plus")
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onPrimary)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .background(Capsule().fill(scheme.primary))
+                    .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+        }
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             container.attach(appState)
             blockedIds = BlockedContactsStore.loadBlockedIds()
+            updateSortedContacts()
         }
         .onChange(of: searchText) { newValue in
             container.setSearchQuery(newValue)
+        }
+        .onChange(of: container.viewModel.filteredItems) { _ in
+            updateSortedContacts()
+        }
+        .onChange(of: sortMode) { _ in
+            updateSortedContacts()
+        }
+        .onChange(of: appState.orphanPeerIds) { _ in
+            updateSortedContacts()
+        }
+        .onChange(of: appState.presenceService.statuses) { _ in
+            updateSortedContacts()
         }
         .sheet(isPresented: $showingNewContact) {
             // W23.E: full ContactEditor in Add mode.
@@ -151,11 +190,11 @@ struct ContactsScreen: View {
 
     private func saveNewContact(_ draft: ContactEditorScreen.Draft) {
         guard let ext = Int64(draft.extensionText) else {
-            snackbar?.show(.init(text: "Interno non valido.", severity: .error))
+            snackbar?.show(.init(text: String(localized: "contacts.extension_invalid", defaultValue: "Interno non valido.", comment: "Snackbar — the extension number typed while adding a contact is not valid"), severity: .error))
             return
         }
         guard let provider = appState.liveProvider else {
-            snackbar?.show(.init(text: "Non connesso al server — riprova.", severity: .error))
+            snackbar?.show(.init(text: String(localized: "contacts.not_connected", defaultValue: "Non connesso al server — riprova.", comment: "Snackbar — cannot add a contact because there is no live server connection"), severity: .error))
             return
         }
         Task {
@@ -163,7 +202,7 @@ struct ContactsScreen: View {
                 guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
                     await MainActor.run {
                         snackbar?.show(.init(
-                            text: "Interno \(ext) non assegnato — verifica il numero.",
+                            text: String(localized: "contacts.extension_not_assigned", defaultValue: "Interno \(ext) non assegnato — verifica il numero.", comment: "Snackbar — the extension number typed while adding a contact has no assigned account; %lld is the extension number"),
                             severity: .error
                         ))
                     }
@@ -181,14 +220,14 @@ struct ContactsScreen: View {
                 ContactsStore().upsert(contact)
                 await MainActor.run {
                     snackbar?.show(.init(
-                        text: "Contatto \(draft.displayName) salvato in rubrica.",
+                        text: String(localized: "contacts.contact_saved", defaultValue: "Contatto \(draft.displayName) salvato in rubrica.", comment: "Snackbar — a new contact was successfully saved to the address book; %@ is their display name"),
                         severity: .info
                     ))
                 }
             } catch {
                 await MainActor.run {
                     snackbar?.show(.init(
-                        text: "Salvataggio fallito: \(error.localizedDescription)",
+                        text: String(localized: "contacts.save_failed", defaultValue: "Salvataggio fallito: \(error.localizedDescription)", comment: "Snackbar — saving a new contact failed; %@ is the underlying error description"),
                         severity: .error
                     ))
                 }
@@ -198,12 +237,22 @@ struct ContactsScreen: View {
 
     // MARK: - Top bar
 
+    /// Action strip, not a header: the screen deliberately states no title.
+    /// It used to print "Contatti" directly above a tab bar whose label is
+    /// the same word, in every locale — the shell already owns that word, so
+    /// the only thing the duplicate bought was vertical space. The search
+    /// field is now the first labelled thing under the shell chrome.
     private var topBar: some View {
         HStack {
-            Text("Contatti")
-                .qaudionStyle(type.titleLarge)
-                .foregroundStyle(scheme.onSurface)
             Spacer()
+            // The VPN chip lives here, not in the navigation bar: this
+            // screen hides that bar (:117), so the toolbar item the shell
+            // used to attach was never drawn. Compact only — on iPad the
+            // sidebar draws one chip for the whole shell.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
             // W58: sort menu — Nome / Online / Verificati. La scelta
             // viene persistita in UserDefaults così sopravvive a riavvi.
             // Visibile solo sulla tab TUTTI (irrilevante su SCOPRI /
@@ -227,13 +276,6 @@ struct ContactsScreen: View {
                     newValue.saveToDefaults()
                 }
             }
-            Button(action: { showingNewContact = true }) {
-                Image(systemName: "person.badge.plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel("Aggiungi contatto")
         }
         .padding(.horizontal, 16)
         .frame(height: 56)
@@ -301,6 +343,30 @@ struct ContactsScreen: View {
 
     // MARK: - Lists
 
+    private func updateSortedContacts() {
+        let unsorted = container.viewModel.filteredItems
+            .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+
+        switch sortMode {
+        case .nameAsc:
+            sortedContacts = unsorted.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+        case .onlineFirst:
+            sortedContacts = unsorted.sorted { a, b in
+                let aOnline = appState.presenceService.isOnline(a.userId)
+                let bOnline = appState.presenceService.isOnline(b.userId)
+                if aOnline != bOnline { return aOnline && !bOnline }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+        case .verifiedFirst:
+            sortedContacts = unsorted.sorted { a, b in
+                if a.isVerified != b.isVerified { return a.isVerified && !b.isVerified }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+        }
+    }
+
     private var allList: some View {
         // W-ORPHANPEER — drop peers whose account no longer exists on the
         // server. Filtered HERE, at read time, and not inside the container:
@@ -308,45 +374,20 @@ struct ContactsScreen: View {
         // observe `.contactsDidChange`, so a filter baked in there would keep
         // a contact visible after the 404 lands. Reading `appState.orphanPeerIds`
         // (@Published) also makes this re-render on its own as lookups resolve.
-        let unsorted = container.viewModel.filteredItems
-            .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+
         // W58: applica il sort prescelto. Locale-aware comparison sul
         // displayName — `localizedCaseInsensitiveCompare` rispetta
         // l'ordinamento italiano (es. é < f, à < b).
-        let items: [ContactsListViewModel.Item] = {
-            switch sortMode {
-            case .nameAsc:
-                return unsorted.sorted {
-                    $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-                }
-            case .onlineFirst:
-                // I2: `item.isOnline` is a static snapshot value hardcoded
-                // to `false` at construction time (ContactsListContainer) —
-                // reading it here always produced a no-op sort. Read the
-                // live PresenceService state instead, same source the row
-                // dot below already uses.
-                return unsorted.sorted { a, b in
-                    let aOnline = appState.presenceService.isOnline(a.userId)
-                    let bOnline = appState.presenceService.isOnline(b.userId)
-                    if aOnline != bOnline { return aOnline && !bOnline }
-                    return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
-                }
-            case .verifiedFirst:
-                return unsorted.sorted { a, b in
-                    if a.isVerified != b.isVerified { return a.isVerified && !b.isVerified }
-                    return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
-                }
-            }
-        }()
+
         // I2: same fix as the sort above — the header used to read the
         // hardcoded `item.isOnline` and always rendered "ONLINE · 0/N".
-        let onlineCount = items.filter { appState.presenceService.isOnline($0.userId) }.count
-        let totalCount  = items.count
+        let onlineCount = sortedContacts.filter { appState.presenceService.isOnline($0.userId) }.count
+        let totalCount  = sortedContacts.count
 
         return List {
-            if !items.isEmpty {
+            if !sortedContacts.isEmpty {
                 Section {
-                    ForEach(items, id: \.userId) { item in
+                    ForEach(sortedContacts, id: \.userId) { item in
                         NavigationLink(destination: detailDestination(for: item)) {
                             // W72: live presence dot from the engine
                             // `BCryptoPresenceManager`. Falls back to the
@@ -354,6 +395,13 @@ struct ContactsScreen: View {
                             // service hasn't received a `presence_update`
                             // for this user yet (status .unknown).
                             ContactRow(item: item,
+                                       // The model has carried the extension
+                                       // all along; this call site simply
+                                       // never passed it, so ContactRow's
+                                       // `extensionLabel` branch had no live
+                                       // caller and the short number was
+                                       // invisible on every row.
+                                       extensionLabel: item.`extension`.map(DisplayName.formatExtension),
                                        presence: appState.presenceService.isOnline(item.userId) ? .online :
                                                  (appState.presenceService.status(for: item.userId) == .offline ? .offline : nil),
                                        onChatTap: { openChat(item) },
@@ -380,6 +428,9 @@ struct ContactsScreen: View {
         .scrollContentBackground(.hidden)
         .background(scheme.background)
         .refreshable { container.refresh() }
+        // Clearance so the last row and its swipe actions are not sitting
+        // under the floating "Aggiungi contatto" capsule.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
     }
 
     // W442 — replaced static placeholder with real device-contacts import.
@@ -432,6 +483,9 @@ struct ContactsScreen: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(scheme.background)
+                // Same clearance as TUTTI — the capsule floats over this
+                // tab too.
+                .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
             }
         }
     }
@@ -444,7 +498,7 @@ struct ContactsScreen: View {
         if let provider = appState.liveProvider {
             Task { try? await provider.contactsApi.unblockContact(userId: uid) }
         }
-        snackbar?.show(.init(text: name + " sbloccato.", severity: .info))
+        snackbar?.show(.init(text: String(localized: "contact_detail.contact_unblocked", defaultValue: "\(name) sbloccato.", comment: "Snackbar — a contact was unblocked, %@ is their display name"), severity: .info))
     }
 
     private var emptyAll: some View {
@@ -461,22 +515,11 @@ struct ContactsScreen: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
 
-            // W61: CTA primario nello stato vuoto. Stesso flow del
-            // bottone "+" del topBar — qui rende esplicito il next
-            // step per first-launch users.
-            Button {
-                showingNewContact = true
-            } label: {
-                Label("Aggiungi contatto", systemImage: "person.badge.plus")
-                    .qaudionStyle(type.labelMedium)
-                    .foregroundStyle(scheme.onPrimary)
-                    .padding(.horizontal, 18).padding(.vertical, 10)
-                    .background(
-                        Capsule().fill(scheme.primary)
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
+            // W61's empty-state CTA is gone: the floating "Aggiungi
+            // contatto" capsule is visible over this state too, and two
+            // identical buttons setting the identical flag is the
+            // one-action-two-controls duplication being removed everywhere
+            // else in this pass.
 
             Spacer().frame(height: 8)
         }

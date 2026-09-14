@@ -1,6 +1,11 @@
 import SwiftUI
 import QAudionEngine
 
+// App Store 2.1 (2026-09-12): internal rollout toggles for testers, not a
+// user feature. Compiled out of the store build together with its sole
+// caller (SettingsScreen.privacySection).
+#if QAUDION_DEV_TOOLS
+
 /// W379 — UI surface for the cross-platform parity rollover flags.
 ///
 /// All toggles default OFF and are guarded by per-peer auto-detection
@@ -19,6 +24,13 @@ struct CrossPlatformBetaScreen: View {
 
     @State private var resetPeerCapsConfirm: Bool = false
     @State private var clearedAt: String? = nil
+
+    private static let betaTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
+        return f
+    }()
 
     var body: some View {
         ZStack {
@@ -40,8 +52,7 @@ struct CrossPlatformBetaScreen: View {
             Button("Annulla", role: .cancel) {}
             Button("Reset", role: .destructive) {
                 PeerCapabilityRegistry.shared.reset()
-                let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-                clearedAt = f.string(from: Date())
+                clearedAt = CrossPlatformBetaScreen.betaTimeFormatter.string(from: Date())
             }
         } message: {
             Text("Cancella tutti i flag v3-capable per peer. La discovery riparte da zero.")
@@ -196,3 +207,4 @@ struct CrossPlatformBetaScreen: View {
             .qAudionTheme(dark: true)
     }
 }
+#endif

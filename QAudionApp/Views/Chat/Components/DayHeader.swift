@@ -40,22 +40,26 @@ struct DayHeader: View {
 
     private static let thisWeekFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "EEE d MMM"
         return f
     }()
 
     private static let oldDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "d MMM yyyy"
         return f
     }()
 
     private var label: String {
         let cal = Calendar.current
-        if cal.isDateInToday(date) { return "Oggi" }
-        if cal.isDateInYesterday(date) { return "Ieri" }
+        if cal.isDateInToday(date) {
+            return String(localized: "day_header.today", defaultValue: "Oggi", comment: "Chat day-separator label — the message group is from today")
+        }
+        if cal.isDateInYesterday(date) {
+            return String(localized: "day_header.yesterday", defaultValue: "Ieri", comment: "Chat day-separator label — the message group is from yesterday")
+        }
 
         let now = Date()
         if let days = cal.dateComponents([.day], from: date, to: now).day,

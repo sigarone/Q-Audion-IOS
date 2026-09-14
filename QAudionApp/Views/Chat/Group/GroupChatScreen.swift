@@ -51,6 +51,11 @@ struct GroupChatScreen: View {
     /// W409: needed to call AppState.leaveGroup from the
     /// GroupInfoScreen.onLeft callback.
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    @State private var upgradeSheetCapability: Capability? = nil
 
     let groupId: UUID
     @State private var state: GroupChatUiState
@@ -242,6 +247,13 @@ struct GroupChatScreen: View {
                 )
             }
         }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked control for
+        // (group call, group video call, file attach).
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
     }
 
     // MARK: - Top bar
@@ -298,23 +310,44 @@ struct GroupChatScreen: View {
             // same two-button pattern as the 1:1 ChatDetailScreen's
             // startAudioCall/startVideoCall pair. Invitees = the group
             // roster minus self.
-            Button(action: { handleStartGroupCall(video: false) }) {
+            // Entitlements Task 5 — Capability.callsGroup lock-badge. The
+            // roster-empty disabled look (`canStartGroupCall`) is unrelated
+            // to entitlement and takes precedence — a call with no members
+            // makes no sense regardless of tier, so `.disabled` still wins
+            // over the gate (mirrors Android's own GroupChatScreen.kt
+            // comment on the same precedence).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsGroup),
+                action: { handleStartGroupCall(video: false) },
+                onLockedClick: { upgradeSheetCapability = .callsGroup }
+            ) {
                 Image(systemName: "phone.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
-            .buttonStyle(.plain)
             .disabled(!canStartGroupCall)
             .accessibilityLabel("Chiama il gruppo (audio)")
 
-            Button(action: { handleStartGroupCall(video: true) }) {
+            // A video group call needs BOTH callsGroup (the call itself,
+            // group_call_create) AND callsGroupVideo (group_call_sfu_token)
+            // — tapping this button sends the two gated commands in
+            // sequence server-side, so a grant with only ONE of the two
+            // would render unlocked here and then fail on the very first
+            // message. Routes the locked tap to whichever capability is
+            // actually missing rather than always naming callsGroupVideo.
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsGroup) && capabilityGate.isUnlocked(.callsGroupVideo),
+                action: { handleStartGroupCall(video: true) },
+                onLockedClick: {
+                    upgradeSheetCapability = capabilityGate.isUnlocked(.callsGroup) ? .callsGroupVideo : .callsGroup
+                }
+            ) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
-            .buttonStyle(.plain)
             .disabled(!canStartGroupCall)
             .accessibilityLabel("Videochiama il gruppo")
         }
@@ -429,13 +462,18 @@ struct GroupChatScreen: View {
         HStack(spacing: 10) {
             // Fase 1B — attach button (parity with the 1:1 composer
             // paperclip). Opens the photo/file choice dialog.
-            Button(action: { showingAttachChoice = true }) {
+            // Entitlements Task 5 — Capability.files (server already
+            // enforces this at tus HandlePost/IssueToken).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.files),
+                action: { showingAttachChoice = true },
+                onLockedClick: { upgradeSheetCapability = .files }
+            ) {
                 Image(systemName: "paperclip")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 32, height: 32)
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Aggiungi allegato")
 
             TextField("",
@@ -517,7 +555,7 @@ struct GroupChatScreen: View {
     /// W320: snackbar copy helper. Static so it has its own clean
     /// type-check scope and no `@ViewBuilder` constraints.
     private static func formatGroupIdCopiedMessage(prefix: String) -> String {
-        return "ID gruppo copiato (" + prefix + "…)"
+        return String(localized: "group_chat.group_id_copied", defaultValue: "ID gruppo copiato (\(prefix)…)", comment: "Snackbar confirming the group id was copied to the clipboard after a long-press on the group chat header; %@ is the first 8 hex characters of the id.")
     }
 
     // MARK: - W-GRPRING: start a group call from the group chat
@@ -549,7 +587,7 @@ struct GroupChatScreen: View {
     private func handleStartGroupCall(video: Bool) {
         let invitees = groupCallInvitees
         guard !invitees.isEmpty else {
-            snackbar?.show(.init(text: "Nessun altro membro nel gruppo", severity: .info))
+            snackbar?.show(.init(text: String(localized: "group_chat.no_other_members", defaultValue: "Nessun altro membro nel gruppo", comment: "Snackbar shown when trying to start a group call but no other group members are available to invite."), severity: .info))
             return
         }
         let name = state.name
@@ -561,7 +599,7 @@ struct GroupChatScreen: View {
             groupId: dashedGroupId,  // dashed UUID == server wire id
             groupName: name)
         if created == nil {
-            snackbar?.show(.init(text: "Chiamata di gruppo non disponibile ora", severity: .error))
+            snackbar?.show(.init(text: String(localized: "group_chat.group_call_unavailable", defaultValue: "Chiamata di gruppo non disponibile ora", comment: "Snackbar error shown when creating a group call fails."), severity: .error))
         } else {
             // In-call chat panel — bind this call to its persisted group so
             // `GroupCallView`'s chat panel knows which group's messages/
@@ -573,6 +611,7 @@ struct GroupChatScreen: View {
     private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
@@ -726,7 +765,7 @@ struct GroupChatScreen: View {
             members: memberIds,
             selfId: selfId
         ) else {
-            print("[GroupChatScreen] encrypt failed for group \(groupHex)")
+            print("[GroupChatScreen] encrypt failed for group \(groupHex.prefix(8))…")
             return
         }
         NotificationCenter.default.post(
@@ -771,7 +810,7 @@ struct GroupChatScreen: View {
         if failures > 0 {
             await MainActor.run {
                 snackbar?.show(.init(
-                    text: "\(failures) foto su \(items.count) non leggibili.",
+                    text: String(localized: "group_chat.photos_partial_unreadable", defaultValue: "\(failures) foto su \(items.count) non leggibili.", comment: "Snackbar warning in group chat / in-call chat panel when some selected photos could not be read from the picker; %lld/%lld = failed count / total count."),
                     severity: .warning, durationSeconds: 3))
             }
         }
@@ -818,7 +857,7 @@ struct GroupChatScreen: View {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 guard let data = try? Data(contentsOf: url) else {
-                    snackbar?.show(.init(text: "File non leggibile", severity: .warning))
+                    snackbar?.show(.init(text: String(localized: "group_chat.file_unreadable", defaultValue: "File non leggibile", comment: "Snackbar warning in group chat / in-call chat panel when a picked file's contents could not be read from disk before sending."), severity: .warning))
                     return
                 }
                 let ext = url.pathExtension
@@ -868,7 +907,7 @@ struct GroupChatScreen: View {
                 members: memberIds, selfId: selfId,
                 timerOverrideSeconds: timerOverrideSeconds, exportBlocked: exportBlocked)
         } catch {
-            snackbar?.show(.init(text: "Allegato non inviato — \(error.localizedDescription)",
+            snackbar?.show(.init(text: String(localized: "group_chat.attachment_send_failed", defaultValue: "Allegato non inviato — \(error.localizedDescription)", comment: "Snackbar error in group chat / in-call chat panel when preparing or sending a group attachment throws; %@ is the underlying error's localized description."),
                                  severity: .error, durationSeconds: 5))
             return
         }
@@ -926,7 +965,7 @@ struct GroupChatScreen: View {
             plaintext: prepared.descriptorJson,
             groupId: groupHex, members: memberIds, selfId: selfId
         ) else {
-            print("[GroupChatScreen] attachment encrypt failed for group \(groupHex)")
+            print("[GroupChatScreen] attachment encrypt failed for group \(groupHex.prefix(8))…")
             return
         }
         NotificationCenter.default.post(
@@ -1007,7 +1046,7 @@ struct GroupChatScreen: View {
                 GroupMemberRowUi(userId: selfId, displayName: "Tu",
                                  isAdmin: true, isSelf: true)
             ],
-            error: "Elenco membri non ancora disponibile — in attesa di sincronizzazione."
+            error: String(localized: "group_chat.error.members_not_synced", defaultValue: "Elenco membri non ancora disponibile — in attesa di sincronizzazione.", comment: "Error banner (surfaced via GroupInfoUiState.error, rendered by GroupInfoScreen) — the local group registry entry isn't populated yet, shown while waiting for the invite to sync")
         )
     }
 }
@@ -1176,6 +1215,13 @@ private struct MonoCaption: ViewModifier {
             messages: []
         )
     )
+    // Entitlements Task 5 — this preview was already missing
+    // `.environmentObject(AppState())` for the `appState` this screen has
+    // required since before this task (pre-existing gap, not fixed here —
+    // out of Task 5's scope); `capabilityGate` is added for consistency
+    // with every other Task 5 call site's preview even though this one
+    // still fatals on the pre-existing `appState` gap regardless.
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }
 
@@ -1199,5 +1245,6 @@ private struct MonoCaption: ViewModifier {
             ]
         )
     )
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }

@@ -2,14 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App Store metadata consistency: the entire UI is hardcoded Italian
-	     (no Localizable.strings/*.lproj, single-language app, not a
-	     rejection cause by itself). CFBundleDevelopmentRegion should match
-	     the actual shipped language. Separately, set the "Italian" primary
-	     language in App Store Connect's app metadata before submission,
-	     that's a dashboard setting, not derived from this key. -->
+	<!-- CFBundleDevelopmentRegion stays "it": that's the source language of
+	     Localizable.xcstrings (QAudionApp/Localizable.xcstrings) and the
+	     language every string was originally authored/reviewed in.
+	     Separately, set the "Italian" primary language in App Store
+	     Connect's app metadata, that's a dashboard setting, not derived
+	     from this key. -->
 	<key>CFBundleDevelopmentRegion</key>
 	<string>it</string>
+	<!-- W-L10N-BATCH1 (2026-09-08) — real supported-language set, so App
+	     Store Connect and iOS itself see it (affects the Settings.app
+	     per-app language picker and App Store listing language matching).
+	     Order: dev region first, then the rest alphabetical by code —
+	     matches no particular priority, iOS doesn't treat array order as
+	     ranking. Batch 2 (ru/ar/zh-Hans/ja/nl/tr/pl/ko) is deliberately
+	     NOT listed yet — see the l10n plan doc, this is Batch 1 only. -->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>it</string>
+		<string>en</string>
+		<string>es</string>
+		<string>fr</string>
+		<string>de</string>
+		<string>pt-BR</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Q-Audion</string>
 	<key>CFBundleExecutable</key>
@@ -23,13 +39,13 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.986</string>
+	<string>1.0.1155</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Q-Audion uses your microphone for post-quantum encrypted voice calls and voice authentication.</string>
+	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and for voice authentication.</string>
 	<key>NFCReaderUsageDescription</key>
 	<string>Q-Audion reads NFC tags to securely import encryption keys from Android devices.</string>
 	<!-- W-NFCIOS  -  the AID of the Android HCE service we tap against
@@ -60,17 +76,41 @@
 		<string>F0BCF1073A5100</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Q-Audion uses the camera to scan QR codes for key exchange.</string>
+	<string>Q-Audion uses the camera for end-to-end encrypted video calls, to take photos you send in chats or set as your avatar, and to scan QR codes when pairing contacts or importing keys.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Q-Audion can use your contacts so you can import them into your encrypted address book, and to automatically show the name and photo of a phone contact when they call you or you call them.</string>
+	<string>Q-Audion can use your contacts so you can import them into your encrypted address book, and to automatically show the name and photo of a phone contact when they call you or you call them. To find contacts already on Q-Audion, phone numbers are hashed on your device before matching; names and photos never leave your phone.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Q-Audion saves chat images you choose to keep into your Photos library.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Q-Audion uses Face ID to unlock the app when the app lock feature is enabled.</string>
+	<!-- NSBluetoothPeripheralUsageDescription (deprecated since iOS 13) is
+	     intentionally absent: the Always key covers every supported iOS. -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available.</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available.</string>
+	<string>Q-Audion uses Bluetooth to pair with Q-Audion earbuds for hardware-backed key custody and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available.</string>
+	<!-- WebRTC gathers host ICE candidates, so a call between two devices on
+	     the same Wi-Fi can connect directly; iOS 14+ shows the local-network
+	     prompt for that and requires this string to be present. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Q-Audion connects directly to other Q-Audion devices on your local network for lower-latency encrypted calls.</string>
+	<!-- CarPlay/Siri state-of-the-art plan S1 — required by Apple whenever
+	     the app calls INPreferences.requestSiriAuthorization (AppState.
+	     initialize()); the system shows this exact string in the
+	     authorization alert. Apple's own doc: "This key is a requirement" —
+	     missing it is a hard App Review blocker, not just a style nit. -->
+	<key>NSSiriUsageDescription</key>
+	<string>Q-Audion shares your contact names with Siri so you can start an encrypted call by saying "Call [name] on Q-Audion".</string>
+	<!-- CarPlay/Siri state-of-the-art plan S1 (docs/superpowers/plans/
+	     2026-09-06-carplay-state-of-the-art.md) — declares that this app can
+	     continue an NSUserActivity of type "INStartCallIntent". SiriKit hands
+	     this activity to `.onContinueUserActivity` in QAudionApp.swift after
+	     the QAudionIntents extension (IntentHandler.swift) resolves a "Hey
+	     Siri, chiama X su Q-Audion" request. The string MUST be the literal
+	     Intents class name, not a custom identifier — this is Apple's own
+	     convention for every INStartCallIntent-based VoIP app. -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INStartCallIntent</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -119,12 +159,20 @@
 	<string>com.qaudion.app.broadcast</string>
 	<!--
 	  Export Compliance - required by Apple to skip the manual
-	  "Provide Export Compliance Information" prompt in TestFlight.
-	  Q-Audion uses ML-KEM-1024 (NIST FIPS 203, public-domain open-
-	  source crypto) which qualifies as "exempt" under US BIS rules.
-	  Setting `false` is appropriate for TestFlight Internal testing.
-	  Revisit before App Store production submission (may need `true`
-	  + ITSEncryptionExportComplianceCode or annual CCATS filing).
+	  "Provide Export Compliance Information" prompt on every upload.
+	  Position (2026-09-12, App Store readiness audit, pending counsel
+	  confirmation before the store submission is sent): the app uses
+	  only standard, published algorithms - AES-256-GCM, ChaCha20-
+	  Poly1305 (WireGuard), X25519, Ed25519, SHA-2/HKDF, and ML-KEM-1024
+	  (NIST FIPS 203) via liboqs - implemented by open-source libraries,
+	  and encryption is used for the app's own communications, not sold
+	  as an encryption product. That is the "uses standard encryption
+	  algorithms" self-classification Apple lists as not requiring an
+	  ERN/CCATS code; the annual BIS self-classification report still
+	  applies to the account holder. If counsel disagrees, set this to
+	  true and add ITSEncryptionExportComplianceCode with the code App
+	  Store Connect issues. France: ANSSI declaration before enabling
+	  France in availability.
 	  NOTE: this file is intentionally pure ASCII. A non-ASCII em-dash
 	  here was repeatedly mojibaked by the release script's encoding
 	  handling and ballooned Info.plist to 66 MB by v1.0.471 (W472).

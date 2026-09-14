@@ -233,6 +233,17 @@ struct GroupCallView: View {
                 GeometryReader { geo in
                     let pageCapacity = Self.gridPageCapacity(width: geo.size.width, height: geo.size.height)
                     let pages = gridPages(pageCapacity: pageCapacity)
+                    // W-GRPVIEWPORT: exactly which identities this grid is
+                    // ACTUALLY rendering right now — the visibility signal
+                    // `updateVideoViewport` needs, read straight off the
+                    // pagination state this view already maintains for
+                    // layout, no separate tracking required. `.speaker`
+                    // mode's pinned spotlight tile lives OUTSIDE `pages`
+                    // entirely (`gridParticipants` excludes it, see that
+                    // property's kdoc), so it's threaded in as its own
+                    // value rather than folded into `visibleIds`.
+                    let visibleIds = Set((pages.indices.contains(currentGridPage) ? pages[currentGridPage] : []).map(\.id))
+                    let spotlightId = viewModel.layoutMode == .speaker ? viewModel.currentSpeakerId : nil
                     TabView(selection: $currentGridPage) {
                         ForEach(Array(pages.enumerated()), id: \.offset) { pageIndex, pageParticipants in
                             let layout = Self.adaptiveGridLayout(
@@ -271,6 +282,18 @@ struct GroupCallView: View {
                         if currentGridPage > newCount - 1 {
                             currentGridPage = max(newCount - 1, 0)
                         }
+                    }
+                    // W-GRPVIEWPORT: `.task(id:)` runs once immediately (the
+                    // initial page/roster, before any `.onChange` would ever
+                    // fire) AND again every time `visibleIds`/`spotlightId`
+                    // actually change (page swipe, roster change reshuffling
+                    // pages, `.speaker` pin moving) — exactly the "set now +
+                    // resync on change" shape this needs, cancelling any
+                    // in-flight previous call the way `.task(id:)` always
+                    // does. `VideoViewportKey` (below) is a plain
+                    // `Set<String>` + `String?` pair so SwiftUI can diff it.
+                    .task(id: VideoViewportKey(visible: visibleIds, spotlight: spotlightId)) {
+                        viewModel.updateVideoViewport(visible: visibleIds, spotlight: spotlightId)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -594,6 +617,15 @@ struct GroupCallView: View {
         return stride(from: 0, to: items.count, by: cols).map {
             Array(items[$0..<min($0 + cols, items.count)])
         }
+    }
+
+    /// W-GRPVIEWPORT: `.task(id:)`'s identity value for the visible-tile
+    /// tracking above — plain `Equatable`/`Hashable` data (a `Set<String>`
+    /// + a `String?`) so SwiftUI can diff it and only re-run
+    /// `updateVideoViewport` when what's actually on-screen changes.
+    private struct VideoViewportKey: Equatable, Hashable {
+        let visible: Set<String>
+        let spotlight: String?
     }
 
     /// Adaptive gallery grid — result of `adaptiveGridLayout`: render
@@ -1192,6 +1224,35 @@ class GroupCallViewModel: ObservableObject {
         reactionEvents.last(where: { $0.senderId == participantId })?.emoji
     }
 
+    /// W-GRPVIEWPORT: called by `GroupCallView` (via `.task(id:)`, so once
+    /// immediately + again on every real change) with the identities
+    /// currently on the visible grid page and the current `.speaker`-mode
+    /// spotlight identity, if any — `GroupCallView`'s own existing
+    /// `gridPages`/`currentGridPage` pagination state already tracks
+    /// exactly this, no new visibility plumbing needed on that side. Fans
+    /// each participant out to `GroupCallController.
+    /// setRemoteVideoRenderPriority` (a no-op unless the call is actually
+    /// on the LiveKit SFU — see that method's kdoc), skipping our own
+    /// entry (no remote publication exists for the local tile). Only
+    /// closes the "which layer" half of the SFU-video gap; `adaptiveStream`/
+    /// `dynacast` themselves stay off (see `LiveKitGroupCallRoom.
+    /// RoomOptions`'s W-GRPADAPTIVEDEADLOCK kdoc) — full re-enablement of
+    /// those needs live-device verification this pass didn't have.
+    func updateVideoViewport(visible: Set<String>, spotlight: String?) {
+        guard let controller else { return }
+        for participant in participants where participant.id != selfUserId {
+            let priority: RemoteVideoRenderPriority
+            if participant.id == spotlight {
+                priority = .onScreenSpotlight
+            } else if visible.contains(participant.id) {
+                priority = .onScreenSmall
+            } else {
+                priority = .offScreen
+            }
+            controller.setRemoteVideoRenderPriority(identity: participant.id, priority: priority)
+        }
+    }
+
     /// W-GRPSFUGHOST: append a synthesized tile for any `sfuPresentIdentities`
     /// entry missing from `participants` — called both right after a
     /// `group_call_update` roster rebuild (`onParticipants`) and immediately
@@ -1520,7 +1581,7 @@ class GroupCallViewModel: ObservableObject {
                     // central chain (rubrica → "Utente a1b2c3d4…").
                     let displayName = self.participants.first(where: { $0.id == requesterId })?.displayName
                         ?? DisplayName.forUser(requesterId)
-                    self.muteRequestToastText = "\(displayName) ti ha silenziato"
+                    self.muteRequestToastText = String(localized: "group_call.mute_request_toast", defaultValue: "\(displayName) ti ha silenziato", comment: "Snackbar — one-shot toast shown when another participant force-mutes you in a group call; %@ is the requester's display name")
                 }
             }
         } else {

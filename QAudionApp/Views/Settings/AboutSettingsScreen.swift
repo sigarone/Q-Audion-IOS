@@ -195,7 +195,15 @@ struct AboutSettingsScreen: View {
                               mono: true)
                     }
                     section("SICUREZZA") {
-                        statusRow("ML-KEM-1024 (PQC)",
+                        // W-L10N-BATCH1 (2026-09-08) — statusRow's
+                        // `label:` (first positional arg) is a plain
+                        // String, not LocalizedStringKey (see its
+                        // signature below), so this literal doesn't
+                        // auto-localize. The text is entirely protocol/
+                        // technical identifiers (ML-KEM-1024, PQC) —
+                        // must stay byte-for-byte identical in every
+                        // language, never translated.
+                        statusRow(String(localized: "about_settings.security.mlkem_pqc_label", defaultValue: "ML-KEM-1024 (PQC)", comment: "About screen, SICUREZZA section — status row label; contains ML-KEM-1024/PQC — do not translate those tokens"),
                                   enabled: container.viewModel.mlKem1024Enabled)
                         kvRow("ONNX Runtime", container.viewModel.onnxruntimeVersion, mono: true)
                     }
@@ -237,6 +245,39 @@ struct AboutSettingsScreen: View {
                                 Text("Contatta supporto")
                                     .qaudionStyle(type.bodyMedium)
                                     .foregroundStyle(scheme.onSurface)
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        // App Store 5.1.1(i) — in-app privacy policy link
+                        // (same page entered as Privacy Policy URL in App
+                        // Store Connect). Same row style as the mailto above.
+                        Button {
+                            LegalLinks.open(LegalLinks.privacyPolicy())
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "hand.raised.fill")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Informativa privacy")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Dati trattati, conservazione, cancellazione account")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
                                     .font(.system(size: 14, weight: .regular))
@@ -294,6 +335,9 @@ struct AboutSettingsScreen: View {
                         // The standard public TestFlight feedback URL
                         // for an app uses the App Apple ID; ours is
                         // 6762266299 (see ios-testflight.yml's APP_APPLE_ID).
+                        // Dev/TestFlight builds only (App Store 2.1/2.3):
+                        // the store build carries no TestFlight surface.
+                        #if QAUDION_DEV_TOOLS
                         Button {
                             #if canImport(UIKit)
                             // Hardcode the public feedback URL since
@@ -330,6 +374,7 @@ struct AboutSettingsScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        #endif
 
                         // W179: copy a compact build-ID blob (version,
                         // build, device, iOS) to the clipboard so testers
@@ -593,7 +638,7 @@ struct AboutSettingsScreen: View {
         let bytes: UInt64 = ProcessInfo.processInfo.physicalMemory
         let gb: Double = Double(bytes) / (1024.0 * 1024.0 * 1024.0)
         let nf = NumberFormatter()
-        nf.locale = Locale(identifier: "it_IT")
+        nf.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         nf.minimumFractionDigits = 2
         nf.maximumFractionDigits = 2
         let formatted: String = nf.string(from: NSNumber(value: gb)) ?? "?"
@@ -806,7 +851,7 @@ struct AboutSettingsScreen: View {
         // locale-shenanigans of String(format:) which uses the user's
         // active locale (could be en_US in some sims).
         let nf = NumberFormatter()
-        nf.locale = Locale(identifier: "it_IT")
+        nf.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         nf.minimumFractionDigits = 1
         nf.maximumFractionDigits = 1
         let formatted: String = nf.string(from: NSNumber(value: mb)) ?? "?"
@@ -844,7 +889,8 @@ struct AboutSettingsScreen: View {
     /// W162: stamp the first-launch timestamp for THIS build number
     /// (so Settings can show "Build installato 3 giorni fa"). Keyed
     /// by `qaudion.buildSeen.<n>` so each build gets its own stamp.
-    /// Format: relative time-ago in Italian.
+    /// Format: relative time-ago, localized via String(localized:)
+    /// (W-L10N-BATCH1).
     private static func buildInstalledLabel(buildNumber: String) -> String {
         let key = "qaudion.buildSeen." + buildNumber
         let store = UserDefaults.standard
@@ -857,18 +903,37 @@ struct AboutSettingsScreen: View {
             return now
         }()
         let elapsed = Date().timeIntervalSince(date)
-        if elapsed < 60 { return "ora" }
+        if elapsed < 60 {
+            return String(localized: "about_settings.build_installed.now", defaultValue: "ora", comment: "About screen, 'Build installato' row — less than a minute ago")
+        }
         if elapsed < 3600 {
             let m = Int(elapsed / 60)
-            return m == 1 ? "1 minuto fa" : "\(m) minuti fa"
+            if m == 1 {
+                return String(localized: "about_settings.build_installed.one_minute_ago", defaultValue: "1 minuto fa", comment: "About screen, 'Build installato' row — exactly 1 minute ago")
+            }
+            return String(localized: "about_settings.build_installed.minutes_ago", defaultValue: "\(m) minuti fa", comment: "About screen, 'Build installato' row — N minutes ago")
         }
         if elapsed < 86400 {
             let h = Int(elapsed / 3600)
-            return h == 1 ? "1 ora fa" : "\(h) ore fa"
+            if h == 1 {
+                return String(localized: "about_settings.build_installed.one_hour_ago", defaultValue: "1 ora fa", comment: "About screen, 'Build installato' row — exactly 1 hour ago")
+            }
+            return String(localized: "about_settings.build_installed.hours_ago", defaultValue: "\(h) ore fa", comment: "About screen, 'Build installato' row — N hours ago")
         }
         let d = Int(elapsed / 86400)
-        return d == 1 ? "1 giorno fa" : "\(d) giorni fa"
+        if d == 1 {
+            return String(localized: "about_settings.build_installed.one_day_ago", defaultValue: "1 giorno fa", comment: "About screen, 'Build installato' row — exactly 1 day ago")
+        }
+        return String(localized: "about_settings.build_installed.days_ago", defaultValue: "\(d) giorni fa", comment: "About screen, 'Build installato' row — N days ago")
     }
+
+    private static let aboutDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
 
     /// W158: read or stamp the first-launch timestamp under
     /// `qaudion.firstSeen`. Idempotent — only writes the value the
@@ -884,11 +949,7 @@ struct AboutSettingsScreen: View {
             store.set(now, forKey: key)
             return now
         }()
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f.string(from: date)
+        return aboutDateFormatter.string(from: date)
     }
 
     // MARK: - Rows
@@ -919,34 +980,7 @@ struct AboutSettingsScreen: View {
     /// Tapping copies `value` to UIPasteboard and shows haptic feedback.
     /// Mono-formatted (since copyable values are usually IDs / hashes).
     private func tapCopyRow(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 14) {
-            Text(label)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Text(value)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            #if canImport(UIKit)
-            UIPasteboard.general.string = value
-            HapticFeedback.messageSent()
-            #endif
-        }
+        TapCopyRow(label: label, value: value)
     }
 
     private func statusRow(_ label: String, enabled: Bool) -> some View {
@@ -1010,7 +1044,7 @@ struct AboutSettingsScreen: View {
             }
 
             if let last = updateChecker.lastChecked {
-                Text("Ultimo controllo \(last.formatted(.relative(presentation: .named)))")
+                Text("Ultimo controllo \(last.formatted(.relative(presentation: .named).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))))")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }

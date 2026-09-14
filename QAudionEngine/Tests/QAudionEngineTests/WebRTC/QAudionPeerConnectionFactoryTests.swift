@@ -6,10 +6,32 @@ import WebRTC
 
 final class QAudionPeerConnectionFactoryTests: XCTestCase {
     #if canImport(WebRTC)
-    func testFactoryIsLazyAndIdempotent() {
-        let f1 = QAudionPeerConnectionFactory.shared.factory
-        let f2 = QAudionPeerConnectionFactory.shared.factory
+    func testFactoryIsLazyAndIdempotent() async {
+        let f1 = await QAudionPeerConnectionFactory.shared.factory()
+        let f2 = await QAudionPeerConnectionFactory.shared.factory()
         XCTAssertTrue(f1 === f2, "factory must be a singleton")
+    }
+
+    /// W-PERSISTENTFACTORY (2026-09-09) — the whole redesign's correctness
+    /// rests on `sharedFactory()` returning the SAME factory+ADM across
+    /// repeated calls, not a fresh pair each time (the old, now-removed
+    /// per-call `createFactory()` behavior). Pins that guarantee directly.
+    func testSharedFactoryReturnsSameFactoryAndAdmAcrossCalls() async {
+        let first = await QAudionPeerConnectionFactory.shared.sharedFactory()
+        let second = await QAudionPeerConnectionFactory.shared.sharedFactory()
+        XCTAssertTrue(first.factory === second.factory, "factory must persist across calls")
+        XCTAssertTrue(first.audioProcessingModule === second.audioProcessingModule, "ADM must persist across calls")
+    }
+
+    /// W-ADMWEDGERESET — the safety-net counterpart: after a forced reset,
+    /// the NEXT `sharedFactory()` call must rebuild rather than keep
+    /// returning the (potentially wedged) prior instance.
+    func testResetForWedgeRecoveryForcesRebuildOnNextCall() async {
+        let before = await QAudionPeerConnectionFactory.shared.sharedFactory()
+        QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()
+        let after = await QAudionPeerConnectionFactory.shared.sharedFactory()
+        XCTAssertFalse(before.factory === after.factory, "resetForWedgeRecovery must force a fresh factory")
+        XCTAssertFalse(before.audioProcessingModule === after.audioProcessingModule, "resetForWedgeRecovery must force a fresh ADM")
     }
 
     func testDefaultConfigurationHasUnifiedPlan() {

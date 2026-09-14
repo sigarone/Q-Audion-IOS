@@ -2,11 +2,22 @@ import Foundation
 
 /// In-memory, locally-built mesh topology view: each ANNOUNCE a peer sends
 /// carries the set of nodes IT is directly connected to; accumulating those
-/// across peers lets this device infer a multi-hop route to a peer it
-/// cannot directly reach. Both ``MeshRelayPolicy/evaluate(packet:localNodeId:visiblePeerCount:knownNextHop:sampleUniform:)``'s
-/// `knownNextHop` parameter and the transport's `send`'s `preferredNextHop`
-/// parameter consume ``nextHop(for:maxHops:)`` to prefer a direct send over
-/// a flood.
+/// across peers lets this device infer a route to a peer it cannot directly
+/// reach — but only as far as its own direct neighbors' self-reported
+/// neighbors, since ANNOUNCE packets are never relayed (see
+/// `BleMeshTransport.handlePacket`'s `.announce` branch, which returns
+/// before the flood-relay block), so the graph never grows past 2 levels.
+///
+/// ``nextHop(for:maxHops:)`` is consumed by ``MeshRuntime/sendData`` at the
+/// point a message *originates*, to prefer a direct write to a known bridge
+/// over a flood. It is NOT consulted again once a packet is in flight:
+/// `MeshRelayPolicy/evaluate(packet:localNodeId:visiblePeerCount:knownNextHop:sampleUniform:)`'s
+/// `knownNextHop` parameter is hard-coded to `nil` at every relay call site
+/// in `handlePacket`, so an intermediate hop always floods rather than
+/// directing the packet onward with its own topology view. This is a
+/// materially weaker, origination-only version of true multi-hop source
+/// routing — `MeshPacket.sourceRoute` exists on the wire for this purpose
+/// but no caller ever populates it.
 ///
 /// Holds no CoreBluetooth type — the graph-walk logic below is
 /// unit-testable on the plain Swift Package Manager test target, even

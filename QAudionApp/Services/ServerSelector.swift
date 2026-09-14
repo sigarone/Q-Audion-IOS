@@ -6,7 +6,11 @@ import os
 ///
 /// ## Algorithm
 /// 1. GET /api/v1/servers (authenticated — requires a live access token)
-/// 2. HEAD /api/v1/health on each node (5 s timeout, no auth needed)
+/// 2. HEAD /api/v1/ready on each node (5 s timeout, no auth needed) — READINESS,
+///    not liveness. /health answers 200 for as long as the process is up, which
+///    is the right answer for a supervisor and the wrong one for deciding where
+///    to connect: a node shedding load, serving a read-only replica or already
+///    draining answers it just as happily. See isProbeAcceptable.
 /// 3. Pick lowest RTT; update `BCryptoBackendProvider` if it beats the
 ///    current node by at least `improvementFactor` AND the current RTT
 ///    exceeds `switchThresholdMs` (avoids flapping on similar nodes).
@@ -34,6 +38,20 @@ final class ServerSelector {
     static let loadWeight: Double = 1.0
 
     /// Load-aware ranking score (pure; testable). Static so unit tests need no instance.
+    /// Whether a readiness probe answer means "usable candidate".
+    ///
+    /// 200 is ready. 503 is the node declining new work — shedding, read-only or
+    /// draining — and it must NOT be chosen, which is the entire reason for
+    /// asking. 404 is a node too old to have the endpoint: treated as ready,
+    /// because excluding every un-upgraded node turns a rollout into an outage.
+    /// Anything else is not a usable answer.
+    ///
+    /// Narrower than the old probe, which accepted anything under 500 and so
+    /// could not have heard a refusal even once the server started sending one.
+    static func isProbeAcceptable(_ statusCode: Int) -> Bool {
+        statusCode == 200 || statusCode == 404
+    }
+
     static func effectiveRtt(_ rttMs: Double, loadPct: Double) -> Double {
         let load = min(100, max(0, loadPct))
         return rttMs * (1 + loadWeight * load / 100)
@@ -176,7 +194,8 @@ final class ServerSelector {
         do {
             let config = URLSessionConfiguration.ephemeral
             config.timeoutIntervalForRequest = probeTimeoutSec
-            let (data, resp) = try await URLSession(configuration: config).data(for: req)
+            let session = URLSession(configuration: config, delegate: pinnedDelegate(for: httpsUrl), delegateQueue: nil)
+            let (data, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let returnedUserId = json["user_id"] as? String
@@ -219,7 +238,7 @@ final class ServerSelector {
                 // the moment it answers at all — no RTT contest. The primary
                 // is home; every other trusted host is a last resort.
                 if URL(string: baseUrl)?.host?.lowercased() != URL(string: PinnedServerHost.url)?.host?.lowercased() {
-                    if let primaryRtt = await self.measureRtt(url: PinnedServerHost.url + "/api/v1/health") {
+                    if let primaryRtt = await self.measureRtt(url: PinnedServerHost.url + "/api/v1/ready") {
                         os_log("ServerSelector: W-PRIMARYSNAP — off primary (%{public}@), primary reachable (rtt=%.0fms) — snapping back",
                                baseUrl, primaryRtt)
                         p.updateServerUrl(to: PinnedServerHost.url)
@@ -229,7 +248,7 @@ final class ServerSelector {
                 guard let nodes = await self.fetchServers(provider: p) else { continue }
                 let ranked = await self.probeAll(nodes: nodes)
                 guard let best = await self.pickVerified(from: ranked, provider: p) else { continue }
-                let currentRtt = await self.measureRtt(url: baseUrl + "/api/v1/health") ?? Double.infinity
+                let currentRtt = await self.measureRtt(url: baseUrl + "/api/v1/ready") ?? Double.infinity
                 self.applyIfBetter(provider: p, candidate: best.url, candidateRtt: best.rtt,
                                    currentUrl: baseUrl, currentRtt: currentRtt)
             }
@@ -248,6 +267,35 @@ final class ServerSelector {
         let wssUrl: String
         let rtt: Double
         let load: Double
+    }
+
+    /// W-AUXPIN (2026-09-02) — the `URLSessionDelegate` a candidate/primary
+    /// probe should use so its TLS validation matches every other pinned
+    /// request to this host (audit reference_ios_stability_audit_2026_09_01,
+    /// P1 item 6 / B11: these probes ran on a plain `URLSessionConfiguration
+    /// .ephemeral` session with no delegate at all — one of them (line ~197)
+    /// even carries the user's bearer token).
+    ///
+    /// Deliberately reuses `PinnedURLSession.auxiliary(for:)`'s DELEGATE
+    /// only, not the session it returns: that cached session carries
+    /// `BCryptoRestClient`'s 15 s default timeout on a non-ephemeral
+    /// configuration, while `probeAll` awaits `measureRtt` SEQUENTIALLY for
+    /// every candidate — inheriting that timeout would let one unreachable
+    /// node stall server selection 3x longer than today's 5 s probe budget.
+    /// Wrapping the SAME delegate instance in each call site's own
+    /// short-timeout ephemeral `URLSessionConfiguration` keeps probing exactly
+    /// as fast as before while still validating the pin, and creates no
+    /// second pinning mechanism (same `CertPinningDelegate` object, same
+    /// pins, same kill switch).
+    ///
+    /// Returns `nil` — reproducing today's undelegated session exactly —
+    /// whenever `PinnedSessionPolicy.auxiliaryClientsUsePinnedSession` is
+    /// off (aux falls back to `.shared`, whose `.delegate` is nil) or
+    /// `serverUrl`'s host isn't the pinned production host (e.g. the
+    /// fi1.bcrypto.com DR node, which `BackendConfig.pinned(serverUrl:)`
+    /// already leaves unpinned today).
+    private func pinnedDelegate(for serverUrl: String) -> URLSessionDelegate? {
+        PinnedURLSession.auxiliary(for: serverUrl).delegate
     }
 
     /// SECURITY C-6 — uses the provider's cert-pinned BCryptoRestClient session.
@@ -298,8 +346,8 @@ final class ServerSelector {
             guard let httpsUrl = node["https_url"] as? String, !httpsUrl.isEmpty,
                   let wssUrl = node["wss_url"] as? String, !wssUrl.isEmpty,
                   isTrustedFailoverHost(wssUrl) else { continue }
-            let healthUrl = httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/health"
-            if let rtt = await measureRtt(url: healthUrl) {
+            let readyUrl = httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/ready"
+            if let rtt = await measureRtt(url: readyUrl) {
                 let load = (node["load_pct"] as? NSNumber)?.doubleValue ?? 0
                 results.append(NodeProbe(url: httpsUrl, wssUrl: wssUrl, rtt: rtt, load: load))
             }
@@ -323,15 +371,14 @@ final class ServerSelector {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = probeTimeoutSec
         config.timeoutIntervalForResource = probeTimeoutSec
-        let session = URLSession(configuration: config)
+        let session = URLSession(configuration: config, delegate: pinnedDelegate(for: urlStr), delegateQueue: nil)
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
         do {
             let start = Date()
             let (_, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse,
-                  (200...499).contains(http.statusCode) else { return nil }
-            // 401 is fine — server is alive, we don't need auth for RTT
+                  ServerSelector.isProbeAcceptable(http.statusCode) else { return nil }
             return Date().timeIntervalSince(start) * 1000  // ms
         } catch {
             return nil

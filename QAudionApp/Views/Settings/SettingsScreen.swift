@@ -15,7 +15,7 @@ import QAudionEngine
 /// Layout (top → bottom):
 ///   1. Top bar — "Impostazioni" title + ⋯ menu (placeholder)
 ///   2. ProfileHeroCard — avatar + display name + handle + status + EDIT
-///   3. SecurityChipsRow — PSK / PQC / VOICE / OTA badges
+///   3. SecurityChipsRow — PSK HW-BOUND / VOICE n/n / OTA <version> badges
 ///   4. ACCOUNT — Profilo / Numero di telefono / Dispositivi / Esci
 ///   5. SICUREZZA — Security / Voice-as-Key / Gestione chiavi /
 ///                  Trasporto / Scambio NFC
@@ -34,13 +34,26 @@ import QAudionEngine
 /// deferred until the engine surfaces a unified `SettingsUiState`.
 struct SettingsScreen: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject private var capabilityGate: CapabilityGate
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// W102: cache-clear feedback alert state.
     @State private var cacheClearedAlertVisible: Bool = false
     @State private var cacheClearedMessage: String = ""
+    /// W-AUDIOSRTPDEBUGTOGGLE (2026-09-10) — mirrors
+    /// `CallCapabilities.audioSrtpDebugOverride` (a plain static var, not
+    /// itself observable) into local SwiftUI state. Seeded from whatever
+    /// override is already in force (falling back to the compiled default)
+    /// so re-entering this screen mid-session shows the real current state,
+    /// not a stale default.
+    @State private var audioSrtpDebugToggle: Bool =
+        CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
     /// W151: confirm dialog gate for sign-out. Logging out wipes the
     /// auth token + flips ContentView routing back to OnboardingRoot;
     /// trivial to do by accident from the bottom of Settings.
@@ -60,6 +73,13 @@ struct SettingsScreen: View {
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
+    /// Entitlements Task 4 — gate for the "Attiva Pro" upgrade sheet
+    /// tapped from `TrialBanner`, next to the profile card.
+    @State private var showTrialUpgradeSheet = false
+
+    private var planStatus: PlanStatus {
+        derivePlanStatus(claims: capabilityGate.claims, nowSeconds: Int64(Date().timeIntervalSince1970))
+    }
 
     /// W118+W134: footer with version + build + uptime tagline.
     /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
@@ -67,7 +87,8 @@ struct SettingsScreen: View {
     /// when SettingsScreen first appears (StaticUptimeAnchor).
     private var versionFooter: some View {
         let info = Bundle.main.infoDictionary
-        let v = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+        // Shared with the OTA chip above so the two cannot drift.
+        let v = SecurityChipsRow.buildString
         let b = (info?["CFBundleVersion"] as? String) ?? "?"
         let uptime = ProcessInfo.processInfo.systemUptime
             - StaticUptimeAnchor.processStartedAt
@@ -96,14 +117,14 @@ struct SettingsScreen: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Tocca due volte per copiare versione e build negli appunti")
+        .accessibilityHint("Copia versione e build negli appunti")
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
             #if canImport(UIKit)
             UIPasteboard.general.string = bundleSummary
             snackbar?.show(.init(
-                text: "Versione copiata: \(bundleSummary)",
+                text: String(localized: "settings.version_copied", defaultValue: "Versione copiata: \(bundleSummary)", comment: "Snackbar — app version and build string copied to the clipboard, %@ is the version/build summary text"),
                 severity: .info,
                 durationSeconds: 3
             ))
@@ -153,36 +174,50 @@ struct SettingsScreen: View {
             scheme.background.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    QAudionBrandBanner()
                     topBar
-                    ZStack {
-                        ProfileHeroCard(
-                            displayName: profileDisplayName,
-                            handle: profileHandle,
-                            statusMessage: appState.currentUserStatusMessage ?? "Disponibile per chiamate sicure.",
-                            // W-AVATARICONSHARED (2026-08-13) — was the raw
-                            // photo-cache URL: nil (and permanently stuck on
-                            // the initials bubble) for an icon-chosen avatar,
-                            // and not guaranteed to refresh after a
-                            // re-uploaded photo since the file path itself
-                            // never changes. See AvatarUploader.resolveSelfAvatarURL.
-                            avatarUrl: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
-                            shortNumber: appState.currentUserDialExtension,
-                            onEditTap: { showAccountFromEdit = true }
-                        )
-                        // 2026-08-06 fix: hidden NavigationLink driving the
-                        // MODIFICA pill to the same destination as the
-                        // "Profilo" row in accountSection below — the pill
-                        // used to call an empty closure and do nothing.
-                        NavigationLink(isActive: $showAccountFromEdit) {
-                            LazyView {
-                                AccountSettingsScreen(appState: appState)
-                                    .onAppear { print("[Settings] AccountSettingsScreen appeared (via EDIT)") }
-                            }
-                        } label: { EmptyView() }
-                        .opacity(0)
+                    ProfileHeroCard(
+                        displayName: profileDisplayName,
+                        handle: profileHandle,
+                        statusMessage: profileStatus,
+                        // W-AVATARICONSHARED (2026-08-13) — was the raw
+                        // photo-cache URL: nil (and permanently stuck on
+                        // the initials bubble) for an icon-chosen avatar,
+                        // and not guaranteed to refresh after a
+                        // re-uploaded photo since the file path itself
+                        // never changes. See AvatarUploader.resolveSelfAvatarURL.
+                        avatarUrl: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
+                        // Digits only while there is no name to draw
+                        // initials from — same rule the chat header and
+                        // the iPad sidebar use, so the three "this is
+                        // you" avatars cannot disagree.
+                        shortNumber: appState.accountAvatarName == nil
+                            ? appState.currentUserDialExtension
+                            : nil,
+                        onEditTap: { showAccountFromEdit = true }
+                    )
+                    // 2026-08-06 fix: drives the MODIFICA pill to the same
+                    // destination as the "Profilo" row in accountSection
+                    // below — the pill used to call an empty closure and do
+                    // nothing. 2026-08-20: migrated off the deprecated
+                    // `NavigationLink(isActive:destination:label:)` init;
+                    // `navigationDestination(isPresented:)`'s closure is
+                    // lazy the same way, so the W464 eager-init crash this
+                    // guarded against stays guarded against.
+                    .navigationDestination(isPresented: $showAccountFromEdit) {
+                        LazyView {
+                            AccountSettingsScreen(appState: appState)
+                                .onAppear { print("[Settings] AccountSettingsScreen appeared (via EDIT)") }
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
+
+                    if case let .proTrial(daysRemaining, _) = planStatus {
+                        TrialBanner(daysRemaining: daysRemaining) {
+                            showTrialUpgradeSheet = true
+                        }
+                    }
 
                     SecurityChipsRow()
                         .padding(.top, 8)
@@ -215,7 +250,7 @@ struct SettingsScreen: View {
                         ) {
                             Button("Esci", role: .destructive) {
                                 snackbar?.show(.init(
-                                    text: "Sessione chiusa.",
+                                    text: String(localized: "settings.session_closed", defaultValue: "Sessione chiusa.", comment: "Snackbar — the user confirmed sign-out and the session was closed"),
                                     severity: .info,
                                     durationSeconds: 3))
                                 appState.logout()
@@ -251,6 +286,14 @@ struct SettingsScreen: View {
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
         }
+        // Entitlements Task 4 — "Attiva Pro" tap on TrialBanner opens the
+        // same UpgradeSheet the rest of the app uses; capability is a
+        // benefit-framing hint only (see UpgradeSheet's own doc), so
+        // .callsVideo (the anchor feature PlanStatus itself reads) is fine
+        // here even though the trial unlocks everything, not just video.
+        .sheet(isPresented: $showTrialUpgradeSheet) {
+            UpgradeSheet(capability: .callsVideo)
+        }
     }
 
     // MARK: - Top bar
@@ -261,6 +304,15 @@ struct SettingsScreen: View {
                 .qaudionStyle(type.titleLarge)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
+            // The VPN chip lives here, not in the navigation bar: this
+            // screen hides that bar (see below), so the toolbar item the
+            // shell used to attach was never drawn. Compact only — on iPad
+            // the sidebar draws one chip for the whole shell and a second
+            // one in the detail pane would be a duplicate.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
             // W292: replaced the TODO no-op stub with a real Menu of
             // side-effect-only quick actions. Avoids new navigation
             // state plumbing — each item is a single statement that
@@ -276,11 +328,15 @@ struct SettingsScreen: View {
                 } label: {
                     Label("Apri Impostazioni iOS", systemImage: "gear")
                 }
+                // App Store 2.1/2.3 — TestFlight-only surface, compiled out
+                // of the store build (no beta wording, no itms links).
+                #if QAUDION_DEV_TOOLS
                 Button {
                     openTestFlightFeedback()
                 } label: {
                     Label("Feedback TestFlight", systemImage: "ant.fill")
                 }
+                #endif
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .semibold))
@@ -313,7 +369,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "person",
                             iconColor: scheme.primary,
                             title: "Profilo",
-                            subtitle: profileDisplayName)
+                            subtitle: LocalizedStringKey(profileDisplayName))
             }
             .buttonStyle(.plain)
 
@@ -358,9 +414,20 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // Entitlements Task 5 — Capability.keyManagement gates the
+            // WHOLE destination (not a single button): the row itself
+            // never hides or disables, tapping always navigates, but the
+            // pushed content swaps to UpgradeSheet when locked. Mirrors
+            // Android's gatedEntry<QAudionRoute.KeyManagement>.
             NavigationLink {
-                LazyView { KeyManagementScreen(state: appState) }
+                LazyView { GatedScreenEntry(capability: .keyManagement) { KeyManagementScreen(state: appState) } }
             } label: {
+                // The one row that keeps the PQC purple, deliberately: its
+                // subtitle IS "PSK · PQC · rotazione". Three neighbours
+                // wore the same tint and had nothing to do with
+                // post-quantum crypto — a voiceprint, a 12-word BIP-39
+                // mnemonic, an Ed25519-signed update catalogue — so the
+                // colour meant nothing wherever it appeared.
                 SettingsRow(icon: "key.fill",
                             iconColor: extras.pqcAccent,
                             title: "Gestione chiavi",
@@ -368,11 +435,13 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // Entitlements Task 5 — Capability.voiceBiometrics, same
+            // whole-destination gate as Gestione chiavi above.
             NavigationLink {
-                LazyView { VoiceEnrollmentScreen() }
+                LazyView { GatedScreenEntry(capability: .voiceBiometrics) { VoiceEnrollmentScreen() } }
             } label: {
                 SettingsRow(icon: "waveform.badge.mic",
-                            iconColor: extras.pqcAccent,
+                            iconColor: scheme.primary,
                             title: "Voice-as-Key",
                             subtitle: "Registra voiceprint · 5 campioni")
             }
@@ -400,7 +469,7 @@ struct SettingsScreen: View {
                 }
             } label: {
                 SettingsRow(icon: "arrow.counterclockwise.icloud",
-                            iconColor: extras.pqcAccent,
+                            iconColor: scheme.primary,
                             title: "Seed di recupero",
                             subtitle: "Mnemonica 12 parole · ripristino account")
             }
@@ -454,7 +523,10 @@ struct SettingsScreen: View {
 
             // W379: rollover toggles for cross-platform parity flags.
             // Lives under "Conversazioni" so testers can find it next to
-            // the chat-related settings.
+            // the chat-related settings. Tester-only (App Store 2.1): the
+            // toggles are internal rollout switches, compiled out of the
+            // store build together with the screen itself.
+            #if QAUDION_DEV_TOOLS
             NavigationLink {
                 LazyView { CrossPlatformBetaScreen() }
             } label: {
@@ -464,6 +536,7 @@ struct SettingsScreen: View {
                             subtitle: "Wire-format v3 · attach_announce · capability per peer")
             }
             .buttonStyle(.plain)
+            #endif
         }
         .padding(.horizontal, 16)
     }
@@ -471,8 +544,10 @@ struct SettingsScreen: View {
     private var datiSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("DATI")
+            // Entitlements Task 5 — Capability.backup, same
+            // whole-destination gate as the other two settings screens.
             NavigationLink {
-                LazyView { BackupSettingsScreen(state: appState) }
+                LazyView { GatedScreenEntry(capability: .backup) { BackupSettingsScreen(state: appState) } }
             } label: {
                 SettingsRow(icon: "externaldrive.fill",
                             iconColor: scheme.primary,
@@ -484,9 +559,27 @@ struct SettingsScreen: View {
         .padding(.horizontal, 16)
     }
 
+    /// Native name of the currently effective app language, for the
+    /// "Lingua" row subtitle. No AppState involved — reads
+    /// `AppLanguageManager` directly per CLAUDE.md §16.
+    private var currentLanguageNativeName: String {
+        let code = AppLanguageManager.effectiveLanguageCode
+        return AppLanguageManager.supportedLanguages.first(where: { $0.code == code })?.nativeName ?? code
+    }
+
     private var infoSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
+            NavigationLink {
+                LazyView { LanguageSettingsScreen() }
+            } label: {
+                SettingsRow(icon: "globe",
+                            iconColor: scheme.primary,
+                            title: "Lingua",
+                            subtitle: LocalizedStringKey(currentLanguageNativeName))
+            }
+            .buttonStyle(.plain)
+
             NavigationLink {
                 LazyView { AboutSettingsScreen(state: appState) }
             } label: {
@@ -497,18 +590,37 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // App Store 5.1.1(i) — the privacy policy must be reachable
+            // from inside the app, not only from the store listing. Same
+            // page family entered in App Store Connect (App Information >
+            // Privacy Policy URL); see `LegalLinks` for the locale rule.
+            Button {
+                LegalLinks.open(LegalLinks.privacyPolicy())
+            } label: {
+                SettingsRow(icon: "hand.raised.fill",
+                            iconColor: scheme.primary,
+                            title: "Informativa privacy",
+                            subtitle: "q-audion.com · dati trattati · cancellazione account")
+            }
+            .buttonStyle(.plain)
+
             // W42: Aggiornamento firmato OTA. Stub UI con mock catalog —
             // l'engine wirerà il vero fetch + Ed25519 verify quando lands.
-            // 1:1 visual port di Android `OtaUpdateScreen.kt`.
+            // 1:1 visual port di Android `OtaUpdateScreen.kt`. On iOS the
+            // only real update path is the App Store (AboutSettingsScreen's
+            // "Controlla aggiornamenti"); this screen redirects to
+            // TestFlight, so it is compiled out of the store build.
+            #if QAUDION_DEV_TOOLS
             NavigationLink {
                 LazyView { OtaUpdateScreen() }
             } label: {
                 SettingsRow(icon: "arrow.triangle.2.circlepath.icloud",
-                            iconColor: extras.pqcAccent,
+                            iconColor: scheme.primary,
                             title: "Aggiornamento OTA",
                             subtitle: "Catalogo firmato · Ed25519 · canali")
             }
             .buttonStyle(.plain)
+            #endif
 
             // W49: Cosa c'è di nuovo — changelog viewer per i tester.
             // Lista hardcoded delle release con bullet di feature, così
@@ -580,6 +692,30 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // W-AUDIOSRTPDEBUGTOGGLE (2026-09-10) — A/B testing switch
+            // between audio-srtp-v1 (native RTP/DTLS-SRTP, NetEQ+NACK/RTX
+            // di WebRTC) e il protocollo custom (DataChannel/WS-relay,
+            // cifratura app-level, il nostro NACK/RTX + jitter buffer).
+            // Cambia SOLO cosa questo device annuncia — serve comunque che
+            // l'ALTRO lato lo annunci (intersezione simmetrica). Tutto il
+            // resto (quale pipeline gira davvero, ogni feature legata al
+            // protocollo) segue automaticamente dalla negoziazione, stessa
+            // garanzia della costante compile-time che sostituisce. Non
+            // sopravvive a un riavvio dell'app — vedi
+            // CallCapabilities.audioSrtpDebugOverride.
+            SettingsToggleRow(
+                title: "Usa SRTP nativo invece del protocollo custom",
+                subtitle: "Non sopravvive a un riavvio — resetta al default compilato " +
+                    "(oggi: \(CallCapabilities.audioSrtpSendEnabled ? "ON" : "OFF")).",
+                isOn: Binding(
+                    get: { audioSrtpDebugToggle },
+                    set: { newValue in
+                        audioSrtpDebugToggle = newValue
+                        CallCapabilities.audioSrtpDebugOverride = newValue
+                    }
+                )
+            )
+
             // W46: Reset dati locali (UserDefaults wipe non-credenziale).
             // Utile per QA TestFlight per ripartire pulito senza
             // reinstallare l'app o forzare logout.
@@ -618,7 +754,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "tray.2.fill",
                             iconColor: .orange,
                             title: "Svuota cache allegati",
-                            subtitle: cacheUsageSubtitle)
+                            subtitle: LocalizedStringKey(cacheUsageSubtitle))
             }
             .buttonStyle(.plain)
             // W460: unique id per sibling view — sharing the same id value
@@ -658,7 +794,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "doc.text.below.ecg",
                             iconColor: .orange,
                             title: "Cancella abbozzi",
-                            subtitle: Self.draftsSubtitle())
+                            subtitle: LocalizedStringKey(Self.draftsSubtitle()))
             }
             .buttonStyle(.plain)
             .id("drafts-row-\(cacheUsageRefreshTrigger)")
@@ -713,7 +849,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "eye.slash.fill",
                             iconColor: .orange,
                             title: "Cancella timestamp ultimo accesso",
-                            subtitle: Self.lastSeenSubtitle())
+                            subtitle: LocalizedStringKey(Self.lastSeenSubtitle()))
             }
             .buttonStyle(.plain)
             .id("lastseen-row-\(cacheUsageRefreshTrigger)")
@@ -880,7 +1016,10 @@ struct SettingsScreen: View {
         #endif
     }
 
+    #if QAUDION_DEV_TOOLS
     /// W292: open the public TestFlight feedback page. Sister of W288.
+    /// Dev/TestFlight builds only — the store build has no TestFlight
+    /// wording or links anywhere (App Store 2.1/2.3).
     private func openTestFlightFeedback() {
         #if canImport(UIKit)
         if let url = URL(string: "https://testflight.apple.com/v1/app/6762266299") {
@@ -888,6 +1027,7 @@ struct SettingsScreen: View {
         }
         #endif
     }
+    #endif
 
     // MARK: - PQC self-test (W268)
 
@@ -964,38 +1104,49 @@ struct SettingsScreen: View {
 
     // MARK: - Helpers
 
+    /// The card's largest line. It is the user's NAME now — it used to be
+    /// the extension, so the biggest text on the screen read "170", and
+    /// when there was no extension it read a truncated raw userId.
+    /// Both userId branches are deleted; nothing derived from the id
+    /// reaches this surface at any position.
     private var profileDisplayName: String {
-        // W459: prefer the server-assigned PBX extension over the UUID
-        // fragment. getProfile() populates currentUserDialExtension on
-        // every launch; UUID fallback applies only on first-frame before
-        // the profile round-trip completes (or if server returns
-        // dialExtension == 0). Pavel, 2026-07-29: bare digits, no "Interno"
-        // prefix — the local user's own extension follows the same
-        // no-prefix rule as every peer-facing display.
-        if let ext = appState.currentUserDialExtension, !ext.isEmpty {
-            return DisplayName.formatExtension(ext)
-        }
-        if let userId = appState.currentUserId, !userId.isEmpty {
-            if userId.hasPrefix("user-") {
-                return String(userId.dropFirst(5)).capitalized
-            }
-            // W461: always truncate — never show the full UUID regardless of length.
-            return String(userId.prefix(8)) + (userId.count > 8 ? "…" : "")
-        }
-        return "Q-Audion User"
+        AccountIdentityLabels.make(
+            currentUserDialExtension: appState.currentUserDialExtension,
+            accountAvatarName: appState.accountAvatarName).primary
     }
 
+    /// The identity line under the name: "#170 · +39333…". It used to be
+    /// the extension joined to the last four characters of the userId, and
+    /// with no extension it degraded to an em-dash and a UUID fragment.
+    /// Returns nil when neither value exists, so the card omits the line
+    /// rather than printing a placeholder — which is why the "— · " branch
+    /// has no replacement.
+    ///
+    /// The phone is whatever this device has configured, since the profile
+    /// the server returns carries no phone field of its own.
     private var profileHandle: String? {
-        guard let userId = appState.currentUserId else { return nil }
-        // W444: prefer the real server-assigned PBX extension (e.g. "103 · …d2e9")
-        // over the hardcoded dash. Falls back to the UUID fragment when extension
-        // is not yet loaded (first launch before getProfile() returns).
-        // Pavel, 2026-07-29: bare digits, no "Int." prefix.
-        let tail = userId.count > 4 ? "…" + String(userId.suffix(4)) : userId
-        if let ext = appState.currentUserDialExtension, !ext.isEmpty {
-            return DisplayName.formatExtension(ext) + " · " + tail
-        }
-        return "— · " + tail
+        let labels = AccountIdentityLabels.make(
+            currentUserDialExtension: appState.currentUserDialExtension,
+            accountAvatarName: appState.accountAvatarName)
+        // Whatever the name line already took is not repeated here.
+        return labels.secondary.isEmpty ? nil : labels.secondary
+    }
+
+    /// The status line, shown only when the user actually wrote one.
+    ///
+    /// The call site used to pass `?? "Disponibile per chiamate sicure."`,
+    /// so the parameter was never nil and every account that had not
+    /// written a status advertised the same italic sentence — a line that
+    /// distinguished nothing, on a card whose whole job is to say who this
+    /// account is. The trim is load-bearing rather than cosmetic: the
+    /// account editor mirrors `profile.statusMessage` unconditionally, so a
+    /// server-returned "" arrives as a non-nil empty string and would
+    /// otherwise render an empty italic line plus its spacing.
+    private var profileStatus: String? {
+        guard let s = appState.currentUserStatusMessage?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !s.isEmpty else { return nil }
+        return s
     }
 }
 
@@ -1010,7 +1161,12 @@ struct LazyView<Content: View>: View {
 }
 
 #Preview {
+    // Entitlements Task 4 — this screen now reads `@EnvironmentObject var
+    // capabilityGate: CapabilityGate` directly (previously only its child
+    // QAudionBrandBanner did), so the preview needs one injected or
+    // SwiftUI fatal-errors at render time.
     SettingsScreen()
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }

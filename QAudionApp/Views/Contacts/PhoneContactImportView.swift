@@ -27,8 +27,9 @@ struct PhoneContactImportView: View {
     @State private var candidates: [PhoneCandidate] = []
     @State private var loading: Bool = false
     @State private var selectedCandidate: PhoneCandidate? = nil
+    @State private var filtered: [PhoneCandidate] = []
 
-    struct PhoneCandidate: Identifiable {
+    struct PhoneCandidate: Identifiable, Equatable {
         let id: String      // CNContact.identifier
         let displayName: String
         let phoneNumbers: [String]
@@ -44,15 +45,6 @@ struct PhoneContactImportView: View {
             return permission == .limited
         }
         return false
-    }
-
-    private var filtered: [PhoneCandidate] {
-        guard !searchText.isEmpty else { return candidates }
-        let q = searchText.lowercased()
-        return candidates.filter {
-            $0.displayName.lowercased().contains(q)
-            || $0.phoneNumbers.contains { $0.contains(q) }
-        }
     }
 
     var body: some View {
@@ -74,7 +66,16 @@ struct PhoneContactImportView: View {
                 candidateList
             }
         }
-        .onAppear { refreshIfAuthorized() }
+        .onAppear {
+            refreshIfAuthorized()
+            updateFiltered(with: candidates)
+        }
+        .onChange(of: searchText) { _ in
+            updateFiltered(with: candidates)
+        }
+        .onChange(of: candidates) { newCandidates in
+            updateFiltered(with: newCandidates)
+        }
         .sheet(item: $selectedCandidate) { candidate in
             ImportContactSheet(candidate: candidate) { stored in
                 // Security-review fix (2026-07-30): `stored` is always a
@@ -114,7 +115,7 @@ struct PhoneContactImportView: View {
                 let name = stored.displayName
                 onImported(name)
                 snackbar?.show(.init(
-                    text: "Contatto \(name) importato in rubrica.",
+                    text: String(localized: "phone_contact_import.contact_imported", defaultValue: "Contatto \(name) importato in rubrica.", comment: "Snackbar — a device-contact was successfully imported into the address book; %@ is their display name"),
                     severity: .info
                 ))
             }
@@ -236,6 +237,10 @@ struct PhoneContactImportView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(scheme.background)
+        // This list is the body of the Contacts tab's SCOPRI tab, so the
+        // floating "Aggiungi contatto" capsule ContactsScreen overlays sits
+        // above its last row.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
     }
 
     @ViewBuilder
@@ -304,6 +309,22 @@ struct PhoneContactImportView: View {
             break
         }
     }
+
+    // MARK: - Filter logic
+
+    private func updateFiltered(with currentCandidates: [PhoneCandidate]) {
+        guard !searchText.isEmpty else {
+            filtered = currentCandidates
+            return
+        }
+        let q = searchText.lowercased()
+        filtered = currentCandidates.filter {
+            $0.displayName.lowercased().contains(q)
+            || $0.phoneNumbers.contains { $0.contains(q) }
+        }
+    }
+
+    // MARK: - Loading
 
     private func refreshIfAuthorized() {
         if isAccessGranted { loadCandidates() }

@@ -45,4 +45,32 @@ final class ConversationListViewModelTests: XCTestCase {
         )
         XCTAssertTrue(vm.filteredItems.isEmpty)
     }
+
+    // MARK: - pinnedNonGroupItems / regularNonGroupItems
+
+    func test_pinnedNonGroupItems_excludesGroupsAndUnpinned() {
+        let mock = ConversationListViewModel.mock
+        XCTAssertTrue(mock.pinnedNonGroupItems.allSatisfy { $0.pinned && $0.kind != .group })
+    }
+
+    func test_regularNonGroupItems_excludesGroupsAndPinned() {
+        let mock = ConversationListViewModel.mock
+        XCTAssertTrue(mock.regularNonGroupItems.allSatisfy { !$0.pinned && $0.kind != .group })
+    }
+
+    func test_pinnedAndRegularNonGroupItems_coverFilteredItemsMinusGroups() {
+        let mock = ConversationListViewModel.mock
+        let nonGroup = mock.filteredItems.filter { $0.kind != .group }
+        XCTAssertEqual(mock.pinnedNonGroupItems.count + mock.regularNonGroupItems.count, nonGroup.count)
+        XCTAssertEqual(Set(mock.pinnedNonGroupItems.map(\.conversationId) + mock.regularNonGroupItems.map(\.conversationId)),
+                       Set(nonGroup.map(\.conversationId)))
+    }
+
+    func test_pinnedAndRegularNonGroupItems_preserveFilteredItemsOrder() {
+        let mock = ConversationListViewModel.mock
+        let expectedPinnedOrder = mock.filteredItems.filter { $0.kind != .group && $0.pinned }
+        let expectedRegularOrder = mock.filteredItems.filter { $0.kind != .group && !$0.pinned }
+        XCTAssertEqual(mock.pinnedNonGroupItems.map(\.conversationId), expectedPinnedOrder.map(\.conversationId))
+        XCTAssertEqual(mock.regularNonGroupItems.map(\.conversationId), expectedRegularOrder.map(\.conversationId))
+    }
 }

@@ -4,6 +4,7 @@ Q-Audion iOS is the native Swift client for the Q-Audion E2EE post-quantum messe
 
 **Authoritative protocol spec:** `apps/bcrypto-server/docs/WIRE_SPEC.md`
 **Master security policy:** `apps/bcrypto-server/SECURITY.md`
+**MASVS certification status:** [`../qaudion-android-new/docs/security/CERTIFICATION_STATUS.md`](../qaudion-android-new/docs/security/CERTIFICATION_STATUS.md) — read this before answering "is the certification closed"
 
 ## Reporting
 
@@ -16,7 +17,7 @@ We acknowledge within 48 business hours, triage within 5 business days, follow a
 In scope:
 - All Swift code under `QAudionEngine/Sources/` and `QAudionApp/Sources/`
 - Cryptographic implementations:
-  - **ML-KEM-1024** via `liboqs` C target (pinned commit SHA in `Package.swift`) — fallback to RNG if unavailable is documented but must NEVER ship in release config
+  - **ML-KEM-1024** via `liboqs` C target — hand-vendored local source (`Sources/CLiboqs`, not a git-pinned SPM dependency). Not traceable via `Package.swift` (corrected 2026-08-21 — the prior "pinned commit SHA" claim there didn't match reality), but the exact upstream origin of the crypto-critical code IS identified and verified: `src/mlkem/*` matches `pq-code-package/mlkem-native` tag `v1.1.0` (commit `d2cae2be`) byte-for-byte across all 22 files checked, and the Keccak/SHA3 permutation core matches liboqs's own current vendored XKCP copy byte-for-byte across all 7 files checked. Full evidence, exact commit, and a reproducible re-verification procedure in `Sources/CLiboqs/PROVENANCE.md`, plus a manifest-hash checkpoint for detecting any future local drift. The random-fallback-on-failure risk once present here (SECURITY C-9) is fixed: `PqcKeyExchange.swift`/`VpnMlKem.swift` fail closed (throw) on any liboqs init/keypair failure, never fall back to plain RNG output.
   - **X25519** via Apple `CryptoKit.Curve25519.KeyAgreement`
   - **Ed25519** via `CryptoKit.Curve25519.Signing`
   - **AES-256-GCM** via `CryptoKit.AES.GCM`
@@ -37,10 +38,10 @@ Out of scope:
 
 ## Cryptographic invariants
 
-- liboqs commit SHA pinned and verified in CI
+- liboqs is a locally vendored source tree, not a git dependency — but its crypto-critical code is identified against a real upstream commit by direct byte-level comparison (`pq-code-package/mlkem-native` `v1.1.0` for ML-KEM, liboqs's own vendored XKCP for Keccak/SHA3) and integrity-checkpointed by a manifest hash for future drift; see `Sources/CLiboqs/PROVENANCE.md` for the full evidence and a reproducible verification procedure
 - Keys never leave Secure Enclave (P-256 identity); ML-KEM and X25519 secrets live in Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
 - HKDF labels versioned per WIRE_SPEC.md §5.1
-- KAT cross-platform vectors (Android BouncyCastle ↔ Desktop noble ↔ iOS liboqs+CryptoKit) gated in CI (Codemagic)
+- KAT cross-platform vectors (Android BouncyCastle ↔ Desktop noble ↔ iOS liboqs+CryptoKit ↔ Server Go stdlib) gated in CI (GitHub Actions — moved off Codemagic 2026-05-06). These vectors prove the four implementations agree with each other byte-for-byte; they are **not** validated against NIST's official ACVP/FIPS-203 reference vectors, so treat this as cross-implementation regression protection, not a standalone FIPS 203 conformance proof — see `FIPS_PQC_CONFORMANCE_2026-08-21.md` in `qaudion-android-new` for the full distinction.
 - All ML-KEM private operations are wrapped + zeroized after use
 
 ## Recent significant work

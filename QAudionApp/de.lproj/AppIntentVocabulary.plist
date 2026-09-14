@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- W-L10N-BATCH1 (2026-09-08) — German counterpart of it.lproj's
+	     AppIntentVocabulary.plist (ITMS-90626 fix). See it.lproj's own
+	     header comment for the full rationale, unchanged here. -->
+	<key>IntentPhrases</key>
+	<array>
+		<dict>
+			<key>IntentName</key>
+			<string>INStartCallIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Rufe Max auf Q-Audion an</string>
+				<string>Rufe Julia mit Q-Audion an</string>
+			</array>
+		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSendMessageIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Sende eine Nachricht an Max auf Q-Audion</string>
+				<string>Sende eine Nachricht mit Q-Audion</string>
+			</array>
+		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSearchForMessagesIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Suche Max' Nachrichten auf Q-Audion</string>
+				<string>Suche Nachrichten auf Q-Audion</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

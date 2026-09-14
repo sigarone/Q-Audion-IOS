@@ -80,7 +80,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             p.rate = playbackRate
             p.prepareToPlay()
             guard p.play() else {
-                print("[VoiceNotePlayer] play() returned false for \(url.lastPathComponent)")
+                // I8 FIX: the filename embeds the attachment's fileId (see
+                // ChatVoiceNoteReceiver.fetch) — truncate like every other
+                // identifier print in this codebase.
+                print("[VoiceNotePlayer] play() returned false for \(url.lastPathComponent.prefix(8))…")
                 stop()
                 return
             }
@@ -90,7 +93,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             self.progress = 0
             startTick()
         } catch {
-            print("[VoiceNotePlayer] failed to load \(url.path): \(error)")
+            // I8 FIX: same fileId-in-filename concern as above — print only
+            // the truncated last path component, not the full sandbox path.
+            print("[VoiceNotePlayer] failed to load \(url.lastPathComponent.prefix(8))…: \(error)")
             stop()
         }
     }
@@ -184,11 +189,36 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         try? session.setActive(true, options: [])
     }
 
+    // W-SESSIONCATLEAK (2026-08-30) — restore the VoIP category on the way
+    // out. Six places in this app set a category on the SHARED
+    // AVAudioSession and, until now, not one of them put it back: this
+    // player left `.playback` (no input at all, speaker output, long
+    // buffer), voice-unlock and enrollment leave `.record` (no output).
+    // Whatever ran last owned every later call. Measured consequence on the
+    // live 1.0.1063 call: the in-call session reported `in=` EMPTY,
+    // `out=Speaker`, `buf=0.02` — the `.playback` signature exactly — so
+    // BOTH capture engines were silent (native `tx=0 ptx=0`, AVAudioEngine
+    // `capfail=1`). Restoring here is the fix at the source; the call path
+    // also re-asserts the category under RTCAudioSession's lock
+    // (W-SESSIONLOCK), which is the belt to this pair of braces.
     private func deactivateAudioSession() {
         try? AVAudioSession.sharedInstance().setActive(
             false, options: .notifyOthersOnDeactivation
         )
+        restoreVoipCategory()
     }
+
+    /// See W-SESSIONCATLEAK above.
+    private func restoreVoipCategory() {
+        let session = AVAudioSession.sharedInstance()
+        #if os(iOS) && !targetEnvironment(simulator)
+        let opts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        #else
+        let opts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        #endif
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
+    }
+
 
     private func startTick() {
         stopTick()

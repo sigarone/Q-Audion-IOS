@@ -28,7 +28,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 | `.github/workflows/ios-ui-smoke.yml` | ACTIVE, manual-only (`workflow_dispatch`) — builds QAudionApp for iOS Simulator (no signing) + runs Maestro UI flows from `maestro/*.yaml`. Added 2026-08-06, GREEN as of run [31079859197](https://github.com/sigarone/Q-Audion-IOS/actions/runs/31079859197) (13m51s) after 3 fix iterations (xcodegen not installed; a device-only quiche.xcframework — since removed with the MASQUE/QUIC transport; QAudionPacketTunnel/WireGuardKitGo is device-only too and is still stripped from a local project.yml copy — see the workflow file's own header for the full iteration log) | yes if it fails again — read the uploaded `build-sim-log`/`maestro-debug` artifacts first |
 | `.github/workflows/ios-wda-provision.yml` | ACTIVE, manual-only (`workflow_dispatch`, input `device_udid`) — registers a real test iPhone + builds/signs WebDriverAgentRunner (appium/WebDriverAgent v16.1.5, IOS_APP_DEVELOPMENT signing) for interactive UI debug from Windows via go-ios (see global CLAUDE.md "go-ios + WebDriverAgent"). Added 2026-08-06, UNVERIFIED — first Development-type signing in this repo's CI (everything else here is IOS_APP_STORE), see file header for the certificate-reuse caveat | yes if it fails — read `wda-build-log` artifact; check whether `WDA_CERTIFICATE_PRIVATE_KEY` secret needs setting after a first successful cert creation |
 | `XCODE_CLOUD_MIGRATION.md` | **HISTORICAL** — proposal for Xcode Cloud, never adopted | **do not follow its instructions** |
-| `ci_scripts/` (`ci_post_clone.sh`, `ci_pre_xcodebuild.sh`, `ci_post_xcodebuild.sh`) | **DEAD SCRIPTS** — Xcode Cloud convention, NEVER executed by the active GH Actions pipeline | do not edit them when fixing CI |
+| `ci_scripts/` | **REMOVED 2026-09-12** (App Store readiness audit FIX-24) — they were Xcode Cloud hooks never run by the GH Actions pipeline, and would have executed unreviewed if Xcode Cloud were ever switched on | do not recreate |
 | `codemagic.yaml` | **REMOVED** 2026-05-06 — deleted from the repo when CI moved to GH Actions | n/a |
 
 ### If a CI run fails
@@ -39,10 +39,13 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 
 ## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.398+)
 
-**Build v1.0.398+ (W417) ships always-on auto-upload telemetry.** The
-device pumps a chunk file to `/api/v1/files/upload` every ~3 seconds
-without user interaction (background, throttled, single-flight,
-non-interfering with calls). The user does NOT need to open Settings.
+**Build v1.0.398+ (W417) ships the auto-upload log shipper — OPT-IN,
+default OFF since the MASVS-PRIVACY remediation (2026-08-20).** Once the
+user enables Settings > Privacy > Diagnostica > "Log diagnostici in tempo
+reale" (`LiveLogStreamer.isEnabled`), the device pumps a chunk file to
+`/api/v1/files/upload` every ~3 seconds (background, throttled,
+single-flight, non-interfering with calls). Without that consent nothing
+leaves the device; ask the tester to flip the toggle before debugging.
 
 **Filename pattern**:
 ```
@@ -545,3 +548,20 @@ the same pattern is what triggers it.
 **Reference:** see `LiveLogStreamer.swift` (W417) for the canonical
 shape. The bisect commit chain is v1.0.386→v1.0.397 if this happens
 again — `git log --oneline v1.0.385..v1.0.398` reads like a story.
+
+## Audio / call-path changes — mandatory gate (added 2026-08-30 after a 13-build regression spiral)
+
+Before ANY build that touches the audio, session or crypto path:
+
+1. Pull the FULL telemetry corpus (not greps) and lay the key metrics out build
+   by build. First question is always "did my own last change break this?".
+2. Name the log line or file:line that PROVES the cause. No proof, no build.
+3. Android is the specification. Read its implementation and port its exact
+   rule, ordering and constants — never invent an iOS mechanism to match.
+4. Adopting an SDK mechanism means reading every related class in the
+   xcframework headers first, not one property.
+5. One hypothesis-driven build maximum. If it misses, stop shipping and run the
+   systematic cross-platform analysis instead.
+
+Full rationale and the incident that produced this: memory
+`feedback_no_blind_ship_regression_discipline`.

@@ -35,6 +35,17 @@ public struct ConversationListViewModel: ViewModelProtocol {
     public let items: [Item]
     public let searchQuery: String
     public let filteredItems: [Item]
+    /// `filteredItems` split into pinned/regular, excluding `.group` items —
+    /// same split `ChatListScreen.pinned`/`.regular` used to recompute on
+    /// every SwiftUI render pass via two `.filter` calls over `filteredItems`.
+    /// Precomputed once here instead, alongside `filteredItems`, so both stay
+    /// in lockstep by construction — there is no separate invalidation path
+    /// to keep in sync. Named *NonGroup* (not just `pinnedItems`/
+    /// `regularItems`) because these are `public`: a name that didn't say so
+    /// would silently promise "every pinned conversation" while actually
+    /// excluding group chats.
+    public let pinnedNonGroupItems: [Item]
+    public let regularNonGroupItems: [Item]
 
     public init(items: [Item], searchQuery: String = "") {
         self.items = items
@@ -45,14 +56,15 @@ public struct ConversationListViewModel: ViewModelProtocol {
             return lhs.lastActivity > rhs.lastActivity
         }
 
+        let computedFiltered: [Item]
         if searchQuery.isEmpty {
-            self.filteredItems = pinnedFirst
+            computedFiltered = pinnedFirst
         } else {
             let q = searchQuery.lowercased()
             // W104: extend search to also match the last-message preview.
             // Useful when the user remembers a phrase but not who said it
             // (e.g. searching "pizza" surfaces every conv mentioning food).
-            self.filteredItems = pinnedFirst.filter { item in
+            computedFiltered = pinnedFirst.filter { item in
                 if item.peerDisplayName.lowercased().contains(q) { return true }
                 if let preview = item.lastMessagePreview?.lowercased(), preview.contains(q) {
                     return true
@@ -60,6 +72,19 @@ public struct ConversationListViewModel: ViewModelProtocol {
                 return false
             }
         }
+        self.filteredItems = computedFiltered
+
+        var pinnedNonGroup: [Item] = []
+        var regularNonGroup: [Item] = []
+        for item in computedFiltered where item.kind != .group {
+            if item.pinned {
+                pinnedNonGroup.append(item)
+            } else {
+                regularNonGroup.append(item)
+            }
+        }
+        self.pinnedNonGroupItems = pinnedNonGroup
+        self.regularNonGroupItems = regularNonGroup
     }
 
     // force-unwraps below are safe: fixed hardcoded UUID string literals

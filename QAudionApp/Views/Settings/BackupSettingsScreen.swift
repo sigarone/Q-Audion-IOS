@@ -170,7 +170,7 @@ struct BackupSettingsScreen: View {
     private var lastBackupText: String {
         guard let date = container.viewModel.lastBackupAt else { return "Mai" }
         let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "it_IT")
+        formatter.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
@@ -269,7 +269,7 @@ struct BackupSettingsScreen: View {
                         // riskHigh esistente fa il proprio lavoro).
                         if container.coordinator.errorMessage == nil {
                             snackbar?.show(.init(
-                                text: "Backup cifrato completato.",
+                                text: String(localized: "backup_settings.backup_completed", defaultValue: "Backup cifrato completato.", comment: "Snackbar — shown after a local encrypted backup completes successfully"),
                                 severity: .info))
                         }
                     }
@@ -290,7 +290,7 @@ struct BackupSettingsScreen: View {
                         await container.restore(password: pwd)
                         if container.coordinator.errorMessage == nil {
                             snackbar?.show(.init(
-                                text: "Backup ripristinato.",
+                                text: String(localized: "backup_settings.restore_completed", defaultValue: "Backup ripristinato.", comment: "Snackbar — shown after successfully restoring from a local encrypted backup"),
                                 severity: .info))
                         }
                     }
@@ -341,34 +341,7 @@ struct BackupSettingsScreen: View {
     /// interaction. Useful for the Cifratura algo string which is
     /// the most-pasted value in security audit questions.
     private func tapCopyRow(label: String, value: String) -> some View {
-        HStack(spacing: 14) {
-            Text(label)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Text(value)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            #if canImport(UIKit)
-            UIPasteboard.general.string = value
-            HapticFeedback.messageSent()
-            #endif
-        }
+        TapCopyRow(label: label, value: value)
     }
 
     private func kvRow(label: String, value: String, mono: Bool) -> some View {

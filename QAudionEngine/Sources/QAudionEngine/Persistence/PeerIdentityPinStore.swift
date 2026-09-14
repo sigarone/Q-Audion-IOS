@@ -194,6 +194,71 @@ public final class PeerIdentityPinStore {
         #endif
     }
 
+    // MARK: - Set-proven re-pin (D11 rotation)
+
+    /// W-SASPIN (2026-09-08) — overwrite the pin for `(contactId, deviceId)` with a
+    /// key the policy has ALREADY proven: `.authenticatedRepinFromPublished`, i.e.
+    /// the bundle key is ∈ the server-published per-device set AND its own
+    /// signature verified. `pinOrMatch` above is deliberately write-once, so the
+    /// D11 "silent additive re-pin" the actuator wired to it was a no-op whenever a
+    /// pin already existed: after a legitimate rotation (reinstall / number
+    /// recovery) the stale pin stayed forever, and every reader that derives the
+    /// identity tag from the pin (`SasVerificationStore`, `PeerTrustEvaluator`)
+    /// disagreed with the key the handshake had actually verified.
+    ///
+    /// NEVER call this with an unverified key — the actuator reaches it only from
+    /// the set-proven verdict; a plain `.authenticated` verdict still goes through
+    /// the write-once `pinOrMatch`. NEVER call it without first checking whether
+    /// the account being written already carries a human-verified SAS binding —
+    /// this method has no knowledge of `SasVerificationStore` (a Persistence-layer
+    /// type cannot depend on it) and will overwrite unconditionally; the caller
+    /// (`AppState.commitSetProvenRepinForDevice`) is where that refusal lives
+    /// (W-VERIFIEDNOREPIN, adversarial review 2026-09-08 — mirrors Android's
+    /// `EnsurePeerTrustPinnedUseCase`: a server-proven rotation may silently
+    /// re-pin a TOFU-only peer, never one the user has explicitly verified).
+    public enum RepinOutcome {
+        /// No pin existed at this EXACT (contactId, deviceId) account (a legacy
+        /// bare pin for the SAME peer may still exist untouched — this is
+        /// additive, a new device, not a destructive change to it).
+        case added
+        /// A pin existed at this exact account and DIFFERED — it was replaced.
+        /// This is the only outcome that may invalidate a SAS record.
+        case overwritten
+        /// A pin existed and already equalled the argument key — no write.
+        case unchanged
+        /// The Keychain write failed; the previous pin, if any, is untouched.
+        case failed
+    }
+
+    @discardableResult
+    public func repin(contactId: String, ed25519Pub: Data, deviceId: String? = nil) -> RepinOutcome {
+        guard !contactId.isEmpty, ed25519Pub.count == 32 else { return .failed }
+        let account = Self.account(contactId, deviceId)
+        let existing = rawPinnedKey(account: account)
+        if existing == ed25519Pub { return .unchanged }
+        #if canImport(Security)
+        if existing != nil {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Self.keychainService,
+                kSecAttrAccount as String: account
+            ]
+            let update: [String: Any] = [kSecValueData as String: ed25519Pub]
+            return SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecSuccess ? .overwritten : .failed
+        }
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: ed25519Pub,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess ? .added : .failed
+        #else
+        return .failed
+        #endif
+    }
+
     // MARK: - Wipe
 
     /// Forget the pin(s) for a single peer — used when the user explicitly resets

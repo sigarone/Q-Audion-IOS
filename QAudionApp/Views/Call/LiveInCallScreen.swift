@@ -42,6 +42,11 @@ import QAudionEngine
 @MainActor
 struct LiveInCallScreen: View {
     @EnvironmentObject var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    @State private var upgradeSheetCapability: Capability? = nil
     // ContactsStore is a plain final class (not ObservableObject) — used
     // as a one-shot lookup helper, not as reactive state.
     private let contactsStore = ContactsStore()
@@ -187,6 +192,13 @@ struct LiveInCallScreen: View {
                 lockedVideo: appState.isVideoCall
             )
         }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked in-call control
+        // for (upgrade-to-video, add-participant).
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
     }
 
     /// W-CALLPROMOTE — contacts selectable from the "+" sheet: every stored
@@ -206,7 +218,12 @@ struct LiveInCallScreen: View {
                     avatarUrl: contact.avatarUrl,
                     isOnline: false,
                     unreadMessageCount: 0,
-                    isVerified: contact.isVerified
+                    isVerified: contact.isVerified,
+                    // Required now that the picker's secondary line is the
+                    // short number instead of a truncated userId: left at
+                    // its nil default, every row in the add-participant
+                    // sheet would render with no secondary line at all.
+                    extension: contact.`extension`
                 )
             }
     }
@@ -260,6 +277,12 @@ struct LiveInCallScreen: View {
                 // RITARDO label it would be undetectably wrong. It stays where
                 // it is honest — the diagnostics overlay's "LATENZA RELAY" row.
                 rttMs: appState.callService.mediaRttMs,
+                // W-DELAYSPLIT (IOS-E6) — windowed audio jitter-buffer delay
+                // in ms, paired with rttMs above so RITARDO can show
+                // "<rtt>+<buf>ms" the same way Android's InCallScreen.kt
+                // does (InCallScreen.kt:1170-1176). nil renders as today
+                // (RTT alone) — see `CallService.mediaJitterBufferMs` kdoc.
+                bufMs: appState.callService.mediaJitterBufferMs,
                 // W-TRUSTBAR-FIX: backendType is one of "p2p"/"turn"/"relay"
                 // (see AppState.swift ~line 267) — it is NEVER the literal
                 // "PQC". The PQC handshake is a SEPARATE layer from the
@@ -325,6 +348,10 @@ struct LiveInCallScreen: View {
                 onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
                 onToggleCamera: handleToggleCamera,
                 onUpgradeToVideo: handleUpgradeToVideo,
+                // Entitlements Task 5 — feat.calls.video for the mid-call
+                // escalation button.
+                upgradeToVideoUnlocked: capabilityGate.isUnlocked(.callsVideo),
+                onUpgradeToVideoLocked: { upgradeSheetCapability = .callsVideo },
                 screenSharing: appState.isScreenSharing,
                 onToggleScreenShare: handleToggleScreenShare,
                 peerScreenSharing: appState.peerScreenShareActive,
@@ -362,6 +389,10 @@ struct LiveInCallScreen: View {
                 // AppState.callPeerVoiceKeyEnrolled's doc).
                 peerVoiceKeyEnrolled: appState.callPeerVoiceKeyEnrolled,
                 onAddParticipant: { showAddParticipant = true },
+                // Entitlements Task 5 — feat.calls.group for the
+                // "add participant" (1:1 → group escalation) button.
+                addParticipantUnlocked: capabilityGate.isUnlocked(.callsGroup),
+                onAddParticipantLocked: { upgradeSheetCapability = .callsGroup },
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
@@ -386,7 +417,8 @@ struct LiveInCallScreen: View {
                 // `peerVoiceKeyEnrolled` fact in that case, see
                 // InCallScreen's own gating.
                 peerOwnerContinuityLevel: appState.peerOwnerContinuityLevel,
-                contactVoiceLevel: appState.contactVoiceLevel
+                contactVoiceLevel: appState.contactVoiceLevel,
+                speakerChange: appState.speakerChangeVerdict
             )
     }
 
@@ -408,6 +440,23 @@ struct LiveInCallScreen: View {
 
     private func handleToggleCamera() {
         let next = !cameraOn
+        // W-CAMBTNSRC follow-up (2026-09-08) — a call answered without video
+        // (W-VIDPRIVACY `.receiveOnly`) never opens a real `AVCaptureSession`
+        // (`VideoCallPipeline.sourceMode == .external`); this button still
+        // renders because `hasVideo` reflects the call TYPE, not whether the
+        // local camera was ever provisioned. Turning it "on" via
+        // `videoSetCameraEnabled` used to call `captureSession.startRunning()`
+        // on a session that was never configured with a camera input —
+        // silent no-op, live-reported as "pressing the video button does
+        // nothing." Local video was never actually negotiated in this call,
+        // so re-enabling it needs the same consent-gated renegotiation as the
+        // mid-call upgrade button (`handleUpgradeToVideo`), not a bare pause/
+        // resume flip. Once a real camera exists (`.camera` sourceMode), this
+        // stays a pure pause/resume via `videoSetCameraEnabled` as before.
+        if next, appState.videoPipeline?.sourceMode == .external {
+            appState.upgradeToVideo()
+            return
+        }
         // W-CAMSILENT (2026-07-24) — was `appState.setCamera(...)`, which only
         // flips the LOCAL pipeline: it neither updates `localVideoPaused` nor
         // sends `call_video_state`. So turning the camera off on THIS surface
@@ -441,13 +490,34 @@ struct LiveInCallScreen: View {
     }
 
     private func handleConfirmSas() {
+        // W-SASNOFEEDBACK (2026-09-08) — live-reported: tapping the confirm
+        // button does nothing visible (no D11-style "SAS verificato" text,
+        // shield stays whatever color it was). D11 (2026-09-07) fixed ONE way
+        // this guard could silently no-op (wrong pinned-account lookup) but
+        // every branch below still returns with zero signal on failure — the
+        // tap either worked invisibly-but-correctly (liveSasVerified recomputes
+        // every TimelineView tick, so a genuine success should repaint within
+        // ~1s) or one of these three preconditions failed, and there was no
+        // way to tell which from a remote log pull. Numeric-only markers
+        // (matches the redactor's numeric-survives rule) so the next repro is
+        // conclusive instead of another dead end.
         let words = appState.callSasWords
-        guard !words.isEmpty,
-              let peer = appState.callContactId,
-              let identityTag = sasIdentityTag(for: peer) else { return }
+        guard !words.isEmpty else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=1")  // 1 = no SAS words yet
+            return
+        }
+        guard let peer = appState.callContactId else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=2")  // 2 = no call peer
+            return
+        }
+        guard let identityTag = sasIdentityTag(for: peer) else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=3")  // 3 = no pinned identity tag
+            return
+        }
         let fp = SasVerificationStore.fingerprint(forWords: words)
         SasVerificationStore.shared.recordVerified(
             peerUserId: peer, fingerprint: fp, identityTag: identityTag)
+        RTLog.info("call", "sasConfirm ok=1")
         // P0-3 — release whatever media (relay sealers / v4 bootstrap) AppState
         // held back for this call's unverified handshake identity, if any was.
         // No-op when the gate was never engaged (the common case).
@@ -458,8 +528,19 @@ struct LiveInCallScreen: View {
     /// pinned for the call's peer. `nil` when there is no pin, in which case
     /// nothing may be recorded or trusted: a confirmation with no identity to bind
     /// to is the state this finding was about.
+    ///
+    /// D11 fix — MUST pass the peer's device id: `commitTofuPinForDevice`
+    /// pins under the composite `"<peerId>|<deviceId>"` account whenever the
+    /// server stamped one (the normal case), and the bare-contactId lookup
+    /// this used to do checks a DIFFERENT account than the one the
+    /// handshake actually wrote to. That mismatch is why "CONFERMA
+    /// COINCIDONO" looked live but did nothing on every repeat call with an
+    /// already-trusted peer (2026-09-07 live report): the pin was there,
+    /// just under an account this lookup never checked.
     private func sasIdentityTag(for peerId: String) -> String? {
-        guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peerId) else { return nil }
+        guard let pinned = PeerIdentityPinStore().pinnedKey(
+            contactId: peerId, deviceId: appState.peerDeviceId(for: peerId)
+        ) else { return nil }
         return SasVerificationStore.identityTag(forPinnedKey: pinned)
     }
 
@@ -540,10 +621,15 @@ struct LiveInCallScreen: View {
         return ms.description + " ms"
     }
 
+    /// W-SRTPCOUNTERS (2026-08-29) — the effective counters, so these rows
+    /// count the units the call is really protecting: sealed frames on the
+    /// DataChannel path, RTP packets on the native-SRTP one, where this app
+    /// seals nothing and the raw counters would read 0 all call.
+    /// See `CallService.effectiveAudioTxCount`.
     @ViewBuilder
     private var diagPanelFrameCounters: some View {
-        let txVal = appState.callService.framesEncryptedTx.description
-        let rxVal = appState.callService.framesDecryptedRx.description
+        let txVal = appState.callService.effectiveAudioTxCount.description
+        let rxVal = appState.callService.effectiveAudioRxCount.description
         let rekeyVal = appState.rekeyCount.description
         let latencyVal = Self.latencyString(appState.latencyMs)
         diagRow("TX FRAME CIFRATI",   txVal)
@@ -621,8 +707,21 @@ struct LiveInCallScreen: View {
     /// `.active` handler immediately before `reconfigureAudioCodec`
     /// (CallService.swift L834-856). Before that the encoder is still on its
     /// construction default and reporting the tuned rate would be a guess.
+    ///
+    /// W-SRTPWIREMETRICS (2026-08-29) — the gate below accepts EITHER kind of
+    /// evidence that this call is really encoding and sending. It used to
+    /// require `framesEncryptedTx > 0`, which counts frames sealed for the
+    /// DataChannel/WS relay; on an `audio-srtp-v1` call nothing ever rides
+    /// that path, so the counter stayed at 0 and the CODEC column showed "—"
+    /// for the entire call while audio was plainly flowing. Reported live
+    /// 2026-08-29 ("su iOS non funziona ancora il contatore del codec").
+    /// Outbound RTP bytes are the same proof for the native path, and the
+    /// reasoning behind the gate is unchanged: report the tuned rate only
+    /// once the encoder has actually been reconfigured, never before.
     private var liveCodecKbps: Int {
-        guard appState.callService.framesEncryptedTx > 0,
+        let sealedFrames = appState.callService.framesEncryptedTx > 0
+        let rtpSent = (appState.callService.getAudioRtpBytesSent?() ?? -1) > 0
+        guard sealedFrames || rtpSent,
               let profile = appState.callService.callIntegration?.activeAudioProfile
         else { return 0 }
         return profile.clamp(kbps: min(max(AudioCodecPrefs.bitrateKbps, 8), 40))
@@ -711,7 +810,7 @@ struct LiveInCallScreen: View {
     /// Compute a short display fingerprint from the ML-KEM session key.
     /// Format: first 8 hex chars + "…" + last 4 hex chars of SHA-256(key).
     /// E.g. "7f3bd2a1…d2e9" — matches Android KeyInfoPanel.
-    private static func sessionFingerprintFromKey(_ key: Data) -> String {
+    static func sessionFingerprintFromKey(_ key: Data) -> String {
         let digest = SHA256.hash(data: key)
         var hex = ""
         for byte in digest {
@@ -803,5 +902,6 @@ struct LiveInCallScreen: View {
             s.isInCall = true
             return s
         }())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }

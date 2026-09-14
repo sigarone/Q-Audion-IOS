@@ -26,6 +26,9 @@ struct GroupInfoScreen: View {
 
     @State private var state: GroupInfoUiState
     @State private var showingLeaveConfirm = false
+    /// App Store 1.2 — "Segnala gruppo" row (E2EE abuse report with the
+    /// group id; category picker like the 1:1 flows).
+    @State private var showingReportDialog = false
     /// W52: presenta il sheet QR di invito al gruppo. Engine wiring per
     /// `GroupChatRepository.createInvite(groupId:)` deferred — oggi
     /// genera un payload pure-locale (groupId + name).
@@ -128,6 +131,9 @@ struct GroupInfoScreen: View {
                         Spacer().frame(height: 10)
                         deleteRow
                             .padding(.horizontal, 16)
+                        Spacer().frame(height: 10)
+                        reportRow
+                            .padding(.horizontal, 16)
 
                         if let err = state.error {
                             errorBanner(err)
@@ -180,7 +186,9 @@ struct GroupInfoScreen: View {
                     guard !ids.isEmpty else { return }
                     onAddMembers(ids)
                     snackbar?.show(.init(
-                        text: ids.count == 1 ? "Membro aggiunto." : "\(ids.count) membri aggiunti.",
+                        text: ids.count == 1
+                            ? String(localized: "group_info.member_added_one", defaultValue: "Membro aggiunto.", comment: "Snackbar — exactly one member was added to the group")
+                            : String(localized: "group_info.members_added_many", defaultValue: "\(ids.count) membri aggiunti.", comment: "Snackbar — more than one member was added to the group; the number is the count added"),
                         severity: .info))
                 },
                 onCancel: { showingAddMembers = false })
@@ -195,7 +203,7 @@ struct GroupInfoScreen: View {
             Button("Rimuovi", role: .destructive) {
                 if let m = pendingRemoveMember {
                     onRemoveMember(m.userId)
-                    snackbar?.show(.init(text: "Membro rimosso.", severity: .info))
+                    snackbar?.show(.init(text: String(localized: "group_info.member_removed", defaultValue: "Membro rimosso.", comment: "Snackbar — a member was removed from the group"), severity: .info))
                 }
                 pendingRemoveMember = nil
             }
@@ -212,7 +220,7 @@ struct GroupInfoScreen: View {
                 guard !trimmed.isEmpty, trimmed != state.name else { return }
                 onRename(trimmed)
                 state.name = trimmed
-                snackbar?.show(.init(text: "Gruppo rinominato.", severity: .info))
+                snackbar?.show(.init(text: String(localized: "group_info.group_renamed", defaultValue: "Gruppo rinominato.", comment: "Snackbar — the group was successfully renamed"), severity: .info))
             }
         }
         // Fase 1C — admin promote/demote confirmation.
@@ -228,10 +236,10 @@ struct GroupInfoScreen: View {
                 if let m = pendingAdminToggle {
                     if m.isAdmin {
                         onDemoteAdmin(m.userId)
-                        snackbar?.show(.init(text: "\(m.displayName) non è più admin.", severity: .info))
+                        snackbar?.show(.init(text: String(localized: "group_info.member_demoted", defaultValue: "\(m.displayName) non è più admin.", comment: "Snackbar — a group member was demoted from admin, %@ is their display name"), severity: .info))
                     } else {
                         onPromoteAdmin(m.userId)
-                        snackbar?.show(.init(text: "\(m.displayName) è ora admin.", severity: .info))
+                        snackbar?.show(.init(text: String(localized: "group_info.member_promoted", defaultValue: "\(m.displayName) è ora admin.", comment: "Snackbar — a group member was promoted to admin, %@ is their display name"), severity: .info))
                     }
                 }
                 pendingAdminToggle = nil
@@ -248,16 +256,16 @@ struct GroupInfoScreen: View {
         Task { @MainActor in
             guard let raw = try? await item.loadTransferable(type: Data.self),
                   let img = UIImage(data: raw) else {
-                snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                snackbar?.show(.init(text: String(localized: "group_info.image_unreadable", defaultValue: "Immagine non leggibile", comment: "Snackbar — the picked group avatar image could not be read"), severity: .warning))
                 return
             }
             let resized = Self.resizeAvatar(img, to: CGSize(width: 512, height: 512))
             guard let jpeg = resized.jpegData(compressionQuality: 0.85) else {
-                snackbar?.show(.init(text: "Immagine non leggibile", severity: .warning))
+                snackbar?.show(.init(text: String(localized: "group_info.image_unreadable", defaultValue: "Immagine non leggibile", comment: "Snackbar — the picked group avatar image could not be read"), severity: .warning))
                 return
             }
             onSetAvatar(jpeg)
-            snackbar?.show(.init(text: "Immagine del gruppo aggiornata.", severity: .info))
+            snackbar?.show(.init(text: String(localized: "group_info.avatar_updated", defaultValue: "Immagine del gruppo aggiornata.", comment: "Snackbar — the group avatar was successfully updated"), severity: .info))
         }
     }
 
@@ -511,14 +519,65 @@ struct GroupInfoScreen: View {
         .accessibilityLabel("Elimina chat di gruppo")
     }
 
+    /// App Store 1.2 — report this group (spam / abuse / other). Same
+    /// visual treatment as deleteRow; the report goes through
+    /// BugReporter's E2EE pipeline with the group id attached.
+    private var reportRow: some View {
+        Button {
+            showingReportDialog = true
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(extras.riskHigh.opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "flag")
+                        .foregroundStyle(extras.riskHigh)
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                Text("Segnala gruppo")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(extras.riskHigh)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(scheme.surfaceVariant.opacity(0.4))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Segnala gruppo")
+        .confirmationDialog("Segnala gruppo",
+                            isPresented: $showingReportDialog,
+                            titleVisibility: .visible) {
+            Button("Spam") { sendGroupReport(category: "spam") }
+            Button("Abuso o molestie") { sendGroupReport(category: "abuse") }
+            Button("Altro") { sendGroupReport(category: "other") }
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i messaggi del gruppo.")
+        }
+    }
+
+    private func sendGroupReport(category: String) {
+        BugReporter.shared.reportAbuse(reportedUserId: nil,
+                                       reportedGroupId: state.groupId.uuidString,
+                                       reportedName: state.name,
+                                       category: category,
+                                       note: "")
+        snackbar?.show(.init(text: String(localized: "group_info.report_sent", defaultValue: "Segnalazione inviata.", comment: "Snackbar — an abuse report about the group was sent"), severity: .info))
+    }
+
     // MARK: - Helpers
 
-    /// W321: builds "Aggiornato …" relative-time string with locale
-    /// it_IT. Static so its String formatting lives outside any
-    /// @ViewBuilder closure (SWIFT6_PATTERNS rule 1).
+    /// W321: builds "Aggiornato …" relative-time string with the
+    /// in-app language override locale (AppLanguageManager). Static
+    /// so its String formatting lives outside any @ViewBuilder
+    /// closure (SWIFT6_PATTERNS rule 1).
     private static func formatLastRefreshed(_ date: Date) -> String {
         let f = RelativeDateTimeFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
         return "Aggiornato " + rel
@@ -531,7 +590,7 @@ struct GroupInfoScreen: View {
         // local registry/session) to the caller, which has the
         // groupId in scope and wires AppState.leaveGroup.
         snackbar?.show(.init(
-            text: "Hai lasciato il gruppo.",
+            text: String(localized: "group_info.left_group", defaultValue: "Hai lasciato il gruppo.", comment: "Snackbar — confirms the user has left the group"),
             severity: .info
         ))
         dismiss()
@@ -545,7 +604,7 @@ struct GroupInfoScreen: View {
     /// always true.
     private func handleDelete() {
         snackbar?.show(.init(
-            text: "Chat di gruppo eliminata.",
+            text: String(localized: "group_info.chat_deleted", defaultValue: "Chat di gruppo eliminata.", comment: "Snackbar — confirms the group chat was deleted from this device"),
             severity: .info
         ))
         dismiss()
@@ -589,12 +648,7 @@ private struct AddGroupMembersSheet: View {
     let onCancel: () -> Void
 
     @State private var query: String = ""
-
-    private var filtered: [ContactPickerRowUi] {
-        guard !query.isEmpty else { return candidates }
-        let q = query.lowercased()
-        return candidates.filter { $0.displayName.lowercased().contains(q) }
-    }
+    @State private var filteredCandidates: [ContactPickerRowUi] = []
 
     var body: some View {
         ZStack {
@@ -609,6 +663,24 @@ private struct AddGroupMembersSheet: View {
                 }
             }
         }
+        .onAppear {
+            updateFiltered(with: candidates, for: query)
+        }
+        .onChange(of: candidates) { newCandidates in
+            updateFiltered(with: newCandidates, for: query)
+        }
+        .onChange(of: query) { newQuery in
+            updateFiltered(with: candidates, for: newQuery)
+        }
+    }
+
+    private func updateFiltered(with currentCandidates: [ContactPickerRowUi], for currentQuery: String) {
+        guard !currentQuery.isEmpty else {
+            filteredCandidates = currentCandidates
+            return
+        }
+        let q = currentQuery.lowercased()
+        filteredCandidates = currentCandidates.filter { $0.displayName.lowercased().contains(q) }
     }
 
     private var header: some View {
@@ -644,7 +716,7 @@ private struct AddGroupMembersSheet: View {
     private var list: some View {
         ScrollView {
             VStack(spacing: 6) {
-                ForEach(filtered) { row in
+                ForEach(filteredCandidates) { row in
                     Button(action: { toggle(row.userId) }) {
                         HStack(spacing: 12) {
                             QAudionAvatar(displayName: row.displayName,

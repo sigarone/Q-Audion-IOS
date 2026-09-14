@@ -117,6 +117,49 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // `@EncodeDefault(NEVER) pskMixV1` field exactly.
         public let pskMixV1: Bool?
 
+        // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) —
+        // capability bit for the combined transcript-bound session-key
+        // KDF/SAS fix (CALL-4) and the signed re-key round-freshness fix
+        // (CALL-3): both new signed transcript fields (`domainV3` — see
+        // `HandshakeTranscript.offerV3`/`acceptV3`) are computed/verified
+        // ONLY when both peers advertise this bit. OPTIONAL, appended LAST,
+        // same "omit when not advertising" convention as `pskMixV1`/
+        // `ratchetV4`/`srtpDirKeyV1` above: a peer that doesn't carry the
+        // field decodes to nil (treated as `false`), and `JSONEncoder` omits
+        // a nil key, so the OFFER/ACCEPT bytes stay byte-IDENTICAL to today's
+        // wire for every peer that has not shipped this fix.
+        //
+        // W-HSCAPKEYFIX (2026-09-03): this property has NO `CodingKeys`
+        // override, so its Swift name IS the wire JSON key. It was
+        // previously spelled `transcriptBindV1` here while Android's
+        // kotlinx.serialization `Capabilities.hsTranscriptBindV1` field
+        // (no `@SerialName`, same rule) put it on the wire as
+        // `hsTranscriptBindV1` — an exact-string-key mismatch that made an
+        // Android peer's `"hsTranscriptBindV1": true` decode to `nil` here
+        // (unrecognised key), and iOS's `"transcriptBindV1": true` decode
+        // to `nil` on Android (`ignoreUnknownKeys = true` swallows it
+        // silently). Net effect: this bit could never actually negotiate
+        // `true` on a real Android↔iOS call, so the fix always silently
+        // fell back to the legacy KDF/SAS. Renamed to match Android's wire
+        // spelling exactly. The KDF/SAS byte layout itself was never wrong
+        // — see `QAudionCallIntegration.hsTranscriptBindV1Enabled`'s doc
+        // for the cross-platform KAT convergence evidence.
+        public let hsTranscriptBindV1: Bool?
+
+        // MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4)
+        // — capability bit for the inner sealed-audio wire's per-direction
+        // keys + AAD + replay window (see `QAudionEngine.initSession`'s
+        // `innerAudioAadV1` param and `QAudionCallIntegration
+        // .innerAudioAadV1Enabled`). OPTIONAL, appended LAST, same "omit
+        // when not advertising" convention as `pskMixV1`/`hsTranscriptBindV1`
+        // above: a peer that doesn't carry the field decodes to nil (treated
+        // as `false`), and `JSONEncoder` omits a nil key, so the OFFER/ACCEPT
+        // bytes stay byte-IDENTICAL to today's wire until this ships on
+        // every platform and the kill switch flips on. NOT bound into the
+        // signed transcript CAPS tuple (like `pskMixV1`) — only gates local
+        // behaviour, never authenticated.
+        public let innerAudioAadV1: Bool?
+
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
@@ -124,7 +167,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             sessionKdfV3: Bool? = nil,
             ratchetV4: Bool? = nil,
             srtpDirKeyV1: Bool? = nil,
-            pskMixV1: Bool? = nil
+            pskMixV1: Bool? = nil,
+            hsTranscriptBindV1: Bool? = nil,
+            innerAudioAadV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -133,6 +178,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.ratchetV4 = ratchetV4
             self.srtpDirKeyV1 = srtpDirKeyV1
             self.pskMixV1 = pskMixV1
+            self.hsTranscriptBindV1 = hsTranscriptBindV1
+            self.innerAudioAadV1 = innerAudioAadV1
         }
     }
 
@@ -210,6 +257,63 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // `AndroidOfferBundle.sigV2`/`AndroidAcceptBundle.sigV2` (commit c6bf155).
     public let sigV2: String?
 
+    // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — v3
+    // dual-signature rollout, mirroring `sigV2`'s own additive introduction.
+    // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over
+    // `HandshakeTranscript`'s NEW v3 transcript (`offerV3`/`acceptV3`),
+    // computed by the SAME signer ALONGSIDE (never instead of) `signature`
+    // and `sigV2`. `nil` on any build that hasn't shipped this fix and on the
+    // unsigned path — verification only attempts v3 when this AND
+    // `capabilities.hsTranscriptBindV1` are both present; a peer that hasn't
+    // shipped it is verified exactly as before (v2-then-v1), never rejected.
+    // APPENDED LAST so existing peers' wire bytes are unchanged.
+    public let sigV3: String?
+
+    /// CALL-3 — the call's own random 64-bit freshness nonce (raw 8 bytes,
+    /// base64 no-wrap/padded), generated once at call start.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — present on EVERY OFFER of the call
+    /// (round 1 AND every re-key round, unchanged across all of them) once
+    /// this fix is live for the pair, AND echoed back verbatim on the
+    /// matching ACCEPT — mirrors `rekeyRound`'s own "present on every
+    /// OFFER/ACCEPT once live" rule exactly (both are set together or both
+    /// stay nil). Previously present ONLY on round 1's OFFER and never on any
+    /// ACCEPT — that shape broke byte-for-byte v3 transcript equality against
+    /// Android/Desktop (see `HandshakeTranscript.offerV3`/`acceptV3`'s docs).
+    /// OPTIONAL, JSONEncoder omits nil, so a bundle that doesn't carry it is
+    /// byte-wire-identical to a peer that hasn't shipped this fix.
+    public let rekeyNonce: String?
+
+    /// CALL-3 — this bundle's 1-based re-key round ordinal (1 = the call's
+    /// first handshake, 2.. = re-key rounds), present on EVERY OFFER and
+    /// ACCEPT once this fix is live for the pair (mirrors `sigV3`'s presence
+    /// exactly — both are set together or both stay nil). `nil` on any build
+    /// that hasn't shipped this fix.
+    public let rekeyRound: Int?
+
+    /// W-REKEYSYNC (2026-09-10) — the INITIATOR's own `ReKeyScheduler`
+    /// period (ms) this OFFER was armed with, i.e. how long until this
+    /// device would schedule the NEXT periodic re-key after this one.
+    /// Purely informational, display-only: not part of any signed
+    /// transcript, carries no anti-replay or authentication weight, and
+    /// tampering with it in transit can only make the on-screen countdown
+    /// wrong — it cannot affect the actual key material, its rotation, or
+    /// when a real re-key runs. Mirrors Android's
+    /// `HandshakeBundleCodec.HandshakeBundle.rekeyNextPeriodMs` field
+    /// exactly (same name, same semantics) — added because the RESPONDER
+    /// previously ran its own independent confidence-scaled guess for what
+    /// it displays, with no relation to the timeline the initiator alone
+    /// actually acts on (live-observed 100+ second on-screen divergence
+    /// between two genuinely healthy devices on the same call). A responder
+    /// that understands this field adopts it directly via
+    /// `ReKeyScheduler.start(syncedDeadlineMs:syncedPeriodMs:)` instead of
+    /// guessing; one that doesn't (older iOS/Android/Desktop) simply never
+    /// sees the key — same "JSONEncoder omits nil" backward-compat
+    /// convention as every optional field above. `nil` on the call's first
+    /// (non-re-key) handshake, where both sides start from the same
+    /// `ReKeyScheduler` default and this class of drift cannot yet exist.
+    public let rekeyNextPeriodMs: Int?
+
     public init(
         kind: Kind,
         callId: String,
@@ -224,7 +328,11 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         pskRoles: [Int]? = nil,
         signerIdentityKey: String? = nil,
         signature: String? = nil,
-        sigV2: String? = nil
+        sigV2: String? = nil,
+        sigV3: String? = nil,
+        rekeyNonce: String? = nil,
+        rekeyRound: Int? = nil,
+        rekeyNextPeriodMs: Int? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -240,6 +348,10 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.signerIdentityKey = signerIdentityKey
         self.signature = signature
         self.sigV2 = sigV2
+        self.sigV3 = sigV3
+        self.rekeyNonce = rekeyNonce
+        self.rekeyRound = rekeyRound
+        self.rekeyNextPeriodMs = rekeyNextPeriodMs
     }
 }
 
@@ -310,9 +422,16 @@ public enum AndroidHandshakeEnvelope {
 ///     `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
 ///   - `CAPS:<csv>` — peer capability announce (reserved, not consumed
 ///     by iOS yet — silently dropped).
-///   - `HANGUP:<reason>` — peer hangup piggy-back (reserved, not
-///     consumed by iOS yet — the regular `call_hangup` WS envelope is
-///     authoritative; silently dropped).
+///   - `HANGUP:<reason>` — peer hangup piggy-back. Consumed since
+///     2026-08-25 (W-HANGUPECHO): an id-matched HANGUP runs the same
+///     definitive teardown as the `call_hangup` WS envelope, and is
+///     echoed to the server as `call_hangup {reason:"peer-acknowledged"}`
+///     so its books close. Also EMITTED alongside every outbound
+///     `call_hangup` envelope (hangup-opaque-piggyback — bcrypto-lite in
+///     certain paths drops the envelope silently, the opaque survives).
+///   - `PLP:<int percent>` — W-PLPFEEDBACK (2026-08-25): sender's periodic
+///     measured inbound-audio loss, consumed to drive this receiver's own
+///     TX encoder loss-hint via `PlpPolicy`.
 ///   - `KCMAC:<payload>` — PSK-mix ship-step-2: reserved for a future
 ///     key-confirmation MAC tied to PSK mixing. Recognised-and-ignored
 ///     for now (logged, then dropped) — no handler logic yet. The point
@@ -357,11 +476,64 @@ public enum CallPiggyBack: Equatable {
     /// `OwnerContinuityAnnounce` byte for byte.
     case ownerContinuity(callId: String, level: String)
 
-    /// `<callId>|HANGUP:<reason>` — secondary hangup signal. The
-    /// authoritative teardown still arrives on the `call_hangup` WS
-    /// envelope; this branch exists so the parser doesn't classify the
-    /// piggy-back as malformed.
+    /// `<callId>|SPKCHG:<0|1>` — "interlocutore cambiato" live cross-device
+    /// signal (2026-08-29). Carries the SENDER's own receive-side verdict
+    /// that the voice it is hearing — which is THIS device's user — is no
+    /// longer the voice the call started with. Sent only on a real
+    /// transition of that verdict, like `.ownerContinuity` and for the same
+    /// reason, so the wire cost is zero on the overwhelming majority of
+    /// calls.
+    ///
+    /// It exists for the half of the scenario a receive-only design cannot
+    /// see: the device whose user just handed their handset over hears no
+    /// change, because the new voice is on its microphone rather than in its
+    /// received audio, so without this message that user's screen would stay
+    /// silent while the other side's lit up.
+    ///
+    /// The receiver treats it as an input to its display and never as proof
+    /// — a claim from across the trust boundary can raise that side's state
+    /// to "suspected" but never to "confirmed". `1`/`true`/`on` parse as
+    /// true, anything else as false, so a malformed payload can only ever
+    /// clear an alert rather than raise one. Mirrors Android's
+    /// `WsCallSignaller.SPEAKER_CHANGE_PAYLOAD_PREFIX` /
+    /// `SpeakerChangeAnnounce` byte for byte.
+    case speakerChange(callId: String, changed: Bool)
+
+    /// `<callId>|HANGUP:<reason>` — secondary hangup signal. Exists because
+    /// bcrypto-lite in certain paths drops `call_hangup` envelopes silently
+    /// while forwarding opaques — so this is NOT redundancy theatre: it is
+    /// the channel that survives exactly when the envelope does not. The
+    /// receiver treats an id-matched HANGUP as definitive teardown (same
+    /// semantics as the envelope, W-CALLHANGUP-SEMANTICS id gate applied)
+    /// and echoes `call_hangup {reason:"peer-acknowledged"}` to the server
+    /// (W-HANGUPECHO). Byte-for-byte matches Android
+    /// `WsCallSignaller.HANGUP_PAYLOAD_PREFIX` framing.
     case hangup(callId: String, reason: String)
+
+    /// `<callId>|PLP:<int percent>` — W-PLPFEEDBACK (2026-08-25): the
+    /// sender's periodic report of ITS OWN measured inbound-audio loss over
+    /// the last window, 0-100. Consumed to drive the RECEIVER's own TX
+    /// encoder's `OPUS_SET_PACKET_LOSS_PERC` knob (via `PlpPolicy`) so the
+    /// FEC redundancy budget tracks what the peer is actually experiencing
+    /// on this link, rather than a fixed provisioning constant. Mirrors
+    /// Android's `WsCallSignaller.PLP_PAYLOAD_PREFIX` byte for byte.
+    case plp(callId: String, percent: Int)
+
+    /// `<callId>|VCONF:<base64(nonce||ciphertext+tag)>` — W-VOICECONFSYNC
+    /// (2026-09-11): the RESPONDER's periodic advisory that the CALLER's
+    /// voice looks suspicious, so the caller's re-key scheduler (the only
+    /// side whose confidence has ever had a real effect on when a re-key
+    /// actually fires) can react. UNLIKE every other case on this list,
+    /// `sealedPayload` is genuinely E2E encrypted, not plaintext to the
+    /// relay — see `VoiceConfidenceAnnounceCipher`'s kdoc for why this one
+    /// needed real encryption where PLP/OWNER_CONT/etc. did not (it reveals
+    /// "a deepfake-suspicion event happened on this call, with this
+    /// score," not a network stat). Mirrors Android's
+    /// `WsCallSignaller.VOICE_CONFIDENCE_PAYLOAD_PREFIX` byte for byte.
+    /// This enum has no key material, so it only carries the still-sealed
+    /// blob through — `AppState` (which does hold `activeKey`/the PQC
+    /// session key) decrypts and validates it.
+    case voiceConfidence(callId: String, sealedPayload: String)
 
     /// `<callId>|EARBUDPDU:<base64>` — opaque earbud-firmware handshake
     /// PDU (earbud-relay-v1). The earbud-side phone relays HSRESP
@@ -387,6 +559,26 @@ public enum CallPiggyBack: Equatable {
     /// HandshakeBundle decoder) but carries no logic yet beyond a log-
     /// and-drop; `raw` is the undecoded payload after the tag.
     case kcmac(callId: String, raw: String)
+
+    /// `<callId>|VNACK:<frameId>:<idx1>,<idx2>,...` — W-VNACK (2026-08-16)
+    /// fragment-level NACK/retransmission for the WS-relay video fallback.
+    /// The receiver's reassembler asks the sender to resend specific
+    /// missing fragments of a stalled in-flight frame BEFORE giving up on
+    /// it — recovers real data, unlike PLC which only conceals damage
+    /// after the fact. Mirrors Android's `WsCallSignaller
+    /// .VIDEO_NACK_PAYLOAD_PREFIX` / `VideoNack` byte for byte:
+    /// `frameId` is the fragmenter's 16-bit frame counter, `missing` the
+    /// list of 0-based fragment indices not yet received.
+    case vnack(callId: String, frameId: Int, missing: [Int])
+
+    /// `<callId>|VBWCAP:<int bps>` — W-BWCAP (2026-08-25) receiver-driven
+    /// video bitrate cap: the peer's OWN local downlink decision, reported
+    /// so THIS side can clamp its outbound video sender to it. Mirrors
+    /// Android's `WsCallSignaller.VBWCAP_PAYLOAD_PREFIX` /
+    /// `VideoBwCapReport` byte for byte. Event-driven (sent only on a
+    /// route-tier transition, never polled) — see
+    /// `QAudionWebRtcCallController.resolveAndApplyRouteTier`.
+    case videoBwCap(callId: String, bps: Int)
 
     /// Parse the literal `opaque_message.data` UTF-8 string.
     ///
@@ -430,8 +622,34 @@ public enum CallPiggyBack: Equatable {
             let level = ["unknown", "verified", "uncertain", "mismatch"].contains(lower) ? lower : "unknown"
             return .ownerContinuity(callId: callId, level: level)
         }
+        // SPKCHG:<0|1> — the peer's receive-side "the voice changed" verdict
+        // about US. Permissive boolean parse, deliberately one-directional:
+        // anything that is not an explicit affirmative clears the flag, so a
+        // truncated or corrupted payload can only ever remove an alert.
+        if let v = stripPrefix(payload, "SPKCHG:") {
+            let lower = v.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let changed = (lower == "1" || lower == "true" || lower == "on")
+            return .speakerChange(callId: callId, changed: changed)
+        }
         if let v = stripPrefix(payload, "HANGUP:") {
             return .hangup(callId: callId, reason: v)
+        }
+        // PLP:<int percent> — malformed (non-numeric, out of range) drops
+        // the whole envelope fail-closed, same discipline as VNACK: a stale
+        // loss knob is harmless, a corrupt one applied blind is not.
+        if let v = stripPrefix(payload, "PLP:") {
+            guard let pct = Int(v.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  pct >= 0, pct <= 100
+            else { return nil }
+            return .plp(callId: callId, percent: pct)
+        }
+        // VCONF:<base64> — sealed, only structurally validated here (a
+        // non-empty base64-looking blob). Decryption/AEAD verification
+        // happens in AppState, which holds the session key this enum
+        // never sees. An empty body is the only thing worth dropping at
+        // this layer.
+        if let v = stripPrefix(payload, "VCONF:"), !v.isEmpty {
+            return .voiceConfidence(callId: callId, sealedPayload: v)
         }
         // EARBUDPDU:<base64> — earbud-relay-v1 handshake PDU. Malformed
         // base64 is dropped fail-closed (handshake simply won't complete),
@@ -456,6 +674,25 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "KCMAC:") {
             return .kcmac(callId: callId, raw: v)
         }
+        // VNACK:<frameId>:<idx1>,<idx2>,... — malformed (non-numeric
+        // frameId, missing colon, non-numeric index) drops the whole
+        // envelope fail-closed: a NACK is a best-effort optimisation, a
+        // half-parsed one that resent the wrong fragments would be worse
+        // than dropping it. Mirrors Android's receive-side parse, which
+        // has the same "if any piece fails, ignore the whole frame" shape.
+        if let v = stripPrefix(payload, "VNACK:") {
+            let parts = v.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2, let frameId = Int(parts[0]) else { return nil }
+            let missing = parts[1].split(separator: ",").compactMap { Int($0) }
+            guard !missing.isEmpty else { return nil }
+            return .vnack(callId: callId, frameId: frameId, missing: missing)
+        }
+        // VBWCAP:<int bps> — malformed (non-numeric, <= 0) drops the whole
+        // envelope, mirrors Android's `toIntOrNull()` + `bps > 0` receive guard.
+        if let v = stripPrefix(payload, "VBWCAP:") {
+            guard let bps = Int(v), bps > 0 else { return nil }
+            return .videoBwCap(callId: callId, bps: bps)
+        }
         return nil
     }
 
@@ -478,6 +715,44 @@ public enum CallPiggyBack: Equatable {
         return "\(callId)|VOICE_KEY:\(enrolled ? "1" : "0")"
     }
 
+    /// Build a wire string for a HANGUP piggy-back — the inverse of the
+    /// `.hangup` parse branch. Byte-for-byte matches Android
+    /// `WsCallSignaller.sendHangup`'s opaque leg
+    /// (`"$callId|HANGUP:$reason"`): plain UTF-8 string, NOT base64 —
+    /// it must ship via `sendOpaqueMessageString`, never via the
+    /// base64-wrapping `sendOpaqueMessage(payload: Data)` overload
+    /// (the pipe would vanish inside the base64 alphabet and every
+    /// receiver would drop the envelope as malformed).
+    public static func serializeHangup(callId: String, reason: String) -> String {
+        return "\(callId)|HANGUP:\(reason)"
+    }
+
+    /// Build a wire string for a VNACK request — the inverse of the
+    /// `.vnack` parse branch. Byte-for-byte matches Android's
+    /// `WsCallSignaller.sendVideoNack` payload shape.
+    public static func serializeVnack(callId: String, frameId: Int, missing: [Int]) -> String {
+        let missingCsv = missing.map(String.init).joined(separator: ",")
+        return "\(callId)|VNACK:\(frameId):\(missingCsv)"
+    }
+
+    /// Build a wire string for a PLP announce — the inverse of the `.plp`
+    /// parse branch. `percent` is clamped to `0...100` here too, so a caller
+    /// that skips its own clamping still cannot ship an out-of-contract
+    /// value the PEER's parser would then have to reject.
+    public static func serializePlp(callId: String, percent: Int) -> String {
+        "\(callId)|PLP:\(min(max(percent, 0), 100))"
+    }
+
+    /// Build a wire string for a VCONF announce — the inverse of the
+    /// `.voiceConfidence` parse branch. `sealedPayload` must already be
+    /// the base64 output of `VoiceConfidenceAnnounceCipher.seal` — this
+    /// function does no encryption itself, it only frames an
+    /// already-sealed blob, mirroring Android's `WsCallSignaller`'s own
+    /// separation (the signaller frames, `CallController` seals).
+    public static func serializeVoiceConfidence(callId: String, sealedPayload: String) -> String {
+        "\(callId)|VCONF:\(sealedPayload)"
+    }
+
     /// Build a wire string for an OWNER_CONT announce — the inverse of the
     /// `.ownerContinuity` parse branch. `level` should already be one of
     /// `unknown`/`verified`/`uncertain`/`mismatch` (lowercased) — callers
@@ -485,6 +760,13 @@ public enum CallPiggyBack: Equatable {
     /// `AppState`'s send-side wiring.
     public static func serializeOwnerContinuity(callId: String, level: String) -> String {
         return "\(callId)|OWNER_CONT:\(level)"
+    }
+
+    /// Build a wire string for a SPKCHG announce — the inverse of the
+    /// `.speakerChange` parse branch. Byte-identical framing to Android's
+    /// `WsCallSignaller.sendSpeakerChangeAnnounce`.
+    public static func serializeSpeakerChange(callId: String, changed: Bool) -> String {
+        return "\(callId)|SPKCHG:\(changed ? "1" : "0")"
     }
 
     /// Build a wire string for an earbud handshake PDU — the inverse of
@@ -501,6 +783,14 @@ public enum CallPiggyBack: Equatable {
     public static func serializeFpSet(callId: String, fpAdv: Data) -> String {
         precondition(fpAdv.count == 32, "fpAdv must be 32 bytes")
         return "\(callId)|FPSET:\(fpAdv.base64EncodedString())"
+    }
+
+    /// Build a wire string for a VBWCAP report — the inverse of the
+    /// `.videoBwCap` parse branch. Byte-for-byte matches Android's
+    /// `WsCallSignaller.VBWCAP_PAYLOAD_PREFIX + bps` (`CallController
+    /// .reportLocalVideoCapBps`).
+    public static func serializeVideoBwCap(callId: String, bps: Int) -> String {
+        return "\(callId)|VBWCAP:\(bps)"
     }
 
     /// W-KCMAC (ship step 5) — build the wire string for a key-confirmation MAC:

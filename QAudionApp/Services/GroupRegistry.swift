@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// W399 — persisted local registry of joined groups.
 ///
@@ -102,17 +103,48 @@ public final class GroupRegistry: ObservableObject {
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
-              let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
-            entries = []
+        if let sealed = UserDefaults.standard.string(forKey: Self.storageKey) {
+            guard let json = LocalStoreCipher.open(sealed),
+                  let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) else {
+                // Never silent: a sealed blob that fails to open (e.g. a
+                // device restore, since the Keychain key does not migrate
+                // across devices) has to be greppable, not a quiet wipe.
+                // W-GRPLOGSHAPE (2026-09-08) — the free-text form of this
+                // line failed the structured-shape gate outright, so the ONE
+                // event this comment insists must be greppable never actually
+                // reached Loki; see GroupMembershipVerifier.verify's kdoc for
+                // the fix and why the replacement code is this short.
+                RTLog.error("group", "grp_reg r=decf")
+                entries = []
+                return
+            }
+            entries = decoded
             return
         }
-        entries = decoded
+        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+           let decoded = try? JSONDecoder().decode([Entry].self, from: data) {
+            entries = decoded
+            // Legacy plaintext blob just read — convert it now rather than
+            // waiting for the next mutation.
+            persist()
+            return
+        }
+        entries = []
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        guard let data = try? JSONEncoder().encode(entries),
+              let json = String(data: data, encoding: .utf8) else { return }
+        // Fail closed: if the key is unreachable the blob is NOT written in
+        // the clear. The previous (sealed) value stays on disk and the next
+        // persist retries.
+        let attempt: String?? = try? LocalStoreCipher.seal(json)
+        guard let unwrapped = attempt, let sealed = unwrapped else {
+            // W-GRPLOGSHAPE (2026-09-08) — see GroupMembershipVerifier.verify's kdoc.
+            RTLog.warn("group", "grp_reg r=pdef sealed=0")
+            return
+        }
+        UserDefaults.standard.set(sealed, forKey: Self.storageKey)
     }
 
     // MARK: - Public API

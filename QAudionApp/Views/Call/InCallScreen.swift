@@ -195,6 +195,14 @@ struct InCallScreen: View {
     /// but of a DIFFERENT quantity — this device to the signalling server,
     /// sampled every 30 s — so it is never shown under this label.
     let rttMs: Double?
+    /// W-DELAYSPLIT (IOS-E6, playbook parity with Android's
+    /// `CallUiState.bufMs`) — windowed average ms a sample spent in the
+    /// audio jitter buffer since the previous poll. `nil` ⇒ shown as RTT
+    /// alone; a non-nil value ≥10 ms appends "+<buf>ms" to the RITARDO
+    /// column, mirroring `InCallScreen.kt:1170-1176` exactly (buffer noise
+    /// under 10 ms stays hidden). Zero/nil on today's iOS builds (no
+    /// SRTP-audio inbound-rtp row) — see `CallService.mediaJitterBufferMs`.
+    let bufMs: Int?
     let pqcActive: Bool
     let sasWords: [String]
     let sasVerified: Bool
@@ -262,6 +270,18 @@ struct InCallScreen: View {
     /// Mirrors Android/Desktop "upgrade to video" button. On tap, starts the
     /// local camera and transitions the call to video mode.
     let onUpgradeToVideo: () -> Void
+    /// Entitlements Task 5 — whether `Capability.callsVideo` is entitled
+    /// (this is the mid-call escalation trigger for
+    /// `call_upgrade_request`, the SAME server gate as the pre-call video
+    /// buttons in ChatDetailScreen/ContactDetailScreen/CallHistoryView).
+    /// Defaults to `true` so this "pure presentation" view stays
+    /// byte-identical for every existing caller that doesn't pass it —
+    /// `LiveInCallScreen` (the only real caller today) computes the real
+    /// value from `CapabilityGate`, which this view deliberately has no
+    /// dependency on (mirrors Android's `CircularAction.kt` staying
+    /// capability-agnostic).
+    let upgradeToVideoUnlocked: Bool
+    let onUpgradeToVideoLocked: () -> Void
     /// W533: true when ReplayKit screen capture is currently feeding
     /// the WebRTC video sender instead of the camera. Drives the
     /// share-screen button's filled state.
@@ -332,6 +352,13 @@ struct InCallScreen: View {
     /// `pskMixedThisCall` above. Mirrors `AppState.callPeerVoiceKeyEnrolled`.
     let peerVoiceKeyEnrolled: Bool
     let onAddParticipant: () -> Void
+    /// Entitlements Task 5 — whether `Capability.callsGroup` is entitled
+    /// (escalating a 1:1 call to group via `promoteToGroupCall`, which
+    /// reuses the same server-side group-call-creation gate a brand-new
+    /// group call goes through). Same always-`true`-by-default,
+    /// capability-agnostic shape as `upgradeToVideoUnlocked` above.
+    let addParticipantUnlocked: Bool
+    let onAddParticipantLocked: () -> Void
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
@@ -378,6 +405,17 @@ struct InCallScreen: View {
     /// hidden in that case too.
     let contactVoiceLevel: ContactVoiceContinuityGate.Level
 
+    /// "Interlocutore cambiato" — is the voice arriving now still the voice
+    /// this call started with, published as `AppState.speakerChangeVerdict`.
+    ///
+    /// Its own shield rather than a colour change on the one next to it:
+    /// "the voice changed during this call" and "the voice does not match
+    /// the template I stored for this contact" are different claims resting
+    /// on different evidence, and collapsing them into one indicator would
+    /// make a strong, self-referential measurement inherit the credibility
+    /// of an absolute threshold never validated against a real impostor.
+    let speakerChange: RemoteSpeakerChangeMonitor.Verdict
+
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
          durationSeconds: Int = 0,
@@ -388,6 +426,7 @@ struct InCallScreen: View {
          txKbps: Double? = nil,
          rxKbps: Double? = nil,
          rttMs: Double? = nil,
+         bufMs: Int? = nil,
          pqcActive: Bool = true,
          sasWords: [String] = [],
          sasVerified: Bool = false,
@@ -410,6 +449,8 @@ struct InCallScreen: View {
          onToggleVoiceEnhancement: @escaping () -> Void = {},
          onToggleCamera: @escaping () -> Void = {},
          onUpgradeToVideo: @escaping () -> Void = {},
+         upgradeToVideoUnlocked: Bool = true,
+         onUpgradeToVideoLocked: @escaping () -> Void = {},
          screenSharing: Bool = false,
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
@@ -421,6 +462,8 @@ struct InCallScreen: View {
          pskMixedThisCall: Bool = false,
          peerVoiceKeyEnrolled: Bool = false,
          onAddParticipant: @escaping () -> Void = {},
+         addParticipantUnlocked: Bool = true,
+         onAddParticipantLocked: @escaping () -> Void = {},
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
@@ -428,7 +471,8 @@ struct InCallScreen: View {
          onStartVoiceLearning: @escaping () -> Void = {},
          voiceConfidenceHistory: [Float] = [],
          peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown,
-         contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown) {
+         contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown,
+         speakerChange: RemoteSpeakerChangeMonitor.Verdict = .init(level: .unknown)) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
@@ -439,6 +483,7 @@ struct InCallScreen: View {
         self.txKbps = txKbps
         self.rxKbps = rxKbps
         self.rttMs = rttMs
+        self.bufMs = bufMs
         self.pqcActive = pqcActive
         self.sasWords = sasWords
         self.sasVerified = sasVerified
@@ -461,6 +506,8 @@ struct InCallScreen: View {
         self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
         self.onToggleCamera = onToggleCamera
         self.onUpgradeToVideo = onUpgradeToVideo
+        self.upgradeToVideoUnlocked = upgradeToVideoUnlocked
+        self.onUpgradeToVideoLocked = onUpgradeToVideoLocked
         self.screenSharing = screenSharing
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
@@ -472,6 +519,8 @@ struct InCallScreen: View {
         self.pskMixedThisCall = pskMixedThisCall
         self.peerVoiceKeyEnrolled = peerVoiceKeyEnrolled
         self.onAddParticipant = onAddParticipant
+        self.addParticipantUnlocked = addParticipantUnlocked
+        self.onAddParticipantLocked = onAddParticipantLocked
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
@@ -480,6 +529,7 @@ struct InCallScreen: View {
         self.voiceConfidenceHistory = voiceConfidenceHistory
         self.peerOwnerContinuityLevel = peerOwnerContinuityLevel
         self.contactVoiceLevel = contactVoiceLevel
+        self.speakerChange = speakerChange
     }
 
     // MARK: - Body
@@ -937,7 +987,7 @@ struct InCallScreen: View {
                 Spacer(minLength: 6)
                 // Measured RTT on the active media path; "—" wherever no such
                 // measurement exists (never an invented or last-known number).
-                statColumn("RITARDO", Self.delayText(rttMs), delayColor)
+                statColumn("RITARDO", Self.delayText(rttMs, bufMs: bufMs), delayColor)
             }
             HStack(alignment: .center, spacing: 0) {
                 statColumn("CONFIDENCE", Self.confidenceText(confidence), confidenceLabelColor)
@@ -1020,9 +1070,15 @@ struct InCallScreen: View {
         return txText + "/" + rxText
     }
 
-    /// Measured round-trip time: "128ms", or "—".
-    private static func delayText(_ ms: Double?) -> String {
+    /// Measured round-trip time, optionally split with the windowed
+    /// jitter-buffer delay: "128ms", or "128+40ms" once `bufMs` is ≥10 ms
+    /// (buffer noise under that stays hidden), or "—". Mirrors Android's
+    /// W-DELAYSPLIT column exactly (`InCallScreen.kt:1170-1176`).
+    private static func delayText(_ ms: Double?, bufMs: Int?) -> String {
         guard let ms else { return Self.statDash }
+        if let buf = bufMs, buf >= 10 {
+            return String(format: "%.0f+%dms", ms, buf)
+        }
         return String(format: "%.0fms", ms)
     }
 
@@ -1045,11 +1101,15 @@ struct InCallScreen: View {
     }
 
     /// RITARDO colour — Android's exact thresholds: red above 400 ms,
-    /// warning above 200 ms, success below; neutral when unmeasured.
+    /// warning above 200 ms, success below; neutral when unmeasured. The
+    /// threshold is evaluated against RTT + jitter-buffer delay together
+    /// (W-DELAYSPLIT, `InCallScreen.kt:1177-1182`) — total ear-perceived
+    /// delay, not RTT alone.
     private var delayColor: Color {
         guard let rttMs = self.rttMs else { return scheme.onSurfaceVariant }
-        if rttMs > 400 { return extras.riskHigh }
-        if rttMs > 200 { return extras.warning }
+        let total = rttMs + Double(bufMs ?? 0)
+        if total > 400 { return extras.riskHigh }
+        if total > 200 { return extras.warning }
         return extras.success
     }
 
@@ -1119,7 +1179,15 @@ struct InCallScreen: View {
                 Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(sasVerified ? extras.success : scheme.primary)
-                Text(sasVerified ? "SAS VERIFICATO" : "CONFRONTA QUESTE PAROLE")
+                // W-L10N-BATCH1 (2026-09-08) — ternary-in-Text(variable) does
+                // NOT auto-localize (confirmed for this codebase); explicit
+                // lookup. Shared key with VideoCallView's SAS mini panel —
+                // W-L10N-SASCONSOLIDATE also unifies the previously-different
+                // wording ("CONFRONTA QUESTE PAROLE" here vs "CONFRONTA
+                // PAROLE" there) into one canonical string, see the plan doc.
+                Text(sasVerified
+                     ? String(localized: "sas.header.verified", defaultValue: "SAS VERIFICATO", comment: "SAS verification panel header — words already confirmed")
+                     : String(localized: "sas.header.compare_words", defaultValue: "CONFRONTA PAROLE", comment: "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party"))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
                     .foregroundStyle(sasVerified ? extras.success : scheme.primary)
@@ -1139,7 +1207,19 @@ struct InCallScreen: View {
             }
 
             Button(action: onConfirmSas) {
-                Text(sasVerified ? "VERIFICATO" : "CONFERMA COINCIDONO")
+                // W-L10N-SASCONSOLIDATE — kept as its own key rather than
+                // reusing trust.header.verified: that key's default is
+                // title-case "Verificato" (TrustVerificationCard's own
+                // styling), while THIS button's label is literally ALL-CAPS
+                // in the source text (no .textCase modifier doing it) —
+                // reusing the title-case key would visually downgrade this
+                // button's emphasis. The action label DOES consolidate from
+                // "CONFERMA COINCIDONO" to "CONFERMA", shared with
+                // VideoCallView's SAS mini panel (previously "CONFERMO"
+                // there) — see the l10n plan doc.
+                Text(sasVerified
+                     ? String(localized: "sas.confirm.button_verified", defaultValue: "VERIFICATO", comment: "SAS verification button — disabled state after confirmation, ALL CAPS styling")
+                     : String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
                     .qaudionStyle(type.labelLarge)
                     .tracking(1.2)
                     .foregroundStyle(sasVerified ? extras.success : scheme.onPrimary)
@@ -1294,6 +1374,27 @@ struct InCallScreen: View {
                         : (contactVoiceLevel == .mismatch
                             ? "Attenzione: la voce del contatto non corrisponde a quella già conosciuta"
                             : "Verifica della voce del contatto in corso")
+                )
+            }
+            // "Interlocutore cambiato" — shown only once there is something
+            // to say. Amber while evidence builds, red once sustained. The
+            // three labels distinguish the cases the user needs told apart:
+            // this device heard the change, both devices agree, or only the
+            // far end reports it — which is what the person who just handed
+            // their own phone over sees, since their device hears nothing
+            // unusual in its received audio.
+            if speakerChange.level != .unknown && speakerChange.level != .steady {
+                trustShield(
+                    tint: speakerChange.level == .changed ? extras.riskHigh : extras.warning,
+                    icon: "arrow.left.arrow.right",
+                    info: .contactVoice,
+                    accessibilityLabel: speakerChange.peerReportedOnly
+                        ? "L'altro dispositivo segnala che la voce da questo lato è cambiata"
+                        : (speakerChange.level == .changed
+                            ? (speakerChange.corroborated
+                                ? "Entrambi i dispositivi rilevano che chi parla è cambiato"
+                                : "Chi parla ora non è la persona con cui è iniziata questa chiamata")
+                            : "La voce che stai ascoltando sta cambiando rispetto a quella di questa chiamata")
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with
@@ -2750,9 +2851,9 @@ struct InCallScreen: View {
     /// avatar-halo tone.
     private func confidenceWord(_ value: Float) -> String {
         switch ConfidenceThresholds.category(of: Double(value)) {
-        case 0:  return "genuina"
-        case 1:  return "verifica con SAS"
-        default: return "a rischio"
+        case 0:  return String(localized: "in_call.confidence_word_genuine", defaultValue: "genuina", comment: "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)")
+        case 1:  return String(localized: "in_call.confidence_word_verify_sas", defaultValue: "verifica con SAS", comment: "Biometrics row value — voice authenticity confidence label for the mid-range score, prompting an SAS compare")
+        default: return String(localized: "in_call.confidence_word_at_risk", defaultValue: "a rischio", comment: "Biometrics row value — voice authenticity confidence label when the score is below the red threshold (possible synthetic voice)")
         }
     }
     private func confidenceColorFor(_ value: Float) -> Color {
@@ -2843,12 +2944,18 @@ struct InCallScreen: View {
                 )
                 .accessibilityLabel(cameraOn ? "Disattiva video" : "Attiva video")
             } else {
+                // Entitlements Task 5 — feat.calls.video at the mid-call
+                // escalation trigger (Phase 5 server plan Task 7's
+                // call_upgrade_request gate — the same capability as the
+                // pre-call video buttons elsewhere in this app).
                 CircularAction(
                     icon: "video.badge.plus",
                     action: onUpgradeToVideo,
                     diameter: 52,
                     background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface
+                    iconColor: scheme.onSurface,
+                    unlocked: upgradeToVideoUnlocked,
+                    onLockedClick: onUpgradeToVideoLocked
                 )
                 .accessibilityLabel("Passa a videochiamata")
             }
@@ -2888,12 +2995,17 @@ struct InCallScreen: View {
             // the add-participant sheet (LiveInCallScreen owns the sheet
             // state + submit handler that calls GroupCallController
             // .createCall, mirroring Android/Desktop's identical port).
+            // Entitlements Task 5 — feat.calls.group. Escalating a 1:1
+            // call to group reuses the same server-side group-call
+            // creation gate as starting a brand-new group call.
             CircularAction(
                 icon: "person.badge.plus",
                 action: onAddParticipant,
                 diameter: 48,
                 background: scheme.surfaceVariant,
-                iconColor: scheme.onSurface
+                iconColor: scheme.onSurface,
+                unlocked: addParticipantUnlocked,
+                onLockedClick: onAddParticipantLocked
             )
             .accessibilityLabel("Aggiungi partecipante")
             Spacer(minLength: 0)

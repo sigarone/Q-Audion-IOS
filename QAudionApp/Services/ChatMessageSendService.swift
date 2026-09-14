@@ -54,10 +54,14 @@ final class ChatMessageSendService {
 
     /// Encrypts and sends a chat message. Idempotent on `messageId` —
     /// the same id is forwarded to the server so retries don't duplicate.
+    /// - Parameter forceStatelessFormat: see `encryptForWire`'s doc — pass
+    ///   `true` for a protocol/control envelope (sender_key_init/rotate,
+    ///   avatar_announce), never for real user text.
     func sendEncrypted(
         messageId: UUID,
         peerUserId: String,
-        plaintext: String
+        plaintext: String,
+        forceStatelessFormat: Bool = false
     ) async -> Outcome {
         // Authentication gate — without a token we can't talk to the
         // server. The container will surface `.notAuthenticated`.
@@ -65,7 +69,10 @@ final class ChatMessageSendService {
             return .failed(reason: .notAuthenticated)
         }
         let wireBlob: Data
-        switch await encryptForWire(messageId: messageId, peerUserId: peerUserId, plaintext: plaintext) {
+        switch await encryptForWire(
+            messageId: messageId, peerUserId: peerUserId, plaintext: plaintext,
+            forceStatelessFormat: forceStatelessFormat
+        ) {
         case .success(let blob):
             wireBlob = blob
         case .failure(let reason):
@@ -109,6 +116,82 @@ final class ChatMessageSendService {
         }
     }
 
+    /// W-MSGOUTBOX (2026-09-01) — outcome of the durable text send.
+    /// `queued` is the one case `Outcome` cannot express: the sealed bytes
+    /// are persisted in `ChatOutboxStore` and `ChatOutboxDrain` re-sends
+    /// them with the same `client_msg_id`; the row stays `.sending`.
+    enum DurableOutcome {
+        case delivered(serverMessageId: String)
+        case queued
+        case failed(reason: ChatContainer.SendFailureReason)
+    }
+
+    /// W-MSGOUTBOX (2026-09-01) — `sendEncrypted` for the 1:1 TEXT path
+    /// only (`ChatContainer.sendMessage`), with the transport failure
+    /// re-routed into the durable outbox instead of `.failed`.
+    ///
+    /// Same steps, same order, same crypto as `sendEncrypted` (auth gate →
+    /// `encryptForWire` → persistent WS → `messageApi.sendMessage`); the
+    /// happy path returns exactly what it returned before. The ONLY
+    /// difference is the catch: when the socket is not there in time
+    /// (`wsUnavailable`, no provider, send threw) the bytes we already
+    /// sealed are written to `chat_outbox` — attempt 1 counted, first
+    /// backoff armed — and the caller gets `.queued`. Crypto/PSK/auth
+    /// failures still return `.failed` (the key exchange / login those
+    /// trigger is the fix, not a retry). With `OutboxRetryPolicy.enabled
+    /// == false` this collapses to the old `.failed(.networkError)`.
+    ///
+    /// `sendEncrypted` itself is untouched — every other caller (control
+    /// envelopes, attachments, avatar announce, forwards) keeps today's
+    /// contract.
+    func sendEncryptedDurable(
+        messageId: UUID,
+        conversationId: UUID,
+        peerUserId: String,
+        plaintext: String
+    ) async -> DurableOutcome {
+        guard let token = appState.authService.loadToken(), !token.isEmpty else {
+            return .failed(reason: .notAuthenticated)
+        }
+        let wireBlob: Data
+        switch await encryptForWire(messageId: messageId, peerUserId: peerUserId, plaintext: plaintext) {
+        case .success(let blob):
+            wireBlob = blob
+        case .failure(let reason):
+            return .failed(reason: reason)
+        }
+        do {
+            guard let live = await appState.ensurePersistentProviderConnected() else {
+                throw BCryptoMessageError.wsUnavailable
+            }
+            let serverMsgId = try await live.messageApi.sendMessage(
+                recipientId: peerUserId,
+                content: wireBlob,
+                clientMsgId: messageId.uuidString
+            )
+            return .delivered(serverMessageId: serverMsgId)
+        } catch {
+            guard OutboxRetryPolicy.shouldQueue(isTransportFailure: true) else {
+                print("[ChatSend] WS send failed: \(error.localizedDescription)")
+                return .failed(reason: .networkError)
+            }
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let attempts = 1
+            ChatOutboxStore().enqueueMessage(
+                clientMsgId: messageId.uuidString,
+                messageId: messageId,
+                conversationId: conversationId,
+                peerUserId: peerUserId,
+                wireBlob: wireBlob,
+                attempts: attempts,
+                createdAtMs: nowMs,
+                nextAttemptAtMs: nowMs + OutboxRetryPolicy.backoffMs(afterFailedAttempts: attempts)
+            )
+            RTLog.warn("chat", "send queued=1 attempts=\(attempts) bytes=\(wireBlob.count)")
+            return .queued
+        }
+    }
+
     /// Encrypts `plaintext` the SAME way `sendEncrypted` does (v4 native
     /// ratchet -> v3.1 forward-secrecy ratchet -> legacy PSK-AEAD, chosen by
     /// per-peer capability) but stops short of the WebSocket network send.
@@ -124,11 +207,46 @@ final class ChatMessageSendService {
     ///   The mesh passes the public packet header here so a relay cannot
     ///   re-address a packet it forwards; v3.1 and v4 rebuild their own AAD
     ///   internally and ignore it, exactly as on Android.
+    /// - Parameter forceStatelessFormat: W-CTLNORATCHET (2026-09-10) — true
+    ///   for protocol/control envelopes ONLY (`qa_grp` sender_key_init /
+    ///   sender_key_rotate / member_added / member_removed / member_left /
+    ///   group_invite, `qa_ctl` avatar_announce / delete / edit / reaction /
+    ///   ephemeral_timer / screenshot_lock — never real user chat text).
+    ///   Skips the v4/v3 ratchet entirely and always encrypts on the
+    ///   legacy, stateless per-message PSK-AEAD path (random salt per
+    ///   message, no chain index, no shared skipped-key cache).
+    ///
+    ///   Live incident: control envelopes rode the SAME v3.1 ratchet chain
+    ///   as real chat text to a peer. A burst of many control sends
+    ///   (deleting and recreating every group chat fans one sender_key_init
+    ///   out per group per member) can push the ratchet's per-peer 256-slot
+    ///   skipped-key LRU (`MessageRatchet.skippedKeysCacheMax`) to evict a
+    ///   key before its matching out-of-order ciphertext — control OR real
+    ///   text — arrives. That failure is PERMANENT (the key material is
+    ///   gone), and after one buffered retry also fails, the existing
+    ///   "[messaggio cifrato non leggibile]" placeholder gets persisted as
+    ///   a real, visible row — for a REAL message, just because unrelated
+    ///   control traffic to the same peer burned through the shared cache.
+    ///
+    ///   The stateless legacy format has no chain/skip-key state to share,
+    ///   so once control traffic stops touching the ratchet at all, it can
+    ///   never again cause this collateral damage to real content. The
+    ///   receiver needs no changes: `MessageWireFormat.detect(cipher)`
+    ///   already dispatches purely on the ciphertext's own first byte
+    ///   (AppState.swift, `attemptDecrypt`), independent of any per-peer
+    ///   "this peer uses v3 now" memory, so a legacy-format control
+    ///   envelope decrypts correctly on any receiver build that already
+    ///   supports the legacy format (every build does — it's the original
+    ///   wire format). The group-session layer's own replay defense
+    ///   (`GroupSession.handleSenderKeyInit`/`handleSenderKeyRotate`
+    ///   requiring `env.e == state.groupEpoch`) is unchanged and orthogonal
+    ///   to which 1:1 transport format carried the envelope.
     func encryptForWire(
         messageId: UUID,
         peerUserId: String,
         plaintext: String,
-        aadOverride: Data? = nil
+        aadOverride: Data? = nil,
+        forceStatelessFormat: Bool = false
     ) async -> Result<Data, ChatContainer.SendFailureReason> {
         guard let senderId = appState.currentUserId else {
             return .failure(.notAuthenticated)
@@ -146,8 +264,13 @@ final class ChatMessageSendService {
         // Android `MessageCrypto.kt` which dispatches on `ratchetVersion == 4`
         // before any v3/v2 PSK lookup). The 0xE5 frame is OPAQUE — emitted by the
         // engine-routed method; we never build it here.
-        let useV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
-        print("[PQC_DIAG_V4] send peer=\(peerUserId) useV4=\(useV4) hasV4Session=\(useV4)")
+        //
+        // W-CTLNORATCHET — forceStatelessFormat skips this gate unconditionally,
+        // regardless of hasV4Session: a control envelope must never touch EITHER
+        // ratchet, v3 or v4, both of which are stateful chain designs this fix
+        // exists to keep control traffic away from.
+        let useV4 = !forceStatelessFormat && AppState.sharedV4Ratchet.hasV4Session(peerUserId)
+        print("[PQC_DIAG_V4] send peer=\(peerUserId.prefix(8))… useV4=\(useV4) hasV4Session=\(useV4)")
 
         let wireBlob: Data
         if useV4 {
@@ -209,7 +332,7 @@ final class ChatMessageSendService {
                     // X25519-derived PSK gets bound under `auto:<prefix>:<peerId>`,
                     // and fail this send. Once the peer's ACCEPT lands, the user's
                     // Retry succeeds against the real PSK (resolved above).
-                    print("[ChatSend] PSK not found for \(peerUserId) — refusing to send, triggering key exchange")
+                    print("[ChatSend] PSK not found for \(peerUserId.prefix(8))… — refusing to send, triggering key exchange")
                     appState.triggerKeyExchange(with: peerUserId)
                     return .failure(.pskMissing)
                 }
@@ -225,7 +348,11 @@ final class ChatMessageSendService {
             // from this peer (PeerCapabilityRegistry.probeInbound writes
             // the flag). This means v3 lights up incrementally as peers
             // upgrade, without any manual coordination per device.
-            let useV3 = PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
+            //
+            // W-CTLNORATCHET — forced to false for a control envelope
+            // regardless of this peer's capability, so it always takes the
+            // `else` branch below (the stateless legacy path) instead.
+            let useV3 = !forceStatelessFormat && PeerCapabilityRegistry.shared.shouldUseV3Outbound(for: peerUserId)
             do {
                 if useV3 {
                     wireBlob = try Self.ratchetEncryptV3(

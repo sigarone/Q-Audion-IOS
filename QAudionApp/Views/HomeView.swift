@@ -11,6 +11,25 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false
+    /// W-L10N-BATCH2 (2026-09-08) — explicit per-tab navigation path, reset
+    /// to root on a language change (see `.onChange(of: locale)` below).
+    /// TabView keeps every tab's UIHostingController alive off-screen, so a
+    /// screen sitting BELOW a push (e.g. SettingsScreen while
+    /// LanguageSettingsScreen is showing — exactly where the user is
+    /// standing when they pick a language) never gets a fresh render pass
+    /// and stays on the old language until they navigate back to it
+    /// manually or the app is relaunched — confirmed by a dedicated audit
+    /// after real device testing. Popping to root the moment the language
+    /// changes puts the just-updated root screen back in front immediately,
+    /// where normal SwiftUI environment propagation already re-renders it
+    /// correctly (the other 3 tabs self-heal on their own the next time the
+    /// user switches to them — verified by the same audit, no extra fix
+    /// needed there).
+    @Environment(\.locale) private var locale
+    @State private var chatsPath = NavigationPath()
+    @State private var contactsPath = NavigationPath()
+    @State private var callsPath = NavigationPath()
+    @State private var settingsPath = NavigationPath()
     /// W55: visibility del sidebar su iPad. Default `.all` mantiene la
     /// sidebar aperta di default su iPad — lo spazio disponibile la rende
     /// utile per accedere rapidamente a chat, chiamate e impostazioni.
@@ -25,7 +44,12 @@ struct HomeView: View {
 
         var id: Self { self }
 
-        var label: String {
+        // W-L10N-BATCH2 (2026-09-08) — was String: Label(tab.label, ...)/
+        // Text(tab.label) always resolved the verbatim StringProtocol
+        // overload, so the tab bar's 4 words never localized, in any
+        // language, ever. Every branch is a literal so this compiles
+        // unchanged at every call site.
+        var label: LocalizedStringKey {
             switch self {
             case .chats:    return "Chat"
             case .contacts: return "Contatti"
@@ -60,6 +84,18 @@ struct HomeView: View {
         // il default UIKit (grigio iOS) per leggibilità. Si applica
         // anche al sidebar selection highlight su iPad.
         .tint(scheme.primary)
+        // W-L10N-BATCH2 (2026-09-08) — see the path @State declarations'
+        // own doc above: pop every tab back to root the instant the
+        // in-app language changes, so whatever screen was covered by a
+        // push (almost always Settings, covered by the Lingua screen
+        // itself) gets a real render pass immediately instead of staying
+        // stale until the user navigates back to it manually.
+        .onChange(of: locale) { _ in
+            chatsPath = NavigationPath()
+            contactsPath = NavigationPath()
+            callsPath = NavigationPath()
+            settingsPath = NavigationPath()
+        }
         .overlay(alignment: .top) {
             // W-1TO1RING (2026-07-27) — the thin incomingCallBanner is retired:
             // ContentView's fullScreenCover now shows the full IncomingCallScreen
@@ -99,6 +135,13 @@ struct HomeView: View {
         TabView(selection: $selectedTab) {
             chatsTab
                 .tabItem { Label(Tab.chats.label, systemImage: Tab.chats.systemImage) }
+                // W146's "Chat (3)" navigation title is gone — that bar now
+                // carries the account identity instead of the tab's own
+                // word. The count moves to the badge, which is where the
+                // iPad sidebar has always shown it and where iOS users
+                // expect it. Without this the total would have vanished
+                // from the phone entirely.
+                .badge(totalUnreadCount)
                 .tag(Tab.chats)
 
             contactsTab
@@ -113,6 +156,26 @@ struct HomeView: View {
                 .tabItem { Label(Tab.settings.label, systemImage: Tab.settings.systemImage) }
                 .tag(Tab.settings)
         }
+        // W-BRAND (2026-08-15): the wordmark banner does NOT live here.
+        // First attempt used `.safeAreaInset(edge: .top)` on this TabView,
+        // reasoning that a layout primitive (unlike `.toolbar`) could not be
+        // suppressed by a child's `.toolbar(.hidden, for: .navigationBar)`.
+        // Reported live the same day, on the Chat tab specifically (the
+        // other three rendered fine — never fully root-caused, plausibly a
+        // TabView first-visible-tab timing quirk with safeAreaInset):
+        // ChatListScreen's `accountTopBar`, which draws the signed-in
+        // identity, rendered UNDER the inset instead of below it, an
+        // overlap indistinguishable from a hidden banner at a glance.
+        // Moved to inline placement on all four screens regardless of
+        // which one actually broke — it is the same fix already proven
+        // for the VPN chip (see `vpnToolbarItem()`'s kdoc), it does not
+        // depend on this fragile shell/inset timing at all, and leaving
+        // three screens on the old mechanism while one used the new one
+        // would be its own inconsistency. Stop
+        // trying to attach shared chrome from the shell and draw it INSIDE
+        // each screen's own already-correct top-of-body row instead — see
+        // `QAudionBrandBanner` (DesignSystem) and its call site at the top
+        // of ChatListScreen/ContactsScreen/CallHistoryView/SettingsScreen.
     }
 
     /// iPad / regular layout — sidebar list con la stessa enum `Tab` del
@@ -170,6 +233,14 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { vpnToolbarItem() }
         } detail: {
+            // W-BRAND (2026-08-15): no shared safeAreaInset here either —
+            // see the kdoc on `tabLayout`'s TabView for why that composes
+            // badly with a detail screen that hides its own nav bar. Each
+            // of chatsTab/contactsTab/callsTab/settingsTab draws
+            // `QAudionBrandBanner` itself, at the top of its own body, same
+            // as the compact layout. The sidebar keeps its own plain-text
+            // `.navigationTitle("Q-Audion")` (iPadSidebarHeader's kdoc
+            // explains why that stays text) — unaffected either way.
             switch selectedTab {
             case .chats:    chatsTab
             case .contacts: contactsTab
@@ -185,30 +256,51 @@ struct HomeView: View {
         appState.conversations.reduce(0) { $0 + $1.unreadCount }
     }
 
-    /// Header compatto con avatar + numero corto in cima alla sidebar iPad.
+    /// Account header at the top of the iPad sidebar.
+    ///
+    /// It used to state two facts in five renderings. The primary line and
+    /// the avatar bubble both showed the extension, because the label the
+    /// primary line read resolves to the extension when no name exists; and
+    /// the secondary line printed the literal "Q-Audion" under a list whose
+    /// `.navigationTitle` is already "Q-Audion". The account's phone number
+    /// appeared nowhere.
+    ///
+    /// Now: name as primary, "#<ext> · <phone>" as secondary, with whatever
+    /// was promoted never repeated below — the same two lines the Chats-tab
+    /// header and the Settings hero draw, from the same helper, so the three
+    /// cannot disagree. The brand stays on the navigation title, which on
+    /// iPad is the shell's own chrome and the one legitimate place for it.
     @ViewBuilder
     private var iPadSidebarHeader: some View {
-        // W466 — show the SHORT account label ("Interno 234") instead of
-        // the raw 36-char UUID. The user reported the long UID as
-        // unreadable in the main-screen top-left.
-        let displayName = appState.displayAccountLabel
+        let labels = AccountIdentityLabels.make(
+            currentUserDialExtension: appState.currentUserDialExtension,
+            accountAvatarName: appState.accountAvatarName)
         HStack(spacing: 10) {
             QAudionAvatar(
-                displayName: displayName,
+                // Name alone, never `labels.primary`: the avatar turns what
+                // it is handed into initials, and `primary` can be an
+                // extension or the complete-your-profile prompt. The digits
+                // arrive through `shortNumber`, and stop once there is a
+                // real name to draw initials from.
+                displayName: labels.nameLabel ?? "Q",
                 imageURL: nil,
                 size: 36,
                 presenceDot: .online,
-                shortNumber: appState.currentUserDialExtension
+                shortNumber: labels.nameLabel == nil ? appState.currentUserDialExtension : nil
             )
             VStack(alignment: .leading, spacing: 1) {
-                Text(displayName)
+                Text(labels.primary)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(scheme.onSurface)
                     .lineLimit(1)
-                Text("Q-Audion")
-                    .font(.system(size: 11))
-                    .foregroundStyle(scheme.onSurfaceVariant)
+                if !labels.secondary.isEmpty {
+                    Text(labels.secondary)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .lineLimit(1)
+                }
             }
+            .accessibilityElement(children: .combine)
             Spacer()
         }
         .padding(.vertical, 8)
@@ -217,7 +309,17 @@ struct HomeView: View {
 
     // MARK: - VPN chip helper
 
-    /// Trailing toolbar item that appears in each tab's root navigation bar.
+    /// Trailing toolbar item for the one host that still HAS a navigation
+    /// bar: the iPad sidebar.
+    ///
+    /// It used to be attached to all four tabs, and the comment here used to
+    /// claim it "appears in each tab's root navigation bar" — but every tab
+    /// screen ends its own body with
+    /// `.toolbar(.hidden, for: .navigationBar)` (the W460 iOS 26
+    /// crash-on-tap fix), and an item placed in a hidden bar is simply not
+    /// drawn. All four screens now render the chip inline in their own
+    /// header strip; the four dead attachments are gone.
+    ///
     /// The `currentAccessToken ?? ""` fallback means the chip renders but
     /// any tap while unauthenticated will fail fast inside VpnApiService.
     @ToolbarContentBuilder
@@ -240,9 +342,8 @@ struct HomeView: View {
         // Data layer (`ConversationListContainer`) is unchanged: only the
         // presentation layer flipped, so the existing chat / search /
         // pin / delete / new-conversation flows keep working.
-        NavigationStack {
+        NavigationStack(path: $chatsPath) {
             ChatListScreen()
-                .toolbar { vpnToolbarItem() }
         }
     }
 
@@ -254,9 +355,8 @@ struct HomeView: View {
         // / MetadataCard / SecurityLog. Il legacy `ContactsListView`
         // resta ancora montato per i flow di scan/import (sheets) finché
         // non li portiamo alla nuova UI.
-        NavigationStack {
+        NavigationStack(path: $contactsPath) {
             ContactsScreen()
-                .toolbar { vpnToolbarItem() }
         }
     }
 
@@ -266,9 +366,8 @@ struct HomeView: View {
     /// audio/video CTAs). Il legacy `CallsTabView` resta come private
     /// struct nel file ma non è più routed.
     private var callsTab: some View {
-        NavigationStack {
+        NavigationStack(path: $callsPath) {
             CallHistoryView()
-                .toolbar { vpnToolbarItem() }
         }
     }
 
@@ -293,9 +392,8 @@ struct HomeView: View {
     /// pattern: NavigationStack { SettingsScreen() } — the only difference
     /// is the outer container (TabView vs NavigationSplitView.detail).
     private var settingsTab: some View {
-        NavigationStack {
+        NavigationStack(path: $settingsPath) {
             SettingsScreen()
-                .toolbar { vpnToolbarItem() }
         }
     }
 

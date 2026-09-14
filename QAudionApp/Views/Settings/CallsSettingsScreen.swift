@@ -126,8 +126,12 @@ struct CallsSettingsScreen: View {
                     }
 
                     SettingsSectionHeader("BACKGROUND")
+                    // W-L10N-BATCH1 (2026-09-08) — statusRow's `label:`
+                    // is a plain String, not LocalizedStringKey (see
+                    // its signature below), so this literal doesn't
+                    // auto-localize.
                     statusRow(
-                        label: "Modalità VoIP background",
+                        label: String(localized: "calls_settings.status.background_voip_mode", defaultValue: "Modalità VoIP background", comment: "Calls settings, BACKGROUND section — status row label for whether VoIP background mode is active"),
                         active: container.viewModel.isVoipBackgroundModeActive
                     )
                     Text("La modalità background è controllata dall'entitlement UIBackgroundModes.")

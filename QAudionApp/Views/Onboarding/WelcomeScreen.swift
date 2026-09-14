@@ -33,6 +33,11 @@ struct WelcomeScreen: View {
     let onStartFastSetup: () -> Void
     let onStartRegister: () -> Void
     let onStartLogin: () -> Void
+    /// 2026-08-20 — manual-entry login (extension + password) for Fast
+    /// Setup accounts, as an alternative to scanning/uploading the QR.
+    /// Added for App Store / Google Play reviewers who cannot present a
+    /// QR image.
+    let onStartExtensionLogin: () -> Void
     /// 2026-07-29 — extension-only registration (no phone number, email
     /// required). Previously there was no distinct CTA for this path.
     let onStartExtensionOnlyRegister: () -> Void
@@ -143,8 +148,13 @@ struct WelcomeScreen: View {
                             variant: .text
                         )
                         QAudionButton(
+                            action: onStartExtensionLogin,
+                            label: "Accedi con estensione e password",
+                            variant: .text
+                        )
+                        QAudionButton(
                             action: onStartExtensionOnlyRegister,
-                            label: "Registrati senza numero (solo interno)",
+                            label: "Registrati con interno e email (senza numero)",
                             variant: .text
                         )
                         QAudionButton(
@@ -154,7 +164,22 @@ struct WelcomeScreen: View {
                         )
                     }
 
-                    Spacer().frame(height: 24)
+                    Spacer().frame(height: 12)
+
+                    // App Store 5.1.1(i) — privacy policy reachable before
+                    // any account is created, not only from Settings.
+                    Button {
+                        LegalLinks.open(LegalLinks.privacyPolicy())
+                    } label: {
+                        Text("Continuando accetti l'Informativa privacy")
+                            .qaudionStyle(type.labelSmall)
+                            .underline()
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer().frame(height: 12)
 
                     Text("Hybrid PQC · Voice-first · Deepfake Guard")
                         .qaudionStyle(type.labelSmall)
@@ -228,6 +253,7 @@ private struct FeaturePill: View {
         onStartFastSetup: {},
         onStartRegister: {},
         onStartLogin: {},
+        onStartExtensionLogin: {},
         onStartExtensionOnlyRegister: {},
         onStartRecoveryRestore: {}
     )

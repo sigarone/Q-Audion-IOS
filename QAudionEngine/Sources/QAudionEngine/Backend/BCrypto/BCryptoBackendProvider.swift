@@ -48,7 +48,19 @@ public final class BCryptoBackendProvider: BackendProvider {
         return c
     }
 
-    public lazy var callingApi: CallingApi = BCryptoCallingApiImpl(ws: wsClient, rest: restClient)
+    public lazy var callingApi: CallingApi = {
+        let impl = BCryptoCallingApiImpl(ws: wsClient, rest: restClient)
+        // W-ACTIVECALLASSERT — hand the WS layer a live view of the bound
+        // call id so every `authenticate` frame asserts it and the server's
+        // mid-call blip recovery can cancel its pending disconnect-grace
+        // teardown (or answer with the late definitive `call_hangup` for a
+        // call that already ended). The impl's accessor is NSLock-guarded,
+        // so the read is safe from the WS delegate thread. No call bound =
+        // nil = the field is omitted — "I hold no call state" is exactly
+        // what a fresh session should say.
+        wsClient.activeCallIdProvider = { [weak impl] in impl?.getActiveCallId() }
+        return impl
+    }()
     public lazy var messageApi: MessageApi = BCryptoMessageApiImpl(ws: wsClient)
     public lazy var accountApi: AccountApi = BCryptoAccountApiImpl(rest: restClient)
     public lazy var contactsApi: ContactsApi = BCryptoContactsApiImpl(rest: restClient)
@@ -93,7 +105,17 @@ public final class BCryptoBackendProvider: BackendProvider {
         self.restClient.setTokenRefresher { [weak self] in
             guard let self else { throw BCryptoError.unauthorized }
             guard let refresh = self.config.refreshToken else { throw BCryptoError.unauthorized }
-            let pair = try await (self.accountApi as! BCryptoAccountApiImpl).refreshToken(refresh)
+            // W-B1CRASHFRAME (2026-09-02) — was `as!`. `accountApi` is a
+            // public `var`, always `BCryptoAccountApiImpl` from this same
+            // init today (see its declaration above), but nothing in the
+            // type system stops a future caller from assigning a different
+            // `AccountApi` conformer to it — this closure runs on every REST
+            // 401, so that would crash the process on the next expired
+            // token instead of just failing this one refresh.
+            guard let accountApiImpl = self.accountApi as? BCryptoAccountApiImpl else {
+                throw BCryptoError.unexpectedAccountApiImplementation
+            }
+            let pair = try await accountApiImpl.refreshToken(refresh)
             self.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
             return (accessToken: pair.accessToken, refreshToken: pair.refreshToken)
         }
@@ -143,12 +165,37 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// Used by ServerSelector after probing finds a lower-latency node.
     /// The currently connected WebSocket is disconnected — it will
     /// reconnect automatically (with backoff) to the new URL.
-    public func updateServerUrl(to newUrl: String) {
+    public func updateServerUrl(to newUrl: String, reconnectSocket: Bool = true) {
+        // Nothing to do when the selector re-affirms the node we are already on,
+        // which is most of what it does — the primary-snap check re-asserts the
+        // pinned host on every monitor tick.
+        guard config.serverUrl != newUrl else { return }
+
         config.serverUrl = newUrl
         // `_wsClient?` — a not-yet-created socket reads the new URL on first
         // connect; no need to force one into existence here.
         _wsClient?.updateConfig(config)
         restClient.updateConfig(config)
+
+        // updateConfig only STORES the value: a socket that is already open
+        // keeps talking to the node it dialled, indefinitely, while REST has
+        // already moved. That left the two halves of this client disagreeing
+        // about which node it was on for as long as the connection happened to
+        // survive — hours, in practice.
+        //
+        // Reconnecting costs a few seconds of signaling, which this client is
+        // built to absorb (it reconnects with backoff and surfaces a
+        // reconnecting state); media rides WebRTC and is not on this socket at
+        // all. An indefinite disagreement is the worse of the two.
+        //
+        // `reconnectSocket: false` exists for the caller that knows this is a
+        // bad moment — mid call-setup, offer and answer in flight. Wiring that
+        // signal in is the remaining refinement: the selector cannot see call
+        // state today, so nothing passes false yet.
+        if reconnectSocket, let ws = _wsClient {
+            ws.disconnect()
+            ws.connect()
+        }
     }
 
     public func initialize() async throws { wsClient.connect() }

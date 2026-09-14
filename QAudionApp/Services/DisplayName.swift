@@ -302,8 +302,32 @@ enum DisplayName {
         if t.hasPrefix("Utente ") && t.hasSuffix("…") { return true }
         if t.hasPrefix("Gruppo ") && t.hasSuffix("…") { return true }
         if t.caseInsensitiveCompare("New User") == .orderedSame { return true }
+        if isDevicePlaceholder(t) { return true }
         if extensionDigits(fromLegacyLabel: t) != nil { return true }
         return false
+    }
+
+    /// W-DEVICEPLACEHOLDER — ported verbatim from Android's
+    /// `PeerDisplayResolver.kt` `DEVICE_PLACEHOLDER_REGEX`
+    /// (`^Device-[0-9a-fA-F]{6,}$`, added there 2026-08-07). An
+    /// auto-generated "Device-<hex>" account name — exact provenance
+    /// unconfirmed, most likely a server-assigned default — that is not a
+    /// name any human chose. Android already treated this as "no name set"
+    /// so the real display name (or the extension one step down the chain)
+    /// takes over; iOS never had the equivalent check, so a stale
+    /// "Device-XXXX" cached in a peer's local rubrica entry at first
+    /// contact permanently outranked every later real name update for
+    /// that peer, on every call, forever (confirmed live 2026-08-16 —
+    /// a caller who set their account name never stopped showing as
+    /// "Device-XXXX" to an existing contact).
+    private static func isDevicePlaceholder(_ s: String) -> Bool {
+        let prefix = "Device-"
+        guard s.hasPrefix(prefix) else { return false }
+        let hex = s.dropFirst(prefix.count)
+        guard hex.count >= 6 else { return false }
+        return hex.allSatisfy { c in
+            (c >= "0" && c <= "9") || (c >= "a" && c <= "f") || (c >= "A" && c <= "F")
+        }
     }
 
     /// True when `s` is nothing but digits — the bare, rule-3-compliant

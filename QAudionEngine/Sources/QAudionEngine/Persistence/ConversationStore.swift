@@ -231,6 +231,69 @@ public final class ConversationStore {
         }
     }
 
+    /// W-MSGOUTBOX (2026-09-01) — the drainer's work list: every OUTGOING
+    /// TEXT row still at `.sending`, oldest first. Text only — attachment
+    /// rows (`mediaMimeType`/`mediaLocalPath` set) ride the TUS pipeline and
+    /// have their own resume path (`TusResumeState`); tombstoned rows are
+    /// never re-sent. `.failed` rows are deliberately NOT here: they stay
+    /// on manual retry exactly as before.
+    public func loadPendingOutboundTextMessages() -> [Message] {
+        do {
+            return try db.reader.read { db in
+                try Message
+                    .filter(Column("status") == Message.Status.sending.rawValue)
+                    .filter(Column("direction") == Message.Direction.outgoing.rawValue)
+                    .filter(Column("mediaMimeType") == nil)
+                    .filter(Column("mediaLocalPath") == nil)
+                    .filter(Column("deletedAt") == nil)
+                    .order(Column("sentAt").asc)
+                    .fetchAll(db)
+            }
+        } catch {
+            print("[ConversationStore] loadPendingOutboundTextMessages failed: \(error)")
+            return []
+        }
+    }
+
+    /// W-MSGDEDUP (2026-09-01) — is an INBOUND row with this server id
+    /// already persisted? The 1:1 mirror of
+    /// `GroupMessageStore.contains(groupHex:serverMessageId:)`; checked
+    /// before decrypt so a server re-delivery never reaches the ratchet as
+    /// a replay. Restricted to `.incoming` so an outbound row that later
+    /// bound the same id via the self-echo can never match a peer's frame.
+    public func hasInboundMessage(serverMessageId: String) -> Bool {
+        do {
+            return try db.reader.read { db in
+                try Message
+                    .filter(Column("direction") == Message.Direction.incoming.rawValue)
+                    .filter(Column("serverMessageId") == serverMessageId)
+                    .fetchCount(db) > 0
+            }
+        } catch {
+            print("[ConversationStore] hasInboundMessage(serverMessageId:) failed: \(error)")
+            return false
+        }
+    }
+
+    /// W-MSGDEDUP (2026-09-01) — is an INBOUND row from this sender with
+    /// this `client_msg_id` already persisted? Covers the case the server
+    /// stored a client resend twice (two server ids, one idempotency key).
+    /// Sender-scoped so two peers' UUIDs can never collide into a drop.
+    public func hasInboundMessage(clientMsgId: String, senderUserId: String) -> Bool {
+        do {
+            return try db.reader.read { db in
+                try Message
+                    .filter(Column("direction") == Message.Direction.incoming.rawValue)
+                    .filter(Column("clientMsgId") == clientMsgId)
+                    .filter(Column("senderUserId") == senderUserId)
+                    .fetchCount(db) > 0
+            }
+        } catch {
+            print("[ConversationStore] hasInboundMessage(clientMsgId:) failed: \(error)")
+            return false
+        }
+    }
+
     public func removeMessage(id: UUID, conversationId: UUID) {
         do {
             _ = try db.writer.write { db in
@@ -269,13 +332,65 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: viaMesh ?? msg.viaMesh
+                        viaMesh: viaMesh ?? msg.viaMesh,
+                        wireAttachmentId: msg.wireAttachmentId
                     )
                     try msg.save(db)
                 }
             }
         } catch {
             print("[ConversationStore] updateMessageStatus failed: \(error)")
+        }
+    }
+
+    /// Bug found live 2026-08-18 — see `Message.wireAttachmentId` doc.
+    /// Tags an OUTBOUND file/voice-note row with the announce envelope's
+    /// real `fileId`/`voiceNoteId` once minted, so an incoming
+    /// `qa_att_receipt:1` has something to match against.
+    public func setWireAttachmentId(id: UUID, wireAttachmentId: String) {
+        do {
+            try db.writer.write { db in
+                if var msg = try Message.fetchOne(db, key: id) {
+                    msg = Message(
+                        id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
+                        plaintext: msg.plaintext, sentAt: msg.sentAt,
+                        deliveredAt: msg.deliveredAt, readAt: msg.readAt,
+                        status: msg.status, senderUserId: msg.senderUserId,
+                        serverMessageId: msg.serverMessageId,
+                        mediaLocalPath: msg.mediaLocalPath,
+                        mediaDurationMs: msg.mediaDurationMs,
+                        mediaMimeType: msg.mediaMimeType,
+                        clientMsgId: msg.clientMsgId,
+                        edited: msg.edited,
+                        deletedAt: msg.deletedAt,
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh,
+                        wireAttachmentId: wireAttachmentId
+                    )
+                    try msg.save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setWireAttachmentId failed: \(error)")
+        }
+    }
+
+    /// Bug found live 2026-08-18 — see `Message.wireAttachmentId` doc.
+    /// `qa_att_receipt:1` receipts key off this instead of
+    /// `serverMessageId`, since the file/voice-note transport never has
+    /// one.
+    public func messageByWireAttachmentId(_ wireAttachmentId: String) -> Message? {
+        do {
+            return try db.reader.read { db in
+                try Message.filter(Column("wireAttachmentId") == wireAttachmentId).fetchOne(db)
+            }
+        } catch {
+            print("[ConversationStore] messageByWireAttachmentId failed: \(error)")
+            return nil
         }
     }
 
@@ -350,32 +465,27 @@ public final class ConversationStore {
                                        deliveredAt: Date? = nil, readAt: Date? = nil) -> Bool {
         do {
             return try db.writer.write { db in
-                let msgs = try Message.filter(Column("serverMessageId") == serverMessageId).fetchAll(db)
-                for var msg in msgs {
-                    msg = Message(
-                        id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
-                        plaintext: msg.plaintext, sentAt: msg.sentAt,
-                        deliveredAt: deliveredAt ?? msg.deliveredAt,
-                        readAt: readAt ?? msg.readAt,
-                        status: newStatus,
-                        senderUserId: msg.senderUserId,
-                        serverMessageId: msg.serverMessageId,
-                        mediaLocalPath: msg.mediaLocalPath,
-                        mediaDurationMs: msg.mediaDurationMs,
-                        mediaMimeType: msg.mediaMimeType,
-                        clientMsgId: msg.clientMsgId,
-                        edited: msg.edited,
-                        deletedAt: msg.deletedAt,
-                        reactions: msg.reactions,
-                        expiresAt: msg.expiresAt,
-                        isViewOnce: msg.isViewOnce,
-                        viewOnceOpened: msg.viewOnceOpened,
-                        exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
-                    )
-                    try msg.save(db)
+                // `status`/`deliveredAt`/`readAt` are plain (unsealed) columns
+                // — see `LocalStoreCipher` and `Message.encode(to:)`, only
+                // `plaintext` goes through the at-rest cipher — so a direct
+                // column-level UPDATE is safe here: it can't desync from the
+                // per-row seal because it never touches a sealed column.
+                // Replaces the previous fetch-all + per-row re-encode-and-save
+                // loop with one statement. Omitting an assignment (rather than
+                // writing `msg.deliveredAt`/`msg.readAt` back unchanged)
+                // reproduces the original "leave the existing value alone
+                // when the caller passed nil" behavior for every matched row.
+                var assignments: [ColumnAssignment] = [Column("status").set(to: newStatus.rawValue)]
+                if let deliveredAt {
+                    assignments.append(Column("deliveredAt").set(to: deliveredAt))
                 }
-                return !msgs.isEmpty
+                if let readAt {
+                    assignments.append(Column("readAt").set(to: readAt))
+                }
+                let updated = try Message
+                    .filter(Column("serverMessageId") == serverMessageId)
+                    .updateAll(db, assignments)
+                return updated > 0
             }
         } catch {
             print("[ConversationStore] updateStatusByServerId failed: \(error)")
@@ -772,6 +882,11 @@ public final class ConversationStore {
         do {
             _ = try db.writer.write { db in
                 try Conversation.deleteAll(db)
+                // W-MSGOUTBOX (2026-09-01) — the outbox holds sealed wire
+                // bytes for rows that no longer exist after this; a wipe
+                // (logout / remote_wipe via LocalCryptoWipe) must not leave
+                // them behind to be re-sent under the next identity.
+                try ChatOutboxEntry.deleteAll(db)
             }
         } catch {
             print("[ConversationStore] wipeAll failed: \(error)")

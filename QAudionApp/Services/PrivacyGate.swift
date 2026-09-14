@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import QAudionEngine
 
 /// W404 — single source of truth for privacy / notification gates.
 ///
@@ -70,17 +71,42 @@ public enum PrivacyGate {
         return readBoolWithDefault(keyMessagePreview, default: true)
     }
 
-    /// Default OFF. When on, the app detects screenshots and applies
-    /// UIKit secure layer to block OS-level screen capture.
+    /// Default ON (W-PRIVACYDEFAULTON, 2026-09-02 — audit memory
+    /// reference_ios_stability_audit_2026_09_01, P2 "privacy overlay
+    /// default OFF"). When on, the app hides content from app-switcher
+    /// snapshots, warns on a screenshot, and warns on an active screen
+    /// recording (see `QAudionApp.registerScreenshotObserver` /
+    /// `registerScreenRecordingObserver`). The safer default for a
+    /// security-sensitive messenger; PrivacySettingsScreen already exposes
+    /// a toggle so a user who wants it off can turn it off there — this
+    /// only changes what a user who never opened Settings gets. Only the
+    /// DEFAULT moves; `readSecureBoolWithDefault` still returns whatever an
+    /// existing explicit choice was, in either direction.
     /// SECURITY M-28: Keychain-backed (security-affecting flag).
     public static var screenshotProtectionEnabled: Bool {
-        return readSecureBoolWithDefault(keyScreenshotProtection, default: false)
+        return readSecureBoolWithDefault(keyScreenshotProtection, default: true)
     }
 
-    /// Default OFF. Prompts biometric/passcode after the grace period
-    /// elapses while in background.
+    /// MASVS-AUTH remediation (2026-08-21, A1b/I4) — the default (used only
+    /// when the user has never explicitly chosen; `readSecureBoolWithDefault`
+    /// already distinguishes that from an explicit `false`) now mirrors
+    /// device capability: on wherever Face ID/Touch ID/passcode is actually
+    /// enrolled (`KeychainProtectionPolicy.shared.isAuthenticationAvailable`),
+    /// inert on a device with none configured — never forces a requirement
+    /// the device can't satisfy, and never overrides an explicit prior choice
+    /// either way. Prompts biometric/passcode after the grace period elapses
+    /// while in background.
     /// SECURITY M-28: Keychain-backed (security-affecting flag).
     public static var appLockEnabled: Bool {
+        // Reverted 2026-08-21 — defaulting this to
+        // KeychainProtectionPolicy.shared.isAuthenticationAvailable (device
+        // has Face ID/Touch ID/passcode configured -> app-lock ON by
+        // default) traps a user with no way out: AppLockGateView has no
+        // skip/bypass button, so a user who doesn't want to authenticate on
+        // every launch has no path to the Settings toggle that would turn
+        // this off. Confirmed live on device (infinite "Sblocca" retry with
+        // no escape). Back to the explicit-opt-in-only default; the user
+        // can still turn it ON from PrivacySettingsScreen if they want it.
         return readSecureBoolWithDefault(keyAppLockEnabled, default: false)
     }
 
@@ -135,6 +161,26 @@ public enum PrivacyGate {
         // SECURITY L-8: audit-parity log line.
         let line: String = "PrivacyGate.screenshotProtection=" + String(value)
         RTLog.info("settings", line)
+        // W-APPSTORAGEDEADLOCK — the app root used to read this flag via
+        // `@AppStorage("qaudion.privacy.screenshot_protection")`, a plain
+        // UserDefaults key. That was already disconnected from the real
+        // value (Keychain-backed, per SECURITY M-28 above — the toggle
+        // never actually updated what @AppStorage was reading), and
+        // separately, @AppStorage installs SwiftUI's own UserDefaults-
+        // change observer for the ENTIRE app root regardless — root-caused
+        // live 2026-08-16 (crash report, EXC_CRASH/SIGKILL 0x8BADF00D,
+        // scene-update watchdog): during a background PushKit-driven
+        // launch, the main thread was inside SwiftUI's ForEach/Observation
+        // graph update while a background thread's UserDefaults-change
+        // notification concurrently drove SwiftUI's internal
+        // `UserDefaultObserver` into the SAME AttributeGraph lock — genuine
+        // deadlock, watchdog-killed after ~18s. This explicit notification
+        // replaces @AppStorage for that one root-level property so the app
+        // root observes the REAL Keychain value without SwiftUI's own
+        // reactive-UserDefaults machinery being present for the entire
+        // app lifetime (every other @AppStorage use in this app is scoped
+        // to a screen that is only instantiated while actually visible).
+        NotificationCenter.default.post(name: .screenshotProtectionDidChange, object: nil)
     }
     public static func setAppLockEnabled(_ value: Bool) {
         // SECURITY M-28: Keychain-backed.
@@ -292,4 +338,8 @@ extension Notification.Name {
     /// Posted by `PrivacyGate.setPresenceVisibleToContacts` only when the
     /// gate turns ON. See that setter for why this exists.
     static let presenceVisibilityDidChange = Notification.Name("qaudion.presenceVisibilityDidChange")
+    /// W-APPSTORAGEDEADLOCK (2026-08-16) — posted by
+    /// `PrivacyGate.setScreenshotProtectionEnabled`. See that setter's doc
+    /// for why the app root can no longer just use `@AppStorage` here.
+    static let screenshotProtectionDidChange = Notification.Name("qaudion.screenshotProtectionDidChange")
 }

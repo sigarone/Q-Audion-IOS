@@ -104,35 +104,47 @@ discover-v2 results." `MeshNodeId.from(identityKeyRaw:)`'s derivation
 (SHA-256 truncated to 8 bytes) is format-agnostic, so it works unchanged
 against whatever raw bytes `pubkey` holds.
 
-**Known gap, left honest rather than guessed at:** this port does not yet
-wire the LOCAL device's own long-term identity key into
-`MeshRuntime.configureLocalIdentity(identityKeyRaw:)` — the signing/identity
-manager surface (`SovereignIdentityManager` and friends) wasn't safe to
-guess at blind, with no compiler available in this environment to verify a
-wrong guess. `MeshRuntime` falls back to `MeshNodeId.random()` for the
-LOCAL node id in the meantime (same fallback Android's own
-`BleMeshTransportImpl.localNodeId` uses when no identity key is available
-yet) — this only affects what id THIS device advertises as; resolving OTHER
-peers' node ids against their `ContactsStore.pubkey` (the radar
-auto-highlight / tap-to-jump feature) is fully wired and does not depend on
-this gap.
+**Since closed:** the LOCAL device's own long-term identity key is now
+wired into `MeshRuntime.configureLocalIdentity(identityKeyRaw:)` from
+`AppState.initialize()`, using `SovereignIdentityManager().loadIdentity()?.signingPublic`
+— the same Ed25519 public key the KMS bundle publishes as `ed25519Pub`, so
+the id a peer derives from the directory matches the id this device
+advertises. Before this was wired, `MeshRuntime` fell back to
+`MeshNodeId.random()` for the LOCAL node id on every launch, so this
+device advertised a different id each time and could never be resolved by
+a peer computing the id from its known identity key — the cross-platform
+half of R1 (see `AppState.swift`'s `configureLocalIdentity` call site for
+the full story). Resolving OTHER peers' node ids against their
+`ContactsStore.pubkey` (the radar auto-highlight / tap-to-jump feature)
+was always fully wired and never depended on this.
 
-## 6. Scoping cut: no outbox / store-and-forward tier yet
+## 6. Store-and-forward: `MeshOutboxStore` / `MeshOutboxDrain`
 
 Android's real integration surface (per its own architecture study, §3.2)
-is genuinely non-trivial: extending `PendingSendOrchestrator`'s
-`KIND_MESSAGE`-only drain loop into a kind-dispatch table, a new
-`KIND_BLE_MESH` `PendingSendEntity` row, its own backoff schedule. iOS has
-no directly equivalent generic outbox to extend (its retry/backoff live
-inline per-transport, e.g. `ChatMessageSendService`), so this port's
-`MeshRuntime.sendData` is fire-and-forget against the transport's live
-peer set: no reachable path right now means the send fails immediately
-(`ChatContainer.finishMeshSend` marks it `.failed`) rather than being
-queued for delivery once the peer is next seen. This is the single largest
-functional gap versus the Android sibling's store-and-forward design (its
-own §2.7) — flagged here rather than silently degrading UX expectations.
-A follow-up could add a small persistent mesh-outbox table mirroring
-`PendingSendEntity`'s shape.
+reuses its generic outbox: extending `PendingSendOrchestrator`'s
+`KIND_MESSAGE`-only drain loop into a kind-dispatch table, with a new
+`KIND_BLE_MESH` `PendingSendEntity` row and its own backoff schedule. iOS
+has no directly equivalent generic outbox to extend (its retry/backoff
+live inline per-transport, e.g. `ChatMessageSendService`), so rather than
+force a shared table this got a small, self-contained pair of types
+instead: `MeshOutboxStore` (`Services/MeshOutboxStore.swift`) is a plain
+Codable array under one `UserDefaults` key — the same persistence style
+`ConversationStore` itself used before message history moved to GRDB —
+holding `MeshPendingSend` rows (message id, target node hex, the already-
+sealed `MeshSealedShell` bytes, creation time, attempt count).
+`MeshOutboxDrain` (`Services/MeshOutboxDrain.swift`) retries a row once its
+target reappears in `MeshRuntime.peers` (triggered from
+`MeshRuntime.applyKnownPeers`) and on a 20s backstop timer while the
+antenna is on, and gives up past `MeshOutboxStore.maxAgeMs` (~1h, same
+order of magnitude as Android's `MAX_MESH_ATTEMPTS` ceiling) — marking the
+message `.failed` only then, not on the first failed write.
+`ChatContainer.finishMeshSend`'s failure branch enqueues instead of
+calling `markFailed` directly; the message simply stays in the `.sending`
+status it already had.
+
+This was flagged as the single largest functional gap versus Android's
+store-and-forward design — closed, without adopting Android's shared-table
+shape, since iOS never had the generic outbox that shape depends on.
 
 ## 7. Crypto decrypt-path duplication — a known, deliberate near-term risk
 
@@ -211,8 +223,6 @@ navigating to the sheet via the (flag-gated) antenna button. `CBCentralManager`/
 
 ## 11. What's NOT done in this increment
 
-- Local node-id identity-key wiring (§5).
-- Store-and-forward / outbox tier (§6).
 - Shared (non-duplicated) decrypt dispatch (§7).
 - Packet-level `.fragment` type is implemented and unit-tested
   (`MeshFragmenter`/`MeshFragmentReassembler`) but NOT wired into the send

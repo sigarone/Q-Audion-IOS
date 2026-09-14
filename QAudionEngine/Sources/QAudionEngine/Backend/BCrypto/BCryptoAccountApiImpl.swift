@@ -26,6 +26,13 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
     }
 
+    public func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials {
+        let dict: [String: Any] = ["extension": ext, "password": password, "device_name": deviceName]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let data = try await rest.post("/api/v1/auth/login/extension", body: body)
+        return try JSONDecoder().decode(AuthCredentials.self, from: data)
+    }
+
     public func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair {
         let dict = ["refresh_token": refreshToken]
         let body = try JSONSerialization.data(withJSONObject: dict)
@@ -207,8 +214,22 @@ public final class BCryptoAccountApiImpl: AccountApi {
             // print() is captured by RuntimeLogSink's stdout tee even from
             // this package (no RTLog here -- app-layer only). Remove once
             // root-caused, or keep as a general decode-failure diagnostic.
-            let preview = String(data: data.prefix(2000), encoding: .utf8) ?? "<non-UTF8, \(data.count) bytes>"
-            print("[BCryptoAccountApiImpl] registerExtensionOnly decode failed: \(error). Raw response (\(data.count) bytes): \(preview)")
+            //
+            // I8 FIX (2026-08-21): the response body is OtpAuthResult —
+            // access_token/refresh_token/user_id/device_id live session
+            // credentials. Printing it raw put those values one decode
+            // failure away from the uploadable log ring buffer, relying
+            // only on the stdout-tee's best-effort keyword regex as a
+            // backstop. A decode failure is almost always a missing/
+            // renamed/mistyped FIELD, not a value problem, so the useful
+            // diagnostic is the top-level key set — never the values.
+            let keysPreview: String
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                keysPreview = "keys=" + obj.keys.sorted().joined(separator: ",")
+            } else {
+                keysPreview = "<not a JSON object>"
+            }
+            print("[BCryptoAccountApiImpl] registerExtensionOnly decode failed: \(error). Response shape (\(data.count) bytes): \(keysPreview)")
             throw error
         }
     }

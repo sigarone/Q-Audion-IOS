@@ -50,9 +50,10 @@ public enum HandshakeSigningPolicy {
 
     /// The verdict the orchestration acts on after evaluating a received bundle.
     public enum Verdict: Equatable {
-        /// Signature present, valid, and identity matches the pin (or first-seen
-        /// TOFU candidate). `tofuPinKey` is set when this verification should
-        /// also first-seen-pin the key (caller pins AFTER this success).
+        /// Signature present, valid, and identity matches the pin (or the
+        /// server-fetched key, or the first-seen TOFU candidate). `tofuPinKey`
+        /// is set whenever the peer had NO pin yet — the caller pins it AFTER
+        /// this success (W-SASPIN: the server-anchored first contact pins too).
         /// `v4Capable` true when the verified bundle advertised v4+suite-1.
         /// `srtpDirKeyV1Capable` true when the verified bundle advertised the
         /// directional-SRTP-key capability (TURN_SPOOF/SRTP downgrade fix —
@@ -110,10 +111,11 @@ public enum HandshakeSigningPolicy {
     ///
     /// Trust source (§5c): verification ALWAYS uses the pinned/server-fetched key
     /// when one exists; the bundle-carried key is accepted only if it equals that
-    /// trusted key OR it is proven ∈ the published set (D11). On genuine first
-    /// contact (neither pin nor server key nor set membership) the bundle key is
-    /// the TOFU candidate and is returned in `tofuPinKey` so the caller pins it
-    /// ONLY after this returns `.authenticated`.
+    /// trusted key OR it is proven ∈ the published set (D11). When the peer has
+    /// NO pin yet, the key the signature verified under (server-fetched key, or
+    /// on genuine first contact the bundle key itself) is returned in
+    /// `tofuPinKey` so the caller pins it ONLY after this returns
+    /// `.authenticated` (W-SASPIN).
     ///
     /// CALLER CONTRACT (D11): when the bundle key differs from the pin but is ∈
     /// the published set, the signature is verified UNDER THE BUNDLE KEY (its own
@@ -181,17 +183,30 @@ public enum HandshakeSigningPolicy {
         // Prefer the pin, then the server/QR key. The bundle key is trusted only
         // on genuine first contact (no pin, no server key) — and even then it is
         // pinned only AFTER the signature verifies under it.
+        //
+        // W-SASPIN (2026-09-08) — whichever of the three sources the trust came
+        // from, a peer with NO pin yet gets one on this first VERIFIED contact
+        // (see the `.authenticated` return below). The old shape pinned only on
+        // the bundle-key branch: with the server-published key present (the
+        // normal case once identity keys are published) the signature verified
+        // under it and nothing was ever persisted, so `PeerIdentityPinStore`
+        // stayed empty for that peer forever. Every reader downstream of the
+        // handshake — the in-call SAS binding (`SasVerificationStore` needs the
+        // pinned key's identity tag), `PeerTrustEvaluator`, the per-device
+        // verdicts on the next call — reads the pin store, not the server cache.
+        // Live evidence 2026-09-08 (calls bba2aeca/1cd640d6, iOS<->iOS, both
+        // 1.0.1108): 20x `sasConfirm noop=1 reason=3` on both devices while the
+        // handshake had verified cleanly. Android persists the server-fetched
+        // key on first sight (`PeerTrustRepository.checkOrPinTrust`) and Desktop
+        // stores it on the contact row, so this is the parity gap, not a new
+        // trust class.
         let trustedKey: Data
-        let isTofuFirstContact: Bool
         if let pin = pinnedKey {
             trustedKey = pin
-            isTofuFirstContact = false
         } else if let server = serverFetchedKey {
             trustedKey = server
-            isTofuFirstContact = false
         } else {
             trustedKey = bundleKey
-            isTofuFirstContact = true
         }
 
         let bundleInSet = isMember(bundleKey, of: publishedKeySet)
@@ -230,8 +245,11 @@ public enum HandshakeSigningPolicy {
         }
 
         if matchesTrusted {
+            // W-SASPIN — first verified contact pins the key the signature was
+            // verified under (bundle key on genuine TOFU, server-published key
+            // otherwise). An existing pin is never re-written from here.
             return .authenticated(
-                tofuPinKey: isTofuFirstContact ? trustedKey : nil,
+                tofuPinKey: pinnedKey == nil ? trustedKey : nil,
                 v4Capable: advertisedV4,
                 srtpDirKeyV1Capable: advertisedSrtpDirKeyV1
             )

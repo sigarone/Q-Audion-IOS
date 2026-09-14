@@ -44,7 +44,7 @@ enum PendingAttachmentSend {
 ///
 /// Layout (top → bottom):
 ///   1. **Top bar** — back chevron + 36pt avatar + display name + presence
-///                    label + `PqcBadge` + audio call + video call + ⋯
+///                    label + ephemeral timer + audio call + video call + ⋯
 ///   2. **SessionStatusStrip** — confidence dot, presence label, C=0.NN,
 ///                                MiniSpark, RE-KEY countdown.
 ///   3. **Message list** — `LazyVStack` with day headers, `MessageBubble`
@@ -63,6 +63,12 @@ enum PendingAttachmentSend {
 struct ChatDetailScreen: View {
     @StateObject private var container: ChatContainer
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment (not via
+    /// `appState.capabilityGate`) so this screen's gated controls actually
+    /// re-render on a grant change; see the injection site's own doc in
+    /// `QAudionApp.swift` for why `appState.capabilityGate` alone is not
+    /// reactive.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -117,11 +123,35 @@ struct ChatDetailScreen: View {
     /// rather than UUID since the action is screen-scoped — there's
     /// only one history per chat detail view.
     @State private var showClearHistoryConfirm: Bool = false
+    /// App Store 1.2 — "Segnala contatto" next to "Blocca contatto" in the
+    /// overflow menu; see ContactDetailScreen for the same flow.
+    @State private var showReportDialog: Bool = false
     /// W445: Screenshot lock — local user preference. Toggled from
     /// PrivacySettingsScreen; read here to activate/deactivate on
-    /// chat open/close. Persisted via AppStorage so it survives
-    /// app restarts.
-    @AppStorage("qaudion.chat.screenshot_lock_enabled") private var screenshotLockEnabled: Bool = true
+    /// chat open/close.
+    ///
+    /// W-CHATDEADLOCK (2026-08-19) — was `@AppStorage`, matching the
+    /// exact deadlock class already root-caused once at the app root
+    /// (see PrivacyGate.setScreenshotProtectionEnabled's
+    /// W-APPSTORAGEDEADLOCK note): `@AppStorage` installs SwiftUI's own
+    /// UserDefaults-change observer for as long as the owning view stays
+    /// instantiated, and ContentView's body is a single ZStack — the
+    /// call screens (VideoCallView/LiveInCallScreen) are layered ON TOP
+    /// of, not swapped in for, the chat detail view, so this screen
+    /// (and its observer) stays alive for the full duration of a call
+    /// placed from an open chat. Device-log-confirmed crash (call
+    /// 836638fa, iPhone callee, EXC_CRASH/SIGKILL 0x8BADF00D, scene-
+    /// update watchdog "is stuck (deadlock)"): the main thread was mid
+    /// SwiftUI ForEach/Observation update while a background Task's
+    /// UserDefaults write drove SwiftUI's internal `UserDefaultObserver`
+    /// into the same AttributeGraph lock. This property is read exactly
+    /// once per screen-appear (`handleScreenAppear`), never reactively,
+    /// so it needs no live-observing wrapper at all — a plain read
+    /// removes this screen from the set of long-lived UserDefaults
+    /// observers without changing behavior.
+    private func screenshotLockEnabled() -> Bool {
+        (UserDefaults.standard.object(forKey: "qaudion.chat.screenshot_lock_enabled") as? Bool) ?? true
+    }
     /// W445: Ephemeral timer picker.
     @State private var showingEphemeralPicker: Bool = false
     /// BLE-mesh offline chat fallback (branch claude/ble-mesh-cleanroom-spike).
@@ -140,12 +170,17 @@ struct ChatDetailScreen: View {
         guard meshRuntime.antennaMode != nil else { return false }
         let peerUserId = container.viewModel.conversation.peerUserId
         guard !peerUserId.isEmpty,
-              let pubkey = ContactsStore().findPubkey(userId: peerUserId),
-              let nodeHex = MeshFeature.nodeId(forContactPubkey: pubkey)?.hex
+              let contact = ContactsStore().load().first(where: { $0.userId == peerUserId })
         else { return false }
-        return meshRuntime.peers.contains { $0.nodeHex == nodeHex }
+        let nodeHexes = MeshFeature.nodeHexes(forContact: contact)
+        guard !nodeHexes.isEmpty else { return false }
+        return meshRuntime.peers.contains { nodeHexes.contains($0.nodeHex) }
     }
     @ObservedObject private var meshRuntime = MeshRuntime.shared
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    /// Non-nil while the sheet is up; the sheet closure uses this exact
+    /// capability so the benefit text always matches what was tapped.
+    @State private var upgradeSheetCapability: Capability? = nil
     /// W445: Forward message state.
     @State private var showingForwardPicker: Bool = false
     @State private var forwardingMessage: Message? = nil
@@ -163,7 +198,6 @@ struct ChatDetailScreen: View {
     private let stubConfidence: Double = 0.92
     private let stubPresenceLabel: String = "VOCE VERIFICATA"
     private let stubRekeyInSeconds: Int? = 252
-    private let stubPqcActive: Bool = true
     private let stubSamples: [Float] = [0.84, 0.86, 0.89, 0.91, 0.92, 0.92, 0.93, 0.92]
 
     // MARK: - Init
@@ -183,12 +217,41 @@ struct ChatDetailScreen: View {
     /// raw UUID; re-resolve through the central chain.
     private var resolvedPeerTitle: String {
         let stored = container.viewModel.conversation.peerDisplayName
-        guard DisplayName.looksLikeUUID(stored) || stored.isEmpty else { return stored }
         if container.viewModel.conversation.kind == .group {
+            guard DisplayName.looksLikeUUID(stored) || stored.isEmpty else { return stored }
             return DisplayName.forGroup(id: container.viewModel.conversation.peerUserId, name: nil)
         }
+        // W-DETAILNAMESTALE (2026-08-19) — this used to short-circuit and
+        // return `stored` directly whenever it looked like a real name,
+        // bypassing DisplayName.forUser (and, with it, the
+        // NameResolutionService.ensureResolved() re-check forUser fires
+        // unconditionally on every call). ChatListScreen.resolvedRowTitle
+        // never had that shortcut — it always calls forUser with the
+        // freshest serverDisplay/contacts, so it visibly refreshed a
+        // peer's renamed/re-avatared profile while this header kept
+        // showing whatever name the conversation row was first created
+        // with. Route through the exact same resolution chain as the
+        // list so the two can never disagree again.
         return DisplayName.forUser(container.viewModel.conversation.peerUserId,
+                                   serverDisplay: stored,
                                    contacts: appState.cachedContacts)
+    }
+
+    /// W-CHATHEADERAVATARSTALE (2026-08-17) — mirrors `ChatListScreen
+    /// .resolvedRowAvatarUrl` (2026-08-05 fix). The top bar built
+    /// `QAudionAvatar` with no `imageURL` argument at all, so it always
+    /// fell back to the initials placeholder regardless of what
+    /// `ContactsStore`/`AvatarAnnounceCoordinator` had cached for this
+    /// peer — the exact same class of bug the list row already had fixed,
+    /// just never ported to this screen. Visible as: chat list shows the
+    /// peer's real synced photo, tapping into the chat drops back to a
+    /// plain initials circle. Group avatars are out of scope here (no
+    /// single peer to key off) — same guard the list uses.
+    private var resolvedPeerAvatarUrl: URL? {
+        guard container.viewModel.conversation.kind != .group else { return nil }
+        return appState.cachedContacts.first(where: {
+            $0.userId == container.viewModel.conversation.peerUserId
+        })?.avatarUrl
     }
 
     var body: some View {
@@ -254,11 +317,11 @@ struct ChatDetailScreen: View {
             // SwiftUI struct literal trips Swift 6 / Xcode 26.4 type-checker
             // timeouts. See CLAUDE.md §13. Keep this pattern.
             let reasonText: String = reason.localizedDescription
-            let snackbarText: String = "Messaggio non inviato — " + reasonText
+            let snackbarText: String = String(localized: "chat_detail.message_send_failed", defaultValue: "Messaggio non inviato — \(reasonText)", comment: "Snackbar shown when a message fails to send; %@ is the localized failure reason description.")
             snackbar?.show(.init(
                 text: snackbarText,
                 severity: .error,
-                actionLabel: "Riprova",
+                actionLabel: String(localized: "chat_detail.retry_action", defaultValue: "Riprova", comment: "Snackbar action button label to retry sending a failed message."),
                 onAction: { container.retryFailedMessage() },
                 durationSeconds: 6
             ))
@@ -298,7 +361,7 @@ struct ChatDetailScreen: View {
                         pendingAttachmentSend = .image(data)
                     } else {
                         snackbar?.show(.init(
-                            text: "Nessuna immagine valida negli appunti.",
+                            text: String(localized: "chat_detail.no_valid_clipboard_image", defaultValue: "Nessuna immagine valida negli appunti.", comment: "Snackbar warning shown when the user taps \"paste image\" but the clipboard image could not be decoded to JPEG."),
                             severity: .warning, durationSeconds: 3))
                     }
                 } label: {
@@ -355,7 +418,7 @@ struct ChatDetailScreen: View {
                 onCopy: {
                     copyMessage(messageId: msgIdWrapper.id)
                     snackbar?.show(.init(
-                        text: "Testo copiato negli appunti.",
+                        text: String(localized: "chat_detail.text_copied", defaultValue: "Testo copiato negli appunti.", comment: "Snackbar confirming a message's text was copied to the clipboard from the bubble action sheet."),
                         severity: .info,
                         durationSeconds: 2
                     ))
@@ -418,7 +481,7 @@ struct ChatDetailScreen: View {
                 }
                 container.deleteMessage(target)
                 snackbar?.show(.init(
-                    text: "Messaggio eliminato per tutti.",
+                    text: String(localized: "chat_detail.message_deleted_for_all", defaultValue: "Messaggio eliminato per tutti.", comment: "Snackbar confirming a message was deleted for everyone after the destructive confirmation dialog."),
                     severity: .info,
                     durationSeconds: 2
                 ))
@@ -442,7 +505,7 @@ struct ChatDetailScreen: View {
             Button("Svuota", role: .destructive) {
                 container.clearLocalHistory()
                 snackbar?.show(.init(
-                    text: "Cronologia locale cancellata.",
+                    text: String(localized: "chat_detail.local_history_cleared", defaultValue: "Cronologia locale cancellata.", comment: "Snackbar confirming the local conversation history was cleared after the confirmation dialog."),
                     severity: .info,
                     durationSeconds: 2))
             }
@@ -543,6 +606,42 @@ struct ChatDetailScreen: View {
                 onOpenConversation: handleMeshOpenConversation
             )
         }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked control for
+        // (video call, mesh, file attach). `appState` re-applied
+        // explicitly, matching this app's existing convention for every
+        // other `.sheet`/`.fullScreenCover` whose content reads
+        // `@EnvironmentObject var appState` (see ContentView.swift).
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
+        // App Store 1.2 — report flow from the chat overflow menu.
+        .confirmationDialog("Segnala contatto",
+                            isPresented: $showReportDialog,
+                            titleVisibility: .visible) {
+            Button("Spam") { sendAbuseReport(category: "spam") }
+            Button("Abuso o molestie") { sendAbuseReport(category: "abuse") }
+            Button("Altro") { sendAbuseReport(category: "other") }
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi. Puoi anche bloccare il contatto dal menu.")
+        }
+    }
+
+    /// App Store 1.2 — E2EE abuse report for the peer of this chat.
+    private func sendAbuseReport(category: String) {
+        let peerId: String = container.viewModel.conversation.peerUserId
+        let peerName: String = container.viewModel.conversation.peerDisplayName
+        BugReporter.shared.reportAbuse(reportedUserId: peerId,
+                                       reportedGroupId: nil,
+                                       reportedName: peerName,
+                                       category: category,
+                                       note: "")
+        snackbar?.show(.init(
+            text: String(localized: "chat_detail.report_sent", defaultValue: "Segnalazione inviata.", comment: "Snackbar — an abuse report about the chat peer was sent"),
+            severity: .info,
+            durationSeconds: 2))
     }
 
     // MARK: - BLE mesh sheet callbacks (branch claude/ble-mesh-cleanroom-spike)
@@ -578,6 +677,7 @@ struct ChatDetailScreen: View {
 
             QAudionAvatar(
                 displayName: resolvedPeerTitle,
+                imageURL: resolvedPeerAvatarUrl,
                 kind: container.viewModel.conversation.kind == .group ? .group : .person,
                 size: 36,
                 // W72: prefer live presence from engine, fall back to model.
@@ -603,7 +703,12 @@ struct ChatDetailScreen: View {
 
             Spacer(minLength: 6)
 
-            PqcBadge(active: stubPqcActive)
+            // The PQC badge that sat here was `PqcBadge(active: true)` off a
+            // compile-time constant — lit in every chat on every device
+            // regardless of what key agreement actually happened. Deleted
+            // rather than wired to a real source, because post-quantum key
+            // agreement is unconditional in this app, so even a truthful
+            // indicator would restate nothing.
 
             // W445: ephemeral timer button. Tap opens the timer chooser.
             // Accent color signals when a timer is active so the user knows
@@ -628,7 +733,18 @@ struct ChatDetailScreen: View {
             .disabled(container.viewModel.conversation.kind == .group)
             .accessibilityLabel("Chiamata audio")
 
-            Button(action: startVideoCall) {
+            // Entitlements Task 5 — 1:1 video calling behind
+            // Capability.callsVideo (design doc §7.2, and Phase 5 server
+            // plan Task 7's honest-client WsDispatcher-equivalent gate on
+            // call_upgrade_request — this is the matching UI trigger).
+            // Audio stays ungated: feat.calls.voice is Base-tier per
+            // design doc §2, never gated (see CapabilityGate.swift's own
+            // enum doc for the excluded-rows list).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsVideo),
+                action: startVideoCall,
+                onLockedClick: { upgradeSheetCapability = .callsVideo }
+            ) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(scheme.onSurface)
@@ -654,7 +770,17 @@ struct ChatDetailScreen: View {
                 let conversationKey = container.viewModel.conversation.id.uuidString
                 let armed = meshRuntime.activeTarget(for: conversationKey) != nil
                 let peerNearby = meshChatPeerIsNearby
-                Button { showingMeshSheet = true } label: {
+                // Entitlements Task 5 — Capability.meshBle lock-badge. No
+                // hide-outright here: BLE hardware is universal on the
+                // phones this app targets (unlike NFC), so this is a
+                // paid-tier gate, not a hardware-absence case — matches
+                // Android's own reasoning at the same site
+                // (ChatDetailScreen.kt's Capability.MESH_BLE comment).
+                GatedActionButton(
+                    unlocked: capabilityGate.isUnlocked(.meshBle),
+                    action: { showingMeshSheet = true },
+                    onLockedClick: { upgradeSheetCapability = .meshBle }
+                ) {
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .font(.system(size: 18, weight: .regular))
                         .foregroundStyle(armed || peerNearby ? extras.pqcAccent : scheme.onSurface)
@@ -676,7 +802,7 @@ struct ChatDetailScreen: View {
                 if ssGranted == true {
                     Button {
                         container.revokeScreenshotPermission()
-                        snackbar?.show(.init(text: "Autorizzazione screenshot revocata.",
+                        snackbar?.show(.init(text: String(localized: "chat_detail.screenshot_permission_revoked", defaultValue: "Autorizzazione screenshot revocata.", comment: "Snackbar confirming the peer's screenshot permission was revoked from the chat overflow menu."),
                                              severity: .info))
                     } label: {
                         Label("Revoca screenshot", systemImage: "camera.badge.ellipsis")
@@ -684,7 +810,7 @@ struct ChatDetailScreen: View {
                 } else {
                     Button {
                         container.requestScreenshotPermission()
-                        snackbar?.show(.init(text: "Richiesta screenshot inviata.",
+                        snackbar?.show(.init(text: String(localized: "chat_detail.screenshot_request_sent", defaultValue: "Richiesta screenshot inviata.", comment: "Snackbar confirming a screenshot permission request was sent to the peer from the chat overflow menu."),
                                              severity: .info))
                     } label: {
                         Label("Richiedi screenshot", systemImage: "camera")
@@ -697,11 +823,18 @@ struct ChatDetailScreen: View {
                     Label("Svuota cronologia", systemImage: "tray")
                 }
                 Button(role: .destructive) {
+                    showReportDialog = true
+                } label: {
+                    Label("Segnala contatto", systemImage: "flag")
+                }
+                Button(role: .destructive) {
                     Task {
                         let ok = await container.toggleBlock()
                         await MainActor.run {
                             snackbar?.show(.init(
-                                text: ok ? "Contatto bloccato." : "Operazione fallita.",
+                                text: ok
+                                    ? String(localized: "chat_detail.contact_blocked", defaultValue: "Contatto bloccato.", comment: "Snackbar confirming the contact was blocked from the chat overflow menu.")
+                                    : String(localized: "chat_detail.operation_failed", defaultValue: "Operazione fallita.", comment: "Generic snackbar error shown when the block/unblock contact action fails."),
                                 severity: ok ? .info : .error,
                                 durationSeconds: 2))
                         }
@@ -992,7 +1125,8 @@ struct ChatDetailScreen: View {
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
                     durationMs: msg.mediaDurationMs ?? 0,
-                    shareRequest: mediaShareRequestBinding(for: msg.id)
+                    shareRequest: mediaShareRequestBinding(for: msg.id),
+                    onOpened: { markAttachmentRead(msg) }
                 )
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
                 ImageBubbleContent(
@@ -1003,6 +1137,7 @@ struct ChatDetailScreen: View {
                     galleryItems: galleryItems,
                     exportBlocked: msg.exportBlocked ?? false
                 )
+                .onAppear { markAttachmentRead(msg) }
             } else if let mime = msg.mediaMimeType, !mime.isEmpty {
                 // W446: generic file attachment (PDF, doc, archive, …) —
                 // anything with a mime that isn't audio/image lands here
@@ -1017,13 +1152,15 @@ struct ChatDetailScreen: View {
                     mediaLocalPath: msg.mediaLocalPath,
                     exportBlocked: msg.exportBlocked ?? false
                 )
+                .onAppear { markAttachmentRead(msg) }
             } else if let dur = msg.mediaDurationMs, dur > 0 {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
                     messageId: msg.id,
                     mediaLocalPath: msg.mediaLocalPath,
                     durationMs: dur,
-                    shareRequest: mediaShareRequestBinding(for: msg.id)
+                    shareRequest: mediaShareRequestBinding(for: msg.id),
+                    onOpened: { markAttachmentRead(msg) }
                 )
             } else {
                 Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
@@ -1127,7 +1264,7 @@ struct ChatDetailScreen: View {
             container.deleteMessageLocally(target)
         }
         snackbar?.show(.init(
-            text: "Messaggio eliminato per te.",
+            text: String(localized: "chat_detail.message_deleted_for_me", defaultValue: "Messaggio eliminato per te.", comment: "Snackbar confirming a message was deleted locally (for me only) from the bubble action sheet."),
             severity: .info,
             durationSeconds: 3
         ))
@@ -1138,7 +1275,7 @@ struct ChatDetailScreen: View {
     private func handleScreenAppear() {
         // Lock screenshots unless the peer has explicitly granted permission.
         let peerGranted = container.screenshotGrantedByPeer == true
-        if screenshotLockEnabled && !peerGranted {
+        if screenshotLockEnabled() && !peerGranted {
             ScreenshotLockService.lock()
         } else {
             ScreenshotLockService.unlock()
@@ -1209,7 +1346,7 @@ struct ChatDetailScreen: View {
         // Single-statement static method — minimal context, single
         // overload. Type-checker resolves instantly even when callers
         // are deep inside closure stacks.
-        return "\(failed) foto su \(total) non leggibili."
+        return String(localized: "chat_detail.photos_partial_unreadable", defaultValue: "\(failed) foto su \(total) non leggibili.", comment: "Snackbar warning when some of the selected photos could not be read from the picker; %lld/%lld = failed count / total count.")
     }
 
     /// W611: stage-2 counterpart to `photoFailureSnackbarText` above.
@@ -1220,9 +1357,9 @@ struct ChatDetailScreen: View {
     /// used to be a print-only silent drop with zero user feedback.
     private static func photoSendFailureSnackbarText(failed: Int, total: Int) -> String {
         if total == 1 {
-            return "Invio foto non riuscito: formato non valido o file troppo grande."
+            return String(localized: "chat_detail.photo_send_failed_single", defaultValue: "Invio foto non riuscito: formato non valido o file troppo grande.", comment: "Snackbar error when sending a single photo attachment fails because the format is invalid or the file is too large.")
         }
-        return "\(failed) foto su \(total) non inviate: formato non valido o file troppo grandi."
+        return String(localized: "chat_detail.photos_send_failed_multi", defaultValue: "\(failed) foto su \(total) non inviate: formato non valido o file troppo grandi.", comment: "Snackbar error when sending multiple photo attachments and some failed because the format is invalid or the files are too large; %lld/%lld = failed count / total count.")
     }
 
     // MARK: - W447: pre-send attachment timer dialog — dispatch
@@ -1342,6 +1479,16 @@ struct ChatDetailScreen: View {
             onAttach: { showAttachmentChoice = true },
             // W445: file attachment callback — opens UIDocumentPickerViewController.
             onAttachFile: { showingDocPicker = true },
+            // Entitlements Task 5 — Capability.files (server already
+            // enforces this at tus HandlePost/IssueToken, Phase 5 server
+            // plan Task 2; this is the matching UI trigger). Gates BOTH
+            // composer attach affordances (photo/camera/paste picker AND
+            // the direct document picker) — this app splits what
+            // Android's single AttachFile icon does into two icons, but
+            // both are real "send a file/attachment" entry points funneling
+            // into the same server-gated upload path.
+            filesUnlocked: capabilityGate.isUnlocked(.files),
+            onFilesLocked: { upgradeSheetCapability = .files },
             onSend: handleSend,
             onCancelEdit: { editingTarget = nil },
             onCancelReply: { replyTarget = nil },
@@ -1468,6 +1615,26 @@ struct ChatDetailScreen: View {
         )
     }
 
+    /// Bug found live 2026-08-18 — sends a "read" `qa_att_receipt:1` to
+    /// the original sender the first time an INBOUND file/voice-note row
+    /// is actually opened. `msg.status != .read` doubles as a local dedup
+    /// guard against a re-tap or a bubble scrolling in/out of view
+    /// repeatedly. No-op for outbound rows, text rows, or rows predating
+    /// this field (`wireAttachmentId == nil` — nothing to match against
+    /// on the sender's side anyway).
+    private func markAttachmentRead(_ msg: Message) {
+        guard msg.direction == .incoming, msg.status != .read,
+              let wireId = msg.wireAttachmentId, !wireId.isEmpty
+        else { return }
+        let senderId = msg.senderUserId ?? container.viewModel.conversation.peerUserId
+        let store = ConversationStore()
+        store.updateMessageStatus(id: msg.id, conversationId: msg.conversationId, newStatus: .read, readAt: Date())
+        Task {
+            await appState.sendAttachmentReceipt(
+                recipientId: senderId, wireId: wireId, status: AttachmentReceiptEnvelope.statusRead)
+        }
+    }
+
     private func startAudioCall() {
         guard container.viewModel.conversation.kind != .group else { return }
         let peerId = container.viewModel.conversation.peerUserId
@@ -1503,6 +1670,7 @@ struct ChatDetailScreen: View {
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
@@ -1620,5 +1788,6 @@ struct DocumentPicker: UIViewControllerRepresentable {
         )
     }
     .environmentObject(AppState())
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }

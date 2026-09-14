@@ -19,7 +19,11 @@ final class AudioProfileTests: XCTestCase {
         XCTAssertEqual(p.blockBytes, 120)
         XCTAssertEqual(p.samplesPerFrame, 960)
         XCTAssertEqual(p.bytesPerFrame, 1920)
-        XCTAssertEqual(p.opusBytes(), 80)
+        // W-OPUSHEADROOM (2026-08-27): opusBitrate raised 32000->40000 for this
+        // profile (real headroom under the 41,600 ceiling below, zero
+        // wire-size change - see AudioConstants.opusBitrate's own kdoc). 100
+        // bytes at 40 kbps / 20 ms, was 80 at 32 kbps.
+        XCTAssertEqual(p.opusBytes(), 100)
         XCTAssertEqual(p.maxBitrateBps, 41600)
     }
 
@@ -29,17 +33,24 @@ final class AudioProfileTests: XCTestCase {
         XCTAssertEqual(p.blockBytes, 256)
         XCTAssertEqual(p.samplesPerFrame, 2880)
         XCTAssertEqual(p.bytesPerFrame, 5760)
-        XCTAssertEqual(p.opusBytes(), 240)
+        // W-OPUSHEADROOM (2026-08-27): this profile has ZERO headroom (its own
+        // maxBitrateBps below is already 32,000) and stays clamped there in
+        // real usage — unlike the standard profile above, opusBytes() must be
+        // called with the CLAMPED rate explicitly, not the raised global
+        // default (which would compute an over-block 300 bytes and was
+        // exactly the overflow-to-silence hazard this file exists to catch).
+        XCTAssertEqual(p.opusBytes(bitrateBps: 32000), 240)
         XCTAssertEqual(p.maxBitrateBps, 32000)
     }
 
     /// The block is exactly `2 + opus + filler`, and the filler is what is left.
-    /// 38 spare bytes at 120/20; 14 at 256/60 — and those 14 are
-    /// `blockSafetyBytes`, i.e. NOT budget.
+    /// 18 spare bytes at 120/20 (40 kbps, W-OPUSHEADROOM); 14 at 256/60 (still
+    /// 32 kbps, zero headroom) — and those 14 are `blockSafetyBytes`, i.e. NOT
+    /// budget.
     func test_blockAccounting_addsUp() {
-        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.standard.opusBytes() + 38,
+        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.standard.opusBytes() + 18,
                        AudioProfile.standard.blockBytes)
-        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.long60x256.opusBytes() + 14,
+        XCTAssertEqual(AudioConstants.lengthHeaderBytes + AudioProfile.long60x256.opusBytes(bitrateBps: 32000) + 14,
                        AudioProfile.long60x256.blockBytes)
         XCTAssertEqual(AudioConstants.blockSafetyBytes, 14)
     }
@@ -167,16 +178,52 @@ final class AudioProfileTests: XCTestCase {
         XCTAssertEqual(AudioConstants.playbackRingBufferFrames, 10)
     }
 
-    /// The tuning constants this change must NOT redefine.
+    /// The tuning constants this (W-LONGAUDIO) change must NOT redefine.
+    /// `opusBitrate` is deliberately NOT asserted here any more — it moved
+    /// 32000 -> 40000 under W-OPUSHEADROOM (2026-08-27), a later, unrelated
+    /// change; see `AudioConstantsTests.testOpusBitrate` for its current
+    /// value and the tests below for why raising it is safe.
     func test_defaultConstants_keepTheirValues() {
         XCTAssertEqual(AudioConstants.frameDurationMs, 20)
         XCTAssertEqual(AudioConstants.samplesPerFrame, 960)
         XCTAssertEqual(AudioConstants.bytesPerFrame, 1920)
         XCTAssertEqual(AudioConstants.blockBytesStandard, 120)
         XCTAssertEqual(AudioConstants.blockBytesLong, 256)
-        XCTAssertEqual(AudioConstants.opusBitrate, 32000)
         XCTAssertEqual(AudioConstants.maxFrameDurationMs, 60)
         XCTAssertEqual(AudioConstants.maxSamplesPerFrame, 2880)
         XCTAssertEqual(AudioConstants.maxBytesPerFrame, 5760)
+    }
+
+    // MARK: - W-OPUSHEADROOM (2026-08-27): the shared 40 kbps preferred base
+
+    /// The base preferred bitrate must never itself exceed the LOOSEST
+    /// ceiling any profile offers — the standard profile's, since the long
+    /// profile's is tighter and is covered by its own clamp regardless.
+    /// This is the ceiling computation from first principles, independent of
+    /// the `AudioProfile.standard.maxBitrateBps` convenience property, so a
+    /// bug in one cannot hide behind the other.
+    func test_opusBitrate_neverExceedsTheStandardProfileCeiling() {
+        let ceiling = AudioConstants.maxBitrateForBlock(blockBytes: 120, frameDurationMs: 20)
+        XCTAssertEqual(ceiling, 41600)
+        XCTAssertLessThanOrEqual(AudioConstants.opusBitrate, ceiling)
+    }
+
+    /// The construction path every real call uses (`OpusCodec.Config(profile:)`,
+    /// via `QAudionEngine.initialize()`/`latchAudioProfile()`) takes the new
+    /// 40 kbps base and clamps it to EXACTLY 32 kbps for a call latched to the
+    /// fleet-default long profile — zero headroom, unchanged from before this
+    /// constant moved. This is the single fact that makes raising the base
+    /// safe: the clamp already existed and already used the ACTIVE profile.
+    func test_defaultBitrate_clampsToExactly32kbpsOnTheLongProfile() {
+        let cfg = OpusCodec.Config(profile: .long60x256)
+        XCTAssertEqual(cfg.bitrate, 32000)
+    }
+
+    /// The same base bitrate reaches the standard profile UNCLAMPED — the
+    /// 8 kbps of headroom `blockSafetyBytes` was reserved for.
+    func test_defaultBitrate_reachesTheStandardProfileUnclamped() {
+        let cfg = OpusCodec.Config(profile: .standard)
+        XCTAssertEqual(cfg.bitrate, AudioConstants.opusBitrate)
+        XCTAssertEqual(cfg.bitrate, 40000)
     }
 }

@@ -79,4 +79,45 @@ final class AcceptGateDecisionsTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - shouldAcceptAnswer (W-ANSWERBEFOREREADY, 2026-09-08)
+
+    /// THE REGRESSION. `call_answer` can win the race against `call_ready` —
+    /// the caller is still pre-ring `.active`, not yet `.ringing`. It must
+    /// still be handed to `resolve`, not dropped (live, call bba2aeca).
+    func testAnswerBeforeReadyIsAccepted() {
+        XCTAssertTrue(
+            Sut.shouldAcceptAnswer(isRinging: false, isPreRingActive: true, alreadyFinalized: false))
+    }
+
+    /// The ordinary case — `call_ready` won the race, caller is `.ringing`
+    /// — must keep working exactly as before this call existed.
+    func testAnswerAfterReadyIsAccepted() {
+        XCTAssertTrue(
+            Sut.shouldAcceptAnswer(isRinging: true, isPreRingActive: false, alreadyFinalized: false))
+    }
+
+    /// Neither `.ringing` nor pre-ring `.active` (e.g. `.idle`, `.connecting`,
+    /// a stray answer for a call never dialed) — nothing to latch onto.
+    func testAnswerInAnUnrelatedStateIsRejected() {
+        XCTAssertFalse(
+            Sut.shouldAcceptAnswer(isRinging: false, isPreRingActive: false, alreadyFinalized: false))
+    }
+
+    /// `.active` is ALSO `finalizeCallActive()`'s own non-PQC outcome — a
+    /// `call_answer` redelivered afterward (WS reconnect requeues call-setup
+    /// envelopes) must not re-open a latch that already closed, even though
+    /// `callState` alone looks identical to the pre-ring case.
+    func testRedeliveredAnswerAfterFinalizeIsRejectedEvenWhilePreRingActiveLooksTrue() {
+        XCTAssertFalse(
+            Sut.shouldAcceptAnswer(isRinging: false, isPreRingActive: true, alreadyFinalized: true))
+    }
+
+    /// Same for a redelivery caught while `.ringing` (finalize can also land
+    /// on `.encrypted`, but a slow observer or another redelivery could still
+    /// see `.ringing` stick around) — `alreadyFinalized` wins regardless.
+    func testRedeliveredAnswerAfterFinalizeIsRejectedEvenWhileRingingLooksTrue() {
+        XCTAssertFalse(
+            Sut.shouldAcceptAnswer(isRinging: true, isPreRingActive: false, alreadyFinalized: true))
+    }
 }

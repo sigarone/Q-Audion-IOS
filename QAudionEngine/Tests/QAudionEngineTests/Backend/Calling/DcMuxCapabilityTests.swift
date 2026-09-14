@@ -10,8 +10,10 @@ import XCTest
 /// three things asserted here are the three things whose breakage is invisible
 /// until a real cross-platform call is silent:
 ///
-///   1. the kill switch really ships OFF, and the tag really is absent from the
-///      advertised list while it is;
+///   1. the kill switch's value really matches its own documented
+///      preconditions (see ``CallCapabilities/dcMuxAdvertiseEnabled``), and
+///      the tag's presence in the advertised list tracks the switch exactly
+///      in either state;
 ///   2. the advertisement gates never strip the tag — it is a TRANSPORT
 ///      statement, orthogonal to the sovereign/earbud key-custody policy those
 ///      gates enforce;
@@ -19,13 +21,17 @@ import XCTest
 ///      Android and Desktop compare against.
 ///
 /// Why (1) is not paranoia: advertising this tag makes an Android peer STOP
-/// routing audio through the WS relay and expect a DataChannel — it skips the
-/// eager-WS leg on a fast ICE convergence (`CallTransportFactory.kt:722-735`)
-/// and destroys the relay leg on an upgrade (`:824-828`). Desktop shipped the
-/// tag before its own DC path was reliable and wrote the outcome down in
-/// `CallCapabilities.ts:76-83`: the two ends sat on opposite transports and the
-/// call was silent. Advertising a path that is not there does not degrade a
-/// call, it kills it.
+/// eagerly routing audio through the WS relay and prefer the DataChannel once
+/// it opens. Desktop shipped the tag before its own DC path was reliable and
+/// wrote the outcome down in `CallCapabilities.ts:76-83`: the two ends sat on
+/// opposite transports and the call was silent. Advertising a path that is
+/// not there does not degrade a call, it kills it. Android's own historical
+/// version of that same failure — destroying the WS relay receive pump on a
+/// DataChannel upgrade — is what `dcMuxAdvertiseEnabled`'s doc comment cites
+/// as condition (b); as of `qaudion-android-new`'s current
+/// `CallTransportFactory.kt` (`ResilientFrameRelayTransport`) that specific
+/// failure mode is redesigned away, not merely avoided by luck: both receive
+/// pumps live for the whole call regardless of which leg is transmitting.
 ///
 /// No WebRTC import: every value tested is a pure constant or a pure function,
 /// so this runs on a CI machine without the WebRTC binary.
@@ -33,13 +39,35 @@ final class DcMuxCapabilityTests: XCTestCase {
 
     // MARK: - 1. the kill switch, and what it gates
 
-    func testDcMuxAdvertiseKillSwitchShipsOff() {
-        XCTAssertFalse(
+    /// 2026-08-25 — this test used to assert the switch ships OFF
+    /// unconditionally. Like the original, it still asserts a fixed value —
+    /// a unit test cannot itself re-derive "does production log evidence
+    /// exist" or "does today's Android source have this design" — but the
+    /// expected value flips to `true` because both preconditions the
+    /// original assertion message named have now been checked against real
+    /// evidence rather than assumed: (a) Phase 0 log evidence the
+    /// DataChannel opens and carries frames on a real Android<->iOS call —
+    /// call `532a3161` (2026-08-22 Loki correlation), dc=2717/ws=33; (b)
+    /// "the Android WS-receive-fallback companion change" — verified
+    /// present in `qaudion-android-new`'s `CallTransportFactory.kt`
+    /// (`ResilientFrameRelayTransport`: WS and DC receive pumps both live
+    /// for the whole call regardless of the active transmit leg) and pinned
+    /// there by `ResilientTransportLegSymmetryTest.kt`. Full citation trail
+    /// in `dcMuxAdvertiseEnabled`'s own doc comment. If a future change
+    /// flips the flag back to `false`, that means one of the two conditions
+    /// regressed — update this assertion AND investigate why, in that
+    /// order, same as any other kill-switch state change in this file.
+    func testDcMuxAdvertiseKillSwitchMatchesItsDocumentedPreconditions() {
+        XCTAssertTrue(
             CallCapabilities.dcMuxAdvertiseEnabled,
-            "dc-mux-v1 must ship UNADVERTISED. Flipping this is a deliberate "
-            + "release step that requires (a) Phase 0 evidence from logs that "
-            + "the DataChannel opens and carries frames on a real Android<->iOS "
-            + "call, and (b) the Android WS-receive-fallback companion change.")
+            "dc-mux-v1 advertisement requires (a) Phase 0 evidence from logs "
+            + "that the DataChannel opens and carries frames on a real "
+            + "Android<->iOS call, and (b) the Android WS-receive-fallback "
+            + "companion change. Both were verified with citations as of "
+            + "2026-08-25 (see CallCapabilities.dcMuxAdvertiseEnabled's doc "
+            + "comment) — if this now reads false, re-check whether (a) or "
+            + "(b) actually regressed before assuming this assertion is "
+            + "simply stale.")
     }
 
     func testLocalOmitsDcMuxWhileKillSwitchIsOff() {

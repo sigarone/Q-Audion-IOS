@@ -61,7 +61,15 @@ let package = Package(
         // ios-testflight.yml). QAudionEngine's own swift-tools-version (5.9, top of
         // this file) is unaffected — a package can depend on a higher-swift-tools-
         // version package as long as the actual toolchain resolves it.
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
+        // MASVS I5 (2026-08-21) — switched from `from:` to `exact:`, matching
+        // onnxruntime-spm's own pin below and every other dependency in this
+        // manifest that has a committed Package.resolved to anchor an exact
+        // version against (`from:` lets a future `swift package update` drift
+        // to any 7.x without anyone noticing). 7.11.1 is the version this
+        // package actually resolved to, confirmed via the real CI-produced
+        // Package.resolved now committed at
+        // QAudionApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/.
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
         // W-GRPLIVEKIT: self-hosted LiveKit SFU for group calls (audio, +video
         // later) with native per-participant E2EE (RTCFrameCryptor). Pinned to
         // an EXACT tag (not `from:`) — same discipline as onnxruntime-spm above.
@@ -142,38 +150,109 @@ let package = Package(
         // call-waiting/concurrent-call scenario would need explicit
         // handoff between the two.
         //
-        // AES-256 fork (sigarone/client-sdk-swift, tag 2.15.1-aes256-raw,
-        // rebased from 2.13.1-aes256-raw's same two commits onto upstream
-        // 2.15.1): (1) redirects the transitive webrtc-xcframework
-        // dependency to sigarone/webrtc-xcframework@144.7559.10-aes256-livekit
-        // (itself rebuilt via sigarone/webrtc-aes256-build's
-        // build-livekit-ios.yml from sigarone/webrtc@f47af7bc9658 — one day
-        // before livekit/webrtc-xcframework's real 144.7559.10 cut on
-        // 2026-06-16, same day-prior matching methodology already validated
-        // for 144.7559.03; verified in the build log: LK-prefixed symbols
+        // AES-256 fork (sigarone/client-sdk-swift, tag 2.16.0-aes256-raw4,
+        // rebased from 2.15.3-aes256-raw3's same 3 commits onto upstream
+        // 2.16.0 on 2026-08-21 — jumped straight past 2.15.3 same day per
+        // explicit request, to not fall behind LiveKit again right before
+        // this resubmission): (1) redirects the transitive
+        // webrtc-xcframework dependency to
+        // sigarone/webrtc-xcframework@144.7559.10-aes256-livekit (itself
+        // rebuilt via sigarone/webrtc-aes256-build's build-livekit-ios.yml
+        // from sigarone/webrtc@f47af7bc9658 — one day before
+        // livekit/webrtc-xcframework's real 144.7559.10 cut on 2026-06-16,
+        // same day-prior matching methodology already validated for
+        // 144.7559.03; verified in the build log: LK-prefixed symbols
         // present, "AES-256 GCM using openssl" string present in the
         // binary), carrying the same aes256-framecryptor.patch as this
         // app's own WebRTC binaryTarget below — group-call media gets
         // AES-256-GCM instead of the fixed AES-128 FrameCryptor once a
         // 32-byte shared key is supplied (matches the Android wiring).
-        // (2) a raw-Data `setKey(keyData:participantId:index:)` overload on
-        // `BaseKeyProvider` that hands the bytes VERBATIM to
+        // STILL pinned at 144.7559.10-aes256-livekit even though 2.16.0
+        // upstream itself moved to 144.7559.11: no aes256 build of .11
+        // exists yet (needs the native rebuild pipeline on a Mac — not run
+        // this pass), and the checked upstream 2.15.1..2.16.0 diff touches
+        // zero files under Sources/LiveKit/E2EE/ beyond the setKey(keyData:)
+        // overload upstream added itself (see below), so staying one
+        // WebRTC binary behind is safe for this release. (2) upstream
+        // 2.16.0 added ITS OWN `setKey(keyData: Data, ...)` overload
+        // (byte-identical body to the one this fork carried since
+        // 2.15.1-aes256-raw) that hands the bytes VERBATIM to
         // `LKRTCFrameCryptorKeyProvider` (the String overload UTF-8-encodes,
         // so a 44-char base64 key can never fire the patched native
-        // `password.size() == 32 ? 256 : 128` gate). `LiveKitGroupCallRoom`
-        // feeds the RAW 32-byte SK_0 through this overload -> native
-        // derives AES-256-GCM. Every other file/line in client-sdk-swift
-        // 2.15.1 is untouched — same-tag-shape fork, not a rewrite.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.15.1-aes256-raw2"),
-        // W610 (PENDING): iCepa/Tor.swift — embedded Tor for iOS.
-        // The SPM package URL https://github.com/iCepa/Tor.swift returns 404 on
-        // GitHub Actions — the repo does not exist at that path. Dependency
-        // temporarily removed; EmbeddedTorManager compiles against the stub branch
-        // (#else of #if canImport(Tor)) which throws TorError.notAvailable so
-        // TorObfsTransport falls back to external Orbot (port 9050).
-        // TODO: locate the correct SPM-compatible Tor XCFramework URL and re-add.
-        // Candidates: https://github.com/iCepa/Tor.framework (Obj-C, needs wrapper)
-        //             or a third-party SPM mirror of the Tor binary.
+        // `password.size() == 32 ? 256 : 128` gate) — this rebase dropped
+        // the fork's now-duplicate declaration and kept upstream's,
+        // layering (3) below on top of it. `LiveKitGroupCallRoom` feeds the
+        // RAW 32-byte SK_0 through this overload -> native derives
+        // AES-256-GCM. (3) per-participant FrameCryptor keyIndex pinning
+        // (W-GRPKEYPIN-SWIFT) — upstream did NOT pick this up on its own
+        // (E2EEManager.swift unchanged 2.15.3->2.16.0), still fork-only.
+        // This rebase ALSO carries upstream's own fix for Apple's
+        // ITMS-90338 rejection (Guideline 2.5.1):
+        // Broadcast/BroadcastManager.swift no longer calls the non-public
+        // `buttonPressed:` selector (removed upstream in 2.15.3, PR #1065 /
+        // commit 11a2c490, still present in 2.16.0), using public
+        // `UIButton.sendActions` instead. Every other file/line in
+        // client-sdk-swift 2.16.0 is untouched — same-tag-shape fork, not a
+        // rewrite.
+        //
+        // 2026-08-26: tried bumping to raw5 (webrtc-xcframework@
+        // 144.7559.10-aes256-livekit-native-pli, same native-pli.patch as the
+        // direct-call WebRTC binaryTarget below) to close the group-call
+        // native-PLI parity gap — REVERTED same day, stayed on raw4/
+        // 144.7559.10-aes256-livekit. The native-pli rebuild of
+        // LiveKitWebRTC.xcframework was MISSING `RTCAudioProcessingState.h`
+        // (confirmed: downloaded both release zips and diffed the actual
+        // Headers/ file listing under ios-arm64 — that one file was the only
+        // difference), which client-sdk-swift's own
+        // AudioProcessingModes.swift/AudioProcessingOptions.swift/
+        // RTC.swift/AudioManager.swift/LocalAudioTrack.swift reference —
+        // real CI compile failure (`gh run 32964484046`), not a
+        // hypothetical.
+        //
+        // ROOT-CAUSED AND FIXED, same day: build-livekit-ios.yml's
+        // `webrtc_ref` workflow_dispatch default had gone stale. It read a
+        // tag pinned to a sigarone/webrtc commit dated 2026-03-30, but the
+        // known-good 144.7559.10-aes256-livekit build (and every other
+        // -aes256-livekit build referenced in this file's history above) was
+        // actually produced by manually overriding that input to
+        // f47af7bc9658-livekit-aes256-7559.10 (2026-06-15) — the YAML
+        // default was never updated to match. `RTCAudioProcessingState.h`
+        // does not exist anywhere in sigarone/webrtc's tree at the March
+        // commit (confirmed via the GitHub Trees API, non-truncated) but
+        // does exist at the June commit — genuine upstream content drift
+        // between the two pins, not a build-script or patch bug; native-
+        // pli.patch itself never touched this file, as suspected. Fixed at
+        // the source (sigarone/webrtc-aes256-build@506c59d re-pins the
+        // default to f47af7bc9658-livekit-aes256-7559.10 itself), rebuilt as
+        // release tag webrtc-ios-aes256-livekit-m144-native-pli-2, and
+        // VERIFIED by downloading the new zip and diffing its Headers/
+        // listing against the known-good build: 112/112 files match,
+        // RTCAudioProcessingState.h present — not just a green CI check.
+        // webrtc-xcframework re-tagged 144.7559.10-aes256-livekit-native-
+        // pli-2 (checksum b7a999c1ceb087dc818b28f9d65923e62e7d7b17bfcb8e78
+        // ed497eed9e14e96e for the underlying LiveKitWebRTC.xcframework.zip)
+        // and client-sdk-swift rebased onto it as 2.16.0-aes256-raw6 (raw5
+        // is the broken tag above, left as-is/unused rather than reused).
+        // Group-call native-PLI parity now shipped: this pin closes the gap
+        // the direct-call WebRTC binaryTarget below already had.
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw6"),
+        // W610 (REMOVED 2026-09-14): embedded Tor support for iOS has been
+        // removed entirely, on every platform, not just deprioritized here.
+        // Product decision: this app's censorship-bypass need is bypassing
+        // blocked/closed networks, not anonymity — Tor's fixed ~300-800ms
+        // per-hop latency (3-hop onion circuit) materially degrades
+        // real-time voice, and the app shipped no pluggable-transport
+        // bridges (no obfs4/meek/snowflake), so plain Tor was often blocked
+        // outright by real state-level censorship anyway (well-known guard-
+        // relay IPs get blocklisted) while Reality's TLS-disguise approach
+        // is comparably or more resistant AND single-hop. `EmbeddedTorManager`
+        // and `TorObfsTransport` were deleted along with this dependency
+        // entry (they only ever compiled against the `#else` stub branch —
+        // the SPM package URL https://github.com/iCepa/Tor.swift 404s, so a
+        // working embedded Tor build never actually shipped on iOS). Reality
+        // (VLESS+REALITY over xray-core) is now the sole censorship-bypass
+        // mechanism, on every platform, for consistency. Do not re-attempt
+        // sourcing a working Tor SPM package — this line of work is closed.
         //
         // REALITY: RealityManager.swift's real `#if canImport(Reality)` branch is wired
         // below — see `hasRealityXcframework` at the top of this file for how the
@@ -259,15 +338,24 @@ let package = Package(
             ]
         ),
         // WebRTC with H265/HEVC + AES-256-GCM FrameCryptor — patched build of
-        // webrtc-sdk M144 (same RTC* API as 144.7559.10). Single-hunk patch:
-        // DeriveKeys(..., password.size()==32?256:128) forces AES-256-GCM when
-        // a 32-byte K_video is set (stock binary hardcodes 128). H265 enabled
-        // (rtc_use_h265=true). Built via sigarone/webrtc-aes256-build@webrtc-ios-aes256-m144.
-        // Checksum = SHA256(WebRTC.xcframework.zip).
+        // webrtc-sdk M144 (same RTC* API as 144.7559.10). Two patches applied
+        // in sequence: (1) DeriveKeys(..., password.size()==32?256:128) forces
+        // AES-256-GCM when a 32-byte K_video is set (stock binary hardcodes
+        // 128); (2) native-pli.patch (W-NATIVEPLI, 2026-08-26) adds an
+        // unconditional, rate-limited FrameCryptionState.kDecryptionFailed
+        // notification on a real decrypt-tag-mismatch — the native signal
+        // Android's AAR rebuild added the same day (`project_aar_rebuild_
+        // 2026_08_25` memory), ported here to close the iOS/Android parity
+        // gap found `project_aar_ios_parity_audit_2026_08_26`. H265 enabled
+        // (rtc_use_h265=true). Built via
+        // sigarone/webrtc-aes256-build@webrtc-ios-aes256-m144-native-pli.
+        // Checksum = SHA256(WebRTC.xcframework.zip), independently verified
+        // against the GitHub release asset digest before this edit, not
+        // just copied from the build log.
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144/WebRTC.xcframework.zip",
-            checksum: "44f0779e18e86c9b65e03592ee8d28d667d8bc3218fc401f4c7f393353fbb410"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144-native-pli/WebRTC.xcframework.zip",
+            checksum: "dbaefe2aff6eabff29320bea00c1f85b6cab774457721bc8c509e896f95701b9"
         ),
         .target(
             name: "QAudionEngine",
@@ -285,7 +373,7 @@ let package = Package(
                 // dependency comment above for the dual-WebRTC coexistence
                 // rationale (LK-prefixed symbols, renamed framework bundle).
                 .product(name: "LiveKit", package: "client-sdk-swift"),
-                // Tor.swift removed — see W610 note in dependencies above.
+                // Tor.swift removed entirely (W610, 2026-09-14) — see note in dependencies above.
             ] + (hasRealityXcframework ? [.target(name: "Reality", condition: .when(platforms: [.iOS]))] : []),
             path: "Sources/QAudionEngine",
             resources: [
@@ -295,7 +383,28 @@ let package = Package(
                 // verification) — SAME asset Android already ships
                 // (qaudion-engine/src/main/assets/models/campplus_sv_voxceleb_16k.onnx),
                 // SHA-256 pinned in CamPlusSpeakerEmbedder.swift.
-                .copy("Resources/campplus_sv_voxceleb_16k.onnx")
+                .copy("Resources/campplus_sv_voxceleb_16k.onnx"),
+                // 2026-09-02: AS-Norm impostor cohort for SpeakerCohortNormalizer
+                // (RemoteSpeakerChangeMonitor's score feed) — SAME bytes Android
+                // ships at qaudion-engine/src/main/assets/models/speaker_cohort_v1.bin
+                // (80 x 512 float32 LE prototypes, no header). See that class's kdoc.
+                .copy("Resources/speaker_cohort_v1.bin"),
+                // Entitlement (EGT) signing pubkey pinned as a build asset,
+                // design doc §3.5 — SAME bytes Android ships at
+                // app/src/main/assets/bcrypto_entitlement_pubkey.pem.
+                // ⚠️ PLACEHOLDER: a throwaway test keypair, not the real
+                // server ent-v1 key (not issued yet). Loaded by
+                // EntitlementPublicKey.swift; the ship-guard for swapping it
+                // is EntitlementPublicKeyTests, currently skipped on purpose.
+                .copy("Resources/bcrypto_entitlement_pubkey.pem"),
+                // TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — DEDICATED
+                // remote-wipe signing pubkey, deliberately a SEPARATE key
+                // from the entitlement one above (different purpose,
+                // different blast radius). Loaded by
+                // WipeSigningPublicKey.swift; same placeholder/ship-guard
+                // discipline as bcrypto_entitlement_pubkey.pem — see that
+                // file's kdoc.
+                .copy("Resources/wipe_signing_pubkey.pem")
             ]
         ),
         .testTarget(
@@ -323,6 +432,12 @@ let package = Package(
                 .copy("Video/Resources/sframe-video-kat.json"),
                 .copy("Crypto/Resources/handshake-sig-kat.json"),
                 .copy("Crypto/Resources/psk-mix-v1-kat.json"),
+                // W-GRPAUDIOKEY (2026-08-27) — group-call SFU-outage
+                // fallback-audio session/frame-key derivation, byte-for-byte
+                // shared cross-platform with Desktop/Android (see
+                // GroupAudioSessionKeyKatTests.swift + GroupSenderKey's
+                // W-GRPAUDIOKEY extension).
+                .copy("Crypto/Resources/group-audio-kat.json"),
                 // WIRE_SPEC §3.3.1 blinded PSK advertisement. Written here by
                 // bcrypto-server/tools/kat/gen_psk_advert_v3_kat.py, which emits all
                 // six fleet copies in one run so they cannot drift apart.

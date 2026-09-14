@@ -36,6 +36,53 @@ public final class PushKitProvider {
         public var hasVideo: Bool { callType == "video" }
     }
 
+    /// TRUST-6 (`docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md`, security
+    /// audit backlog item 9) — decoded form of an opaque incoming-call wake
+    /// push: `{"type":"opaque_wakeup","kind":"call","shash":"<hex>","ts":"<unix
+    /// seconds>"}`. Deliberately carries NO caller identity, NO `call_id` —
+    /// that is the whole point (the plaintext `ParsedPayload` above is what
+    /// TRUST-6 flags: `call_id`/`caller_id`/`caller_name`/`call_type` visible
+    /// in cleartext push metadata to Apple/the server even though the call's
+    /// content is E2EE). `senderHash`/`timestamp` are logged/telemetry only —
+    /// never used to establish identity or to correlate with a specific call;
+    /// the real call details are learned exclusively over the already-
+    /// authenticated signaling WebSocket after this wakes the app. Public so
+    /// unit tests can use it.
+    ///
+    /// Wire shape mirrors bcrypto-server's EXISTING `opaque_wakeup` pattern
+    /// for messages (`internal/push/fcm.go`'s `SendOpaquePush`: `type`,
+    /// `kind`, `shash`, `ts` — same field names, `kind` there is presumably
+    /// "message"/similar, here `"call"`). That pattern is FCM/WNS-only today
+    /// (`internal/push/apns.go` has no `opaque_wakeup` sender at all — iOS
+    /// currently has no push-driven message wake path whatsoever, messages
+    /// rely entirely on the persistent WS) — there is no existing iOS
+    /// opaque-wakeup precedent to literally copy, so the field names are
+    /// carried over from the FCM/WNS shape instead, as the closest real
+    /// cross-platform contract to stay consistent with.
+    public struct OpaqueCallWakeupPayload: Equatable, Sendable {
+        /// `kind` field, always "call" for anything this type parses
+        /// (guaranteed by `parseOpaqueCallWakeup`'s own gate).
+        public let kind: String
+        /// `shash` — a non-identifying hash, opaque to this client. Never
+        /// decoded/reversed; carried through only for diagnostics.
+        public let senderHash: String
+        /// `ts` — unix seconds the server sent the wakeup. Diagnostics only
+        /// (staleness of the PUSH, not of the eventual call — that is
+        /// `call_incoming`'s own `server_ts_ms`/W-OFFERTS gate).
+        public let timestamp: Int64
+    }
+
+    /// W-CANCELPUSH (2026-09-03) — decoded form of the `type ==
+    /// "call_cancelled"` VoIP payload (server: `internal/push/apns.go`
+    /// `SendVoIPCallCancel`/`SendAlertCallCancel`). Wire: `{call_id}` only —
+    /// deliberately no caller identity, this is a stop-ringing signal for a
+    /// call the RECEIVING side already knows about (it already showed the
+    /// ring from the original `incoming_call` push), not new information.
+    /// Public so unit tests can use it.
+    public struct ParsedCancelPayload: Equatable, Sendable {
+        public let callId: UUID
+    }
+
     public enum DecodeError: Error {
         case wrongType(String)
         case missingField(String)
@@ -93,6 +140,47 @@ public final class PushKitProvider {
         )
     }
 
+    /// TRUST-6 — stateless parser for the opaque call-wakeup VoIP payload.
+    /// Pure function, testable on any platform, same discipline as
+    /// `parsePayload`/`parseGroupPayload` above. `kind` MUST be exactly
+    /// `"call"` — a bare `opaque_wakeup` with a different (or missing)
+    /// `kind` is some OTHER wakeup type this parser does not own and must
+    /// reject, not silently accept as a call.
+    public static func parseOpaqueCallWakeup(_ dict: [String: Any]) throws -> OpaqueCallWakeupPayload {
+        guard let type = dict["type"] as? String, type == "opaque_wakeup" else {
+            throw DecodeError.wrongType(dict["type"] as? String ?? "<absent>")
+        }
+        guard let kind = dict["kind"] as? String, kind == "call" else {
+            throw DecodeError.wrongType(dict["kind"] as? String ?? "<absent-kind>")
+        }
+        let shash = (dict["shash"] as? String) ?? ""
+        let ts: Int64
+        if let n = dict["ts"] as? NSNumber {
+            ts = n.int64Value
+        } else if let s = dict["ts"] as? String, let parsed = Int64(s) {
+            ts = parsed
+        } else {
+            ts = 0
+        }
+        return OpaqueCallWakeupPayload(kind: kind, senderHash: shash, timestamp: ts)
+    }
+
+    /// W-CANCELPUSH — stateless parser for the call-cancel VoIP payload.
+    /// Pure function, testable on any platform, same discipline as the
+    /// other parsers above.
+    public static func parseCancelPayload(_ dict: [String: Any]) throws -> ParsedCancelPayload {
+        guard let type = dict["type"] as? String, type == "call_cancelled" else {
+            throw DecodeError.wrongType(dict["type"] as? String ?? "<absent>")
+        }
+        guard let callIdStr = dict["call_id"] as? String else {
+            throw DecodeError.missingField("call_id")
+        }
+        guard let callId = UUID(uuidString: callIdStr) else {
+            throw DecodeError.badUUID(callIdStr)
+        }
+        return ParsedCancelPayload(callId: callId)
+    }
+
     // MARK: - PushKit-only behaviors (iOS-only)
 
     #if canImport(PushKit) && os(iOS)
@@ -102,6 +190,18 @@ public final class PushKitProvider {
     /// handler carries the SAME iOS mandate as `IncomingHandler`: it MUST
     /// report a new incoming call to CallKit before the push completes.
     public typealias IncomingGroupHandler = (ParsedGroupPayload) async -> Void
+    /// TRUST-6 — fired for a `type == "opaque_wakeup", kind == "call"` VoIP
+    /// push. Same iOS mandate as `IncomingHandler`: the handler MUST report
+    /// SOME incoming call to CallKit before the push completes — see
+    /// `AppState`'s wiring for how it does that with no identity to show yet.
+    public typealias IncomingOpaqueCallWakeupHandler = (OpaqueCallWakeupPayload) async -> Void
+    /// W-CANCELPUSH — fired for a `type == "call_cancelled"` VoIP push. Same
+    /// iOS mandate as the other handlers: it MUST report SOME call to
+    /// CallKit before the push completes — in practice this means reporting
+    /// the SAME `callId` UUID that is already ringing (from the original
+    /// invite) and immediately ending it, so CallKit dismisses that ring
+    /// without ever surfacing a new one. See `AppState`'s wiring.
+    public typealias IncomingCancelHandler = (ParsedCancelPayload) async -> Void
     /// Fired when a VoIP push arrives that we CANNOT decode into a call
     /// (wrong type / missing field / bad UUID / non-[String:Any] payload).
     /// The handler MUST still report-and-end a placeholder call to CallKit —
@@ -112,6 +212,8 @@ public final class PushKitProvider {
     private let onTokenUpdate: TokenHandler
     private let onIncomingCall: IncomingHandler
     private let onIncomingGroupCall: IncomingGroupHandler?
+    private let onIncomingOpaqueCallWakeup: IncomingOpaqueCallWakeupHandler?
+    private let onIncomingCancel: IncomingCancelHandler?
     private let onMalformedPush: MalformedHandler?
 
     private final class Delegate: NSObject, PKPushRegistryDelegate {
@@ -153,6 +255,29 @@ public final class PushKitProvider {
                     await groupHandler(group)
                     completion()
                 }
+            } else if let owner = self.owner,
+                      let opaqueCallHandler = owner.onIncomingOpaqueCallWakeup,
+                      let opaqueCall = try? PushKitProvider.parseOpaqueCallWakeup(dict) {
+                // TRUST-6 — opaque call wakeup, no caller identity in the
+                // push. Same mandate: report SOME call to CallKit before
+                // completion(). If no handler is wired, fall through to
+                // onMalformedPush exactly like the group branch above,
+                // rather than completing silently.
+                Task {
+                    await opaqueCallHandler(opaqueCall)
+                    completion()
+                }
+            } else if let owner = self.owner,
+                      let cancelHandler = owner.onIncomingCancel,
+                      let cancel = try? PushKitProvider.parseCancelPayload(dict) {
+                // W-CANCELPUSH — same mandate as every other branch: the
+                // handler reports (and immediately ends) a call to CallKit
+                // before completion(). If no handler is wired, fall through
+                // to onMalformedPush rather than completing silently.
+                Task {
+                    await cancelHandler(cancel)
+                    completion()
+                }
             } else {
                 Task {
                     await self.owner?.onMalformedPush?()
@@ -167,10 +292,14 @@ public final class PushKitProvider {
     public init(onTokenUpdate: @escaping TokenHandler,
                 onIncomingCall: @escaping IncomingHandler,
                 onIncomingGroupCall: IncomingGroupHandler? = nil,
+                onIncomingOpaqueCallWakeup: IncomingOpaqueCallWakeupHandler? = nil,
+                onIncomingCancel: IncomingCancelHandler? = nil,
                 onMalformedPush: MalformedHandler? = nil) {
         self.onTokenUpdate = onTokenUpdate
         self.onIncomingCall = onIncomingCall
         self.onIncomingGroupCall = onIncomingGroupCall
+        self.onIncomingOpaqueCallWakeup = onIncomingOpaqueCallWakeup
+        self.onIncomingCancel = onIncomingCancel
         self.onMalformedPush = onMalformedPush
         self.registry = PKPushRegistry(queue: .main)
         delegate.owner = self

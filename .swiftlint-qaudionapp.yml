@@ -1,0 +1,31 @@
+# MASVS-CODE remediation (2026-08-21, I8) — separate, narrow SwiftLint pass
+# for QAudionApp. `.swiftlint.yml` (repo root) deliberately never covered
+# this target — see engine-tests.yml's swiftlint-report job comment: "the
+# SwiftUI app with the documented Xcode 26.4 type-checker-timeout traps
+# (see CLAUDE.md), and adding lint there is a separate, higher-risk
+# decision for later." That risk is about the Xcode COMPILER's type
+# checker, not SwiftLint (a source-text linter, unrelated to compilation),
+# but the safer move is still to scope this precisely rather than widen the
+# main config's `included:` — that would expose QAudionApp to every
+# default/opt-in rule at once (identifier_name, force_unwrapping, etc.),
+# which is exactly the "flood of unrelated violations" risk the main
+# config's own history (2258/3380 violations from one rule alone) already
+# demonstrated is real in this codebase.
+#
+# `only_rules: []` disables every built-in/opt-in rule; custom_rules below
+# are independently active regardless. Run separately in CI from the main
+# `swiftlint lint --config .swiftlint.yml` invocation:
+#   swiftlint lint --config .swiftlint-qaudionapp.yml --path QAudionApp
+
+included:
+  - QAudionApp
+
+only_rules: []
+
+custom_rules:
+  no_bare_print_qaudionapp:
+    excluded: ".*Tests.*"
+    name: "No bare print()"
+    regex: "(?<![\\w.])print\\("
+    message: "Use RTLog.{info,warn,error} instead of print() — RTLog's redaction pipeline is the load-bearing privacy control (see docs/security/MASVS_ASSESSMENT_2026-08-20.md item I8). This rule flags NEW bare print() calls going forward; the existing 463 sites found in the 2026-08-20 audit were not retroactively annotated — that's a separate cleanup task."
+    severity: warning

@@ -171,6 +171,10 @@ final class VoiceUnlockController: ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning { audioEngine.stop() }
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        // W-SESSIONCATLEAK — `.record` has no OUTPUT; leaving it behind
+        // silenced later calls the same way `.playback` silenced their
+        // capture (see VoiceNotePlayer for the measured incident).
+        restoreVoipCategoryAfterCapture()
     }
 
     /// Float32 (-1...1) → little-endian Int16 PCM. Same conversion shape as
@@ -186,4 +190,17 @@ final class VoiceUnlockController: ObservableObject {
         }
         return data
     }
+}
+
+/// W-SESSIONCATLEAK (2026-08-30) — shared restore for the capture screens
+/// that temporarily switch the SHARED session to `.record`. See
+/// `VoiceNotePlayer`'s note for the live incident this closes.
+func restoreVoipCategoryAfterCapture() {
+    let session = AVAudioSession.sharedInstance()
+    #if os(iOS) && !targetEnvironment(simulator)
+    let opts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+    #else
+    let opts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+    #endif
+    try? session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
 }

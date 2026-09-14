@@ -875,7 +875,7 @@ struct EarbudDiagScreen: View {
     }
 
     private func lastUpdatedFooter(_ date: Date) -> some View {
-        let ts = date.formatted(date: .omitted, time: .standard)
+        let ts = date.formatted(Date.FormatStyle(date: .omitted, time: .standard).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode)))
         let line = "Ultimo aggiornamento: " + ts
         return Text(line)
             .qaudionStyle(type.labelSmall)

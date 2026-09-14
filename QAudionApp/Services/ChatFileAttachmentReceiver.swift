@@ -44,6 +44,18 @@ final class ChatFileAttachmentReceiver {
         case truncated(String)
         case decryptFailed(String)
         case writeFailed(String)
+        /// ATT-1 — a `sg` signature is present but malformed (wrong length)
+        /// or its canon could not be reconstructed. Always fatal — see the
+        /// type doc on `receive(envelope:transportSenderId:)`.
+        case signatureMalformed
+        /// ATT-1 — a `sg` signature is present but does not verify under the
+        /// sender's resolved identity key. Always fatal.
+        case signatureInvalid
+        /// ATT-1 — a `sg` signature is present but the sender's identity key
+        /// could not be resolved at all (no pin, no server-published key).
+        /// Treated the same as an invalid signature: there is nothing to
+        /// verify against, so the envelope cannot be trusted.
+        case signatureUnresolvable
 
         var errorDescription: String? {
             switch self {
@@ -55,6 +67,9 @@ final class ChatFileAttachmentReceiver {
             case .truncated(let m): return "File troncato: \(m)"
             case .decryptFailed(let m): return "Decrittazione fallita: \(m)"
             case .writeFailed(let m): return "Scrittura fallita: \(m)"
+            case .signatureMalformed: return "Firma allegato malformata"
+            case .signatureInvalid: return "Firma allegato non valida"
+            case .signatureUnresolvable: return "Identità del mittente non verificabile"
             }
         }
     }
@@ -76,7 +91,20 @@ final class ChatFileAttachmentReceiver {
         self.appState = appState
     }
 
-    func receive(envelope: FileAttachmentAnnounceWireEnvelope) async throws -> Result {
+    /// - Parameter transportSenderId: the WS `opaque_message` frame's
+    ///   SERVER-STAMPED sender — NOT read from the envelope itself. ATT-1
+    ///   (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 1) binds this into
+    ///   the envelope's signature canon (see `FileAttachmentAnnounceSig`), so
+    ///   a signature can never be re-attributed to a different transport
+    ///   frame than the one it was actually signed for.
+    ///
+    ///   Verification contract: `envelope.sigB64` PRESENT and malformed,
+    ///   unverifiable (sender identity cannot be resolved), or invalid is
+    ///   always fatal — the envelope is dropped before the content key is
+    ///   ever unwrapped, nothing is downloaded or written to disk.
+    ///   `envelope.sigB64` ABSENT is accepted exactly as before (unsigned) —
+    ///   no interop break for a peer that has not shipped signing yet.
+    func receive(envelope: FileAttachmentAnnounceWireEnvelope, transportSenderId: String) async throws -> Result {
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let selfId = appState.currentUserId, !selfId.isEmpty else {
             throw ReceiveError.notAuthenticated
@@ -100,6 +128,54 @@ final class ChatFileAttachmentReceiver {
         }
 
         let provider = appState.makeUploadProvider()
+
+        // ATT-1 — verify BEFORE the content key is ever unwrapped (cheapest
+        // check first, same "sig-verify-first" ordering `KmsPreBootstrap`
+        // documents for its own receiver: protects against an attacker
+        // forcing ECDH/AEAD work by spamming garbage envelopes). Only runs
+        // when the sender actually signed; an absent `sg` is legacy-accepted
+        // unchanged below.
+        if let sigB64 = envelope.sigB64 {
+            guard let sig = Data(base64Encoded: sigB64), sig.count == 64,
+                  let transportSenderRaw = Self.uuidBytes(from: transportSenderId) else {
+                throw ReceiveError.signatureMalformed
+            }
+            let sigWraps: [FileAttachmentAnnounceSig.DeviceWrap] = try envelope.wraps.map { w in
+                guard let d = Data(base64Encoded: w.deviceIdB64),
+                      let k = Data(base64Encoded: w.wrappedContentKeyB64) else {
+                    throw ReceiveError.signatureMalformed
+                }
+                return FileAttachmentAnnounceSig.DeviceWrap(deviceId: d, wrappedContentKey: k)
+            }
+            guard let canon = FileAttachmentAnnounceSig.canon(
+                fileId: fileId, senderUuid: senderId, recipientUuid: myDeviceId,
+                senderEphemeralPub: senderEphPub, wraps: sigWraps, tusFileId: envelope.tusFileId,
+                totalChunks: envelope.totalChunks, totalSizeBytes: envelope.totalSizeBytes,
+                transportSenderId: transportSenderRaw
+            ) else {
+                throw ReceiveError.signatureMalformed
+            }
+            guard let resolution = await Self.resolveSignerIdentity(
+                senderId: envelope.senderId, kmsClient: provider.kmsClient
+            ) else {
+                throw ReceiveError.signatureUnresolvable
+            }
+            guard FileAttachmentAnnounceSig.verify(
+                canon: canon, signature: sig, signerIdentityKey: resolution.key
+            ) else {
+                throw ReceiveError.signatureInvalid
+            }
+            // Only commit the first-contact TOFU pin AFTER a successful
+            // verify — never pin a server-supplied candidate key that never
+            // actually produced a valid signature (mirrors
+            // `QAudionCallIntegration.applyAuthenticatedSideEffects`, which
+            // commits its own TOFU pin only from an `.authenticated`
+            // verdict, never before).
+            if resolution.isNewCandidate {
+                _ = PeerIdentityPinStore().pinOrMatch(contactId: envelope.senderId, ed25519Pub: resolution.key)
+            }
+        }
+
         let vault = SovereignKeyVault()
         let deviceKeyManager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
         guard let identityPriv = try? deviceKeyManager.currentKeys()?.x25519Priv, identityPriv.count == 32 else {
@@ -183,6 +259,50 @@ final class ChatFileAttachmentReceiver {
         }
 
         return Result(localUrl: outURL, mime: envelope.mime, filename: envelope.filename, byteLength: envelope.totalSizeBytes)
+    }
+
+    // MARK: - ATT-1 pinned-identity resolution
+
+    /// Result of `resolveSignerIdentity`: which Ed25519 key to verify
+    /// against, and whether it came from an existing Keychain pin
+    /// (`isNewCandidate == false`) or is a first-contact server-published
+    /// candidate that the caller should only pin AFTER a successful verify
+    /// (`isNewCandidate == true`).
+    private struct SignerResolution {
+        let key: Data
+        let isNewCandidate: Bool
+    }
+
+    /// ATT-1's pinned-identity resolver — the iOS counterpart of Android's
+    /// `EnsurePeerTrustPinnedUseCase.resolvePeerIdentity`, reused the same
+    /// way `KmsPreBootstrap`'s own receiver resolves the sender's identity
+    /// before verifying its Ed25519 signature: Keychain TOFU pin FIRST
+    /// (`PeerIdentityPinStore`, the same store `QAudionCallIntegration`'s
+    /// handshake verifier and `AppState.wireHandshakeSigning` use); only
+    /// when no pin exists yet does this fall back to the server-published
+    /// key as a first-contact TOFU candidate — mirrored from
+    /// `PeerTrustEvaluator.evaluate`'s and the call-handshake's own
+    /// `resolveServerPeerKey` fallback shape.
+    ///
+    /// Returns `nil` ("Unresolved") only when NEITHER a pin nor a
+    /// server-published key exists for `senderId` — the caller then drops
+    /// the envelope rather than verifying a signature against nothing.
+    /// Never trusts a key the WIRE envelope itself might claim to carry
+    /// (this envelope carries none) — the whole point of pinned-identity
+    /// resolution is that the verifier decides which key is authoritative,
+    /// not the (potentially forged) message.
+    private static func resolveSignerIdentity(
+        senderId: String, kmsClient: BCryptoKmsClient
+    ) async -> SignerResolution? {
+        guard !senderId.isEmpty else { return nil }
+        if let pinned = PeerIdentityPinStore().pinnedKey(contactId: senderId) {
+            return SignerResolution(key: pinned, isNewCandidate: false)
+        }
+        guard let serverKey = await kmsClient.fetchUserIdentityKey(userId: senderId),
+              serverKey.count == 32 else {
+            return nil
+        }
+        return SignerResolution(key: serverKey, isNewCandidate: true)
     }
 
     // MARK: - Helpers

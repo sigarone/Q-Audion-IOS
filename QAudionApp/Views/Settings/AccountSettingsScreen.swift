@@ -135,7 +135,7 @@ final class AccountSettingsContainer: ObservableObject {
 
     func loadFromServer() {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             isLoading = false
             return
         }
@@ -191,6 +191,23 @@ final class AccountSettingsContainer: ObservableObject {
                     } else {
                         UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
                     }
+                    // Same reason as the two mirrors above, applied to the
+                    // display name: this screen is the only place the user
+                    // can change it, and `saveProfile()` re-runs this loader,
+                    // so without the mirror the Settings hero and the chat
+                    // header keep showing the old name until the next cold
+                    // launch. Placeholder names are filtered out here too, so
+                    // the two write paths agree on what counts as "no name".
+                    if let name = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !name.isEmpty,
+                       !DisplayName.looksLikeUUID(name),
+                       !DisplayName.isPlaceholderName(name) {
+                        self.appState?.currentUserDisplayName = name
+                        UserDefaults.standard.set(name, forKey: "currentUserDisplayName")
+                    } else {
+                        self.appState?.currentUserDisplayName = nil
+                        UserDefaults.standard.removeObject(forKey: "currentUserDisplayName")
+                    }
                     self.isLoading = false
                 }
             } catch {
@@ -217,7 +234,7 @@ final class AccountSettingsContainer: ObservableObject {
     @discardableResult
     func saveProfile() async -> Bool {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             return false
         }
         // Persist the local public phone on every save. The setter
@@ -246,20 +263,25 @@ final class AccountSettingsContainer: ObservableObject {
         }
     }
 
+    private static let exportIsoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        return f
+    }()
+
     // MARK: - Audit P0 #2.12 — GDPR data export
     /// Pulls /api/v1/account/export and presents a system Share sheet
     /// so the user can save the JSON envelope to Files or AirDrop it
     /// to a desktop. Best-effort; errors surface as errorMessage.
     func exportMyData(presenting: UIViewController) {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             return
         }
         Task {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
             do {
                 let data = try await provider.accountApi.accountExport()
-                let ts = ISO8601DateFormatter().string(from: Date())
+                let ts = AccountSettingsContainer.exportIsoFormatter.string(from: Date())
                     .replacingOccurrences(of: ":", with: "")
                     .replacingOccurrences(of: "-", with: "")
                     .prefix(15)
@@ -285,21 +307,35 @@ final class AccountSettingsContainer: ObservableObject {
     }
 
     // MARK: - Audit P0 #2.12 — GDPR right-to-be-forgotten
-    /// Fires DELETE /api/v1/account first, then triggers local logout
-    /// via AuthService regardless of server response. The user wants
-    /// to be forgotten — a server 5xx must not block the local wipe.
+    /// Fires DELETE /api/v1/account first; the local wipe follows only
+    /// when the server confirmed the deletion (2xx) or reports the
+    /// account already gone (404). App Store readiness audit 2026-09-12
+    /// (FIX-18): the previous `try?` wiped locally on ANY error, so a
+    /// network blip or 5xx left the account alive server-side while the
+    /// user believed it deleted — the opposite of 5.1.1(v). On failure
+    /// the user sees an error and keeps the session, so they can retry.
     /// Caller wraps this in a confirmation alert per UX guidelines.
     func deleteAccount() {
         guard let provider = makeProvider() else {
-            errorMessage = "Accesso non effettuato"
+            errorMessage = String(localized: "account_settings.error.not_signed_in", defaultValue: "Accesso non effettuato", comment: "Error banner — the action requires an active session but no auth token is available")
             return
         }
         Task {
             await MainActor.run { self.isLoading = true; self.errorMessage = nil }
-            // Best-effort server delete; ignore errors — BCryptoAccountApiImpl's
-            // own doc says the caller "MUST treat the JWT as invalidated even
-            // on error", so a failure here doesn't change what we do next.
-            try? await provider.accountApi.deleteAccount()
+            do {
+                try await provider.accountApi.deleteAccount()
+            } catch BCryptoError.notFound {
+                // Already gone server-side — proceed with the local wipe.
+            } catch BCryptoError.httpError(404) {
+                // Same as above, older client mapping.
+            } catch {
+                RTLog.warn("account", "deleteAccount failed: " + String(describing: error))
+                await MainActor.run {
+                    self.isLoading = false
+                    self.errorMessage = String(localized: "account_settings.error.delete_failed", defaultValue: "Eliminazione non riuscita. Riprova tra qualche istante o scrivi a support@qaudion.app.", comment: "Error banner — the server did not confirm the account deletion; nothing was wiped locally")
+                }
+                return
+            }
             // Server-side session invalidation (DELETE /api/v1/auth/logout).
             // Best-effort too now (was a throwing call that gated everything
             // below it): a 401 here is actually the EXPECTED shape right after
@@ -324,6 +360,13 @@ final class AccountSettingsContainer: ObservableObject {
                 // round trip caught up. Clear both explicitly, same as the
                 // other two wipe call sites.
                 self.appState?.authService.clearToken()
+                // Whole-phase-review finding I1 (2026-08-17) — GDPR account
+                // deletion clears the Keychain token but doesn't nil
+                // `currentUserId` (pre-existing, not changed here), so
+                // `capabilityGate`'s reactive discard never fires on its
+                // own. Explicit call so a deleted account's in-memory grant
+                // doesn't outlive the process.
+                self.appState?.capabilityGate.discard()
                 self.appState?.isAuthenticated = false
                 self.isLoading = false
                 self.errorMessage = nil
@@ -575,12 +618,12 @@ struct AccountSettingsScreen: View {
                 // shown anywhere.
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
-                        container.errorMessage = "Impossibile leggere la foto selezionata."
+                        container.errorMessage = String(localized: "account_settings.error.photo_read_failed", defaultValue: "Impossibile leggere la foto selezionata.", comment: "Error banner — the selected photo item could not be loaded as Data via PhotosPickerItem.loadTransferable")
                         selectedItem = nil
                         return
                     }
                     guard let img = UIImage(data: data) else {
-                        container.errorMessage = "Formato immagine non valido."
+                        container.errorMessage = String(localized: "account_settings.error.photo_format_invalid", defaultValue: "Formato immagine non valido.", comment: "Error banner — the loaded photo data could not be decoded into a UIImage")
                         selectedItem = nil
                         return
                     }
@@ -782,34 +825,7 @@ struct AccountSettingsScreen: View {
     /// UIPasteboard + fires HapticFeedback.messageSent. Trailing
     /// clipboard icon telegraphs the gesture.
     private func tapCopyRow(label: String, value: String) -> some View {
-        HStack(spacing: 14) {
-            Text(label)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Text(value)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            #if canImport(UIKit)
-            UIPasteboard.general.string = value
-            HapticFeedback.messageSent()
-            #endif
-        }
+        TapCopyRow(label: label, value: value)
     }
 
     /// 2026-07-29 — caller-id single-select. Options are "la mia
@@ -929,8 +945,25 @@ struct AccountSettingsScreen: View {
 
     /// App Store 5.1.1(v) — permanent, in-app account deletion. Same visual
     /// treatment as logoutButton (both destructive-risk actions) but placed
-    /// below it since it's the more severe of the two.
+    /// below it since it's the more severe of the two. The link under it
+    /// opens the public deletion page (same URL as the App Store Connect
+    /// "account deletion" field) so what gets erased is documented.
     private var deleteAccountButton: some View {
+        VStack(spacing: 8) {
+            deleteAccountTrigger
+            Button {
+                LegalLinks.open(LegalLinks.deleteAccount())
+            } label: {
+                Text("Cosa viene eliminato — informativa")
+                    .qaudionStyle(type.labelSmall)
+                    .underline()
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var deleteAccountTrigger: some View {
         Button {
             showDeleteAccountConfirm = true
         } label: {
@@ -987,7 +1020,7 @@ struct AccountSettingsScreen: View {
             Task {
                 if await container.saveProfile() {
                     snackbar?.show(.init(
-                        text: "Profilo aggiornato.",
+                        text: String(localized: "account_settings.profile_updated", defaultValue: "Profilo aggiornato.", comment: "Snackbar — shown after successfully saving profile changes (display name, status, phone)"),
                         severity: .info
                     ))
                 }

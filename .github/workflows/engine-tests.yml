@@ -41,6 +41,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Select Xcode
+        id: select-xcode
         run: |
           set -e
           PIN="${XCODE_VERSION}"
@@ -53,6 +54,15 @@ jobs:
           echo "Selecting: $MATCH"
           sudo xcode-select -s "$MATCH"
           xcodebuild -version
+          # Exact toolchain build number (e.g. "Build version 17A400"), not
+          # just the ${XCODE_VERSION} major pin -- the explicit-module cache
+          # below is keyed on this because a .pcm built by one Xcode build
+          # is not guaranteed compatible with another (same major, different
+          # point release/build on a runner-image bump), and a stale/
+          # incompatible module cache produces confusing compiler errors
+          # that look nothing like the OOM this cache is meant to fix.
+          BUILD=$(xcodebuild -version | grep '^Build version' | awk '{print $3}')
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------
       # Build Reality.xcframework -- VLESS+REALITY-over-xray-core transport
@@ -120,6 +130,61 @@ jobs:
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      # Cache the Swift explicit-module cache across runs. Two distinct
+      # DerivedData subdirectories hold generated .pcm files and both are
+      # cached: ModuleCache.noindex (system frameworks -- SwiftUI, Vision,
+      # CoreML, AVFoundation, ...) and Build/Intermediates.noindex/
+      # SwiftExplicitPrecompiledModules (this package's own binaryTargets --
+      # WebRTC, LiveKitWebRTC, LKObjCHelpers, Reality). The latter is not
+      # optional: in every failing run's log, the LAST module line before
+      # output went silent (the OOM kill point) was always one of exactly
+      # these four -- WebRTC/LiveKitWebRTC/LKObjCHelpers/Reality are the
+      # heaviest ObjC++ module builds this target does, so leaving that
+      # directory uncached would still force a cold rebuild of precisely the
+      # frameworks most implicated in the crash.
+      #
+      # Root cause (2026-08-26): this job runs on macos-latest,
+      # which is 3 vCPU / 7 GB RAM (confirmed against GitHub's own runner
+      # spec table, not assumed) -- and until this cache existed, EVERY push
+      # cold-rebuilt the explicit-module graph for the entire system-
+      # framework set this target touches (SwiftUI, Vision, CoreML,
+      # AVFoundation, WebRTC, LiveKitWebRTC, Reality, ~30 frameworks total,
+      # confirmed by grepping a failing run's log for
+      # SwiftExplicitDependencyGeneratePcm) from scratch, with xcodebuild's
+      # default (unthrottled) build concurrency. That cold burst is the
+      # dominant memory cost of this job. Bisecting CI history (`gh run
+      # list`) found the job green through commit 534e804c and failing on
+      # every run from 00e38574 onward (+2262 lines / 22 files, incl. 4 new
+      # XCTest files) -- the added compile-graph size tipped peak RSS over
+      # the 7 GB ceiling. Every failing run's log shows the SAME signature:
+      # output stops mid-module-list with NO xcodebuild error text and NO
+      # "::error::...watchdog" line (that only prints on OUR 15-min kill,
+      # line ~257 below) at a VARYING point (5m36s to 15min+) -- consistent
+      # with an external SIGKILL from the kernel OOM killer, not a hang or a
+      # real compile/test failure. Caching the module cache removes the cold
+      # full-framework-graph rebuild on every run, which should keep steady-
+      # state peak RSS well under the ceiling; -jobs 2 below is a second,
+      # independent safety margin in case a cache-miss run (Xcode bump,
+      # first run after this change) still spikes.
+      #
+      # Keyed on the exact Xcode BUILD number (not just the ${XCODE_VERSION}
+      # major pin) because a .pcm from one Xcode build is not guaranteed
+      # compatible with another -- restoring a stale/incompatible module
+      # cache would produce confusing compiler errors, not the OOM this is
+      # meant to fix. restore-keys falls back to any cache for the same
+      # Xcode build even if Package.swift changed, since most of the cache's
+      # value is the ~30 SYSTEM framework .pcm files, which don't depend on
+      # our own package's dependency graph at all.
+      - name: Cache explicit-module cache (iOS Simulator)
+        uses: actions/cache@v5
+        with:
+          path: |
+            /tmp/dd-ios-sim/ModuleCache.noindex
+            /tmp/dd-ios-sim/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+          key: ios-sim-modulecache-v1-${{ runner.os }}-${{ steps.select-xcode.outputs.build }}-${{ hashFiles('QAudionEngine/Package.swift') }}
+          restore-keys: |
+            ios-sim-modulecache-v1-${{ runner.os }}-${{ steps.select-xcode.outputs.build }}-
 
       - name: Resolve dependencies
         if: steps.cache-spm-ios.outputs.cache-hit != 'true'
@@ -231,20 +296,91 @@ jobs:
           # under its own key) rather than byte-equality CryptoKit was
           # never going to satisfy. Un-skipping now that it asserts the
           # right thing.
-          xcodebuild test \
-            -scheme "QAudionEngine" \
-            -configuration Release \
-            SWIFT_ENABLE_TESTABILITY=YES \
-            OTHER_LDFLAGS="\$(inherited) -lresolv" \
-            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
-            -derivedDataPath /tmp/dd-ios-sim \
-            -resultBundlePath /tmp/ios-sim-results.xcresult &
-          XCODEBUILD_PID=$!
-          ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
-          WATCHDOG_PID=$!
-          wait "$XCODEBUILD_PID"
-          EXIT_CODE=$?
-          kill "$WATCHDOG_PID" 2>/dev/null || true
+          # -jobs 2 / COMPILER_INDEX_STORE_ENABLE=NO (2026-08-26): safety
+          # margin on top of the ModuleCache.noindex cache added above --
+          # macos-latest is 3 vCPU / 7 GB RAM. Capping build concurrency
+          # reduces peak concurrent swift-frontend/clang worker RSS at the
+          # cost of wall-clock time; disabling the index store (never
+          # consumed here -- no Xcode UI navigates this CI-only
+          # DerivedData) removes a purely-additive memory/disk cost.
+          #
+          # CONFIRMED NOT SUFFICIENT ALONE (2026-08-26, run 32939729408):
+          # the very first run after adding the cache above still died at
+          # the exact same point as before -jobs 2 existed -- mid explicit-
+          # module precompile, immediately after WebRTC/LiveKitWebRTC/
+          # LKObjCHelpers -- just slower getting there (9m43s vs the prior
+          # 5m36s). Expected: that run's cache was necessarily a cold MISS
+          # (first run with this key), and -jobs 2 lowers peak RSS without
+          # lowering the SINGLE heaviest module's own compile footprint
+          # enough to fit under 7 GB from a fully cold start. Worse: a job
+          # that OOMs before the cache-SAVE step (which runs in job
+          # cleanup) never populates the cache for the NEXT run either --
+          # so a cold run stays stuck cold forever without the retry below.
+          #
+          # SWIFT_ENABLE_EXPLICIT_MODULES=NO (2026-08-26, THIRD attempt):
+          # the retry loop below (added for the SECOND attempt, run
+          # 32940815497) did NOT help either -- its own "::group::attempt
+          # 1/2" line opened and never closed, meaning the whole script's
+          # process tree died mid-attempt-1, not just the xcodebuild child.
+          # That rules out "OOM kills xcodebuild, shell survives to retry"
+          # as the only failure mode here -- some kills take the whole job
+          # step down at once (consistent with GitHub's own low-memory
+          # runner abort, not just the kernel OOM-killer picking a single
+          # victim PID), which no in-script retry can survive by
+          # construction. Real lever instead: explicit module builds
+          # (Xcode 16+ default, what SwiftExplicitDependencyGeneratePcm --
+          # the exact step every failing run dies inside -- IS) precompile
+          # every imported framework into a standalone .pcm up front, all
+          # at once, before any of our own source compiles; the OLDER
+          # implicit-module mechanism resolves modules lazily per
+          # translation unit via clang's traditional module cache, with a
+          # materially smaller peak burst (real, documented Xcode build
+          # setting -- confirmed via Apple's own explicit-modules doc and a
+          # live report of the exact same setting/symptom on Bitrise's
+          # forum, not guessed). Trades some incremental-build speed for a
+          # much lower peak RSS; on a CI job that runs cold every time
+          # anyway, that trade is free.
+          #
+          # RETRY: kept as a second, independent, low-cost safety margin --
+          # up to 2 attempts of the SAME xcodebuild invocation in the SAME
+          # job. Still correct reasoning for the failure mode it DOES cover
+          # (a plain SIGKILL of just the xcodebuild PID, which the FIRST
+          # failing run after the module-cache fix showed: DerivedData
+          # survives on local disk, so a same-job retry only needs to
+          # finish precompiling whatever attempt 1 didn't reach). Harmless
+          # no-op on the whole-tree-killed failure mode above -- nothing
+          # survives to retry there either way, so this loop costs nothing
+          # extra beyond one skipped iteration. -resultBundlePath must be
+          # unique per attempt (xcodebuild refuses to write into an
+          # already-existing bundle).
+          ATTEMPT=1
+          MAX_ATTEMPTS=2
+          EXIT_CODE=1
+          while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$EXIT_CODE" -ne 0 ]; do
+            echo "::group::xcodebuild test — attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+            xcodebuild test \
+              -scheme "QAudionEngine" \
+              -configuration Release \
+              -jobs 2 \
+              SWIFT_ENABLE_TESTABILITY=YES \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              SWIFT_ENABLE_EXPLICIT_MODULES=NO \
+              OTHER_LDFLAGS="\$(inherited) -lresolv" \
+              -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+              -derivedDataPath /tmp/dd-ios-sim \
+              -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
+            XCODEBUILD_PID=$!
+            ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
+            WATCHDOG_PID=$!
+            wait "$XCODEBUILD_PID"
+            EXIT_CODE=$?
+            kill "$WATCHDOG_PID" 2>/dev/null || true
+            echo "::endgroup::"
+            if [ "$EXIT_CODE" -ne 0 ] && [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
+              echo "::warning::xcodebuild test attempt ${ATTEMPT} failed (exit ${EXIT_CODE}) — retrying once against the now-partially-warm local DerivedData (see comment above)"
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
           exit "$EXIT_CODE"
 
   # ----------------------------------------------------------------
@@ -262,13 +398,18 @@ jobs:
 
   # SwiftLint over QAudionEngine only (scope + exclusions come from the
   # existing .swiftlint.yml at repo root — CLiboqs/COpus are already
-  # excluded there since they're C, not Swift). Deliberately does NOT
-  # touch QAudionApp: that's the SwiftUI app with the documented Xcode
-  # 26.4 type-checker-timeout traps (see CLAUDE.md), and adding lint
-  # there is a separate, higher-risk decision for later. Runs the
-  # official realm/swiftlint Docker image directly (no third-party
-  # Action) on ubuntu-latest — no Xcode/macOS runner needed for pure
-  # linting, so this doesn't compete for macOS runner capacity.
+  # excluded there since they're C, not Swift). Deliberately does NOT run
+  # the FULL rule set against QAudionApp: that's the SwiftUI app with the
+  # documented Xcode 26.4 type-checker-timeout traps (see CLAUDE.md), and
+  # widening this config's `included:` to it would also expose it to every
+  # default/opt-in rule at once — a real flood-of-violations risk this same
+  # config's identifier_name history already demonstrated (2258/3380
+  # violations from one rule alone). See the separate, narrowly-scoped
+  # `swiftlint-qaudionapp-print-check` job below for the one QAudionApp
+  # rule that IS active (2026-08-21, MASVS-CODE I8). Runs the official
+  # realm/swiftlint Docker image directly (no third-party Action) on
+  # ubuntu-latest — no Xcode/macOS runner needed for pure linting, so this
+  # doesn't compete for macOS runner capacity.
   swiftlint-report:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -332,6 +473,25 @@ jobs:
           path: swiftlint-report.json
           if-no-files-found: warn
           retention-days: 14
+
+  # MASVS-CODE remediation (2026-08-21, I8) — narrowly-scoped QAudionApp
+  # pass, deliberately separate from swiftlint-report above. Uses
+  # .swiftlint-qaudionapp.yml (only_rules: [] + one custom rule banning
+  # new bare print() calls) instead of widening the main .swiftlint.yml,
+  # so this does NOT run any of the default/opt-in rules against
+  # QAudionApp — see that file's own header comment for the full
+  # rationale. Non-blocking (continue-on-error, same as swiftlint-report):
+  # this is a visibility signal for new violations, not a merge gate.
+  swiftlint-qaudionapp-print-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: SwiftLint (QAudionApp, print()-ban rule only)
+        continue-on-error: true
+        uses: docker://ghcr.io/realm/swiftlint:latest
+        with:
+          args: lint --config .swiftlint-qaudionapp.yml --path QAudionApp
 
   # RealityCore (VLESS+REALITY Go core, see ios-simulator-tests above
   # for the gomobile-bind build of the same module) has go.mod/tests

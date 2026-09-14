@@ -46,6 +46,10 @@ public final class BugReporter: ObservableObject {
         public let logs: String
         public let trigger: String
         public let capturedAt: Date
+        /// Extra plaintext multipart fields (abuse reports: the reported
+        /// user/group id so triage can act without decrypting the body).
+        /// Defaulted so the existing 4-argument call sites keep compiling.
+        public var extraFields: [String: String] = [:]
     }
 
     // MARK: - Private state
@@ -183,10 +187,18 @@ public final class BugReporter: ObservableObject {
         // capture instant. Debug-only escape hatch; will be revisited
         // before production per the user's own note that this won't stay
         // permanent.
+        // App Store readiness audit 2026-09-12 (FIX-22): the bypass is
+        // dev/TestFlight-only. A store build captures without unlocking —
+        // a blank image on a screenshot-locked screen is the correct
+        // behaviour for a product marketed on screenshot protection.
+        #if QAUDION_DEV_TOOLS
         let wasLocked = ScreenshotLockService.isLocked
         if wasLocked { ScreenshotLockService.unlock() }
         let screenshot = captureScreen()
         if wasLocked { ScreenshotLockService.lock() }
+        #else
+        let screenshot = captureScreen()
+        #endif
         let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: 2.0)
         pendingReport = PendingReport(
             screenshot: screenshot,
@@ -198,6 +210,15 @@ public final class BugReporter: ObservableObject {
     }
 
     private func triggerAuto(tag: String) {
+        // App Store readiness audit 2026-09-12 (FIX-11): the automatic
+        // report is diagnostic egress the user never asked for, so it is
+        // gated on the same diagnostics opt-in (default OFF) the privacy
+        // manifest and both privacy policies describe. The manual shake /
+        // volume path stays: it ends in an explicit "Invia report" tap.
+        guard TelemetryService.isEnabled else {
+            RTLog.info("bugreport", "auto report suppressed (diagnostics opt-in OFF): " + tag)
+            return
+        }
         let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: 2.0)
         let report = PendingReport(
             screenshot: nil,
@@ -220,6 +241,36 @@ public final class BugReporter: ObservableObject {
 
     /// Posted when an automatic (silent) bug report is triggered.
     public static let autoReportNotification = Notification.Name("qaudion.bugreport.auto")
+
+    // MARK: - Abuse report (App Store 1.2 / Play UGC)
+
+    /// User-initiated report of another user, message or group — the
+    /// "Segnala" that must sit next to "Blocca". Reuses the E2EE report
+    /// pipeline (`trigger=abuse`, server `reports.TriggerAbuse`): the
+    /// category, note and reported ids travel in the encrypted body, the
+    /// reported ids ALSO travel as plaintext form fields so triage can
+    /// route without decrypting. No log tail, no screenshot, no consent
+    /// gate — the user is explicitly asking for this to be sent.
+    public func reportAbuse(reportedUserId: String?,
+                            reportedGroupId: String?,
+                            reportedName: String,
+                            category: String,
+                            note: String) {
+        var fields: [String: String] = ["report_category": category]
+        if let u = reportedUserId, !u.isEmpty { fields["reported_user_id"] = u }
+        if let g = reportedGroupId, !g.isEmpty { fields["reported_group_id"] = g }
+        var report = PendingReport(screenshot: nil, logs: "", trigger: "abuse", capturedAt: Date())
+        report.extraFields = fields
+        var lines: [String] = ["ABUSE REPORT", "category=" + category]
+        if let u = reportedUserId, !u.isEmpty { lines.append("reported_user_id=" + u) }
+        if let g = reportedGroupId, !g.isEmpty { lines.append("reported_group_id=" + g) }
+        lines.append("reported_name=" + reportedName)
+        if !note.isEmpty { lines.append("note=" + note) }
+        let body = lines.joined(separator: "\n")
+        Task {
+            await uploadReport(report: report, note: body)
+        }
+    }
 
     // MARK: - Send (called by overlay UI)
 
@@ -252,8 +303,17 @@ public final class BugReporter: ObservableObject {
         guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return nil }
         var request = URLRequest(url: url)
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        // W-AUXPIN: keep the 60 s idle timeout this request always had under
+        // URLSession.shared — the pinned session's configuration carries the
+        // REST client's 15 s (IOS-E2), and a per-request value takes
+        // precedence over it. Behaviour-preserving, not a tuning change.
+        request.timeoutInterval = 60
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins
+            // as the REST client) instead of URLSession.shared — this
+            // bearer-token GET had no pin at all (audit memory
+            // reference_ios_stability_audit_2026_09_01, P1 item 6).
+            let (data, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 RTLog.warn("bugreport", "report-pubkey fetch failed")
                 return nil
@@ -299,10 +359,11 @@ public final class BugReporter: ObservableObject {
         let appVersion = resolveAppVersion()
         let osVersion = UIDevice.current.systemVersion
         let deviceModel = UIDevice.current.model
-        let userPrefix = String(token.prefix(8))
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let timestamp = iso.string(from: report.capturedAt)
+        // FIX-11 (2026-09-12): this used to be `token.prefix(8)` — eight
+        // characters of the LIVE bearer token as a plaintext form field.
+        // Same convention as LogExportService now: first 8 of the user id.
+        let userPrefix = String((TokenVault.loadUserId() ?? "").prefix(8))
+        let timestamp = BugReporter.isoFormatter.string(from: report.capturedAt)
         let callId = getActiveCallId?() ?? ""
         let diagSnapshot = getDiagSnapshot?() ?? ""
 
@@ -354,6 +415,9 @@ public final class BugReporter: ObservableObject {
             appendField(&body, boundary: boundary, name: "call_id", value: callId)
         }
         appendField(&body, boundary: boundary, name: "diag_summary", value: diagSummary)
+        for (key, value) in report.extraFields.sorted(by: { $0.key < $1.key }) {
+            appendField(&body, boundary: boundary, name: key, value: value)
+        }
         appendField(&body, boundary: boundary, name: "ephemeral_pub", value: bodyEnc.ephemeralPubHex)
         appendField(&body, boundary: boundary, name: "logs_ephemeral_pub", value: logsEnc.ephemeralPubHex)
         appendFilePart(&body, boundary: boundary, name: "body_enc",
@@ -372,9 +436,14 @@ public final class BugReporter: ObservableObject {
             body.append(closingData)
         }
         request.httpBody = body
+        // W-AUXPIN: same 60 s idle timeout as before (see fetchAdminPubKey) —
+        // this is the multi-MB encrypted upload, the one request here that
+        // must not inherit the pinned session's 15 s default.
+        request.timeoutInterval = 60
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            // W-AUXPIN (2026-09-01): pinned session, see fetchAdminPubKey.
+            let (_, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             if let http = response as? HTTPURLResponse {
                 RTLog.info("bugreport", "E2EE upload status=" + String(describing: http.statusCode))
             }
@@ -438,6 +507,12 @@ public final class BugReporter: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso
+    }()
 
     private func resolveAppVersion() -> String {
         guard let info = Bundle.main.infoDictionary else { return "unknown" }

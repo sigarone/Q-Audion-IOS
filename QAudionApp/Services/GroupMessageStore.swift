@@ -125,6 +125,10 @@ public final class GroupMessageStore: ObservableObject {
     /// the 1:1 `Conversation.unreadCount` read-marker, but derived rather
     /// than a stored counter (the group message list is the source of truth).
     private var lastRead: [String: Date] = [:]
+    /// Group-list rendering can query this value repeatedly while SwiftUI
+    /// recomposes. Histories hold up to 500 messages, so cache the derived
+    /// count and invalidate it whenever the messages or read marker change.
+    private var unreadCountCache: [String: Int] = [:]
     private static let storageKey = "qaudion.groups.messages.v1"
     private static let readStorageKey = "qaudion.groups.messages.lastread.v1"
     private static let maxPerGroup = 500
@@ -170,7 +174,11 @@ public final class GroupMessageStore: ObservableObject {
         // reverting the whole group history to plaintext is not.
         let attempt: String?? = try? LocalStoreCipher.seal(json)
         guard let unwrapped = attempt, let sealed = unwrapped else {
-            RTLog.warn("group", "message store persist deferred sealed=0")
+            // W-GRPLOGSHAPE (2026-09-08) — 4 consecutive free words made this
+            // fail the structured-shape gate outright (MAX_FREEWORD_RUN=3);
+            // see GroupMembershipVerifier.verify's kdoc for the fix and why
+            // the replacement codes are this short specifically.
+            RTLog.warn("group", "grp_mstore r=pdef sealed=0")
             return
         }
         UserDefaults.standard.set(sealed, forKey: Self.storageKey)
@@ -197,11 +205,16 @@ public final class GroupMessageStore: ObservableObject {
     /// derived from the message list + a read-marker instead of a stored
     /// counter (the server does not push a per-group unread count to iOS).
     public func unreadCount(forGroupHex groupHex: String) -> Int {
+        if let cached = unreadCountCache[groupHex] {
+            return cached
+        }
         guard let arr = byGroup[groupHex] else { return 0 }
         let since = lastRead[groupHex] ?? .distantPast
-        return arr.reduce(0) { acc, m in
+        let unread = arr.reduce(0) { acc, m in
             (!m.mine && m.ts > since) ? acc + 1 : acc
         }
+        unreadCountCache[groupHex] = unread
+        return unread
     }
 
     /// True if a message with this server id is already persisted — used
@@ -239,6 +252,7 @@ public final class GroupMessageStore: ObservableObject {
             arr.removeFirst(arr.count - Self.maxPerGroup)
         }
         byGroup[groupHex] = arr
+        unreadCountCache.removeValue(forKey: groupHex)
         persist()
         postDidChange(groupHex)
         return true
@@ -315,6 +329,7 @@ public final class GroupMessageStore: ObservableObject {
         guard let newest = byGroup[groupHex]?.last?.ts else { return }
         if let cur = lastRead[groupHex], cur >= newest { return }
         lastRead[groupHex] = newest
+        unreadCountCache[groupHex] = 0
         persistReadMarkers()
         postDidChange(groupHex)
     }
@@ -354,6 +369,7 @@ public final class GroupMessageStore: ObservableObject {
                 return exp > now
             }
             byGroup[groupHex] = remaining
+            unreadCountCache.removeValue(forKey: groupHex)
             changedGroupHexes.append(groupHex)
         }
         guard !changedGroupHexes.isEmpty else { return }
@@ -366,7 +382,10 @@ public final class GroupMessageStore: ObservableObject {
             do {
                 try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
             } catch {
-                print("[GroupMessageStore] deleteExpiredMessages: cache cleanup failed for \(path): \(error)")
+                // I8 FIX: drop the raw cache path from the print — matches
+                // this file's own `clear()` sibling, which already omits the
+                // path for the identical cleanup-failure case (g=<hex> only).
+                print("[GroupMessageStore] deleteExpiredMessages: cache cleanup failed: \(error)")
             }
         }
         // Notify every open GroupChatScreen/GroupCallChatPanel so a
@@ -404,6 +423,7 @@ public final class GroupMessageStore: ObservableObject {
         }
         let cachedPathsToRemove = rows.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty }
         byGroup.removeValue(forKey: groupHex)
+        unreadCountCache.removeValue(forKey: groupHex)
         if lastRead.removeValue(forKey: groupHex) != nil { persistReadMarkers() }
         persist()
         let gShort: String = String(groupHex.prefix(8))

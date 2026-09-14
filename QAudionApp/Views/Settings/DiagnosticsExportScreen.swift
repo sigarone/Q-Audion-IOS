@@ -167,11 +167,15 @@ final class DiagnosticsExportContainer: ObservableObject {
         generating = false
     }
 
-    private func formatNow() -> String {
+    private static let nowFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
-        return f.string(from: Date())
+        return f
+    }()
+
+    private func formatNow() -> String {
+        return DiagnosticsExportContainer.nowFormatter.string(from: Date())
     }
 }
 
@@ -377,7 +381,7 @@ struct DiagnosticsExportScreen: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .tracking(1.5)
                 .foregroundStyle(extras.warning)
-            Text("Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a bug-report TestFlight.")
+            Text("Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a una segnalazione al supporto.")
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurface)
         }
@@ -428,7 +432,7 @@ struct DiagnosticsExportScreen: View {
         HStack(spacing: 10) {
             Button {
                 UIPasteboard.general.string = container.report
-                snackbar?.show(.init(text: "Report copiato.", severity: .info))
+                snackbar?.show(.init(text: String(localized: "diagnostics_export.report_copied", defaultValue: "Report copiato.", comment: "Snackbar — shown after copying the diagnostics report text to the clipboard"), severity: .info))
             } label: {
                 Label("Copia", systemImage: "doc.on.doc")
                     .qaudionStyle(type.labelMedium)

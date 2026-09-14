@@ -24,7 +24,7 @@ final class BCryptoKmsWireFormatTests: XCTestCase {
 
     func testRegisterPublicKeyOmitsDeviceIdAndDefaultsToX25519() async throws {
         KmsStubURLProtocol.stubResponse = (200, Data("{}".utf8))
-        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [KmsStubURLProtocol.self]))
 
         try await client.registerPublicKey(publicKey: Data([0x01, 0x02, 0x03, 0x04]))
 
@@ -38,7 +38,7 @@ final class BCryptoKmsWireFormatTests: XCTestCase {
 
     func testRegisterPublicKeyHonoursExplicitKeyType() async throws {
         KmsStubURLProtocol.stubResponse = (200, Data("{}".utf8))
-        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [KmsStubURLProtocol.self]))
 
         try await client.registerPublicKey(publicKey: Data([0xaa]), keyType: "ml-kem-1024")
 
@@ -63,7 +63,7 @@ final class BCryptoKmsWireFormatTests: XCTestCase {
         }]}
         """#
         KmsStubURLProtocol.stubResponse = (200, Data(payload.utf8))
-        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [KmsStubURLProtocol.self]))
 
         let keys = try await client.getPendingKeys()
         XCTAssertEqual(keys.count, 1)
@@ -80,7 +80,7 @@ final class BCryptoKmsWireFormatTests: XCTestCase {
 
     func testGetPendingKeysEmptyEnvelope() async throws {
         KmsStubURLProtocol.stubResponse = (200, Data(#"{"keys":[]}"#.utf8))
-        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local")))
+        let client = BCryptoKmsClient(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [KmsStubURLProtocol.self]))
         let keys = try await client.getPendingKeys()
         XCTAssertTrue(keys.isEmpty)
     }

@@ -95,18 +95,22 @@ final class EarbudExclKatTests: XCTestCase {
     // MARK: - server_id
 
     func testServerIdMatchesKmsServerIdentity() {
-        // SHA-256("qa-kms-server-id-v1|qa-kms-test-server-2026-06-16") — frozen label.
-        // KmsServerIdentity.serverIdBytes must produce this exact 32 bytes.
+        // SHA-256("qa-kms-server-id-v1|qa-kms-test-server-2026-06-16") — frozen
+        // KAT label (deliberately NOT KmsServerIdentity.SERVER_IDENTITY, which
+        // is the live production identity — see KmsServerIdentity.swift).
+        // KmsServerIdentity.serverId(identity:) must reproduce this exact
+        // 32 bytes when fed the frozen KAT label.
         let expected = Data([
             0x94, 0xb4, 0x00, 0x0e, 0x40, 0xb5, 0xa7, 0x16,
             0xd3, 0xd8, 0x06, 0xbb, 0x79, 0xc5, 0x0f, 0x29,
             0x04, 0xa4, 0xc8, 0xd8, 0xfd, 0xc5, 0xf4, 0x29,
             0x38, 0x3d, 0x10, 0x5f, 0x61, 0x99, 0x7a, 0x7e
         ])
-        XCTAssertEqual(32, KmsServerIdentity.serverIdBytes.count,
-                       "serverIdBytes must be 32 bytes")
-        XCTAssertEqual(expected, KmsServerIdentity.serverIdBytes,
-                       "KmsServerIdentity.serverIdBytes drifted from earbud-excl-v2 KAT — label changed?")
+        let frozenKatServerId = KmsServerIdentity.serverId(identity: "qa-kms-test-server-2026-06-16")
+        XCTAssertEqual(32, frozenKatServerId.count,
+                       "serverId(identity:) must return 32 bytes")
+        XCTAssertEqual(expected, frozenKatServerId,
+                       "KmsServerIdentity.serverId(identity:) drifted from earbud-excl-v2 KAT — label changed?")
     }
 
     // MARK: - pair_id from frozen KAT vector

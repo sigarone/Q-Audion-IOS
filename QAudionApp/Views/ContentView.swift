@@ -69,6 +69,29 @@ struct ContentView: View {
     @State private var outgoingAvatarUrl: URL? = nil
     private let contactsStore = ContactsStore()
 
+    /// W-OUTGOINGDOT3 (2026-08-16) — `inCallStack` used to branch straight
+    /// on `appState.callState` in the SAME body evaluation that state
+    /// change triggers, so the instant `callState` reached `.active` /
+    /// `.encrypted` the view swapped synchronously to `LiveInCallScreen`/
+    /// `VideoCallView`. `makeOutgoingScreen()` was therefore NEVER called
+    /// with a state that could map to `OutgoingCallScreen.State.connected`
+    /// — the third handshake-log checkmark ("HKDF session key derived")
+    /// was unreachable dead code on every call, successful or not (a user
+    /// watching a real call always saw it stuck at 2/3, independent of
+    /// whether the PQC handshake had actually completed).
+    ///
+    /// Android's `OutgoingCallRoute` doesn't have this problem: it routes
+    /// to InCall via a `LaunchedEffect(state) { if (state == "connected")
+    /// onConnected(...) }` side effect, which runs AFTER the composable
+    /// has already rendered once with the new state — so the third
+    /// checkmark genuinely appears for a frame before the screen swaps.
+    /// This flag reproduces that same one-frame-then-navigate timing on
+    /// iOS: `inCallStack` gates on IT (not on `callState` directly), and
+    /// only `.onChange` below — which fires after the body has already
+    /// re-rendered with the new `callState` — flips it, mirroring
+    /// Android's async LaunchedEffect instead of a synchronous branch.
+    @State private var showLiveCallScreen: Bool = false
+
     var body: some View {
         ZStack(alignment: .top) {
             mainStack
@@ -211,6 +234,13 @@ struct ContentView: View {
         .onChange(of: appState.callContactId) { id in
             resolveOutgoingName(id)
         }
+        // W-OUTGOINGDOT3 — see showLiveCallScreen's doc above. Async on
+        // purpose: this must fire AFTER inCallStack already rendered once
+        // with the new callState (so makeOutgoingScreen() gets a chance to
+        // show the third checkmark), not synchronously with it.
+        .onChange(of: appState.callState) { newState in
+            showLiveCallScreen = (newState == .active || newState == .encrypted)
+        }
         .onAppear {
             resolveOutgoingName(appState.callContactId)
         }
@@ -256,7 +286,11 @@ struct ContentView: View {
             callType: invite.hasVideo ? .video : .audio,
             subtitle: Self.groupCallSubtitle(invite),
             showReplyAction: false,
-            onAccept: { appState.answerIncomingGroupCall() },
+            // W-VIDPRIVACY — accept-without-video is a 1:1-only feature
+            // (design non-goal for group calls); the toggle still renders on
+            // this shared component, but its result is intentionally ignored
+            // here.
+            onAccept: { _ in appState.answerIncomingGroupCall() },
             onReject: { appState.declineIncomingGroupCall() }
         )
     }
@@ -281,9 +315,27 @@ struct ContentView: View {
             avatarUrl: outgoingAvatarUrl,
             callType: appState.isVideoCall ? .video : .audio,
             peerShortNumber: outgoingShortNumber,
-            onAccept: { appState.answerIncomingCall() },
+            onAccept: { audioOnly in appState.answerIncomingCall(audioOnly: audioOnly) },
             onReject: { appState.declineIncomingCall() }
         )
+        // W-VIDPRIVACY follow-up — `IncomingCallScreen`'s own
+        // `acceptWithoutVideo` @State only resets when SwiftUI tears down
+        // and recreates the view instance. `incomingCallRingVisible` alone
+        // does NOT guarantee that: `prepareIncomingPushCall` (AppState.swift)
+        // unconditionally overwrites the incoming-call state — including
+        // `activeCallKitId` — when a PushKit wakeup for a DIFFERENT call
+        // arrives while this one is still ringing, without ever dipping
+        // `incomingCallRingVisible` back to false. Without an explicit
+        // identity key, SwiftUI would keep reusing the same view instance
+        // (same position in the view tree) across that swap, so a
+        // pre-checked "Rispondi senza video" from the first call would
+        // silently carry over to the second, different call's Accept
+        // button. Keying on `activeCallKitId` (nilled on call end, stamped
+        // fresh per call by both the PushKit and WS incoming-call paths)
+        // forces a brand-new `IncomingCallScreen` — and therefore fresh
+        // `@State` — every time the underlying call actually changes,
+        // independent of `incomingCallRingVisible`'s own transitions.
+        .id(appState.activeCallKitId?.uuidString ?? "no-active-call")
     }
 
     /// GAP FIX — group-call "room identity" avatar. `invite.groupId` is
@@ -377,8 +429,9 @@ struct ContentView: View {
     /// wiring), so this is a safe surface to fall back to.
     @ViewBuilder
     private var inCallStack: some View {
-        let cs = appState.callState
-        if cs == .active || cs == .encrypted {
+        // W-OUTGOINGDOT3 — gates on the async-flipped flag, not on
+        // appState.callState directly. See showLiveCallScreen's doc.
+        if showLiveCallScreen {
             let bothCamerasPaused = appState.localVideoPaused && appState.remoteVideoPaused
             if (appState.isVideoCall || appState.peerScreenShareActive) && !bothCamerasPaused {
                 VideoCallView()
@@ -392,16 +445,41 @@ struct ContentView: View {
 
     private func makeOutgoingScreen() -> OutgoingCallScreen {
         let cs = appState.callState
-        let outState: OutgoingCallScreen.State = (cs == .connecting) ? .dialing : .handshaking
+        // W-OUTGOINGDOT3 — cs can now legitimately be .active/.encrypted
+        // here: showLiveCallScreen hasn't flipped yet for this render pass
+        // (its .onChange fires after), so this frame is exactly the one
+        // that must show the third checkmark. Previously this branch could
+        // never see those two values in practice (inCallStack swapped
+        // away synchronously the same instant), so the ternary only ever
+        // needed to distinguish .connecting from everything else — that
+        // silently made OutgoingCallScreen.State.connected dead code.
+        let outState: OutgoingCallScreen.State
+        switch cs {
+        case .connecting: outState = .dialing
+        case .active, .encrypted: outState = .connected
+        default: outState = .handshaking
+        }
         let name: String = outgoingDisplayName.isEmpty
             ? (appState.callContactId ?? "…")
             : outgoingDisplayName
+        // Key-exchange ring — only non-nil once the real PQC session key
+        // exists (same condition LiveInCallScreen.liveKeyInfo uses), which
+        // in practice is only true for the single .connected render frame
+        // this screen survives — see this plan's design-doc reference for
+        // why these are shown immediately rather than animated in.
+        let pskMethodLabel: String? = appState.pskMethod.isEmpty ? nil : appState.pskMethod
+        let sessionFingerprint: String? = {
+            guard let key = appState.callPqcSessionKey, !key.isEmpty else { return nil }
+            return LiveInCallScreen.sessionFingerprintFromKey(key)
+        }()
         return OutgoingCallScreen(
             peerDisplayName: name,
             avatarUrl: outgoingAvatarUrl,
             state: outState,
             elapsedSeconds: Int(appState.callService.callDurationSeconds),
             peerShortNumber: outgoingShortNumber,
+            pskMethodLabel: pskMethodLabel,
+            sessionFingerprint: sessionFingerprint,
             onHangup: { appState.endCall() }
         )
     }

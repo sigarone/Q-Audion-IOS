@@ -48,15 +48,19 @@ final class GroupMembershipReplayGuard {
     /// (not a replay) and records it. Returns `false` — recording nothing
     /// — if it is a replay under either gate.
     func check(groupId: String, eProposed: Int64, ts: Int64) -> Bool {
+        // W-GRPLOGSHAPE (2026-09-08) — reformatted; see GroupMembershipVerifier
+        // .verify's kdoc for why free-text "group"-tagged bodies never ship,
+        // and for why the codes are 3-4 chars specifically (verified against
+        // ship-ios-logs.py's own scrub functions).
         if let seenMax = maxEpochSeen[groupId], eProposed < seenMax {
             let gShort: String = String(groupId.prefix(8))
-            RTLog.warn("group", "replay: eProposed below floor g=" + gShort)
+            RTLog.warn("group", "grp_replay r=eplo g=" + gShort)
             return false
         }
         let sameKey: String = groupId + ":" + String(eProposed)
         if let seenTs = sameEpochSeen[sameKey], ts <= seenTs {
             let gShort: String = String(groupId.prefix(8))
-            RTLog.warn("group", "replay: ts not increasing g=" + gShort)
+            RTLog.warn("group", "grp_replay r=tslo g=" + gShort)
             return false
         }
         let currentMax = maxEpochSeen[groupId]

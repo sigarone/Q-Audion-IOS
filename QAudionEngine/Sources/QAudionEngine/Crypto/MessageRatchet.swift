@@ -97,6 +97,31 @@ public final class MessageRatchet {
     /// vault under the same routing tag.
     public static let v4RoutingEpoch = "v4"
 
+    /// MSG-4 (2026-09-02 protocol audit, backlog item 5C) go-live gate for
+    /// widening the v3.1 nonce derivation's chain-index input from its LOW
+    /// BYTE (`chainIdx & 0xFF`) to the FULL 64-bit big-endian chain index —
+    /// see `deriveMsgKeyAndNonce`'s SECURITY L-16 comment for exactly what
+    /// this changes and why the low byte alone was never a nonce-reuse bug
+    /// (CK_n's own per-message advance already prevents that; this is
+    /// defence-in-depth, not a fix for exploitable reuse).
+    ///
+    /// Modeled directly on this same file's `v4NativeRatchetEnabled` gate
+    /// immediately above — a single static go-live boolean, default OFF,
+    /// that both legs of a session must agree on before either switches
+    /// formulas. Unlike v3-vs-v4 (a distinct wire magic byte the RECEIVER
+    /// can dispatch on per-frame), v3.1-vs-v3.2 is invisible on the wire —
+    /// the nonce itself is never transmitted, only independently re-derived
+    /// by both sides from `(CK_n, chain_idx)` — so there is no per-frame
+    /// signal to detect a mismatch from; a receiver still on v3.1's formula
+    /// while the sender has moved to v3.2 fails AEAD on every message with
+    /// no other symptom. That is exactly why this constant exists rather
+    /// than switching unilaterally (the L-16 comment already said so before
+    /// this constant existed: "DO NOT change unilaterally"). Flip to `true`
+    /// only as a coordinated, simultaneous release once Android/Desktop ship
+    /// the SAME widened construction — see the Android repo's
+    /// docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 5.
+    public static let msgNonceWidenV32Enabled: Bool = false
+
     public static let keyLen = 32
     public static let nonceLen = 12
     public static let tagLen = 16
@@ -104,7 +129,19 @@ public final class MessageRatchet {
     /// Hard cap on `(incoming_idx - last_seen_recv_idx - 1)` per spec §9.
     public static let maxSkipAhead: UInt64 = 10_000
     /// LRU bound on the per-session skipped-keys cache.
-    public static let skippedKeysCacheMax = 256
+    ///
+    /// W-SKIPCACHEWIDEN (2026-09-10) — was 256, widened 16x as defense-in-
+    /// depth alongside the Android fix for the same class of risk (see
+    /// Android's `MessageRatchet.SKIPPED_KEYS_CACHE_MAX` kdoc for the full
+    /// incident writeup). iOS itself is no longer exposed to THAT specific
+    /// trigger — control/protocol envelopes were moved off this ratchet
+    /// entirely (`ChatMessageSendService.encryptForWire`'s
+    /// `forceStatelessFormat`, same date) — but a large-enough burst of
+    /// genuine real-content messages arriving out of order could still
+    /// exhaust a small cache the same way, so the wider margin is kept
+    /// here too. Pure capacity change, no cryptographic construction
+    /// touched.
+    public static let skippedKeysCacheMax = 4096
     /// TTL for skipped-key cache entries (7 days, in ms).
     public static let skippedKeysTtlMs: Int64 = 7 * 24 * 3600 * 1000
 
@@ -112,6 +149,13 @@ public final class MessageRatchet {
     private static let initSalt = Data("ratchet-init-v3".utf8)
     private static let infoMsgKey = Data("msg-key".utf8)
     private static let infoMsgNonce = Data("msg-nonce-v3.1".utf8)
+    /// MSG-4 (backlog item 5C) — distinct info label for the widened nonce
+    /// derivation, gated behind `msgNonceWidenV32Enabled`. A different label
+    /// (not a reused "msg-nonce-v3.1") gives the widened construction its
+    /// own HKDF domain on top of the IKM shape already differing — belt and
+    /// suspenders, matching this file's own convention of a versioned label
+    /// per wire-visible formula change (`ratchet-init-v3`, `msg-nonce-v3.1`).
+    private static let infoMsgNonceV32 = Data("msg-nonce-v3.2".utf8)
     private static let infoRatchetStep = Data("ratchet-step".utf8)
     private static let emptySalt = Data()
 
@@ -189,7 +233,13 @@ public final class MessageRatchet {
                 "epochId must encode to 1..255 UTF-8 bytes (got \(epochBytes.count))")
         }
 
-        if let existing = vault.load(epochId: epochId, peerId: peerId) {
+        // W-KCAFTERUNLOCK (2026-09-01) — `loadChecked`, not `load`: a locked
+        // Keychain (-25308) used to read as "no snapshot", and this branch then
+        // DERIVED a fresh chain from pskRoot and tried to persist it over the
+        // real one. Now it throws `VaultError.deviceLocked` instead —
+        // transient, retry after unlock (audit memory
+        // reference_ios_stability_audit_2026_09_01, P1 item 5).
+        if let existing = try vault.loadChecked(epochId: epochId, peerId: peerId) {
             guard existing.selfId == selfId else {
                 throw RatchetError.invalidArguments(
                     "vault snapshot belongs to a different self ('\(existing.selfId)', expected '\(selfId)')")
@@ -547,28 +597,50 @@ public final class MessageRatchet {
         return derived.withUnsafeBytes { Data($0) }
     }
 
-    private static func deriveMsgKeyAndNonce(
-        ck: Data, chainIdx: UInt64
+    /// `widenNonceV32` defaults to the `msgNonceWidenV32Enabled` kill switch
+    /// (i.e. every production call site — `encrypt`/`decryptOrThrow` below —
+    /// gets the SAME, currently-`false`, behaviour with no change of their
+    /// own). Not `private` and the parameter exists ONLY so
+    /// `MessageRatchetNonceV32Tests` can exercise the widened formula
+    /// directly without flipping the shipped kill switch — Swift's `private`
+    /// is invisible even to `@testable import`, and the kill switch is a
+    /// `let` (deliberately not overridable at runtime, so it can never be a
+    /// silent config toggle).
+    static func deriveMsgKeyAndNonce(
+        ck: Data, chainIdx: UInt64, widenNonceV32: Bool = MessageRatchet.msgNonceWidenV32Enabled
     ) throws -> (key: Data, nonce: Data) {
         let msgKey = hkdf(ikm: ck, salt: emptySalt, info: infoMsgKey, length: keyLen)
-        // SECURITY L-16: the nonce IKM folds in only the LOW BYTE of
-        // chain_idx (`chainIdx & 0xFF`), not the full 64-bit index. This
-        // is wire-load-bearing — Android's MessageRatchet derives the
-        // nonce byte-for-byte the same way, so widening it here would
-        // silently break every cross-platform decrypt. It is NOT a nonce-
-        // reuse bug at the protocol level: the nonce's primary entropy is
-        // the full 32-byte chain key `CK_n`, which advances (HKDF "ratchet
-        // -step") on EVERY send/receive, so two different messages never
-        // share the same (CK_n, idx-low-byte) pair within a chain. The
-        // low byte is only a cheap extra domain separator. Using the
-        // full-width chain_idx in the nonce IKM would be cleaner defence-
-        // in-depth but requires a coordinated cross-platform wire bump
-        // (v3.2) — DO NOT change unilaterally. Comment-only.
-        let idxLowByte = UInt8(chainIdx & 0xFF)
-        var nonceIkm = Data(capacity: ck.count + 1)
-        nonceIkm.append(ck)
-        nonceIkm.append(idxLowByte)
-        let nonce = hkdf(ikm: nonceIkm, salt: emptySalt, info: infoMsgNonce, length: nonceLen)
+        // SECURITY L-16 / MSG-4 (2026-09-02 protocol audit, backlog item 5C):
+        // the nonce IKM historically folds in only the LOW BYTE of chain_idx
+        // (`chainIdx & 0xFF`), not the full 64-bit index. This was NOT a
+        // nonce-reuse bug at the protocol level: the nonce's primary entropy
+        // is the full 32-byte chain key `CK_n`, which advances (HKDF
+        // "ratchet-step") on EVERY send/receive, so two different messages
+        // never share the same (CK_n, idx-low-byte) pair within a chain —
+        // the low byte was only a cheap extra domain separator. Widening it
+        // to the full chain_idx is cleaner defence-in-depth, gated behind
+        // `msgNonceWidenV32Enabled` (default false — see its doc): this is
+        // wire-load-bearing (the nonce itself is never transmitted, only
+        // independently re-derived by both peers), so an unnegotiated
+        // unilateral switch silently breaks every message both directions
+        // the moment one side flips ahead of the other. Legacy path (kill
+        // switch off, always true today) is byte-identical to before.
+        var nonceIkm: Data
+        let nonceInfo: Data
+        if widenNonceV32 {
+            var idxBE = chainIdx.bigEndian
+            nonceIkm = Data(capacity: ck.count + 8)
+            nonceIkm.append(ck)
+            nonceIkm.append(withUnsafeBytes(of: &idxBE) { Data($0) })
+            nonceInfo = infoMsgNonceV32
+        } else {
+            let idxLowByte = UInt8(chainIdx & 0xFF)
+            nonceIkm = Data(capacity: ck.count + 1)
+            nonceIkm.append(ck)
+            nonceIkm.append(idxLowByte)
+            nonceInfo = infoMsgNonce
+        }
+        let nonce = hkdf(ikm: nonceIkm, salt: emptySalt, info: nonceInfo, length: nonceLen)
         return (msgKey, nonce)
     }
 

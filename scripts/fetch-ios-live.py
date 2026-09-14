@@ -44,13 +44,34 @@ except ImportError:
     sys.exit(1)
 
 
+def _vps_key_path():
+    """Private key for the prod VPS: env QAUDION_VPS_KEY / VPS_SSH_KEY, else
+    the dev-box default the other prod tools (ship-ios-logs.py, phone-debug,
+    deploy.py) use. Returns None when no readable key exists so callers can
+    fall back. Identical to ship-ios-logs.py::_vps_key_path."""
+    for cand in (os.environ.get("QAUDION_VPS_KEY"), os.environ.get("VPS_SSH_KEY"),
+                 str(Path.home() / ".claude" / "bin" / "bcrypto_vps_ed25519")):
+        if cand:
+            p = Path(os.path.expanduser(cand))
+            if p.is_file():
+                return str(p)
+    return None
+
+
 def _load_vps_creds():
-    """Load VPS credentials from environment variables or VPS_ACCESS.md."""
+    """Load VPS credentials from environment variables or VPS_ACCESS.md.
+
+    W-VPSKEYAUTH parity with ship-ios-logs.py: the prod VPS is publickey-only
+    post-migration-hardening, so QAUDION_VPS_PASS is optional once a key is
+    available (_vps_key_path()) -- requiring all three env vars used to force
+    every caller down the stale VPS_ACCESS.md fallback whenever the password
+    var was unset, even though key auth alone was already sufficient.
+    """
     host = os.environ.get("QAUDION_VPS_HOST")
     user = os.environ.get("QAUDION_VPS_USER")
     password = os.environ.get("QAUDION_VPS_PASS")
-    if host and user and password:
-        return host, user, password
+    if host and user and (password or _vps_key_path()):
+        return host, user, password or ""
 
     # Fall back to VPS_ACCESS.md in sibling bcrypto-server repo
     candidates = [
@@ -66,11 +87,12 @@ def _load_vps_creds():
             h = re.search(r"\*\*IP\*\*:\s*`?([^`\s]+)", text)
             u = re.search(r"\*\*SSH\*\*:\s*`?(\w+)@", text)
             pw = re.search(r"\*\*Password root\*\*:\s*`?([^`\s]+)", text)
-            if h and u and pw:
-                return h.group(1), u.group(1), pw.group(1)
+            if h and u and (pw or _vps_key_path()):
+                return h.group(1), u.group(1), (pw.group(1) if pw else "")
 
     print("ERROR: VPS credentials not found.", file=sys.stderr)
-    print("Set env vars QAUDION_VPS_HOST / QAUDION_VPS_USER / QAUDION_VPS_PASS", file=sys.stderr)
+    print("Set env vars QAUDION_VPS_HOST / QAUDION_VPS_USER (+ QAUDION_VPS_PASS if no SSH key)",
+          file=sys.stderr)
     print("or place VPS_ACCESS.md in the bcrypto-server sibling repo.", file=sys.stderr)
     sys.exit(1)
 
@@ -88,9 +110,8 @@ def ssh_connect():
     # locked the operator IP out (a failed password attempt got us banned, and
     # "we are the operators, we must never be banned"). Password stays only as a
     # last-resort fallback. Use the env override QAUDION_VPS_KEY if set.
-    key_path = os.environ.get("QAUDION_VPS_KEY") or os.path.expanduser(
-        "~/.claude/bin/bcrypto_vps_ed25519")
-    if os.path.exists(key_path):
+    key_path = _vps_key_path()
+    if key_path:
         try:
             client.connect(VPS_HOST, username=VPS_USER, key_filename=key_path,
                            timeout=15, look_for_keys=False, allow_agent=False)

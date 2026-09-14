@@ -31,7 +31,7 @@ struct CallDesignShowcase: View {
                         peerDisplayName: "Mario Rossi",
                         callType: .audio,
                         confidence: 0.94,
-                        onAccept: {}, onReject: {}
+                        onAccept: { _ in }, onReject: {}
                     )
                     .navigationBarBackButtonHidden(false)
                 }
@@ -40,7 +40,7 @@ struct CallDesignShowcase: View {
                         peerDisplayName: "Anna Bianchi",
                         callType: .video,
                         confidence: 0.81,
-                        onAccept: {}, onReject: {}
+                        onAccept: { _ in }, onReject: {}
                     )
                 }
                 NavigationLink("Outgoing · Dialing") {

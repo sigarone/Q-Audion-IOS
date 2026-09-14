@@ -23,6 +23,11 @@ import QAudionEngine
 /// yet — sensible defaults render so the screen still validates layout.
 struct ContactDetailScreen: View {
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
+    @State private var upgradeSheetCapability: Capability? = nil
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -38,6 +43,11 @@ struct ContactDetailScreen: View {
     @State private var sharingVCard: VCardShareItem? = nil
     /// Local block state — initialised from BlockedContactsStore on .onAppear.
     @State private var isBlocked: Bool = false
+    /// App Store 1.2 / Play UGC — "Segnala" next to "Blocca". The dialog
+    /// picks a category, the report goes through BugReporter's E2EE
+    /// pipeline (trigger=abuse), then the user is offered to block too.
+    @State private var showingReportDialog: Bool = false
+    @State private var showingPostReportBlock: Bool = false
     /// Internal extension number for this peer, bare digits, no prefix —
     /// resolved via the canonical `DisplayName.resolvedExtension`, not by
     /// parsing `item.displayName` (see `extractExtension`'s old kdoc: that
@@ -101,7 +111,7 @@ struct ContactDetailScreen: View {
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     snackbar?.show(.init(
-                        text: "\(removedName) rimosso dalla rubrica.",
+                        text: String(localized: "contact_detail.contact_removed", defaultValue: "\(removedName) rimosso dalla rubrica.", comment: "Snackbar — a contact was removed from the address book, %@ is their display name"),
                         severity: .info
                     ))
                 }
@@ -131,7 +141,7 @@ struct ContactDetailScreen: View {
                 PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
                 Task { await loadTrustEvaluation() }
                 snackbar?.show(.init(
-                    text: "\(item.displayName) verificato via \(method.localized).",
+                    text: String(localized: "contact_detail.contact_verified_via", defaultValue: "\(item.displayName) verificato via \(method.localized).", comment: "Snackbar — a contact was verified via SAS; first %@ is their display name, second %@ is the verification method"),
                     severity: .info
                 ))
             })
@@ -165,7 +175,7 @@ struct ContactDetailScreen: View {
                         // rebuild helpers use internally) and upsert it.
                         let store = ContactsStore()
                         guard let existing = store.load().first(where: { $0.userId == item.userId }) else {
-                            snackbar?.show(.init(text: "Contatto non trovato.", severity: .error))
+                            snackbar?.show(.init(text: String(localized: "contact_detail.contact_not_found", defaultValue: "Contatto non trovato.", comment: "Snackbar — the contact being edited could not be found in local storage"), severity: .error))
                             return
                         }
                         let updated = ContactsStore.StoredContact(
@@ -187,12 +197,38 @@ struct ContactDetailScreen: View {
                             voiceVerifiedAt: existing.voiceVerifiedAt
                         )
                         store.upsert(updated)
-                        snackbar?.show(.init(text: "Contatto aggiornato.", severity: .info))
+                        snackbar?.show(.init(text: String(localized: "contact_detail.contact_updated", defaultValue: "Contatto aggiornato.", comment: "Snackbar — contact edits were saved successfully"), severity: .info))
                     }
                 )
                 .navigationBarBackButtonHidden(true)
                 .toolbar(.hidden, for: .navigationBar)
             }
+        }
+        // Entitlements Task 5 — presents UpgradeSheet pre-filled with
+        // whichever Capability the user tapped a locked control for.
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
+        }
+        // App Store 1.2 — report flow (category picker -> E2EE report ->
+        // offer to block). Same three categories as Android.
+        .confirmationDialog("Segnala \(item.displayName)",
+                            isPresented: $showingReportDialog,
+                            titleVisibility: .visible) {
+            Button("Spam") { performReport(category: "spam") }
+            Button("Abuso o molestie") { performReport(category: "abuse") }
+            Button("Altro") { performReport(category: "other") }
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi.")
+        }
+        .alert("Segnalazione inviata", isPresented: $showingPostReportBlock) {
+            Button("Blocca \(item.displayName)", role: .destructive) {
+                if !isBlocked { performBlock() }
+            }
+            Button("Non ora", role: .cancel) {}
+        } message: {
+            Text("Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti.")
         }
     }
 
@@ -360,31 +396,31 @@ struct ContactDetailScreen: View {
 
     // MARK: - Trust badges row
 
+    /// One statement per fact.
+    ///
+    /// This row used to render FOUR widgets off the single `isVerified`
+    /// boolean — VOICE, the SAS chip, a RiskPill and a VoiceTrustIndicator —
+    /// plus the unconditional PQC literal. So VOICE and SAS always appeared
+    /// together and always said the same thing, and the meter showed 0.92 for
+    /// any contact that had merely had a SAS ceremony: a voice-match strength
+    /// nobody measured.
+    ///
+    /// VOICE now reads `voiceVerifiedAt`, the same independent signal the
+    /// trustVerificationCard below was already fixed to use. The two can
+    /// legitimately disagree: a contact can be SAS-verified without ever
+    /// being voice-learned, and the chip will correctly be absent for them.
+    /// The risk pill and the meter are gone rather than re-sourced — neither
+    /// had a number behind it.
     private var trustBadgesRow: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                TrustChip("PQC", accent: extras.pqcAccent)
-                if item.isVerified {
-                    TrustChip("VOICE", accent: extras.success)
-                }
-                if item.isVerified {
-                    TrustChip("SAS VERIFICATO", accent: extras.success)
-                } else {
-                    TrustChip("SAS DA VERIFICARE", accent: extras.warning)
-                }
-                // W35: il livello di rischio del contatto è derivato
-                // dallo stato di verifica engine-side. Senza un campo
-                // engine reale (deepfake history / blocked / SAS-fail
-                // rate) approssimiamo: verified == low, !verified ==
-                // medium. Il campo engine arriverà con lo stesso
-                // surface usato dalla TrustVerificationCard (W36).
-                RiskPill(item.isVerified ? .low : .medium)
+        HStack(spacing: 8) {
+            if voiceVerifiedAt != nil {
+                TrustChip("VOICE", accent: extras.success)
             }
-            // W35: VoiceTrustIndicator inline. Per ora il confidence
-            // è un proxy di isVerified (1.0 / 0.55). Quando l'engine
-            // espone il voice-match score storico, sostituisco il
-            // proxy con il valore reale.
-            VoiceTrustIndicator(index: item.isVerified ? 0.92 : 0.55)
+            if item.isVerified {
+                TrustChip("SAS VERIFICATO", accent: extras.success)
+            } else {
+                TrustChip("SAS DA VERIFICARE", accent: extras.warning)
+            }
         }
     }
 
@@ -417,9 +453,15 @@ struct ContactDetailScreen: View {
                          tint: extras.success) {
                 Task { await appState.startCall(contactId: item.userId, video: false) }
             }
-            actionButton(icon: "video",
-                         caption: "Video",
-                         tint: extras.pqcAccent) {
+            // Entitlements Task 5 — Capability.callsVideo. Same capability
+            // as ChatDetailScreen's video-call button — a second independent
+            // trigger for the same server-side call_upgrade_request-equivalent
+            // gate (mirrors Android's ContactDetailScreen.kt review fix I1 #1).
+            gatedActionButton(icon: "video",
+                               caption: "Video",
+                               tint: extras.pqcAccent,
+                               unlocked: capabilityGate.isUnlocked(.callsVideo),
+                               onLockedClick: { upgradeSheetCapability = .callsVideo }) {
                 Task { await appState.startCall(contactId: item.userId, video: true) }
             }
             actionButton(icon: "shield.lefthalf.filled",
@@ -430,6 +472,9 @@ struct ContactDetailScreen: View {
                          tint: extras.riskHigh) {
                 if isBlocked { performUnblock() } else { performBlock() }
             }
+            actionButton(icon: "flag",
+                         caption: "Segnala",
+                         tint: extras.riskHigh) { showingReportDialog = true }
         }
     }
 
@@ -446,6 +491,33 @@ struct ContactDetailScreen: View {
                     .background(Circle().fill(scheme.surfaceVariant.opacity(0.6)))
             }
             .buttonStyle(.plain)
+            Text(caption)
+                .qaudionStyle(type.labelSmall)
+                .tracking(1.2)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Entitlements Task 5 — gated counterpart to `actionButton` above,
+    /// same 52pt-circle-plus-caption footprint, wrapped in
+    /// `GatedActionButton` so the ONE quick-action this screen gates
+    /// (Video) gets the exact same dim + lock-badge treatment as every
+    /// other Task 5 site.
+    private func gatedActionButton(icon: String,
+                                    caption: String,
+                                    tint: Color,
+                                    unlocked: Bool,
+                                    onLockedClick: @escaping () -> Void,
+                                    action: @escaping () -> Void) -> some View {
+        VStack(spacing: 6) {
+            GatedActionButton(unlocked: unlocked, action: action, onLockedClick: onLockedClick) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 52, height: 52)
+                    .background(Circle().fill(scheme.surfaceVariant.opacity(0.6)))
+            }
             Text(caption)
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.2)
@@ -596,7 +668,7 @@ struct ContactDetailScreen: View {
                     PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
                     Task { await loadTrustEvaluation() }
                     snackbar?.show(.init(
-                        text: "Identità di \(item.displayName) marcata verificata via \(method.localized).",
+                        text: String(localized: "contact_detail.identity_marked_verified", defaultValue: "Identità di \(item.displayName) marcata verificata via \(method.localized).", comment: "Snackbar — the contact's identity was marked verified from the safety-number card; first %@ is their display name, second %@ is the verification method"),
                         severity: .info
                     ))
                 },
@@ -605,7 +677,7 @@ struct ContactDetailScreen: View {
                     PeerTrustEvaluator.acceptNewFingerprint(peerUserId: item.userId, newPeerIkEdPub: newKey)
                     Task { await loadTrustEvaluation() }
                     snackbar?.show(.init(
-                        text: "Nuova identità accettata.",
+                        text: String(localized: "contact_detail.new_identity_accepted", defaultValue: "Nuova identità accettata.", comment: "Snackbar — the contact's rotated identity key was accepted, re-pinning trust"),
                         severity: .warning
                     ))
                 }
@@ -645,8 +717,11 @@ struct ContactDetailScreen: View {
     /// pattern as `presenceAuth` above, no network), the persisted
     /// "a `VoiceLearningSession` for this contact reached `.completed`"
     /// timestamp. nil until the user has run the in-call voice-learning
-    /// flow at least once for this contact — see `trustVerificationCard`'s
-    /// "Voce verificata" row above, the only consumer.
+    /// flow at least once for this contact.
+    ///
+    /// Three consumers now, not the one this comment used to claim:
+    /// `trustVerificationCard`'s "Voce verificata" row, the security log
+    /// card, and the VOICE chip in `trustBadgesRow`.
     private var voiceVerifiedAt: Date? {
         guard let ms = ContactsStore().load().first(where: { $0.userId == item.userId })?.voiceVerifiedAt else {
             return nil
@@ -656,7 +731,7 @@ struct ContactDetailScreen: View {
 
     private static let voiceVerifiedDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         return f
     }()
@@ -718,14 +793,17 @@ struct ContactDetailScreen: View {
         }
     }
 
-    // Device-locale, no override — matches presenceAuthSummary's original
-    // behavior exactly. Kept separate from lastVerificationDateFormatter
-    // below (it_IT forced) — an earlier extraction merged the two into one
-    // formatter and silently switched this call site to it_IT regardless of
-    // device locale; two distinct call sites with two distinct locale
-    // requirements need two distinct static formatters, not one shared.
+    // In-app language override (AppLanguageManager.effectiveLanguageCode) —
+    // was previously device-locale-only, no override, to match
+    // presenceAuthSummary's original behavior exactly; now aligned with the
+    // rest of the app's formatters (see W-L10N-FORMATTERS). Kept as its own
+    // static formatter, separate from lastVerificationDateFormatter below —
+    // an earlier extraction merged the two into one formatter and silently
+    // switched this call site to it_IT regardless of locale; two distinct
+    // call sites still get two distinct static formatters, not one shared.
     private static let presenceAuthDateFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         return f
     }()
@@ -800,12 +878,11 @@ struct ContactDetailScreen: View {
         }
     }
 
-    // it_IT forced — matches lastVerificationLabel's original behavior
-    // exactly. See presenceAuthDateFormatter above for why this stays a
-    // separate formatter instead of a shared one.
+    // In-app language override (was it_IT forced). See presenceAuthDateFormatter
+    // above for why this stays a separate formatter instead of a shared one.
     private static let lastVerificationDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         return f
     }()
@@ -884,7 +961,7 @@ struct ContactDetailScreen: View {
 
     private static let eventDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateStyle = .medium
         f.timeStyle = .short
         return f
@@ -910,6 +987,17 @@ struct ContactDetailScreen: View {
         }
     }
 
+    // MARK: - Report (App Store 1.2)
+
+    private func performReport(category: String) {
+        BugReporter.shared.reportAbuse(reportedUserId: item.userId,
+                                       reportedGroupId: nil,
+                                       reportedName: item.displayName,
+                                       category: category,
+                                       note: "")
+        showingPostReportBlock = true
+    }
+
     // MARK: - Block / Unblock
 
     private func performBlock() {
@@ -920,7 +1008,7 @@ struct ContactDetailScreen: View {
         if let provider = appState.liveProvider {
             Task { try? await provider.contactsApi.blockContact(userId: uid) }
         }
-        let msg: String = name + " bloccato."
+        let msg: String = String(localized: "contact_detail.contact_blocked", defaultValue: "\(name) bloccato.", comment: "Snackbar — a contact was blocked, %@ is their display name")
         snackbar?.show(.init(text: msg, severity: .info))
     }
 
@@ -932,14 +1020,14 @@ struct ContactDetailScreen: View {
         if let provider = appState.liveProvider {
             Task { try? await provider.contactsApi.unblockContact(userId: uid) }
         }
-        let msg: String = name + " sbloccato."
+        let msg: String = String(localized: "contact_detail.contact_unblocked", defaultValue: "\(name) sbloccato.", comment: "Snackbar — a contact was unblocked, %@ is their display name")
         snackbar?.show(.init(text: msg, severity: .info))
     }
 
     /// W294: build the guidance snackbar text via static method to keep
     /// the closure body trivial. CLAUDE.md §13.
     private static func openChatGuidance(peer: String) -> String {
-        return "Apri la chat con " + peer + " dalla scheda Chat."
+        return String(localized: "contact_detail.open_chat_guidance", defaultValue: "Apri la chat con \(peer) dalla scheda Chat.", comment: "Snackbar — guidance shown after tapping the Chat quick action; %@ is the contact's display name")
     }
 }
 
@@ -1053,5 +1141,6 @@ private struct SasVerifySheet: View {
         ContactDetailScreen(item: ContactsListViewModel.mock.items[0])
     }
     .environmentObject(AppState())
+    .environmentObject(CapabilityGate.previewInstance())
     .qAudionTheme(dark: true)
 }

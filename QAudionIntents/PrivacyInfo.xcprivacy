@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PrivacyInfo.xcprivacy - QAudionIntents (SiriKit) extension.
+
+  Resolves INStartCallIntent / INSendMessageIntent / INSearchForMessagesIntent on-device and hands off to the host app.
+  No tracking and no data collection of its own: everything the extension
+  handles is either on-device or already declared by the host app's
+  manifest. Picked up by the target's recursive `sources:` sweep in
+  QAudionApp/project.yml, same as the host app's manifest (no explicit
+  resources: entry - see the project.yml comment on why that pattern
+  silently dropped the file from the IPA).
+-->
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!-- SiriMessageBridgeStore.swift (compiled into this target too)
+             reads/writes the App Group suite group.com.bcrypto.qaudion.siri
+             shared with the host app: CA92.1 + 1C8F.1. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+                <string>1C8F.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

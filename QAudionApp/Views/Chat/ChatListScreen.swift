@@ -17,13 +17,17 @@ import QAudionEngine
 ///   3. "Fissate"      — pinned 1-to-1 conversations (`pinned == true`).
 ///   4. "Conversazioni" — everything else, sorted by lastActivity desc.
 ///
-/// 2 FABs anchored bottom-trailing (matches Android `Box`+`Column`):
-///   - secondary FAB (small, surface bg) → "Nuovo gruppo"
-///   - primary FAB (large, primary bg)   → "Nuova chat"
+/// One labelled FAB anchored bottom-trailing: an extended capsule reading
+/// "Nuovo gruppo". Starting a 1:1 chat is a labelled icon in the header —
+/// it used to be a second bare circle stacked above this one, duplicating
+/// the empty-state CTA.
 ///
-/// Search field uses `.searchable` (system standard) so iOS keyboard +
-/// "Cancel" affordance Just Work; Compose's TopBar TextField is the
-/// equivalent UX on Android.
+/// Above the sections sit the account header (`accountTopBar`) and an
+/// in-body search field. Both used to be navigation-bar chrome —
+/// `.navigationTitle` and `.searchable` — but that bar printed the tab's
+/// own label and is now hidden, so the search field is a plain TextField
+/// styled like the one on ContactsScreen. Same shape as Compose's TopBar
+/// TextField on Android.
 ///
 /// This screen is back-compatible with the existing `ConversationListContainer`
 /// — the data layer is unchanged. Only the presentation layer is new.
@@ -35,6 +39,10 @@ struct ChatListScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
@@ -54,6 +62,28 @@ struct ChatListScreen: View {
     @State private var deepLinkItem: ConversationListViewModel.Item? = nil
     @State private var deepLinkActive: Bool = false
     @State private var adminBannerDismissed = false
+    /// W-WSBANNERDEBOUNCE (2026-09-09) — see the `onChange` below and
+    /// `connectionStatusBanner`'s kdoc: the red "Connessione persa" banner
+    /// only appears after `.disconnected` has held for
+    /// `disconnectedBannerGraceSec`, not on the raw state transition.
+    @State private var showDisconnectedBanner = false
+    @State private var disconnectedBannerTask: Task<Void, Never>?
+    /// W-WSCONNECTINGDEBOUNCE (2026-09-12) — same principle extended to
+    /// `.connecting`, which W-WSBANNERDEBOUNCE deliberately left ungated
+    /// ("informational, not alarming, still shows immediately" — see the
+    /// superseded comment this change replaces below). Live evidence
+    /// (2026-09-12, user-reported): a phone lock/unlock is exactly the
+    /// "closes the WS, reconnects in 1-2s" blip this file already
+    /// documented for the disconnected case — the connecting banner was
+    /// flashing on every one of those, many times a day, for something
+    /// that resolves on its own before a human could act on it anyway.
+    /// Server + device evidence the same day (12h Loki sample, 2026-09-12)
+    /// found zero stuck-in-connecting watchdog fires and no call/message
+    /// loss correlated with these blips — confirming this is a display-only
+    /// fix, not a connectivity one; see the audit memory file this change
+    /// cites in its own commit for the full evidence trail.
+    @State private var showConnectingBanner = false
+    @State private var connectingBannerTask: Task<Void, Never>?
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
     /// W139: pending conversation export — non-nil triggers the share
@@ -79,6 +109,7 @@ struct ChatListScreen: View {
     /// irreversible locally, hence the confirmation.
     @State private var pendingGroupDelete: GroupRowUi? = nil
     @State private var showingGroupDeleteConfirm = false
+    @State private var recentAlert: AdminBannerData? = nil
 
     /// Sentinel Identifiable per `.fullScreenCover(item:)` con il
     /// groupId + name appena creati.
@@ -93,6 +124,128 @@ struct ChatListScreen: View {
     private struct ExportTarget: Identifiable {
         let id: URL
         var url: URL { id }
+    }
+
+    // MARK: - Account header
+
+    /// The header of the Chats tab shows the one thing only it can show:
+    /// whose account this device is logged into. It used to print "Chat",
+    /// character-for-character the tab-bar label drawn directly below it,
+    /// while the logged-in identity appeared on no home surface at all on
+    /// iPhone.
+    ///
+    /// Metrics match the strips ContactsScreen and CallHistoryView already
+    /// use, so the four tabs line up.
+    private var accountTopBar: some View {
+        let labels = AccountIdentityLabels.make(
+            currentUserDialExtension: appState.currentUserDialExtension,
+            accountAvatarName: appState.accountAvatarName)
+        return HStack(spacing: 12) {
+            QAudionAvatar(
+                // Name only, never `labels.primary`: the avatar turns what
+                // it is handed into initials, and `primary` can be an
+                // extension or the complete-your-profile prompt. The digits
+                // arrive through `shortNumber` instead — and are dropped
+                // once there is a real name to draw initials from.
+                displayName: labels.nameLabel ?? "Q",
+                imageURL: AvatarUploader.resolveSelfAvatarURL(version: appState.selfAvatarVersion),
+                size: 36,
+                shortNumber: labels.nameLabel == nil ? appState.currentUserDialExtension : nil
+            )
+            VStack(alignment: .leading, spacing: 1) {
+                Text(labels.primary)
+                    .qaudionStyle(type.titleSmall)
+                    .foregroundStyle(scheme.onSurface)
+                    .lineLimit(1)
+                if !labels.secondary.isEmpty {
+                    Text(labels.secondary)
+                        .qaudionStyle(type.labelSmall)
+                        .monospaced()
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+            }
+            // One VoiceOver element, not three fragments read in sequence.
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 8)
+            // Replaces the unlabelled `square.and.pencil` circle that used
+            // to sit under the group FAB. Same sheet, same state — that
+            // sheet is also the app's only mount for the dial-by-number
+            // row, the contact picker, QR scan and NFC pairing, which is
+            // why the glyph stays a compose pencil rather than a dialpad.
+            Button { showingNewConversation = true } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(scheme.onSurface)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("Nuova chat")
+            markAllMenu
+            // Compact only — on iPad the sidebar draws one chip for the
+            // whole shell, same gate the other three tabs use.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 56)
+    }
+
+    /// W50: overflow menu — "Segna tutti come letti", gated on the total
+    /// unread count. Lived in the navigation bar until that bar was hidden;
+    /// it had to move in the same edit or it would have gone with it.
+    private var markAllMenu: some View {
+        Menu {
+            Button {
+                let n = container.totalUnread
+                container.markAllAsRead()
+                // W70: replay server-side bulk read-all (best-effort).
+                if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
+                    Task { await sync.markAllConversationsRead() }
+                }
+                snackbar?.show(.init(
+                    text: n > 0
+                        ? String(localized: "chat_list.marked_all_read", defaultValue: "Segnate \(n) conversazioni come lette.", comment: "Snackbar confirming N conversations were marked as read via the overflow menu; %lld = count.")
+                        : String(localized: "chat_list.no_unread_conversations", defaultValue: "Nessuna conversazione non letta.", comment: "Snackbar shown when \"mark all as read\" is tapped but there were no unread conversations."),
+                    severity: .info))
+            } label: {
+                Label("Segna tutti come letti",
+                      systemImage: "checkmark.circle")
+            }
+            .disabled(container.totalUnread == 0)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(scheme.onSurface)
+                .frame(width: 36, height: 36)
+        }
+        .accessibilityLabel("Altro")
+    }
+
+    /// In-body replacement for `.searchable`, which lived in the navigation
+    /// bar this screen now hides. Same shape as ContactsScreen's field so
+    /// the two search surfaces match.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15))
+                .foregroundStyle(scheme.onSurfaceVariant)
+            TextField("", text: $searchText,
+                      prompt: Text("Cerca conversazioni")
+                          .foregroundColor(scheme.onSurfaceVariant))
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+                .tint(scheme.primary)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(
+            RoundedRectangle(cornerRadius: 22)
+                .fill(scheme.surfaceVariant.opacity(0.45))
+        )
     }
 
     /// W57 (Track B engine wire #3): admin banner content. Priorità
@@ -117,7 +270,7 @@ struct ChatListScreen: View {
         guard !adminBannerDismissed else { return nil }
 
         // 1. Recent security alert (≤ 24h, severity warning/alert).
-        if let recentAlert = recentSecurityAlertBanner() {
+        if let recentAlert = recentAlert {
             return recentAlert
         }
 
@@ -136,7 +289,10 @@ struct ChatListScreen: View {
     /// W57: surface alert dalle ultime 24h come banner. Threat reports
     /// con severity == "alert" o "warning" hanno precedenza su
     /// "info"/"low". Restituisce nil se nessuna alert recente.
-    private func recentSecurityAlertBanner() -> AdminBannerData? {
+    // Swift-6 readiness (and the W57 offload made real): this reads only
+    // ThreatReportLogStore — deliberately not @MainActor, see its kdoc —
+    // and touches no view state, so nonisolated is its true isolation.
+    private nonisolated func recentSecurityAlertBanner() -> AdminBannerData? {
         let store = ThreatReportLogStore()
         let entries = store.load()
         let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
@@ -160,12 +316,21 @@ struct ChatListScreen: View {
 
     /// Compact "X min/h fa" formatter — evita di trascinare in
     /// dependency aggiuntive solo per questa label.
-    private func formatRelative(_ date: Date) -> String {
+    private nonisolated func formatRelative(_ date: Date) -> String {
         let delta = Int(Date().timeIntervalSince(date))
-        if delta < 60 { return "ora" }
-        if delta < 3600 { return "\(delta / 60) min fa" }
-        if delta < 86400 { return "\(delta / 3600) h fa" }
-        return "\(delta / 86400) g fa"
+        if delta < 60 {
+            return String(localized: "chat_list.relative.now", defaultValue: "ora", comment: "Admin security banner — the alert was reported less than a minute ago")
+        }
+        if delta < 3600 {
+            let minutes = delta / 60
+            return String(localized: "chat_list.relative.minutes_ago", defaultValue: "\(minutes) min fa", comment: "Admin security banner — the alert was reported N minutes ago")
+        }
+        if delta < 86400 {
+            let hours = delta / 3600
+            return String(localized: "chat_list.relative.hours_ago", defaultValue: "\(hours) h fa", comment: "Admin security banner — the alert was reported N hours ago")
+        }
+        let days = delta / 86400
+        return String(localized: "chat_list.relative.days_ago", defaultValue: "\(days) g fa", comment: "Admin security banner — the alert was reported N days ago")
     }
 
     var body: some View {
@@ -173,6 +338,24 @@ struct ChatListScreen: View {
             scheme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                QAudionBrandBanner()
+                accountTopBar
+                // W-WSBANNER (2026-09-02) — B9: wsConnectionState was reliable
+                // but only ever surfaced in Impostazioni → Info
+                // (AboutSettingsScreen kvRow). Outside the List so it stays
+                // pinned regardless of scroll position and disappears the
+                // instant the state is read as healthy again — no dismiss
+                // affordance, unlike `adminBanner` below, since it must
+                // always reflect the live value, not a one-time user choice.
+                if let status = connectionStatusBanner {
+                    connectionStatusBannerView(status)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                }
+                searchField
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 List {
                     if let banner = adminBanner {
                         Section {
@@ -225,51 +408,54 @@ struct ChatListScreen: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(scheme.background)
+                // Clearance for the floating capsule, which is wider and
+                // taller than the circle it replaced. safeAreaInset rather
+                // than bottom padding: padding would clip the scroll region
+                // instead of extending it, and .contentMargins is iOS 17+
+                // while this target is 16.
+                .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 88) }
+            }
+            // W-WSBANNER: only the banner's own appear/disappear animates —
+            // scoped to this one value so it never fires on unrelated
+            // re-renders of the List above (e.g. a new message arriving).
+            .animation(.easeInOut(duration: 0.2), value: appState.wsConnectionState)
+            // W-WSBANNERDEBOUNCE — see `connectionStatusBanner`'s kdoc.
+            // iOS 16 single-param onChange (deployment target is iOS 16.0,
+            // per project.yml) — do not switch to the two-param iOS 17 form.
+            .onChange(of: appState.wsConnectionState) { newState in
+                disconnectedBannerTask?.cancel()
+                if newState == .disconnected {
+                    disconnectedBannerTask = Task {
+                        try? await Task.sleep(nanoseconds: Self.disconnectedBannerGraceSec * 1_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        showDisconnectedBanner = true
+                    }
+                } else {
+                    showDisconnectedBanner = false
+                }
+                connectingBannerTask?.cancel()
+                if newState == .connecting {
+                    connectingBannerTask = Task {
+                        try? await Task.sleep(nanoseconds: Self.connectingBannerGraceSec * 1_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        showConnectingBanner = true
+                    }
+                } else {
+                    showConnectingBanner = false
+                }
             }
 
             fabStack
                 .padding(.trailing, 16)
                 .padding(.bottom, 16)
         }
-        // W146: surface total unread inside the nav title — "Chat (3)"
-        // when there's something to read, plain "Chat" otherwise.
-        // iOS Mail / Messages idiom that keeps the count visible even
-        // when individual rows are scrolled off-screen.
-        .navigationTitle(container.totalUnread > 0
-                         ? "Chat (\(container.totalUnread))"
-                         : "Chat")
-        .navigationBarTitleDisplayMode(.inline)
-        // W50: overflow menu — "Segna tutti come letti" gated dal
-        // count totale di unread. Disabilitato quando la lista è
-        // tutta letta. Snackbar feedback con il count azzerato.
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        let n = container.totalUnread
-                        container.markAllAsRead()
-                        // W70: replay server-side bulk read-all (best-effort).
-                        if let sync = TrackBSyncService.from(serverUrl: appState.serverUrl, token: appState.authService.loadToken()) {
-                            Task { await sync.markAllConversationsRead() }
-                        }
-                        snackbar?.show(.init(
-                            text: n > 0
-                                ? "Segnate \(n) conversazioni come lette."
-                                : "Nessuna conversazione non letta.",
-                            severity: .info))
-                    } label: {
-                        Label("Segna tutti come letti",
-                              systemImage: "checkmark.circle")
-                    }
-                    .disabled(container.totalUnread == 0)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(scheme.onSurface)
-                }
-                .accessibilityLabel("Altro")
-            }
-        }
-        .searchable(text: $searchText, prompt: "Cerca conversazioni")
+        // The navigation bar printed the word "Chat" directly above a tab
+        // item labelled "Chat", and identified the account nowhere. It is
+        // hidden now and `accountTopBar` takes its place; the two controls
+        // that lived in it (the overflow menu and the search field) moved
+        // into the body in the same edit so nothing was lost with the bar.
+        // W146's unread total moved to the tab-bar badge in HomeView.
+        .toolbar(.hidden, for: .navigationBar)
         .onChange(of: searchText) { newValue in
             // iOS 16 single-param form (the iOS 17 onChange takes
             // (oldValue, newValue) — Codemagic's xcode 26 still has to
@@ -287,6 +473,10 @@ struct ChatListScreen: View {
         // refreshes the same way the old per-entry loop did (one bulk call
         // instead of N per-group GETs — see `reconcileAllGroupsFromServer`).
         .task {
+            // W57 - load alert banner off the main thread to avoid blocking render
+            // with synchronous Keychain and UserDefaults decryption.
+            let alert = await Task.detached { recentSecurityAlertBanner() }.value
+            recentAlert = alert
             await appState.reconcileAllGroupsFromServer()
         }
         // Fase 1B — recompute the group rows' preview / unread / time when a
@@ -306,6 +496,10 @@ struct ChatListScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
             container.loadFromStore()
         }
+        .onAppear { updateGroupRows() }
+        .onChange(of: searchText) { _ in updateGroupRows() }
+        .onChange(of: groupRefreshToken) { _ in updateGroupRows() }
+        .onChange(of: groupRegistry.entries) { _ in updateGroupRows() }
         // W94: navigationDestination triggered by the deep-link state.
         // When a notification tap publishes appState.pendingDeepLinkConversationId,
         // the onChange below captures the matching item and flips the
@@ -417,7 +611,7 @@ struct ChatListScreen: View {
     /// Message body for the delete confirmation. Built here rather than
     /// inline in the `@ViewBuilder` closure — SWIFT6_PATTERNS rule 1.
     private static func groupDeleteWarning(for name: String) -> String {
-        return "\"" + name + "\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
+        return String(localized: "chat_list.group_delete_warning", defaultValue: "\"\(name)\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata.", comment: "Alert body confirming group chat deletion; %@ is the group name. Explains that deleting also leaves the group and cannot be undone.")
     }
 
     /// Run the delete. Any member may do this — it is deliberately not
@@ -439,7 +633,7 @@ struct ChatListScreen: View {
     private func confirmGroupDelete(_ row: GroupRowUi) {
         pendingGroupDelete = nil
         let groupHex = row.hex
-        snackbar?.show(.init(text: "Chat di gruppo eliminata.", severity: .info))
+        snackbar?.show(.init(text: String(localized: "chat_list.group_chat_deleted", defaultValue: "Chat di gruppo eliminata.", comment: "Snackbar confirming a group chat was deleted locally (and left) after the user confirms the delete dialog."), severity: .info))
         Task { @MainActor in
             let outcome = await appState.deleteGroupChatAndWait(groupId: groupHex)
             groupRefreshToken &+= 1
@@ -450,8 +644,7 @@ struct ChatListScreen: View {
 
     /// Copy for the "deleted here, but the server does not know yet" case.
     /// Bound as a static rather than inline — SWIFT6_PATTERNS rule 1.
-    private static let groupLeavePendingNotice =
-        "Chat eliminata da questo dispositivo. Non è stato possibile completare l'uscita dal gruppo: l'app riproverà automaticamente."
+    private static let groupLeavePendingNotice = String(localized: "chat_list.group_leave_pending", defaultValue: "Chat eliminata da questo dispositivo. Non è stato possibile completare l'uscita dal gruppo: l'app riproverà automaticamente.", comment: "Snackbar shown after deleting a group chat locally when the server-side \"leave group\" call did not succeed yet; the app will retry automatically.")
 
     private func requestGroupDelete(_ row: GroupRowUi) {
         pendingGroupDelete = row
@@ -482,10 +675,11 @@ struct ChatListScreen: View {
     /// last activity (newest first) to match the 1:1 ordering. Filtered by
     /// the same search field (name match). `groupRefreshToken` is read so
     /// the rows recompute when GroupMessageStore posts a change.
-    private var groupRows: [GroupRowUi] {
-        _ = groupRefreshToken   // dependency: recompute on message change
+    @State private var groupRows: [GroupRowUi] = []
+
+    private func updateGroupRows() {
         let q = searchText.lowercased()
-        return groupRegistry.entries.compactMap { e -> GroupRowUi? in
+        let result = groupRegistry.entries.compactMap { e -> GroupRowUi? in
             guard let uuid = Self.hexToUUID(e.id) else { return nil }
             if !q.isEmpty && !e.name.lowercased().contains(q) { return nil }
             let last = GroupMessageStore.shared.lastMessage(forGroupHex: e.id)
@@ -506,6 +700,8 @@ struct ChatListScreen: View {
                 })
         }
         .sorted { $0.lastActivity > $1.lastActivity }
+
+        groupRows = result
     }
 
     /// Fase 1B — chat-list row preview text for a group's newest message.
@@ -519,7 +715,9 @@ struct ChatListScreen: View {
         guard let last = last else { return nil }
         if !last.text.isEmpty { return last.text }
         if let kind = last.attachmentKind {
-            return kind == GroupAttachmentEnvelope.kindImage ? "[Foto]" : "[File]"
+            return kind == GroupAttachmentEnvelope.kindImage
+                ? String(localized: "chat_list.group_preview_photo", defaultValue: "[Foto]", comment: "Group chat row preview placeholder for the newest message when it is an un-captioned photo attachment")
+                : String(localized: "chat_list.group_preview_file", defaultValue: "[File]", comment: "Group chat row preview placeholder for the newest message when it is an un-captioned file attachment")
         }
         return nil
     }
@@ -536,11 +734,11 @@ struct ChatListScreen: View {
     }
 
     private var pinned: [ConversationListViewModel.Item] {
-        container.viewModel.filteredItems.filter { $0.kind != .group && $0.pinned }
+        container.viewModel.pinnedNonGroupItems
     }
 
     private var regular: [ConversationListViewModel.Item] {
-        container.viewModel.filteredItems.filter { $0.kind != .group && !$0.pinned }
+        container.viewModel.regularNonGroupItems
     }
 
     // MARK: - Section header
@@ -602,6 +800,114 @@ struct ChatListScreen: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(extras.warning.opacity(0.45), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Connection status banner (B9, W-WSBANNER 2026-09-02)
+
+    /// Pure read of `AppState.wsConnectionState` (W74/W550, already
+    /// `@Published`) — no new state, just a value → banner mapping (the
+    /// state → banner-or-nil decision itself lives in
+    /// `ConnectionStatusBannerPolicy`, tested independently of SwiftUI).
+    /// The only thing added here is the theme tint, which needs `extras`
+    /// from the environment.
+    /// W-WSBANNERDEBOUNCE (2026-09-09) — live evidence the same night: a
+    /// device locking/unlocking every few minutes closes the WS with a
+    /// normal iOS background-triggered "Going Away" and reconnects within
+    /// 1-2s every time, but `wsConnectionState` passes through
+    /// `.disconnected` as a real (if brief) step on every one of those
+    /// cycles — and `ConnectionStatusBannerPolicy` had no notion of
+    /// "briefly" vs. "genuinely stuck": the alarming red "Connessione al
+    /// server persa" flashed on every single blip, read by the user as a
+    /// continuously broken connection when the underlying reconnects were
+    /// actually all succeeding fast. Gated on `showDisconnectedBanner`,
+    /// flipped true by the `onChange` below only after the state has held
+    /// `.disconnected` continuously for `disconnectedBannerGraceSec`.
+    ///
+    /// W-WSCONNECTINGDEBOUNCE (2026-09-12) — `.connecting` used to be
+    /// exempt from this on the reasoning that "Riconnessione in corso…" is
+    /// informational, not alarming, so showing it immediately was harmless.
+    /// Live user reports (2026-09-12) said otherwise: the SAME lock/unlock
+    /// blip this file already documented for `.disconnected` flashes
+    /// "Riconnessione in corso…" too, many times a day, for something that
+    /// resolves before a human can act on it. Same fix, same shape: gated
+    /// on `showConnectingBanner`, held behind `connectingBannerGraceSec`.
+    private var connectionStatusBanner: (title: String, icon: String, tint: Color, showsRetry: Bool)? {
+        switch appState.wsConnectionState {
+        case .disconnected:
+            guard showDisconnectedBanner else { return nil }
+            // W-WSMANUALRETRY (2026-09-09, direct user request) — the
+            // automatic W-WSSTUCKWATCHDOG (AppState) already tries a full
+            // reset after 90s of continuous disconnection, on its own, with
+            // no user action needed — this button is explicitly the LAST
+            // resort the user asked for in case that still isn't enough,
+            // so they never have to force-quit the whole app again.
+            return (ConnectionStatusBannerPolicy.disconnected.title,
+                    ConnectionStatusBannerPolicy.disconnected.systemImage,
+                    extras.riskHigh, true)
+        case .connecting:
+            guard showConnectingBanner else { return nil }
+            return (ConnectionStatusBannerPolicy.reconnecting.title,
+                    ConnectionStatusBannerPolicy.reconnecting.systemImage,
+                    extras.warning, false)
+        default:
+            guard let policy = ConnectionStatusBannerPolicy.select(appState.wsConnectionState) else {
+                return nil
+            }
+            return (policy.title, policy.systemImage, extras.warning, false)
+        }
+    }
+
+    private static let disconnectedBannerGraceSec: UInt64 = 4
+    /// W-WSCONNECTINGDEBOUNCE — longer than the documented "1-2s every
+    /// time" lock/unlock blip so that routine case never paints anything,
+    /// short enough that a genuinely slow reconnect is still visible well
+    /// before W-CONNECTINGWATCHDOG's own 20s hard-reset backstop fires.
+    private static let connectingBannerGraceSec: UInt64 = 2
+
+    /// Same visual language as `adminBannerView` above (12pt corner radius,
+    /// tint@0.18 fill / tint@0.45 stroke) and `QAudionSnackbarHost`'s pill
+    /// (icon + text + spacer, 14/10 padding) — deliberately not a new style.
+    /// No dismiss control: unlike `adminBanner`, this must always reflect the
+    /// live connection state rather than a one-time user choice, so it has
+    /// nothing to dismiss to.
+    private func connectionStatusBannerView(
+        _ status: (title: String, icon: String, tint: Color, showsRetry: Bool)
+    ) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: status.icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(status.tint)
+            Text(status.title)
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurface)
+            Spacer(minLength: 8)
+            // W-WSMANUALRETRY — last-resort manual reset, only on the
+            // genuinely-stuck (debounced) red state. Same action the
+            // automatic 90s watchdog already takes on its own; this just
+            // lets the user trigger it immediately instead of waiting, or
+            // if that automatic pass still wasn't enough.
+            if status.showsRetry {
+                Button {
+                    Task { @MainActor in
+                        appState.forceReconnectPersistentSocket(reason: "manual-button")
+                    }
+                } label: {
+                    Text("Riconnetti ora")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(status.tint)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(status.tint.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(status.tint.opacity(0.45), lineWidth: 1)
         )
     }
 
@@ -683,7 +989,7 @@ struct ChatListScreen: View {
         if let preview = row.preview, !preview.isEmpty {
             return preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
         }
-        return "\(row.memberCount) membri · epoch \(row.epoch)"
+        return String(localized: "chat_list.group_preview_member_epoch", defaultValue: "\(row.memberCount) membri · epoch \(row.epoch)", comment: "Group chat row subtitle shown when there is no message yet; %lld = member count, %lld = epoch number.")
     }
 
     // MARK: - Conversation row (1-to-1)
@@ -725,6 +1031,53 @@ struct ChatListScreen: View {
     private func resolvedRowAvatarUrl(_ item: ConversationListViewModel.Item) -> URL? {
         guard item.kind != .group else { return nil }
         return appState.cachedContacts.first(where: { $0.userId == item.peerUserId })?.avatarUrl
+    }
+
+    /// The peer's short number for the row preview line.
+    ///
+    /// Suppressed for groups, which have no single peer, and suppressed
+    /// when it would merely repeat the row title: `DisplayName.forUser`'s
+    /// last fallback tier returns the bare extension verbatim, so a peer
+    /// with no name is ALREADY displayed by extension.
+    ///
+    /// `contacts:` is passed explicitly on purpose. The default is
+    /// `contacts ?? ContactsStore().load()`, and that load is a UserDefaults
+    /// read plus a decrypt and decode — one disk hit per row per render
+    /// while the user is scrolling.
+    private func resolvedRowExtension(_ item: ConversationListViewModel.Item,
+                                      title: String) -> String? {
+        guard item.kind != .group else { return nil }
+        guard let ext = DisplayName.resolvedExtension(
+            for: item.peerUserId,
+            serverDisplay: item.peerDisplayName,
+            contacts: appState.cachedContacts) else { return nil }
+        let formatted = DisplayName.formatExtension(ext)
+        return formatted == title ? nil : formatted
+    }
+
+    /// The "<ext> · " run in front of the preview snippet, as ONE builder
+    /// shared by both preview branches — applied to only one, the extension
+    /// would blink away whenever the user left a draft.
+    @ViewBuilder
+    private func rowExtensionPrefix(_ item: ConversationListViewModel.Item,
+                                    title: String) -> some View {
+        if let ext = resolvedRowExtension(item, title: title) {
+            // spacing 0: the separator carries its own padding and the
+            // enclosing HStack must not add gaps around it.
+            HStack(spacing: 0) {
+                Text(ext)
+                    .qaudionStyle(type.labelSmall)
+                    .monospaced()
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .lineLimit(1)
+                Text(" · ")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .accessibilityHidden(true)
+            }
+            // Unweighted and never shrinking, so only the snippet truncates.
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
@@ -773,7 +1126,8 @@ struct ChatListScreen: View {
                     // without making them open every chat.
                     if let draftPreview = draftPreviewSnippet(for: item.conversationId) {
                         HStack {
-                            HStack(spacing: 4) {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                rowExtensionPrefix(item, title: rowTitle)
                                 Text("Bozza:")
                                     .qaudionStyle(type.labelSmall)
                                     .foregroundStyle(extras.warning)
@@ -793,7 +1147,13 @@ struct ChatListScreen: View {
                             }
                         }
                     } else if let preview = item.lastMessagePreview {
-                        HStack {
+                        // spacing 4 rather than the default ~8 so the run
+                        // reads "100 · preview". The outer HStack stays
+                        // centre-aligned: on a two-line row a first-baseline
+                        // alignment would make the unread capsule ride the
+                        // first line.
+                        HStack(spacing: 4) {
+                            rowExtensionPrefix(item, title: rowTitle)
                             Text(preview)
                                 .qaudionStyle(type.bodySmall)
                                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -890,7 +1250,7 @@ struct ChatListScreen: View {
                 #if canImport(UIKit)
                 UIPasteboard.general.string = item.peerUserId
                 snackbar?.show(.init(
-                    text: "ID utente copiato.",
+                    text: String(localized: "chat_list.user_id_copied", defaultValue: "ID utente copiato.", comment: "Snackbar confirming the peer's user id was copied to the clipboard from the conversation row's long-press menu."),
                     severity: .info,
                     durationSeconds: 2
                 ))
@@ -919,7 +1279,7 @@ struct ChatListScreen: View {
             peerDisplayName: item.peerDisplayName
         ) else {
             snackbar?.show(.init(
-                text: "Esportazione fallita.",
+                text: String(localized: "chat_list.export_failed", defaultValue: "Esportazione fallita.", comment: "Snackbar error shown when exporting a conversation transcript to a file fails."),
                 severity: .error,
                 durationSeconds: 3
             ))
@@ -959,12 +1319,13 @@ struct ChatListScreen: View {
     private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
     private static let timeFormatterEEE: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "EEE"
         return f
     }()
@@ -972,12 +1333,14 @@ struct ChatListScreen: View {
     private static let timeFormatterDDMM: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "dd/MM"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
     private static let timeFormatterDDMMYY: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "dd/MM/yy"
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         return f
     }()
 
@@ -993,13 +1356,13 @@ struct ChatListScreen: View {
         let now = Date()
         let elapsed = now.timeIntervalSince(date)
         if elapsed < 60, elapsed >= 0 {
-            return "ora"
+            return String(localized: "chat_list.time.now", defaultValue: "ora", comment: "Chat list row timestamp — the last message was sent less than a minute ago")
         }
         if cal.isDateInToday(date) {
             return Self.timeFormatterHHmm.string(from: date)
         }
         if cal.isDateInYesterday(date) {
-            return "ieri"
+            return String(localized: "chat_list.time.yesterday", defaultValue: "ieri", comment: "Chat list row timestamp — the last message was sent yesterday")
         }
         if let days = cal.dateComponents([.day], from: date, to: now).day,
            days < 7 {
@@ -1180,37 +1543,48 @@ struct ChatListScreen: View {
 
     // MARK: - FABs
 
+    /// One primary action, carrying its own word.
+    ///
+    /// This used to be two stacked bare circles. The larger one
+    /// (`square.and.pencil`) opened `showingNewConversation` — the identical
+    /// statement to the empty-state CTA, so both were on screen at once
+    /// whenever the list was empty — and neither circle showed a word to a
+    /// sighted user; the only labels were `.accessibilityLabel`.
+    ///
+    /// "Nuovo gruppo" is what survives as the labelled capsule.
+    /// Start-a-chat-by-number moves to a labelled icon in the header, next
+    /// to the identity, so it is still reachable once the user has a
+    /// conversation and the empty state is gone.
     private var fabStack: some View {
-        VStack(spacing: 12) {
-            Button(action: { showingNewGroup = true }) {
+        Button(action: { showingNewGroup = true }) {
+            HStack(spacing: 8) {
                 Image(systemName: "person.3.fill")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(scheme.surface))
-                    .overlay(Circle().stroke(scheme.outline, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                    // The visible Text is the label now; without this the
+                    // symbol contributes a second phrase to VoiceOver.
+                    .accessibilityHidden(true)
+                Text("Nuovo gruppo")
+                    .qaudionStyle(type.labelLarge)
             }
-            .accessibilityLabel("Nuovo gruppo")
-
-            Button(action: { showingNewConversation = true }) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(scheme.onPrimary)
-                    .frame(width: 56, height: 56)
-                    .background(Circle().fill(scheme.primary))
-                    .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
-            }
-            .accessibilityLabel("Nuova chat")
+            .foregroundStyle(scheme.onPrimary)
+            .padding(.horizontal, 20)
+            .frame(height: 56)
+            .background(Capsule().fill(scheme.primary))
+            .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
         }
+        .buttonStyle(.plain)
     }
 
     /// W293: open the admin banner's CTA URL (if any). Static helper
     /// kept on the struct so the call site closure body is a single
     /// statement — type-checker safe per CLAUDE.md §13.
+    /// Allow-listed: the URL is server-controlled, so only https links to
+    /// our own sites are opened. Anything else is dropped silently — an
+    /// arbitrary off-app destination pushed from the server would be both
+    /// a phishing surface and, under review, an external call-to-action.
     fileprivate static func openAdminCtaURL(_ url: URL?) {
         #if canImport(UIKit)
-        guard let target = url else { return }
+        guard let target = url, LegalLinks.isAllowedExternalLink(target) else { return }
         UIApplication.shared.open(target)
         #endif
     }

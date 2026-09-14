@@ -62,7 +62,8 @@ final class TusResumeStateTests: XCTestCase {
 
     // MARK: - Store round-trip
 
-    func test_store_saveThenLoad_roundTripsByClientMsgId() {
+    func test_store_saveThenLoad_roundTripsByClientMsgId() throws {
+        try KeychainAvailability.requireKeychain()
         let bytes = Data(repeating: 0x11, count: 64)
         let fp = TusResumeStateStore.fingerprint(of: bytes)
         let state = makeState(clientMsgId: "msg-A", sourceSizeAtStart: fp.size, sourceSha256AtStart: fp.sha256Hex)
@@ -78,7 +79,8 @@ final class TusResumeStateTests: XCTestCase {
         XCTAssertNil(TusResumeStateStore.load(clientMsgId: "never-saved-\(UUID().uuidString)"))
     }
 
-    func test_store_clear_removesOnlyTheTargetedKey() {
+    func test_store_clear_removesOnlyTheTargetedKey() throws {
+        try KeychainAvailability.requireKeychain()
         let bytesA = Data(repeating: 0x22, count: 16)
         let bytesB = Data(repeating: 0x33, count: 16)
         let fpA = TusResumeStateStore.fingerprint(of: bytesA)
@@ -96,7 +98,8 @@ final class TusResumeStateTests: XCTestCase {
         XCTAssertNotNil(TusResumeStateStore.load(clientMsgId: "msg-clearB"))
     }
 
-    func test_store_save_overwritesExistingEntryForSameClientMsgId() {
+    func test_store_save_overwritesExistingEntryForSameClientMsgId() throws {
+        try KeychainAvailability.requireKeychain()
         let bytesOld = Data(repeating: 0x44, count: 8)
         let bytesNew = Data(repeating: 0x55, count: 8)
         let fpOld = TusResumeStateStore.fingerprint(of: bytesOld)

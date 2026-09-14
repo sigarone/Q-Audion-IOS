@@ -95,33 +95,366 @@ public enum CallCapabilities {
     /// TRANSPORT and nothing else.
     public static let dcMuxV1: String = "dc-mux-v1"
 
-    /// Kill switch for ADVERTISING ``dcMuxV1``. Ships `false`.
+    /// Kill switch for ADVERTISING ``dcMuxV1``. History: `false` since the tag
+    /// was added → `true` 2026-08-21 (live test window) → `false` 2026-08-22
+    /// (window closed, evidence banked) → `true` 2026-08-25 (this change),
+    /// after both conditions the kill-switch test names were independently
+    /// verified with evidence, not re-run as another live experiment.
     ///
-    /// Advertising this tag makes Android STOP routing audio through the WS
-    /// relay and expect a DataChannel: on a fast ICE convergence it skips the
-    /// eager-WS leg entirely (`CallTransportFactory.kt:722-735`) and on an
-    /// upgrade it destroys the relay leg outright (`:824-828`, `wsRelay = null`
-    /// + `previousWs?.close()`, which also tears down the ONLY WS audio receive
-    /// pump — that pump is launched exclusively inside `downgradeToWsRelay`,
-    /// `:955-962`). Advertising a path that is not there does not degrade the
-    /// call, it silences it. Desktop learned this the expensive way and wrote it
-    /// down in `CallCapabilities.ts:76-83`: it advertised the tag while its
-    /// renderer still lost a race onto the WS relay, the Android peer committed
-    /// to the DataChannel, the two ends sat on opposite transports and the call
-    /// was silent.
+    /// The historical risk: advertising this tag makes Android STOP routing
+    /// audio through the WS relay and expect a DataChannel. The specific
+    /// danger was Android destroying the relay leg outright on upgrade,
+    /// which tore down the ONLY WS audio receive pump — a path that is not
+    /// there does not degrade the call, it silences it. Desktop learned this
+    /// the expensive way and wrote it down in `CallCapabilities.ts:76-83`.
     ///
-    /// Flip only after §9 Phase 0 has shown, from logs, that the channel opens
-    /// and carries frames on a real Android↔iOS call, AND after the Android
-    /// WS-receive-fallback companion change has landed (see the transport
-    /// contract §3 — today, once Android is on the DC leg it has no WS audio
-    /// receive path at all, so iOS's own per-frame fallback would be sending to
-    /// a peer that is not listening).
+    /// `DcMuxCapabilityTests.testDcMuxAdvertiseKillSwitchMatchesItsDocumentedPreconditions`
+    /// (formerly `testDcMuxAdvertiseKillSwitchShipsOff`, before this change)
+    /// named two conditions in its assertion message for flipping this. Both
+    /// are now closed, with citations instead of assumptions:
     ///
-    /// Compile-time, like ``longAudioSendEnabled``: no runtime toggle, no remote
-    /// config, no debug-menu entry. Rollback is this flag going back to `false`
-    /// — the tag leaves the next call's advertisement, the peer's intersection
-    /// empties at the same instant, calls in progress are untouched.
-    public static let dcMuxAdvertiseEnabled: Bool = false
+    /// **(a) Phase 0 log evidence the DataChannel opens and carries frames on
+    /// a real Android↔iOS call.** Gathered 2026-08-22 (Loki cross-platform
+    /// correlation) during the prior live-test window: call `532a3161` —
+    /// dc=2717 / ws=33, ~99% of frames rode the DataChannel once ICE
+    /// converged. (The same session also showed call `222f6b4e` never got ICE
+    /// past NEW inside the 20 s fast-path budget and stayed on WS relay for
+    /// its whole duration — an ICE-convergence gap upstream of dc-mux, not a
+    /// dc-mux failure; dc-mux carried every frame it was asked to carry when
+    /// the path existed to use.)
+    ///
+    /// **(b) "the Android WS-receive-fallback companion change."** Read
+    /// directly from `qaudion-android-new`'s current
+    /// `CallTransportFactory.kt` (2026-08-25) rather than assumed either way:
+    /// this already shipped, under the name `ResilientFrameRelayTransport`.
+    /// Both the WS-relay receive pump and the DataChannel receive pump are
+    /// built once in `start()` and stay subscribed for the entire call,
+    /// regardless of which leg is `active` for transmit — the file's own
+    /// kdoc: "a frame that arrives on the leg we are NOT sending on still
+    /// decodes and still plays. That is the whole point: which leg we
+    /// transmit on must not decide what we can hear." This exact invariant is
+    /// pinned by two dedicated regression tests in
+    /// `ResilientTransportLegSymmetryTest.kt` — `inbound relay audio is heard
+    /// while the transport is transmitting on the DataChannel` and the
+    /// symmetric case for DC audio while transmitting on the relay — kept
+    /// explicit so a regression "would fail here instead of shipping." iOS's
+    /// own receive path already has the same shape and is not a new risk
+    /// introduced by this flip: `CallService.swift`'s WS `audio_frame`
+    /// handler is registered once at login and re-attached on every
+    /// reconnect (`attachIncomingAudioHandler`), never torn down on a
+    /// DataChannel upgrade, and converges with
+    /// `handleIncomingDataChannelAudio` on the same
+    /// `handleIncomingEncryptedFrame` — "The two receive paths converge...
+    /// by design... and that must not change" (`CallService.swift:210-213`).
+    /// So condition (b), as literally worded, was Android-side and was
+    /// already satisfied before this investigation; nothing needed building
+    /// or changing in this repo to close it.
+    ///
+    /// Rollback is this flag going back to `false` — the tag leaves the next
+    /// call's advertisement, the peer's intersection empties at the same
+    /// instant, calls in progress are untouched. Compile-time, like
+    /// ``longAudioSendEnabled``: no runtime toggle, no remote config, no
+    /// debug-menu entry.
+    public static let dcMuxAdvertiseEnabled: Bool = true
+
+    // ── IOS-C4b (2026-08-26): native SRTP audio path ────────────────────────
+
+    /// Native-RTP audio v1 (`audio-srtp-v1`). Mirrors Android `AUDIO_SRTP_V1`
+    /// (`CallCapabilities.kt:272`). Byte-exact string, plain ASCII — compared
+    /// with string equality on every platform, so a rename or re-case is a
+    /// silent interop break.
+    ///
+    /// It means exactly: this endpoint can send a real m=audio SEND_RECV RTP
+    /// track (mic capture via the WebRTC ADM, not the manual Opus/AVAudioEngine
+    /// pipeline) with a native `RTCFrameCryptor` (AES-GCM, keyed off the PQC
+    /// session key, same key-provider discipline as the video path) layered on
+    /// the sender AND receiver. Native NACK/RTX repair the RTP stream and
+    /// NetEQ owns jitter/concealment — real wins the sealed-DataChannel path
+    /// gets for free on a real SRTP audio track. When either side omits it
+    /// (legacy peer, this build's kill switch off, or an earbud call), audio
+    /// stays on the existing sealed-DataChannel/WS-relay path, unchanged.
+    ///
+    /// NEVER advertised on an earbud call: the sovereign-earbud "phone relays
+    /// the sealed frame without ever opening it" design has no equivalent on
+    /// this path (the FrameCryptor decrypts on-device, which is exactly the
+    /// thing an earbud call structurally refuses to do on the phone).
+    /// ``localCaps(earbudActive:sovereignOnly:earbudPaired:)`` withholds it
+    /// whenever `earbudPaired`, exactly like the long-audio-profile tags and
+    /// mirroring Android's `localCaps` (`CallCapabilities.kt:481-486`).
+    ///
+    /// Gated by ``audioSrtpSendEnabled``. Not yet verified live on iOS
+    /// hardware (no toolchain on this box to compile/run) — symmetric
+    /// intersection means shipping the mechanism with the switch off is safe
+    /// either way: the tag never appears in any intersection until a peer
+    /// also advertises it, so every existing call is unaffected by
+    /// construction.
+    public static let audioSrtpV1: String = "audio-srtp-v1"
+
+    // ── W-RESTARTICEREQ (2026-08-29): peer-requested full ICE restart ──────
+
+    /// Peer-requested ICE restart v1 (`restart-ice-req-v1`). Mirrors Android
+    /// `RESTART_ICE_REQUEST_V1` (`CallCapabilities.kt:330`). Byte-exact,
+    /// plain ASCII — string equality on every platform, so a rename or a
+    /// re-case is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE a `restart_ice_request`
+    /// envelope for the current call and answer it by running its OWN ICE
+    /// restart. That distinction is the whole point. Only the leg that
+    /// OFFERS can produce a fresh host candidate for a network that just
+    /// appeared: the other leg's local `restartIce()` merely primes
+    /// gathering, and libwebrtc has been observed re-using a pooled socket
+    /// still bound to the network that went away, so the new interface's
+    /// address is never advertised and no direct pair can form.
+    ///
+    /// Without this tag the non-offering leg has no way to ask, and a
+    /// mid-call handoff pins the call to the TURN relay for the rest of its
+    /// life even when both devices sit on the same LAN. Confirmed live
+    /// 2026-08-29 on iOS<->Android (call fa7d0ee5): Android was the
+    /// responder, logged `useRestartIceRequest=false` because iOS did not
+    /// advertise this, could only prime locally, and the call went ICE-fail
+    /// -> WS relay -> relay abandoned -> dead. iOS-to-iOS and
+    /// Android-to-Android were unaffected precisely because both ends there
+    /// speak the same set.
+    ///
+    /// Symmetric intersection, so this is safe to ship alone: the request is
+    /// SENT only when both peers advertise the tag, and RECEIVE support is
+    /// unconditional — an older peer simply never sends one and the call
+    /// behaves exactly as it does today.
+    public static let restartIceReqV1: String = "restart-ice-req-v1"
+
+    /// Kill switch for the native-RTP-audio path (``audioSrtpV1``). Ships
+    /// `false`. Compile-time only, exactly like ``longAudioSendEnabled``: no
+    /// runtime toggle, no remote config, no debug-menu entry reachable on a
+    /// user build. Flipping it changes only what THIS build advertises; a
+    /// call only uses the new path when the peer also advertises it, so
+    /// partial rollout across a fleet is always safe (the intersection is
+    /// symmetric).
+    ///
+    /// Flipped to `true` 2026-08-26 on explicit user sign-off, mirroring
+    /// desktop's own DSK-C4 commit (`qaudion-desktop@1a505bc`) the same
+    /// evening. The PCM-tap-parity gate — the one precondition this
+    /// orchestrator checks before flipping any of these three platforms'
+    /// switches — closed with real, cited findings, not an open question:
+    /// ``NativeAudioPcmTap`` taps the remote SRTP track and feeds the exact
+    /// same `enqueueForAnalysis` choke point `processIncomingAudio` already
+    /// fed, so `VoiceAnalysisEngine`/`GuardianMode`/`ContactVoiceVerifier`/
+    /// `VoiceLearningSession` see no gap in coverage (full trace in the
+    /// IOS-C4b task report). `VoiceUnlockController` was confirmed local-mic
+    /// only, unaffected either way.
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-09 (W-AUDIOSRTPOFF) — the "zero
+    /// live-call verification" risk this doc already carried forward from
+    /// 2026-08-26 never actually closed. In the 10 days since, this single
+    /// switch drove 30+ follow-up commits (native-mic mute gating, CallKit
+    /// activation relay added then reverted, manual-audio-mode tried for a
+    /// full day then reverted — see git log on this file and
+    /// `NativeAudioSessionGate.swift`'s own kdoc) and, on the same evening
+    /// this comment was written, three consecutive real iOS↔iOS test calls
+    /// each failed a DIFFERENT way with the latest fix already shipped:
+    /// uneven/jittery inbound RX, a total local mic-route failure
+    /// (`AVAudioSessionErrorCodeUnspecified`/'what', `inp=0`, both the
+    /// native path AND its manual-engine fallback), and a PQC handshake
+    /// that never left `.fallback` for a full 30s. Three different failure
+    /// shapes from the same subsystem, still occurring after the mute-gate
+    /// fix, is the "question the architecture, not the next patch" signal —
+    /// the pre-8/26 legacy DataChannel/WS-relay path is what every one of
+    /// tonight's calls actually recovered onto, and it worked. Re-enabling
+    /// this needs the live call-to-call verification the original comment
+    /// already said was required and never happened — not another point fix.
+    ///
+    /// FLIPPED BACK TO `true` 2026-09-09, same night, on explicit user
+    /// request — this IS that verification pass, not a repeat of the
+    /// original unverified rollout. Before flipping back, a best-practices
+    /// audit (`reference_audiosrtp_killswitch_decision_2026_09_09.md` and
+    /// its deep-dive workflow) landed 4 of its 7 fixes: handshake
+    /// round-trip timestamps (`QAudionCallIntegration.swift`, so a stuck
+    /// handshake now shows WHICH of 4 stages failed instead of only "30s,
+    /// nothing"), `teardownAudioStack()` no longer calls its own
+    /// `setActive(false)` racing CallKit's async `didDeactivate`
+    /// (`AudioCapture.stop(deactivateSession:)`, the exact pattern
+    /// documented elsewhere as causing "next call has no audio"), a route
+    /// availability check before every capture attempt instead of only
+    /// after the throw, and `packetsLost`/`jitter` added to the stats poll
+    /// so a bursty RX counter can finally be told apart from real loss.
+    /// Three items from that same audit remain open (route-change/
+    /// interruption-driven capfail retry instead of a flat timer;
+    /// `endCall()` still races `reportCallEnded` against
+    /// `callService.endCall()` instead of waiting for CallKit's
+    /// `didDeactivate`; the flat 15s/50s handshake deadlines are not yet
+    /// RTT-adaptive) — none of the three blocks this pass, they are the
+    /// next round if tonight's calls still show any of the original 3
+    /// failure shapes.
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-09, same night, ~40 minutes after
+    /// the re-enable above — the verification pass caught a live repro of
+    /// exactly the pre-existing `W-DEADTXNET` shape (`engageAudioSrtpFallback`
+    /// kdoc below, first documented from call 4e6d4fa5 on 2026-09-07): the
+    /// native sender activates identically to a healthy call (same
+    /// IOS-C4b JSEP-rewire/cryptor-attach sequence, confirmed byte-for-byte
+    /// against a working call in the same log) but transmits zero packets
+    /// (`ptx=0`) for ~11s while RX grows normally, on a 16s call. The
+    /// `srtpDeadTxBeats`-driven fallback (line ~446 below) does catch it and
+    /// does hand off to the legacy path with real audio — but only at the
+    /// 11s mark, leaving a real call under ~15s with no outbound audio for
+    /// most or all of its length. This is a WebRTC audio-device-module-level
+    /// stall (the sender reports armed; the audio unit underneath doesn't
+    /// push frames), not something any of the 4 landed diagnostic fixes
+    /// touches — it needs its own investigation before another live
+    /// verification attempt, not a repeat of tonight's pass.
+    ///
+    /// FLIPPED BACK TO `true` 2026-09-09, same night — the investigation the
+    /// note above asked for landed: `CallKitProvider` now forwards CallKit's
+    /// own didActivate/didDeactivate into `RTCAudioSession`
+    /// (W-CKAUDIOFORWARD, `CallKitProvider.swift`), which automatic-mode
+    /// WebRTC had no other way to observe (no system notification exists
+    /// for "someone else called setActive" — only interruption/route-change
+    /// fire). `NativeAudioSessionGate`'s kdoc has the full comparison against
+    /// 1053/1056/1066: this is deliberately NOT that same attempt —
+    /// `useManualAudio` stays `false`, `isAudioEnabled` is never touched, so
+    /// the manual-mode-vs-app-owned-session conflict those three attempts
+    /// hit does not apply here. Still unverified live until the next real
+    /// call-to-call test.
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-09, same night — two independent
+    /// fixes at the CallKit/AVAudioSession boundary (the forward above, then
+    /// a caller-side self-activation fix mirroring the answer-side one)
+    /// BOTH landed, BOTH executed and succeeded exactly as designed on the
+    /// next live test (`[CallKitProvider] start audio session ACTIVE
+    /// (attempt 0)` fires immediately, well before the sender even tries to
+    /// arm), and the identical dead-TX-on-the-call-that-follows-another
+    /// symptom reproduced anyway, this time with the caller/callee roles
+    /// swapped from the previous test. Session activation was never the
+    /// bottleneck — both hypotheses were wrong, disproven directly by log
+    /// evidence rather than assumed. Two clean, reasoned, individually
+    /// falsified fixes on the same mechanism is the "stop patching, question
+    /// the architecture" signal: whatever actually stalls the native audio
+    /// unit on a rapid second call lives inside WebRTC's own audio-device-
+    /// module lifecycle across successive calls, not at the CallKit
+    /// integration boundary either of tonight's fixes touched. Needs
+    /// instrumentation of WebRTC's own audio-unit start/stop sequence
+    /// across calls before another attempt — not a third guess at the same
+    /// boundary.
+    ///
+    /// FLIPPED BACK TO `true` 2026-09-09, same night — that instrumentation
+    /// landed. A deep audit (graphify-verified) traced the real mechanism:
+    /// `QAudionPeerConnectionFactory.createFactory()` mints a brand-new
+    /// native AudioDeviceModule/AudioUnit on every call, never reusing the
+    /// previous one, and `RTCPeerConnection.close()` returning is not proof
+    /// the prior call's AudioUnit has actually stopped (libwebrtc tears it
+    /// down on its own internal threads with zero completion signal exposed
+    /// to this app — confirmed absent, not assumed: this codebase has never
+    /// once checked an AudioUnit busy/cannot-do-in-current-context OSStatus).
+    /// `createFactory()` is now async and settles up to 1.5s if the previous
+    /// call's teardown was more recent than that (`QAudionPeerConnection
+    /// .close()` now calls `noteTeardownStarted()`) — the documented
+    /// production mitigation for this exact no-completion-signal race, per
+    /// public WebRTC/CoreAudio design docs and real-world VoIP SDK issue
+    /// reports (see `QAudionPeerConnectionFactory.swift`'s kdoc for sources).
+    /// The 1.5s figure itself is NOT sourced — cited practice tops out
+    /// around 500ms, disclosed as heuristic there too — extended here
+    /// because tonight's own reproductions showed TX starvation lasting far
+    /// longer than 500ms. Unverified live until the next real call-to-call
+    /// test; this is the third attempt at the actual mechanism (the first
+    /// two identified and fixed a different, real, but not load-bearing
+    /// bottleneck one layer up).
+    ///
+    /// FOURTH ATTEMPT, same session — a call to the 3-call v1.0.1124 test
+    /// above found a real signaling instability (`call_answer`/
+    /// `call_accepted` WS retransmits, "setup still pending") on the call
+    /// immediately BEFORE the one that broke, matching the user's own
+    /// hypothesis that a prior call's connection trouble is what poisons the
+    /// next one — not pure back-to-back timing (two calls with the same ~6s
+    /// gap, one healthy, one dead). That pointed at `RTCAudioSession`
+    /// (WebRTC's own AVAudioSession wrapper) specifically, since it is the
+    /// one object that persists across calls in this whole picture — and a
+    /// session memory from the night before this one
+    /// (`reference_ios_callkit_webrtc_audio_activation_race_2026_09_08.md`)
+    /// had ALREADY identified the exact fix and flagged it as never
+    /// implemented: this app's own session self-activation
+    /// (`CallKitProvider.activateAudioSession(logSite:)`) mutated the raw
+    /// `AVAudioSession` directly instead of through `RTCAudioSession`'s own
+    /// `lockForConfiguration`/`setCategory`/`setActive` — invisible to its
+    /// `isActive`/`activationCount` bookkeeping regardless of the
+    /// W-CKAUDIOFORWARD notification added earlier tonight, which is the
+    /// wrong channel for app-initiated (not CallKit-initiated) activation
+    /// per the pinned `webrtc-sdk/webrtc@m144_release` header's own doc.
+    /// Migrated now. Still `useManualAudio = false`. This is the specific,
+    /// previously-identified gap, not a fifth guess.
+    ///
+    /// FIFTH ATTEMPT, same session — the fourth's own live test showed the
+    /// bug: `RTCAudioSession.activationCount` climbed 1→3 across a
+    /// start-then-answer call pair on one device (should climb by exactly
+    /// +1 per balanced call). The fourth attempt added the locked
+    /// `setActive(true)` on activation but never added the matching
+    /// `setActive(false)` through the same counted API — `reportCallEnded`
+    /// now does, so every activate this app makes is balanced by a
+    /// deactivate at the one choke point every call-end path already
+    /// shares. This directly explains why the fault compounds and only a
+    /// full process restart clears it: an ever-climbing count never returns
+    /// to the balanced baseline a fresh call assumes.
+    ///
+    /// SIXTH fix, same investigation, then SEVENTH — the fifth's own double-
+    /// decrement guard (`ledger.forget`'s "was outstanding") turned out to
+    /// be watching the wrong signal, found by fetching `RTCAudioSession.mm`'s
+    /// actual implementation (not just the header) from the pinned
+    /// `webrtc-sdk/webrtc@m144_release` source: `audioSessionDidActivate:`/
+    /// `didDeactivate:` DO touch the same `activationCount` a locked
+    /// `setActive:` call does, confirming the counter is real and shared —
+    /// but `AppState.swift`'s W520 "single-dialer" foreground-answer path
+    /// deliberately never calls `reportIncomingCall`, so
+    /// `CallKitCallLedger.outstandingUUIDs` never has the answering side's
+    /// uuid at all in exactly the two-devices-foregrounded scenario every
+    /// test tonight used — the deactivate silently never fired there. New
+    /// guard (`CallKitCallLedger.audioSelfActivated`) tracks whether THIS
+    /// app's own locked activate ran, independent of CallKit's native-UI
+    /// ledger. See `CallKitCallLedger`'s kdoc and `reportCallEnded`'s for
+    /// the full trace of both the original bug and this one's own bug.
+    ///
+    /// EIGHTH — the sixth/seventh fix's own live retest (same session) showed
+    /// the answering side's `activationCount` now balances perfectly (2→0),
+    /// yet the audio-srtp TX/RX symptom itself was UNCHANGED: one side's
+    /// sender stayed dead the whole call, direction-flipped from the prior
+    /// test, with the dead-call gap now 22-25s — far past any brief async
+    /// race and past the 1.5s settle-wait from the third attempt. This
+    /// proved `RTCAudioSession`/CallKit activation bookkeeping was real and
+    /// worth fixing but NOT the load-bearing cause of the audio symptom.
+    /// Widened, best-practices-researched investigation (not a ninth guess
+    /// at the same boundary) found: `QAudionPeerConnectionFactory.
+    /// createFactory()` minted a brand-new native AudioDeviceModule/AudioUnit
+    /// on every call — the per-call teardown/recreate cycle itself repeats a
+    /// maintainer-acknowledged libwebrtc iOS audio-unit stop race (bug
+    /// webrtc:5993) once per call, and WebRTC's own upstream abandoned the
+    /// one structural fix that would have addressed it inside the library
+    /// (a 2021-2022 "separate audio units for playout & recording" change,
+    /// status ABANDONED). Sequential `RTCPeerConnection`s sharing one
+    /// long-lived factory is WebRTC's own documented normal usage, and this
+    /// app's per-call fresh-factory pattern was the actual anomaly, not an
+    /// inherent WebRTC limitation — confirmed by checking how the library's
+    /// own audio-session wrapper and its `useManualAudio`/`isAudioEnabled`
+    /// pair are designed (process-lifetime by construction). Fixed by making
+    /// `QAudionPeerConnectionFactory` build its factory+ADM ONCE per process
+    /// (`sharedFactory()`, replacing the old per-call `createFactory()`) —
+    /// see that class's own W-PERSISTENTFACTORY kdoc for the full mechanism
+    /// and for why `useManualAudio` deliberately stays `false`. This
+    /// capability flag itself did not need to move for this fix — the defect
+    /// was architectural, one layer below anything a flag flip could reach —
+    /// and stays `true` here, unverified live until the next real
+    /// call-to-call test, same discipline as every attempt above.
+    ///
+    /// FLIPPED BACK TO `false` 2026-09-10, per user request — the whole
+    /// audio-srtp-v1 subsystem got a real, verified fix chain tonight (RX
+    /// playout injector wiring, resample, comfort-noise overwrite-not-add)
+    /// and the asymmetric-no-audio defect this session is chasing STILL
+    /// reproduced afterward on both iOS and Android, including Android↔Android
+    /// where this tag never applies at all. That raises a real, untested
+    /// question: whether the same class of defect predates audio-srtp-v1
+    /// entirely and already existed on the legacy sealed-DataChannel/WS-relay
+    /// path. Flipping this off forces every iOS call back onto that legacy
+    /// path regardless of what the peer advertises (symmetric intersection —
+    /// the tag can't appear in the agreed set if iOS never offers it), which
+    /// is exactly what isolates the two hypotheses. Not a verdict either way;
+    /// a controlled test. Revert to `true` once this comparison is done.
+    public static let audioSrtpSendEnabled: Bool = false
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
@@ -131,6 +464,73 @@ public enum CallCapabilities {
     /// (Desktop) know it's safe to send one instead of falling back to a
     /// direct `call_upgrade_request` real-offer.
     public static let upgradeIntentRecvV1: String = "upgrade-intent-recv-v1"
+
+    // ── W-ICEBATCH (2026-08-25): batched trickle-ICE signaling ──────────────
+
+    /// Batched `call_ice` v1 (`ice-batch-v1`). Mirrors Android `ICE_BATCH_V1`
+    /// (`CallCapabilities.kt`). Byte-exact string, plain ASCII — compared
+    /// with string equality on every platform, so a rename or re-case is a
+    /// silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE a `call_ice` envelope
+    /// whose data carries a `candidates` ARRAY of `{candidate, sdp_mid?,
+    /// sdp_mline_index?, removed?}` entries — coalesced additions plus
+    /// explicit candidate REMOVALS (`removed: true`, pruned immediately on
+    /// receipt) — instead of the legacy one-candidate-per-envelope top-level
+    /// form. The legacy form stays accepted forever regardless of
+    /// negotiation; the batch form is only ever SENT when BOTH peers
+    /// advertised the tag (the sender enforces that gate). The server never
+    /// sees any of it: `call_ice` data rides the party-scoped opaque relay
+    /// end-to-end, so no server change is involved.
+    ///
+    /// iOS advertises RECEIVE support only — TX stays legacy per-candidate
+    /// (deliberately deferred; the interop value is receiving the peer's
+    /// coalesced bursts and, above all, its candidate removals, which had
+    /// no wire representation at all before this tag).
+    public static let iceBatchV1: String = "ice-batch-v1"
+
+    // ── W-DCHANGUP (2026-08-25): in-band hangup control frame ───────────────
+
+    /// In-band hangup control frame v1 (`dc-hangup-v1`). Mirrors Android
+    /// `DC_HANGUP_V1` (`CallCapabilities.kt:307`). Byte-exact string, plain
+    /// ASCII — compared with string equality on every platform, so a rename
+    /// or re-case is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE a control frame on the
+    /// sealed media leg (DataChannel or WS relay — the same leg the
+    /// ``dcMuxV1`` audio envelopes ride) whose first byte is the control mux
+    /// discriminator `0x03`, followed by a 1-byte kind (`0x01` = HANGUP) and
+    /// a UTF-8 reason body of at most 255 bytes. On HANGUP the receiver runs
+    /// the same definitive teardown as a `call_hangup` envelope — the leg
+    /// belongs to exactly one call by construction, so no id travels on the
+    /// wire. TX is best-effort and gated on the PEER having advertised this
+    /// tag (symmetric intersection, enforced by the sender); RX is
+    /// unconditional, exactly like Android's mux-byte peek. It is the third
+    /// hangup channel, additive to the `call_hangup` envelope and the
+    /// `HANGUP:` opaque piggy-back — when the peer's WS is mid-reconnect at
+    /// hangup time, this is the one that arrives.
+    public static let dcHangupV1: String = "dc-hangup-v1"
+
+    // ── W-AUDIONACK (2026-09-10): sealed-audio retransmit-request v1 ────────
+
+    /// Retransmission-request control frame for the sealed-audio wire
+    /// (`audio-nack-v1`). Mirrors Android `CallCapabilities.AUDIO_NACK_V1`.
+    /// Byte-exact string, plain ASCII — compared with string equality on
+    /// every platform, so a rename or re-case is a silent interop break.
+    ///
+    /// It means exactly: this endpoint can RECEIVE
+    /// ``WireRelayFrameCodec/controlKindNackRequest`` and reply by replaying
+    /// the exact already-sealed bytes for the requested sequence number, if
+    /// still held. The custom audio path (active whenever ``audioSrtpV1``
+    /// is not the negotiated media path — earbud calls, a legacy peer, or a
+    /// build with the native path disabled) had loss repair via Opus
+    /// in-band FEC only; this adds a NACK/RTX equivalent without any new
+    /// crypto — see ``NackRetransmitRing``'s doc comment for the security
+    /// review this went through before implementation. Symmetric
+    /// intersection: a request is only ever SENT when both peers advertise
+    /// this tag; an older peer simply never receives one, and the call
+    /// behaves exactly as it does today.
+    public static let audioNackV1: String = "audio-nack-v1"
 
     // ── W-LONGAUDIO (2026-08-10): the negotiated 60 ms / 256-byte profile ──
     //
@@ -278,7 +678,16 @@ public enum CallCapabilities {
     /// the gates. Sending this raw bypasses the earbud filter — see that
     /// method's notes for what that costs.
     public static let local: [String] = {
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1]
+        // W-ICEBATCH — RX support is implemented (batch + removals consumed
+        // in the `call_ice` handler), so advertising is honest; ungated and
+        // never stripped, matching Android's registry (the tag is transport
+        // plumbing, orthogonal to earbud/sovereign key custody).
+        // W-DCHANGUP — RX support ships with this tag (control-mux peek in
+        // CallService's inbound frame path routes 0x03/HANGUP into the same
+        // teardown as call_hangup), so advertising is honest; ungated and
+        // never stripped, matching Android's registry (`add(DC_HANGUP_V1)`,
+        // no kill switch — sending is itself best-effort and additive).
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1, audioNackV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         // W-LONGAUDIO — receive support, then send support. Both gated; both
         // ship absent. See the two kill switches above for why the RECEIVE one
@@ -291,6 +700,16 @@ public enum CallCapabilities {
         // holds the key, so the sovereign/earbud gates must not strip it. This
         // matches Android, which never strips it either.
         if dcMuxAdvertiseEnabled { caps.append(dcMuxV1) }
+        // IOS-C4b — native RTP audio. Gated, ships absent. Withheld on an
+        // earbud call regardless (see applyAdvertisementGates), exactly like
+        // Android's `if (AUDIO_SRTP_SEND_ENABLED) add(AUDIO_SRTP_V1)`.
+        if audioSrtpSendEnabled { caps.append(audioSrtpV1) }
+        // W-RESTARTICEREQ — RX support ships with this tag (the
+        // `restart_ice_request` handler runs a real full ICE restart), so
+        // advertising is honest. Ungated and never stripped: it is pure
+        // transport recovery, orthogonal to earbud/sovereign key custody —
+        // matching Android, which also registers it with no kill switch.
+        caps.append(restartIceReqV1)
         return caps
     }()
 
@@ -345,8 +764,47 @@ public enum CallCapabilities {
         if paired {
             caps = caps.filter { $0 != aprof60x256V1 && $0 != aprof60x256RecvV1 }
         }
+        // IOS-C4b — native RTP audio requires a native FrameCryptor, which
+        // decrypts ON THE PHONE. Structurally incompatible with the
+        // sovereign-earbud "phone relays the sealed frame without ever
+        // opening it" design (same reasoning as the long-audio-profile gate
+        // above). Withhold unconditionally on a paired earbud call. Mirrors
+        // Android `localCaps` (`CallCapabilities.kt:484-486`).
+        if paired {
+            caps = caps.filter { $0 != audioSrtpV1 }
+        }
+        // W-AUDIOSRTPDEBUGTOGGLE (2026-09-10) — runtime override so
+        // audio-srtp-v1 vs the custom sealed-audio wire can be A/B tested
+        // without a new TestFlight build. Applied AFTER the earbud gate
+        // above, never before: an earbud call's structural incompatibility
+        // with native RTP audio is a hardware fact (no frame-content
+        // observation hook on the zero-knowledge relay path), not a
+        // preference, and must never be overridable. Mirrors Android
+        // `CallCapabilities.localCaps`'s identical ordering.
+        if !paired, let override = audioSrtpDebugOverride {
+            caps = override
+                ? (caps.contains(audioSrtpV1) ? caps : caps + [audioSrtpV1])
+                : caps.filter { $0 != audioSrtpV1 }
+        }
         return earbudActive ? caps + [earbudRelayV1] : caps
     }
+
+    /// W-AUDIOSRTPDEBUGTOGGLE — in-memory-only runtime override for whether
+    /// THIS build advertises ``audioSrtpV1``, read by
+    /// ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``
+    /// on every call. `nil` (the default) means "follow
+    /// ``audioSrtpSendEnabled`` as compiled," exactly today's behavior.
+    /// `true`/`false` forces the advertisement on/off for every call from
+    /// this device until changed again or the process restarts —
+    /// deliberately NOT persisted to `UserDefaults`: this is a live A/B
+    /// testing knob, not a standing preference, and resetting to the
+    /// compiled default on a fresh process is the safer failure mode for a
+    /// flag this sensitive. Exposed unconditionally in the Settings
+    /// "SVILUPPATORE" section (not `#if DEBUG`-gated): unlike the Android
+    /// twin, this build reaches testers ONLY via TestFlight, which builds
+    /// Release — a `#if DEBUG` gate would make the control unreachable in
+    /// the exact build this exists to test with.
+    public static var audioSrtpDebugOverride: Bool?
 
     /// #2a gate (Android parity): did the PEER advertise
     /// ``earbudRelayV1`` in its RAW call-setup capability list,
@@ -416,6 +874,34 @@ public enum CallCapabilities {
         /// long or neither does.
         public var bothAdvertiseLongAudioSend: Bool {
             agreedTags.contains(CallCapabilities.aprof60x256V1)
+        }
+
+        /// IOS-C4b — true iff both sides advertised ``CallCapabilities/audioSrtpV1``
+        /// — audio rides a real SRTP m=audio track + native `RTCFrameCryptor`
+        /// (native NACK/RTX + NetEQ) instead of the sealed DataChannel/WS
+        /// relay. ``localCaps(earbudActive:sovereignOnly:earbudPaired:)``
+        /// already guarantees neither side advertises this on an earbud
+        /// call, so this being `true` also implies neither end is
+        /// earbud-paired. Derived — no wire/ctor change. Mirrors Android
+        /// `Negotiated.useAudioSrtp` (`CallCapabilities.kt:551`).
+        public var useAudioSrtp: Bool { agreedTags.contains(CallCapabilities.audioSrtpV1) }
+
+        /// W-RESTARTICEREQ — true iff BOTH sides advertised
+        /// ``CallCapabilities/restartIceReqV1``, i.e. it is worth asking the
+        /// peer to run its own ICE restart after a local network change.
+        /// Receiving is unconditional; only the SEND is gated on this, which
+        /// is what keeps the rollout symmetric. Mirrors Android
+        /// `Negotiated.useRestartIceRequest`.
+        public var useRestartIceRequest: Bool {
+            agreedTags.contains(CallCapabilities.restartIceReqV1)
+        }
+
+        /// W-AUDIONACK — true iff both sides advertised
+        /// ``CallCapabilities/audioNackV1`` — a receiver may ask the sender
+        /// to replay one specific missing sealed-audio frame. Mirrors
+        /// Android `Negotiated.useAudioNack`.
+        public var useAudioNack: Bool {
+            agreedTags.contains(CallCapabilities.audioNackV1)
         }
     }
 

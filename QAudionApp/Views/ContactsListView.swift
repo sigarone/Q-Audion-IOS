@@ -158,6 +158,20 @@ final class ContactsListContainer: ObservableObject {
             // fastSetup è onboarding-time, gestito da OnboardingFlow.
             return false
         }
+        // Security fix (2026-08-22, W-SELFCONTACT): the app has a single
+        // generic QR scanner shared between "add contact" and scanning a
+        // companion-device-link QR (LinkNewDeviceScreen, whose payload
+        // encodes the SCANNING device's own account id — device-link
+        // pairing is not yet wired server-side). Without this guard,
+        // scanning your own "Collega nuovo dispositivo" QR with the
+        // ordinary contacts scanner silently created a contact row whose
+        // userId equals your own account, and every call to that "contact"
+        // (avatar_announce included) then routed back to yourself. Root
+        // cause confirmed end-to-end from QR generation to this call site.
+        if let appState = self.appState, userId == appState.currentUserId {
+            RTLog.warn("security", "addScannedContact rejected — scanned QR resolves to own account id")
+            return false
+        }
         // Security-review fix (2026-07-30): this used to build a bare
         // StoredContact and upsert() unconditionally — a full-record
         // replace (ContactsStore.upsert never merges). Re-scanning an
@@ -231,6 +245,11 @@ final class ContactsListContainer: ObservableObject {
 struct ContactsListView: View {
     @StateObject private var container: ContactsListContainer
     @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// Entitlements Task 5 — drives `.sheet(isPresented:)` for `UpgradeSheet`.
+    @State private var showNfcUpgradeSheet: Bool = false
     @State private var searchText: String = ""
     @State private var showingQrScanner: Bool = false
     @State private var showingMyIdentity: Bool = false
@@ -295,8 +314,19 @@ struct ContactsListView: View {
                     Button("Mostra la mia identità", systemImage: "qrcode") {
                         showingMyIdentity = true
                     }
+                    // Entitlements Task 5 — Capability.nfc. A `Menu`
+                    // row can't render the dim+lock-badge visual treatment
+                    // `GatedActionButton` gives an icon button, so this
+                    // stays a plain always-visible, always-tappable row
+                    // (never removed, matching design doc §7.2) whose
+                    // ACTION branches on entitlement instead: unlocked →
+                    // the real NFC pairing sheet, locked → UpgradeSheet.
                     Button("Aggiungi via NFC", systemImage: "wave.3.right") {
-                        showingNfcPair = true
+                        if capabilityGate.isUnlocked(.nfc) {
+                            showingNfcPair = true
+                        } else {
+                            showNfcUpgradeSheet = true
+                        }
                     }
                     Button("Importa dal telefono", systemImage: "phone.badge.plus") {
                         showingPhonebookImport = true
@@ -353,6 +383,12 @@ struct ContactsListView: View {
                         }
                     }
             }
+        }
+        // Entitlements Task 5 — presents UpgradeSheet when the "Aggiungi
+        // via NFC" row is tapped while locked.
+        .sheet(isPresented: $showNfcUpgradeSheet) {
+            UpgradeSheet(capability: .nfc)
+                .environmentObject(appState)
         }
         .sheet(isPresented: $showingPhonebookImport) {
             NavigationStack {
@@ -640,4 +676,5 @@ struct ContactsListView: View {
     // presents MyIdentityQrSheet which requires it.
     NavigationStack { ContactsListView() }
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
 }

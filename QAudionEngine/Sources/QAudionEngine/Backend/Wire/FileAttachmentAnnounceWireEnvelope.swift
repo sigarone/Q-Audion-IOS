@@ -17,7 +17,7 @@ import Foundation
 ///   "t":"qa_fa_announce:1","f":"<uuid>","s":"<uuid>","eph":"<b64 32B>",
 ///   "tu":"<tus fileId>","nc":2,"cs":65536,"tb":120,"mi":"image/jpeg",
 ///   "fn":"photo.jpg","w":[{"d":"<b64 16B>","k":"<b64 48B>"}],
-///   "dt":"<hex>?","de":123?,"du":10?,"ex":300?,"xp":0?
+///   "dt":"<hex>?","de":123?,"du":10?,"ex":300?,"xp":0?,"sg":"<b64 64B>?"
 /// }
 /// ```
 ///
@@ -27,6 +27,15 @@ import Foundation
 /// (export-permission) are OPTIONAL and backward-tolerant: absent on the
 /// wire (older sender) decodes to `nil` / owner-direct / no-TTL / export-
 /// allowed, matching Android's documented defaults exactly.
+///
+/// ATT-1 (`CRYPTO_PROTOCOL_AUDIT_2026-09-01.md` backlog item 1) — `sg` is a
+/// NEW OPTIONAL field: the base64 detached Ed25519 signature over
+/// `FileAttachmentAnnounceSig.canon(...)`, signed with the sender's
+/// long-term device-identity key. Absent on the wire (older sender, or a
+/// not-yet-updated platform) decodes to `nil` and the receiver accepts the
+/// envelope unsigned exactly as before — no capability negotiation needed.
+/// Present-but-invalid is a receiver-side concern (never accept/install on a
+/// bad or unresolvable signature); this codec only carries the bytes.
 public struct FileAttachmentAnnounceWireEnvelope: Equatable {
 
     public static let wireType = "qa_fa_announce:1"
@@ -56,12 +65,17 @@ public struct FileAttachmentAnnounceWireEnvelope: Equatable {
     public let downloadTokenMaxUses: Int?
     public let ephemeralSpecSec: Int64?
     public let xp: Int?
+    /// ATT-1 — base64 detached Ed25519 signature (64B) over
+    /// `FileAttachmentAnnounceSig.canon(...)`, or `nil` for an unsigned
+    /// (legacy-compatible) envelope. See the type doc's `sg` field note.
+    public let sigB64: String?
 
     public init(
         fileId: String, senderId: String, senderEphPubB64: String, tusFileId: String,
         totalChunks: Int, chunkSize: Int, totalSizeBytes: Int64, mime: String, filename: String,
         wraps: [DeviceWrap], downloadTokenHex: String? = nil, downloadTokenExpiresMs: Int64? = nil,
-        downloadTokenMaxUses: Int? = nil, ephemeralSpecSec: Int64? = nil, xp: Int? = nil
+        downloadTokenMaxUses: Int? = nil, ephemeralSpecSec: Int64? = nil, xp: Int? = nil,
+        sigB64: String? = nil
     ) {
         self.fileId = fileId
         self.senderId = senderId
@@ -78,6 +92,7 @@ public struct FileAttachmentAnnounceWireEnvelope: Equatable {
         self.downloadTokenMaxUses = downloadTokenMaxUses
         self.ephemeralSpecSec = ephemeralSpecSec
         self.xp = xp
+        self.sigB64 = sigB64
     }
 
     public enum Error: Swift.Error, LocalizedError {
@@ -139,12 +154,20 @@ public struct FileAttachmentAnnounceWireEnvelope: Equatable {
         }
         let ex = (any["ex"] as? Int64) ?? (any["ex"] as? NSNumber)?.int64Value
         let xp = (any["xp"] as? Int) ?? (any["xp"] as? NSNumber)?.intValue
+        // ATT-1: optional signature. A present-but-empty string is treated
+        // the same as absent (nil) — the verifier's contract is "present and
+        // well-formed => must verify", and an empty string can never be a
+        // well-formed 64-byte signature, so folding it to nil here just
+        // means the receiver's own length check catches it uniformly with
+        // "field omitted" rather than needing a second empty-string branch.
+        let sgRaw = any["sg"] as? String
+        let sg: String? = (sgRaw?.isEmpty ?? true) ? nil : sgRaw
 
         return FileAttachmentAnnounceWireEnvelope(
             fileId: fileId, senderId: senderId, senderEphPubB64: eph, tusFileId: tu,
             totalChunks: nc, chunkSize: cs, totalSizeBytes: tb, mime: mi, filename: fn,
             wraps: wraps, downloadTokenHex: downloadTokenHex, downloadTokenExpiresMs: downloadTokenExpiresMs,
-            downloadTokenMaxUses: downloadTokenMaxUses, ephemeralSpecSec: ex, xp: xp
+            downloadTokenMaxUses: downloadTokenMaxUses, ephemeralSpecSec: ex, xp: xp, sigB64: sg
         )
     }
 
@@ -173,6 +196,7 @@ public struct FileAttachmentAnnounceWireEnvelope: Equatable {
         }
         if let ex = ephemeralSpecSec { dict["ex"] = NSNumber(value: ex) }
         if let xp = xp { dict["xp"] = xp }
+        if let sg = sigB64 { dict["sg"] = sg }
         let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
         return jsonData.base64EncodedString()
     }

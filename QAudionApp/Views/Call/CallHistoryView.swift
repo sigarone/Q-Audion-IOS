@@ -56,8 +56,22 @@ public struct CallHistoryEntry: Equatable, Identifiable {
 /// isn't empty immediately post-update).
 @MainActor
 final class CallHistoryStore: ObservableObject {
-    @Published private(set) var entries: [CallHistoryEntry] = []
+    @Published private(set) var entries: [CallHistoryEntry] = [] {
+        didSet { updateVisibleEntries() }
+    }
     @Published private(set) var loading: Bool = false
+    @Published var missedOnly: Bool = false {
+        didSet { updateVisibleEntries() }
+    }
+    @Published private(set) var visibleEntries: [CallHistoryEntry] = []
+
+    private func updateVisibleEntries() {
+        if missedOnly {
+            visibleEntries = entries.filter { $0.direction == .missed }
+        } else {
+            visibleEntries = entries
+        }
+    }
 
     /// Refresh from PersistentCallRecordStore. Falls back to
     /// `appState.recentCalls` stubs when the persistent store is empty
@@ -207,9 +221,12 @@ struct CallHistoryView: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Distinguishes the iPhone TabView host from the iPad
+    /// NavigationSplitView detail pane, which already has a shell-level VPN
+    /// chip in its sidebar.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var showingDialPad = false
-    @State private var showingGroupComposer = false
     @State private var showingClearAllConfirm = false
     /// 2026-07-29 fix (Pavel: dialed a real phone number, "nothing
     /// happened") — `DialPadSheet` dismisses synchronously the instant
@@ -222,18 +239,35 @@ struct CallHistoryView: View {
     /// can't pop this alert back up.
     @State private var dialCallError: String?
 
-    /// W296: filter toggle. When true, only missed calls are shown.
-    /// State persists for the lifetime of the screen instance, not
-    /// across launches (intentional — most users want this scoped
-    /// to a single triage session).
-    @State private var missedOnly: Bool = false
-
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomTrailing) {
             scheme.background.ignoresSafeArea()
             VStack(spacing: 0) {
+                QAudionBrandBanner()
                 topBar
                 content
+            }
+
+            // One labelled primary action, replacing the bare dialpad glyph
+            // that used to sit in the header. Suppressed on the empty state,
+            // which already renders an identical "Componi numero" capsule as
+            // its first-launch CTA — two of them on one screen is the
+            // duplication this pass removes. Gated on `entries` rather than
+            // `visibleEntries` so a missed-only filter yielding nothing is
+            // treated as a filtered list, not an empty screen.
+            if !store.entries.isEmpty {
+                Button { showingDialPad = true } label: {
+                    Label("Componi numero", systemImage: "dial.fill")
+                        .qaudionStyle(type.labelMedium)
+                        .foregroundStyle(scheme.onPrimary)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(scheme.primary))
+                        .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
             }
         }
         // W460: same fix as SettingsScreen — replace deprecated API.
@@ -282,19 +316,6 @@ struct CallHistoryView: View {
             .presentationDetents([.height(560)])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showingGroupComposer) {
-            // W45: sostituito GroupComposerPlaceholderSheet (stale) con il
-            // vero CreateGroupScreen. W40 è già live in v1.0.86+, quindi
-            // il placeholder "in arrivo" era obsoleto. onGroupCreated
-            // chiude il sheet e mostra snackbar; in futuro, una volta
-            // wired startGroupCall, può anche aprire direttamente la
-            // chiamata di gruppo invece della chat.
-            NavigationStack {
-                CreateGroupScreen(onGroupCreated: { _ in
-                    showingGroupComposer = false
-                })
-            }
-        }
         // W47: alert di conferma per clear-all dello storico.
         .alert("Cancella tutto lo storico?",
                isPresented: $showingClearAllConfirm) {
@@ -323,12 +344,21 @@ struct CallHistoryView: View {
 
     // MARK: - Top bar
 
+    /// Action strip, not a header: the screen deliberately states no title.
+    /// "Chiamate" was printed here and again by the tab bar ~600pt below.
+    /// The bar itself stays — with the navigation bar hidden (see :240) this
+    /// is the only route to "Cancella storico".
     private var topBar: some View {
         HStack(spacing: 8) {
-            Text("Chiamate")
-                .qaudionStyle(type.titleLarge)
-                .foregroundStyle(scheme.onSurface)
             Spacer()
+            // The VPN chip lives here, not in the navigation bar: this
+            // screen hides that bar (:240), so the toolbar item the shell
+            // used to attach was never drawn. Compact only — on iPad the
+            // sidebar draws one chip for the whole shell.
+            if horizontalSizeClass != .regular {
+                VpnToggleChip(vpnService: appState.vpnService,
+                              accessToken: appState.currentAccessToken ?? "")
+            }
             // W47: overflow menu — "Cancella tutto" sullo storico.
             // Disabled quando la lista è già vuota.
             Menu {
@@ -345,20 +375,17 @@ struct CallHistoryView: View {
                     .frame(width: 36, height: 36)
             }
             .accessibilityLabel("Altro")
-            Button(action: { showingGroupComposer = true }) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel("Nuova chiamata di gruppo")
-            Button(action: { showingDialPad = true }) {
-                Image(systemName: "dial.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel("Componi numero")
+            // The group control that used to sit here is gone. Its label
+            // said "Nuova chiamata di gruppo" but its action opened
+            // CreateGroupScreen, i.e. a group CHAT — it promised a call and
+            // delivered a chat, from the calls surface where a group chat
+            // does not belong. Group chats are created from the Chats tab,
+            // which has a labelled "Nuovo gruppo" action; group calls start
+            // from inside a group chat, which passes the real member ids.
+            //
+            // The dialpad glyph is gone too: "Componi numero" is now a
+            // labelled capsule floating over the list, so the word is
+            // visible instead of living only in an accessibilityLabel.
         }
         .padding(.horizontal, 16)
         .frame(height: 56)
@@ -377,23 +404,13 @@ struct CallHistoryView: View {
         }
     }
 
-    /// W296: visible entries — either all of `store.entries` or just
-    /// the `.missed` ones depending on the filter toggle. Computed at
-    /// render time so toggling is reactive without re-fetch.
-    private var visibleEntries: [CallHistoryEntry] {
-        if missedOnly {
-            return store.entries.filter { $0.direction == .missed }
-        }
-        return store.entries
-    }
-
     /// W296: filter toggle row. Renders only when there's at least
     /// one entry (avoids cluttering the empty state).
     @ViewBuilder
     private var filterRow: some View {
         if !store.entries.isEmpty {
             HStack(spacing: 8) {
-                Toggle(isOn: $missedOnly) {
+                Toggle(isOn: $store.missedOnly) {
                     Text("Solo perse")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurface)
@@ -403,8 +420,8 @@ struct CallHistoryView: View {
                 Spacer()
                 Text(Self.filterCountLabel(
                     total: store.entries.count,
-                    visible: visibleEntries.count,
-                    filtered: missedOnly
+                    visible: store.visibleEntries.count,
+                    filtered: store.missedOnly
                 ))
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -416,7 +433,7 @@ struct CallHistoryView: View {
 
     private static func filterCountLabel(total: Int, visible: Int, filtered: Bool) -> String {
         if filtered {
-            return String(visible) + " di " + String(total)
+            return String(localized: "call_history.filter_count_of_total", defaultValue: "\(visible) di \(total)", comment: "Call history filter row — shows how many entries are visible out of the total when the missed-only filter is active; %lld/%lld = visible count / total count.")
         }
         return String(total)
     }
@@ -430,7 +447,7 @@ struct CallHistoryView: View {
                 .listRowBackground(scheme.background)
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            ForEach(visibleEntries) { entry in
+            ForEach(store.visibleEntries) { entry in
                 CallHistoryRow(entry: entry,
                                onAudioCall: { peerId in
                     Task { await appState.startCall(contactId: peerId, video: false) }
@@ -464,6 +481,9 @@ struct CallHistoryView: View {
         .scrollContentBackground(.hidden)
         .background(scheme.background)
         .refreshable { store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls) }
+        // Clearance so the last row and its swipe-to-delete are reachable
+        // under the floating "Componi numero" capsule.
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 96) }
     }
 
     /// Find existing or create new conversation for a peer, then trigger
@@ -534,6 +554,12 @@ private struct CallHistoryRow: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — drives `.sheet(isPresented:)` for `UpgradeSheet`.
+    @State private var showUpgradeSheet = false
 
     let entry: CallHistoryEntry
     let onAudioCall: (String) -> Void
@@ -567,7 +593,7 @@ private struct CallHistoryRow: View {
                     if entry.isVideo {
                         Image(systemName: "video.fill")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(extras.pqcAccent)
+                            .foregroundStyle(scheme.onSurfaceVariant)
                     }
                 }
             }
@@ -590,15 +616,35 @@ private struct CallHistoryRow: View {
             }
             .accessibilityLabel("Chiama \(entry.peerDisplay)")
 
-            Button(action: { onVideoCall(entry.peerUserId) }) {
+            // Neutral, not the PQC purple it used to wear. That token is
+            // the app's post-quantum accent and its own doc says so, but
+            // CallHistoryEntry carries no security field at all — placing a
+            // video call is not a crypto statement. The green on the audio
+            // button stays: that is the universal place-a-call affordance,
+            // not a trust signal.
+            //
+            // Entitlements Task 5 — Capability.callsVideo. A third
+            // independent trigger for the same server-side gate already
+            // applied to ChatDetailScreen's and ContactDetailScreen's
+            // video buttons (mirrors Android's CallHistoryScreen.kt review
+            // fix I1 #2).
+            GatedActionButton(
+                unlocked: capabilityGate.isUnlocked(.callsVideo),
+                action: { onVideoCall(entry.peerUserId) },
+                onLockedClick: { showUpgradeSheet = true }
+            ) {
                 Image(systemName: "video.fill")
                     .font(.system(size: 18))
-                    .foregroundStyle(extras.pqcAccent)
+                    .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
             }
             .accessibilityLabel("Videochiama \(entry.peerDisplay)")
         }
         .padding(.vertical, 6)
+        .sheet(isPresented: $showUpgradeSheet) {
+            UpgradeSheet(capability: .callsVideo)
+                .environmentObject(appState)
+        }
     }
 
     private var directionIcon: String {
@@ -630,28 +676,28 @@ private struct CallHistoryRow: View {
         if let dur = entry.durationSeconds {
             parts.append(String(format: "%d:%02d", dur / 60, dur % 60))
         } else if entry.direction == .missed {
-            parts.append("persa")
+            parts.append(String(localized: "call_history.missed", defaultValue: "persa", comment: "Call history row subtitle — appended when a call was missed and has no duration to show"))
         }
         return parts.joined(separator: " · ")
     }
 
     private static let timeFormatterHHmm: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "HH:mm"
         return f
     }()
 
     private static let timeFormatterEEEHHmm: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "EEE HH:mm"
         return f
     }()
 
     private static let timeFormatterDDMMHHmm: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "dd/MM HH:mm"
         return f
     }()
@@ -661,7 +707,7 @@ private struct CallHistoryRow: View {
         if cal.isDateInToday(entry.startedAt) {
             return Self.timeFormatterHHmm.string(from: entry.startedAt)
         } else if cal.isDateInYesterday(entry.startedAt) {
-            return "Ieri"
+            return String(localized: "call_history.yesterday", defaultValue: "Ieri", comment: "Call history row subtitle — call happened yesterday")
         } else if let days = cal.dateComponents([.day], from: entry.startedAt, to: Date()).day,
                   days < 7 {
             return Self.timeFormatterEEEHHmm.string(from: entry.startedAt)
@@ -864,5 +910,6 @@ private struct DialKeyStyle: ButtonStyle {
 #Preview {
     CallHistoryView()
         .environmentObject(AppState())
+        .environmentObject(CapabilityGate.previewInstance())
         .qAudionTheme(dark: true)
 }

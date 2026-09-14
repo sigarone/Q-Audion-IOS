@@ -20,11 +20,10 @@ public actor RelayCredentialsProvider {
     public struct RelayBundle: Equatable {
         public let servers: [RelayServer]
         public let wssTurnUrl: String?
-        public let onionAddress: String?
         /// VLESS+REALITY censorship-bypass front params (`reality` block).
         /// nil when the server hasn't provisioned Reality. Carried here so the
         /// transport-fallback selector can read it off the same cached bundle
-        /// it already uses for TURN/onion — no extra round-trip when a hard
+        /// it already uses for TURN — no extra round-trip when a hard
         /// clearnet failure triggers the Reality path (design doc §6).
         public let reality: RealityRelayParams?
         /// Epoch milliseconds at which the freshest server expires.
@@ -33,13 +32,11 @@ public actor RelayCredentialsProvider {
         public init(
             servers: [RelayServer],
             wssTurnUrl: String?,
-            onionAddress: String?,
             reality: RealityRelayParams? = nil,
             expiresAtEpochMs: Int64
         ) {
             self.servers = servers
             self.wssTurnUrl = wssTurnUrl
-            self.onionAddress = onionAddress
             self.reality = reality
             self.expiresAtEpochMs = expiresAtEpochMs
         }
@@ -120,7 +117,6 @@ public actor RelayCredentialsProvider {
         return RelayBundle(
             servers: response.relays,
             wssTurnUrl: response.wssTurnUrl,
-            onionAddress: response.onionAddress,
             reality: response.reality,
             expiresAtEpochMs: now + shortestTtl * 1000
         )

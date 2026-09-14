@@ -86,14 +86,28 @@ public final class CallSessionKeyBroker {
         for peerId: String,
         pskFingerprint: String?,
         pskName: String?,
-        pskMethod: String?
+        pskMethod: String?,
+        retriesLeft: Int = CallSessionKeyBroker.sessionKeyRetryMaxAttempts
     ) {
-        // Reuse the validated base path for the session-key swap + SAS notify.
+        // Reuse the validated base path for the session-key swap + SAS notify
+        // (it has its own internal retry for the same callContactId race).
         registerPqcSessionKey(sharedSecret, for: peerId)
-        // The base method already returned early on a peer mismatch / wrong
-        // length without touching anything; re-check the guard so we don't
-        // write stale PSK metadata for a call that was rejected above.
-        guard let currentPeer = getCallContactId?(), currentPeer == peerId else { return }
+        // The base method's retry is async, so `callContactId` may still be
+        // unset here on the FIRST pass even when it will resolve moments
+        // later — retry this guard too (display-only metadata, same bounded
+        // window) rather than silently losing the PSK row for a call the
+        // base method's retry goes on to accept.
+        guard let currentPeer = getCallContactId?(), currentPeer == peerId else {
+            guard retriesLeft > 0 else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: Self.sessionKeyRetryIntervalNs)
+                self?.registerPqcSessionKeyWithPsk(
+                    sharedSecret, for: peerId,
+                    pskFingerprint: pskFingerprint, pskName: pskName, pskMethod: pskMethod,
+                    retriesLeft: retriesLeft - 1)
+            }
+            return
+        }
         guard sharedSecret.count == 32 else { return }
         if let fp = pskFingerprint, !fp.isEmpty {
             setPskFingerprint?(fp)
@@ -107,6 +121,28 @@ public final class CallSessionKeyBroker {
         }
     }
 
+    /// Bounded retry window for the "callContactId not set yet" race below
+    /// — same TTL-bounded, fail-closed philosophy as `AppState`'s own
+    /// `bufferOfferReplay`/`drainPendingOfferReplays` for the identical race
+    /// class (a value legitimately arriving before `callContactId` is
+    /// wired). 10 × 200ms = 2s, generous for a same-thread-hop UI-state
+    /// race, short enough that a call that's genuinely wrong/stale just
+    /// drops as before.
+    // public, not private/internal — used as a default argument value on
+    // two `public func`s below; Swift requires a default-arg expression to
+    // be at least as visible as the function itself, since it's evaluated
+    // at the call site. `private` failed CI with "is private and cannot be
+    // referenced"; `internal` alone still failed the SAME way ("is internal
+    // and cannot be referenced") because these funcs are public API called
+    // from outside this file's/module's visibility — public is what
+    // actually satisfies the compiler, confirmed by the second real CI
+    // failure this fixes.
+    // Swift-6 readiness: referenced from nonisolated default-argument
+    // position at two call sites — an immutable Int is Sendable, so
+    // nonisolated is the correct isolation, not a workaround.
+    nonisolated public static let sessionKeyRetryMaxAttempts = 10
+    private static let sessionKeyRetryIntervalNs: UInt64 = 200_000_000
+
     /// Call this from the PQC handshake completion path with the
     /// freshly-derived session key (output of
     /// `QAudionCallIntegration.deriveHybridSessionKey`).
@@ -118,10 +154,36 @@ public final class CallSessionKeyBroker {
     ///             changed mid-flight (unlikely but possible during a
     ///             call leg renegotiation), we ignore the late
     ///             arrival.
-    public func registerPqcSessionKey(_ sharedSecret: Data, for peerId: String) {
-        guard let currentPeer = getCallContactId?() else { return }
+    ///   - retriesLeft: internal — do not pass explicitly.
+    public func registerPqcSessionKey(_ sharedSecret: Data, for peerId: String, retriesLeft: Int = CallSessionKeyBroker.sessionKeyRetryMaxAttempts) {
+        guard let currentPeer = getCallContactId?() else {
+            // I3-adjacent (2026-08-21) — confirmed live: a callee answering
+            // from background (CallKit/PushKit wake) can complete the PQC
+            // handshake and deliver the real session key here BEFORE
+            // AppState finishes assigning `callContactId` for the new call
+            // — this guard used to silently drop the key with no log, no
+            // retry. Audio still started (a separate path,
+            // onRelaySessionReady, doesn't depend on this), but
+            // setSessionKey/sasReadyNotification/onSessionEstablished never
+            // fired, so SAS words never appeared and reKeyScheduler.start()
+            // (fired from onSessionEstablished) never ran — the call
+            // eventually timed out. Bounded retry instead of an unbounded
+            // wait or a silent drop: same fail-closed-after-a-window
+            // discipline as bufferOfferReplay, just polling instead of
+            // being replay-triggered (this class has no hook into every
+            // `callContactId = ...` assignment site in AppState).
+            guard retriesLeft > 0 else {
+                print("[CallSessionKeyBroker] callContactId never became available for " + String(peerId.prefix(8)) + "… after retry window — dropping PQC session key (SAS will not appear, call may stall)")
+                return
+            }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: Self.sessionKeyRetryIntervalNs)
+                self?.registerPqcSessionKey(sharedSecret, for: peerId, retriesLeft: retriesLeft - 1)
+            }
+            return
+        }
         guard currentPeer == peerId else {
-            print("[CallSessionKeyBroker] late PQC key for " + peerId + " - current peer is " + currentPeer + "; ignoring")
+            print("[CallSessionKeyBroker] late PQC key for " + String(peerId.prefix(8)) + "… - current peer is " + String(currentPeer.prefix(8)) + "…; ignoring")
             return
         }
         guard sharedSecret.count == 32 else {

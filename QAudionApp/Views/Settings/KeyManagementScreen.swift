@@ -79,7 +79,7 @@ struct KeyManagementScreen: View {
                     VStack(spacing: 8) {
                         if let last = coordinator.lastRotationDate {
                             kvRow(label: "Ultima rotazione",
-                                  value: last.formatted(.relative(presentation: .named)),
+                                  value: last.formatted(.relative(presentation: .named).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))),
                                   mono: false)
                         }
                         rotateButton
@@ -110,7 +110,7 @@ struct KeyManagementScreen: View {
             Button("Ruota", role: .destructive) {
                 coordinator.rotate()
                 snackbar?.show(.init(
-                    text: "Rotazione chiavi avviata.",
+                    text: String(localized: "key_management.rotation_started", defaultValue: "Rotazione chiavi avviata.", comment: "Snackbar — X25519 ephemeral key rotation started after the user confirms the rotate-keys alert"),
                     severity: .warning,
                     durationSeconds: 5
                 ))

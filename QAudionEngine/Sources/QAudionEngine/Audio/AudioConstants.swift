@@ -7,12 +7,33 @@ public enum AudioConstants {
     public static let frameDurationMs = 20
     public static let samplesPerFrame = (sampleRate * frameDurationMs) / 1000
     public static let bytesPerFrame = samplesPerFrame * (bitsPerSample / 8) * channels
-    // W523: 32 kbps CBR — matches Android (`OpusConfig.bitrate=32000`)
-    // and firmware (`QA_OPUS_BITRATE_DEFAULT=32000`). The whole
-    // ecosystem ships frames of the same on-wire size for traffic-
-    // analysis resistance — bumping iOS to 64 kbps would have broken
-    // that property (different frame sizes ⇒ device fingerprintable).
-    public static let opusBitrate = 32000
+    // W523/W-OPUSHEADROOM (2026-08-27): 40 kbps CBR — was 32, raised to match
+    // Android and Desktop, which move to the same value in the same change.
+    // This is the PREFERRED encoder input, not a wire guarantee: every real
+    // construction site clamps it against the ACTIVE profile's block before
+    // it can reach libopus (`OpusCodec.Config(profile:)`'s
+    // `min(bitrate, profile.maxBitrateBps)`, and `QAudionEngine
+    // .reconfigureAudioCodec`'s `profile.clamp`), so raising the base here
+    // cannot by itself push a frame past what any block holds.
+    //
+    // The fleet-default profile (`AudioProfile.long60x256`, 60 ms / 256 B)
+    // has a ceiling of EXACTLY 32000 bps with zero headroom — see
+    // `AudioProfile.maxBitrateBps` — so a call running it stays clamped to
+    // 32 kbps and is audibly unchanged by this. The headroom lands on the
+    // standard profile (20 ms / 120 B, ceiling 41600 bps, reachable only
+    // when a sovereign earbud is party to the call), which now reaches the
+    // full 40 kbps instead of being capped 8 kbps below what its block
+    // could already carry — exactly the headroom `blockSafetyBytes` was
+    // reserved for.
+    //
+    // Firmware is not part of this change and may still advertise 32000;
+    // that is fine because this value is never wire-negotiated — each
+    // endpoint clamps its OWN encoder against its OWN active profile, so
+    // devices choosing different preferred bitrates does not desync
+    // anything. What must never happen is a device raising this PAST what
+    // its active profile's block can carry, which is exactly the failure
+    // the clamp above exists to make impossible rather than merely unlikely.
+    public static let opusBitrate = 40000
 
     // W-FRAMEAGNOSTIC (2026-08-10) — the longest frame this decoder must be
     // able to RECEIVE, in milliseconds, and the buffer that holds it.

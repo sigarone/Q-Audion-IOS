@@ -6,10 +6,15 @@ import SwiftUI
 ///
 /// Layout (left → right):
 ///   - 72pt `QAudionAvatar` with the user's display name + image
-///   - column: display name (titleLarge, semibold) + handle (mono
-///     `labelSmall`, e.g. "103 · 7f3b…d2e9" — bare digits, no "Int."
-///     prefix, Pavel 2026-07-29) + status (italic `bodySmall`, optional)
-///   - trailing 28pt "EDIT" pill (capsule, 1pt primary border, mono)
+///   - column, claiming the rest of the row: display name (titleLarge,
+///     semibold) + identity line (mono `labelSmall`, e.g.
+///     "#103 · +393331234567") + status (italic `bodySmall`, optional) +
+///     the "MODIFICA" pill
+///
+/// The pill sits UNDER the text, not beside it. As a trailing sibling it
+/// took roughly 100pt off a `.lineLimit(1)` identity line — invisible while
+/// that line was a short "103 · …d2e9", and immediately a truncation the
+/// moment it carries a real phone number.
 ///
 /// Card surface = `scheme.surface`, 1pt `primary @ 0.5α` border,
 /// 4pt corner radius.
@@ -66,23 +71,29 @@ struct ProfileHeroCard: View {
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .lineLimit(2)
                 }
-            }
 
-            Spacer(minLength: 8)
+                Spacer().frame(height: 6)
 
-            Button(action: onEditTap) {
-                Text("MODIFICA")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(1.2)
-                    .foregroundStyle(scheme.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .overlay(
-                        Capsule().stroke(scheme.primary, lineWidth: 1)
-                    )
+                Button(action: onEditTap) {
+                    Text("MODIFICA")
+                        .qaudionStyle(type.labelSmall)
+                        .tracking(1.2)
+                        .foregroundStyle(scheme.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .overlay(
+                            Capsule().stroke(scheme.primary, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Modifica profilo")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Modifica profilo")
+            // Claims the width the trailing Spacer used to take. Deleting
+            // that Spacer is not optional: it and this VStack are both
+            // flexible along the HStack axis, so SwiftUI would have split
+            // the freed width between them and the identity line would have
+            // gained only half of what the move intends.
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -104,11 +115,18 @@ private struct MonoCaption: ViewModifier {
 }
 
 #Preview {
-    VStack {
+    VStack(spacing: 12) {
         ProfileHeroCard(
             displayName: "Mario Rossi",
-            handle: "103 · 7f3b…d2e9",
-            statusMessage: "Disponibile per chiamate sicure."
+            handle: "#103 · +393331234567",
+            statusMessage: "In riunione fino alle 18"
+        )
+        // The no-status case is a real state now that the canned
+        // "Disponibile per chiamate sicure." default is gone, so it gets
+        // its own preview rather than being invisible until runtime.
+        ProfileHeroCard(
+            displayName: "Anna Bianchi",
+            handle: "#104 · +393337654321"
         )
         Spacer()
     }

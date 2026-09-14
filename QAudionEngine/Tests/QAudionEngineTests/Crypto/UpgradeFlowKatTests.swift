@@ -582,15 +582,30 @@ final class UpgradeFlowKatTests: XCTestCase {
         XCTAssertEqual(engine.dueActions(nowMs: 7000), [.sinkReattach])
         XCTAssertEqual(engine.dueActions(nowMs: 13_000), [.mediaReadyReannounce])
         XCTAssertEqual(engine.stage, 3)
+        // Audit item 2 (2026-08-26) — every rung fired above bumped the
+        // matching cumulative counter.
+        XCTAssertEqual(engine.totalRungFireCounts, [1, 1, 1])
         // Exhausted ladder: keeps ticking, takes no further action, NEVER
         // tears anything down (SIGNAL-NOT-KILL).
         XCTAssertEqual(engine.dueActions(nowMs: 999_999), [])
-        // Recovery resets stage AND backoff base.
+        XCTAssertEqual(engine.totalRungFireCounts, [1, 1, 1], "no new fire, no new count")
+        // Recovery resets stage AND backoff base — but NOT the cumulative
+        // escalation counts, which are meant to survive across every
+        // stall/recover cycle of the SAME call (only reset() clears them).
         engine.noteRecovered()
         XCTAssertEqual(engine.stage, 0)
+        XCTAssertEqual(engine.totalRungFireCounts, [1, 1, 1], "counts must survive a recovery — only reset() clears them")
         engine.noteStalled(nowMs: 50_000)
         XCTAssertEqual(engine.dueActions(nowMs: 52_999), [])
         XCTAssertEqual(engine.dueActions(nowMs: 53_000), [.keyframeRequest])
+        XCTAssertEqual(engine.totalRungFireCounts, [2, 1, 1], "counts accumulate ACROSS separate stall episodes in the same call")
+        // Full per-call reset (hangup / video-leg rollback) clears the
+        // counters too — a reused engine must not bleed the previous
+        // call's escalation history into the next one.
+        engine.reset()
+        XCTAssertEqual(engine.totalRungFireCounts, [0, 0, 0])
+        XCTAssertEqual(engine.stage, 0)
+        XCTAssertFalse(engine.isStalled)
         // Large clock jump fires the remaining rungs IN ORDER.
         let jump = VideoStallEscalationEngine()
         jump.noteStalled(nowMs: 0)
@@ -598,6 +613,7 @@ final class UpgradeFlowKatTests: XCTestCase {
             jump.dueActions(nowMs: 12_000),
             [.keyframeRequest, .sinkReattach, .mediaReadyReannounce]
         )
+        XCTAssertEqual(jump.totalRungFireCounts, [1, 1, 1])
     }
 
     /// §8.7 BLACK-VIDEO STALL rule + TX storm rule (pure predicates).

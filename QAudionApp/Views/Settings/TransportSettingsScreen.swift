@@ -6,7 +6,6 @@ final class TransportSettingsContainer: ObservableObject {
     @Published var viewModel: TransportSettingsViewModel
     @Published var diagnostics: TransportDiagnostics
     @Published var draftMode: TransportSettingsViewModel.Mode
-    @Published var draftTorEnabled: Bool
     @Published var draftPreferredUrlString: String
 
     // VPN exit-node picker. Reuses the same VpnService + access token the
@@ -30,7 +29,6 @@ final class TransportSettingsContainer: ObservableObject {
         self.viewModel = stored
         self.diagnostics = TransportDiagnostics(appState: state)
         self.draftMode = stored.mode
-        self.draftTorEnabled = stored.torEnabled
         self.draftPreferredUrlString = stored.preferredTurnServerUrl?.absoluteString ?? ""
         self.vpnService = state.vpnService
         self.vpnTokenProvider = { state.currentAccessToken ?? "" }
@@ -58,7 +56,7 @@ final class TransportSettingsContainer: ObservableObject {
 
     func save() {
         let url = URL(string: draftPreferredUrlString)
-        diagnostics.saveTransport(mode: draftMode, torEnabled: draftTorEnabled, preferredUrl: url)
+        diagnostics.saveTransport(mode: draftMode, preferredUrl: url)
         viewModel = SettingsStore().loadTransport()
     }
 }
@@ -151,28 +149,6 @@ struct TransportSettingsScreen: View {
                         .padding(.horizontal, 14)
                         .padding(.top, 6)
 
-                    SettingsSectionHeader("ANONIMIZZAZIONE")
-                    // W409: honest UI for the Tor toggle. iOS does not
-                    // expose system-wide SOCKS proxy support, so even
-                    // with the toggle ON the URLSession used by the
-                    // app's REST/WS transport would still go direct.
-                    // Until a bundled Tor client (e.g. Onion-based
-                    // CFNetwork hook) ships, the row is rendered in
-                    // a disabled state with an explicit "non
-                    // disponibile su iOS" hint so the user isn't
-                    // misled into thinking they're anonymized.
-                    SettingsToggleRow(
-                        title: "Instrada via Tor",
-                        subtitle: "Tutto il segnale e media via rete Tor",
-                        isOn: .constant(false)
-                    )
-                    .opacity(0.45)
-                    .disabled(true)
-                    Text("Non disponibile su iOS in questa versione: la piattaforma non espone un proxy SOCKS di sistema. Verrà riattivato quando l'app integrerà un client Tor bundled.")
-                        .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .padding(.horizontal, 14).padding(.top, 6)
-
                     SettingsSectionHeader("ANTI-CENSURA (REALITY)")
                     // commit 54f0a2e wired Reality.xcframework as a real
                     // conditional .binaryTarget (QAudionEngine/Package.swift),
@@ -213,7 +189,14 @@ struct TransportSettingsScreen: View {
 
                     SettingsSectionHeader("DIAGNOSTICA")
                     VStack(spacing: 8) {
-                        statusRow(label: "Stato server",
+                        // W-L10N-BATCH1 (2026-09-08) — statusRow's
+                        // `label:` is a plain String, not
+                        // LocalizedStringKey (see its signature below),
+                        // so this literal doesn't auto-localize.
+                        // `value:` is `container.diagnostics.
+                        // serverStatus.label`, a live diagnostic result
+                        // (not a call-site literal) — left untouched.
+                        statusRow(label: String(localized: "transport_settings.status.server_label", defaultValue: "Stato server", comment: "Transport settings, DIAGNOSTICA section — status row label for the server connectivity check"),
                                   value: container.diagnostics.serverStatus.label,
                                   tone: container.diagnostics.serverStatus.tone(extras: extras))
                         kvRow(label: "Ultimo TURN RTT",
@@ -224,7 +207,7 @@ struct TransportSettingsScreen: View {
                               mono: true)
                         if let lastChecked = container.diagnostics.lastChecked {
                             kvRow(label: "Ultimo controllo",
-                                  value: lastChecked.formatted(date: .omitted, time: .standard),
+                                  value: lastChecked.formatted(Date.FormatStyle(date: .omitted, time: .standard).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))),
                                   mono: true)
                         }
                         if let errMsg = container.diagnostics.errorMessage {

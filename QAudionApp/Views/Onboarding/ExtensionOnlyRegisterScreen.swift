@@ -49,7 +49,7 @@ struct ExtensionOnlyRegisterScreen: View {
                                 .foregroundStyle(.white)
                                 .padding(8)
                         }
-                        Text("Registrazione solo interno")
+                        Text("Registrazione con interno")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.white)
                         Spacer()

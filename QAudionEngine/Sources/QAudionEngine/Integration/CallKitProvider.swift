@@ -3,34 +3,26 @@ import Foundation
 @preconcurrency import CallKit
 import AVFoundation
 import UIKit
+import WebRTC
 
 public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegate, @unchecked Sendable {
 
     private let provider: CXProvider
     private let controller: CXCallController
 
-    /// W495 — UUIDs for which CallKit rejected reportNewIncomingCall
-    /// (Focus/DnD/block-list). When the user taps Answer on the in-app
-    /// banner for these calls we bypass CXCallController (which would
-    /// also fail) and answer directly, manually activating the audio session.
-    private var callKitRejectedUUIDs: Set<UUID> = []
-    /// W-WAKEONLY — UUIDs for which the NATIVE CallKit incoming UI was actually
-    /// shown (reportNewIncomingCall succeeded). Only these can be "released"
-    /// from the system UI after answer (the foreground-suppressed path never
-    /// showed a native UI, so there is nothing to dismiss).
-    private var nativelyReportedUUIDs: Set<UUID> = []
-
-    /// Every call UUID this process has ever reported to CallKit and not yet
-    /// ended. Distinct from `nativelyReportedUUIDs`, which is cleared the
-    /// moment the system UI is dismissed while the call is still live.
-    ///
-    /// This one exists so a call can always be ended, from any path, without
-    /// the caller having to remember whether it was reported and by which
-    /// route. A CallKit call that outlives the app's own call is not a
-    /// cosmetic problem: iOS believes the phone is busy, and the next incoming
-    /// report can be refused — the user simply stops being reachable and
-    /// nothing on screen says why.
-    private var outstandingUUIDs: Set<UUID> = []
+    /// W-CKLEDGER (2026-09-01) — the W495 rejected/suppressed set, the
+    /// W-WAKEONLY natively-reported set and the outstanding set used to be
+    /// three unlocked `private var Set<UUID>` on this `@unchecked Sendable`
+    /// type. Not every access is on main: this class is not `@MainActor`, so
+    /// its `async` members run on the cooperative pool while
+    /// `registerSuppressedCall` / `releaseFromSystemUI` / `endAllOutstanding`
+    /// and the CXProviderDelegate callbacks (queue nil ⇒ main) run on the main
+    /// thread — and the PushKit+WS `dup=1` report below is two pool threads
+    /// mutating the same Set at once. All three now live behind one NSLock in
+    /// `CallKitCallLedger` (each set's own rationale is documented there);
+    /// every check-then-act below is a single atomic ledger call. See audit
+    /// memory reference_ios_stability_audit_2026_09_01, P1 item 9.
+    private let ledger = CallKitCallLedger()
 
     /// Where this type's diagnostics go. Set by the app to forward into the
     /// remote log; nil in tests and in any target that has no log sink.
@@ -42,6 +34,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public var onAnswerCall: ((UUID) async -> Void)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
+    /// W-CKHOLD (2026-09-02) — fired from `provider(_:perform:
+    /// CXSetHeldCallAction)` when the SYSTEM (not our own UI) puts this
+    /// call on hold or takes it off — another CallKit call becoming
+    /// active, or a Siri "hold my call" request. See B5, audit memory
+    /// reference_ios_stability_audit_2026_09_01, P2: until now this action
+    /// reached no delegate method at all, so CallKit's Hold button
+    /// silently failed (the action was never fulfilled).
+    public var onHoldChanged: ((UUID, Bool) async -> Void)?
     /// W464 — fired when CallKit has activated the shared AVAudioSession.
     /// This is the ONLY safe moment to start `AVAudioEngine` (mic capture
     /// + speaker playback). Starting the engine before this point throws
@@ -69,9 +69,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         cfg.includesCallsInRecents = false
         // Note: CXProviderConfiguration has no supportsHolding property;
         // the Hold button appears when provider implements
-        // provider(_:perform:CXSetHeldCallAction). Since we implement
-        // setOnHold() via CXCallController, hold is available but
-        // signaling-layer hold/resume is a no-op — acceptable.
+        // provider(_:perform:CXSetHeldCallAction) (verified against Apple's
+        // CXSetHeldCallAction docs, 2026-09-02) — see that method below.
+        // `reportIncomingCall` also stamps `CXCallUpdate.supportsHolding`
+        // explicitly rather than relying on its undocumented default.
         //
         // Custom ringtone: the bundled "qaudion_ringtone.caf" (Copy-Bundle-
         // Resources, see project.yml) plays instead of the default iOS ringtone
@@ -94,21 +95,35 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: callerName)
         update.hasVideo = hasVideo
+        // W-CKHOLD (2026-09-02) — explicit rather than relying on
+        // CXCallUpdate's default: this is what makes the native Hold
+        // affordance appear at all (see `provider(_:perform:
+        // CXSetHeldCallAction)` below for the handler side).
+        update.supportsHolding = true
         // Tag the native (cleartext) call UI as an encrypted Q-Audion call. The
         // caller name itself is resolved from the LOCAL address book by the call
         // sites (PushKit + WS), so this only appends the security marker.
-        update.localizedCallerName = callerName + " · 🔒 Cifrata"
+        // W-L10N-BATCH1 (2026-09-08) — this is a plain String property, not a
+        // SwiftUI LocalizedStringKey, so it needs an explicit lookup; the
+        // engine target has no `import UIKit`/app bundle assumption issue
+        // here since String(localized:) resolves against the main app
+        // bundle's own Localizable.xcstrings at runtime regardless of which
+        // module the call site lives in.
+        let encryptedTag = String(localized: "callkit.encrypted_tag", defaultValue: "Cifrata", comment: "Suffix appended to the caller name on the native CallKit incoming-call screen, e.g. 'Marco · 🔒 Encrypted'")
+        update.localizedCallerName = callerName + " · 🔒 " + encryptedTag
         // W-CALLDIAG: every native report attempt logged (uuid + hasVideo). Two
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
         // vs WS) is logged at the call sites in AppState.
-        let alreadyUp: Bool = nativelyReportedUUIDs.contains(uuid)
-        print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid) hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
+        let alreadyUp: Bool = ledger.isNativelyReported(uuid)
+        // I8 FIX — truncate the call UUID (same convention as AppState's
+        // W-CALLDIAG lines for this same call) instead of printing it whole.
+        print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
         do {
             try await provider.reportNewIncomingCall(with: uuid, update: update)
-            nativelyReportedUUIDs.insert(uuid)  // W-WAKEONLY
-            outstandingUUIDs.insert(uuid)
-            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstandingUUIDs.count)")
+            // W-WAKEONLY (native UI up) + outstanding, one atomic insert.
+            let outstanding: Int = ledger.recordNativeReport(uuid)
+            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstanding)")
         } catch {
             // W478 — log instead of silently dropping. CallKit rejects with:
             //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
@@ -127,22 +142,106 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // call CallKit actually knows about was reported by the other
             // branch, never latched to this banner's answer path.
             let nsErr = error as NSError
-            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid)")
+            // I8 FIX — truncated uuid, see above.
+            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid.uuidString.prefix(8))…")
             // Numeric tail so this survives the remote-log redactor: without it
             // the whole CallKit path is invisible off-device, and a rejection
             // that costs the user an incoming call looks exactly like silence.
             log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
             if !alreadyUp {
-                callKitRejectedUUIDs.insert(uuid)
+                ledger.recordRejected(uuid)
             }
         }
     }
 
     public func reportCallEnded(uuid: UUID, reason: CallEndReason) async {
-        // W495 — clean up rejected-UUID tracking on call end.
-        callKitRejectedUUIDs.remove(uuid)
-        nativelyReportedUUIDs.remove(uuid)  // W-WAKEONLY
-        outstandingUUIDs.remove(uuid)
+        // W-RTCLOCKMIGRATE (2026-09-09) — balances every `activateAudioSession`
+        // call. Live evidence this was missing: `RTCAudioSession.activationCount`
+        // on a real device climbed 1 -> 3 across a start-then-answer pair of
+        // calls (should climb by exactly 1 per call if each is balanced) —
+        // `activateAudioSession` called the locked `setActive(true)` on every
+        // call start/answer, but nothing ever called the matching
+        // `setActive(false)` through the SAME counted API, so the count (and
+        // whatever internal state WebRTC's automatic mode derives from it)
+        // could only ever climb, never return to the balanced baseline a
+        // fresh, single call assumes — a real candidate for why this exact
+        // symptom compounds across a session and only clears on a full
+        // process restart. `reportCallEnded` is the one choke point every
+        // call-end path (local hangup, remote hangup, unanswered) already
+        // funnels through, mirroring the two call-start paths this balances.
+        //
+        // W-DOUBLEDECR (2026-09-09) — the balance above shipped with its own
+        // bug: `reportCallEnded` fires more than once for the same logical
+        // call end on real devices (confirmed live: `activationCount` went
+        // 2 -> 1 -> -1 for one call). Originally guarded with
+        // `ledger.forget(uuid)`'s "was outstanding" result — WRONG signal,
+        // caught by a second live test: the foreground/W520 answer path
+        // (`AppState.swift`) deliberately never calls `reportIncomingCall`,
+        // so `outstandingUUIDs` never has that call's uuid on the answering
+        // side AT ALL — the deactivate silently never fired there, in
+        // exactly the two-devices-foregrounded scenario every test tonight
+        // used. `consumeAudioSelfActivation()` tracks the actual thing that
+        // matters — did THIS app call the locked `setActive(true)` for the
+        // current call — independent of CallKit's own native-UI bookkeeping.
+        // See `CallKitCallLedger`'s kdoc for the full trace of both bugs.
+        // W-DRAINACTIVATION (2026-09-10) — raw device traces from tonight's
+        // live tests (two separate builds, both confirmed via unredacted
+        // SSH pulls, not the Loki-redacted view) show `activationCount`
+        // climbing net +1 to +2 across consecutive back-to-back calls and
+        // NEVER returning to a clean 0 baseline — directly correlated with
+        // the native AudioUnit's later Start() failing with CoreAudio's
+        // generic 'what' error and with WebRTC's own InitPlayOrRecord
+        // failing outright on the next call. Root cause: at least THREE
+        // independent code paths can each increment this ONE shared
+        // counter for what is logically a single call — (1) this app's own
+        // explicit self-activation above, now called unconditionally after
+        // every answer/start regardless of whether didActivate will also
+        // fire; (2) CallKit's own native `provider(_:didActivate:)`, when
+        // it DOES also fire for the same call (`audioSessionDidActivate:`
+        // increments too); (3) WebRTC's own internal
+        // `AudioDeviceIOS::InitPlayOrRecord`/`beginWebRTCSession:`, which
+        // activates independently the moment the local audio track starts.
+        // A single boolean-gated `setActive(false)` here only ever
+        // balanced source (1) — sources (2) and (3) are meant to
+        // self-balance via their own paired deactivate (`didDeactivate`,
+        // `ShutdownPlayOrRecord`/`UnconfigureAudioSession`), but real
+        // device evidence shows that pairing is not reliable enough in
+        // practice for back-to-back calls to prevent a net leak.
+        //
+        // Fix (external second opinion sought and confirmed, given this
+        // exact code path's history of three prior production regressions):
+        // drain the counter fully at this one choke point instead of
+        // decrementing by a fixed amount. `RTCAudioSession.setActive(false)`
+        // only touches the real OS session when its own internal
+        // `shouldSetActive` is true (activationCount == 1) — every extra
+        // call beyond that is a documented no-op against the hardware, so
+        // looping it is safe. Bounded (not `while true`) as a defensive cap
+        // against a genuine future bug elsewhere holding the count up
+        // indefinitely; this app's own architecture guarantees at most one
+        // active 1:1 call, so nothing legitimate should still be holding
+        // an activation when a call is genuinely ending. Runs entirely
+        // inside the existing `lockForConfiguration`/`unlockForConfiguration`
+        // pair, serializing the drain against any concurrent activation
+        // (including the next call's own) the same way every other mutation
+        // of this shared session already is.
+        if ledger.consumeAudioSelfActivation() {
+            let rtcSession = RTCAudioSession.sharedInstance()
+            rtcSession.lockForConfiguration()
+            let maxDrainIterations = 10
+            var drainedCount = 0
+            while rtcSession.activationCount > 0 && drainedCount < maxDrainIterations {
+                do {
+                    try rtcSession.setActive(false)
+                } catch {
+                    print("[CallKitProvider] setActive(false) fail site=reportCallEnded iter=\(drainedCount) code=\((error as NSError).code) err=\(error.localizedDescription)")
+                    break
+                }
+                drainedCount += 1
+            }
+            print("[CallKitProvider] reportCallEnded audio session drained iterations=\(drainedCount) activationCount=\(rtcSession.activationCount)")
+            rtcSession.unlockForConfiguration()
+        }
+        ledger.forget(uuid)
         let cxReason: CXCallEndedReason
         switch reason {
         case .userEnded: cxReason = .remoteEnded
@@ -167,7 +266,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// should be zero, and a non-zero one is a path that forgot to end its call.
     @discardableResult
     public func endAllOutstanding(reason: CallEndReason = .remoteEnded) -> Int {
-        let stale = outstandingUUIDs
+        // W-CKLEDGER — snapshot + clear in one critical section; the CallKit
+        // reports below run on the snapshot, same set and same order as before.
+        let stale: Set<UUID> = ledger.drainOutstanding()
         guard !stale.isEmpty else { return 0 }
         let cxReason: CXCallEndedReason
         switch reason {
@@ -178,16 +279,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
         for uuid in stale {
             provider.reportCall(with: uuid, endedAt: Date(), reason: cxReason)
-            nativelyReportedUUIDs.remove(uuid)
-            callKitRejectedUUIDs.remove(uuid)
         }
-        outstandingUUIDs.removeAll()
         log?("callkit reconcile closed=\(stale.count)")
         return stale.count
     }
 
     /// How many calls this process believes are still open with CallKit.
-    public var outstandingCallCount: Int { outstandingUUIDs.count }
+    public var outstandingCallCount: Int { ledger.outstandingCount }
 
     public func startOutgoingCall(handle: String, hasVideo: Bool) async throws -> UUID {
         let uuid = UUID()
@@ -195,7 +293,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         action.isVideo = hasVideo
         let txn = CXTransaction(action: action)
         try await controller.request(txn)
-        outstandingUUIDs.insert(uuid)
+        ledger.recordOutstanding(uuid)
         return uuid
     }
 
@@ -220,7 +318,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// iOS phone UI (which looks identical to a plain voice call and would
     /// confuse users who need to distinguish encrypted calls from cleartext).
     public func registerSuppressedCall(_ uuid: UUID) {
-        callKitRejectedUUIDs.insert(uuid)
+        ledger.recordRejected(uuid)
     }
 
     /// W-WAKEONLY — "CallKit for wake only". After the user answers a
@@ -236,10 +334,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// session there (see reactivateAudioSessionForSelfManagedCall).
     @discardableResult
     public func releaseFromSystemUI(_ uuid: UUID) -> Bool {
-        guard nativelyReportedUUIDs.contains(uuid) else { return false }
-        nativelyReportedUUIDs.remove(uuid)
+        // W-CKLEDGER — atomic test-and-remove: the call stays outstanding.
+        guard ledger.releaseNativeReport(uuid) else { return false }
         provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
-        print("[CallKitProvider] W-WAKEONLY — released system call UI for \(uuid)")
+        // I8 FIX — truncated uuid, see above.
+        print("[CallKitProvider] W-WAKEONLY — released system call UI for \(uuid.uuidString.prefix(8))…")
         return true
     }
 
@@ -248,7 +347,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// Reuses the proven answer-time activation (retry + fire
     /// onAudioSessionActivated → CallService restarts the engines if needed).
     public func reactivateAudioSessionForSelfManagedCall() async {
-        await activateAudioSessionForAnswer()
+        await activateAudioSession(logSite: "answer")
     }
 
     /// W478 — answer an incoming call via the CallKit CXCallController.
@@ -264,8 +363,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// onAudioSessionActivated, and call onAnswerCall directly — identical
     /// to what CXProviderDelegate would do on a successful CallKit path.
     public func answerCall(uuid: UUID) async throws {
-        if callKitRejectedUUIDs.contains(uuid) {
-            callKitRejectedUUIDs.remove(uuid)
+        // W-CKLEDGER — atomic test-and-remove, so two concurrent answerCall for
+        // the same uuid take the manual path once (as two sequential ones did).
+        if ledger.takeRejected(uuid) {
             // W497 — mirror the EXACT order of CXProviderDelegate callbacks on
             // a normal CallKit answer:
             //   1. provider(_:perform:CXAnswerCallAction) → onAnswerCall (sets up
@@ -280,8 +380,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // single `try? setActive(true)` could fail silently (swallowed) and
             // then onAudioSessionActivated() started the engine on an INACTIVE
             // session → capture.start() failed → silent call. See
-            // activateAudioSessionForAnswer().
-            await activateAudioSessionForAnswer()
+            // activateAudioSession(logSite:).
+            await activateAudioSession(logSite: "answer")
             return
         }
         let action = CXAnswerCallAction(call: uuid)
@@ -309,22 +409,139 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// the session is genuinely active so the engine start sees a live session.
     /// Idempotent: if `didActivate` DOES arrive too, `onAudioSessionActivated`
     /// re-runs harmlessly (the engine guards on its own `isRunning`).
-    private func activateAudioSessionForAnswer() async {
-        let session = AVAudioSession.sharedInstance()
+    ///
+    /// W-CKSTARTACTIVATE (2026-09-09) — this was answer-only until tonight.
+    /// The exact same root cause ("a session left active by a prior call...
+    /// skips [didActivate]") applies identically to the OUTGOING/caller side
+    /// on a back-to-back call — live evidence: call e7e8e96a, iPad placing a
+    /// call 8s after its own previous call ended, native audio-srtp's sender
+    /// activates but `AVAudioSession.currentRoute.inputs.count` is 0 the
+    /// whole call (`audioIO noinput=1 inp=0`), and `handleAudioSessionDeactivated`
+    /// never fired even once for the prior call — CallKit kept the session
+    /// continuously "active" across the gap and, on THIS path only, nothing
+    /// ever re-asserted it. `provider(_:perform: CXStartCallAction)` set the
+    /// category and just trusted `didActivate` to follow, with no fallback —
+    /// the asymmetry itself was the bug, not a new mechanism to invent.
+    /// `logSite` is cosmetic (keeps the two callers' log lines
+    /// distinguishable); the retry/forward logic is identical either way.
+    ///
+    /// W-RTCLOCKMIGRATE (2026-09-09) — this used to mutate the raw
+    /// `AVAudioSession.sharedInstance()` directly, then tell `RTCAudioSession`
+    /// about it after the fact via `audioSessionDidActivate` (the "outside"
+    /// notification). That channel is for genuinely-outside activation — its
+    /// own header doc: "used to inform RTCAudioSession when the audio session
+    /// activation state has changed outside of RTCAudioSession... when
+    /// CallKit activates the audio session for the application." This
+    /// function is OUR OWN app code doing the activating, not CallKit, so it
+    /// was using the wrong half of the API — and the header is explicit
+    /// about the right half: "Callers should not call setters on
+    /// AVAudioSession directly." `RTCAudioSession` tracks its own
+    /// `isActive`/`activationCount` ONLY through calls that go through its
+    /// own `lockForConfiguration`/`setCategory`/`setActive` proxies; a direct
+    /// `AVAudioSession.setActive(true)` is invisible to that bookkeeping
+    /// regardless of any notification sent afterward. This is exactly the
+    /// gap `reference_ios_callkit_webrtc_audio_activation_race_2026_09_08.md`
+    /// (session memory, written the night before tonight's audio-srtp work)
+    /// already named as the real fix and flagged as unimplemented: "the only
+    /// architecturally sound fix is migrating EVERY session mutation... the
+    /// app's own category/mode/buffer-duration calls AND the CallKit-
+    /// activation relay — through the wrapper's lock." Confirmed against the
+    /// actual pinned `webrtc-sdk/webrtc@m144_release` header (fetched, not
+    /// assumed) before writing this. `useManualAudio` is still never touched
+    /// — this is the automatic-mode-compatible half of the fix, not the
+    /// 1053/1056/1066 manual-mode regression class.
+    private func activateAudioSession(logSite: String) async {
+        let rtcSession = RTCAudioSession.sharedInstance()
+        // W-NOMIXOPTION (2026-09-10) — best-practices audit: `.interruptSpoken
+        // AudioAndMixWithOthers` is Apple's documented option for apps whose
+        // OWN audio is occasional and spoken over background audio
+        // (navigation, exercise) — never intended for continuous full-duplex
+        // telephony, and Apple's own docs say to pair it with `duckOthers`
+        // "unless you have a specific reason not to", which this app never
+        // did. It also asks iOS to treat the session as mixable/non-exclusive,
+        // in tension with what a voice-processing (echo-cancelling) I/O unit
+        // needs to do its job. The vendored WebRTC engine's own default
+        // `RTCAudioSessionConfiguration` never sets it — only
+        // `allowBluetoothHFP`/`allowBluetooth`. Matching that default exactly.
         #if !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        rtcSession.lockForConfiguration()
+        // W-NEGATIVEFLOOR (2026-09-10) — live evidence tonight, right after
+        // W-DRAINACTIVATION shipped: `activationCount` went NEGATIVE (-1)
+        // between one call ending and the next starting. Confirmed from
+        // WebRTC's own `RTCAudioSession.mm` source: `decrementActivationCount`
+        // has NO floor at 0 — `reportCallEnded`'s drain loop correctly
+        // stopped at exactly 0, but WebRTC's OWN internal deactivate
+        // (`ShutdownPlayOrRecord`/`UnconfigureAudioSession`, tied to the
+        // peer connection's async native teardown) fired a moment LATER,
+        // after the drain had already returned, decrementing an
+        // already-zeroed counter below 0 — exactly the race the drain
+        // fix's own external review flagged as a residual risk. Waiting for
+        // that teardown to finish first is not an option (confirmed
+        // repeatedly tonight: no completion signal exists for it).
+        // Symmetric fix instead: pay off any such deficit HERE, at the one
+        // point every call-start path already funnels through, rather than
+        // chasing the unpredictable tail end of the previous call. Same
+        // safe idiom as the drain loop — `setActive(true)`'s own
+        // `shouldSetActive` only depends on `!isActive`, not the exact
+        // count, so redundant activate calls from a negative baseline are
+        // still no-ops against real hardware beyond the first.
+        if rtcSession.activationCount < 0 {
+            let maxCorrectionIterations = 10
+            var corrected = 0
+            while rtcSession.activationCount < 0 && corrected < maxCorrectionIterations {
+                do {
+                    try rtcSession.setActive(true)
+                } catch {
+                    print("[CallKitProvider] setActive(true) floor-correction fail site=\(logSite) iter=\(corrected) code=\((error as NSError).code) err=\(error.localizedDescription)")
+                    break
+                }
+                corrected += 1
+            }
+            print("[CallKitProvider] \(logSite) corrected negative activationCount iterations=\(corrected) activationCount=\(rtcSession.activationCount)")
+        }
+        do {
+            try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        } catch {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`: a refused category is
+            // the first link in a silent-call chain and left no line (audit
+            // memory reference_ios_stability_audit_2026_09_01, P1 item 7).
+            // Flow unchanged; the setActive retry loop below still runs.
+            print("[CallKitProvider] setCategory fail site=\(logSite) code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
         for attempt in 0..<4 {
             do {
-                try session.setActive(true)
-                print("[CallKitProvider] answer audio session ACTIVE (attempt \(attempt))")
+                try rtcSession.setActive(true)
+                print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt)) activationCount=\(rtcSession.activationCount)")
+                rtcSession.unlockForConfiguration()
+                // W-SELFACTIVATED (2026-09-09) — mark that this call now owes
+                // a matching setActive(false), independent of whether
+                // CallKit's own native UI/ledger ever heard about this call
+                // (it deliberately doesn't for a foreground/W520 answer —
+                // see the ledger's own kdoc for why that distinction is the
+                // whole point of this flag).
+                ledger.markAudioSelfActivated()
                 onAudioSessionActivated?()
                 return
             } catch {
-                print("[CallKitProvider] setActive retry \(attempt): \(error.localizedDescription)")
+                // W-SETACTIVEFAIL (2026-09-10) — the live device trace that
+                // led here showed OUR OWN setActive(true) failing with real,
+                // never-before-diagnosed AVAudioSession errors ("Session
+                // activation failed", "Must call ... before calling this
+                // method") right as `RTCAudioSession`'s shared
+                // activationCount climbed anyway from an INDEPENDENT
+                // increment (WebRTC's own internal InitPlayOrRecord) —
+                // exactly the state a later native AudioUnit Start() then
+                // rejected with a generic CoreAudio error. Only
+                // `localizedDescription` was logged before, which is
+                // apparently redacted client-side for some of these
+                // messages — the numeric code and the session's own
+                // activationCount/isActive at the moment of failure are not.
+                let nsErr = error as NSError
+                print("[CallKitProvider] setActive retry \(attempt) site=\(logSite) code=\(nsErr.code) activationCount=\(rtcSession.activationCount) isActive=\(rtcSession.isActive ? 1 : 0): \(error.localizedDescription)")
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
             }
         }
@@ -337,7 +554,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // AudioCapture.start() throwing, which produces a user-visible log
         // and eventually a call-quality banner. This is the lesser evil vs.
         // a silent dead call.
-        print("[CallKitProvider] setActive never confirmed after 4 attempts — forcing engine start (session may be marginal)")
+        print("[CallKitProvider] setActive never confirmed after 4 attempts site=\(logSite) — forcing engine start (session may be marginal)")
+        rtcSession.unlockForConfiguration()
         onAudioSessionActivated?()
     }
 
@@ -350,34 +568,67 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // Omitting this caused resource leaks (audio engine, WS handlers,
         // video capture session) on system resets (rare but reproducible
         // when switching between apps that use CallKit concurrently).
-        callKitRejectedUUIDs.removeAll()
+        ledger.clearRejected()
         onProviderReset?()
     }
 
     public func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
-        let audioSession = AVAudioSession.sharedInstance()
+        // W-RTCLOCKMIGRATE-2 (2026-09-10) — this was the one remaining raw
+        // `AVAudioSession.sharedInstance().setCategory(...)` call in this
+        // file made OUTSIDE both `provider(_:didActivate:)` (CallKit's own
+        // blessed "outside" channel, forwarded via `audioSessionDidActivate`)
+        // and `RTCAudioSession`'s lock — invisible to its bookkeeping
+        // regardless of the locked `activateAudioSession` call moments
+        // later. Found via a best-practices audit matching a pattern
+        // several Apple Developer Forums threads describe: an app's own
+        // AVAudioSession mutation outside both the CallKit delegate
+        // callbacks and RTCAudioSession's lock can race CallKit's own
+        // internal activation — silently no-op'ing it, or leaving a later
+        // AudioUnit Start() blocked against a HAL state that never
+        // converged. Matches two of the three failure signatures
+        // reproduced live tonight. Migrated to the same locked path
+        // `activateAudioSession` already uses; timing is unchanged — this
+        // still runs before `reportOutgoingCall`/`fulfill()`.
+        let rtcSession = RTCAudioSession.sharedInstance()
         #if !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        rtcSession.lockForConfiguration()
+        do {
+            try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        } catch {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`; log the OSStatus, keep the flow.
+            print("[CallKitProvider] setCategory fail site=start code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
+        rtcSession.unlockForConfiguration()
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
+        // W-CKSTARTACTIVATE (2026-09-09) — the answer side has had this
+        // exact self-activation fallback since build 597 (see
+        // activateAudioSession's kdoc for the root cause it was built for);
+        // this side never got it. Same asymmetry-is-the-bug reasoning
+        // applies unchanged: fulfill() has already closed the start
+        // transaction, so setActive(true) no longer races it.
+        Task {
+            await activateAudioSession(logSite: "start")
+        }
     }
 
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID)")
+        // I8 FIX — truncated uuid, see above.
+        print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID.uuidString.prefix(8))…")
         Task {
             await onAnswerCall?(action.callUUID)
             action.fulfill()
-            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID)")
+            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,
             // so setActive(true) no longer hits the "session activation failed"
             // race. Idempotent with didActivate if it does arrive.
-            await activateAudioSessionForAnswer()
+            await activateAudioSession(logSite: "answer")
         }
     }
 
@@ -395,24 +646,61 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
     }
 
+    /// W-CKHOLD (2026-09-02) — B5: the system (another CallKit call
+    /// becoming active, or Siri) places THIS call on/off hold. Previously
+    /// unimplemented, so CallKit's own Hold action was requested and never
+    /// fulfilled or failed — it just silently timed out, and audio/video
+    /// kept flowing while the system UI believed the call was held.
+    /// Mirrors the shape of every other `perform` handler in this file:
+    /// hand the UUID + new hold state to the app layer, then fulfill.
+    public func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
+        Task {
+            await onHoldChanged?(action.callUUID, action.isOnHold)
+            action.fulfill()
+        }
+    }
+
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         // W464 — keep these options in sync with
         // AudioProcessingPipeline.configureForVoIP(): if CallKit installs
         // a poorer category (e.g. no .defaultToSpeaker) it silently
         // downgrades the routing the app just configured.
+        // W-NOMIXOPTION (2026-09-10) — see `activateAudioSession`'s own kdoc;
+        // kept in sync per this method's own W464 comment above.
         #if !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
-        try? audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
-        try? audioSession.setActive(true)
+        do {
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
+        } catch {
+            // W-SIGSWALLOW (2026-09-01) — was `try?`; log the OSStatus, keep the flow.
+            print("[CallKitProvider] setCategory fail site=didActivate code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
+        do {
+            try audioSession.setActive(true)
+        } catch {
+            // W-SIGSWALLOW — same: `onAudioSessionActivated` still fires so
+            // the engine start surfaces the real failure in its own log.
+            print("[CallKitProvider] setActive fail site=didActivate code=\((error as NSError).code) err=\(error.localizedDescription)")
+        }
+        // W-CKAUDIOFORWARD (2026-09-09) — this delegate callback IS CallKit
+        // telling us the session just activated; forward it to WebRTC's
+        // audio session the same way activateAudioSession(logSite:) above
+        // does for the self-activation path, so both routes into an active
+        // session reach WebRTC identically. useManualAudio is untouched.
+        RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
         // W464 — the session is now active: this is the moment
         // CallService may safely start its AVAudioEngine capture/playback.
         onAudioSessionActivated?()
     }
 
     public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        // W-CKAUDIOFORWARD (2026-09-09) — symmetric with the activate side;
+        // WebRTC's audio session needs to hear this deactivation too, not
+        // just this app's own onAudioSessionDeactivated flag flip.
+        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
         // System took the audio session — engine should pause mic capture.
         onAudioSessionDeactivated?()
     }

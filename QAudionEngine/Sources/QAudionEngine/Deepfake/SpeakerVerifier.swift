@@ -81,14 +81,45 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// `AudioConstants` VAD constant to derive this from at this layer, so
     /// the same already-validated NUMERIC value is used directly rather
     /// than re-deriving/guessing a new one.
-    private static let voiceActivityRmsThreshold: Float = 360.0 / 32_768.0
+    ///
+    /// W-GUARDIAN3SIG (2026-09-11) — widened from `private` to `internal` so
+    /// `ContactVoiceVerifier`'s whole-tick VAD gate (mirroring Android's
+    /// `DeepfakeMonitor.feed()` silence skip) compares against the SAME
+    /// normalized-float threshold this class already uses, instead of a
+    /// second hand-duplicated magic number.
+    static let voiceActivityRmsThreshold: Float = 360.0 / 32_768.0
 
     private let embedder: any SpeakerEmbedding
     private let lock = NSLock()
 
+    /// AS-Norm impostor-cohort back-end for `computeAsNormScore()` — see
+    /// that method's kdoc and `SpeakerCohortNormalizer`'s class kdoc for why
+    /// this exists and what it measurably buys `SpeakerChangeDetector`.
+    /// `nil` (the default, and what every call site other than
+    /// `ContactVoiceVerifier` passes) simply disables AS-Norm scoring for
+    /// this instance — `computeAsNormScore()` returns `nil` and callers fall
+    /// back to the raw score, same as when the asset fails to load at
+    /// runtime. 2026-09-02 port of Android `SpeakerVerifier.kt`'s
+    /// `cohortNormalizer` constructor parameter.
+    private let cohortNormalizer: SpeakerCohortNormalizer?
+
     private var state: State = .idle
     private var enrollmentFrames: [[Float]] = []
     private var storedTemplate: [Float]?
+
+    /// Bumped on every assignment to `storedTemplate` — the invalidation key
+    /// for `cachedEnrollStats` below. Android's equivalent memoization keys
+    /// off `activeTemplate`'s ARRAY REFERENCE IDENTITY (every assignment
+    /// site there rebinds to a new `FloatArray` rather than mutating one in
+    /// place, so `===` is a correct, dependency-free invalidation signal).
+    /// Swift's `[Float]` is a value type with no `===` operator, so the same
+    /// "every assignment is a fresh value" property is expressed here as a
+    /// monotonic counter instead — every one of the three sites that assigns
+    /// `storedTemplate` (`finishEnrollment`, `importTemplate`,
+    /// `completeAutoEnrollment`) increments this alongside the assignment,
+    /// so a stale cache entry's version can never coincidentally match a
+    /// later, different template.
+    private var templateVersion = 0
     private let enrollmentMinFrames = 150  // ~3 seconds at 20ms/frame
 
     // MARK: - Tier 2 (auto-enrollment + continuous verification) state
@@ -102,6 +133,20 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// cheap-read accessor exists yet — iOS's `verify(pcmFrame:)` is a
     /// DIFFERENT method serving Tier 1's different, raw-cosine contract).
     private var cachedVerificationScore: Float = 0.5
+
+    /// AS-Norm score from the SAME pass that set `cachedVerificationScore`
+    /// via `computeVerificationScore()` — see `computeAsNormScore()`. `nil`
+    /// whenever `cohortNormalizer` is absent, its asset failed to load, or
+    /// no score has been computed yet this call. Mirrors Android's
+    /// `cachedAsNormScore`.
+    private var cachedAsNormScore: Float?
+
+    /// Enroll-side (template-against-cohort) AS-Norm stats, memoized against
+    /// `templateVersion` at the time they were computed — see that
+    /// property's kdoc for why a version counter stands in for Android's
+    /// reference-identity check here.
+    private var cachedEnrollStatsTemplateVersion: Int?
+    private var cachedEnrollStats: (mean: Float, std: Float)?
 
     /// Captures what the auto-enrollment completion routine needs to run
     /// CAM++ inference OUTSIDE `lock` — mirrors Android's
@@ -123,8 +168,15 @@ public final class SpeakerVerifier: @unchecked Sendable {
     ///   the whole suite red for 40+ runs, hiding real breakage elsewhere.
     ///   The production path is byte-identical; only the test target ever
     ///   passes anything else.
-    public init(embedder: any SpeakerEmbedding) {
+    /// - Parameter cohortNormalizer: AS-Norm back-end for
+    ///   `computeAsNormScore()` — see that property's kdoc. `nil` by
+    ///   default; only `ContactVoiceVerifier` (Tier 2 / Feature B) passes a
+    ///   real one, matching Android's `VoicePrintBridgeImpl`-only wiring.
+    ///   Every other call site (Tier 1 manual-enrollment-only instances)
+    ///   takes the default and is unaffected.
+    public init(embedder: any SpeakerEmbedding, cohortNormalizer: SpeakerCohortNormalizer? = nil) {
         self.embedder = embedder
+        self.cohortNormalizer = cohortNormalizer
     }
 
     // MARK: - Manual enrollment (Tier 1 / Feature A)
@@ -163,6 +215,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
         }
         lock.lock()
         storedTemplate = embedding
+        templateVersion += 1
         state = .ready
         lock.unlock()
         return true
@@ -214,6 +267,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
     public func importTemplate(_ template: [Float]) {
         lock.lock()
         storedTemplate = template
+        templateVersion += 1
         state = .ready
         lock.unlock()
     }
@@ -231,6 +285,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
         verificationBuffer.removeAll()
         autoEnrollContactId = nil
         cachedVerificationScore = 0.5
+        cachedAsNormScore = nil
         lock.unlock()
     }
 
@@ -311,7 +366,56 @@ public final class SpeakerVerifier: @unchecked Sendable {
         let similarity = cosineSimilarity(liveEmbedding, template)
         let vScore = min(1.0, max(0.0, (similarity + 1.0) / 2.0))
         cachedVerificationScore = vScore
+        cachedAsNormScore = computeAsNormScoreLocked(liveEmbedding: liveEmbedding, template: template, rawScore: similarity)
         return vScore
+    }
+
+    /// AS-Norm-normalized companion to `computeVerificationScore()` — a pure
+    /// read of the value that method already cached as a side effect of its
+    /// ONE embed call, exactly like `verify(pcmFrame:)`'s Tier-1 contract
+    /// reads a value someone else already computed. MUST be called AFTER
+    /// `computeVerificationScore()` on the same tick, never as a substitute
+    /// for it — `computeVerificationScore()` always recomputes the embedding
+    /// unconditionally (no "already computed this tick" cache-hit guard, see
+    /// its own kdoc and the class-level thread-safety note above for the
+    /// real-device lock-contention regression that shape of double-invocation
+    /// has caused before), so calling this method first, or on its own, only
+    /// ever returns a stale or `nil` value — it never triggers a fresh pass
+    /// itself.
+    ///
+    /// `nil` whenever `computeVerificationScore()` itself was `nil` this tick
+    /// (not ready, no template, window not full, silent window), OR no
+    /// `cohortNormalizer` was injected, OR its asset failed to load — a
+    /// caller MUST fall back to the raw score in that last case, exactly the
+    /// same defensive pattern this codebase already uses everywhere a model
+    /// asset might be missing. Mirrors Android's `computeAsNormScore()`.
+    public func computeAsNormScore() -> Float? {
+        lock.lock(); defer { lock.unlock() }
+        return cachedAsNormScore
+    }
+
+    /// Must be called with `lock` held. `nil` when `cohortNormalizer` is
+    /// absent or its asset didn't load. `rawScore` is the SAME cosine
+    /// already computed by the caller — this only adds cohort-relative
+    /// normalization on top, not a second inference.
+    ///
+    /// The enroll side (`template`-against-cohort) is memoized against
+    /// `templateVersion` — see that property's kdoc — so a long call
+    /// re-scoring the same template every tick pays the cohort dot-products
+    /// for the LIVE embedding only, not for the template too.
+    private func computeAsNormScoreLocked(liveEmbedding: [Float], template: [Float], rawScore: Float) -> Float? {
+        guard let normalizer = cohortNormalizer else { return nil }
+        guard let testStats = normalizer.cohortStats(liveEmbedding) else { return nil }
+        let enrollStats: (mean: Float, std: Float)?
+        if cachedEnrollStatsTemplateVersion == templateVersion {
+            enrollStats = cachedEnrollStats
+        } else {
+            enrollStats = normalizer.cohortStats(template)
+            cachedEnrollStatsTemplateVersion = templateVersion
+            cachedEnrollStats = enrollStats
+        }
+        guard let enrollStats else { return nil }
+        return normalizer.asNormScore(rawScore: rawScore, testStats: testStats, enrollStats: enrollStats)
     }
 
     // MARK: - Internals
@@ -338,6 +442,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
             return
         }
         storedTemplate = embedding
+        templateVersion += 1
         verificationBuffer.removeAll()
         cachedVerificationScore = 0.5
         state = .ready
@@ -357,7 +462,13 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// filter; acceptable for a speaker-embedding frontend the same way
     /// it's acceptable for the deepfake models that already do this. No-op
     /// if already at 16kHz.
-    private static func resampleTo16k(_ signal: [Float], fromHz: Int) -> [Float] {
+    ///
+    /// W-GUARDIAN3SIG (2026-09-11) — widened from `private` to `internal`
+    /// so `ContactVoiceVerifier` (same module, different file) can reuse
+    /// this exact, already-accepted resampler for the deepfake classifier's
+    /// own 16kHz input requirement instead of duplicating the block-average
+    /// logic a second time. No behavior change to this function itself.
+    static func resampleTo16k(_ signal: [Float], fromHz: Int) -> [Float] {
         guard fromHz != KaldiFbankExtractor.sampleRate, !signal.isEmpty else { return signal }
         let factor = max(fromHz / KaldiFbankExtractor.sampleRate, 1)
         let outLen = signal.count / factor
@@ -372,7 +483,11 @@ public final class SpeakerVerifier: @unchecked Sendable {
         return out
     }
 
-    private static func pcmToFloat(_ data: Data) -> [Float] {
+    /// W-GUARDIAN3SIG (2026-09-11) — widened from `private` to `internal` so
+    /// `ContactVoiceVerifier` (same module, different file) can reuse this
+    /// exact Int16→Float conversion for its own 16kHz rolling buffer instead
+    /// of duplicating it. No behavior change to this function itself.
+    static func pcmToFloat(_ data: Data) -> [Float] {
         let count = data.count / 2
         guard count > 0 else { return [] }
         var floats = [Float](repeating: 0, count: count)

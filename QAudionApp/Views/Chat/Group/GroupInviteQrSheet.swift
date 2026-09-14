@@ -137,7 +137,7 @@ struct GroupInviteQrSheet: View {
                 Spacer(minLength: 0)
                 Button {
                     UIPasteboard.general.string = groupId.uuidString
-                    snackbar?.show(.init(text: "ID gruppo copiato.", severity: .info))
+                    snackbar?.show(.init(text: String(localized: "group_invite_qr.id_copied", defaultValue: "ID gruppo copiato.", comment: "Snackbar — the group's technical ID was copied to the clipboard"), severity: .info))
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.system(size: 14, weight: .regular))

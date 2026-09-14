@@ -10,6 +10,12 @@ public protocol AccountApi {
     /// The hash value travels on the wire under the `phone_number` key to match
     /// the Android/server contract (`LoginRequest`).
     func login(phoneHash: String, password: String, deviceName: String) async throws -> AuthCredentials
+    /// Login with PBX extension number + password + device name. Restricted
+    /// server-side to Fast Setup accounts (accounts with no real phone
+    /// number) — a manual-entry alternative to the QR scan/upload, for
+    /// reviewers (App Store, Google Play) or anyone else who cannot scan a
+    /// QR image. Matches `POST /api/v1/auth/login/extension`.
+    func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials
     /// Refresh access token.
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair
     /// Logout (revokes all tokens).
@@ -337,4 +343,42 @@ public struct UserProfile: Codable {
         self.phoneHash = phoneHash
         self.dialExtension = dialExtension
     }
+}
+
+// MARK: - Security: Token Redaction
+// Prevent sensitive tokens from leaking via Swift's default reflection in logs.
+
+extension OtpAuthResult: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "OtpAuthResult(userId: \(userId), deviceId: \(deviceId), accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)), tokenType: \(String(describing: tokenType)), assignedExtension: \(String(describing: assignedExtension)), emailPendingVerification: \(String(describing: emailPendingVerification)))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension PublicUser: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "PublicUser(userId: \(userId), displayName: \(String(describing: displayName)), avatarUrl: \(String(describing: avatarUrl)), statusMessage: \(String(describing: statusMessage)), extensionNumber: \(String(describing: extensionNumber)), phoneNumber: \(phoneNumber == nil ? "nil" : "<redacted>"))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension UserProfile: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "UserProfile(userId: \(userId), displayName: \(String(describing: displayName)), avatarUrl: \(String(describing: avatarUrl)), statusMessage: \(String(describing: statusMessage)), phoneHash: \(phoneHash == nil ? "nil" : "<redacted>"), dialExtension: \(String(describing: dialExtension)))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension AuthCredentials: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "AuthCredentials(userId: \(userId), deviceId: \(deviceId), accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)))"
+    }
+    public var debugDescription: String { description }
+}
+
+extension AuthTokenPair: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "AuthTokenPair(accessToken: <redacted>, refreshToken: \(refreshToken == nil ? "nil" : "<redacted>"), expiresIn: \(String(describing: expiresIn)))"
+    }
+    public var debugDescription: String { description }
 }

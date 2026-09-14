@@ -17,6 +17,16 @@ import NetworkExtension
 
 struct VpnToggleChip: View {
     @ObservedObject var vpnService: VpnService
+    /// Entitlements Task 5 — read directly from the environment for
+    /// reactivity; see `QAudionApp.swift`'s injection site doc. Gated
+    /// centrally HERE rather than at each of this chip's 6 real call sites
+    /// (HomeView, CallHistoryView, ChatListScreen, ContactsScreen,
+    /// SettingsScreen, plus the chip's own preview) — one fix covers all
+    /// of them and none can drift out of sync.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    @EnvironmentObject private var appState: AppState
+    /// Entitlements Task 5 — drives `.sheet(isPresented:)` for `UpgradeSheet`.
+    @State private var showUpgradeSheet = false
 
     /// The user's current session access token.
     let accessToken: String
@@ -25,24 +35,62 @@ struct VpnToggleChip: View {
 
     // Manual exit selection. '' = Auto (NodePicker best). Persisted in UserDefaults,
     // mirroring Desktop `vpnPreferredNodeId` and Android's node picker.
-    @AppStorage("vpn.preferredNodeId") private var preferredNodeId: String = ""
+    //
+    // W-CHATDEADLOCK (2026-08-19) — was `@AppStorage`. This chip is placed
+    // on 6 screens (see doc above), several of which (ChatListScreen,
+    // HomeView) stay instantiated as navigation ancestors underneath an
+    // active call, same as ChatDetailScreen's own `@AppStorage` removed in
+    // the same pass (see that file's W-CHATDEADLOCK note for the full
+    // mechanism — SwiftUI's own UserDefaults-change observer racing an
+    // in-progress ForEach/Observation update on the AttributeGraph lock,
+    // device-log-confirmed SIGKILL). `preferredNodeId` is read reactively
+    // only inside `pickerSheet`, which dismisses itself immediately on
+    // selection, so a plain `@State` synced from UserDefaults when the
+    // picker opens is enough; `chooseNode(in:)` (also called from the
+    // connect path, which can run without the picker ever having been
+    // opened this session) reads UserDefaults directly so it never sees a
+    // stale un-synced default.
+    @State private var preferredNodeId: String = ""
+
+    private static let preferredNodeIdKey = "vpn.preferredNodeId"
+
+    private static func loadPreferredNodeId() -> String {
+        UserDefaults.standard.string(forKey: preferredNodeIdKey) ?? ""
+    }
+
+    private func setPreferredNodeId(_ value: String) {
+        preferredNodeId = value
+        UserDefaults.standard.set(value, forKey: Self.preferredNodeIdKey)
+    }
     @State private var nodes: [VpnNode] = []
     @State private var showPicker = false
     @State private var pickerLoading = false
 
     // MARK: - Body
 
+    private var vpnUnlocked: Bool { capabilityGate.isUnlocked(.vpn) }
+
     var body: some View {
         Button(action: handleTap) {
-            HStack(spacing: 5) {
-                chipIcon
-                Text(vpnService.state.statusLabel)
-                    .font(.system(size: 12, weight: .medium))
+            // Entitlements Task 5 — Capability.vpn. This Button already
+            // owns its own tap (handleTap branches on vpnUnlocked itself,
+            // and a long-press separately opens the exit picker) — the
+            // SAME "content already has its own click" shape
+            // `GatedVisualBadge`'s own doc describes, and the exact call
+            // site (`VpnToggle`) its Android counterpart's kdoc names as
+            // the canonical example. Visual-only: dim + lock badge, no
+            // second tap target.
+            GatedVisualBadge(unlocked: vpnUnlocked) {
+                HStack(spacing: 5) {
+                    chipIcon
+                    Text(vpnService.state.statusLabel)
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(chipBackground, in: Capsule())
+                .overlay(Capsule().stroke(chipBorder, lineWidth: 1))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(chipBackground, in: Capsule())
-            .overlay(Capsule().stroke(chipBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .disabled(busy || vpnService.state.isConnecting)
@@ -50,10 +98,19 @@ struct VpnToggleChip: View {
         // Long-press the chip to choose the exit. highPriorityGesture (not
         // simultaneous) so a long-press opens the picker WITHOUT also firing the
         // button's tap action (connect/disconnect); a short tap still falls through.
+        // Entitlements Task 5 — deliberately NOT gated: selecting a node here
+        // only writes `preferredNodeId` (a stored preference for the NEXT
+        // successful connect), it never itself calls `vpnService.connect`.
+        // The one path that actually establishes a tunnel is `handleTap`,
+        // which IS gated above.
         .highPriorityGesture(
             LongPressGesture(minimumDuration: 0.45).onEnded { _ in openPicker() }
         )
         .sheet(isPresented: $showPicker) { pickerSheet }
+        .sheet(isPresented: $showUpgradeSheet) {
+            UpgradeSheet(capability: .vpn)
+                .environmentObject(appState)
+        }
     }
 
     // MARK: - Icon
@@ -103,9 +160,26 @@ struct VpnToggleChip: View {
 
     private func handleTap() {
         guard !busy else { return }
-
+        // Entitlements Task 5 — Capability.vpn. Disconnecting an ALREADY
+        // -connected tunnel is never blocked, checked BEFORE the vpnUnlocked
+        // guard below on purpose: `isUnlocked` re-evaluates the claim's
+        // wall-clock `exp` on every access, so an ordinary token can lapse
+        // while the tunnel is still up. This chip is the only UI path that
+        // calls `vpnService.disconnect()` — if the lock guard ran first, a
+        // lapsed-grant user with an active tunnel would see only the
+        // upgrade sheet on tap, with no way to tear it down. A mid-session
+        // downgrade is handled by the stopAtBoundary revocation policy
+        // server/AppState-side, not by this UI-only gate refusing the
+        // disconnect action itself.
         if case .connected = vpnService.state {
             vpnService.disconnect()
+            return
+        }
+
+        // Starting a NEW connection still requires the capability — only
+        // the disconnect path above bypasses the lock.
+        guard vpnUnlocked else {
+            showUpgradeSheet = true
             return
         }
 
@@ -140,6 +214,7 @@ struct VpnToggleChip: View {
     // MARK: - Manual exit picker
 
     private func openPicker() {
+        preferredNodeId = Self.loadPreferredNodeId()
         showPicker = true
         guard nodes.isEmpty else { return }
         pickerLoading = true
@@ -150,9 +225,13 @@ struct VpnToggleChip: View {
     }
 
     /// The preferred node when it's still in the live list; nil → caller uses auto-best.
+    /// Reads UserDefaults directly (not the `@State` mirror) — called from
+    /// the connect path too, which can run without the picker ever having
+    /// been opened this session.
     private func chooseNode(in list: [VpnNode]) -> VpnNode? {
-        guard !preferredNodeId.isEmpty else { return nil }
-        return list.first { $0.id == preferredNodeId }
+        let id = Self.loadPreferredNodeId()
+        guard !id.isEmpty else { return nil }
+        return list.first { $0.id == id }
     }
 
     @ViewBuilder
@@ -160,14 +239,14 @@ struct VpnToggleChip: View {
         NavigationStack {
             List {
                 Button {
-                    preferredNodeId = ""
+                    setPreferredNodeId("")
                     showPicker = false
                 } label: {
                     pickerRow(title: "Auto", subtitle: "Best node · latency + load", selected: preferredNodeId.isEmpty)
                 }
                 ForEach(nodes) { n in
                     Button {
-                        preferredNodeId = n.id
+                        setPreferredNodeId(n.id)
                         showPicker = false
                     } label: {
                         pickerRow(
@@ -228,9 +307,14 @@ private extension VpnNode {
 // MARK: - Preview
 
 #Preview {
+    // Entitlements Task 5 — this chip now reads `@EnvironmentObject var
+    // capabilityGate: CapabilityGate`, so the preview needs one injected
+    // or SwiftUI fatal-errors at render time.
     VpnToggleChip(
         vpnService: VpnService(),
         accessToken: "preview-token"
     )
     .padding()
+    .environmentObject(AppState())
+    .environmentObject(CapabilityGate.previewInstance())
 }

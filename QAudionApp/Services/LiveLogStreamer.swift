@@ -24,8 +24,14 @@ import CryptoKit
 /// **What it does (only when consented):** every `flushIntervalSeconds`
 /// (default 3s) the streamer reads new entries from `RuntimeLogSink`
 /// since the last successful flush, formats them as a UTF-8 .log
-/// chunk, and POSTs to `/api/v1/files/upload`. Each chunk's filename
-/// is:
+/// chunk, and uploads it via `storageApi.uploadFile` — the shared
+/// tus-always pipeline (`/api/v1/files/tus`, see W-STORAGESPLIT on
+/// `BCryptoStorageApiImpl.uploadFile`), NOT the legacy multipart
+/// `/api/v1/files/upload` endpoint this comment used to (incorrectly)
+/// describe. That mismatch is what let these chunks slip past the
+/// server's SRV-M2 telemetry tagging for years (fixed W-TUSFILENAME,
+/// 2026-09-08, by finally sending `filename` in the tus create's
+/// Upload-Metadata). Each chunk's filename is:
 ///   `qaudion-live-<sessionHmac8>-<bootSession>-<seqZeroPad6>.log`
 /// The maintainer reconstructs the timeline by listing files
 /// matching the prefix sorted by name. The user-id prefix is an
@@ -38,7 +44,8 @@ import CryptoKit
 /// parameter TYPE in a method signature on a new file BREAKS THE
 /// BUILD silently (Swift 6 strict concurrency Sendable inference
 /// explodes on AppState's many @Published properties). The closure
-/// approach captures only the specific values needed (token, userId)
+/// approach captures only the specific values/behaviors needed (token,
+/// userId, and — since 2026-09-10 — a way to ask for a token refresh)
 /// without dragging the whole AppState type into the signature.
 /// See CLAUDE.md "Hard-won lesson 16" for the full story.
 ///
@@ -65,29 +72,25 @@ public final class LiveLogStreamer {
 
     /// SECURITY C-10 — current consent state.
     ///
-    /// An EXPLICIT user choice (Settings toggle → `setEnabled`) always
-    /// wins. When the user has never chosen, the default is build-channel
-    /// aware:
-    ///   • public App Store build → OFF (GDPR / C-10 intent for end users)
-    ///   • TestFlight / sandbox / dev → ON (it is a testing channel where
-    ///     diagnostics are expected; this also restores the maintainer
-    ///     trail when the app is otherwise undebuggable — e.g. a Settings
-    ///     crash means the in-app toggle is unreachable).
+    /// MASVS-PRIVACY remediation (2026-08-20): an EXPLICIT user choice
+    /// (Settings → Diagnostica → toggle → `setEnabled`) always wins. When
+    /// the user has never chosen, the default is now unconditionally
+    /// `false` on EVERY build channel — including TestFlight. Before this
+    /// fix, the default was `!isAppStoreBuild`, which resolved `true` for
+    /// TestFlight (the app's only real distribution channel today, per
+    /// `CLAUDE.md`), with `setEnabled()` having zero reachable UI call
+    /// sites anywhere in the app — i.e. the pump was silently on for every
+    /// real user with no way to see or disable it, contradicting this very
+    /// file's "opt-in" framing. See
+    /// the MASVS-PRIVACY remediation of 2026-08-20 (assessment §1.1) for
+    /// the full writeup. A real Settings toggle now exists (`PrivacySettingsScreen`,
+    /// "Log diagnostici in tempo reale" under DIAGNOSTICA) and is the only
+    /// way this ever becomes `true`.
     public static var isEnabled: Bool {
         if let explicit = UserDefaults.standard.object(forKey: consentKey) as? Bool {
             return explicit
         }
-        return !isAppStoreBuild
-    }
-
-    /// True only for the public App Store receipt ("receipt").
-    /// TestFlight/sandbox receipts are "sandboxReceipt"; dev/simulator
-    /// has no receipt URL → both treated as non-App-Store (debuggable).
-    private static var isAppStoreBuild: Bool {
-        guard let name = Bundle.main.appStoreReceiptURL?.lastPathComponent else {
-            return false
-        }
-        return name == "receipt"
+        return false
     }
 
     /// SECURITY C-10 — flip the consent flag. When disabled we also
@@ -96,7 +99,23 @@ public final class LiveLogStreamer {
         UserDefaults.standard.set(enabled, forKey: consentKey)
         if !enabled {
             LiveLogStreamer.shared.stop()
+            return
         }
+        // W-CONSENTLATESTART (2026-08-29) — turning consent ON must actually
+        // START the pump. It used to write the preference and nothing else,
+        // and `start(serverUrl:getToken:getUserId:)` runs exactly once per
+        // launch (from `AppState`), where it returns immediately if consent
+        // was off at that moment. So the only way to ever begin shipping was
+        // to enable the toggle and then RELAUNCH the app — which nobody
+        // knows to do, and which made the feature look silently broken:
+        // reported live 2026-08-29 ("il toggle è acceso ma i log non
+        // salgono"), with the server confirming the device never even
+        // attempted an upload.
+        //
+        // Safe because `startIfConfigured` re-checks consent itself and does
+        // nothing at all until `start` has supplied the endpoint and the
+        // providers.
+        LiveLogStreamer.shared.startIfConfigured()
     }
 
     public let bootSessionId: String = UUID().uuidString.lowercased()
@@ -114,16 +133,41 @@ public final class LiveLogStreamer {
 
     public typealias TokenProvider = @MainActor () -> String?
     public typealias UserIdProvider = @MainActor () -> String?
+    /// W-LIVELOGAUTHREFRESH (2026-09-10) — ask the caller (AppState) to run
+    /// its OWN existing, single-flight-coalesced refresh cascade
+    /// (`runProactiveRefresh()`) and returns once it settles, success or
+    /// failure either way. Deliberately does NOT hand this streamer a
+    /// refresh token or a way to run its own refresh cascade — this
+    /// process already has exactly one coalesced refresh path guarding a
+    /// single-use refresh token against replay (see `runProactiveRefresh`'s
+    /// own kdoc); a second, independent refresh attempt from this
+    /// low-priority telemetry pipeline could race it and burn that
+    /// single-use token out from under a real, in-flight refresh. See
+    /// [uploadChunk] for how a 401 uses this.
+    public typealias RefreshRequestProvider = @MainActor () async -> Void
 
     private var serverUrl: String?
     private var tokenProvider: TokenProvider?
     private var userIdProvider: UserIdProvider?
+    private var refreshRequestProvider: RefreshRequestProvider?
     private var timer: Timer?
     private var lastSeq: Int64 = 0
     private var chunkSeq: Int = 0
     private var inflight: Bool = false
     private var lastUploadStartedAt: Date = Date.distantPast
     private let minSecondsBetweenUploads: TimeInterval = 2.0
+    // W-LIVELOG429 (2026-08-29): flushOnce() used to retry every fixed
+    // flushIntervalSeconds (3s) regardless of WHY the previous attempt
+    // failed. Against a server-side rate limit (HTTP 429) that just
+    // re-triggers the same 429 every 3s forever, confirmed live — a
+    // device logged 20+ consecutive "TUS create failed: HTTP 429" lines
+    // three seconds apart. Exponential backoff (with jitter, capped)
+    // only on 429/5xx so a transient network blip doesn't get penalized
+    // the same as sustained rate-limiting.
+    private var backoffUntil: Date = Date.distantPast
+    private var consecutiveThrottleFailures: Int = 0
+    private static let backoffBaseSeconds: TimeInterval = 3.0
+    private static let backoffMaxSeconds: TimeInterval = 60.0
     private var isStarted: Bool = false
     
     private let pathMonitor = NWPathMonitor()
@@ -135,16 +179,30 @@ public final class LiveLogStreamer {
     /// — NEVER AppState directly (see file header for why).
     public func start(serverUrl: String,
                       getToken: @escaping TokenProvider,
-                      getUserId: @escaping UserIdProvider) {
+                      getUserId: @escaping UserIdProvider,
+                      requestTokenRefresh: @escaping RefreshRequestProvider) {
+        // W-CONSENTLATESTART (2026-08-29) — retain the endpoint and the two
+        // provider closures BEFORE the consent gate, so consent granted
+        // later in the same launch can start the pump without waiting for a
+        // relaunch. This is deliberately not a weakening of SECURITY C-10:
+        // the gate below still returns before ANY observable side effect —
+        // no tee, no timer, no path monitor, no upload, no network of any
+        // kind. What is kept is four references already held elsewhere in
+        // this process (the server URL the app is talking to anyway, and
+        // three closures reading/driving state AppState owns), which
+        // produce nothing on their own. Without them `setEnabled(true)` has
+        // no endpoint to ship to and the toggle stays inert for the rest of
+        // the launch.
+        self.serverUrl = serverUrl
+        self.tokenProvider = getToken
+        self.userIdProvider = getUserId
+        self.refreshRequestProvider = requestTokenRefresh
         // SECURITY C-10 — consent gate. No consent ⇒ no tee, no
         // upload, no timer, no path monitor. Returns BEFORE any
         // side effect. Default is false (key absent ⇒ false).
         guard LiveLogStreamer.isEnabled else { return }
         if isStarted { return }
         isStarted = true
-        self.serverUrl = serverUrl
-        self.tokenProvider = getToken
-        self.userIdProvider = getUserId
         
         pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
@@ -157,6 +215,24 @@ public final class LiveLogStreamer {
         let session: String = bootSessionId
         let line: String = "LiveLogStreamer started session=" + session
         RTLog.info("livelog", line)
+    }
+
+    /// W-CONSENTLATESTART (2026-08-29) — begin shipping if, and only if,
+    /// consent is granted AND `start` has already supplied the endpoint and
+    /// providers for this launch. Called when the user grants consent from
+    /// Settings, so the toggle takes effect immediately rather than at the
+    /// next launch.
+    ///
+    /// Idempotent (`isStarted` short-circuits) and inert before `start`:
+    /// with no `serverUrl` there is nothing to ship to, and returning here
+    /// leaves the process exactly as it was.
+    public func startIfConfigured() {
+        guard LiveLogStreamer.isEnabled, !isStarted else { return }
+        guard let url = serverUrl,
+              let token = tokenProvider,
+              let user = userIdProvider,
+              let refresh = refreshRequestProvider else { return }
+        start(serverUrl: url, getToken: token, getUserId: user, requestTokenRefresh: refresh)
     }
 
     /// Fully tear down the pump. Safe to call when not started.
@@ -196,7 +272,12 @@ public final class LiveLogStreamer {
         // (`RuntimeLogSink.entriesSince` -> `redactStructured`) is the
         // load-bearing privacy control and stays UNCONDITIONAL: returning
         // here skips an UPLOAD, never a scrub. Redaction is never flagged.
-        guard FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", LiveLogStreamer.isEnabled) else { return }
+        // FIX-19 (2026-09-12): consent is ANDed with the remote flag, not
+        // used as its default — a remote `true` could otherwise replace a
+        // local `false` (FeatureFlags overlay wins). Harmless today because
+        // the timer only exists past the consent guard in start(), but a
+        // future refactor must not be able to flip a non-consented device on.
+        guard LiveLogStreamer.isEnabled, FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", true) else { return }
         if inflight {
             skippedDueToInflight += 1
             return
@@ -204,6 +285,7 @@ public final class LiveLogStreamer {
         let now: Date = Date()
         let elapsed: TimeInterval = now.timeIntervalSince(lastUploadStartedAt)
         if elapsed < minSecondsBetweenUploads { return }
+        if now < backoffUntil { return }
 
         guard let serverUrlLocal = serverUrl,
               let getToken = tokenProvider,
@@ -321,13 +403,34 @@ public final class LiveLogStreamer {
     /// Bound for the watchdog above — see its comment for why it exists.
     private static let uploadTimeoutSeconds: UInt64 = 12
 
+    /// W-LIVELOG429 — true for a rate-limited (429) or server-error (5xx)
+    /// TUS response, the cases worth backing off from. A create/patch/head
+    /// failure with any other status (network drop, 401, 404, ...) is left
+    /// on the normal flushIntervalSeconds cadence instead.
+    private static func isThrottleStatus(_ error: Error) -> Bool {
+        httpStatus(of: error).map { $0 == 429 || (500...599).contains($0) } ?? false
+    }
+
+    /// W-LIVELOGAUTHREFRESH — extracted out of `isThrottleStatus` so the
+    /// 401 check in `uploadChunk` shares the same status-code extraction
+    /// instead of duplicating the switch.
+    private static func httpStatus(of error: Error) -> Int? {
+        switch error {
+        case TusUploadClient.TusError.createFailed(let c): return c
+        case TusUploadClient.TusError.patchFailed(let c): return c
+        case TusUploadClient.TusError.headFailed(let c): return c
+        default: return nil
+        }
+    }
+
     private func uploadChunk(serverUrl: String,
                              token: String,
                              filename: String,
                              data: Data,
                              chunkBytes: Int,
                              seq: Int,
-                             highestSeqInChunk: Int64) async {
+                             highestSeqInChunk: Int64,
+                             isRetryAfterRefresh: Bool = false) async {
         let cfg: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: cfg)
         do {
@@ -350,6 +453,7 @@ public final class LiveLogStreamer {
             // instead of retrying it on the next tick.
             lastSeq = highestSeqInChunk
             inflight = false
+            consecutiveThrottleFailures = 0
             let shouldLog: Bool = totalUploadedChunks <= 3 || (totalUploadedChunks % 50) == 0
             if shouldLog {
                 let seqStr: String = String(seq)
@@ -364,16 +468,67 @@ public final class LiveLogStreamer {
             // one the pump is waiting on, so a late-arriving failure after
             // a watchdog timeout doesn't double-count.
             guard chunkSeq == seq else { return }
+            // W-LIVELOGAUTHREFRESH (2026-09-10) — a 401 here almost always
+            // means this process's access token expired with no unrelated
+            // API call around to trigger AppState's own reactive refresh:
+            // this throwaway per-chunk provider (`BackendConfig.pinned`,
+            // just above) has no refresh token and no device-renew fallback
+            // of its own, by design (see `RefreshRequestProvider`'s kdoc for
+            // why it stays that way). Ask AppState to run its EXISTING
+            // single-flight-coalesced refresh instead of trying to refresh
+            // independently, then retry this one chunk once with whatever
+            // token comes out the other side. `isRetryAfterRefresh` bounds
+            // this to exactly one attempt — a device whose refresh token is
+            // ALSO dead (or offline) falls straight through to the normal
+            // failure/backoff path below instead of looping.
+            if !isRetryAfterRefresh,
+               LiveLogStreamer.httpStatus(of: error) == 401,
+               let refresh = refreshRequestProvider,
+               let getToken = tokenProvider {
+                await refresh()
+                if let freshToken = getToken(), freshToken != token {
+                    await uploadChunk(
+                        serverUrl: serverUrl, token: freshToken, filename: filename,
+                        data: data, chunkBytes: chunkBytes, seq: seq,
+                        highestSeqInChunk: highestSeqInChunk, isRetryAfterRefresh: true)
+                    return
+                }
+            }
             failedUploads += 1
             inflight = false
+            if LiveLogStreamer.isThrottleStatus(error) {
+                consecutiveThrottleFailures += 1
+                let exponent: Int = min(consecutiveThrottleFailures, 5)
+                let raw: TimeInterval = LiveLogStreamer.backoffBaseSeconds * pow(2.0, Double(exponent - 1))
+                let capped: TimeInterval = min(raw, LiveLogStreamer.backoffMaxSeconds)
+                let jitter: TimeInterval = TimeInterval.random(in: 0...(capped * 0.2))
+                backoffUntil = Date().addingTimeInterval(capped + jitter)
+            } else {
+                consecutiveThrottleFailures = 0
+            }
             // W-LIVELOGHANG — the OLD catch block was silent (no RTLog at
             // all), so a run of failures was indistinguishable from the
             // pump never having started. "net" (not "livelog") so this
             // actually ships once the pump recovers, instead of being
             // filtered out by entriesSince's own livelog self-exclusion.
+            //
+            // W-LIVELOGSILENTFAIL (2026-08-21): the line used to stop at
+            // seq/totalfail — a bare failure COUNT with no REASON, so a run
+            // of failures was visible but undiagnosable from the server
+            // side (confirmed live: a call session logged
+            // "totalfail=4" and nothing else ever shipped from that
+            // device for the rest of the call, no way to tell why).
+            // `TusUploadClient.TusError` already conforms to
+            // `LocalizedError` with a real per-case message ("TUS create
+            // failed: HTTP 401", "TUS patch failed: HTTP 404", ...) — it
+            // was just never read here. Appending it costs nothing (this
+            // whole pump is already gated on explicit consent, C-10) and
+            // turns the next occurrence into an actionable line instead of
+            // a dead end.
             let seqStr: String = String(seq)
             let failStr: String = String(failedUploads)
-            let line: String = "livelog upload error seq=" + seqStr + " totalfail=" + failStr
+            let reason: String = error.localizedDescription
+            let line: String = "livelog upload error seq=" + seqStr + " totalfail=" + failStr + " reason=" + reason
             RTLog.warn("net", line)
         }
     }

@@ -47,6 +47,108 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// duplicates. Per OpenRouter glm-5.1 review 2026-05-06.
     private var sessionInitializedByCall: Set<String> = []
 
+    /// I3 (2026-08-21) — content-based dedup for the Android-JSON OFFER
+    /// responder path (`onAndroidBundleReceived`, `.offer` case). W529's
+    /// `sessionInitializedByCall` above answers "have we EVER completed a
+    /// handshake for this callId" — correct for the 30s pre-handshake
+    /// timeout and the reconnect-replay window, but it cannot distinguish a
+    /// byte-identical OFFER *retransmit* (adversarial review 2026-08-21
+    /// corrected the original attribution here: Android's app layer is
+    /// single-shot for the first handshake — one OFFER, `HANDSHAKE_TIMEOUT`,
+    /// then hangup, no resend — and `performReKey` never retries a failed
+    /// round either, it just waits for the next periodic tick with a FRESH
+    /// keypair. The real source of a byte-identical redelivery is WS/push
+    /// message-layer redelivery, e.g. the documented "W-PUSHWAKE
+    /// buffered-offer redelivery" incident, call `c74487d2` — see this
+    /// file's own W-PQCENTRY comment above `onAndroidBundleReceived`. That
+    /// still MUST replay the same cached ACCEPT, never re-derive) from a
+    /// genuinely NEW OFFER on the SAME callId carrying fresh ML-KEM/X25519
+    /// public keys (a mid-call PQC
+    /// re-key — Android's `ReKeyScheduler`/`performReKey`, WIRE_SPEC §3: a
+    /// re-key OFFER is byte-identical in *shape* to the first handshake's,
+    /// the only way to tell them apart is the key material itself).
+    /// Before this fix, every OFFER after the first for a given callId hit
+    /// `sessionInitializedByCall`'s callId-only check and was silently
+    /// answered by replaying the STALE original ACCEPT, discarding the
+    /// re-key's new keys entirely and desyncing the session key from the
+    /// peer's. See `docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md` in the
+    /// qaudion-android-new repo (cross-repo doc, not in this repo) for the
+    /// full root-cause trace. Keyed by
+    /// "<lowercased callId>#<base64 SHA-256(pqcPub || x25519Pub)>", cleared
+    /// alongside `sessionInitializedByCall` at call teardown/reuse.
+    private var processedOfferFingerprintsByCall: Set<String> = []
+    /// ACCEPT wire bundle cached per entry in
+    /// `processedOfferFingerprintsByCall`, so a retransmit of THAT SPECIFIC
+    /// OFFER round replays the matching ACCEPT bytes — never a different
+    /// round's (e.g. a stale retransmit of the ORIGINAL OFFER arriving
+    /// after a re-key must still get the ORIGINAL ACCEPT back, not the
+    /// re-key's).
+    private var acceptWireByOfferFingerprint: [String: String] = [:]
+
+    /// I3 §5 (2026-08-21) — content-based dedup for the CALLER's ACCEPT
+    /// processing (`.accept` case), symmetric to
+    /// `processedOfferFingerprintsByCall` on the responder side. The old
+    /// "Double-ACCEPT guard" deduped by callId alone — harmless while iOS
+    /// never re-sent an OFFER as caller, but `performPqcReKey` below now
+    /// does exactly that, and a genuine re-key ACCEPT (fresh ciphertext,
+    /// same callId) would otherwise hit the callId-only guard and be
+    /// silently discarded as "already initialised" — the exact same bug
+    /// class §4 fixed on the responder side, mirrored here. Keyed by
+    /// "<lowercased callId>#<base64 SHA-256(ct.pqc || ct.x25519)>".
+    private var processedAcceptFingerprintsByCall: Set<String> = []
+
+    // MARK: - CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) —
+    // transcript-bound KDF/SAS + signed re-key round freshness, OFFERER side.
+
+    /// CALL-3 — this call's own random 64-bit freshness nonce, generated ONCE
+    /// by `onAndroidCallSetupStarted` (round 1) and reused (never
+    /// regenerated) by every `performPqcReKey` round this integration
+    /// initiates. In-memory only, keyed by lowercased callId, exactly like
+    /// `callId` itself is ephemeral process-lifetime state — never persisted,
+    /// so a process restart mid-call safely starts a fresh nonce (and hence a
+    /// fresh round-1) rather than needing fragile persisted state. Cleared in
+    /// `onCallEnded`.
+    private var rekeyNonceByCall: [String: Data] = [:]
+
+    /// CALL-3 — this OFFERER's own outgoing round counter, keyed by
+    /// lowercased callId. `onAndroidCallSetupStarted` sets it to 1; each
+    /// `performPqcReKey` round increments it before building that round's
+    /// OFFER. Cleared in `onCallEnded`.
+    private var rekeyRoundByCall: [String: UInt32] = [:]
+
+    /// CALL-3 — the RESPONDER's own `(callId) -> lastAcceptedRound` ratchet:
+    /// an inbound OFFER whose signed `rekeyRound` is <= the value stored here
+    /// is a stale/replayed round and MUST be refused (never installed, never
+    /// ACCEPTed) — see the `.offer` case's round-freshness gate. Populated
+    /// only for a call whose peer negotiated `hsTranscriptBindV1` AND whose v3
+    /// signature verified; a call that never reaches that bar simply has no
+    /// entry here and every round is accepted exactly as before this fix
+    /// (content-fingerprint dedup, `processedOfferFingerprintsByCall`, is
+    /// unchanged and still the FIRST guard every OFFER passes through).
+    /// In-memory only, cleared in `onCallEnded`.
+    private var lastAcceptedRekeyRoundByCall: [String: UInt32] = [:]
+
+    /// I3 §5 — one in-flight caller-initiated mid-call re-key attempt at a
+    /// time (glare-avoidance: `performPqcReKey` only ever runs on the
+    /// device that originated the call, mirrors Android's `!isInitiator`
+    /// early-return in `performReKey`, `CallController.kt:6879`). Holds the
+    /// FRESH ephemeral keypair generated for this round — deliberately
+    /// separate from `localHybridKeysByCall`, which is zeroed and removed
+    /// right after the ORIGINAL handshake's ACCEPT lands
+    /// (`QAudionCallIntegration.swift`, `.accept` case, step 7) and must
+    /// stay that way; reusing that slot for a re-key would risk a stale
+    /// retransmit of the ORIGINAL ACCEPT decapsulating against the WRONG
+    /// (re-key) private key. `resume` resolves the awaiting continuation
+    /// exactly once — whichever of {a matching ACCEPT arrives, the attempt
+    /// times out} fires first; the loser is a no-op because both paths
+    /// clear `pendingReKeyAttempt` before calling `resume`.
+    private struct PendingReKeyAttempt {
+        let id: UUID
+        let localKeys: HybridLocalKeys
+        let resume: (Data?) -> Void
+    }
+    private var pendingReKeyAttempt: PendingReKeyAttempt?
+
     /// M-15 — handle for the 15s capability-exchange fallback timer so
     /// it can be cancelled when the call ends (otherwise it fires on a
     /// stale/unrelated subsequent call and forces it into `.fallback`).
@@ -150,22 +252,171 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// current call. Used to gate pre-negotiation event handling.
     private var isCaller: Bool = false
 
+    /// W-REKEYDISPSYNC (2026-09-11) — thread-safe read of [isCaller] for
+    /// callers outside this class (AppState's confidence-feed gate). Mirrors
+    /// Android's `CallController.currentIsInitiator()`. Same value
+    /// `performPqcReKey`'s own guard already enforces — this just lets a
+    /// caller check it BEFORE doing work that would otherwise be wasted on
+    /// the responder leg (see that property's own doc for why responder-side
+    /// confidence has no effect on a real re-key).
+    public var currentIsCaller: Bool { lock.withLock { isCaller } }
+
     /// W574x — go-live gate for directional per-direction PQC RTP sealer keys
     /// (fixes the bidirectional AES-GCM nonce reuse on the relay path). Mirrors
     /// Android `PqcHandshake.SRTP_DIR_KEYS_ENABLED` / Desktop
     /// `AndroidBundleHandshake.SRTP_DIR_KEYS_ENABLED`.
     public static let srtpDirKeysEnabled = true
 
+    /// CALL-4/HSID-002 + CALL-3 go-live gate — transcript-bound session KDF/SAS +
+    /// re-key nonce+counter freshness. Mirrors Android
+    /// `PqcHandshake.HS_TRANSCRIPT_BIND_V1_ENABLED`. Desktop's equivalent gate
+    /// was `AndroidBundleHandshake.SESSION_KDF_V4_ENABLED` as of this writing;
+    /// Desktop's own wire-key-name fix (converging its `sessionKdfV4` wire
+    /// spelling on `hsTranscriptBindV1` to match Android/iOS, see history (3)
+    /// below) was landing in parallel with this change — re-grep the Desktop
+    /// repo for its current constant name rather than trusting this comment
+    /// if it matters, since that rename's exact result was not observed here.
+    ///
+    /// HISTORY, oldest first — kept for provenance, do not delete when
+    /// editing this doc again:
+    ///
+    /// 1. DEFAULT FALSE (2026-09-02, post-implementation safety fix). This
+    ///    file originally advertised `transcriptBindV1: true` unconditionally,
+    ///    with no kill switch. The bit was implemented in parallel and
+    ///    independently on all three platforms in the same session, with no
+    ///    live cross-platform coordination, and each landed a DIFFERENT
+    ///    session-key KDF construction under the SAME wire capability bit
+    ///    position: Android's superseded the schema:2/3 info string outright,
+    ///    Desktop's ADDED to it (ct_bind || selected_fp || transcriptHash),
+    ///    and this file layered a SECOND independent HKDF pass on top of
+    ///    whichever base key schema already produced. Two peers that both
+    ///    advertised the bit would have derived DIFFERENT session keys from
+    ///    each other.
+    ///
+    /// 2. KDF/SAS + transcript-v3 BYTE LAYOUT RECONCILED (2026-09-02/03). A
+    ///    fixed-input KAT (`pqcSharedSecret`=32×0x11, `x25519Shared`=32×0x22,
+    ///    `psk`=nil, `transcriptHash`=SHA-256("qaudion-item23-kat-fixture-v1"))
+    ///    asserts `session_key =
+    ///    a70fa416996564881a7bf4cefba22ca4dc541d07d822a75f4f2f9955bac33c60`,
+    ///    `sas_words = uproot absurd shadow printer southward clockwork`:
+    ///      - Android's `TranscriptBoundKdfSasSharedKatTest.kt` — PASSING,
+    ///        live-run.
+    ///      - Desktop's `test/kat/sessionKeyV4Transcript.kat.spec.ts` —
+    ///        PASSING, run live via `npx vitest run`, byte-identical.
+    ///      - iOS's own `SessionKeyTranscriptBoundTests
+    ///        .testCrossPlatformKatFixture()` pins the SAME hex, and
+    ///        `deriveTranscriptBoundSessionKey`/`ComputeSasUseCase.invoke`
+    ///        were read line-by-line against it — construction matches
+    ///        exactly, but this is SOURCE-LEVEL verification only: no
+    ///        macOS/Xcode toolchain has run this platform's own Swift test,
+    ///        so iOS's contribution to the convergence is confirmed by
+    ///        careful reading, not live execution, unlike the other two.
+    ///    Separately, the signed v3 transcript byte layout (`domainV3`,
+    ///    `appendLP`/`capByte`/`appendU32BE`/`advEnc` encoders, the 8-byte
+    ///    CAPS array — see `HandshakeTranscript.offerV3`/`acceptV3`) was
+    ///    checked the same way: a real fixed-input vector generated by
+    ///    Android's own `HandshakeTranscriptV3SharedKatTest.kt`, an
+    ///    independent Python re-implementation as a trusted oracle, and this
+    ///    file's `HandshakeTranscript.swift offerV3`/`acceptV3` read
+    ///    line-by-line against both — no divergence found, same source-level
+    ///    (not live-run) caveat as above. Desktop's `HandshakeTranscript.ts`
+    ///    was NOT re-checked in this pass. `rekeyNonce`/`rekeyRound` are
+    ///    fixed-width and always-present on both OFFER and ACCEPT, and every
+    ///    capability-advertisement site excludes this bit for an
+    ///    earbud-possible/hw_only call (search this file for
+    ///    `earbudPairingGattProxy == nil` and `keyClass == 0` near
+    ///    `hsTranscriptBindV1:`) — whether that earbud/schema:4 exclusion is
+    ///    still the right call once this bit is actually reachable in
+    ///    production has NOT been re-examined in the wire-key-name fix below
+    ///    and remains open.
+    ///
+    /// 3. THE ACTUAL BLOCKING BUG, found and fixed 2026-09-03 — with the
+    ///    KDF/SAS/transcript algorithm itself converged per (2), this
+    ///    capability had STILL never negotiated `true` on any real
+    ///    Android↔iOS call, because the wire JSON key carrying the boolean
+    ///    was spelled DIFFERENTLY on every platform: `transcriptBindV1` here,
+    ///    `hsTranscriptBindV1` on Android (`Capabilities.hsTranscriptBindV1`,
+    ///    no `@SerialName` override, so the Kotlin property name IS the JSON
+    ///    key), `sessionKdfV4` on Desktop. `AndroidHandshakeBundle
+    ///    .Capabilities` here has no `CodingKeys` override either, so the
+    ///    same rule applies to Swift's synthesized `Codable`: an Android peer
+    ///    sending `"hsTranscriptBindV1": true` decoded to `nil` (unrecognised
+    ///    key) on this platform and was therefore always treated as `false`,
+    ///    while this platform's own `"transcriptBindV1": true` was an
+    ///    unrecognised key to Android's `ignoreUnknownKeys = true` decoder —
+    ///    silently dropped, no crash, no signal either direction. This is
+    ///    believed to be the root cause of the still-open user report of
+    ///    persistent "unrecognized signature / lower security" warnings on
+    ///    live Android↔iOS calls: the pair always silently fell back to the
+    ///    legacy schema:2/3 KDF and the transcript-independent SAS, never the
+    ///    fix in (2) above. The property and this constant are now both named
+    ///    `hsTranscriptBindV1`/`hsTranscriptBindV1Enabled` (matching Android's
+    ///    spelling exactly, since Android's kotlinx.serialization name is the
+    ///    one every other platform must match byte-for-byte) so the wire key
+    ///    agrees on all three platforms. The KDF/SAS/transcript MATH was
+    ///    never the problem and was NOT touched by this fix — only the
+    ///    identifier used to read/write this one boolean.
+    public static let hsTranscriptBindV1Enabled = true // LIVE 2026-09-03 — KDF/SAS/transcript byte layout reconciled per history (2), wire key name now matches Android's hsTranscriptBindV1 per history (3)
+
+    /// MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4) go-live
+    /// gate for the inner sealed-audio wire's per-direction keys + AAD + replay
+    /// window (`QAudionEngine.initSession`'s `innerAudioAadV1` param). Mirrors
+    /// this platform's own `srtpDirKeysEnabled`/`hsTranscriptBindV1Enabled`
+    /// pattern directly above, and Android/Desktop's equivalent constant for the
+    /// SAME capability bit — grep either sibling repo for `innerAudioAadV1` or
+    /// `INNER_AUDIO_AAD_V1_ENABLED` before flipping this.
+    ///
+    /// DEFAULT FALSE. This bit's exact construction (HKDF info-string pair,
+    /// AAD byte layout, replay-window shape — see `QAudionEngine.swift`'s
+    /// `W-INNERAUDIOAAD` block) was implemented on iOS alone in this session,
+    /// with no live cross-platform KAT against Android/Desktop's own
+    /// implementations of the same audit finding. Exactly the
+    /// `hsTranscriptBindV1Enabled` situation directly above: a mismatched
+    /// construction under the same wire capability bit position would make
+    /// two peers that both advertise it derive different directional keys
+    /// from each other, breaking the call (not a security downgrade — the
+    /// call simply stops decrypting audio). Flip to `true` only after a real
+    /// cross-platform KAT reconciliation pins one byte layout and all three
+    /// platforms implement that exact layout.
+    public static let innerAudioAadV1Enabled = false
+
     /// W574x — whether the PEER advertised `srtpDirKeyV1` in its last received
     /// OFFER/ACCEPT bundle (set in `onAndroidBundleReceived`, before
     /// `onRelaySessionReady` fires).
     private var peerAdvertisedSrtpDirKey: Bool = false
+
+    /// MEDIA-3/4/5 — whether the PEER advertised `innerAudioAadV1` in its last
+    /// received OFFER/ACCEPT bundle. Same set-site/timing as
+    /// `peerAdvertisedSrtpDirKey` immediately above.
+    private var peerAdvertisedInnerAudioAad: Bool = false
 
     /// W574x — directional sealer keys are used only when BOTH peers advertise
     /// support. Read by AppState at relay-sealer install time.
     public var negotiatedSrtpDirKey: Bool {
         Self.srtpDirKeysEnabled && peerAdvertisedSrtpDirKey
     }
+
+    /// MEDIA-3/4/5 — the inner sealed-audio wire's per-direction-key/AAD/
+    /// replay-window scheme is used only when BOTH peers advertise support
+    /// (same AND-negotiation shape as `negotiatedSrtpDirKey`). Read internally
+    /// at the `engine.initSession(...)` call sites below; with the kill
+    /// switch off this is always `false` regardless of what any peer sends.
+    public var negotiatedInnerAudioAadV1: Bool {
+        Self.innerAudioAadV1Enabled && peerAdvertisedInnerAudioAad
+    }
+
+    /// MEDIA-3/4/5 — resolves THIS device's own user id, needed to compute
+    /// `PqcRtpFrameSealer.selfIsRoleA(selfUserId:peerUserId:)` for the inner
+    /// sealed-audio wire's per-direction key assignment (same role rule the
+    /// outer M-15 sealer already uses — see `AppState.installRelaySealers`'s
+    /// callers). `QAudionCallIntegration` has no notion of the app-level
+    /// signed-in user itself; AppState wires this closure once at integration
+    /// construction time, mirroring how it already resolves `currentUserId`
+    /// for the outer sealer's own `selfIsRoleA` computation. `nil`/unset (or
+    /// throwing) resolves to `""`, which is a safe, deterministic (if
+    /// arbitrary) fallback role — inert in practice since the kill switch
+    /// above keeps `negotiatedInnerAudioAadV1` false regardless.
+    public var resolveSelfUserId: (() -> String)?
 
     /// Phase 18 — whether THIS build advertises the v4 PQ ratchet (`ratchetV4`)
     /// capability. Mirrors Android `selfCapabilities().ratchetV4 =
@@ -280,6 +531,30 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `ContactVoiceVerifier`'s own private queue).
     public var onContactVoiceLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
 
+    /// "Interlocutore cambiato" — fires when the receive-side change verdict
+    /// actually changes. Informational: no muting, no teardown, no key
+    /// action follows from it.
+    public var onSpeakerChangeVerdict: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
+
+    /// Record the far end's own receive-side verdict about this device's
+    /// user, as delivered over the `SPKCHG` control piggy-back.
+    public func peerReportedSpeakerChange(_ changed: Bool) {
+        contactVoiceVerifier.peerReportedSpeakerChange(changed)
+    }
+
+    /// Re-anchor the change detector after a media-path switch — see
+    /// `ContactVoiceVerifier.acousticPathChanged` for why a path change must
+    /// not be reported as a person walking in.
+    public func acousticPathChanged() {
+        contactVoiceVerifier.acousticPathChanged()
+    }
+    /// MASVS-CRYPTO remediation (2026-08-20/21) — see
+    /// `ContactVoiceVerifier.onScoreUpdated` kdoc. Feeds `ReKeyScheduler`.
+    public var onContactVoiceScoreUpdated: ((Float) -> Void)?
+    /// W-GUARDIAN3SIG (2026-09-11) — pass-through of
+    /// `ContactVoiceVerifier.onScoreBreakdown`. Diagnostics only.
+    public var onContactVoiceScoreBreakdown: ((Float, Float, Float, Float) -> Void)?
+
     /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
     /// successfully on EITHER side (caller `case .accept` after
     /// `decapsulate`, responder `case .offer` after `encapsulate`). The
@@ -313,6 +588,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// never enters a parameter position (build landmine #16). Pure UI
     /// surface — does NOT affect any derivation. No-op when nil.
     public var onPqcSessionKeyEstablishedWithPsk: ((Data, String?) -> Void)?
+
+    /// W-REKEYSYNC (2026-09-10) — fires ONLY on the RESPONDER leg of a
+    /// re-key round (never round 1, never the initiator leg — this device
+    /// already knows its own armed period there) when the inbound OFFER
+    /// carried a validated `rekeyNextPeriodMs`. The app layer uses this to
+    /// arm its own `ReKeyScheduler` from the SAME real deadline the
+    /// initiator is acting on (`start(syncedDeadlineMs:syncedPeriodMs:)`),
+    /// instead of continuing to display an independent local guess. See
+    /// `AndroidHandshakeBundle.rekeyNextPeriodMs`'s doc for the full
+    /// rationale and the live divergence this closes. DISPLAY-ONLY — never
+    /// gates the actual re-key, which has already completed by the time
+    /// this fires.
+    public var onPeerRekeyPeriodAdvertised: ((Int64) -> Void)?
 
     /// Phase 18 — v4 bootstrap signal. Fires at every JSON handshake-completion
     /// site (OFFER accepted = responder, ACCEPT decapsulated = originator) AFTER
@@ -636,6 +924,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// overload below keeps the legacy 2-arg call sites compiling.
     public var commitTofuPinForDevice: ((String, Data, String?) -> Void)?
 
+    /// W-SASPIN (2026-09-08) — set-proven rotation commit for the D11
+    /// `.authenticatedRepinFromPublished` verdict: the key was proven ∈ the
+    /// server-published set AND self-signed, so the actuator may OVERWRITE an
+    /// existing per-(peer, device) pin with it. Kept separate from
+    /// `commitTofuPinForDevice` (which is write-once via `pinOrMatch`) so a plain
+    /// `.authenticated` verdict can never overwrite a pin. nil ⇒ falls back to the
+    /// write-once commit (the pre-fix behaviour: a no-op when a pin exists).
+    public var commitSetProvenRepinForDevice: ((String, Data, String?) -> Void)?
+
     /// Legacy 2-arg TOFU-pin shim (no device id). Kept so existing wiring /
     /// tests that set `commitTofuPin` still work; the integration prefers
     /// `commitTofuPinForDevice` when both are set.
@@ -720,6 +1017,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Cleared with the rest of the per-call state in `onCallEnded`.
     private var sentOfferTranscriptV2ByCall: [String: Data] = [:]
 
+    /// CALL-3/CALL-4 (HSID-002 remainder) — v3 sibling of
+    /// `sentOfferTranscriptV2ByCall`: the OFFER's v3 transcript WE SENT (the
+    /// one carrying this round's `rekeyNonce`/`rekeyRound`), keyed the same
+    /// way, so the initiator can recompute the v3 `offer_binding` when it
+    /// later verifies the matching ACCEPT's `sigV3`. Populated only when we
+    /// actually signed the OFFER AND the v3 transcript was buildable. Cleared
+    /// with the rest of the per-call state in `onCallEnded`.
+    private var sentOfferTranscriptV3ByCall: [String: Data] = [:]
+
     /// W-KCMAC (ship step 5) — the RAW fingerprint list WE advertised in the OFFER
     /// (`onAndroidCallSetupStarted`'s `advertisedPskFingerprints`), stashed so the
     /// CALLER leg can later rebuild `KeyConfirmation`'s `initAdvert` (its own
@@ -759,6 +1065,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
         contactVoiceVerifier.onLevelChanged = { [weak self] level in self?.onContactVoiceLevelChanged?(level) }
+        contactVoiceVerifier.onSpeakerChanged = { [weak self] verdict in self?.onSpeakerChangeVerdict?(verdict) }
+        // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score
+        // alongside the level, same pattern. See ContactVoiceVerifier's
+        // `onScoreUpdated` kdoc.
+        contactVoiceVerifier.onScoreUpdated = { [weak self] score in self?.onContactVoiceScoreUpdated?(score) }
+        contactVoiceVerifier.onScoreBreakdown = { [weak self] df, lv, vp, combined in
+            self?.onContactVoiceScoreBreakdown?(df, lv, vp, combined)
+        }
         // Task #11 — head-start the ephemeral ML-KEM keypair off the
         // call-start critical path (the reused responder integration and
         // any caller integration created with lead time get it for free).
@@ -1010,6 +1324,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // decode to the same all-zero meaning but is not the same JSON, and wire
         // parity across the three clients is not a thing to leave to chance.
         let advertisedPskRoles: [Int]? = advert.roles
+        // CALL-3 (2026-09-02 protocol audit) — this call's round 1: generate
+        // the call's own random freshness nonce ONCE, in memory, and start
+        // this offerer's own round counter at 1. Both are reused (never
+        // regenerated) by every `performPqcReKey` round this integration
+        // later initiates for the SAME callId.
+        let rekeyNonceRound1 = Self.generateRekeyNonce()
+        lock.withLock {
+            rekeyNonceByCall[callId.lowercased()] = rekeyNonceRound1
+            rekeyRoundByCall[callId.lowercased()] = 1
+        }
         let offerBundle = AndroidHandshakeBundle(
             kind: .offer,
             callId: callId,
@@ -1044,10 +1368,45 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // yet), so flipping this is additive/safe — an unflipped peer simply
                 // omits the bit and both sides keep computing S0 exactly as before.
                 // Mirrored in Android's SELF_CAPABILITIES in the same commit series.
-                pskMixV1: true
+                pskMixV1: true,
+                // CALL-3/CALL-4 (HSID-002 remainder) — gated by hsTranscriptBindV1Enabled
+                // (2026-09-02 safety fix, see its doc comment: three platforms shipped
+                // incompatible KDF constructions under this same bit position). The
+                // ACTUAL negotiated behaviour (v3 signing, transcript-bound KDF/SAS,
+                // signed re-key round) only activates once the PEER'S bundle also
+                // carries this bit (checked at the v3-verify call site, never assumed).
+                //
+                // ITEM 2/3 FOLLOW-UP — ALSO never advertised when a physical earbud is
+                // paired locally (`earbudPairingGattProxy != nil`), conservative-by-
+                // design pending a deliberate decision on how transcript-binding should
+                // compose with the earbud-exclusive schema:4 hw_only KDF
+                // (`deriveHybridSessionKeyV4`/`keyClass != 0`) — the canonical
+                // `deriveSessionKeyTranscriptBound` construction has no
+                // `keyClass`/`negDigest` input at all, so negotiating it for a call
+                // that ends up hw_only would silently drop that scheme's hw-bound
+                // confirmation property. This OFFER can't yet know whether the call
+                // will actually resolve hw_only (that depends on PSK selection, which
+                // only happens once the peer answers) — `earbudPairingGattProxy != nil`
+                // is the earliest, most conservative signal available at send time:
+                // no local earbud paired ⇒ this leg structurally cannot end up hw_only.
+                // See `deriveTranscriptBoundSessionKey`'s doc and the `keyClass == 0`
+                // gates at its two call sites in this file for the other half of this
+                // scoping.
+                hsTranscriptBindV1: (Self.hsTranscriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
+                // MEDIA-3/4/5 — gated by innerAudioAadV1Enabled (default false, see
+                // its doc). The ACTUAL negotiated behaviour (per-direction inner
+                // sealed-audio keys/AAD/replay window) only activates once the
+                // PEER'S bundle also carries this bit — see `negotiatedInnerAudioAadV1`.
+                innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
             ),
             pskFingerprints: advertisedPskFingerprints,
-            pskRoles: advertisedPskRoles
+            pskRoles: advertisedPskRoles,
+            // CALL-3 — ITEM 2/3 FOLLOW-UP: resent IDENTICALLY on every round of the
+            // call (round 1 here, and every re-key round in `performPqcReKey`), not
+            // just round 1 — see `HandshakeTranscript.offerV3`'s doc for why the prior
+            // "round 1 only" shape broke cross-platform transcript-hash equality.
+            rekeyNonce: rekeyNonceRound1.base64EncodedString(),
+            rekeyRound: 1
         )
 
         // W-KCMAC (ship step 5) — stash the advert list itself (not just the
@@ -1081,7 +1440,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // >255-fp OFFER — see HandshakeTranscript.advEnc's doc); signedCopy signs it
             // alongside (never instead of) the v1 signature above.
             let offerTV2 = Self.offerTranscriptV2(from: offerBundle, callId: callId, signerKeyRaw: idKey)
-            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2)
+            // CALL-3/CALL-4 — v3 sibling, same best-effort isolation (nil-safe:
+            // `offerTranscriptV3` only fails on the same pathological psk-list case).
+            let offerTV3 = Self.offerTranscriptV3(from: offerBundle, callId: callId, signerKeyRaw: idKey)
+            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2, transcriptV3: offerTV3)
             // Only stash when the sig actually attached (signedCopy returns the
             // input unchanged on signer failure → don't claim a signed OFFER).
             if bundleToSend.signature != nil {
@@ -1091,6 +1453,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // v2 transcript build failed) so the matching ACCEPT's verify can bind
                     // to SHA-256(offerTV2) as the v2 offer_binding.
                     if let offerTV2 { sentOfferTranscriptV2ByCall[callId.lowercased()] = offerTV2 }
+                    // CALL-3/CALL-4 — stash the v3 sibling too, same nil-safety.
+                    if let offerTV3 { sentOfferTranscriptV3ByCall[callId.lowercased()] = offerTV3 }
                 }
             }
         }
@@ -1112,6 +1476,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             retrySenderClosure = sendOpaqueRaw
         }
         try await sendOpaqueRaw(jsonWire)
+        // W-HSROUNDTIMING (2026-09-09) — first of three round-boundary
+        // breadcrumbs (offer-send-confirmed / accept-received /
+        // derive-complete). Before this, a stuck handshake only had two
+        // observable points — "offer sent" and "30s later, still nothing"
+        // — with no way to tell whether the offer never left the device,
+        // never reached the peer, the peer never answered, or the ACCEPT
+        // came back but decapsulation/derivation failed silently. This
+        // marks the `sendOpaqueRaw` call actually returning (local
+        // dispatch confirmed, not just attempted) — see the paired
+        // breadcrumbs at the `.accept` case entry and after
+        // `engine.initSession` below.
+        logTiming("hs-offer-sent", msInt: 0, ok: true)
         // W529: arm the 5 s idempotent retry loop. Cancels on
         // session-key install (success) or call end (handshake.reset).
         armOfferRetryTimer()
@@ -1163,6 +1539,230 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
+    /// I3 §5 (2026-08-21) — mid-call PQC re-key, INITIATOR side. Mirrors
+    /// Android's `performReKey` (`CallController.kt:6860`): reuses the
+    /// SAME `AndroidHandshakeBundle` OFFER shape as
+    /// `onAndroidCallSetupStarted` (fresh ephemeral ML-KEM+X25519 keypair,
+    /// same PSK-advertisement/signing steps), sent over the SAME
+    /// `opaque_message` channel — but deliberately skips every ONE-TIME
+    /// call-SETUP side effect that function has: no `engine.initialize()`
+    /// (would reset the negotiated audio profile — see the `isReKeyRound`
+    /// guard in the `.offer` case's own doc), no `state` transition away
+    /// from `.active`, no 30s pre-handshake fallback timer, no touch to
+    /// `localKeyPair`/`pendingOutgoingCallId` (those belong to the
+    /// ORIGINAL handshake's own bookkeeping).
+    ///
+    /// Glare-avoidance: only ever call this on the device that originated
+    /// the call. There is no `isInitiator`-equivalent enforcement inside
+    /// this function beyond the `isCaller` guard below — the CALLER of
+    /// this function (the app layer, driven by `ReKeyScheduler`'s ticks)
+    /// is responsible for not calling it on a responder integration.
+    ///
+    /// Returns `true` if a new key was derived and installed, `false` on
+    /// any failure (timeout, network error, keygen failure) — in every
+    /// failure case the call is left running on whatever key was active
+    /// before this call, exactly like Android's `performReKey.onFailure`
+    /// ("NEVER brick an otherwise-healthy call over one failed periodic
+    /// re-key round"). There is no Android-style "provisional swap + revert
+    /// on no-confirmation" watchdog here because there is no need for one:
+    /// unlike Android's `installRekeyedAudioKey`, this function never
+    /// installs anything until AFTER a real ACCEPT has been received and
+    /// the key derived from it — the swap is naturally deferred, not
+    /// optimistic, so there is nothing to revert if the ACCEPT never
+    /// arrives.
+    /// - Parameter armedPeriodMs: W-REKEYSYNC (2026-09-10) — this device's
+    ///   own `ReKeyScheduler` period (ms) at the moment this round starts,
+    ///   i.e. how long until this device's OWN scheduler would next fire.
+    ///   Echoed on the OFFER as `rekeyNextPeriodMs` so the responder can
+    ///   track the SAME real deadline instead of guessing independently —
+    ///   see `AndroidHandshakeBundle.rekeyNextPeriodMs`'s doc. `nil` omits
+    ///   the field (byte-identical wire to a peer that hasn't shipped this).
+    @discardableResult
+    public func performPqcReKey(callId: String, peerId: String, timeoutSec: Double = 8.0, armedPeriodMs: Int64? = nil) async -> Bool {
+        let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
+            guard isCaller, state == .active, pendingReKeyAttempt == nil else { return (false, nil) }
+            return (true, retrySenderClosure)
+        }
+        guard canProceed, let sendOpaqueRaw else {
+            print("[QAudionCallIntegration] performPqcReKey skipped (isCaller/state/in-flight guard) callId=\(callId.prefix(8))… peer=\(peerId.prefix(8))…")
+            return false
+        }
+
+        let pqcKp: PqcKeyExchange.KeyPair
+        let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
+        let pqcRawPub: Data
+        do {
+            // consumeOrGenerateKeyPair has no one-shot restriction — safe
+            // to call again mid-call (verified by reading it: it either
+            // returns a pre-warmed keypair or generates a fresh one cold).
+            pqcKp = try consumeOrGenerateKeyPair()
+            pqcRawPub = try PqcKeyExchange.extractRawPublicKey(pqcKp.publicKey)
+        } catch {
+            print("[QAudionCallIntegration] performPqcReKey keygen failed callId=\(callId.prefix(8))…: \(error)")
+            return false
+        }
+        let localKeys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
+        let x25519RawPub = Data(x25519Priv.publicKey.rawRepresentation)
+
+        // Same PSK-advertisement construction as onAndroidCallSetupStarted
+        // — a re-key OFFER re-advertises the caller's current PSK
+        // catalogue exactly like the original handshake did (Android does
+        // the same: PqcHandshake.initiate() re-runs the full PSK
+        // negotiation on every round, not just the first).
+        let pskVault = SovereignKeyVault()
+        let pskAdvertEntries: [PskAdvertising.Entry] = pskVault.listPskEntries().compactMap { entry in
+            guard let raw = (try? pskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
+            return PskAdvertising.Entry(
+                name: entry.name, origin: pskVault.origin(name: entry.name),
+                material: raw, createdAt: entry.createdAt)
+        }
+        let advert = PskAdvertResolver.buildAdvertisement(
+            dialect: Self.offerAdvertDialect, callId: callId,
+            ownEphemeralX25519Pub: x25519RawPub,
+            candidates: PskAdvertising.candidatesForAdvertisement(pskAdvertEntries))
+        // CALL-3 — this OFFERER's own next round: reuse the nonce round 1
+        // established (never regenerate mid-call) and increment the round
+        // counter. A call that somehow never went through
+        // `onAndroidCallSetupStarted` for this callId (should not happen —
+        // `performPqcReKey`'s own `isCaller`/`state == .active` guard already
+        // requires a completed original handshake) falls back to round 2 with
+        // a freshly-generated nonce rather than crashing; a responder that has
+        // no round-1 record for this callId simply treats this round's
+        // `hsTranscriptBindV1` path as unavailable (falls back to legacy KDF/SAS
+        // — see the `.offer` case's round-freshness gate).
+        // ITEM 2/3 FOLLOW-UP — `thisRoundNonce` is now returned alongside the round
+        // number: the OFFER resends the SAME nonce on every round (see
+        // `HandshakeTranscript.offerV3`'s doc), so this leg needs the actual bytes
+        // here, not just the round-1 existence check the prior version only used to
+        // decide whether to (re)generate.
+        let (thisRound, thisRoundNonce): (UInt32, Data) = lock.withLock {
+            let next = (rekeyRoundByCall[callId.lowercased()] ?? 1) + 1
+            rekeyRoundByCall[callId.lowercased()] = next
+            let nonce: Data
+            if let existing = rekeyNonceByCall[callId.lowercased()] {
+                nonce = existing
+            } else {
+                nonce = Self.generateRekeyNonce()
+                rekeyNonceByCall[callId.lowercased()] = nonce
+            }
+            return (next, nonce)
+        }
+        let offerBundle = AndroidHandshakeBundle(
+            kind: .offer,
+            callId: callId,
+            pqcPublicKey: pqcRawPub.base64EncodedString(),
+            x25519PublicKey: x25519RawPub.base64EncodedString(),
+            capabilities: AndroidHandshakeBundle.Capabilities(
+                ratchetV3: true,
+                sframeV1: true,
+                vkeyV1: true,
+                ratchetV4: Self.advertisesRatchetV4 ? true : nil,
+                srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
+                pskMixV1: true,
+                // ITEM 2/3 FOLLOW-UP — same earbud-exclusion rationale as the round-1
+                // OFFER's own `hsTranscriptBindV1` field above; see that comment.
+                hsTranscriptBindV1: (Self.hsTranscriptBindV1Enabled && earbudPairingGattProxy == nil) ? true : nil,
+                innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
+            ),
+            pskFingerprints: advert.fingerprints,
+            pskRoles: advert.roles,
+            // CALL-3 — ITEM 2/3 FOLLOW-UP: every re-key round resends the SAME nonce
+            // round 1 established (never a fresh one mid-call) — see
+            // `HandshakeTranscript.offerV3`'s doc for why the prior "round 1 only"
+            // shape broke cross-platform transcript-hash equality.
+            rekeyNonce: thisRoundNonce.base64EncodedString(),
+            rekeyRound: Int(thisRound),
+            // W-REKEYSYNC — see this function's `armedPeriodMs` param doc.
+            // Untrusted-input clamp mirrors Android: no legitimate
+            // ReKeyScheduler period ever falls outside (0, basePeriodMs].
+            rekeyNextPeriodMs: armedPeriodMs.flatMap { p -> Int? in
+                guard p > 0, p <= ReKeyScheduler.basePeriodMs else { return nil }
+                return Int(p)
+            }
+        )
+        // Stash the advert list (KCMAC needs it, same as the original
+        // handshake) and sign the OFFER — same steps as
+        // onAndroidCallSetupStarted, deliberately OVERWRITING the
+        // ORIGINAL handshake's stash (callId-keyed, not round-keyed): by
+        // the time a re-key round starts, the original handshake is long
+        // complete (glare-guard above requires `state == .active`) and its
+        // stashed transcript is never read again — the ACCEPT-verify path
+        // for THIS round needs THIS round's transcript.
+        lock.withLock {
+            sentOfferPskFingerprintsByCall[callId.lowercased()] = advert.fingerprints
+            sentOfferPskRolesByCall[callId.lowercased()] = advert.roles ?? []
+        }
+        var bundleToSend = offerBundle
+        if signingEnabled, let idKey = localSignerIdentityKey,
+           let offerT = Self.offerTranscript(from: offerBundle, callId: callId, signerKeyRaw: idKey) {
+            let offerTV2 = Self.offerTranscriptV2(from: offerBundle, callId: callId, signerKeyRaw: idKey)
+            // CALL-3/CALL-4 — v3 sibling; signs THIS round's `rekeyRound`
+            // (nonce empty — already established at round 1).
+            let offerTV3 = Self.offerTranscriptV3(from: offerBundle, callId: callId, signerKeyRaw: idKey)
+            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2, transcriptV3: offerTV3)
+            if bundleToSend.signature != nil {
+                lock.withLock {
+                    sentOfferTranscriptByCall[callId.lowercased()] = offerT
+                    if let offerTV2 { sentOfferTranscriptV2ByCall[callId.lowercased()] = offerTV2 }
+                    if let offerTV3 { sentOfferTranscriptV3ByCall[callId.lowercased()] = offerTV3 }
+                }
+            }
+        }
+        let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: bundleToSend)
+
+        // Arm the pending-attempt continuation BEFORE sending — a
+        // same-machine-speed ACCEPT can never race ahead of
+        // pendingReKeyAttempt being ready to receive it. Whichever of
+        // {the .accept dispatch below, the timeout task} resolves first
+        // wins; both clear pendingReKeyAttempt atomically before calling
+        // resume, so the other is guaranteed a no-op.
+        let attemptId = UUID()
+        let combined: Data? = await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
+            lock.withLock {
+                pendingReKeyAttempt = PendingReKeyAttempt(id: attemptId, localKeys: localKeys) { value in
+                    cont.resume(returning: value)
+                }
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await sendOpaqueRaw(jsonWire)
+                } catch {
+                    print("[QAudionCallIntegration] performPqcReKey send failed callId=\(callId.prefix(8))…: \(error)")
+                    let resume: ((Data?) -> Void)? = self.lock.withLock {
+                        guard self.pendingReKeyAttempt?.id == attemptId else { return nil }
+                        let r = self.pendingReKeyAttempt?.resume
+                        self.pendingReKeyAttempt = nil
+                        return r
+                    }
+                    resume?(nil)
+                }
+            }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSec * 1_000_000_000))
+                guard let self else { return }
+                let resume: ((Data?) -> Void)? = self.lock.withLock {
+                    guard self.pendingReKeyAttempt?.id == attemptId else { return nil }
+                    let r = self.pendingReKeyAttempt?.resume
+                    self.pendingReKeyAttempt = nil
+                    return r
+                }
+                if resume != nil {
+                    print("[QAudionCallIntegration] performPqcReKey timed out after \(timeoutSec)s callId=\(callId.prefix(8))… — keeping current key")
+                }
+                resume?(nil)
+            }
+        }
+
+        guard combined != nil else { return false }
+        // The .accept dispatch (onAndroidBundleReceived's rekey completion
+        // branch) already ran engine.initSession() and fired the session-
+        // key-rotation callbacks before resolving this continuation — see
+        // that branch's own doc for why nothing further is needed here.
+        print("[QAudionCallIntegration] performPqcReKey completed callId=\(callId.prefix(8))… peer=\(peerId.prefix(8))…")
+        return true
+    }
+
     public func onCapabilityMessageReceived(data: Data, fromSenderId: String = "", sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
 
@@ -1208,7 +1808,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if offerAlreadyInit {
                 if let cached = lock.withLock({ lastSentLegacyAcceptWire }) {
                     print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — replaying cached ACCEPT")
-                    Task { try? await sendOpaqueMessage(cached) }
+                    Task {
+                        do { try await sendOpaqueMessage(cached) } catch {
+                            // W-SIGSWALLOW (2026-09-01) — was `try?`.
+                            print("[QAudionCallIntegration] QUAD ACCEPT replay send fail callId=\(normalizedOfferCid.prefix(8))… err=\(error)")
+                        }
+                    }
                 } else {
                     print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — session already initialised, skipping")
                 }
@@ -1224,7 +1829,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "")
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
             lock.withLock { lastSentLegacyAcceptWire = accept }
-            Task { try? await sendOpaqueMessage(accept) }
+            Task {
+                do { try await sendOpaqueMessage(accept) } catch {
+                    // W-SIGSWALLOW (2026-09-01) — was `try?` (audit memory
+                    // reference_ios_stability_audit_2026_09_01, P1 item 7): the
+                    // ACCEPT has no send-side retry of its own; recovery is the
+                    // caller's W529 OFFER retry, which this side answers by
+                    // replaying `lastSentLegacyAcceptWire` (above). A lost first
+                    // send must therefore at least be visible.
+                    print("[QAudionCallIntegration] QUAD ACCEPT send fail callId=\(normalizedOfferCid.prefix(8))… err=\(error)")
+                }
+            }
             lock.lock(); state = .active; lock.unlock()
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()
@@ -1384,6 +1999,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
         // for the pair, exactly like Android's `safePeer.ratchetV4` default.
         self.peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
+        // MEDIA-3/4/5 — capture the peer's inner-sealed-audio-AAD advertisement,
+        // same additive/AND-negotiated shape as srtpDirKeyV1/ratchetV4 above. No
+        // TOFU-pin OR here (unlike srtpDirKeyV1) — this bit has no pinning store
+        // of its own, and with `Self.innerAudioAadV1Enabled` false the AND in
+        // `negotiatedInnerAudioAadV1` keeps this inert either way.
+        self.peerAdvertisedInnerAudioAad = (bundle.capabilities?.innerAudioAadV1 ?? false)
 
         switch bundle.kind {
         case .offer:
@@ -1424,9 +2045,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // (e.g. identity_key_mismatch — bundle key ∉ the server-published set)
             // raises a non-blocking in-call alert and PROCEEDS WITHOUT pinning the
             // observed key — SAS is the terminal anti-MITM gate. `.authenticated`
-            // (key == pinned/server) and `.authenticatedRepinFromPublished` (a
-            // set-PROVEN rotation) commit the per-(peer,device) pin + v4 flag and
-            // yield the offer_binding the ACCEPT must carry (spec §3).
+            // (key == pinned/server; W-SASPIN: pins on the first verified contact
+            // whether the anchor was the bundle key or the server-published key)
+            // and `.authenticatedRepinFromPublished` (a set-PROVEN rotation,
+            // allowed to overwrite the pin) commit the per-(peer,device) pin + v4
+            // flag and yield the offer_binding the ACCEPT must carry (spec §3).
             // `.proceedUnsignedWarn` logs and continues with an EMPTY binding
             // (legacy/unsigned-peer migration path).
             var verifiedOfferBinding = Data()  // empty == "no signed offer to bind"
@@ -1520,7 +2143,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // re-pin per-(peer, device); NO banner. The binding is rebuilt
                     // under the SET-PROVEN device key (the key the policy verified).
                     print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true)
                     offerSigOk = true
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
@@ -1531,6 +2154,97 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     }
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] OFFER unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
+                }
+            }
+
+            // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) —
+            // transcript-bound KDF/SAS (CALL-4) + signed re-key round freshness
+            // (CALL-3), gated on the peer's bundle advertising `hsTranscriptBindV1`
+            // AND carrying a v3 signature that verifies. ADDITIVE on top of the
+            // v1/v2 verification above (never a replacement for it): on ANY
+            // failure to establish v3 (capability not advertised, `sigV3`
+            // absent/malformed, signature invalid) this round silently falls
+            // back to the CURRENT (pre-this-fix) KDF/SAS/re-key-transcript
+            // shape — matching W-NOBRICK, never a hard failure. `offerBindingV3`
+            // stays empty (the fall-back marker every later step below checks)
+            // unless v3 verification actually succeeds.
+            var offerBindingV3 = Data()
+            var acceptedRoundV3: UInt32?
+            // ITEM 2/3 FOLLOW-UP — the OFFER's own rekeyNonce, captured alongside
+            // `acceptedRoundV3` ONLY once v3 actually verified below, so the ACCEPT
+            // this responder sends back can echo it (`HandshakeTranscript.acceptV3`
+            // now REQUIRES a `rekeyNonce` — see its doc). `nil` exactly when
+            // `acceptedRoundV3` is `nil` (the two are set together, in the same
+            // branch, from the same verified OFFER).
+            var acceptedNonceV3: Data?
+            let normalizedOIdV3 = callId.lowercased()
+            // A re-key round for CALL-3 purposes iff this call has already
+            // completed ONE FULL handshake before this OFFER arrived — same
+            // source of truth `isReKeyRound` below (re-derived independently
+            // for zero code health-dependency between the two).
+            let isReKeyRoundV3 = lock.withLock { sessionInitializedByCall.contains(normalizedOIdV3) }
+            // A cheap, non-mutating PEEK at the same content-fingerprint dedup
+            // `isReKeyRound`'s own computation uses further below (mutation —
+            // the actual insert — still happens only at that ONE site, never
+            // here): a bundle whose exact (pqcPub, x25519Pub) content this
+            // integration has ALREADY accepted is a byte-identical RETRANSMIT
+            // (WS/push redelivery), not a new round, and MUST be allowed to
+            // fall through to the existing "replay the cached ACCEPT" path
+            // below rather than being rejected as stale by the round check —
+            // a retransmit of the CURRENTLY-active round legitimately carries
+            // `rekeyRound == lastAcceptedRekeyRoundByCall[callId]`, which the
+            // CALL-3 gate below would otherwise refuse.
+            let offerFingerprintV3 = Data(SHA256.hash(data: pqcPub + x25519Pub)).base64EncodedString()
+            let isKnownRetransmitV3 = lock.withLock {
+                processedOfferFingerprintsByCall.contains(normalizedOIdV3 + "#" + offerFingerprintV3)
+            }
+            if bundle.capabilities?.hsTranscriptBindV1 ?? false,
+               let sigV3B64 = bundle.sigV3, !sigV3B64.isEmpty,
+               let sikB64 = bundle.signerIdentityKey, !sikB64.isEmpty,
+               let sigV3Data = Data(base64Encoded: sigV3B64), sigV3Data.count == 64,
+               let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(UInt32.max) {
+                let round = UInt32(roundInt)
+                let bundleKeyV3 = Data(base64Encoded: sikB64)
+                let pinnedV3 = peerPinStoreLookup(peerId: callerId, deviceId: callerDeviceId)
+                let serverV3 = resolveServerPeerKey?(callerId)
+                let publishedSetV3 = resolvePublishedKeySet?(callerId, callerDeviceId) ?? []
+                let verifyKeyV3 = HandshakeSigningPolicy.verifyKeyHint(
+                    bundleKey: bundleKeyV3, pinnedKey: pinnedV3, serverFetchedKey: serverV3,
+                    publishedKeySet: publishedSetV3
+                ) ?? Data()
+                if let offerTV3 = Self.offerTranscriptV3(from: bundle, callId: callId, signerKeyRaw: verifyKeyV3),
+                   HandshakeTranscript.verify(transcript: offerTV3, signature: sigV3Data, signerIdentityKey: verifyKeyV3) {
+                    // v3 verified — this round's (nonce, round) pair is
+                    // authenticated. CALL-3: refuse a round that is not
+                    // strictly greater than the last one this responder
+                    // accepted for this call (a stale/replayed round —
+                    // e.g. an attacker who later obtains an OLD round's
+                    // leaked ephemeral private key and replays that round's
+                    // still-validly-signed bundle). W-NOBRICK: the call is
+                    // NEVER dropped over a refused round — it simply keeps
+                    // running on whatever key is currently active, exactly
+                    // like the CALL-1/CALL-2 Abort-verdict precedent.
+                    let lastAccepted = lock.withLock { lastAcceptedRekeyRoundByCall[normalizedOIdV3] }
+                    if Self.shouldRefuseStaleRekeyRound(
+                        isReKeyRound: isReKeyRoundV3, isKnownRetransmit: isKnownRetransmitV3,
+                        round: round, lastAccepted: lastAccepted
+                    ) {
+                        print("[QAudionCallIntegration] CALL-3: refusing stale/replayed re-key round=\(round) (last accepted=\(lastAccepted.map(String.init) ?? "—")) callId=\(callId.prefix(8))… peer=\(callerId.prefix(8))… — call continues on its current key")
+                        return
+                    }
+                    lock.withLock { lastAcceptedRekeyRoundByCall[normalizedOIdV3] = round }
+                    offerBindingV3 = HandshakeTranscript.offerBinding(offerTV3)
+                    acceptedRoundV3 = round
+                    // ITEM 2/3 FOLLOW-UP — `offerTranscriptV3` only returned non-nil
+                    // above because `bundle.rekeyNonce` decoded to a valid 8-byte
+                    // value (it is one of that function's own required guards), so
+                    // this decode cannot fail here; re-decoding (rather than
+                    // threading the raw bytes out of `offerTranscriptV3`) keeps that
+                    // function's signature unchanged and this call site self-
+                    // contained.
+                    acceptedNonceV3 = Self.rekeyNonceRaw(from: bundle.rekeyNonce)
+                } else {
+                    print("[QAudionCallIntegration] CALL-3/CALL-4: OFFER carried sigV3/rekeyRound but v3 verification FAILED callId=\(callId.prefix(8))… — falling back to legacy KDF/SAS/re-key-transcript shape, call NOT dropped")
                 }
             }
 
@@ -1685,7 +2399,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
 
             // Derive session key — V4 when keyClass != 0, schema:2 otherwise.
-            let combined: Data
+            // `var`: CALL-4 below may REPLACE this with the canonical
+            // transcript-bound derivation (`deriveTranscriptBoundSessionKey`),
+            // ONLY when `keyClass == 0` — see that override's own comment.
+            var combined: Data
             if keyClass != 0 {
                 let nd = Self.negDigest(fpSetInit: fpSetInit, fpSetResp: fpSetResp)
                 let selFpRaw: Data
@@ -1818,7 +2535,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     srtpDirKeyV1: Self.srtpDirKeysEnabled ? true : nil,
                     // W-NFCVISIBLE go-live — same flip as the OFFER above, see its
                     // comment for the full rationale.
-                    pskMixV1: true
+                    pskMixV1: true,
+                    // CALL-3/CALL-4 (HSID-002 remainder) — same flip as the OFFER
+                    // above, see its comment for the full rationale.
+                    //
+                    // ITEM 2/3 FOLLOW-UP — gated on `keyClass == 0` rather than the
+                    // OFFER's earbud-presence proxy: by THIS point in the function the
+                    // call's actual hw_only outcome is already known precisely
+                    // (`keyClass` was set a few steps above), so this leg can use the
+                    // exact signal instead of the conservative "earbud paired" one —
+                    // see `deriveTranscriptBoundSessionKey`'s doc for why hw_only
+                    // (`keyClass != 0`) and transcript-binding must not compose yet.
+                    hsTranscriptBindV1: (Self.hsTranscriptBindV1Enabled && keyClass == 0) ? true : nil,
+                    // MEDIA-3/4/5 — same flip as the OFFER above, see its comment.
+                    innerAudioAadV1: Self.innerAudioAadV1Enabled ? true : nil
                 ),
                 pskFingerprints: acceptAdvertisedPskFingerprints,
                 // W-PSKBLIND — the RECEIVED wire value, verbatim, not our static
@@ -1826,7 +2556,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // advertisement it composed. `selectedFp` (the static form) stays the
                 // value everything downstream uses.
                 selectedPskFingerprint: selectedPsk != nil ? resolvedAdvert.wireValue : nil,
-                pskRoles: acceptAdvertisedPskRoles
+                pskRoles: acceptAdvertisedPskRoles,
+                // CALL-3 — ITEM 2/3 FOLLOW-UP: echo the OFFER's own (rekeyNonce,
+                // rekeyRound) pair — both nil together when v3 was not established
+                // for this round (see the gate above), both set together otherwise
+                // (`acceptedNonceV3`/`acceptedRoundV3` are only ever written in the
+                // same branch). `HandshakeTranscript.acceptV3` now requires the
+                // nonce echo — see its doc.
+                rekeyNonce: acceptedNonceV3?.base64EncodedString(),
+                rekeyRound: acceptedRoundV3.map { Int($0) }
             )
 
             // Phase-10b (c) — SIGN the ACCEPT, binding it to the verified OFFER
@@ -1858,37 +2596,97 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // alongside the v1 one above (empty when the OFFER's v2 transcript wasn't
                 // available).
                 let acceptTV2 = Self.acceptTranscriptV2(from: accept, callId: callId, signerKeyRaw: idKey, offerBindingV2: verifiedOfferBindingV2)
-                acceptToSend = signedCopy(of: accept, transcript: acceptT, transcriptV2: acceptTV2)
+                // CALL-3/CALL-4 (HSID-002 remainder) — v3 sibling, built ONLY when the
+                // OFFER's v3 signature verified above (`offerBindingV3` non-empty);
+                // `nil` otherwise so `signedCopy` never attaches a `sigV3`/`rekeyRound`
+                // this leg cannot actually stand behind.
+                let acceptTV3: Data? = offerBindingV3.isEmpty ? nil
+                    : Self.acceptTranscriptV3(from: accept, callId: callId, signerKeyRaw: idKey, offerBindingV3: offerBindingV3)
+                acceptToSend = signedCopy(of: accept, transcript: acceptT, transcriptV2: acceptTV2, transcriptV3: acceptTV3)
                 if let acceptTV2 { acceptBindingV2ForKc = HandshakeTranscript.offerBinding(acceptTV2) }
+                // CALL-4 — ITEM 2/3 FOLLOW-UP: recompute `combined` from the raw
+                // hybrid shared secrets under the canonical transcript-bound KDF
+                // (REPLACING, not further transforming, the schema:2 derivation
+                // above), ONLY when `sigV3` actually attached (never on a signer
+                // failure — `signedCopy` already isolates that; checking
+                // `acceptToSend.sigV3` here, not just "acceptTV3 != nil", is what
+                // makes sure of it) AND `keyClass == 0` — the OFFER-side capability
+                // gate above already keeps `hsTranscriptBindV1` off this device's own
+                // earbud-possible legs, but a peer's independent build (or a future
+                // regression there) could still advertise it; this second, local
+                // check is what actually decides whether the override runs, so it
+                // never depends on the peer alone. See
+                // `deriveTranscriptBoundSessionKey`'s doc for the earbud-composition
+                // rationale.
+                if let t3 = acceptTV3, acceptToSend.sigV3 != nil, keyClass == 0 {
+                    let transcriptHashV3 = HandshakeTranscript.offerBinding(t3)
+                    combined = Self.deriveTranscriptBoundSessionKey(
+                        pqcSharedSecret: pqcResult.sharedSecret,
+                        x25519Shared: x25519Result.sharedSecret,
+                        psk: selectedPsk,
+                        transcriptHash: transcriptHashV3
+                    )
+                    print("[QAudionCallIntegration] CALL-4: transcript-bound session key active (responder) callId=\(callId.prefix(8))…")
+                }
             }
             let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: acceptToSend)
 
-            // W529 — stash the ACCEPT wire BEFORE checking the
-            // session-init guard so a duplicate OFFER replays this
-            // EXACT same bundle (same ciphertext, same shared secret)
-            // instead of deriving a fresh one. Re-deriving on every
-            // duplicate OFFER would produce a different ML-KEM
-            // ciphertext (encapsulation is randomized) and the caller
-            // would race between two valid-but-different ACCEPTs.
             let normalizedOId = callId.lowercased()
-            let alreadyInit = lock.withLock {
-                let r = sessionInitializedByCall.contains(normalizedOId)
-                if !r {
+            // I3 fix (2026-08-21) — content-based dedup, see
+            // processedOfferFingerprintsByCall's doc for the full
+            // rationale. sessionInitializedByCall (callId-only) is kept
+            // for the 30s-timeout / reconnect-replay checks elsewhere,
+            // which legitimately only care about "any handshake ever
+            // completed for this call" — the duplicate-vs-fresh DECISION
+            // below now also looks at the OFFER's own key material, so a
+            // genuine re-key OFFER (fresh pqcPub/x25519Pub, same callId)
+            // falls through to full reprocessing instead of being
+            // discarded as a stale retransmit.
+            let offerFingerprint = Data(SHA256.hash(data: pqcPub + x25519Pub)).base64EncodedString()
+            let offerDedupKey = normalizedOId + "#" + offerFingerprint
+            // isReKeyRound: this callId already completed a FULL handshake
+            // round before this one arrived — i.e. this OFFER's key material
+            // is new but the call itself is not. Distinguishing this matters
+            // because `engine.initialize()` below does far more than key
+            // rotation: it allocates BRAND NEW SessionManager instances and
+            // rebuilds `audioProcessor`, resetting `audioProfileLatched` to
+            // false and `audioProfile` to `.defaultProfile` — silently
+            // discarding a call's negotiated long-audio-profile latch
+            // mid-call (exactly the "wire-format change mid-call" the
+            // constant-rate property forbids — see W-LONGAUDIO/W-ALL60 in
+            // QAudionEngine.swift). Android's own re-key path never touches
+            // its equivalent of this reset (`performReKey` calls
+            // `pqcHandshake.initiate()` directly, never `startOutgoing`) —
+            // a re-key round here must skip `engine.initialize()` the same
+            // way and go straight to `engine.initSession()`, which is
+            // already safe to call again mid-session (`state ==
+            // .sessionActive` is an explicit allowed transition — see
+            // QAudionEngine.initSession's guard — and SessionManager
+            // .initSession is a pure key-derivation + atomic swap, safe to
+            // re-run). See docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md
+            // in the qaudion-android-new repo (cross-repo doc).
+            let (alreadyInit, isReKeyRound) = lock.withLock { () -> (Bool, Bool) in
+                let dup = processedOfferFingerprintsByCall.contains(offerDedupKey)
+                let wasAlreadyHandshaked = sessionInitializedByCall.contains(normalizedOId)
+                if !dup {
+                    processedOfferFingerprintsByCall.insert(offerDedupKey)
+                    acceptWireByOfferFingerprint[offerDedupKey] = wire
                     sessionInitializedByCall.insert(normalizedOId)
-                    lastSentAcceptWire = wire
                     if handshakeStartedAt == nil { handshakeStartedAt = Date() }
                     // Capture the responder-side sender closure for
                     // W531 (WS-reconnect replay) so we don't depend on
                     // AppState re-supplying it.
                     retrySenderClosure = sendOpaqueRaw
                 }
-                return r
+                return (dup, wasAlreadyHandshaked && !dup)
             }
             if alreadyInit {
-                // W529: idempotent replay — re-emit the SAME bundle the
-                // first OFFER produced. Caller will recognise it via
-                // their own session-init guard and discard.
-                if let cached = lock.withLock({ lastSentAcceptWire }) {
+                // Idempotent replay — re-emit the SAME bundle THIS OFFER
+                // round produced (looked up by its own fingerprint, never a
+                // different round's — a stale retransmit of the ORIGINAL
+                // OFFER arriving after a later re-key must still get the
+                // ORIGINAL ACCEPT back, not the re-key's).
+                if let cached = lock.withLock({ acceptWireByOfferFingerprint[offerDedupKey] }) {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — replaying cached ACCEPT")
                     try await sendOpaqueRaw(cached)
                 } else {
@@ -1896,13 +2694,37 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 return
             }
+            print("[QAudionCallIntegration] OFFER for callId=\(callId.prefix(8))… — processing (fingerprint=\(offerFingerprint.prefix(12))…, reKey=\(isReKeyRound), roundsSeen=\(processedOfferFingerprintsByCall.count))")
             try await sendOpaqueRaw(wire)
-            try engine.initialize()
+            if !isReKeyRound {
+                try engine.initialize()
+            }
             // W479 — Android peer: use AdaptivePaddingController-compatible
             // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
             // Byte-identical to Android FrameRelayTransport.send/decode +
             // AdaptivePaddingController.sealAudio/openAudio.
-            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+            // I3 — on a re-key round this re-keys the EXISTING session
+            // managers in place (state == .sessionActive is an explicit
+            // allowed transition) without touching the audio profile latch
+            // or rebuilding the codec — see the isReKeyRound doc above.
+            // MEDIA-3/4/5 — per-direction inner-audio keys/AAD/replay window,
+            // only actually applied when negotiated (kill switch default
+            // false — see `negotiatedInnerAudioAadV1`'s doc). Role assignment
+            // reuses the SAME rule the outer M-15 sealer uses
+            // (`PqcRtpFrameSealer.selfIsRoleA`, lexicographically-smaller
+            // userId), so a future go-live can't disagree with the outer
+            // layer about which side is "A". `epoch` reuses this round's
+            // already-agreed CALL-3 re-key round number (both peers derive
+            // the SAME value from the signed bundle) rather than a fresh,
+            // possibly-divergent counter.
+            let innerAadNegotiated = negotiatedInnerAudioAadV1
+            let innerAadSelfIsRoleA = innerAadNegotiated
+                ? PqcRtpFrameSealer.selfIsRoleA(resolveSelfUserId?() ?? "", callerId)
+                : false
+            let innerAadEpoch = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+            try engine.initSession(sharedSecret: combined, adaptivePadding: true,
+                                   innerAudioAadV1: innerAadNegotiated, callId: callId,
+                                   selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
             onRelaySessionReady?(combined, callId)
             lock.withLock { state = .active }
             // W529: handshake reached active — kill the retry loop.
@@ -1913,6 +2735,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // DISPLAY-ONLY: surface the PSK fingerprint negotiated on this
             // responder OFFER path (`selectedFp`, in scope from step 4).
             onPqcSessionKeyEstablishedWithPsk?(combined, selectedFp)
+            // W-REKEYSYNC — only on a re-key round (never round 1, both
+            // sides already share the same ReKeyScheduler default there),
+            // and only when the peer sent a validated period. Untrusted
+            // network input: clamp to the same (0, basePeriodMs] range
+            // Android enforces before treating it as absent/fall back.
+            if isReKeyRound, let peerPeriod = bundle.rekeyNextPeriodMs,
+               peerPeriod > 0, Int64(peerPeriod) <= ReKeyScheduler.basePeriodMs {
+                onPeerRekeyPeriodAdvertised?(Int64(peerPeriod))
+            }
             // Phase 18 — v4 bootstrap (responder leg). Mirrors Android
             // PqcHandshake.kt:819-826 (`v4Ready`): self = our identity, peer = the
             // OFFER's signerIdentityKey (base64-decoded), transcriptHash = the
@@ -1937,8 +2768,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let v4PeerSik = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
             let v4PeerIdValid = (v4PeerSik?.count == 32)
             let v4BindingPresent = !verifiedOfferBinding.isEmpty
-            let v4Fire = negotiatedRatchetV4 && v4SelfIdPresent && v4PeerIdValid && v4BindingPresent
-            print("[PQC_DIAG_V4] responder callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4SelfIdPresent) peer=\(v4PeerIdValid) bindingEmpty=\(verifiedOfferBinding.isEmpty) → fire=\(v4Fire)")
+            // I3 — v4 message-ratchet bootstrap must fire only on the
+            // call's first handshake, never on a re-key round. See the
+            // matching guard + full rationale in the .accept case's
+            // v4InitFire below (same fix, both directions of the handshake).
+            let v4Fire = negotiatedRatchetV4 && v4SelfIdPresent && v4PeerIdValid && v4BindingPresent && !isReKeyRound
+            print("[PQC_DIAG_V4] responder callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4SelfIdPresent) peer=\(v4PeerIdValid) bindingEmpty=\(verifiedOfferBinding.isEmpty) reKey=\(isReKeyRound) → fire=\(v4Fire)")
             if v4Fire,
                let selfId = localSignerIdentityKey,
                let peerId = v4PeerSik {
@@ -2022,7 +2857,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `call_incoming` as acknowledged (suppressing the backup VoIP
             // push). Sent AFTER the ACCEPT so the crypto round-trip is
             // already in flight when the caller starts ringing.
-            if !callerId.isEmpty {
+            // I3 — this is a call-SETUP signal ("we are now ringing"),
+            // meaningless (and actively confusing to the caller's UI) once
+            // the call is already Active. Only send it on the first round;
+            // a re-key round must not re-announce "ringing" on an
+            // already-connected call. Found by adversarial review, not the
+            // original pass — see I3_IOS_REKEY_DESIGN_2026-08-21.md §8 in
+            // the qaudion-android-new repo (cross-repo doc).
+            if !callerId.isEmpty && !isReKeyRound {
                 sendCallReady?(callId, callerId)
             }
 
@@ -2031,7 +2873,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // the local hybrid privs we stashed in onAndroidCallSetupStarted.
             // W461: look up with both original and lowercase callId because
             // Android may echo a lowercase UUID even when iOS sent uppercase.
-            let localKeys = localHybridKeysByCall[callId]
+            //
+            // I3 §5 — a re-key ACCEPT must decapsulate against the FRESH
+            // keypair `performPqcReKey` generated for THIS round, never
+            // against `localHybridKeysByCall` (zeroed and removed right
+            // after the ORIGINAL handshake, step 7 below — reusing that
+            // slot for a re-key would also risk a stale retransmit of the
+            // ORIGINAL ACCEPT decapsulating with the WRONG private key).
+            // `pendingReKeyAttempt` only exists while a re-key round this
+            // integration itself initiated is in flight (single-call
+            // architecture — one integration instance handles one call at
+            // a time, same invariant `localHybridKeysByCall`'s own lookup
+            // already relies on).
+            let rekeyAttempt = lock.withLock { pendingReKeyAttempt }
+            let isReKeyAccept = rekeyAttempt != nil
+            // W-HSROUNDTIMING — second breadcrumb: ACCEPT reached this
+            // side's dispatch. Skipped for re-key rounds (`handshakeStartedAt`
+            // times the ORIGINAL handshake only, not each re-key round) so
+            // this stays a clean signal for "did the peer's ACCEPT for the
+            // opening handshake ever arrive" — see the send-confirmed and
+            // derive-complete siblings.
+            if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
+                logTiming("hs-accept-received", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
+            }
+            let localKeys = rekeyAttempt?.localKeys
+                         ?? localHybridKeysByCall[callId]
                          ?? localHybridKeysByCall[callId.lowercased()]
             guard let local = localKeys else {
                 let stashed: String = localHybridKeysByCall.keys.map { String($0.prefix(8)) }.joined(separator: ",")
@@ -2048,6 +2914,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             guard let x25519EphPub = Data(base64Encoded: ct.x25519) else {
                 print("[QAudionCallIntegration] ACCEPT base64-decode of ciphertext.x25519 failed (\(ct.x25519.count) chars)")
+                return
+            }
+
+            // I3 §5 — early duplicate short-circuit, found by adversarial
+            // review (2026-08-21). `sentOfferTranscriptByCall` (read a few
+            // lines below by the verify step) is keyed by plain callId, and
+            // `performPqcReKey` OVERWRITES it with each new round's own
+            // transcript. A RETRANSMIT of an ACCEPT from an EARLIER round
+            // (e.g. the original handshake's ACCEPT, redelivered late after
+            // a re-key has since started) would otherwise be verified
+            // against the WRONG (current round's) offer_binding — a
+            // spurious `sig_invalid`/`identity_key_mismatch` that clears
+            // the peer's stored SAS and forces re-confirmation on an
+            // otherwise-healthy, already-rekeyed call (W-NOBRICK keeps the
+            // call itself alive, but the UX regression is real and was
+            // fully avoidable). The content-fingerprint dedup a few lines
+            // below already correctly identifies a retransmit as a
+            // duplicate — computed here, earlier, so a duplicate skips
+            // verification entirely instead of running it against a
+            // transcript that no longer belongs to it. A genuinely NEW
+            // ACCEPT (first arrival of the original's, of any re-key
+            // round's) is unaffected — it always verifies against whatever
+            // is CURRENTLY stashed, which is correct because it IS the
+            // current round.
+            let normalizedIdForDedup = callId.lowercased()
+            let acceptFingerprint = Data(SHA256.hash(data: pqcCt + x25519EphPub)).base64EncodedString()
+            let acceptDedupKey = normalizedIdForDedup + "#" + acceptFingerprint
+            if lock.withLock({ processedAcceptFingerprintsByCall.contains(acceptDedupKey) }) {
+                print("[QAudionCallIntegration] ACCEPT duplicate (pre-verify) for callId=\(callId.prefix(8))… — skipping verify + initSession")
                 return
             }
 
@@ -2130,10 +3025,47 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // session (the policy already verified the ACCEPT signature
                     // under this set-proven device key).
                     print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true)
                     acceptSigOk = true
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
+                }
+            }
+
+            // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) —
+            // caller-side mirror of the responder's v3 gate above. Verifies
+            // the RESPONDER'S v3 signature over ITS OWN ACCEPT transcript,
+            // bound to the v3 OFFER transcript WE SENT (stashed at send time —
+            // `sentOfferTranscriptV3ByCall`). No separate round-monotonicity
+            // check is needed HERE: `pendingReKeyAttempt`'s UUID-keyed
+            // continuation (this function's own step 5.5 stale-attempt guard
+            // just below) already refuses an ACCEPT that does not answer the
+            // CURRENT in-flight attempt, which is a STRICTLY tighter guarantee
+            // than comparing round numbers (it is bound to a fresh random
+            // per-attempt id, not merely a monotone counter). This block only
+            // establishes `acceptTranscriptHashV3` for CALL-4's KDF/SAS fold.
+            var acceptTranscriptHashV3: Data?
+            if bundle.capabilities?.hsTranscriptBindV1 ?? false,
+               let sigV3B64 = bundle.sigV3, !sigV3B64.isEmpty,
+               let sikB64 = bundle.signerIdentityKey, !sikB64.isEmpty,
+               let sigV3Data = Data(base64Encoded: sigV3B64), sigV3Data.count == 64 {
+                let sentOfferTV3: Data? = lock.withLock { sentOfferTranscriptV3ByCall[callId.lowercased()] }
+                if let ourOfferTV3 = sentOfferTV3 {
+                    let expectedBindingV3 = HandshakeTranscript.offerBinding(ourOfferTV3)
+                    let bundleKeyV3 = Data(base64Encoded: sikB64)
+                    let pinnedV3 = peerPinStoreLookup(peerId: callerId, deviceId: callerDeviceId)
+                    let serverV3 = resolveServerPeerKey?(callerId)
+                    let publishedSetV3 = resolvePublishedKeySet?(callerId, callerDeviceId) ?? []
+                    let verifyKeyV3 = HandshakeSigningPolicy.verifyKeyHint(
+                        bundleKey: bundleKeyV3, pinnedKey: pinnedV3, serverFetchedKey: serverV3,
+                        publishedKeySet: publishedSetV3
+                    ) ?? Data()
+                    if let acceptTV3 = Self.acceptTranscriptV3(from: bundle, callId: callId, signerKeyRaw: verifyKeyV3, offerBindingV3: expectedBindingV3),
+                       HandshakeTranscript.verify(transcript: acceptTV3, signature: sigV3Data, signerIdentityKey: verifyKeyV3) {
+                        acceptTranscriptHashV3 = HandshakeTranscript.offerBinding(acceptTV3)
+                    } else {
+                        print("[QAudionCallIntegration] CALL-3/CALL-4: ACCEPT carried sigV3 but v3 verification FAILED callId=\(callId.prefix(8))… — falling back to legacy KDF/SAS, call NOT dropped")
+                    }
                 }
             }
 
@@ -2211,7 +3143,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
 
             // 4. Derive session key — V4 when keyClass != 0, schema:2 otherwise.
-            let combined: Data
+            // `var`: CALL-4 below may REPLACE this with the canonical
+            // transcript-bound derivation (`deriveTranscriptBoundSessionKey`).
+            var combined: Data
+            // ITEM 2/3 FOLLOW-UP — the PSK the schema:2 branch below mixes, hoisted
+            // out of that branch's own scope so CALL-4's override (which needs the
+            // SAME raw psk/pqcSs/x25519Ss inputs schema:2 used, not schema:2's
+            // already-derived output) can read it. Only ever meaningful when
+            // `keyClassAccept == 0` — the V4/hw_only branch does not set it, and
+            // CALL-4's override below only runs when `keyClassAccept == 0` too, so
+            // the two are never out of sync.
+            var schema2PskAccept: Data?
             if keyClassAccept != 0 {
                 let nd = Self.negDigest(fpSetInit: fpSetInitAccept, fpSetResp: fpSetRespAccept)
                 // WIRE_SPEC §5 P1 fix: look up PSK by fingerprint from SovereignKeyVault.
@@ -2269,6 +3211,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         ownEphemeralX25519Pub: local.x25519Priv.publicKey.rawRepresentation
                     )
                 }()
+                schema2PskAccept = fallbackPsk
                 combined = Self.deriveHybridSessionKey(
                     pqcSs: pqcSs,
                     x25519Ss: x25519Ss,
@@ -2277,23 +3220,104 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 )
             }
 
-            // 5. Double-ACCEPT guard — normalise to lowercase so both the
-            //    original-case and lowercase-echo paths converge on one key.
-            let normalizedId = callId.lowercased()
+            // CALL-4 — ITEM 2/3 FOLLOW-UP: REPLACE `combined` (not a further
+            // transform of it) with the canonical transcript-bound derivation over
+            // the SAME raw `pqcSs`/`x25519Ss`/`schema2PskAccept` inputs the schema:2
+            // branch above used, when `acceptTranscriptHashV3` was established above
+            // (nil ⇒ not negotiated/verified for this round ⇒ legacy key unchanged)
+            // AND `keyClassAccept == 0` — mirrors the responder leg's own
+            // `keyClass == 0` gate (see its comment there for the earbud-composition
+            // rationale this enforces on this leg too, independent of what the peer
+            // advertised).
+            if let h3 = acceptTranscriptHashV3, keyClassAccept == 0 {
+                combined = Self.deriveTranscriptBoundSessionKey(
+                    pqcSharedSecret: pqcSs,
+                    x25519Shared: x25519Ss,
+                    psk: schema2PskAccept,
+                    transcriptHash: h3
+                )
+                print("[QAudionCallIntegration] CALL-4: transcript-bound session key active (caller) callId=\(callId.prefix(8))…")
+            }
+
+            // I3 §5 — stale-attempt guard, found by adversarial review
+            // (2026-08-21): `rekeyAttempt` above was snapshotted BEFORE the
+            // crypto/FPSET work this case just did, some of which awaits
+            // (GATT round-trip, awaitFpSet's 5s wait). If this round's OWN
+            // timeout fires WHILE this function is suspended there,
+            // `pendingReKeyAttempt` gets cleared and performPqcReKey already
+            // returned `false` to its caller — but this ACCEPT, still
+            // in-flight, would otherwise reach `engine.initSession()` below
+            // and install ITS key anyway (ML-KEM decapsulation doesn't throw
+            // on a stale-but-structurally-valid ciphertext, it just returns
+            // SOME shared secret), silently overriding the "never brick"
+            // property `performPqcReKey`'s deferred-swap design was supposed
+            // to guarantee. Worse: if a NEW re-key round had already started
+            // in the meantime, this stale ACCEPT's resolution would grab and
+            // wrongly resolve THAT round's continuation (see the resolve-time
+            // `.id` check below) with THIS round's key. Bail out before
+            // touching the engine or any dedup/session state — a stale
+            // ACCEPT for an attempt that's no longer the live one is
+            // discarded, exactly like a lost/never-arriving ACCEPT is
+            // (performPqcReKey already returned false for it).
+            if isReKeyAccept {
+                let stillLive = lock.withLock { pendingReKeyAttempt?.id == rekeyAttempt?.id }
+                guard stillLive else {
+                    print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… arrived for a re-key attempt that already resolved/timed out — discarding stale ACCEPT")
+                    return
+                }
+            }
+
+            // 5. Double-ACCEPT guard — the AUTHORITATIVE, atomic check-and-insert
+            //    (the early return right after ct/x25519EphPub decode above is
+            //    only a cheap pre-verify optimization for the common retransmit
+            //    case; two near-simultaneous copies of the same ACCEPT could
+            //    both pass that early check before either inserts, so this
+            //    lock-guarded check-and-insert is what actually prevents a
+            //    double session-install). I3 §5 — content-based dedup, symmetric
+            //    to the OFFER-side fix (see processedAcceptFingerprintsByCall's
+            //    doc): keyed by the ACCEPT's own ciphertext, not callId alone,
+            //    so a genuine re-key ACCEPT (fresh ciphertext, same callId) is
+            //    NOT mistaken for a duplicate of the ORIGINAL ACCEPT and
+            //    silently discarded — the same bug class §4 fixed on the
+            //    responder side.
             let alreadyInit = lock.withLock {
-                let r = sessionInitializedByCall.contains(normalizedId)
-                if !r { sessionInitializedByCall.insert(normalizedId) }
+                let r = processedAcceptFingerprintsByCall.contains(acceptDedupKey)
+                if !r {
+                    processedAcceptFingerprintsByCall.insert(acceptDedupKey)
+                    sessionInitializedByCall.insert(normalizedIdForDedup)
+                }
                 return r
             }
             if alreadyInit {
                 print("[QAudionCallIntegration] ACCEPT duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 return
             }
-            print("[QAudionCallIntegration] ACCEPT accepted for callId=\(callId.prefix(8))… — initialising session")
+            print("[QAudionCallIntegration] ACCEPT accepted for callId=\(callId.prefix(8))… reKey=\(isReKeyAccept) — initialising session")
 
-            // 6. Initialise the audio session and fire the broker hook.
+            // 6. Initialise the audio session and fire the broker hook. No
+            //    engine.initialize() call in this case (unlike the .offer
+            //    case) — engine.initSession() alone is already safe to call
+            //    again mid-session, so this step needed no isReKeyRound
+            //    guard to begin with.
             // W479 — Android peer (caller side): same AdaptivePadding scheme.
-            try engine.initSession(sharedSecret: combined, adaptivePadding: true)
+            // MEDIA-3/4/5 — same negotiated per-direction inner-audio keys/AAD/
+            // replay window as the .offer branch above; see its comment.
+            let innerAadNegotiatedCaller = negotiatedInnerAudioAadV1
+            let innerAadSelfIsRoleACaller = innerAadNegotiatedCaller
+                ? PqcRtpFrameSealer.selfIsRoleA(resolveSelfUserId?() ?? "", callerId)
+                : false
+            let innerAadEpochCaller = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+            try engine.initSession(sharedSecret: combined, adaptivePadding: true,
+                                   innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
+                                   selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
+            // W-HSROUNDTIMING — third breadcrumb: decapsulation + session-key
+            // derivation actually completed (engine.initSession didn't
+            // throw). Paired with hs-offer-sent/hs-accept-received above —
+            // a stuck-in-.fallback call missing ONLY this one now points
+            // straight at decap/derivation, not the network legs.
+            if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
+                logTiming("hs-derive-complete", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
+            }
             onRelaySessionReady?(combined, callId)
             lock.withLock {
                 state = .active
@@ -2304,8 +3328,29 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 //    and the Curve25519 PrivateKey (CryptoKit will deinit
                 //    the wrapped opaque handle on dealloc). Zeroing
                 //    earlier risks the second-ACCEPT branch trying to
-                //    decap with empty bytes.
+                //    decap with empty bytes. No-op on a re-key round (this
+                //    slot was already removed after the ORIGINAL handshake).
                 localHybridKeysByCall.removeValue(forKey: callId)
+            }
+            // I3 §5 — resolve performPqcReKey's awaiting continuation now
+            // that the new key is installed. The `stillLive` gate above
+            // already guarantees `pendingReKeyAttempt?.id == rekeyAttempt?.id`
+            // at this point (nothing between there and here can start a NEW
+            // re-key round — that only happens from a fresh
+            // performPqcReKey call, and the glare guard there requires
+            // `pendingReKeyAttempt == nil`, which isn't true again until
+            // THIS resolution clears it a few lines down). The `.id` check
+            // is repeated here anyway, matching the send-failure/timeout
+            // paths' own pattern exactly, rather than relying on that
+            // invariant holding across a future edit to either function.
+            if isReKeyAccept {
+                let resume: ((Data?) -> Void)? = lock.withLock {
+                    guard pendingReKeyAttempt?.id == rekeyAttempt?.id else { return nil }
+                    let r = pendingReKeyAttempt?.resume
+                    pendingReKeyAttempt = nil
+                    return r
+                }
+                resume?(combined)
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
@@ -2360,8 +3405,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let v4InitPeerSik = bundle.signerIdentityKey.flatMap { Data(base64Encoded: $0) }
             let v4InitPeerIdValid = (v4InitPeerSik?.count == 32)
             let v4InitBindingPresent = (sentOfferTForV4 != nil)
-            let v4InitFire = negotiatedRatchetV4 && v4InitSelfIdPresent && v4InitPeerIdValid && v4InitBindingPresent
-            print("[PQC_DIAG_V4] initiator callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4InitSelfIdPresent) peer=\(v4InitPeerIdValid) bindingEmpty=\(!v4InitBindingPresent) → fire=\(v4InitFire)")
+            // I3 (2026-08-21) — v4 message-ratchet bootstrap must fire ONLY
+            // on the call's very first handshake, never on a re-key round.
+            // onV4BootstrapReady's consumer (AppState.sharedV4Ratchet
+            // .bootstrapV4AndPersist) unconditionally OVERWRITES the
+            // persisted v4 CHAT ratchet session for this contact — that is
+            // the message layer, not the call's audio/video key. Re-firing
+            // it every ~5 minutes during a call would silently reset a
+            // contact's chat ratchet chain state mid-call, making any chat
+            // message in flight at that moment permanently undecryptable
+            // (confirmed by reading MessageRatchet's decrypt path: fail-
+            // closed, no fallback, no state kept on failure). Real gap
+            // found investigating a spun-off follow-up from the I3 re-key
+            // fix — same root pattern (Android's finalize()/
+            // persistMessagePsk() has the identical unconditional call and
+            // needs the mirrored isReKeyRound guard there too).
+            let v4InitFire = negotiatedRatchetV4 && v4InitSelfIdPresent && v4InitPeerIdValid && v4InitBindingPresent && !isReKeyAccept
+            print("[PQC_DIAG_V4] initiator callId=\(callId.prefix(8)) negotiatedV4=\(negotiatedRatchetV4) available=\(RatchetNative.available) selfId=\(v4InitSelfIdPresent) peer=\(v4InitPeerIdValid) bindingEmpty=\(!v4InitBindingPresent) reKey=\(isReKeyAccept) → fire=\(v4InitFire)")
             if v4InitFire,
                let selfId = localSignerIdentityKey,
                let peerId = v4InitPeerSik,
@@ -2572,6 +3632,38 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return (c6.ratchetV3, c6.sframeV1, c6.vkeyV1, c6.sessionKdfV3, c6.ratchetV4, c6.srtpDirKeyV1, caps?.pskMixV1 ?? false)
     }
 
+    /// CALL-3/CALL-4 (HSID-002 remainder) — 8-tuple sibling of `capsFromBundle7`,
+    /// adding `hsTranscriptBindV1` (bound into the v3 transcript's 8th CAPS byte
+    /// ONLY — `capsFromBundle`/v1's 6-byte and `capsFromBundle7`/v2's 7-byte CAPS
+    /// are completely untouched). Absent/null capabilities → false, same rule as
+    /// `capsFromBundle`/`capsFromBundle7`.
+    private static func capsFromBundle8(
+        _ caps: AndroidHandshakeBundle.Capabilities?
+    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool, sessionKdfV3: Bool, ratchetV4: Bool, srtpDirKeyV1: Bool, pskMixV1: Bool, hsTranscriptBindV1: Bool) {
+        let c7 = capsFromBundle7(caps)
+        return (c7.ratchetV3, c7.sframeV1, c7.vkeyV1, c7.sessionKdfV3, c7.ratchetV4, c7.srtpDirKeyV1, c7.pskMixV1, caps?.hsTranscriptBindV1 ?? false)
+    }
+
+    /// CALL-3 — decode a bundle's `rekeyNonce` (base64) to raw bytes for
+    /// `HandshakeTranscript.offerV3`/`acceptV3`. Returns `nil` for an absent
+    /// field AND for any present-but-malformed value (wrong length, bad
+    /// base64) — NEVER a length other than exactly 8 bytes, because
+    /// `offerV3`/`acceptV3` `precondition` on that length and a
+    /// `precondition` cannot be caught (see `HandshakeTranscript.advEnc`'s
+    /// doc on the same hazard).
+    ///
+    /// ITEM 2/3 FOLLOW-UP — `rekeyNonce` is now a REQUIRED field on both
+    /// `offerV3` and `acceptV3` (resent on every round, never omitted — see
+    /// `offerV3`'s doc), so a `nil` return here degrades the CALLER's entire
+    /// v3 transcript to `nil` (falls back to legacy KDF/SAS for that round —
+    /// see `offerTranscriptV3`/`acceptTranscriptV3`), never a crash: a
+    /// malformed/absent peer-controlled nonce simply means "this round never
+    /// gets v3", not "sign with a wrong-shaped nonce".
+    private static func rekeyNonceRaw(from b64: String?) -> Data? {
+        guard let b64, let raw = Data(base64Encoded: b64), raw.count == 8 else { return nil }
+        return raw
+    }
+
     /// Build the §3 OFFER transcript from an OFFER bundle's RAW (base64-decoded)
     /// fields, signed/verified under `signerKeyRaw` (the LOCAL pub when signing,
     /// the PINNED/server peer pub when verifying — NEVER blindly the bundle key).
@@ -2643,6 +3735,57 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             suiteId: HandshakeSigningPolicy.suiteId,
             pskFingerprints: bundle.pskFingerprints,
             pskRoles: bundle.pskRoles
+        )
+    }
+
+    /// CALL-3/CALL-4 (HSID-002 remainder) — v3 sibling of `offerTranscriptV2`.
+    /// Same base64-decode guards, PLUS requires `bundle.rekeyRound` to be
+    /// present (v3 is meaningless without a round number — returns `nil`,
+    /// same "degrade to legacy" contract every other guard in this function
+    /// already follows) AND, ITEM 2/3 FOLLOW-UP, requires `bundle.rekeyNonce`
+    /// to decode via `rekeyNonceRaw` to a valid 8-byte value — `offerV3` now
+    /// takes `rekeyNonce` as a REQUIRED, non-optional `Data` (see its own
+    /// doc: the nonce is resent on every round, not just round 1, so there is
+    /// no longer a legitimate "round > 1, no nonce" shape to accommodate). A
+    /// missing/malformed nonce degrades this ENTIRE v3 transcript to `nil`
+    /// (same "fall back to legacy KDF/SAS" contract as every other guard
+    /// here), never a `precondition` trap on peer-controlled input.
+    private static func offerTranscriptV3(
+        from bundle: AndroidHandshakeBundle,
+        callId: String,
+        signerKeyRaw: Data
+    ) -> Data? {
+        guard let pqcB64 = bundle.pqcPublicKey, let pqcRaw = Data(base64Encoded: pqcB64),
+              let x25B64 = bundle.x25519PublicKey, let x25Raw = Data(base64Encoded: x25B64),
+              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
+            return nil
+        }
+        let strongBox = bundle.strongBoxPublicKey.flatMap { Data(base64Encoded: $0) }
+        let dualCurve = bundle.dualCurvePublicKey.flatMap { Data(base64Encoded: $0) }
+        let caps = capsFromBundle8(bundle.capabilities)
+        return HandshakeTranscript.offerV3(
+            callId: callId,
+            signerIdentityKey: signerKeyRaw,
+            epochId: HandshakeSigningPolicy.placeholderEpochId,
+            pqcPublicKey: pqcRaw,
+            x25519PublicKey: x25Raw,
+            strongBoxPublicKey: strongBox,
+            dualCurvePublicKey: dualCurve,
+            ratchetV3: caps.ratchetV3,
+            sframeV1: caps.sframeV1,
+            vkeyV1: caps.vkeyV1,
+            sessionKdfV3: caps.sessionKdfV3,
+            ratchetV4: caps.ratchetV4,
+            srtpDirKeyV1: caps.srtpDirKeyV1,
+            pskMixV1: caps.pskMixV1,
+            hsTranscriptBindV1: caps.hsTranscriptBindV1,
+            ratchetV: HandshakeSigningPolicy.ratchetV,
+            suiteId: HandshakeSigningPolicy.suiteId,
+            pskFingerprints: bundle.pskFingerprints,
+            pskRoles: bundle.pskRoles,
+            rekeyNonce: nonceRaw,
+            rekeyRound: UInt32(roundInt)
         )
     }
 
@@ -2730,6 +3873,63 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         )
     }
 
+    /// CALL-3/CALL-4 (HSID-002 remainder) — v3 sibling of `acceptTranscriptV2`.
+    /// `offerBindingV3` MUST be `SHA-256` of the OFFER's **v3** transcript
+    /// (from `offerTranscriptV3`/`HandshakeTranscript.offerBinding`) — distinct
+    /// from the v1/v2 `offerBinding`s the sibling functions bind to. Requires
+    /// `bundle.rekeyRound` (this ACCEPT's own echoed round) to be present,
+    /// same "degrade to legacy" contract as `offerTranscriptV3`.
+    ///
+    /// ITEM 2/3 FOLLOW-UP — ALSO requires `bundle.rekeyNonce` (the RESPONDER'S
+    /// ECHO of the OFFER's nonce, now set on every ACCEPT this bundle builder
+    /// produces — see the `.offer`/`.accept` cases in `onAndroidBundleReceived`)
+    /// to decode via `rekeyNonceRaw`: `acceptV3` now takes `rekeyNonce` as a
+    /// REQUIRED, non-optional `Data`, matching Android's `acceptV3` shape —
+    /// this platform's ACCEPT transcript previously carried no nonce field at
+    /// all (see `HandshakeTranscript.acceptV3`'s doc).
+    private static func acceptTranscriptV3(
+        from bundle: AndroidHandshakeBundle,
+        callId: String,
+        signerKeyRaw: Data,
+        offerBindingV3: Data
+    ) -> Data? {
+        guard let ct = bundle.ciphertext,
+              let pqcRaw = Data(base64Encoded: ct.pqc),
+              let x25Raw = Data(base64Encoded: ct.x25519),
+              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
+            return nil
+        }
+        let strongBox = ct.strongBox.flatMap { Data(base64Encoded: $0) }
+        let dualCurve = ct.dualCurve.flatMap { Data(base64Encoded: $0) }
+        let caps = capsFromBundle8(bundle.capabilities)
+        return HandshakeTranscript.acceptV3(
+            callId: callId,
+            signerIdentityKey: signerKeyRaw,
+            epochId: HandshakeSigningPolicy.placeholderEpochId,
+            ctPqc: pqcRaw,
+            ctX25519: x25Raw,
+            ctStrongBox: strongBox,
+            ctDualCurve: dualCurve,
+            ratchetV3: caps.ratchetV3,
+            sframeV1: caps.sframeV1,
+            vkeyV1: caps.vkeyV1,
+            sessionKdfV3: caps.sessionKdfV3,
+            ratchetV4: caps.ratchetV4,
+            srtpDirKeyV1: caps.srtpDirKeyV1,
+            pskMixV1: caps.pskMixV1,
+            hsTranscriptBindV1: caps.hsTranscriptBindV1,
+            ratchetV: HandshakeSigningPolicy.ratchetV,
+            suiteId: HandshakeSigningPolicy.suiteId,
+            selectedPskFingerprint: bundle.selectedPskFingerprint,
+            offerBinding: offerBindingV3,
+            responderPskFingerprints: bundle.pskFingerprints,
+            responderPskRoles: bundle.pskRoles,
+            rekeyNonce: nonceRaw,
+            rekeyRound: UInt32(roundInt)
+        )
+    }
+
     /// Compute `require_signed(peer)` (spec §4) from the wired policy closures.
     private func requireSigned(forPeer peerId: String) -> Bool {
         let v4 = isPeerV4Pinned?(peerId) ?? false
@@ -2763,7 +3963,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `signOffer/signAccept`). Returns the ORIGINAL bundle unchanged when the v1 signature
     /// itself fails (degrade to unsigned) so signing can never break a call. No-op (returns
     /// input) when signing is not wired.
-    private func signedCopy(of bundle: AndroidHandshakeBundle, transcript: Data, transcriptV2: Data? = nil) -> AndroidHandshakeBundle {
+    private func signedCopy(of bundle: AndroidHandshakeBundle, transcript: Data, transcriptV2: Data? = nil, transcriptV3: Data? = nil) -> AndroidHandshakeBundle {
         guard let idKey = localSignerIdentityKey, let sign = signTranscript,
               let sig = sign(transcript), sig.count == 64 else {
             return bundle
@@ -2771,6 +3971,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         var sigV2B64: String?
         if let t2 = transcriptV2, let sig2 = sign(t2), sig2.count == 64 {
             sigV2B64 = sig2.base64EncodedString()
+        }
+        // CALL-3/CALL-4 (HSID-002 remainder) — v3 sibling, same
+        // never-blocks-the-v1-signature isolation as sigV2 above: a v3-specific
+        // failure (signer error, or `transcriptV3` absent because `bundle` did
+        // not carry `rekeyRound`) never prevents `sig`/`sigV2` from attaching.
+        var sigV3B64: String?
+        if let t3 = transcriptV3, let sig3 = sign(t3), sig3.count == 64 {
+            sigV3B64 = sig3.base64EncodedString()
         }
         return AndroidHandshakeBundle(
             kind: bundle.kind,
@@ -2786,7 +3994,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             pskRoles: bundle.pskRoles,
             signerIdentityKey: idKey.base64EncodedString(),
             signature: sig.base64EncodedString(),
-            sigV2: sigV2B64
+            sigV2: sigV2B64,
+            sigV3: sigV3B64,
+            // CALL-3 — carried through verbatim from the input bundle, which
+            // the OFFER/ACCEPT builders set BEFORE calling this function.
+            rekeyNonce: bundle.rekeyNonce,
+            rekeyRound: bundle.rekeyRound,
+            // W-REKEYSYNC — same "carried through verbatim" rule; omitting
+            // this here would silently drop it from every SIGNED OFFER
+            // (the only kind actually sent when signing is enabled), since
+            // this function reconstructs the bundle field-by-field rather
+            // than copying it.
+            rekeyNextPeriodMs: bundle.rekeyNextPeriodMs
         )
     }
 
@@ -2876,10 +4095,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         deviceId: String?,
         tofuPinKey: Data?,
         v4Capable: Bool,
-        srtpDirKeyV1Capable: Bool = false
+        srtpDirKeyV1Capable: Bool = false,
+        setProven: Bool = false
     ) {
         if let pinKey = tofuPinKey {
-            if let perDevice = commitTofuPinForDevice {
+            // W-SASPIN — a set-proven rotation is the ONE case allowed to
+            // overwrite an existing pin; everything else stays write-once.
+            if setProven, let repin = commitSetProvenRepinForDevice {
+                repin(peerId, pinKey, deviceId)
+            } else if let perDevice = commitTofuPinForDevice {
                 perDevice(peerId, pinKey, deviceId)
             } else {
                 commitTofuPin?(peerId, pinKey)
@@ -3309,6 +4533,175 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return key.withUnsafeBytes { Data($0) }
     }
 
+    // MARK: - CALL-4/HSID-002 (2026-09-02 protocol audit) — transcript-bound
+    // session key, canonical single-pass construction (ITEM 2/3 FOLLOW-UP,
+    // reconciled to Android's HybridPqcKeyExchange.kt
+    // deriveSessionKeyTranscriptBound — the DESIGNATED CANONICAL construction
+    // across all three platforms, see this fix's own commit message)
+
+    /// CALL-4/HSID-002 — the transcript-bound session-key KDF. Operates
+    /// DIRECTLY on the raw hybrid shared secrets, exactly like the un-bound
+    /// schema:2 derivation (`deriveHybridSessionKey`) — this is a REPLACEMENT
+    /// for that derivation's `info`, not a second pass layered on top of its
+    /// output. Applied ONLY when both peers negotiated `hsTranscriptBindV1` AND
+    /// that round's v3 signature verified — the caller
+    /// (`onAndroidBundleReceived`) is responsible for that gate, INCLUDING
+    /// never calling this for a call using the earbud-exclusive schema:4 KDF
+    /// (`deriveHybridSessionKeyV4`, `keyClass != 0`) — see the "UNRESOLVED
+    /// INTERACTION" note on `hsTranscriptBindV1`'s capability-advertisement
+    /// sites (search this file for `keyClass == 0` near this function's call
+    /// sites) for why: this construction has no `keyClass`/`negDigest` input
+    /// at all, so composing it with the earbud hw_only scheme was left
+    /// unresolved by design pending a dedicated decision, and the
+    /// conservative fix here is to never negotiate `hsTranscriptBindV1` for an
+    /// earbud/sovereign-earbud call in the first place.
+    ///
+    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — REPLACES the prior CASCADED
+    /// second-HKDF-pass-over-`baseKey` construction this function used to be
+    /// (see the git history for the pre-follow-up version). All three
+    /// platforms had independently implemented DIFFERENT algebraic
+    /// constructions under the SAME `hsTranscriptBindV1` wire capability bit;
+    /// Android's is DESIGNATED CANONICAL (simplest, externally
+    /// security-reviewed before the original implementation) and this
+    /// function is now a byte-for-byte Swift port of Android's
+    /// `HybridPqcKeyExchange.kt deriveSessionKeyTranscriptBound`:
+    ///
+    ///   ikm  = pqcSharedSecret(32) || x25519Shared(32)                  [64B]
+    ///   salt = psk                if (psk != nil && !psk.isEmpty)
+    ///          else HkdfLabels.hybridPqcSaltV1  // "q-audion-hybrid-pqc-v1"
+    ///   info = HkdfLabels.hybridPqcSessionKey(20) || transcriptHash(32) [52B]
+    ///   key  = HKDF-SHA256(ikm, salt, info, 32)
+    ///
+    /// Deliberately does NOT also fold `ctBind`/`selectedFp` the way
+    /// schema:3/4 do: `transcriptHash` (the v3 ACCEPT transcript's SHA-256)
+    /// already embeds the raw ML-KEM ciphertext and the selected PSK
+    /// fingerprint set directly — recursively, via `HandshakeTranscript
+    /// .acceptV3`/`offerV3`'s own `ctPqc`/`ctX25519`/`advEnc` fields — so
+    /// re-adding them here would be redundant, not additional protection
+    /// (this platform's prior construction did include a `ctBind` HMAC via
+    /// the base-key cascade; that redundancy is what this follow-up removes).
+    ///
+    /// `transcriptHash` MUST be exactly 32 bytes (a SHA-256 digest) —
+    /// `precondition`-checked; callers only ever pass
+    /// `HandshakeTranscript.offerBinding(_:)`'s own 32-byte output, never
+    /// peer-controlled bytes directly, so this can never trap on adversarial
+    /// input (the peer only influences the TRANSCRIPT that gets hashed, never
+    /// the hash's length).
+    ///
+    /// `internal` (not `private`) so the cross-platform KAT test
+    /// (`SessionKeyTranscriptBoundTests.testCrossPlatformKatFixture`) can
+    /// exercise this exact production path via `@testable import`.
+    static func deriveTranscriptBoundSessionKey(
+        pqcSharedSecret: Data,
+        x25519Shared: Data,
+        psk: Data?,
+        transcriptHash: Data
+    ) -> Data {
+        precondition(transcriptHash.count == 32, "transcriptHash must be 32 bytes")
+        var ikm = Data(capacity: pqcSharedSecret.count + x25519Shared.count)
+        ikm.append(pqcSharedSecret)
+        ikm.append(x25519Shared)
+        let salt: Data
+        if let psk = psk, !psk.isEmpty {
+            salt = psk
+        } else {
+            salt = HkdfLabels.hybridPqcSaltV1
+        }
+        var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + transcriptHash.count)
+        info.append(HkdfLabels.hybridPqcSessionKey)
+        info.append(transcriptHash)
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: salt,
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    // MARK: - CALL-3 (2026-09-02 protocol audit) — re-key round freshness
+
+    /// CALL-3 — the nonce-scoped re-key round freshness value the audit's fix
+    /// design specifies: `HKDF(ikm: callId || rekeyNonce, info:
+    /// "rekey-round"(11) || round_number as u32_BE(4), L: 32)`. NOT itself a
+    /// wire field on `offerV3`/`acceptV3` today — those sign the raw
+    /// `(rekeyNonce, rekeyRound)` pair directly (Ed25519-authenticated, which
+    /// is what actually makes a replayed stale round detectable; see those
+    /// functions' docs), so re-deriving an opaque blob from the same two
+    /// inputs would be redundant for THAT property. This function exists as a
+    /// ready, tested, byte-exact implementation of the literal formula the
+    /// external security review specified, for whichever future consumer
+    /// wants an opaque per-round freshness token (e.g. the day
+    /// `HandshakeSigningPolicy.placeholderEpochId` is replaced by a real
+    /// per-round epoch — see that constant's own EPOCH NOTE) rather than the
+    /// call-site round/nonce pair directly.
+    ///
+    /// `internal` (not `private`) so a future KAT test can exercise it via
+    /// `@testable import`.
+    /// CALL-3 — generate the call's own random 64-bit (8-byte) `rekeyNonce`.
+    /// `SecRandomCopyBytes` against `kSecRandomDefault`, matching every other
+    /// CSPRNG call site in this engine (`MessageCrypto.randomBytes`,
+    /// `SessionManager`, `StunClient`, …). `private` — the only callers are
+    /// `onAndroidCallSetupStarted` (round 1, generates it once per call) and
+    /// tests (via a dedicated seam, not this raw generator).
+    private static func generateRekeyNonce() -> Data {
+        var bytes = Data(count: 8)
+        let status = bytes.withUnsafeMutableBytes { buf -> OSStatus in
+            guard let base = buf.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, 8, base)
+        }
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
+        return bytes
+    }
+
+    /// CALL-3 — the pure round-monotonicity DECISION: does an inbound v3-verified
+    /// re-key OFFER's `round` get REFUSED as stale/replayed? `true` ⇒ refuse (do
+    /// not install, do not ACCEPT — the call keeps running on its current key).
+    ///
+    /// - `isReKeyRound`: this call already completed a full handshake before
+    ///   (round 1's OFFER itself is NEVER refused — there is no "last accepted"
+    ///   to compare against yet).
+    /// - `isKnownRetransmit`: this EXACT bundle's content-fingerprint has already
+    ///   been processed once (a WS/push redelivery of the CURRENTLY-active
+    ///   round) — MUST be let through so the caller's existing "replay the
+    ///   cached ACCEPT" path runs, never refused here (a retransmit of the
+    ///   active round legitimately carries `round == lastAccepted`, which the
+    ///   raw `round <= lastAccepted` rule below would otherwise catch).
+    /// - `round`: this OFFER's own signed, v3-verified round number.
+    /// - `lastAccepted`: the last round THIS side has accepted for this call
+    ///   (nil ⇒ no prior state ⇒ never refuse — TOFU-accept the baseline).
+    ///
+    /// `internal` (not `private`) so a KAT/unit test can exercise this exact
+    /// decision via `@testable import` without standing up the full async
+    /// handshake machinery.
+    static func shouldRefuseStaleRekeyRound(
+        isReKeyRound: Bool,
+        isKnownRetransmit: Bool,
+        round: UInt32,
+        lastAccepted: UInt32?
+    ) -> Bool {
+        guard !isKnownRetransmit, isReKeyRound, let last = lastAccepted else { return false }
+        return round <= last
+    }
+
+    static func rekeyFreshnessValue(callId: String, rekeyNonce: Data, round: UInt32) -> Data {
+        precondition(rekeyNonce.count == 8, "rekeyNonce must be 8 bytes")
+        var ikm = Data(callId.utf8)
+        ikm.append(rekeyNonce)
+        var info = Data("rekey-round".utf8)
+        info.append(UInt8((round >> 24) & 0xFF))
+        info.append(UInt8((round >> 16) & 0xFF))
+        info.append(UInt8((round >> 8) & 0xFF))
+        info.append(UInt8(round & 0xFF))
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: Data(),
+            info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
     /// `vkey-v1` — derive the dedicated 32-byte earbud-video key K_video.
     ///
     /// Byte-identical to Android `deriveVideoKey` and the Desktop port.
@@ -3359,6 +4752,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             inputKeyMaterial: SymmetricKey(data: sessionKey),
             salt: salt,
             info: info,
+            outputByteCount: 32
+        )
+        return key.withUnsafeBytes { Data($0) }
+    }
+
+    /// MEDIA-8 (2026-09-02 protocol audit, backlog item 5B) — the video
+    /// fallback key used when the peer did NOT negotiate `vkey-v1` (see
+    /// `QAudionWebRtcCallController.ensureVideoSealerInternal`'s call site).
+    /// Replaces the old behaviour of handing the raw audio `sessionKey`
+    /// straight to the video FrameCryptor, unmodified — a single key domain
+    /// shared between audio and video with separation resting solely on the
+    /// native FrameCryptor's own SSRC/timestamp-derived IV.
+    ///
+    ///   k_video_fallback = HKDF-SHA256(IKM=sessionKey, salt=∅,
+    ///                                  info="q-audion-video-fallback-v1", L=32)
+    ///
+    /// Deliberately UNCONDITIONAL: unlike `deriveVideoKey` above (gated on
+    /// the peer advertising `vkey-v1`) this needs no peer coordination —
+    /// HKDF is a deterministic pure function of a value BOTH sides already
+    /// hold (`sessionKey`), so both legs derive the identical fallback key
+    /// independently with no wire change and no negotiation. No kill switch:
+    /// every build applies this whenever the vkey-v1 path isn't taken.
+    static func deriveVideoFallbackKey(sessionKey: Data) -> Data {
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: sessionKey),
+            salt: Data(),
+            info: Data("q-audion-video-fallback-v1".utf8),
             outputByteCount: 32
         )
         return key.withUnsafeBytes { Data($0) }
@@ -3459,6 +4879,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let pcm = try engine.processIncomingAudio(serializedFrame: serializedFrame)
         enqueueForAnalysis(pcm)
         return pcm
+    }
+
+    /// IOS-C4b / PCM-TAP PARITY (2026-08-26) — the native-audio-srtp RX
+    /// counterpart of `processIncomingAudio`, for a call that negotiated
+    /// `CallCapabilities.audioSrtpV1`. On such a call the peer sends real
+    /// SRTP, never a serialized DataChannel/WS frame, so
+    /// `processIncomingAudio` above is NEVER called for its whole
+    /// life — without this method every RX consumer it feeds
+    /// (`guardianMode`, `contactVoiceVerifier`, `voiceLearningSession`,
+    /// `voiceAnalysis`, `spectrumExtractor`) would silently see zero frames.
+    /// See `NativeAudioPcmTap`'s own doc for the full incident this exists
+    /// to avoid (Android's real, shipped `W-AUDIOSRTPFEATUREPARITY`
+    /// incident, confirmed present on iOS by tracing this exact call chain).
+    ///
+    /// Wired from `QAudionWebRtcCallController.onNativeAudioSrtpRxPcm` via
+    /// `CallService`. `pcm` is already little-endian Int16 mono 48 kHz —
+    /// the SAME layout `enqueueForAnalysis`'s callers assume — so this
+    /// reuses the identical bounded-ring / rxAnalysisQueue machinery with
+    /// zero new consumer code, only a new PRODUCER.
+    public func feedNativeAudioSrtpRxPcm(_ pcm: Data) {
+        enqueueForAnalysis(pcm)
+    }
+
+    /// TX/local-mic counterpart — mirrors `processOutgoingAudio`'s
+    /// `ownerContinuityMonitor.feed(pcmFrame:)` call, minus the Opus encode
+    /// (native SRTP owns encoding on this path). Wired from
+    /// `QAudionWebRtcCallController.onNativeAudioSrtpTxPcm`.
+    public func feedNativeAudioSrtpTxPcm(_ pcm: Data) {
+        ownerContinuityMonitor.feed(pcmFrame: pcm)
     }
 
     /// Hand decoded RX PCM to the analysis queue. Bounded and drop-oldest:
@@ -3599,6 +5048,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // later call: clear all per-callId state so the next call
         // re-runs key generation + session init from scratch.
         sessionInitializedByCall.removeAll()
+        // I3 — same reasoning as sessionInitializedByCall above: a reused
+        // integration instance must not carry a prior call's OFFER
+        // fingerprints/cached ACCEPTs into the next call.
+        processedOfferFingerprintsByCall.removeAll()
+        acceptWireByOfferFingerprint.removeAll()
+        // I3 §5 — same reasoning; also resolve (never leak) an in-flight
+        // re-key attempt's continuation if the call ends while one is
+        // outstanding, so performPqcReKey's awaiter returns `false` instead
+        // of hanging until its own timeout fires on a dead call.
+        processedAcceptFingerprintsByCall.removeAll()
+        let orphanedReKeyResume = pendingReKeyAttempt?.resume
+        pendingReKeyAttempt = nil
+        orphanedReKeyResume?(nil)
         localHybridKeysByCall.removeAll()
         // Phase-10b: clear the stashed sent-OFFER transcripts so a reused
         // integration does not leak a prior call's offer_binding into the next
@@ -3606,6 +5068,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         sentOfferTranscriptByCall.removeAll()
         // W-TRANSCRIPTV2 — same reasoning, v2 sibling.
         sentOfferTranscriptV2ByCall.removeAll()
+        // CALL-3/CALL-4 (HSID-002 remainder) — same reasoning, v3 sibling, PLUS
+        // the round/nonce ratchets: a reused integration instance must not
+        // carry a prior call's nonce or accepted-round watermark into a NEW
+        // call that happens to reuse the SAME callId is impossible (callIds
+        // are UUIDs), but clearing unconditionally is the same "never trust
+        // stale per-call state" discipline every dictionary in this block
+        // already follows.
+        sentOfferTranscriptV3ByCall.removeAll()
+        rekeyNonceByCall.removeAll()
+        rekeyRoundByCall.removeAll()
+        lastAcceptedRekeyRoundByCall.removeAll()
         // W-KCMAC — same reasoning, the stashed sent-OFFER PSK advert list.
         sentOfferPskFingerprintsByCall.removeAll()
         // W-KCMACROLES — the parallel role list is stashed and cleared in lockstep
@@ -3950,6 +5423,27 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// No-op before the engine is initialized.
     public func reconfigureAudioCodec(bitrateKbps: Int, plp: Int) {
         engine.reconfigureAudioCodec(bitrateKbps: bitrateKbps, plp: plp)
+    }
+
+    /// W-FECDECODE (2026-08-25) — forwards `engine.onFecRecoveredAudio`. A
+    /// computed proxy rather than a copied closure: `engine` is a `let`
+    /// constant for this integration's whole life, so there is no rebuild to
+    /// go stale against, unlike `engine`'s own forwarding to `audioProcessor`.
+    public var onFecRecoveredAudio: ((Data) -> Void)? {
+        get { engine.onFecRecoveredAudio }
+        set { engine.onFecRecoveredAudio = newValue }
+    }
+
+    /// W-FECDECODE — cumulative FEC recovery counters, for the rate-limited
+    /// `fec_rec=<n> fec_fail=<n>` diagnostic.
+    public func rxFecStats() -> (recovered: Int64, failed: Int64) {
+        engine.rxFecStats()
+    }
+
+    /// W-PLPFEEDBACK — cumulative inbound-loss snapshot, for the periodic
+    /// PLP: report timer.
+    public func rxLossSnapshot() -> (expected: Int64, lost: Int64) {
+        engine.rxLossSnapshot()
     }
 
     /// W-LONGAUDIO (2026-08-10) — latch this call's audio profile on the engine.

@@ -33,6 +33,73 @@ public struct GroupMediaKey {
     }
 }
 
+/// W-GRPVIEWPORT (2026-08-26): the safe, additive half of closing
+/// W-GRPADAPTIVEDEADLOCK's gap (see that tag's kdoc at `RoomOptions`
+/// below for the starvation bug that forced `adaptiveStream`/`dynacast`
+/// off). With both SDK-driven mechanisms off, nothing else in the SDK
+/// ever asks the SFU to stop sending a layer this app isn't rendering —
+/// this is the manual per-participant equivalent, driven from the app's
+/// OWN visibility signal (`GroupCallView`'s existing grid-pagination
+/// state) instead of the SDK's disabled auto-detection. Shared above the
+/// `#if canImport(LiveKit)` split (like `GroupMediaKey`) so callers that
+/// only import QAudionEngine — not LiveKit directly — can use it, and so
+/// the type is identical across the real/stub build configurations.
+public enum RemoteVideoRenderPriority: Sendable, Equatable {
+    /// Not on the current grid page (and not the `.speaker`-mode
+    /// spotlight tile) — stop the SFU from forwarding this track's
+    /// bytes to us at all (`RemoteTrackPublication.set(enabled: false)`,
+    /// real bandwidth savings, not just a local render skip).
+    case offScreen
+    /// On the current grid page as a regular (non-spotlight) tile —
+    /// tiles are small (`gridMinTileWidth` floor is 110pt), so the
+    /// lowest simulcast layer is legible and cheapest.
+    case onScreenSmall
+    /// The enlarged `.speaker`-mode pinned tile — worth the top layer.
+    case onScreenSpotlight
+}
+
+/// W-GRPQUALITY (2026-08-26) — local mirror of LiveKit's `VideoQuality`
+/// (low/medium/high), kept independent of the `#if canImport(LiveKit)`
+/// split (like `RemoteVideoRenderPriority` above) so the composition below
+/// is testable without the SDK — same discipline as `RestartIceDecisions`
+/// in the WebRTC/ directory.
+public enum GroupVideoQualityTier: Sendable, Equatable {
+    case low, medium, high
+}
+
+extension RemoteVideoRenderPriority {
+    /// W-GRPQUALITY — composes the viewport-driven render priority
+    /// (W-GRPVIEWPORT, above) with the user's saved `preferredCallQuality`
+    /// setting (`CallsSettingsViewModel.CallQuality`, previously dead code
+    /// — nothing in the call pipeline consulted it) into the actual
+    /// subscribe-side quality tier to request.
+    ///
+    /// `.offScreen` has no quality — the track is disabled outright
+    /// (`set(enabled: false)`) — so it is not represented in the return
+    /// type; callers branch on `.offScreen` separately before reaching
+    /// this (see `LiveKitGroupCallRoom.setRemoteVideoRenderPriority`).
+    ///
+    /// The `.medium` preference (today's persisted default — see
+    /// `SettingsStore.loadCalls`) reproduces EXACTLY what W-GRPVIEWPORT
+    /// already shipped (`onScreenSmall` -> `.low`, `onScreenSpotlight` ->
+    /// `.high`) — this composition is additive, not a behavior change for
+    /// a user who has never touched the quality setting. `.low` caps the
+    /// spotlight tile down one notch (a user who explicitly asked for
+    /// lower quality should get it even on the tile they're looking
+    /// straight at); `.high` raises the small grid tiles up one notch
+    /// (worth it once the user has said they want quality over data/CPU
+    /// savings).
+    public func subscribeQuality(preferring quality: CallsSettingsViewModel.CallQuality) -> GroupVideoQualityTier {
+        switch (self, quality) {
+        case (.onScreenSmall, .high):    return .medium
+        case (.onScreenSmall, _):        return .low
+        case (.onScreenSpotlight, .low): return .medium
+        case (.onScreenSpotlight, _):    return .high
+        case (.offScreen, _):            return .low // unreachable in practice — see kdoc
+        }
+    }
+}
+
 #if canImport(LiveKit)
 import LiveKit
 import AVFoundation
@@ -123,6 +190,21 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// telemetry emit in that delegate method below. `state` is the raw
     /// `.toString()` value ("missing_key" / "decryption_failed" / ...).
     public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
+    /// W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) — fires
+    /// from `room(_:didDisconnectWithError:)` ONLY when the SFU disconnected
+    /// on its own (network drop, SFU node failover/health-check, server-
+    /// initiated close) rather than as a result of THIS app calling
+    /// `disconnect()` itself — see `isIntentionalDisconnect`'s kdoc for how
+    /// that distinction is made. Before this signal existed, a mid-call SFU
+    /// disconnect (the SFU was previously healthy and connected, unlike the
+    /// setup-time TOTAL-failure-to-ever-connect case `GroupCallController
+    /// .handleSfuToken`'s own catch block and `handleSfuUnavailable` already
+    /// cover) just surfaced as an error with no fallback — see the git blame
+    /// on `room(_:didDisconnectWithError:)` for the 2026-07-14 comment this
+    /// closure closes out. `GroupCallController` wires this to the SAME
+    /// WS-relay mesh fallback (`startAudioPipeline()`) those two setup-time
+    /// cases already use, rather than a second fallback mechanism.
+    public var onSfuDisconnectedMidCall: ((_ error: Error?) -> Void)?
 
     /// W-GRPSFUGHOST follow-up (2026-07-20): a point-in-time snapshot of
     /// every remote identity LiveKit currently considers connected to this
@@ -153,6 +235,17 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// RoomDelegate/TrackDelegate callback fired afterwards (they don't
     /// otherwise carry the call id) can attach it to its telemetry event.
     private var callId: String?
+    /// W-GRPSFUMIDFALLBACK — set right before this class's OWN
+    /// `disconnect()` calls into the SDK's `room?.disconnect()`, cleared at
+    /// the top of `connect()` for the next room. Lets `room(_:
+    /// didDisconnectWithError:)` tell "the SDK connection died on its own"
+    /// (this flag still `false` — a genuine mid-call SFU failure) apart
+    /// from "the app asked to disconnect" (a normal call-end, a fast
+    /// SFU rejoin, or `handleSfuToken`'s own connect-failure cleanup) —
+    /// only the former should trigger the WS-relay mesh fallback. Guarded
+    /// by `lock` like every other field this class touches from both
+    /// `RoomDelegate` callbacks and app/main-thread call sites.
+    private var isIntentionalDisconnect = false
     private let lock = NSLock()
     // NOTE: deliberately `DispatchWorkItem` + `asyncAfter`, NOT `Timer`.
     // `applyKey` is invoked from `GroupCallController`, itself driven off
@@ -160,6 +253,87 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     // loop) — a `Timer` scheduled there would silently never fire (Timer
     // needs an actively-pumped RunLoop; a plain GCD queue doesn't run one).
     private var graceWorkItems: [DispatchWorkItem] = []
+    /// W-GRPVIEWPORT: one entry per identity with an actively subscribed
+    /// CAMERA video track (never screen-share — see `didSubscribeTrack`'s
+    /// `else` branch below, the same split `onRemoteVideoTrack` already
+    /// uses). Guarded by `lock` like every other mutable field on this
+    /// class touched from both `RoomDelegate` callbacks (SDK's own queue,
+    /// "not guaranteed to be the main thread" per that protocol's own doc)
+    /// and `setRemoteVideoRenderPriority` (called from the app/main
+    /// thread).
+    private var remoteVideoPublications: [String: RemoteTrackPublication] = [:]
+    /// W-GRPVIEWPORT (independent-review fix, nim.ps1 security pass): the
+    /// LAST priority actually requested per identity, so
+    /// `setRemoteVideoRenderPriority` can skip re-sending an unchanged
+    /// value. `updateVideoViewport` calls this for EVERY participant on
+    /// EVERY visibility change (page swipe, roster update), not just the
+    /// ones whose priority actually moved — without this dedup, a rapid
+    /// swipe through several pages fires one `set(enabled:)`/
+    /// `set(videoQuality:)` round trip per participant per swipe, an
+    /// unbounded, uncoalesced burst of independent `Task{}`s against the
+    /// SFU's signaling client (flagged in review: SwiftUI's `.task(id:)`
+    /// cancels the OUTER view task on the next id change, but the inner
+    /// per-participant `Task{}`s it already spawned are unstructured and
+    /// NOT children of it, so cancellation doesn't reach them). Guarded by
+    /// the same `lock` as `remoteVideoPublications`.
+    private var lastAppliedVideoPriority: [String: RemoteVideoRenderPriority] = [:]
+
+    // W-GRPBACKPRESSURE (2026-08-26) — group-call CPU/thermal backpressure
+    // state. `_cpuLimitedPolls` counts CONSECUTIVE `qualityLimitationReason
+    // == "cpu"` outbound-stats polls (this file's own 1s cadence, see
+    // `attachStatsReporting`'s kdoc — scaled from the 1:1 controller's
+    // 3s-cadence "2 consecutive polls" so the real-world ~6s sustain window
+    // matches, not a blind copy of the raw poll count). `_videoBackpressureEngaged`
+    // / `_videoBackpressureEngagedAt` track whether the outgoing CAMERA
+    // track is currently paused by this mechanism and since when — see
+    // `evaluateGroupVideoBackpressure`'s kdoc for why recovery is time+
+    // thermal gated instead of poll-counted like the engage side.
+    private var _cpuLimitedPolls: Int = 0
+    private var _videoBackpressureEngaged = false
+    private var _videoBackpressureEngagedAt: Date?
+    /// Consecutive CPU-limited 1s polls before engaging (1s cadence × 6 ≈
+    /// 6s) — same real-world timing as `QAudionWebRtcCallController
+    /// .backpressureSustainPolls` (3s × 2 ≈ 6s), rescaled for this file's
+    /// actual per-track stats cadence.
+    private let groupBackpressureSustainPolls: Int = 6
+    /// Minimum time the camera stays paused before a recovery PROBE
+    /// (unmute) is attempted — order-of-magnitude match to
+    /// `QAudionWebRtcCallController.backpressureRecoverPolls` (3s × 3 ≈
+    /// 9s), not poll-counted for the same reason recovery isn't poll-based
+    /// here (see kdoc below).
+    private let groupBackpressureCooldownSeconds: TimeInterval = 9
+    /// Independent-review fix (nim.ps1 security pass): a device that's
+    /// borderline CPU-limited (right at the edge, not sustained-overloaded)
+    /// would otherwise flap on a tight ~15s cycle — cooldown expires, probe
+    /// unmutes, CPU is still marginal, `groupBackpressureSustainPolls`
+    /// re-engages within another ~6s, repeat forever. `_backpressureEngageStreak`
+    /// counts CONSECUTIVE engage->probe->still-limited cycles (reset the
+    /// moment a poll while disengaged is genuinely healthy — see the
+    /// `cpuLimited == false` branch below) and stretches the cooldown by
+    /// `groupBackpressureCooldownStepSeconds` per streak step, capped at
+    /// `groupBackpressureMaxCooldownSeconds` — same "gets less eager to
+    /// retry after repeated failures" shape as this app's other backoff
+    /// ladders (`RestartIceDecisions`'s restart backoff, `AbrController`'s
+    /// AIMD), not a peculiar one-off.
+    private var _backpressureEngageStreak: Int = 0
+    private let groupBackpressureCooldownStepSeconds: TimeInterval = 9
+    private let groupBackpressureMaxCooldownSeconds: TimeInterval = 60
+    /// W-GRPBACKPRESSURE: latest `ProcessInfo.thermalState`, kept current
+    /// by `thermalObserver` below rather than read live on each poll — the
+    /// plan calls for a real notification subscription ("feed
+    /// thermalStateDidChangeNotification into the same clamp"), not a
+    /// poll-time `ProcessInfo.processInfo.thermalState` read that would
+    /// happen to work but not actually be the described mechanism.
+    private var _latestThermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
+    private var thermalObserver: NSObjectProtocol?
+
+    /// W-GRPQUALITY (2026-08-26) — snapshot of `preferredCallQuality`,
+    /// taken once at `connect()` time (same "settings apply on the next
+    /// call" convention `CallsGate`'s audio DSP flags already use — no
+    /// mid-call hot-reload elsewhere in this codebase's call settings).
+    /// Consulted by `setRemoteVideoRenderPriority` via
+    /// `RemoteVideoRenderPriority.subscribeQuality(preferring:)`.
+    private var _preferredCallQuality: CallsSettingsViewModel.CallQuality = .medium
 
     /// W-GRPVIDEO-PERM (review fix): the SDK never requests camera
     /// authorization itself (verified against client-sdk-swift 2.13.0 —
@@ -267,6 +441,33 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// livekitKeyringSize`).
     public func connect(url: String, token: String, callId: String, selfKey: GroupMediaKey? = nil) async throws {
         self.callId = callId
+        // W-GRPSFUMIDFALLBACK — a fresh room for a fresh call/rejoin must
+        // not inherit a previous room's "we asked for this" flag — see
+        // `isIntentionalDisconnect`'s own kdoc.
+        lock.withLock { isIntentionalDisconnect = false }
+        // W-GRPQUALITY (2026-08-26) — snapshot the user's quality
+        // preference once, at connect time (see `_preferredCallQuality`'s
+        // own kdoc for why not live-reloaded mid-call). `SettingsStore`
+        // is cheap to construct fresh (same pattern every Settings screen
+        // in this codebase already uses — see e.g. `CallsSettingsScreen`).
+        _preferredCallQuality = SettingsStore().loadCalls().preferredCallQuality
+        // W-GRPBACKPRESSURE: call-scoped thermal observer — torn down in
+        // `disconnect()`. `ProcessInfo.thermalState` is read once here to
+        // seed `_latestThermalState` with the CURRENT state (the
+        // notification only fires on a CHANGE, so a call starting on an
+        // already-hot device would otherwise read `.nominal` — the
+        // property's own default — until the next transition).
+        _latestThermalState = ProcessInfo.processInfo.thermalState
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            let state = ProcessInfo.processInfo.thermalState
+            self.lock.withLock { self._latestThermalState = state }
+            self.emitTelemetry("call.video.thermal_state", ["state": String(describing: state)])
+        }
         // Options set EXPLICITLY — SDK defaults diverge across platforms
         // (the JS SDK defaults `sharedKey: true`; we need per-participant
         // keys, so this must never rely on a default).
@@ -301,7 +502,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
             if let raw = Self.rawKeyMaterial(selfKey.keyB64) {
                 keyProvider.setKey(keyData: raw, participantId: selfKey.identity, index: selfKey.keyIndex)
             } else {
-                print("[GroupCallController][telemetry] e2ee self-key REJECTED identity=\(selfKey.identity) idx=\(selfKey.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
+                print("[GroupCallController][telemetry] e2ee self-key REJECTED identity=\(selfKey.identity.prefix(8))… idx=\(selfKey.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
                 emitTelemetry("call.media.e2ee_key_invalid", ["identity": selfKey.identity, "key_index": Int(selfKey.keyIndex), "site": "connect_self_seed"])
             }
         }
@@ -398,11 +599,82 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // fall back to. If the local encoder factory has no H265 at all, the
         // SDK degrades quietly (RTCRtpTransceiver logs "Preferred codec is not
         // first of codecPreferences" and reorders) rather than throwing.
+        // SUPERSEDED 2026-08-27 by W-GRPVP8SIMULCAST (see `connect()`'s
+        // `RoomOptions` construction below, and `defaultVideoPublishOptions
+        // (for:)` next to `videoEncoding(for:)`). Everything above this line
+        // is still factually accurate — H265 genuinely IS carried correctly
+        // end-to-end by the E2EE transform and the SFU — but none of it
+        // checked whether the LOCAL encoder can actually produce 3
+        // CONCURRENT H265 streams for simulcast, which is a separate,
+        // narrower question than "can this codec be carried at all". Mobile
+        // hardware H265 encoders are commonly single-instance per chip, so
+        // asking for H265 simulcast either silently collapses to one layer
+        // or starves the others — an encoder-capability gap, not a
+        // transport/decode-compatibility one. VP8's software (libvpx)
+        // encode path has no such single-instance limit, which is why this
+        // app (matching qaudion-android-new and qaudion-desktop's
+        // `GroupCallRoom.ts`) now forces VP8, unconditionally, for every
+        // group-call video publish; H265 stays for 1:1 calls, where a
+        // single encode stream is always enough.
+        // W-GRPQUALITY (2026-08-26) — the FIRST real per-track bandwidth
+        // priority wiring for group calls: `VideoEncoding.bitratePriority`/
+        // `.networkPriority` (verified against the pinned fork's real
+        // source, `Types/Options/VideoEncoding.swift`/`Priority.swift` at
+        // tag 2.16.0, same audit discipline as the H265 codec note above)
+        // are the actual WebRTC/DSCP bandwidth-allocation levers this
+        // encoding carries — `preferredCallQuality` (persisted since the
+        // Settings screen shipped, never read by ANY production path
+        // before this) now actually reaches them. `maxBitrate`/`maxFps`
+        // are LiveKit's own official preset scale
+        // (`VideoParameters.presetH360_169`/`presetH540_169`/
+        // `presetH720_169`), not invented numbers.
+        // W-SIMULCASTPIN (2026-08-26, P2 audit item 5) — `simulcast` was the
+        // one field on this initializer left unset, riding the pinned
+        // fork's SDK default rather than a code-level statement of intent.
+        // Verified against the real upstream source at the pinned tag's
+        // lineage (livekit/client-sdk-swift 2.16.0,
+        // Types/Options/VideoPublishOptions.swift — this fork's own audit
+        // trail above confirms it touches E2EE/broadcast files only, not
+        // this one): `public let simulcast: Bool` with `simulcast: Bool =
+        // true` as the initializer default, matching the value pinned here.
+        // No behavior change today — this makes explicit exactly what the
+        // SDK already does, so a future SDK upgrade that changes that
+        // default can no longer silently change group-call quality behavior
+        // out from under this call site. `simulcast` must be spelled here
+        // BETWEEN `encoding` and `preferredCodec` — Swift resolves a
+        // memberwise-style initializer's keyword arguments by matching each
+        // label to the NEXT unconsumed parameter in DECLARATION order, not
+        // by label alone, so an out-of-order argument list is a compile
+        // error here rather than a silent mismatch. (Still true after
+        // W-GRPVP8SIMULCAST moved this literal into
+        // `defaultVideoPublishOptions(for:)` below — same initializer, same
+        // argument-order rule.)
+        //
+        // W-GRPVP8SIMULCAST (2026-08-27): the construction itself now lives
+        // in `defaultVideoPublishOptions(for:)` (next to `videoEncoding
+        // (for:)`, which it calls) so the codec/simulcast decision is a
+        // pure, directly-testable function instead of an inline literal
+        // here — see that function's doc comment for why `preferredCodec`
+        // is `.vp8` with no backup. Layer COUNT is deliberately left to the
+        // SDK's own simulcast default rather than pinned to a literal
+        // array: this fork's `VideoPublishOptions` has no explicit
+        // layer-count/resolution-list field (only `encoding` + `simulcast`
+        // + codec, per the full field audit in W-SIMULCASTPIN/W-GRPQUALITY
+        // above) — `simulcast: true` plus a top `encoding` is what drives
+        // the SDK's normal scale-down ladder, the same mechanism every
+        // other publish path in this SDK already relies on. That happens to
+        // net out to the same 3-layer shape qaudion-desktop pins explicitly
+        // (`GroupCallRoom.ts`, widths [320,640,1280]), without hardcoding
+        // Desktop's literal numbers into a platform whose SDK doesn't
+        // expose that knob the same way. iOS has no existing device-tier
+        // gating on group-call layer count to preserve here (checked —
+        // there is none), and VP8 is a software (libvpx) encode path, so
+        // the single-hardware-instance ceiling that rules out H265
+        // simulcast doesn't apply to layer count: 3 CPU-bound software
+        // layers is the same cost class Android's own simulcast reasoning
+        // accepts, not a mobile-specific reason to cap it lower.
         let roomOptions = RoomOptions(
-            defaultVideoPublishOptions: VideoPublishOptions(
-                preferredCodec: .h265,
-                preferredBackupCodec: .vp8
-            ),
+            defaultVideoPublishOptions: Self.defaultVideoPublishOptions(for: _preferredCallQuality),
             defaultAudioPublishOptions: AudioPublishOptions(red: false),
             adaptiveStream: false,
             dynacast: false,
@@ -418,7 +690,8 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): local publish
         // confirmation — proves OUR OWN mic reached the SFU at all, cheap
         // to cross-reference against the SFU-side "track published" log.
-        print("[GroupCallController][telemetry] local audio track published identity=\(room.localParticipant.identity?.stringValue ?? "self") callSid=\(room.sid?.stringValue ?? "?")")
+        // I8 FIX: identity/callSid are user-identifying — truncate like every other identity print in this file.
+        print("[GroupCallController][telemetry] local audio track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))… callSid=\((room.sid?.stringValue ?? "?").prefix(8))…")
         // W-GRPTELEM (item a): the `call.media.connected`-equivalent — fired
         // right here, NOT from a delegate callback, because no RoomDelegate
         // method fires on a successful INITIAL connect in this SDK version
@@ -443,7 +716,8 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 // defaultVideoPublishOptions above (see its comment for why)
                 // — no per-call override needed here.
                 _ = try await room.localParticipant.setCamera(enabled: true)
-                print("[GroupCallController][telemetry] local video track published identity=\(room.localParticipant.identity?.stringValue ?? "self")")
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
                 onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
                 attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
             } else {
@@ -455,6 +729,86 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 onError?(CameraPermissionError.denied)
             }
         }
+    }
+
+    /// W-GRPQUALITY (2026-08-26) — maps `preferredCallQuality` onto
+    /// LiveKit's OWN preset bitrate/fps scale
+    /// (`VideoParameters.presetH360_169`/`presetH540_169`/`presetH720_169`,
+    /// verified against the pinned fork's real source at tag 2.16.0) rather
+    /// than inventing new numbers, plus a matching `Priority` for both
+    /// `bitratePriority` (WebRTC's internal bandwidth allocation between
+    /// streams) and `networkPriority` (DSCP marking, only takes effect if
+    /// `ConnectOptions.isDscpEnabled` — inert but harmless otherwise) — the
+    /// actual per-track bandwidth priority lever this item wires. `.medium`
+    /// (today's persisted default) reproduces the encoding this file
+    /// already shipped before this change (`presetH540_169`'s
+    /// 800kbps/25fps was NOT what shipped before — see note below).
+    ///
+    /// Note: before this change, `VideoPublishOptions` never set `encoding`
+    /// at all (SDK default: `nil`), which lets the SDK derive it from the
+    /// camera's OWN captured dimensions/fps at publish time — there was no
+    /// single "before" bitrate to preserve exactly. `.medium`'s
+    /// 800kbps/25fps ceiling is a reasonable mid-point that does not
+    /// regress typical camera output, and now actually RESPONDS to the
+    /// setting instead of ignoring it entirely.
+    static func videoEncoding(for quality: CallsSettingsViewModel.CallQuality) -> VideoEncoding {
+        switch quality {
+        case .low:
+            return VideoEncoding(
+                maxBitrate: VideoParameters.presetH360_169.encoding.maxBitrate,
+                maxFps: VideoParameters.presetH360_169.encoding.maxFps,
+                bitratePriority: .low, networkPriority: .low)
+        case .medium:
+            return VideoEncoding(
+                maxBitrate: VideoParameters.presetH540_169.encoding.maxBitrate,
+                maxFps: VideoParameters.presetH540_169.encoding.maxFps,
+                bitratePriority: .medium, networkPriority: .medium)
+        case .high:
+            return VideoEncoding(
+                maxBitrate: VideoParameters.presetH720_169.encoding.maxBitrate,
+                maxFps: VideoParameters.presetH720_169.encoding.maxFps,
+                bitratePriority: .high, networkPriority: .high)
+        }
+    }
+
+    /// W-GRPVP8SIMULCAST (2026-08-27) — SUPERSEDES W-GRPH265 (see the
+    /// long-form audit trail in `connect()`, where this used to be an
+    /// inline `VideoPublishOptions(...)` literal). Forces VP8 as the ONLY
+    /// codec for group-call video publish, on EVERY device, unconditionally
+    /// — a cross-platform best-practices decision mirrored from
+    /// qaudion-android-new and qaudion-desktop's `GroupCallRoom.ts`, both of
+    /// which already ship VP8-only simulcast for group video and reserve
+    /// H265/HEVC for 1:1 calls only (a single encode stream, which is
+    /// always sufficient there).
+    ///
+    /// The reason is encoder CAPABILITY, not decode compatibility: real
+    /// LiveKit simulcast needs 3 CONCURRENT encoder instances at different
+    /// resolutions from the same source track, and mobile hardware H265
+    /// encoders are commonly single-instance per chip — they physically
+    /// cannot produce that, regardless of whether every other link in the
+    /// chain (E2EE FrameCryptor, the SFU) can carry H265 correctly, which
+    /// W-GRPH265's own audit already confirmed they can. VP8's mature
+    /// software (libvpx) encode path has no such single-instance ceiling,
+    /// which is exactly why every LiveKit-based client treats it as the
+    /// universal simulcast codec.
+    ///
+    /// `preferredBackupCodec` is intentionally omitted (unlike the old H265
+    /// configuration, which needed `.vp8` as a decode-compatibility
+    /// fallback for participants that couldn't decode HEVC): VP8 already
+    /// has universal decode support across every LiveKit-participating
+    /// platform this app talks to, so there is nothing to fall back FROM.
+    ///
+    /// This function does not force a specific simulcast layer COUNT —
+    /// `simulcast: true` plus a single top-level `encoding` lets the SDK
+    /// derive its own scale-down ladder, the same mechanism every other
+    /// publish path in this SDK relies on (this fork's `VideoPublishOptions`
+    /// has no separate explicit layer-count/resolution-list field to pin).
+    static func defaultVideoPublishOptions(for quality: CallsSettingsViewModel.CallQuality) -> VideoPublishOptions {
+        VideoPublishOptions(
+            encoding: videoEncoding(for: quality),
+            simulcast: true,
+            preferredCodec: .vp8
+        )
     }
 
     /// W-GRPVIDEO: mid-call camera on/off. Publishing a NEW video track
@@ -589,7 +943,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public func applyKey(_ key: GroupMediaKey) {
         guard let kp = keyProvider else { return }
         guard let raw = Self.rawKeyMaterial(key.keyB64) else {
-            print("[GroupCallController][telemetry] e2ee key REJECTED identity=\(key.identity) idx=\(key.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
+            print("[GroupCallController][telemetry] e2ee key REJECTED identity=\(key.identity.prefix(8))… idx=\(key.keyIndex) — not base64/32 bytes, fail closed (no key installed)")
             emitTelemetry("call.media.e2ee_key_invalid", ["identity": key.identity, "key_index": Int(key.keyIndex), "site": "apply_key"])
             return
         }
@@ -607,12 +961,231 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
 
     public func disconnect() async {
         lock.withLock {
+            // W-GRPSFUMIDFALLBACK — set BEFORE `room?.disconnect()` below
+            // so the `RoomDelegate` callback it may synchronously or
+            // asynchronously trigger sees the flag already flipped; see
+            // `isIntentionalDisconnect`'s own kdoc.
+            isIntentionalDisconnect = true
             for w in graceWorkItems { w.cancel() }
             graceWorkItems.removeAll()
+            // W-GRPVIEWPORT: drop every cached publication (and its
+            // last-applied-priority dedup entry) with the room — a
+            // call-scoped cache, never meant to outlive `room` itself.
+            remoteVideoPublications.removeAll()
+            lastAppliedVideoPriority.removeAll()
+            // W-GRPBACKPRESSURE: call-scoped, reset with everything else.
+            _cpuLimitedPolls = 0
+            _videoBackpressureEngaged = false
+            _videoBackpressureEngagedAt = nil
+            _backpressureEngageStreak = 0
+        }
+        if let thermalObserver {
+            NotificationCenter.default.removeObserver(thermalObserver)
+            self.thermalObserver = nil
         }
         await room?.disconnect()
         room = nil
         keyProvider = nil
+    }
+
+    private enum VideoBackpressureAction { case none, engage, disengage }
+
+    /// W-GRPBACKPRESSURE (2026-08-26): the group-call counterpart of
+    /// `QAudionWebRtcCallController.evaluateBackpressure` — same
+    /// CPU-sustained-polls TRIGGER shape (rescaled to this file's real 1s
+    /// stats cadence, see `groupBackpressureSustainPolls`'s kdoc), plus
+    /// `thermalStateDidChangeNotification` folded in as a second,
+    /// immediate-engage input (a `.serious`/`.critical` reading needs no
+    /// poll-sustain of its own — the OS already debounces its own thermal
+    /// state transitions).
+    ///
+    /// The ACTION differs from the 1:1 path, and had to change after
+    /// checking the real SDK source rather than assuming a straight port:
+    /// `applyComposedVideoSenderClamp` mutates `RTCRtpSender.parameters
+    /// .encodings[0].maxBitrateBps` directly on `peerConnection.videoSender`
+    /// — a graduated ladder. LiveKit's `LocalVideoTrack` keeps that same
+    /// kind of sender in `_state.rtpSender`, and `LocalTrackPublication
+    /// .recomputeSenderParameters()`'s read of it — both verified
+    /// module-internal against the pinned fork's real source
+    /// (client-sdk-swift 2.16.0, byte-identical to this file's
+    /// 2.16.0-aes256-raw6 tag) — so there is no safe PUBLIC lever to
+    /// graduate an already-published group video track's bitrate the way
+    /// the 1:1 path does. Unpublish+republish with a lower
+    /// `VideoPublishOptions` would fake one, but at the cost of a new track
+    /// SID and a full re-negotiation visible to every OTHER subscriber —
+    /// exactly the kind of change this pass was told not to force onto
+    /// main without live-device verification. The lever that IS verified
+    /// public and safe: `LocalTrackPublication.mute()`/`.unmute()` — a
+    /// coarser, binary pause/resume of the outgoing CAMERA track (never
+    /// screen-share — see the call site) instead of a graduated ladder,
+    /// but real, working degradation where today group calls do nothing at
+    /// all under sustained CPU/thermal pressure.
+    ///
+    /// RECOVERY is deliberately NOT poll-counted the way engage is: once
+    /// paused, the camera stops encoding, so this same track's own
+    /// `qualityLimitationReason` stops being a meaningful signal (an idle
+    /// encoder is never "cpu-limited") — counting "healthy" polls against a
+    /// muted track would make it look permanently healthy and cause an
+    /// immediate flap right back to engaged. Instead: after
+    /// `groupBackpressureCooldownSeconds` of staying paused, AND the device
+    /// is not currently thermal-critical, unmute as a PROBE. If CPU
+    /// pressure is still real, `qualityLimitationReason` starts reporting
+    /// "cpu" again the moment encoding resumes and this method re-engages
+    /// within `groupBackpressureSustainPolls` — bounded, self-correcting,
+    /// no permanent silent mute.
+    ///
+    /// Also self-heals against an EXTERNAL mute-state change this instance
+    /// didn't cause — e.g. the user manually toggling their own camera off
+    /// then back on (`GroupCallController.setVideoEnabled` also rides
+    /// `LocalTrackPublication.mute()`/`.unmute()`) would otherwise leave
+    /// `_videoBackpressureEngaged` stale-true, silently blocking fresh CPU
+    /// detection until the cooldown elapsed.
+    private func evaluateGroupVideoBackpressure(cpuLimited: Bool, videoPublication: LocalTrackPublication) {
+        let action: VideoBackpressureAction = lock.withLock {
+            if _videoBackpressureEngaged, !videoPublication.isMuted {
+                _videoBackpressureEngaged = false
+                _videoBackpressureEngagedAt = nil
+            }
+            let thermalCritical = _latestThermalState == .serious || _latestThermalState == .critical
+            if _videoBackpressureEngaged {
+                // Independent-review fix: cooldown GROWS with consecutive
+                // failed probes (`_backpressureEngageStreak`) instead of a
+                // fixed 9s, so a borderline-CPU device that keeps
+                // re-triggering doesn't flap on a tight ~15s cycle.
+                let cooldown = min(groupBackpressureCooldownSeconds + Double(_backpressureEngageStreak) * groupBackpressureCooldownStepSeconds,
+                                    groupBackpressureMaxCooldownSeconds)
+                guard !thermalCritical, let engagedAt = _videoBackpressureEngagedAt,
+                      Date().timeIntervalSince(engagedAt) >= cooldown else { return .none }
+                _videoBackpressureEngaged = false
+                _videoBackpressureEngagedAt = nil
+                return .disengage
+            }
+            if thermalCritical {
+                _cpuLimitedPolls = 0
+                _videoBackpressureEngaged = true
+                _videoBackpressureEngagedAt = Date()
+                _backpressureEngageStreak += 1
+                return .engage
+            }
+            guard cpuLimited else {
+                _cpuLimitedPolls = 0
+                // A genuinely healthy poll while disengaged — the streak's
+                // reset condition (see its own kdoc above).
+                _backpressureEngageStreak = 0
+                return .none
+            }
+            _cpuLimitedPolls += 1
+            guard _cpuLimitedPolls >= groupBackpressureSustainPolls else { return .none }
+            _cpuLimitedPolls = 0
+            _videoBackpressureEngaged = true
+            _videoBackpressureEngagedAt = Date()
+            _backpressureEngageStreak += 1
+            return .engage
+        }
+        switch action {
+        case .none:
+            return
+        case .engage:
+            print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: engaging -> pausing outgoing camera")
+            emitTelemetry("call.video.group_backpressure", ["engaged": true])
+            Task {
+                do {
+                    try await videoPublication.mute()
+                } catch {
+                    print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: mute FAILED: \(error)")
+                }
+            }
+        case .disengage:
+            print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: disengaging -> resuming outgoing camera")
+            emitTelemetry("call.video.group_backpressure", ["engaged": false])
+            Task {
+                do {
+                    try await videoPublication.unmute()
+                } catch {
+                    print("[GroupCallController][telemetry] W-GRPBACKPRESSURE: unmute FAILED: \(error)")
+                }
+            }
+        }
+    }
+
+    /// W-GRPVIEWPORT: manual per-participant remote video render priority —
+    /// the additive, safe half of closing W-GRPADAPTIVEDEADLOCK's gap (see
+    /// that tag's kdoc at `RoomOptions` above, in `connect()`, and
+    /// `RemoteVideoRenderPriority`'s own kdoc above the `#if
+    /// canImport(LiveKit)` split). This is the SAME per-publication API
+    /// `adaptiveStream`'s own internal timer would be driving automatically
+    /// if it were on — verified against the pinned fork's real source
+    /// (2.16.0-aes256-raw6, byte-identical to upstream client-sdk-swift
+    /// 2.16.0 for this file per `Package.swift`'s own audit comment):
+    /// `RemoteTrackPublication.set(enabled:)` and `.set(videoQuality:)`
+    /// both gate on `checkUserCanModifyTrackSettings()`, which requires
+    /// `adaptiveStream` OFF (it already is, see `RoomOptions` above) AND
+    /// the track already subscribed — both hold here. Driven
+    /// instead by `GroupCallView`'s own existing grid-pagination state
+    /// (`gridPages`/`currentGridPage`), which already knows exactly which
+    /// tiles are on-screen — no new plumbing needed on that side.
+    ///
+    /// No-op (logged, never thrown) if this identity has no cached camera
+    /// publication yet/anymore — a page-visibility change racing a
+    /// participant join/leave/camera-toggle is an expected, not
+    /// exceptional, race with `didSubscribeTrack`/`didUnsubscribeTrack`
+    /// above.
+    public func setRemoteVideoRenderPriority(identity: String, priority: RemoteVideoRenderPriority) {
+        let publication: RemoteTrackPublication? = lock.withLock {
+            guard let pub = remoteVideoPublications[identity], lastAppliedVideoPriority[identity] != priority else { return nil }
+            lastAppliedVideoPriority[identity] = priority
+            return pub
+        }
+        guard let publication else { return }
+        Task {
+            do {
+                switch priority {
+                case .offScreen:
+                    try await publication.set(enabled: false)
+                case .onScreenSmall, .onScreenSpotlight:
+                    // W-GRPQUALITY (2026-08-26) — the viewport priority
+                    // decides ON-screen vs off; the user's quality
+                    // preference now decides WHICH tier within "on-screen"
+                    // (see `subscribeQuality(preferring:)`'s kdoc). `.medium`
+                    // (the persisted default) reproduces exactly what this
+                    // switch shipped before this change — additive, not a
+                    // behavior change for a user who never touched the
+                    // setting.
+                    try await publication.set(enabled: true)
+                    let tier = priority.subscribeQuality(preferring: _preferredCallQuality)
+                    try await publication.set(videoQuality: Self.liveKitQuality(tier))
+                }
+            } catch {
+                // Evict the optimistically-recorded cache entry on failure
+                // so a LATER identical request retries instead of being
+                // dedup'd against a value that never actually applied —
+                // only clear it if nothing else already moved it on again
+                // in the meantime (a fast page-swipe-back racing this
+                // failure), matching the reference-identity discipline
+                // `didUnsubscribeTrack` already uses above.
+                lock.withLock {
+                    if lastAppliedVideoPriority[identity] == priority {
+                        lastAppliedVideoPriority.removeValue(forKey: identity)
+                    }
+                }
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] setRemoteVideoRenderPriority(\(priority)) identity=\(identity.prefix(8))… FAILED: \(error)")
+            }
+        }
+    }
+
+    /// W-GRPQUALITY — `GroupVideoQualityTier` (this file's own SDK-
+    /// independent mirror, see its kdoc) to the real LiveKit `VideoQuality`
+    /// this SDK call needs. A 1:1 rename, kept as an explicit mapping
+    /// rather than making the two the same type so
+    /// `RemoteVideoRenderPriority.subscribeQuality(preferring:)` stays
+    /// testable without the SDK.
+    private static func liveKitQuality(_ tier: GroupVideoQualityTier) -> VideoQuality {
+        switch tier {
+        case .low:    return .low
+        case .medium: return .medium
+        case .high:   return .high
+        }
     }
 }
 
@@ -630,7 +1203,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // track regardless of source (camera/screen-share/mic).
         attachStatsReporting(to: publication.track)
         if let audioTrack = publication.track as? RemoteAudioTrack {
-            print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity)")
+            // I8 FIX: truncate identity like every other identity print in this file.
+            print("[GroupCallController][telemetry] remote audio track subscribed identity=\(identity.prefix(8))…")
             emitTelemetry("call.audio.remote_track", ["identity": identity, "track_sid": publication.sid.stringValue])
             onRemoteAudioTrack?(identity, audioTrack)
         } else if let videoTrack = publication.track as? RemoteVideoTrack {
@@ -642,12 +1216,19 @@ extension LiveKitGroupCallRoom: RoomDelegate {
             // handling. Routing both through `onRemoteVideoTrack` would
             // silently drop whichever published second.
             if publication.source == .screenShareVideo {
-                print("[GroupCallController][telemetry] remote screen-share track subscribed identity=\(identity)")
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] remote screen-share track subscribed identity=\(identity.prefix(8))…")
                 emitTelemetry("video.remote_track", ["identity": identity, "kind": "screen_share", "track_sid": publication.sid.stringValue])
                 onRemoteScreenShareTrack?(identity, videoTrack)
             } else {
-                print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity)")
+                // I8 FIX: truncate identity like every other identity print in this file.
+                print("[GroupCallController][telemetry] remote video track subscribed identity=\(identity.prefix(8))…")
                 emitTelemetry("video.remote_track", ["identity": identity, "kind": "camera", "track_sid": publication.sid.stringValue])
+                // W-GRPVIEWPORT: cache the publication (not just the track)
+                // so `setRemoteVideoRenderPriority` can call `set(enabled:)`/
+                // `set(videoQuality:)` on it later — those live on
+                // `RemoteTrackPublication`, not `RemoteVideoTrack`.
+                lock.withLock { remoteVideoPublications[identity] = publication }
                 onRemoteVideoTrack?(identity, videoTrack)
             }
         }
@@ -669,9 +1250,32 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // leave a camera/mic track's SDK-internal 1s poll running after
         // it's gone.
         detachStatsReporting(from: publication.track)
-        guard publication.source == .screenShareVideo else { return }
+        // W-GRPVIEWPORT: drop the cached publication reference regardless
+        // of source, independent of the screen-share-only UI gate right
+        // below (pre-existing scope, untouched). Matched by REFERENCE
+        // (`===`), not by re-deriving the track kind — by the time this
+        // delegate fires, `publication.track` is already nil (`set(track:)`
+        // in the SDK notifies `didUnsubscribeTrack` only after clearing its
+        // own track to nil), and keying only off `identity` would risk an
+        // unrelated audio-track unsubscribe for the same identity wiping a
+        // still-live video entry.
         let identity = participant.identity?.stringValue ?? ""
-        print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity)")
+        lock.withLock {
+            if remoteVideoPublications[identity] === publication {
+                remoteVideoPublications.removeValue(forKey: identity)
+                // Same publication really is gone — its dedup entry must
+                // go with it, or a future re-subscribe (new publication,
+                // fresh state) could be wrongly skipped as "already
+                // applied" against the OLD publication's last value.
+                lastAppliedVideoPriority.removeValue(forKey: identity)
+            }
+        }
+        guard publication.source == .screenShareVideo else { return }
+        // W-GRPVIEWPORT: `identity` is already computed above (this method
+        // now needs it unconditionally, not just on the screen-share path)
+        // — no re-declaration here.
+        // I8 FIX: truncate identity like every other identity print in this file.
+        print("[GroupCallController][telemetry] remote screen-share track unsubscribed identity=\(identity.prefix(8))…")
         onRemoteScreenShareTrack?(identity, nil)
     }
 
@@ -695,7 +1299,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // `didSubscribeTrack` above — if this fires for a peer whose track
         // publish the SFU logs confirm succeeded, the failure is on OUR
         // subscribe side (ICE/transport), not the sender's publish.
-        print("[GroupCallController][telemetry] remote track subscribe FAILED identity=\(participant.identity?.stringValue ?? "") sid=\(trackSid) error=\(error)")
+        // I8 FIX: truncate identity like every other identity print in this file.
+        print("[GroupCallController][telemetry] remote track subscribe FAILED identity=\((participant.identity?.stringValue ?? "").prefix(8))… sid=\(trackSid) error=\(error)")
         emitTelemetry("video.remote_track_failed", [
             "identity": participant.identity?.stringValue ?? "",
             "track_sid": trackSid.stringValue,
@@ -729,13 +1334,23 @@ extension LiveKitGroupCallRoom: RoomDelegate {
     }
 
     public func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
-        // NOTE: a mid-call SFU disconnect does NOT currently auto-fall-back
-        // to the WS-relay mesh (that fallback today only covers the INITIAL
-        // connect attempt — see `GroupCallController.handleSfuToken`). This
-        // just surfaces the error; resuming the mesh mid-call is a known
-        // follow-up, not silently claimed as handled here.
+        // W-GRPSFUMIDFALLBACK (2026-08-27, best-practices audit item 2) —
+        // was, up to 2026-07-14, just a surfaced error with a documented
+        // "resuming the mesh mid-call is a known follow-up" comment right
+        // here. Now: `isIntentionalDisconnect` (set by THIS class's own
+        // `disconnect()`, right before it calls into the SDK) distinguishes
+        // a genuine SFU failure from an app-initiated disconnect (call end,
+        // fast SFU rejoin, `handleSfuToken`'s own connect-failure cleanup) —
+        // only the former fires `onSfuDisconnectedMidCall`, which
+        // `GroupCallController` wires to the SAME WS-relay mesh fallback
+        // (`startAudioPipeline()`) the setup-time total-failure cases
+        // already use. `onError` still fires unconditionally either way —
+        // this is additive, not a replacement for that existing signal.
         emitTelemetry("call.media.sfu_disconnected", ["error": error.map { "\($0)" } ?? "none"])
         if let error = error { onError?(error) }
+        let intentional = lock.withLock { isIntentionalDisconnect }
+        guard !intentional else { return }
+        onSfuDisconnectedMidCall?(error)
     }
 
     /// W-GRPTELEM (item b) — ongoing SFU connection-state telemetry, the
@@ -779,7 +1394,8 @@ extension LiveKitGroupCallRoom: RoomDelegate {
         // onE2eeStateChanged's kdoc in GroupCallController.swift for the full
         // live incident this was root-caused from).
         let isSelf = identity == nil ? false : room.localParticipant.trackPublications[trackPublication.sid] != nil
-        print("[GroupCallController][telemetry] e2ee-state identity=\(identity ?? "?") self=\(isSelf) kind=\(kind) state=\(state.toString())")
+        // I8 FIX: truncate identity like every other identity print in this file.
+        print("[GroupCallController][telemetry] e2ee-state identity=\((identity ?? "?").prefix(8))… self=\(isSelf) kind=\(kind) state=\(state.toString())")
         emitTelemetry("call.media.e2ee_state", ["identity": identity ?? "?", "self": isSelf, "kind": kind, "state": state.toString()])
         // W-GRPSENDERKEY-NACK (2026-07-17) — forward this SAME signal
         // operationally, not just diagnostically: GroupCallController
@@ -854,9 +1470,11 @@ extension LiveKitGroupCallRoom: TrackDelegate {
         switch track.kind {
         case .video:
             // W-GRPTELEM-SIMULCAST (2026-07-20, call 694147de leg e1f5690b):
-            // `VideoPublishOptions.simulcast` defaults TRUE in the pinned SDK
-            // (verified in the fork source: `simulcast: Bool = true`), so
-            // `outboundRtpStream` carries one entry PER simulcast layer and
+            // `VideoPublishOptions.simulcast` is `true` — explicitly pinned
+            // in `connect()`'s `RoomOptions` as of W-SIMULCASTPIN (2026-08-26,
+            // P2 audit item 5; before that it rode the pinned SDK's own
+            // `simulcast: Bool = true` default unstated in this app's code),
+            // so `outboundRtpStream` carries one entry PER simulcast layer and
             // the array order is arbitrary — `.first` regularly lands on a
             // suspended/bandwidth-starved layer, which reports
             // frameWidth/Height nil (rendered as 0x0) and framesPerSecond
@@ -880,6 +1498,22 @@ extension LiveKitGroupCallRoom: TrackDelegate {
                     "out_encoder_impl": out.encoderImplementation ?? "?",
                     "out_quality_limit": out.qualityLimitationReason?.rawValue ?? "?"
                 ])
+                // W-GRPBACKPRESSURE: `out_quality_limit` above used to be
+                // logged only — this is where it actually gets ACTED on.
+                // Scoped to the CAMERA publication only (never
+                // screen-share, deliberately — pausing a screen share the
+                // user just explicitly started would be a far more
+                // surprising interruption than pausing camera video, and
+                // the plan only asks to close the "camera video" gap).
+                // `track` here is exactly the `Track` this delegate call
+                // is reporting on, so matching by reference identity finds
+                // the right publication even with multiple local tracks
+                // published (mirrors `resolveIdentity(forTrack:in:)`'s own
+                // matching style below).
+                if let localPub = room.localParticipant.trackPublications.values.first(where: { $0.track === track }) as? LocalTrackPublication,
+                   localPub.source == .camera {
+                    evaluateGroupVideoBackpressure(cpuLimited: out.qualityLimitationReason?.rawValue == "cpu", videoPublication: localPub)
+                }
             } else if let inb = statistics.inboundRtpStream.first {
                 emitTelemetry("video.stats", [
                     "identity": identity,
@@ -979,6 +1613,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// W-GRPSENDERKEY-NACK — stub counterpart of the real class's same-named
     /// property (see this stub's own doc comment above). Never fires here.
     public var onE2eeStateChanged: ((_ identity: String, _ kind: String, _ state: String) -> Void)?
+    /// W-GRPSFUMIDFALLBACK — stub counterpart of the real class's same-named
+    /// property (see this stub's own doc comment above). Never fires here:
+    /// `connect` always throws immediately, so there is never a live SFU
+    /// connection that could disconnect mid-call.
+    public var onSfuDisconnectedMidCall: ((_ error: Error?) -> Void)?
     /// W-GRPSFUGHOST — stub counterpart of the real class's same-named
     /// property (see this stub's own doc comment above). No room ever
     /// connects here, so always empty.
@@ -1005,6 +1644,11 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public func setScreenShareEnabled(_ enabled: Bool) async throws {
         throw LiveKitUnavailableError.notAvailable
     }
+
+    /// W-GRPVIEWPORT — stub counterpart of the real class's same-named
+    /// method (see this stub's own doc comment above). No room, no cached
+    /// publications, so always a no-op.
+    public func setRemoteVideoRenderPriority(identity: String, priority: RemoteVideoRenderPriority) { /* no-op */ }
 
     public func disconnect() async { /* no-op */ }
 }

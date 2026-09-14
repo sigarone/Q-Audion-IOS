@@ -35,9 +35,22 @@ struct IncomingCallScreen: View {
     /// W-GRPRING — nasconde il bottone centrale "Rispondi" (quick reply) su
     /// superfici dove non esiste una chat 1:1 a cui rispondere (group call).
     let showReplyAction: Bool
-    let onAccept: () -> Void
+    let onAccept: (_ acceptWithoutVideo: Bool) -> Void
     let onReject: () -> Void
     let onReplyWithMessage: () -> Void
+
+    /// W-VIDPRIVACY — "answer without video" toggle. Only consulted when
+    /// `callType == .video`; not persisted (no "always audio-only" setting
+    /// — design non-goal).
+    ///
+    /// W-VIDEODEFAULTOFF (2026-09-08) — starts pre-set to true (audio-only)
+    /// for a video call, set from `init` below. Confirmed live on the
+    /// Android port of this same screen: tapping the main Accept action
+    /// with zero other interaction is the most common real path, and with
+    /// this toggle defaulting to false (wants video) that reflexive tap
+    /// silently opened the camera — defeating the entire point of the
+    /// feature. Getting video now requires actively turning this off.
+    @State private var acceptWithoutVideo: Bool
 
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
@@ -46,7 +59,7 @@ struct IncomingCallScreen: View {
          peerShortNumber: String? = nil,
          subtitle: String? = nil,
          showReplyAction: Bool = true,
-         onAccept: @escaping () -> Void,
+         onAccept: @escaping (Bool) -> Void,
          onReject: @escaping () -> Void,
          onReplyWithMessage: @escaping () -> Void = {}) {
         self.peerDisplayName = peerDisplayName
@@ -59,6 +72,7 @@ struct IncomingCallScreen: View {
         self.onAccept = onAccept
         self.onReject = onReject
         self.onReplyWithMessage = onReplyWithMessage
+        _acceptWithoutVideo = State(initialValue: callType == .video)
     }
 
     var body: some View {
@@ -74,8 +88,15 @@ struct IncomingCallScreen: View {
                     .padding(.bottom, 40)
 
                 ZStack {
-                    AvatarHalo(color: extras.success,    diameter: 240)
-                    AvatarHalo(color: extras.pqcAccent,  diameter: 200)
+                    // Always .settled/unconfirmed — this screen is torn
+                    // down before Accept even finishes processing
+                    // (appState.incomingCallRingVisible clears BEFORE
+                    // callState leaves .ringing) and there is no
+                    // client-side timeout on a 1:1 incoming ring, so an
+                    // animating ring here would have no real progress to
+                    // show and no bound on how long it could run. See the
+                    // design doc's "What is NOT real on iOS" section.
+                    KeyExchangeRing(phase: .settled, confirmed: false, ringSize: 240)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
                                   size: 160,
@@ -91,10 +112,43 @@ struct IncomingCallScreen: View {
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 4)
 
-                Text(subtitle ?? (callType == .video ? "Videochiamata sicura" : "Chiamata audio sicura"))
-                    .qaudionStyle(type.titleMedium)
-                    .foregroundStyle(scheme.onSurfaceVariant)
+                if callType == .video {
+                    HStack(spacing: 6) {
+                        Image(systemName: "video.fill").font(.system(size: 13, weight: .semibold))
+                        Text(subtitle ?? "Videochiamata sicura").qaudionStyle(type.titleMedium)
+                    }
+                    .foregroundStyle(extras.trustEnterprise)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(extras.trustEnterprise.opacity(0.18)))
+                    .overlay(Capsule().stroke(extras.trustEnterprise.opacity(0.55), lineWidth: 1))
+                    .padding(.bottom, 10)
+
+                    Button { acceptWithoutVideo.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: acceptWithoutVideo ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 15, weight: .semibold))
+                            Text("Rispondi senza video").qaudionStyle(type.labelSmall)
+                        }
+                        .foregroundStyle(acceptWithoutVideo ? extras.trustEnterprise : scheme.onSurfaceVariant)
+                        // HIG minimum tap target is 44x44pt; the label's own
+                        // bounding box (~16-18pt tall) is far under that.
+                        // minHeight only grows the invisible hit area — the
+                        // icon/text keep their natural size, centered inside
+                        // it — and contentShape extends hit-testing to the
+                        // full frame instead of just the drawn glyphs.
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Rispondi senza video")
+                    .accessibilityValue(acceptWithoutVideo ? "Attivo" : "Non attivo")
                     .padding(.bottom, 24)
+                } else {
+                    Text(subtitle ?? "Chiamata audio sicura")
+                        .qaudionStyle(type.titleMedium)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.bottom, 24)
+                }
 
                 HStack(spacing: 8) {
                     MetaPill("PQC ACTIVE", accent: extras.pqcAccent)
@@ -133,11 +187,11 @@ struct IncomingCallScreen: View {
                     }
                     CircularAction(
                         icon: "phone.fill",
-                        action: onAccept,
+                        action: { onAccept(callType == .video && acceptWithoutVideo) },
                         diameter: 72,
                         background: extras.success,
                         iconColor: extras.onSuccess,
-                        caption: "Accetta",
+                        caption: (callType == .video && acceptWithoutVideo) ? "Senza video" : "Accetta",
                         captionColor: extras.success
                     )
                 }
@@ -156,7 +210,7 @@ struct IncomingCallScreen: View {
 #Preview("Audio") {
     IncomingCallScreen(peerDisplayName: "Mario Rossi",
                        callType: .audio,
-                       onAccept: {}, onReject: {})
+                       onAccept: { _ in }, onReject: {})
         .qAudionTheme(dark: true)
 }
 
@@ -164,6 +218,6 @@ struct IncomingCallScreen: View {
     IncomingCallScreen(peerDisplayName: "Anna Bianchi",
                        callType: .video,
                        confidence: 0.81,
-                       onAccept: {}, onReject: {})
+                       onAccept: { _ in }, onReject: {})
         .qAudionTheme(dark: true)
 }

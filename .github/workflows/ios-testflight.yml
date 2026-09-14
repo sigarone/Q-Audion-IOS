@@ -222,9 +222,10 @@ jobs:
       # ----------------------------------------------------------
       # 3c) Build Reality.xcframework -- VLESS+REALITY-over-xray-core
       #     censorship-bypass transport (github.com/xtls/libxray), the
-      #     PRIMARY bypass mechanism per bcrypto-server's
-      #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md (Tor stays, additive,
-      #     unchanged -- design doc §7). Source lives in ../RealityCore (this
+      #     SOLE bypass mechanism per bcrypto-server's
+      #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md -- embedded Tor was
+      #     removed entirely 2026-09-14, on every platform (was additive,
+      #     design doc §7). Source lives in ../RealityCore (this
       #     repo, not an external clone); cache key is that module's own
       #     go.sum + this build script, since there is no external ref to pin.
       #     Produces QAudionApp/Vendor/Reality.xcframework (the `Reality`
@@ -301,6 +302,13 @@ jobs:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # SEC (Aikido, 2026-08-21): pass workflow_dispatch input via env,
+          # never interpolate ${{ }} directly into the script — the ${{ }}
+          # form splices raw text into the run: block BEFORE bash parses it,
+          # so shell metacharacters in a malicious `tag` value would execute.
+          # Referencing $TAG_INPUT below is a normal shell variable read —
+          # its value can never be reinterpreted as script syntax.
+          TAG_INPUT: ${{ github.event.inputs.tag }}
         run: |
           set -e
           # Marketing version from tag (strip leading "v" + any "-suffix").
@@ -312,7 +320,7 @@ jobs:
           # gets an actionable error before the build runs.
           GIT_TAG="${GITHUB_REF#refs/tags/}"
           if [ -z "$GIT_TAG" ] || [ "$GIT_TAG" = "$GITHUB_REF" ]; then
-            GIT_TAG="${{ github.event.inputs.tag }}"
+            GIT_TAG="$TAG_INPUT"
           fi
           if [ -z "$GIT_TAG" ]; then
             echo "::error::No tag resolved. tag-push triggers set GITHUB_REF=refs/tags/v*; workflow_dispatch must fill the 'tag' input (e.g. v1.0.415). Refusing to upload a fallback version to TestFlight." >&2
@@ -329,16 +337,29 @@ jobs:
           # runner lacks a `timeout` binary the command fails fast (rc=127) and we
           # ALSO fall back — safe either way. Fallback = commit count (monotonic,
           # > any prior build number) → valid TestFlight build (unique+increasing).
+          # macOS has no GNU `timeout`; Homebrew coreutils on the runner
+          # provides `gtimeout` (run 34701677262 logged rc=127 from the bare
+          # name and silently fell back to the commit count). Prefer
+          # gtimeout, accept timeout, run unbounded only if neither exists.
+          TIMEOUT_BIN=$(command -v gtimeout || command -v timeout || true)
           set +e
-          LATEST=$(timeout 120 app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          if [ -n "$TIMEOUT_BIN" ]; then
+            LATEST=$("$TIMEOUT_BIN" 120 app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          else
+            echo "WARN: no gtimeout/timeout binary on runner — ASC lookup runs unbounded"
+            LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID")
+          fi
           rc=$?
           set -e
+          BUILD_SOURCE="asc"
           if [ "$rc" -ne 0 ] || [ -z "$LATEST" ]; then
             echo "WARN: ASC fetch failed/timed out (rc=$rc), falling back to commit count"
             LATEST=$(git rev-list --count HEAD)
+            BUILD_SOURCE="commit-count"
           fi
           NEW_BUILD=$((LATEST + 1))
-          echo "Build number = $NEW_BUILD"
+          echo "Build number = $NEW_BUILD (source: $BUILD_SOURCE)"
+          echo "build_number_source=$BUILD_SOURCE" >> "$GITHUB_OUTPUT"
 
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" Info.plist
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        Info.plist
@@ -355,6 +376,13 @@ jobs:
           BCAST_PLIST="../QAudionBroadcastExtension/Info.plist"
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$BCAST_PLIST"
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$BCAST_PLIST"
+
+          # And the SiriKit Intents extension — it was the one extension
+          # left out, so every archive warned "CFBundleVersion of an app
+          # extension (1) must match ... (<build>)" (audit FIX-15).
+          INTENTS_PLIST="../QAudionIntents/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$INTENTS_PLIST"
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$INTENTS_PLIST"
 
           plutil -extract CFBundleShortVersionString raw -o - Info.plist
           plutil -extract CFBundleVersion             raw -o - Info.plist
@@ -396,6 +424,94 @@ jobs:
             --platform IOS \
             --certificate-key "@file:$CERT_KEY_PATH" \
             --strict-match-identifier
+
+          # -- Main app: Associated Domains --------------------------------
+          # v1.0.1023 (2026-08-21): Universal Links support was added
+          # (QAudionApp.entitlements now declares
+          # com.apple.developer.associated-domains for the
+          # applinks:q-audion.com / applinks:www.q-audion.com domains), but
+          # the App Store profile above was created before that capability
+          # existed on the Bundle ID -- xcodebuild archive rejected it
+          # immediately with:
+          #   "Provisioning profile ... doesn't include the Associated
+          #    Domains capability."
+          # Same class of fix as the VPN extension/broadcast extension
+          # below (same root cause: fetch-signing-files --create makes the
+          # Bundle ID/profile but does not add a capability that didn't
+          # exist yet) -- reusing that exact Phase 1-4 pattern here instead
+          # of a one-off manual portal fix, so this self-heals on every
+          # future run rather than needing to be redone if the profile is
+          # ever recreated from scratch.
+          #
+          # Phase 1: resolve the main app's Bundle ID resource id. Verified
+          # 2026-08-21 against the real installed codemagic-cli-tools source
+          # (codemagic/apple/resources/resource.py Resource.__str__) that
+          # plain `list`/`profiles` output (unlike fetch-signing-files' own
+          # custom progress log lines used elsewhere in this file) always
+          # starts each printed resource with a literal "Id: <RESOURCE_ID>"
+          # line -- confirmed by running both commands locally against the
+          # real Apple API with a syntactically-valid-but-unauthorized key
+          # (got a real 401 from the real endpoint, not an argparse error,
+          # i.e. the flags/subcommands below are real and accepted).
+          echo "Resolving main app Bundle ID resource id for capability check..."
+          MAIN_BID_LOOKUP=$(app-store-connect bundle-ids list \
+            --bundle-id-identifier "$BUNDLE_ID" --strict-match-identifier 2>&1 || true)
+          MAIN_BID_PLAIN=$(printf '%s\n' "$MAIN_BID_LOOKUP" | sed 's/\x1b\[[0-9;]*m//g')
+          MAIN_BID_RES=$(printf '%s\n' "$MAIN_BID_PLAIN" \
+            | grep -E '^Id: ' | head -1 | sed 's/^Id: //' || echo "")
+          echo "Main app Bundle ID res-id: ${MAIN_BID_RES:-UNKNOWN}"
+
+          if [ -n "$MAIN_BID_RES" ]; then
+            echo "Enabling Associated Domains on $MAIN_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$MAIN_BID_RES" --capability "Associated Domains" 2>&1 \
+              && echo "  ASSOCIATED_DOMAINS: done" \
+              || echo "  ASSOCIATED_DOMAINS: WARN (may already be enabled)"
+
+            # CarPlay/Siri state-of-the-art plan S1 (docs/superpowers/plans/
+            # 2026-09-06-carplay-state-of-the-art.md) -- QAudion.entitlements
+            # now declares com.apple.developer.siri, but the main app's App
+            # Store profile was created before that capability existed on
+            # the Bundle ID. Same self-healing pattern as Associated Domains
+            # above: enable it here, then Phase 2/3 below delete the stale
+            # profile and recreate it so the new profile actually includes it.
+            echo "Enabling SiriKit on $MAIN_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$MAIN_BID_RES" --capability "SiriKit" 2>&1 \
+              && echo "  SIRIKIT: done" \
+              || echo "  SIRIKIT: WARN (may already be enabled)"
+
+            # Phase 2: delete the stale profile (created before the
+            # capability existed) so --create below makes a fresh one that
+            # actually includes it. `bundle-ids profiles` (not `profiles
+            # list`, which has no --bundle-id-identifier filter) is the
+            # real subcommand for "profiles for this bundle id".
+            MAIN_PROF_LOOKUP=$(app-store-connect bundle-ids profiles \
+              --bundle-ids "$MAIN_BID_RES" --type IOS_APP_STORE 2>&1 || true)
+            MAIN_PROF_PLAIN=$(printf '%s\n' "$MAIN_PROF_LOOKUP" | sed 's/\x1b\[[0-9;]*m//g')
+            MAIN_PROF_RES=$(printf '%s\n' "$MAIN_PROF_PLAIN" \
+              | grep -E '^Id: ' | head -1 | sed 's/^Id: //' || echo "")
+            if [ -n "$MAIN_PROF_RES" ]; then
+              echo "Deleting stale main app profile $MAIN_PROF_RES (created without Associated Domains)..."
+              app-store-connect profiles delete "$MAIN_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            else
+              echo "WARNING: could not resolve main app profile resource -- relying on --create below."
+            fi
+
+            # Phase 3: re-create the main app profile. It will now include
+            # Associated Domains, satisfying the entitlements file.
+            echo "Re-creating main app signing files with Associated Domains..."
+            app-store-connect fetch-signing-files "$BUNDLE_ID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "WARNING: could not resolve main app Bundle ID resource -- archive may still fail on Associated Domains."
+          fi
 
           # ?? VPN extension: App Groups + Network Extensions ???????????????????
           # QAudionPacketTunnel.entitlements requires both capabilities.
@@ -565,6 +681,73 @@ jobs:
             echo "WARNING: could not resolve Broadcast Extension Bundle ID resource -- archive may fail."
           fi
 
+          # ── Intents extension: App Groups (S2 added QAudionIntents.entitlements) ─
+          # CarPlay/Siri state-of-the-art plan. S1 (INStartCallIntent) needed
+          # no entitlements file at all -- S2 (INSendMessageIntent/
+          # INSearchForMessagesIntent, SiriMessageBridgeStore.swift) added
+          # QAudionIntents.entitlements declaring
+          # group.com.bcrypto.qaudion.siri, so this now needs the same
+          # enable-capabilities / delete-stale-profile dance as the VPN and
+          # broadcast extensions above, not a plain profile.
+          INTENTS_BID="com.qaudion.app.intents"
+
+          INTENTS_FETCH_TMP=$(mktemp)
+          app-store-connect fetch-signing-files "$INTENTS_BID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier 2>&1 | tee "$INTENTS_FETCH_TMP" || true
+          INTENTS_FETCH_OUT=$(cat "$INTENTS_FETCH_TMP")
+          rm -f "$INTENTS_FETCH_TMP"
+
+          INTENTS_PLAIN=$(printf '%s\n' "$INTENTS_FETCH_OUT" | sed 's/\x1b\[[0-9;]*m//g')
+
+          INTENTS_BID_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+            | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$INTENTS_BID_RES" ]; then
+            INTENTS_BID_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+              | grep -F "com.qaudion.app.intents" \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Intents Extension Bundle ID res-id: ${INTENTS_BID_RES:-UNKNOWN}"
+
+          INTENTS_PROF_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+            | grep -oE 'Created Profile [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$INTENTS_PROF_RES" ]; then
+            INTENTS_PROF_RES=$(printf '%s\n' "$INTENTS_PLAIN" \
+              | grep -E '^- IOS_APP_STORE' \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Intents Extension Profile res-id: ${INTENTS_PROF_RES:-UNKNOWN}"
+
+          if [ -n "$INTENTS_BID_RES" ]; then
+            echo "Enabling APP_GROUPS on $INTENTS_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$INTENTS_BID_RES" --capability "App Groups" 2>&1 \
+              && echo "  APP_GROUPS: done" \
+              || echo "  APP_GROUPS: WARN (may already be enabled)"
+
+            if [ -n "$INTENTS_PROF_RES" ]; then
+              echo "Deleting stale profile $INTENTS_PROF_RES (created without capabilities)..."
+              app-store-connect profiles delete "$INTENTS_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            fi
+
+            echo "Re-creating Intents extension signing files with capabilities..."
+            app-store-connect fetch-signing-files "$INTENTS_BID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "WARNING: could not resolve Intents Extension Bundle ID resource -- archive may fail."
+          fi
+
           keychain add-certificates
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
 
@@ -582,6 +765,56 @@ jobs:
             --project "$XCODE_PROJECT" \
             --scheme QAudionApp 2>&1 | tee build.log \
           || (echo ""; echo "=== BUILD FAILED -- full build.log ==="; cat build.log; exit 1)
+
+      # ----------------------------------------------------------
+      # 7a-2) I5 (MASVS assessment) -- publish the real Package.resolved
+      #     produced by this build as an artifact. No Swift/Xcode toolchain
+      #     exists on the dev machine that authors these workflow changes
+      #     (Windows), so this macOS runner is the only place the actual
+      #     resolved dependency graph is ever materialized; committing it
+      #     to the repo (for reproducible-build / supply-chain pinning)
+      #     needs it pulled from here.
+      #
+      #     ONE file only, ONE known path: the Xcode-managed workspace's own
+      #     xcshareddata/swiftpm/Package.resolved. The first version of this
+      #     step also globbed all of DerivedData "just in case" -- that
+      #     picked up a SECOND, unrelated Package.resolved belonging to
+      #     GRDB.swift's own vendored test-fixture sub-project
+      #     (.../SourcePackages/checkouts/GRDB.swift/Tests/Performance/
+      #     GRDBPerformance/...), confirmed from that run's own logged
+      #     source paths -- not this app's dependency graph at all, and
+      #     genuinely confusing to find sitting next to the real one with no
+      #     way to tell them apart without re-reading the log. QAudionEngine
+      #     itself has no separate Package.resolved (it resolves as part of
+      #     the same workspace graph, confirmed by this fix -- only one file
+      #     was ever real).
+      #     Always runs (not gated on success) so a Package.resolved that
+      #     did get written before a later failure is still recoverable.
+      # ----------------------------------------------------------
+      - name: Collect Package.resolved
+        if: always()
+        working-directory: QAudionApp
+        continue-on-error: true
+        run: |
+          OUT="$GITHUB_WORKSPACE/package-resolved-out"
+          mkdir -p "$OUT"
+          SRC="QAudionApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+          if [ -f "$SRC" ]; then
+            cp "$SRC" "$OUT/Package.resolved"
+            echo "Found: $SRC"
+          else
+            echo "Package.resolved not found at expected path: $SRC"
+          fi
+
+      - name: Upload Package.resolved
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-resolved-${{ github.run_number }}
+          path: package-resolved-out
+          retention-days: 30
+          if-no-files-found: warn
 
       # ----------------------------------------------------------
       # 7b) Diagnose Swift compile errors ONLY when Build IPA fails.
@@ -712,6 +945,27 @@ jobs:
           fi
           codesign --force --sign "$IDENTITY" --entitlements "$ENT_FILE" "Payload/QAudionApp.app"
 
+          # ---- Store-readiness gates on the SHIPPED artifact -----------
+          # (App Store readiness audit 2026-09-12, FIX-01/FIX-06.) The
+          # privacy manifest was silently absent from every IPA up to
+          # v1.0.1151 because of a project.yml exclude+re-add pattern; a
+          # manifest that exists in git but not in the bundle is exactly
+          # the failure only the artifact can prove. Same for TestFlight
+          # wording: it must be compiled out of the store build.
+          APP="Payload/QAudionApp.app"
+          for MANIFEST in "$APP/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionBroadcastExtension.appex/PrivacyInfo.xcprivacy"; do
+            if [ ! -f "$MANIFEST" ]; then
+              echo "::error::privacy manifest missing from IPA: $MANIFEST"
+              exit 1
+            fi
+            plutil -lint "$MANIFEST"
+          done
+          if strings "$APP/QAudionApp" | grep -qiE "itms-beta://|testflight\.apple\.com"; then
+            echo "::error::TestFlight-only surface compiled into the store binary (itms-beta / testflight.apple.com string found) — QAUDION_DEV_TOOLS must be OFF for a tag build"
+            exit 1
+          fi
+          echo "store-readiness gates: privacy manifests present (x4), no TestFlight strings in binary"
+
           rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
           zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload
           ls -lh "$GITHUB_WORKSPACE/$IPA_PATH"
@@ -721,6 +975,8 @@ jobs:
       # ----------------------------------------------------------
       - name: Upload IPA to App Store Connect
         env:
+          ALLOW_REDUNDANT: ${{ github.event.inputs.allow_redundant }}
+          BUILD_NUMBER_SOURCE: ${{ steps.version.outputs.build_number_source }}
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
@@ -768,8 +1024,18 @@ jobs:
             echo "$OUT"
             if [ "$rc" -eq 0 ]; then upload_ok=1; break; fi
             if echo "$OUT" | grep -qiE "already been uploaded|redundant binary|same version"; then
-              echo "altool: build already on App Store Connect — treating as success"
-              upload_ok=1; break
+              # A redundant binary means the build number was NOT
+              # monotonic (e.g. the ASC lookup failed and the commit-count
+              # fallback collided). Treat it as success only when the
+              # operator explicitly asked for that (workflow_dispatch
+              # allow_redundant=true); otherwise fail loudly so a store
+              # submission never silently reuses an older upload.
+              if [ "${ALLOW_REDUNDANT:-false}" = "true" ]; then
+                echo "altool: build already on App Store Connect — allow_redundant=true, treating as success"
+                upload_ok=1; break
+              fi
+              echo "::error::altool reports this build number is already on App Store Connect and allow_redundant is not set — build number source was '${BUILD_NUMBER_SOURCE:-unknown}'"
+              exit 1
             fi
             echo "=== altool attempt $attempt failed (rc=$rc); backoff 30s ==="
             sleep 30
@@ -921,6 +1187,10 @@ jobs:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          # SEC (Aikido, 2026-08-21): env, not ${{ }} spliced into the
+          # script — see the "Bump version" step's identical fix above.
+          TAG_INPUT: ${{ github.event.inputs.tag }}
+          MARKETING_VERSION_OUTPUT: ${{ steps.version.outputs.marketing_version }}
         run: |
           # NB: intentionally NO `set -x` -- it would echo the .p8 secret.
           set -uo pipefail
@@ -960,9 +1230,9 @@ jobs:
           mkdir -p "$REC_OUT"
 
           # version: prefer the bumped value, else parse the dispatch tag.
-          VER="${{ steps.version.outputs.marketing_version }}"
+          VER="$MARKETING_VERSION_OUTPUT"
           if [ -z "$VER" ]; then
-            VER="$(echo "${{ github.event.inputs.tag }}" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
+            VER="$(echo "$TAG_INPUT" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
           fi
           echo "Recovering dSYMs for app $BUNDLE_ID${VER:+ version $VER}"
 

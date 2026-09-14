@@ -44,7 +44,8 @@ import Foundation
 ///
 ///   | key                      | type | default               | effect                                   |
 ///   |--------------------------|------|-----------------------|------------------------------------------|
-///   | `LOG_OTLP_EXPORT_ENABLED`| Bool | `LiveLogStreamer.isEnabled` (build-channel consent) | RUNTIME kill-switch for the log SHIPPER (`LiveLogStreamer.flushOnce`). `false` STOPS uploads on an already-shipped TestFlight build within the ~15 min refresh window; `true`/absent allow them. **Gates SHIP only -- egress REDACTION (`RuntimeLogSink.redactStructured`) is unconditional and is NEVER gated on this or any flag.** |
+///   | `LOG_OTLP_EXPORT_ENABLED`| Bool | `true` | RUNTIME kill-switch for the log SHIPPER (`LiveLogStreamer.flushOnce`), ANDed with the user's local consent (`LiveLogStreamer.isEnabled`, default OFF) -- it can only ever turn shipping OFF, never ON for a device without consent. `false` STOPS uploads on an already-shipped build within the ~15 min refresh window; `true`/absent allow them. **Gates SHIP only -- egress REDACTION (`RuntimeLogSink.redactStructured`) is unconditional and is NEVER gated on this or any flag.** |
+///   | `ENTITLEMENTS_CODE_UI_ENABLED` | Bool | `false` | Shows the activation-code field + "Attiva" in `UpgradeSheet` -- but ONLY on a TestFlight/dev install (sandbox receipt); an App Store install ignores it entirely and always shows the plain "funzione non attiva" notice (App Review 2.1(b)/3.1.1, submission c6432fb4). Turn ON only for internal/beta builds. |
 @MainActor
 public final class FeatureFlags {
 

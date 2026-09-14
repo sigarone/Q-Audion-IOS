@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Group shared with the main QAudionApp target, dedicated to the
+	     Siri messaging bridge (SiriMessageBridgeStore.swift). Deliberately
+	     SEPARATE from the vpn/broadcast groups (this project's per-feature
+	     App Group convention, see QAudionPacketTunnel/
+	     QAudionBroadcastExtension .entitlements) and carries NO ratchet/
+	     session material — see that file's own security-design doc comment
+	     and docs/superpowers/plans/2026-09-06-carplay-state-of-the-art.md
+	     (S2). NOT used by S1 (INStartCallIntent) at all. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.bcrypto.qaudion.siri</string>
+	</array>
+</dict>
+</plist>

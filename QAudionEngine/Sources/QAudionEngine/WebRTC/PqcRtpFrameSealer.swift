@@ -108,10 +108,27 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     // (iOS measured 27/16125 ≈0.17% RX decrypt errors on one such call).
     // Widened to 512 frames (~10.24s @ 20ms/frame) to cover a full churn
     // cycle. Receiver-only, non-wire-breaking (Android/Desktop unaffected).
+    //
+    // WIDENED AGAIN (2026-08-24, W-VNACK-REPLAY, mirrors Android's M-14
+    // fix): this constant is not audio-only — VideoCallPipeline.rotatePqcSealer
+    // creates its directional video sealer from this SAME class (the ":video"
+    // HKDF info suffix is the only difference), so the window also has to
+    // cover VideoNackFragmentCache's retransmit window (maxAgeMs = 3000, i.e.
+    // a NACK'd fragment can legitimately be resent up to 3s after its
+    // original send). At VideoConstants.maxVideoBitrateBps (2.5 Mbps) and
+    // ~1193B of NAL data per fragment (maxFragmentPayload - header), that is
+    // ~262 fragments/s — up to ~786 fragments across the full 3s retention
+    // window, which exceeded the 512-slot window with no margin for a
+    // keyframe burst (exactly when loss + NACK activity concentrate). A
+    // legitimately NACK-recovered late video fragment was being silently
+    // dropped as a false-positive replay. 1024 covers the ~786-fragment
+    // worst case with headroom and matches Android's REPLAY_WINDOW_SIZE for
+    // cross-platform parity. Do not shrink this back down for an audio-only
+    // rationale without re-checking the video math above.
     private let replayLock = NSLock()
     private var replayInitialized = false
     private var replayHighest: UInt64 = 0   // highest accepted counter
-    private static let replayWindowSize: UInt64 = 512
+    private static let replayWindowSize: UInt64 = 1024
     private static let replayWindowWordCount = Int(replayWindowSize / 64)
     // Bitmask split across 64-bit words: bit i of the logical window lives
     // in word i/64, offset i%64. word[0] holds bits 0..63 (most recent).
@@ -253,9 +270,10 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     }
 
     /// Open one sealed frame. The peer's counter is reflected in the
-    /// nonce we read off the wire. Out-of-order delivery within the 64-frame
-    /// sliding window is accepted; replayed or excessively late frames are
-    /// rejected (M-14 anti-replay — receiver side only, no wire change).
+    /// nonce we read off the wire. Out-of-order delivery within the
+    /// `replayWindowSize`-frame sliding window is accepted; replayed or
+    /// excessively late frames are rejected (M-14 anti-replay — receiver
+    /// side only, no wire change).
     public func open(_ sealed: Data) throws -> Data {
         guard sealed.count >= Self.nonceSize + Self.tagSize else {
             throw SealerError.truncated

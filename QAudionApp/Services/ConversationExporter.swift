@@ -99,10 +99,10 @@ enum ConversationExporter {
         return "[\(stamp)] \(author): \(body)\(editedSuffix)"
     }
 
-    /// 01/05/2026, 14:32 — Italian short date+time.
+    /// 01/05/2026, 14:32 — short date+time in the app's effective language.
     private static let humanFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "it_IT")
+        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.dateFormat = "dd/MM/yyyy, HH:mm"
         return f
     }()

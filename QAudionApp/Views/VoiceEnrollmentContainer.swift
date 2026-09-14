@@ -269,6 +269,10 @@ final class VoiceEnrollmentContainer: ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         if audioEngine.isRunning { audioEngine.stop() }
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        // W-SESSIONCATLEAK — `.record` has no OUTPUT; leaving it behind
+        // silenced later calls the same way `.playback` silenced their
+        // capture (see VoiceNotePlayer for the measured incident).
+        restoreVoipCategoryAfterCapture()
     }
 
     @MainActor

@@ -58,17 +58,30 @@ final class MeshSheetViewModel: ObservableObject {
     /// move a chat off the public network.
     func autoSelectChatPeer(visibleNodeHexes: [String]) {
         guard !selectionTouchedByUser, selectedNodeHex == nil else { return }
-        guard let target = currentChatPeerNodeHex, visibleNodeHexes.contains(target) else { return }
+        // W-MESHUNKNOWN-IOS: a contact can have more than one candidate hex
+        // when sources briefly disagree (see MeshFeature.nodeHexes) — match
+        // against whichever one is actually visible, not just the first.
+        guard let target = currentChatPeerNodeHexes.first(where: visibleNodeHexes.contains) else { return }
         selectedNodeHex = target
     }
 
-    /// The node id this chat's own contact would advertise, resolved from
-    /// their stored identity key — nil when unknown/unpaired. Drives the
-    /// radar's chat-peer halo.
+    /// Every node id hex this chat's own contact could be advertising,
+    /// resolved from every authenticated identity key known for them — empty
+    /// when unknown/unpaired/never called.
+    var currentChatPeerNodeHexes: Set<String> {
+        guard let chatPeerUserId,
+              let contact = contactsStore.load().first(where: { $0.userId == chatPeerUserId })
+        else { return [] }
+        return MeshFeature.nodeHexes(forContact: contact)
+    }
+
+    /// Single-hex convenience for callers that only ever compare against one
+    /// value (the radar halo, `MeshSheetView`'s reachability chip) — picking
+    /// `.first` is a non-issue there: those are cosmetic, and a contact with
+    /// more than one candidate hex is the rare disagreement window
+    /// `MeshFeature.nodeHexes` documents, not the normal case.
     var currentChatPeerNodeHex: String? {
-        guard let chatPeerUserId else { return nil }
-        let pubkey = contactsStore.load().first(where: { $0.userId == chatPeerUserId })?.pubkey
-        return MeshFeature.nodeId(forContactPubkey: pubkey)?.hex
+        currentChatPeerNodeHexes.first
     }
 
     /// (displayName, isKnownContact) for a node hex — linear scan over the
@@ -83,11 +96,21 @@ final class MeshSheetViewModel: ObservableObject {
     }
 
     /// Reverse lookup: which known contact (if any) owns `nodeHex`.
+    ///
+    /// W-MESHUNKNOWN (2026-08-17) — used to check ONLY `contact.pubkey`,
+    /// which is populated exclusively by the QR-scan/NFC pairing flow
+    /// (`ContactsStore.StoredContact.pubkey` doc). A contact added through
+    /// the ordinary phone-number flow has `pubkey == nil` and could never
+    /// resolve here, however well "known" they are elsewhere in the app —
+    /// exactly the "unknown user" symptom reported live, since most real
+    /// contacts are never QR/NFC-paired. `presenceAuth?.peerIdentityKey` is
+    /// the SAME long-term Ed25519 identity key, already written whenever a
+    /// call with this contact reached NFC-authenticated presence (S2) — it
+    /// was just never consulted here. No new data, no schema change: this
+    /// only widens the lookup to a source that already exists on disk.
+    /// Mirrors Android's `MeshNodeIdentity.resolveNode()`, which already
+    /// unions its own multiple stored-key columns for the same reason.
     func resolveContact(nodeHex: String) -> ContactsStore.StoredContact? {
-        for contact in contactsStore.load() {
-            guard let id = MeshFeature.nodeId(forContactPubkey: contact.pubkey) else { continue }
-            if id.hex == nodeHex { return contact }
-        }
-        return nil
+        contactsStore.load().first { MeshFeature.matchesNodeHex(nodeHex, contact: $0) }
     }
 }

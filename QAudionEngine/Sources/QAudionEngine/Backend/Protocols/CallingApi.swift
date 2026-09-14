@@ -136,14 +136,85 @@ public protocol CallingApi {
     /// active callId on most backends).
     func sendCallHangupForId(callId: String, recipientId: String) async throws
 
+    /// W-SILENTPATHDEATH / W-RESTARTOFFERPARK (2026-08-25) — the
+    /// INITIATOR-side send primitive for a mid-call ICE-restart offer.
+    /// Ships a `call_offer` reusing the ALREADY-BOUND active call id (no
+    /// callId parameter — mirrors `sendIceCandidate`/`sendHangup`, which
+    /// read the backend's own internally-tracked active call id rather
+    /// than requiring the caller to carry it around) — a restart offer is
+    /// never a new call session.
+    ///
+    /// Returns `true` the moment the envelope reaches an authenticated
+    /// socket, `false` when it could not (caller-owned retry/park loop —
+    /// `QAudionWebRtcCallController.restartIce` — decides what to do
+    /// next). This is a THIN, non-blocking-beyond-the-single-attempt
+    /// primitive by design: `sendCallOfferWithId`'s own W-SETUPRETRY
+    /// ladder is gated off once the call has demonstrably progressed past
+    /// setup (see `BCryptoCallingApiImpl._setupProgressed`), which is
+    /// always true by the time an ICE restart can happen — reusing it here
+    /// would silently drop the retry coverage this method exists to
+    /// provide.
+    ///
+    /// Default impl returns `false` unconditionally (no-op) — backends
+    /// that haven't wired ICE-restart support keep compiling; only
+    /// `BCryptoCallingApiImpl` overrides with the real W-RESTARTOFFERPARK
+    /// send+park behavior (mirrors `deliverHangup`'s proven two-phase
+    /// shape: best-effort immediate send, then a detached park up to the
+    /// server's disconnect-grace ceiling).
+    /// `onParkDelivery`: W-PARKFRESHOFFER (2026-09-01) — when the offer
+    /// cannot go out now and the park later finds the socket back, the
+    /// impl calls THIS instead of resending the SDP captured at park time:
+    /// an ICE-restart offer parked for up to 40s carries the ufrag of a
+    /// local description the controller may have since replaced, and the
+    /// peer would answer an offer the initiator no longer holds. The
+    /// closure re-runs `restartIce` so the wire always carries an offer
+    /// minted at DELIVERY time (Android: park re-runs restartIce with
+    /// PARKED_SUFFIX). Pass nil to keep the legacy resend (non-restart
+    /// callers).
+    func sendIceRestartOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        onParkDelivery: (@Sendable () async -> Void)?
+    ) async -> Bool
+
+    /// W-RESPONDERREQFIRST (2026-08-30) — ask the OFFERING leg to drive a
+    /// fresh ICE-restart offer (`restart_ice_request` wire envelope),
+    /// instead of this responder shipping an offer of its own.
+    ///
+    /// Exists because W-RESPONDERRESTART's "both roles offer" model was
+    /// verified only against iOS's OWN receive path: Android's mid-call
+    /// offer pump applies a crossing offer ONLY on the responder
+    /// (`!activeAsInitiator`), and its ring layer suppresses the same
+    /// envelope as a stale replay — so an iOS responder's fresh offer to
+    /// an Android initiator is discarded on arrival. Measured live (call
+    /// 9df47801, 2026-08-30): simultaneous handoff restarts crossed, both
+    /// offers died, the initiator sat in CHECKING for minutes.
+    /// Default impl returns `false` (no-op); only BCryptoCallingApiImpl
+    /// overrides.
+    func sendRestartIceRequest(recipientId: String) async -> Bool
+
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
     /// Get the full relay response including the optional WS-TURN URL and
-    /// Tor onion address used by transport fallback selectors. Default impl
-    /// wraps `getRelays()` and leaves the top-level fields nil — backends
-    /// that decode a full `RelayResponse` SHOULD override to preserve them.
+    /// Reality censorship-bypass params used by transport fallback
+    /// selectors. Default impl wraps `getRelays()` and leaves the top-level
+    /// fields nil — backends that decode a full `RelayResponse` SHOULD
+    /// override to preserve them.
     func getRelaysResponse() async throws -> RelayResponse
+
+    /// W-AUXPIN (2026-09-02) — this backend's already cert-pinned REST
+    /// `URLSession` (SECURITY C-6), if it has one. Exists so Engine-side
+    /// callers that need a plain `URLSession` bound to the SAME pin/
+    /// delegate — but have no reachable route to `BackendConfig
+    /// .pinned(serverUrl:)`/`PinnedServerHost` (both QAudionApp-target-
+    /// only, unlike this protocol) — can reuse it instead of standing up
+    /// a second pinning mechanism or falling back to `URLSession.shared`.
+    /// See `QAudionWebRtcCallController`'s WSS-TURN bridge construction,
+    /// the one caller today. Default impl returns `nil`; only
+    /// `BCryptoCallingApiImpl` overrides.
+    func pinnedUrlSession() -> URLSession?
 
     // MARK: - Pre-negotiation (optional — backend-specific)
     // The BCrypto backend implements these. Default impls are no-ops to
@@ -172,12 +243,17 @@ public extension CallingApi {
 
     /// Default impl — wraps `getRelays()` into a `RelayResponse` with nil
     /// top-level fields. Backends that decode the full server response SHOULD
-    /// override to preserve wssTurnUrl / onionAddress so the transport fallback
-    /// selectors can use WS-TURN and Tor paths.
+    /// override to preserve wssTurnUrl / reality so the transport fallback
+    /// selectors can use the WS-TURN and Reality paths.
     func getRelaysResponse() async throws -> RelayResponse {
         let servers = try await getRelays()
-        return RelayResponse(relays: servers, wssTurnUrl: nil, onionAddress: nil)
+        return RelayResponse(relays: servers, wssTurnUrl: nil)
     }
+
+    /// Default impl — no pinned session available (test stubs, future
+    /// backends). Callers fall back to their own pre-W-AUXPIN default
+    /// (`URLSession.shared`) exactly as before.
+    func pinnedUrlSession() -> URLSession? { nil }
 
     /// Default impl — falls back to the sdp-less overload (drops sdpMid /
     /// sdpMLineIndex). Backends that send multi-stream ICE (audio + video)
@@ -305,6 +381,24 @@ public extension CallingApi {
     func sendCallHangupForId(callId: String, recipientId: String) async throws {
         try await sendHangup(recipientId: recipientId)
     }
+
+    /// Default impl — no-op, `false`. Backends supporting ICE-restart
+    /// recovery (BCryptoCallingApiImpl) MUST override; see the protocol
+    /// kdoc for why the setup-retry ladder cannot be reused here.
+    func sendIceRestartOffer(
+        recipientId: String,
+        sdp: String,
+        capabilities: [String],
+        onParkDelivery: (@Sendable () async -> Void)?
+    ) async -> Bool {
+        return false
+    }
+
+    /// Default impl — no-op, `false`. See the protocol kdoc
+    /// (W-RESPONDERREQFIRST); only BCryptoCallingApiImpl overrides.
+    func sendRestartIceRequest(recipientId: String) async -> Bool {
+        return false
+    }
 }
 
 /// Bcrypto-server `/api/v1/calling/relays` response shape.
@@ -312,19 +406,33 @@ public extension CallingApi {
 /// - `username` and `credential` are **optional** (STUN-only relays omit
 ///   them); previous iOS revs declared them non-optional, which made the
 ///   JSON decoder reject any STUN-only entry with `keyNotFound`.
-/// - `wssTurnUrl` / `onionAddress` are top-level fields used by the
-///   transport selector for the WS-TURN and Tor onion fallbacks.
+/// - `wssTurnUrl` is a top-level field used by the transport selector for
+///   the WS-TURN fallback; `reality` is the equivalent for the Reality
+///   censorship-bypass fallback.
 public struct RelayServer: Decodable, Equatable {
     public let urls: [String]
     public let username: String?
     public let credential: String?
     public let ttl: Int
+    /// W-RELAYGEO (2026-08-26, best-practices audit item 5) — optional
+    /// region/geo hint (e.g. `"eu-west"`, `"fi"`), matching whatever label
+    /// the relay-fleet operator assigns server-side. `nil` on every
+    /// deployment today: as of this change the server's relay-list model
+    /// (`bcrypto-server`) does NOT populate or even define this field yet —
+    /// this is the client's forward-compatible READ side only, added so
+    /// nothing breaks (and `RelayOrdering` can start using it for free) the
+    /// moment the server starts sending one, without a second client
+    /// release. Until then, `RelayOrdering` falls back entirely to the
+    /// client-measured RTT probe (`RelayLatencyProbe`) — a real ordering
+    /// signal on its own, independent of this field ever landing.
+    public let region: String?
 
-    public init(urls: [String], username: String? = nil, credential: String? = nil, ttl: Int = 3600) {
+    public init(urls: [String], username: String? = nil, credential: String? = nil, ttl: Int = 3600, region: String? = nil) {
         self.urls = urls
         self.username = username
         self.credential = credential
         self.ttl = ttl
+        self.region = region
     }
 
     /// Tolerant init: Android may serialize `ttl` as `ttlSeconds` /
@@ -339,32 +447,37 @@ public struct RelayServer: Decodable, Equatable {
             ?? c.decodeIfPresent(Int.self, forKey: .ttlSecondsSnake)
             ?? 3600
         self.ttl = ttl
+        // W-RELAYGEO — tolerate either casing the server might eventually
+        // ship (`region`/`geo` — Android's DTO naming for this hint hasn't
+        // been decided server-side yet either, so accept both rather than
+        // guess wrong and silently read nothing).
+        self.region = try c.decodeIfPresent(String.self, forKey: .region)
+            ?? c.decodeIfPresent(String.self, forKey: .geo)
     }
 
     private enum CodingKeys: String, CodingKey {
         case urls, username, credential, ttl
         case ttlSeconds
         case ttlSecondsSnake = "ttl_seconds"
+        case region
+        case geo
     }
 }
 
 public struct RelayResponse: Decodable, Equatable {
     public let relays: [RelayServer]
     public let wssTurnUrl: String?
-    public let onionAddress: String?
     /// Top-level `reality` block — the VLESS+REALITY censorship-bypass front
     /// parameters (design doc §4 / bcrypto-server
     /// CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Present ONLY when the server
     /// has provisioned a Reality front; nil on un-provisioned / older
     /// deployments (the whole Reality path stays inert when this is nil).
-    /// Consumed by the transport-fallback selector, exactly like
-    /// `onionAddress` — never a default route.
+    /// Consumed by the transport-fallback selector — never a default route.
     public let reality: RealityRelayParams?
 
-    public init(relays: [RelayServer], wssTurnUrl: String? = nil, onionAddress: String? = nil, reality: RealityRelayParams? = nil) {
+    public init(relays: [RelayServer], wssTurnUrl: String? = nil, reality: RealityRelayParams? = nil) {
         self.relays = relays
         self.wssTurnUrl = wssTurnUrl
-        self.onionAddress = onionAddress
         self.reality = reality
     }
 
@@ -373,8 +486,6 @@ public struct RelayResponse: Decodable, Equatable {
         self.relays = try c.decodeIfPresent([RelayServer].self, forKey: .relays) ?? []
         self.wssTurnUrl = try c.decodeIfPresent(String.self, forKey: .wssTurnUrl)
             ?? c.decodeIfPresent(String.self, forKey: .wssTurnUrlSnake)
-        self.onionAddress = try c.decodeIfPresent(String.self, forKey: .onionAddress)
-            ?? c.decodeIfPresent(String.self, forKey: .onionAddressSnake)
         self.reality = try c.decodeIfPresent(RealityRelayParams.self, forKey: .reality)
     }
 
@@ -382,8 +493,6 @@ public struct RelayResponse: Decodable, Equatable {
         case relays
         case wssTurnUrl
         case wssTurnUrlSnake = "wss_turn_url"
-        case onionAddress
-        case onionAddressSnake = "onion_address"
         case reality
     }
 }

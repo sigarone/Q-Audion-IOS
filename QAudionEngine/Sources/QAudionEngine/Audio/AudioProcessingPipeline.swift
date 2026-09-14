@@ -159,10 +159,12 @@ public final class AudioProcessingPipeline {
         // environment, they can enable AEC in Settings → Chiamate →
         // Echo Cancellation to re-activate VP-IO. For the common
         // earpiece case, no AEC is needed.
+        // W-NOMIXOPTION (2026-09-10) — see `CallKitProvider.activateAudioSession`'s
+        // kdoc; kept in sync per this method's own W464-referenced invariant.
         #if os(iOS) && !targetEnvironment(simulator)
-        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
         #else
-        let audioOpts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        let audioOpts: AVAudioSession.CategoryOptions = []
         #endif
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
 
@@ -287,6 +289,17 @@ public final class AudioProcessingPipeline {
     /// read `inputNode.isVoiceProcessingEnabled`.
     private var voiceProcessingActive = false
 
+    /// W-CKMAINBLOCK-TEARDOWN (2026-09-02) — serial queue `disableVoiceProcessing`
+    /// dispatches onto when `CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled`
+    /// is flipped on. See that flag's kdoc for why it stays off by default
+    /// (no on-device verification yet) and why this needs its own queue
+    /// rather than reusing the caller's — mirrors `VideoCallPipeline`'s
+    /// `captureQueue` role for the equivalent camera-stop fix, minus the
+    /// "already owns every mutation" guarantee that let that one default on.
+    private let voiceProcessingTeardownQueue = DispatchQueue(
+        label: "com.bcrypto.qaudion.audio.vpio-teardown"
+    )
+
     // AUDIO-DIAG (2026-07-10) — per-call audio-path snapshot. Two open
     // investigations, both needing REAL data instead of guesses:
     //
@@ -391,6 +404,11 @@ public final class AudioProcessingPipeline {
     /// How many engine starts this call have been forced to run without VP-IO.
     /// Read by `AudioCapture.restartEngineForRoute` to bound retries.
     public var voiceProcessingBypassCount: Int { vpioBypassCountThisCall }
+
+    /// W-AUDIOBEACON (2026-09-01) — read-only view of the canonical per-call
+    /// restart counter for `AudioCapture`'s periodic engine-state line, so
+    /// the beacon reports the same number `call.audio.diag` does at teardown.
+    public var engineRestartCount: Int { engineRestartsThisCall }
 
     /// Pure step function for the speaker-residency accumulator: given the ms
     /// accumulated so far, whether an interval is currently open (0 = no)
@@ -683,17 +701,44 @@ public final class AudioProcessingPipeline {
 
     /// Disable voice processing (call when the call ends).
     public func disableVoiceProcessing(on engine: AVAudioEngine) {
-        let inputNode = engine.inputNode
-        if #available(iOS 13.0, *) {
-            try? inputNode.setVoiceProcessingEnabled(false)
-        }
         voiceProcessingActive = false
+        guard #available(iOS 13.0, *) else { return }
+        let inputNode = engine.inputNode
+        // W-CKMAINBLOCK-TEARDOWN — see CallKitWorkOffloadPolicy's kdoc: this
+        // call is the audio-side twin of the camera's `stopRunning()` block,
+        // found on the remote-hangup path (AppState.handleRemoteCallHangup →
+        // MainActor.run → CallService.teardownAudioStack → AudioCapture.stop
+        // → here) that froze the app's own in-app UI when the PEER hung up.
+        // Default is blockingSync (today's exact behaviour) until the
+        // fireAndForgetAsync path is verified on a device.
+        switch CallKitWorkOffloadPolicy.voiceProcessingTeardownDispatch() {
+        case .blockingSync:
+            try? inputNode.setVoiceProcessingEnabled(false)
+        case .fireAndForgetAsync:
+            voiceProcessingTeardownQueue.async {
+                try? inputNode.setVoiceProcessingEnabled(false)
+            }
+        }
     }
 
     /// Deactivate the audio session when the call ends.
     public func deactivateSession() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         isConfigured = false
+    }
+
+    /// W-MEDIARESET (2026-09-01) — forget that the session was configured,
+    /// WITHOUT touching it. After `AVAudioSession.mediaServicesWereReset`
+    /// the category/mode/preferred-* we set are gone with the media server
+    /// and the VP-IO unit is orphaned; the next `AudioCapture.start()` must
+    /// re-run `configureForVoIP()` (setCategory + best-effort setActive)
+    /// instead of skipping it on a stale `isConfigured`. Deliberately NOT
+    /// `deactivateSession()`: that would `setActive(false)` mid-call and
+    /// notify others, which is CallKit's decision, not ours. See
+    /// `AudioInterruptionRecoveryPolicy.mediaServicesResetAction`.
+    public func invalidateSessionConfiguration() {
+        isConfigured = false
+        voiceProcessingActive = false
     }
 
     /// Bug B robustness — best-effort (re)activate the shared session.

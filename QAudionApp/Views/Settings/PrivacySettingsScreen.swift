@@ -19,24 +19,25 @@ final class PrivacySettingsContainer: ObservableObject {
         //     container and by nothing else. No SOCKS / Tor path ever
         //     consulted it, so the subtitle ("tutte le connessioni passano
         //     per la rete Tor") was a false anonymisation claim on a privacy
-        //     screen. The honest, explicitly-disabled row on Impostazioni →
-        //     Trasporto (TransportSettingsScreen) is the surviving statement
-        //     about Tor on iOS.
+        //     screen. (2026-09-14: embedded Tor was removed from the app
+        //     entirely — see EmbeddedTorManager/TorObfsTransport history —
+        //     and the `torEnabled` field itself was deleted from
+        //     PrivacySettingsViewModel/TransportSettingsViewModel along with
+        //     it; Reality is now the sole censorship-bypass mechanism on iOS.)
         //   • "Messaggi a scadenza / Scadenza": PrivacyGate.disappearingSeconds
         //     was likewise read only here. The TTL that actually ships is the
         //     per-conversation Conversation.ephemeralTimerSeconds
         //     (ChatContainer / ChatDetailScreen), set from the chat itself.
-        // Both ViewModel fields are still hydrated from — and saved back to —
-        // the legacy SettingsStore blob, so no stored user value is migrated
-        // or deleted; they are simply no longer read by anything.
+        // The disappearing-duration field is still hydrated from — and saved
+        // back to — the legacy SettingsStore blob, so no stored user value is
+        // migrated or deleted; it is simply no longer read by anything.
         let legacy = store.loadPrivacy()
         self.viewModel = PrivacySettingsViewModel(
             readReceiptsEnabled: PrivacyGate.readReceiptsEnabled,
             typingIndicatorEnabled: PrivacyGate.typingIndicatorEnabled,
             presenceVisibleToContacts: PrivacyGate.presenceVisibleToContacts,
             disappearingMessagesDuration: legacy.disappearingMessagesDuration,
-            blockedUserIds: legacy.blockedUserIds,
-            torEnabled: legacy.torEnabled
+            blockedUserIds: legacy.blockedUserIds
         )
     }
 
@@ -71,8 +72,7 @@ final class PrivacySettingsContainer: ObservableObject {
             typingIndicatorEnabled: typing ?? viewModel.typingIndicatorEnabled,
             presenceVisibleToContacts: presence ?? viewModel.presenceVisibleToContacts,
             disappearingMessagesDuration: viewModel.disappearingMessagesDuration,
-            blockedUserIds: viewModel.blockedUserIds,
-            torEnabled: viewModel.torEnabled
+            blockedUserIds: viewModel.blockedUserIds
         )
     }
 }
@@ -142,6 +142,100 @@ struct PrivacySettingsScreen: View {
         Binding(
             get: { PrivacyGate.appLockEnabled },
             set: { PrivacyGate.setAppLockEnabled($0) }
+        )
+    }
+
+    // MARK: - C7 operational-diagnostics consent (audit 2026-08-19)
+    //
+    // Parity with Android `operationalDiagnosticsEnabled` / Desktop
+    // `SealedTelemetryService.enabled`: opt-in, default OFF. Setter has
+    // side effects — it arms/tears down the live flush timer immediately,
+    // not just a stored preference.
+    //
+    // W-DIAGTOGGLE-DEAD (2026-08-20) — was a plain `Binding(get:set:)`
+    // over `TelemetryService.isEnabled`/`setEnabled`, no `@State`/
+    // `@Published` backing it. Reported live: the switch does not move at
+    // all on tap. `SettingsToggleRow`'s own `@Binding var isOn` mutation
+    // (`isOn.toggle()`, fired from the row's `.onTapGesture` — the native
+    // `Toggle` has `.allowsHitTesting(false)` and never receives the touch
+    // itself) invalidates that row, but nothing here ever confirmed a
+    // closure-only `Binding` with no SwiftUI-tracked storage underneath
+    // reliably re-renders through that path, and `TelemetryService
+    // .setEnabled` posts no notification either — unlike
+    // `screenshotProtectionEnabled`'s `.screenshotProtectionDidChange`,
+    // there is nothing else that could rescue a re-render if the direct
+    // path silently doesn't fire one. A real `@State` var is the one
+    // SwiftUI primitive guaranteed to invalidate on write regardless of
+    // that uncertainty — `TelemetryService.setEnabled` still runs as the
+    // side effect, this only fixes what drives the switch's own position.
+    @State private var operationalDiagnosticsToggleState: Bool = TelemetryService.isEnabled
+
+    private var operationalDiagnosticsEnabled: Binding<Bool> {
+        Binding(
+            get: { operationalDiagnosticsToggleState },
+            set: { newValue in
+                operationalDiagnosticsToggleState = newValue
+                TelemetryService.setEnabled(newValue)
+            }
+        )
+    }
+
+    // MARK: - MASVS-PRIVACY remediation (2026-08-20) — LiveLogStreamer consent
+    //
+    // DISTINCT from `operationalDiagnosticsEnabled` above: that one gates the
+    // encrypted call-pipeline metrics stream (X25519+AES-GCM). This one gates
+    // `LiveLogStreamer` — raw-ish application log lines (redacted, but a
+    // continuous stream, not a single encrypted event) shipped every ~3s
+    // while the app runs. Before this fix `LiveLogStreamer.setEnabled` had
+    // zero reachable UI call sites anywhere in the app and the flag defaulted
+    // on for TestFlight — see `docs/security/MASVS_ASSESSMENT_2026-08-20.md`
+    // §1.1. Uses the same real-`@State`-backing pattern as
+    // `operationalDiagnosticsEnabled` (W-DIAGTOGGLE-DEAD, 2026-08-20) so the
+    // switch actually re-renders on tap.
+    @State private var liveLogStreamerToggleState: Bool = LiveLogStreamer.isEnabled
+
+    private var liveLogStreamerEnabled: Binding<Bool> {
+        Binding(
+            get: { liveLogStreamerToggleState },
+            set: { newValue in
+                liveLogStreamerToggleState = newValue
+                LiveLogStreamer.setEnabled(newValue)
+            }
+        )
+    }
+
+    // MARK: - CarPlay/Siri state-of-the-art plan S2 — messaging cache consent
+    //
+    // Gates SiriMessageBridgeStore.replaceRecentMessages (AppState
+    // .refreshSiriMessageCache): a second, App-Group-shared on-disk copy of
+    // recent 1:1 plaintext, readable by the QAudionIntents extension so
+    // "Chiedi a Q-Audion di leggermi i messaggi di X" works. Default OFF —
+    // this is a real privacy trade-off (see that file's own security-design
+    // doc, cryptography-security-expert consultation 2026-09-06), never
+    // silently enabled. Same real-`@State`-backing pattern as
+    // `operationalDiagnosticsEnabled` above (W-DIAGTOGGLE-DEAD) so the
+    // switch actually re-renders on tap. Sending a message via Siri
+    // (`INSendMessageIntent` → the outbox queue) is NOT gated by this flag —
+    // it never stores a second copy of anything, see AppState
+    // .drainSiriOutbox.
+    @State private var siriMessagingConsentToggleState: Bool = SiriMessagingConsent.isEnabled
+
+    private var siriMessagingConsentEnabled: Binding<Bool> {
+        Binding(
+            get: { siriMessagingConsentToggleState },
+            set: { newValue in
+                siriMessagingConsentToggleState = newValue
+                SiriMessagingConsent.setEnabled(newValue)
+                // Turning ON: the cache populates on the next foreground/
+                // launch pass (AppState.refreshSiriMessageCache, already
+                // wired there) — this screen holds no AppState reference to
+                // call it immediately, and a few seconds' delay is a fine
+                // trade-off. Turning OFF: clear any existing copy right now
+                // rather than waiting for that same pass.
+                if !newValue {
+                    SiriMessageBridgeStore.shared.replaceRecentMessages([])
+                }
+            }
         )
     }
 
@@ -257,6 +351,35 @@ struct PrivacySettingsScreen: View {
                         if appLockEnabled.wrappedValue {
                             appLockTimeoutRow
                         }
+                    }
+
+                    // C7: encrypted operational-diagnostics opt-in (audit
+                    // 2026-08-19). Default OFF — parity with Android/Desktop.
+                    SettingsSectionHeader("DIAGNOSTICA")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Diagnostica operativa cifrata",
+                            subtitle: "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Disattivato di default.",
+                            isOn: operationalDiagnosticsEnabled
+                        )
+                        // MASVS-PRIVACY remediation (2026-08-20) — real
+                        // toggle for LiveLogStreamer, previously unreachable
+                        // from any UI and on by default for TestFlight.
+                        SettingsToggleRow(
+                            title: "Log diagnostici in tempo reale",
+                            subtitle: "Invia log applicativi redatti (tag, dimensioni, fingerprint troncati — mai chiavi, token o contenuto messaggi) al backend di diagnostica ogni pochi secondi mentre l'app è in uso. Canale separato dal precedente. Disattivato di default.",
+                            isOn: liveLogStreamerEnabled
+                        )
+                    }
+
+                    // CarPlay/Siri state-of-the-art plan S2 (2026-09-06).
+                    SettingsSectionHeader("SIRI")
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Siri può leggere i tuoi messaggi",
+                            subtitle: "Permette a Siri di risponderti a voce con i tuoi messaggi recenti (es. \"Chiedi a Q-Audion di leggermi i messaggi di Anna\"). Richiede di tenere una seconda copia cifrata dei messaggi recenti accessibile a Siri. Disattivato di default. L'invio di messaggi via Siri non è interessato da questa opzione.",
+                            isOn: siriMessagingConsentEnabled
+                        )
                     }
 
                     // IOS-SE: hardware-gated custody of session keys. Default OFF

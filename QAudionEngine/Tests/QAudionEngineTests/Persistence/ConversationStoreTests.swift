@@ -111,12 +111,118 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(updated.plaintext, "hello")
     }
 
+    /// Regression guard for the fetch-all/loop-save → `updateAll` rewrite:
+    /// the batched UPDATE must still touch only the row matching
+    /// `serverMessageId`, still leave `readAt` alone when the caller only
+    /// passes `deliveredAt` (mirrors the old per-row `readAt ?? msg.readAt`
+    /// fallback), still leave unrelated columns (`plaintext`) untouched, and
+    /// still report false when nothing matched.
+    func test_updateStatusByServerId_updatesOnlyMatchingRowAndRequestedFields() {
+        store.upsertConversation(makeConv(id: convId))
+        let mid = UUID()
+        let sid = "srv-\(UUID().uuidString)"
+        let msg = Message(id: mid, conversationId: convId, direction: .outgoing,
+                          plaintext: "hello", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                          deliveredAt: nil, readAt: nil, status: .sent,
+                          serverMessageId: sid)
+        store.appendMessage(msg)
+
+        let matched = store.updateStatusByServerId(
+            serverMessageId: sid, newStatus: .delivered,
+            deliveredAt: Date(timeIntervalSince1970: 1_745_001_000))
+        XCTAssertTrue(matched)
+        // Exactly one message was appended above for this conversationId; list is guaranteed non-empty.
+        // swiftlint:disable:next force_unwrapping
+        let updated = store.loadMessages(conversationId: convId).first!
+        XCTAssertEqual(updated.status, .delivered)
+        XCTAssertNotNil(updated.deliveredAt)
+        XCTAssertNil(updated.readAt)
+        XCTAssertEqual(updated.plaintext, "hello")
+
+        let unmatched = store.updateStatusByServerId(serverMessageId: "no-such-server-id", newStatus: .read)
+        XCTAssertFalse(unmatched)
+    }
+
     func test_wipeAll_clearsEverything() {
         store.upsertConversation(makeConv(id: convId))
         store.appendMessage(makeMsg(in: convId))
         store.wipeAll()
         XCTAssertTrue(store.loadConversations().isEmpty)
         XCTAssertTrue(store.loadMessages(conversationId: convId).isEmpty)
+    }
+
+    // MARK: - W-MSGOUTBOX: drainer work list
+
+    /// Only OUTGOING rows still at `.sending` with no media and no
+    /// tombstone are the outbox's business, oldest first. `.failed` rows
+    /// stay on manual retry, attachments ride their own pipeline.
+    func test_loadPendingOutboundTextMessages_filtersAndOrders() {
+        store.upsertConversation(makeConv(id: convId))
+        let base = Date(timeIntervalSince1970: 1_745_000_000)
+        let older = UUID()
+        let newer = UUID()
+        store.appendMessage(Message(id: newer, conversationId: convId, direction: .outgoing,
+                                    plaintext: "second", sentAt: base.addingTimeInterval(10),
+                                    deliveredAt: nil, readAt: nil, status: .sending,
+                                    clientMsgId: newer.uuidString))
+        store.appendMessage(Message(id: older, conversationId: convId, direction: .outgoing,
+                                    plaintext: "first", sentAt: base,
+                                    deliveredAt: nil, readAt: nil, status: .sending,
+                                    clientMsgId: older.uuidString))
+        // Excluded: failed, delivered, incoming, voice note, tombstoned.
+        store.appendMessage(makeMsg(in: convId, direction: .outgoing, status: .failed))
+        store.appendMessage(makeMsg(in: convId, direction: .outgoing, status: .delivered))
+        store.appendMessage(makeMsg(in: convId, direction: .incoming, status: .sending))
+        store.appendMessage(Message(id: UUID(), conversationId: convId, direction: .outgoing,
+                                    plaintext: "voice", sentAt: base,
+                                    deliveredAt: nil, readAt: nil, status: .sending,
+                                    mediaLocalPath: "/tmp/x.m4a", mediaMimeType: "audio/mp4"))
+        store.appendMessage(Message(id: UUID(), conversationId: convId, direction: .outgoing,
+                                    plaintext: "gone", sentAt: base,
+                                    deliveredAt: nil, readAt: nil, status: .sending,
+                                    deletedAt: base))
+
+        let pending = store.loadPendingOutboundTextMessages()
+        XCTAssertEqual(pending.map { $0.id }, [older, newer])
+        XCTAssertEqual(pending.map { $0.plaintext }, ["first", "second"])
+    }
+
+    // MARK: - W-MSGDEDUP: inbound dedup lookups
+
+    func test_hasInboundMessage_byServerId_matchesOnlyIncomingRows() {
+        store.upsertConversation(makeConv(id: convId))
+        let sid = "srv-\(UUID().uuidString)"
+        store.appendMessage(Message(id: UUID(), conversationId: convId, direction: .incoming,
+                                    plaintext: "hi", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                                    deliveredAt: nil, readAt: nil, status: .delivered,
+                                    senderUserId: "peer-a", serverMessageId: sid))
+        let outboundSid = "srv-\(UUID().uuidString)"
+        store.appendMessage(Message(id: UUID(), conversationId: convId, direction: .outgoing,
+                                    plaintext: "mine", sentAt: Date(timeIntervalSince1970: 1_745_000_001),
+                                    deliveredAt: nil, readAt: nil, status: .delivered,
+                                    serverMessageId: outboundSid))
+
+        XCTAssertTrue(store.hasInboundMessage(serverMessageId: sid))
+        XCTAssertFalse(store.hasInboundMessage(serverMessageId: outboundSid))
+        XCTAssertFalse(store.hasInboundMessage(serverMessageId: "srv-unknown"))
+    }
+
+    func test_hasInboundMessage_byClientMsgId_isSenderScoped() {
+        store.upsertConversation(makeConv(id: convId))
+        let cmid = UUID().uuidString
+        store.appendMessage(Message(id: UUID(), conversationId: convId, direction: .incoming,
+                                    plaintext: "hi", sentAt: Date(timeIntervalSince1970: 1_745_000_000),
+                                    deliveredAt: nil, readAt: nil, status: .delivered,
+                                    senderUserId: "peer-a", clientMsgId: cmid))
+        // Our own outbound row with the same key must never count.
+        store.appendMessage(Message(id: UUID(), conversationId: convId, direction: .outgoing,
+                                    plaintext: "mine", sentAt: Date(timeIntervalSince1970: 1_745_000_001),
+                                    deliveredAt: nil, readAt: nil, status: .delivered,
+                                    clientMsgId: cmid))
+
+        XCTAssertTrue(store.hasInboundMessage(clientMsgId: cmid, senderUserId: "peer-a"))
+        XCTAssertFalse(store.hasInboundMessage(clientMsgId: cmid, senderUserId: "peer-b"))
+        XCTAssertFalse(store.hasInboundMessage(clientMsgId: "no-such", senderUserId: "peer-a"))
     }
 
     // MARK: - View-once

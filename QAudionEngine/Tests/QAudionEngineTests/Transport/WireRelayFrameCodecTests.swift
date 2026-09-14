@@ -198,4 +198,67 @@ final class WireRelayFrameCodecTests: XCTestCase {
         XCTAssertEqual(decoded.frame.payload, payload)
         XCTAssertEqual(decoded.frame.tag, tag)
     }
+
+    // MARK: - Control (W-DCHANGUP, 2026-08-25)
+
+    /// Wire layout pinned against Android
+    /// `DefaultFrameRelayTransport.sendControlRaw`: `0x03 || kind || body`,
+    /// no length field (message boundaries come from the transport).
+    func testControlWireLayoutMatchesAndroid() {
+        let body = Data("glare".utf8)
+        let wire = WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindHangup, body: body)
+        XCTAssertEqual(wire.count, 2 + body.count)
+        XCTAssertEqual(wire[0], 0x03)   // mux = CONTROL
+        XCTAssertEqual(wire[1], 0x01)   // kind = HANGUP
+        XCTAssertEqual(wire.subdata(in: 2..<wire.count), body)
+    }
+
+    func testControlRoundTrip() throws {
+        let body = Data("local_hangup".utf8)
+        let wire = WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindHangup, body: body)
+        let (kind, decodedBody) = try WireRelayFrameCodec.decodeControl(wire)
+        XCTAssertEqual(kind, WireRelayFrameCodec.controlKindHangup)
+        XCTAssertEqual(decodedBody, body)
+    }
+
+    func testControlEmptyBodyRoundTrip() throws {
+        let wire = WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindHangup, body: Data())
+        XCTAssertEqual(wire.count, 2)
+        let (kind, body) = try WireRelayFrameCodec.decodeControl(wire)
+        XCTAssertEqual(kind, WireRelayFrameCodec.controlKindHangup)
+        XCTAssertTrue(body.isEmpty)
+    }
+
+    /// Bodies over 255 bytes are truncated, never thrown — the frame is a
+    /// best-effort notification, not a correctness-load-bearing path.
+    func testControlBodyTruncatedAt255() throws {
+        let big = Data(repeating: 0x41, count: 400)
+        let wire = WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindHangup, body: big)
+        XCTAssertEqual(wire.count, 2 + 255)
+        let (_, body) = try WireRelayFrameCodec.decodeControl(wire)
+        XCTAssertEqual(body.count, 255)
+        XCTAssertEqual(body, big.prefix(255))
+    }
+
+    /// Mirrors Android `decodeControl`'s `require(payload.size >= 2)`.
+    func testControlDecodeThrowsOnTruncatedHeader() {
+        XCTAssertThrowsError(try WireRelayFrameCodec.decodeControl(Data([0x03])))
+        XCTAssertThrowsError(try WireRelayFrameCodec.decodeControl(Data()))
+    }
+
+    /// Non-zero-based Data slices must decode identically (the RX path hands
+    /// the codec a Data whose startIndex is not necessarily 0).
+    func testControlDecodeOnSlicedData() throws {
+        var outer = Data([0xFF, 0xFF])
+        outer.append(WireRelayFrameCodec.encodeControl(
+            kind: WireRelayFrameCodec.controlKindHangup, body: Data("x".utf8)))
+        let slice = outer.dropFirst(2)  // startIndex == 2
+        let (kind, body) = try WireRelayFrameCodec.decodeControl(slice)
+        XCTAssertEqual(kind, WireRelayFrameCodec.controlKindHangup)
+        XCTAssertEqual(body, Data("x".utf8))
+    }
 }

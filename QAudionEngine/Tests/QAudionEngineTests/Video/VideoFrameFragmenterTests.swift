@@ -207,4 +207,37 @@ final class VideoFrameFragmenterTests: XCTestCase {
         let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true)
         XCTAssertEqual(frags.count, VideoConstants.maxFragmentsPerFrame)
     }
+
+    // MARK: - W-VNACK (2026-08-16)
+
+    func testNoPendingFrameReportsSentinel() {
+        let recv = VideoFrameFragmenter()
+        XCTAssertEqual(recv.currentFrameId, -1)
+        XCTAssertEqual(recv.missingFragmentIndices(), [])
+    }
+
+    func testMissingFragmentIndicesReportsGap() throws {
+        let fragmenter = VideoFrameFragmenter()
+        // 3500 bytes -> 3 fragments, same shape as testMultiFragmentReassembly.
+        let nal = Data((0..<3500).map { UInt8($0 & 0xFF) })
+        let frags = try fragmenter.fragment(nalUnit: nal, isKeyFrame: true, bitrateKbps: 800)
+        XCTAssertEqual(frags.count, 3)
+
+        let recv = VideoFrameFragmenter()
+        // Deliver fragment 0 only — fragment 1 (the middle one) never arrives.
+        XCTAssertNil(recv.defragment(frags[0]))
+        XCTAssertNotEqual(recv.currentFrameId, -1)
+        XCTAssertEqual(recv.missingFragmentIndices(), [1, 2])
+
+        // Fragment 2 arrives but 1 is still missing — frame stays incomplete.
+        XCTAssertNil(recv.defragment(frags[2]))
+        XCTAssertEqual(recv.missingFragmentIndices(), [1])
+
+        // The straggler completes the frame — no more pending frame at all.
+        let final = recv.defragment(frags[1])
+        XCTAssertNotNil(final)
+        XCTAssertEqual(final?.nalUnit, nal)
+        XCTAssertEqual(recv.currentFrameId, -1)
+        XCTAssertEqual(recv.missingFragmentIndices(), [])
+    }
 }

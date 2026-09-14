@@ -71,6 +71,14 @@ final class ChatFileAttachmentSender {
     ///     three-way convention as `AttachAnnounceMeta.ex` (0/nil = none,
     ///     -1 = view-once, N = seconds).
     ///   - exportAllowed: export-permission choice; `false` embeds `xp: 0`.
+    /// - Returns: the announce envelope's `fileId` (a UUID string) — the
+    ///   caller must persist this onto the local outbound row's
+    ///   `Message.wireAttachmentId` (`ConversationStore.setWireAttachmentId`)
+    ///   so an incoming `qa_att_receipt:1` has something to match against.
+    ///   Bug found live 2026-08-18: without it, a sent file/voice-note
+    ///   bubble never left its single grey tick no matter what the
+    ///   recipient did with it.
+    @discardableResult
     func send(
         data: Data,
         mime: String,
@@ -78,7 +86,7 @@ final class ChatFileAttachmentSender {
         recipientUserId: String,
         ephemeralSpecSec: Int64? = nil,
         exportAllowed: Bool = true
-    ) async throws {
+    ) async throws -> String {
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let selfId = appState.currentUserId, !selfId.isEmpty else {
             throw SendError.notAuthenticated
@@ -158,6 +166,32 @@ final class ChatFileAttachmentSender {
             RTLog.warn("voicenote", "file-attachment issue-token failed: \(error)")
         }
 
+        // 6b. ATT-1 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md backlog item 1) —
+        //     co-sign the envelope with this device's long-term Ed25519
+        //     identity key, over the canon defined by
+        //     `FileAttachmentAnnounceSig`. `transportSenderId` is signed as
+        //     THIS device's own user id — the server always stamps outbound
+        //     opaque_message frames with the authenticated sender's real id,
+        //     so this is the value the receiver's transport frame will
+        //     carry. Best-effort: no local identity, or a signing failure,
+        //     degrades to an UNSIGNED envelope (byte-identical legacy wire)
+        //     rather than failing the send — same "signTranscript returns
+        //     nil => unsigned" contract `AppState.wireHandshakeSigning`
+        //     already documents for the call-handshake signer.
+        var sigB64: String?
+        let sigWraps = sealed.wraps.map {
+            FileAttachmentAnnounceSig.DeviceWrap(deviceId: $0.deviceId, wrappedContentKey: $0.wrappedContentKey)
+        }
+        if let identity = SovereignIdentityManager().loadIdentity(),
+           let canon = FileAttachmentAnnounceSig.canon(
+                fileId: fileId, senderUuid: senderId, recipientUuid: peerDeviceId,
+                senderEphemeralPub: sealed.senderEphPub, wraps: sigWraps, tusFileId: tusFileId,
+                totalChunks: totalChunks, totalSizeBytes: Int64(data.count), transportSenderId: senderId
+           ),
+           let sig = try? FileAttachmentAnnounceSig.sign(canon: canon, signingPrivateKeyRaw: identity.signingPrivate) {
+            sigB64 = sig.base64EncodedString()
+        }
+
         // 7. Encode + send.
         let envelope = FileAttachmentAnnounceWireEnvelope(
             fileId: Self.uuidString(fromRawBytes: fileId),
@@ -177,7 +211,8 @@ final class ChatFileAttachmentSender {
             downloadTokenExpiresMs: downloadTokenExpiresMs,
             downloadTokenMaxUses: downloadTokenMaxUses,
             ephemeralSpecSec: (ephemeralSpecSec ?? 0) != 0 ? ephemeralSpecSec : nil,
-            xp: exportAllowed ? nil : 0
+            xp: exportAllowed ? nil : 0,
+            sigB64: sigB64
         )
         do {
             let payload = try envelope.toWirePayload()
@@ -185,6 +220,7 @@ final class ChatFileAttachmentSender {
         } catch {
             throw SendError.sendFailed(String(describing: error))
         }
+        return envelope.fileId
     }
 
     // MARK: - Helpers

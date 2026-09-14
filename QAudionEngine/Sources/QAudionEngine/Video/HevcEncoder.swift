@@ -153,15 +153,34 @@ public final class HevcEncoder: @unchecked Sendable {
     }
 
     public func invalidate() {
+        // W-INVALIDATEDEADLOCK (2026-09-04) — VTCompressionSessionInvalidate
+        // can block waiting for an outstanding encode's output callback to
+        // be DELIVERED, not merely for the hardware encode itself to finish.
+        // That callback is `outputCallback` -> `handleOutput`, which takes
+        // this SAME `lock` to read `onNal`/`fps`/`sessionGeneration` (see its
+        // own W-crash-guard doc). Holding `lock` across the invalidate call
+        // self-deadlocked whenever a frame's encode was genuinely in flight
+        // at teardown time — i.e. only on a call ending while video was
+        // actively streaming, never on an idle/paused one. Live-reproduced
+        // and symbolicated: VideoCallPipeline.stop() -> HevcEncoder
+        // .invalidate() hung the MainActor (endCall() never returns),
+        // freezing the whole app until the remote peer's own hangup gave up
+        // waiting. Fix: clear `session`/bump `sessionGeneration` under the
+        // lock (so any new encode attempt or in-flight callback already
+        // sees the superseded state — unchanged from before), THEN release
+        // the lock before calling VTCompressionSessionInvalidate — nothing
+        // downstream needs the lock held across that call, only atomically
+        // updated before it.
         lock.lock()
-        if let session = session {
-            VTCompressionSessionInvalidate(session)
-        }
+        let sessionToInvalidate = session
         session = nil
         // W-crash-guard — supersede any callback already in flight from the
-        // session just invalidated (see sessionGeneration doc above).
+        // session about to be invalidated (see sessionGeneration doc above).
         sessionGeneration &+= 1
         lock.unlock()
+        if let sessionToInvalidate {
+            VTCompressionSessionInvalidate(sessionToInvalidate)
+        }
     }
 
     // MARK: - Encode

@@ -52,6 +52,11 @@ struct VoiceNoteBubbleContent: View {
     /// "Condividi audio" row can trigger the share sheet here, where
     /// the cached file path already lives.
     var shareRequest: Binding<Bool>? = nil
+    /// Bug found live 2026-08-18 — fired once, the first time an INBOUND
+    /// voice note is actually played, so the caller can send a "read"
+    /// `qa_att_receipt:1` back to the sender. `nil`/never called for
+    /// outbound bubbles (the caller only passes it for inbound rows).
+    var onOpened: (() -> Void)? = nil
 
     private var isReady: Bool { mediaLocalPath != nil }
     private var isActive: Bool { player.currentlyPlayingId == messageId }
@@ -285,7 +290,11 @@ struct VoiceNoteBubbleContent: View {
         guard let path = mediaLocalPath, !path.isEmpty else { return }
         // W124: missing cache → no-op rather than crash the player.
         guard FileManager.default.fileExists(atPath: path) else {
-            print("[VoiceNoteBubbleContent] file missing at \(path)")
+            // I8 FIX: the filename embeds the attachment's fileId (see
+            // ChatVoiceNoteReceiver.fetch) — print only the truncated last
+            // path component, not the full sandbox path, matching every
+            // other identifier print in this codebase.
+            print("[VoiceNoteBubbleContent] file missing at \((path as NSString).lastPathComponent.prefix(8))…")
             return
         }
         if isPlayingThis {
@@ -295,11 +304,13 @@ struct VoiceNoteBubbleContent: View {
         if isActive && player.isPaused {
             // Resume — reuses the loaded player for the same id.
             player.play(url: URL(fileURLWithPath: path), messageId: messageId)
+            onOpened?()
             return
         }
         // Fresh play (this bubble might be a different id than the
         // currently-active one; the player will stop the previous and
         // start ours).
         player.play(url: URL(fileURLWithPath: path), messageId: messageId)
+        onOpened?()
     }
 }

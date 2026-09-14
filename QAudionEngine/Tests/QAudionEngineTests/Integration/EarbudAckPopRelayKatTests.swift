@@ -134,6 +134,8 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
     }
 
     /// Pin the expected server_id hex so any label typo is caught cross-platform.
+    /// Uses the frozen KAT label explicitly (NOT KmsServerIdentity.SERVER_IDENTITY,
+    /// which is the live production identity — see KmsServerIdentity.swift).
     func testServerIdKnownVector() {
         let expected = Data([
             0x94, 0xb4, 0x00, 0x0e, 0x40, 0xb5, 0xa7, 0x16,
@@ -141,7 +143,8 @@ final class EarbudAckPopRelayKatTests: XCTestCase {
             0x04, 0xa4, 0xc8, 0xd8, 0xfd, 0xc5, 0xf4, 0x29,
             0x38, 0x3d, 0x10, 0x5f, 0x61, 0x99, 0x7a, 0x7e
         ])
-        XCTAssertEqual(expected, KmsServerIdentity.serverIdBytes,
+        let frozenKatServerId = KmsServerIdentity.serverId(identity: "qa-kms-test-server-2026-06-16")
+        XCTAssertEqual(expected, frozenKatServerId,
                        "server_id KAT vector mismatch — label changed?")
     }
 

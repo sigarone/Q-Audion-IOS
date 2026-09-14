@@ -69,6 +69,15 @@ public final class VideoCallPipeline: NSObject {
     /// UI bridge must hop to MainActor before touching SwiftUI state.
     public nonisolated(unsafe) var onDecodedFrame: FrameCallback?
 
+    /// W-VNACK (2026-08-16) — fired when the stall watchdog judges the
+    /// in-flight inbound frame stalled long enough to be worth a
+    /// retransmission request. `(frameId, missingFragmentIndices)`. The
+    /// caller (AppState, which owns the WS client this pipeline
+    /// intentionally doesn't depend on) is responsible for getting the
+    /// VNACK piggy-back to the peer — see `CallPiggyBack.serializeVnack`.
+    /// Mirrors Android's `BcryptoWsVideoRelayTransport.onNackNeeded`.
+    public nonisolated(unsafe) var onNackNeeded: ((Int, [Int]) -> Void)?
+
     /// Camera position. Default front-facing for video calls.
     public var cameraPosition: AVCaptureDevice.Position = .front
 
@@ -106,7 +115,11 @@ public final class VideoCallPipeline: NSObject {
 
     /// Public accessor: SwiftUI bridge views (LocalCameraPreview)
     /// attach this to AVCaptureVideoPreviewLayer.
-    public let captureSession = AVCaptureSession()
+    // nonisolated(unsafe): AVCaptureSession is not Sendable, but every
+    // start/stop in this file already runs on `captureQueue` by the W565
+    // rule (never the main thread) — the manual discipline IS the safety
+    // contract, and this annotation states it instead of tripping Swift 6.
+    nonisolated(unsafe) public let captureSession = AVCaptureSession()
     private let captureQueue = DispatchQueue(label: "qaudion.video.capture")
     private let videoOutput = AVCaptureVideoDataOutput()
     private var captureInput: AVCaptureDeviceInput?
@@ -200,6 +213,47 @@ public final class VideoCallPipeline: NSObject {
     private var isRunning: Bool = false
     /// Periodic purge timer for stale incomplete inbound frames.
     private var purgeTimer: DispatchSourceTimer?
+    /// W-VNACK — stall watchdog, separate from and faster than
+    /// `purgeTimer`: polls every 25ms against the SAME 150ms
+    /// (`VideoConstants.fragmentReassemblyTimeoutMs`) threshold the purge
+    /// timer uses, so a NACK round-trip has a real window to land before
+    /// the purge timer gives up on the frame entirely. Mirrors Android's
+    /// `BcryptoWsVideoRelayTransport` stall watchdog exactly (25ms poll,
+    /// 150ms threshold, "up to 6 chances to catch the stall").
+    private var nackWatchdogTimer: DispatchSourceTimer?
+    private nonisolated(unsafe) var stallTrackedFrameId: Int = -1
+    private nonisolated(unsafe) var stallTrackedSinceMs: Int64 = 0
+    private nonisolated(unsafe) var stallNackedFrameId: Int = -1
+
+    /// W-CAPSESSIONWATCH (2026-08-23) — `AVCaptureSession` can stop
+    /// delivering frames for reasons entirely outside this pipeline's
+    /// control: another app claims the camera, thermal throttling under
+    /// sustained encode load, a system alert, a multitasking camera-access
+    /// change. Apple posts three notifications for exactly this — without
+    /// observing them the app has no way to know the camera died, and no
+    /// way to bring it back; frames just silently stop. Root-caused from a
+    /// real production call (Loki, 2026-08-22, call 532a3161): the peer's
+    /// receive side saw 75+ seconds of zero inbound video while ICE/DC
+    /// stayed healthy, meaning the freeze originated here on the send side,
+    /// not on the network. Tokens kept so `stop()` can remove exactly what
+    /// `start()` added — the same pattern this class already uses for its
+    /// timers.
+    private var captureInterruptedObserver: NSObjectProtocol?
+    private var captureInterruptionEndedObserver: NSObjectProtocol?
+    private var captureRuntimeErrorObserver: NSObjectProtocol?
+    private var captureDidStopObserver: NSObjectProtocol?
+
+    /// W-CAPINTERRUPTBEACON — tells the owner (AppState) that the capture
+    /// session was interrupted / resumed by the OS, so the §8.9 video-state
+    /// beacon can report the truth. Measured live 2026-09-01 (iOS↔Android
+    /// call f882cbe9): app backgrounded → iOS kept beaconing paused=false
+    /// every 3s for 80 s while zero frames left the device, and the peer
+    /// burned its whole recovery ladder (keyframe requests, IDRs, a full
+    /// ICE restart) against a sender that had nothing to send. The beacon
+    /// machinery was already state-triggered and heartbeat-repeated — the
+    /// missing piece was only that its input state never learned about
+    /// capture interruption.
+    public var onCaptureInterruptionChanged: ((Bool) -> Void)?
 
     // MARK: - Lifecycle
 
@@ -223,6 +277,7 @@ public final class VideoCallPipeline: NSObject {
             try encoder.start()
             encoder.requestForcedKeyFrame()
             startPurgeTimer()
+            startNackWatchdog()
             isRunning = true
             return
         }
@@ -251,6 +306,8 @@ public final class VideoCallPipeline: NSObject {
         // decoder can bootstrap immediately.
         encoder.requestForcedKeyFrame()
         startPurgeTimer()
+        startNackWatchdog()
+        startSessionHealthObservers()
         isRunning = true
     }
 
@@ -259,14 +316,36 @@ public final class VideoCallPipeline: NSObject {
         // Drop the WebRTC bridge callback before stopping the session so
         // no frames are pushed to a deallocated RTCVideoSource after teardown.
         onCapturedPixelBuffer = nil
+        stopSessionHealthObservers()
         // W-CRASH-AVF: stopRunning() must run on captureQueue, same as
         // startRunning()/setupSession() — see the note on setupSession().
         // This used to call stopRunning() directly on whatever thread
         // called stop() (MainActor), racing any in-flight captureQueue
         // work on the same session.
         let session = captureSession
-        captureQueue.sync {
-            session.stopRunning()
+        switch CallKitWorkOffloadPolicy.stopRunningDispatch() {
+        case .blockingSync:
+            captureQueue.sync {
+                session.stopRunning()
+            }
+        case .fireAndForgetAsync:
+            // W-CKMAINBLOCK (2026-09-02) — `.sync` here blocked the CALLING
+            // thread for however long the camera HAL takes to physically
+            // stop (Apple's own doc on `stopRunning()`: "This method is
+            // synchronous and blocks until the session stops running
+            // completely" — same class of block `start()` above already
+            // avoids for `startRunning()`, see its W565 comment). `stop()`
+            // can run on the main thread from a CallKit-triggered teardown
+            // (`providerDidReset` → `onProviderReset` → `videoPipeline?.
+            // stop()`), and CXProvider's delegate queue (nil = main) is
+            // shared by every OTHER CallKit callback too, so blocking here
+            // risks starving a later mute/end action, not just this call.
+            // `captureQueue` is serial: queuing the stop still runs it
+            // before any later session mutation (a fast re-`start()`'s
+            // `setupSession()` included) — only the CALLER stops waiting.
+            captureQueue.async {
+                session.stopRunning()
+            }
         }
         encoder.invalidate()
         decoder.invalidate()
@@ -274,7 +353,102 @@ public final class VideoCallPipeline: NSObject {
         inboundFragmenter.reset()
         purgeTimer?.cancel()
         purgeTimer = nil
+        nackWatchdogTimer?.cancel()
+        nackWatchdogTimer = nil
+        stallTrackedFrameId = -1
+        stallNackedFrameId = -1
         isRunning = false
+    }
+
+    /// W-CAPSESSIONWATCH — observe the three AVFoundation notifications
+    /// that fire when the capture session stops for a reason outside our
+    /// control, and recover automatically where Apple's own guidance says
+    /// recovery is the app's responsibility:
+    ///
+    ///  - `wasInterrupted`: session paused (another app took the camera,
+    ///    a system alert, etc). No restart here — `interruptionEnded`
+    ///    fires when it's safe to resume and is where we act.
+    ///  - `interruptionEnded`: safe to resume. AVCaptureSession does NOT
+    ///    restart itself; the app must call `startRunning()` again
+    ///    (same pattern as Apple's own AVCam sample).
+    ///  - `runtimeError`: the session stopped on an actual error
+    ///    (`AVError.Code`, e.g. `.mediaServicesWereReset`). Restart is
+    ///    the standard baseline recovery Apple's docs describe.
+    ///  - `didStopRunning`: catch-all diagnostic only, no action — fires
+    ///    for intentional stops too (our own `stop()`), so it must never
+    ///    drive a restart on its own.
+    ///
+    /// Skips `.external` source mode, which never opens the camera and
+    /// has no `captureSession` activity to watch.
+    private func startSessionHealthObservers() {
+        guard sourceMode == .camera else { return }
+        let center = NotificationCenter.default
+        let session = captureSession
+
+        captureInterruptedObserver = center.addObserver(
+            forName: AVCaptureSession.wasInterruptedNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] note in
+            let reasonValue = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
+            RTLog.warn("call", "vcap session_interrupted reason=\(reasonValue)")
+            self?.onCaptureInterruptionChanged?(true)
+        }
+
+        captureInterruptionEndedObserver = center.addObserver(
+            forName: AVCaptureSession.interruptionEndedNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] _ in
+            RTLog.info("call", "vcap session_interruption_ended")
+            self?.restartSessionIfNeeded(reason: "interruption_ended")
+            self?.onCaptureInterruptionChanged?(false)
+        }
+
+        captureRuntimeErrorObserver = center.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification,
+            object: session,
+            queue: nil
+        ) { [weak self] note in
+            let code = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.code ?? -1
+            RTLog.warn("call", "vcap session_runtime_error code=\(code)")
+            self?.restartSessionIfNeeded(reason: "runtime_error")
+        }
+
+        captureDidStopObserver = center.addObserver(
+            forName: AVCaptureSession.didStopRunningNotification,
+            object: session,
+            queue: nil
+        ) { _ in
+            RTLog.info("call", "vcap session_did_stop")
+        }
+    }
+
+    private func stopSessionHealthObservers() {
+        let center = NotificationCenter.default
+        [captureInterruptedObserver, captureInterruptionEndedObserver,
+         captureRuntimeErrorObserver, captureDidStopObserver].forEach {
+            if let token = $0 { center.removeObserver(token) }
+        }
+        captureInterruptedObserver = nil
+        captureInterruptionEndedObserver = nil
+        captureRuntimeErrorObserver = nil
+        captureDidStopObserver = nil
+    }
+
+    /// Restart the capture session on `captureQueue` — same thread-safety
+    /// rule as every other `startRunning()`/`stopRunning()` call in this
+    /// file (W565: never on the main thread). No-op if the pipeline was
+    /// torn down (`stop()`) or the session is already running, so a
+    /// `runtimeError` racing a legitimate `stop()` can't resurrect a
+    /// session the caller just asked to end.
+    private nonisolated func restartSessionIfNeeded(reason: String) {
+        let session = captureSession
+        captureQueue.async {
+            guard !session.isRunning else { return }
+            session.startRunning()
+            RTLog.info("call", "vcap session_restarted reason=\(reason) running=\(session.isRunning ? 1 : 0)")
+        }
     }
 
     /// W393: flip front ↔ rear camera mid-call. Reconfigures the
@@ -744,6 +918,40 @@ public final class VideoCallPipeline: NSObject {
         }
         timer.resume()
         purgeTimer = timer
+    }
+
+    /// W-VNACK — stall watchdog. See `onNackNeeded`'s kdoc and the
+    /// `nackWatchdogTimer` field comment for the rationale (25ms poll vs
+    /// the purge timer's 200ms, same 150ms stall threshold, so a
+    /// retransmit request has a real chance to land before the purge
+    /// timer evicts the frame). Direct port of Android's
+    /// `BcryptoWsVideoRelayTransport.start()`'s stall watchdog loop.
+    private func startNackWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: captureQueue)
+        timer.schedule(deadline: .now() + .milliseconds(25), repeating: .milliseconds(25))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let frameId = self.inboundFragmenter.currentFrameId
+            if frameId == -1 {
+                self.stallTrackedFrameId = -1
+                return
+            }
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            if frameId != self.stallTrackedFrameId {
+                self.stallTrackedFrameId = frameId
+                self.stallTrackedSinceMs = now
+                return
+            }
+            if frameId == self.stallNackedFrameId { return } // already asked once for this frame
+            if now - self.stallTrackedSinceMs < VideoConstants.fragmentReassemblyTimeoutMs { return }
+            let missing = self.inboundFragmenter.missingFragmentIndices()
+            if missing.isEmpty { return } // completed between the currentFrameId read above and here
+            self.stallNackedFrameId = frameId
+            RTLog.info("call", "vcap nack frame=\(frameId) missing=\(missing.count)")
+            self.onNackNeeded?(frameId, missing)
+        }
+        timer.resume()
+        nackWatchdogTimer = timer
     }
 
     // MARK: - Errors

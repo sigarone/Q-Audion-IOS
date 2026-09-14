@@ -103,6 +103,9 @@ struct ImageBubbleContent: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                         .onTapGesture { fullscreen = true }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityLabel("Immagine allegata")
+                        .accessibilityHint("Visualizza a schermo intero")
                 } else if loadFailed {
                     failedBox(path: path)
                 } else {
@@ -215,7 +218,10 @@ struct ImageBubbleContent: View {
                 self.loadedImage = img
                 self.loadFailed = false
             } else {
-                print("[ImageBubbleContent] failed to load \(path) — cache reclaimed?")
+                // I8: the full on-disk cache path is an identifier we don't
+                // need in the log — the messageId (truncated) is enough to
+                // correlate this failure with a specific bubble.
+                print("[ImageBubbleContent] failed to load cache for message \(self.messageId.uuidString.prefix(8))… — cache reclaimed?")
                 self.loadFailed = true
             }
         }
@@ -247,6 +253,10 @@ struct ImageBubbleContent: View {
             loadFailed = false
             loadIfNeeded(path: path)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Foto non disponibile")
+        .accessibilityHint("Riprova")
     }
 }
 

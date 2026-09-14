@@ -38,19 +38,31 @@ struct SettingsRow: View {
 
     let icon: String
     let iconColor: Color?
-    let title: String
-    let subtitle: String?
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey?
     let mono: Bool
-    let trailingBadge: String?
+    let trailingBadge: LocalizedStringKey?
     let trailingBadgeColor: Color?
     let destructive: Bool
 
+    // W-L10N-BATCH2 (2026-09-08) — title/subtitle/trailingBadge were plain
+    // String: Text(aStringValue) always uses the verbatim StringProtocol
+    // overload, never the LocalizedStringKey one, so every row using this
+    // component was permanently untranslatable regardless of the String
+    // Catalog or the in-app language override — confirmed by a dedicated
+    // audit after real device testing. Every existing call site passes a
+    // string LITERAL for title (and almost all for subtitle/trailingBadge),
+    // which keeps compiling unchanged since a literal satisfies either type;
+    // the handful of call sites passing a runtime String wrap it in
+    // `LocalizedStringKey(value)` at the call site (verbatim display, no
+    // catalog lookup surprise — correct for genuinely dynamic content like a
+    // profile name or a byte count).
     init(icon: String,
          iconColor: Color? = nil,
-         title: String,
-         subtitle: String? = nil,
+         title: LocalizedStringKey,
+         subtitle: LocalizedStringKey? = nil,
          mono: Bool = false,
-         trailingBadge: String? = nil,
+         trailingBadge: LocalizedStringKey? = nil,
          trailingBadgeColor: Color? = nil,
          destructive: Bool = false) {
         self.icon = icon

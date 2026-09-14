@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ITMS-90626 (flagged on v1.0.1096 build 2830 and v1.0.1097 build 2833
+	     — delivery still succeeds, this is a warning, but Apple asks for it
+	     to be fixed on the next upload). CFBundleDevelopmentRegion is "it"
+	     (QAudionApp/Info.plist), so Apple validates example phrases against
+	     THIS locale specifically for every intent QAudionIntents/Info.plist
+	     declares in IntentsSupported: INStartCallIntent (S1),
+	     INSendMessageIntent / INSearchForMessagesIntent (S2). Each phrase
+	     MUST name the app so Siri can route the utterance here — same
+	     convention already used for NSSiriUsageDescription in
+	     QAudionApp/Info.plist ("Chiama [nome] su Q-Audion"), with a real
+	     example name in place of the placeholder since Apple's validator
+	     wants natural utterances, not template syntax. -->
+	<key>IntentPhrases</key>
+	<array>
+		<dict>
+			<key>IntentName</key>
+			<string>INStartCallIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Chiama Marco su Q-Audion</string>
+				<string>Chiama Giulia con Q-Audion</string>
+			</array>
+		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSendMessageIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Manda un messaggio a Marco su Q-Audion</string>
+				<string>Invia un messaggio con Q-Audion</string>
+			</array>
+		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSearchForMessagesIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Cerca i messaggi di Marco su Q-Audion</string>
+				<string>Cerca messaggi su Q-Audion</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

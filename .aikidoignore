@@ -1,0 +1,25 @@
+# Aikido scanner ignore rules for qaudion-ios.
+#
+# Rules use gitignore-style syntax. Every rule is paired with a rationale so
+# a future reviewer (or an auditor asking why an Aikido finding was silenced)
+# can verify the decision without re-doing the triage.
+#
+# Scope:
+#   * True positives are fixed in code, NOT silenced here.
+#   * Ignore rules are for documented false positives, third-party vendored
+#     code we don't own, or structural scanner limitations.
+#
+# When adding a rule: paste the Aikido issue title + sub-issue ID in the
+# comment so we can cross-reference with the dashboard.
+#
+# Status as of 2026-08-21:
+#   This repo is NOT YET CONNECTED to the Aikido dashboard (no findings have
+#   been triaged here). Placeholder file added to match the convention used
+#   in bcrypto-server, qaudion-android-new, and qaudion-desktop, so the
+#   moment this repo is connected in Aikido's external dashboard, the triage
+#   file already exists in the expected location/format and the first real
+#   findings can be added here following the numbered-section pattern used
+#   in the sibling repos' .aikidoignore files.
+#
+# No rules yet — nothing to ignore because no scan has run against this
+# repo's Swift/Xcode sources.

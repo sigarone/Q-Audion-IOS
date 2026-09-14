@@ -41,20 +41,23 @@ final class ChatContainer: ObservableObject {
         case uploadFailure   = "upload_failure"
         case generic         = "send_error"
 
+        // W-L10N-BATCH1 (2026-09-08) — this drives a plain-String error
+        // banner (not a SwiftUI Text literal at the display site), so it
+        // needs an explicit lookup here at the point of construction.
         var localizedDescription: String {
             switch self {
             case .pskMissing:
-                return "Errore di cifratura. Contatto non verificato."
+                return String(localized: "chat.send_error.psk_missing", defaultValue: "Errore di cifratura. Contatto non verificato.", comment: "Message-send failure banner — recipient's key isn't verified")
             case .cryptoFailure:
-                return "Errore crittografico. Riprova."
+                return String(localized: "chat.send_error.crypto_failure", defaultValue: "Errore crittografico. Riprova.", comment: "Message-send failure banner — generic crypto failure")
             case .networkError:
-                return "Errore di rete. Controlla la connessione."
+                return String(localized: "chat.send_error.network_error", defaultValue: "Errore di rete. Controlla la connessione.", comment: "Message-send failure banner — network error")
             case .notAuthenticated:
-                return "Sessione scaduta. Effettua di nuovo l'accesso."
+                return String(localized: "chat.send_error.not_authenticated", defaultValue: "Sessione scaduta. Effettua di nuovo l'accesso.", comment: "Message-send failure banner — session expired")
             case .uploadFailure:
-                return "Caricamento allegato fallito. Riprova."
+                return String(localized: "chat.send_error.upload_failure", defaultValue: "Caricamento allegato fallito. Riprova.", comment: "Message-send failure banner — attachment upload failed")
             case .generic:
-                return "Invio fallito. Riprova più tardi."
+                return String(localized: "chat.send_error.generic", defaultValue: "Invio fallito. Riprova più tardi.", comment: "Message-send failure banner — generic send failure")
             }
         }
     }
@@ -107,7 +110,44 @@ final class ChatContainer: ObservableObject {
         let existing = store.loadConversations().first(where: { $0.id == conversationId })
         let conv: Conversation
         if let e = existing {
-            conv = e
+            // W-CHATHEADERSTALE (2026-08-17) — `peerDisplayName` is written
+            // ONCE, the first time this conversation row is created, and
+            // this init used to keep that value forever regardless of what
+            // fresh name the caller just passed in. The chat LIST resolves
+            // the peer's name live on every render (DisplayName.forUser
+            // against the current rubrica); this stored row does not — so a
+            // peer who renamed themselves kept showing their OLD name in
+            // the chat header while the list right above it already showed
+            // the new one (confirmed live 2026-08-17: contact/avatar sync
+            // now works, but the in-chat header lagged behind it). The
+            // caller's `peerDisplayName` argument is exactly as fresh as
+            // what the list row just rendered (ChatListScreen passes
+            // `item.peerDisplayName` straight through), so trust it over
+            // the stored value whenever it looks like a real name and
+            // actually differs — same trust bar `resolvedPeerTitle` below
+            // already applies to the stored value at render time.
+            if !peerDisplayName.isEmpty,
+               !DisplayName.looksLikeUUID(peerDisplayName),
+               !DisplayName.isPlaceholderName(peerDisplayName),
+               peerDisplayName != e.peerDisplayName {
+                let refreshed = Conversation(
+                    id: e.id,
+                    peerUserId: e.peerUserId,
+                    peerDisplayName: peerDisplayName,
+                    lastMessagePreview: e.lastMessagePreview,
+                    lastActivity: e.lastActivity,
+                    unreadCount: e.unreadCount,
+                    pinned: e.pinned,
+                    kind: e.kind,
+                    muted: e.muted,
+                    ephemeralTimerSeconds: e.ephemeralTimerSeconds,
+                    screenshotGrantedByPeer: e.screenshotGrantedByPeer
+                )
+                store.upsertConversation(refreshed)
+                conv = refreshed
+            } else {
+                conv = e
+            }
         } else {
             conv = Conversation(
                 id: conversationId,
@@ -195,6 +235,21 @@ final class ChatContainer: ObservableObject {
                 return from == peerId
             }()
             guard peerMatch else { return }
+            // W-MSGOUTBOX (2026-09-01) — a row the outbox drainer gave up
+            // on (`ChatOutboxDrain.fail`) arrives here with its id and
+            // reason, so the SAME "Riprova" snackbar the live path raises
+            // through `markFailed` shows for it. Extracted outside the Task
+            // for the same Sendable-capture reason as `peerMatch`.
+            let outboxFailedId: UUID? = {
+                guard let info = note.userInfo as? [String: Any],
+                      let idText = info[ChatOutboxDrain.failedMessageIdKey] as? String else { return nil }
+                return UUID(uuidString: idText)
+            }()
+            let outboxFailureReason: SendFailureReason? = {
+                guard let info = note.userInfo as? [String: Any],
+                      let raw = info[ChatOutboxDrain.failureReasonKey] as? String else { return nil }
+                return SendFailureReason(rawValue: raw)
+            }()
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 // W83: while the user is looking at this conversation,
@@ -203,6 +258,10 @@ final class ChatContainer: ObservableObject {
                 // navigates away.
                 self.store.markConversationRead(id: self.conversationId)
                 self.refreshFromStore()
+                if let failedId = outboxFailedId, let reason = outboxFailureReason {
+                    self.failedMessageId = failedId
+                    self.failureReason = reason
+                }
             }
         }
         center.addObserver(forName: AppState.screenshotRequestNotification,
@@ -316,13 +375,20 @@ final class ChatContainer: ObservableObject {
         // qaudion-desktop and qaudion-android-new. Fallback PSK kicks in
         // for unpaired contacts so the wire still flows.
         if let sender = sendService {
+            // W-MSGOUTBOX (2026-09-01) — claim the row for this live attempt
+            // so `ChatOutboxDrain` (kicked by any WS re-auth in the meantime)
+            // never seals and sends the same message a second time while
+            // this Task is still in flight. Released in the MainActor tail.
+            ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msg.id.uuidString)
             Task { [conversationId, peerUserId, msgId = msg.id, wireText] in
-                let outcome = await sender.sendEncrypted(
+                let outcome = await sender.sendEncryptedDurable(
                     messageId: msgId,
+                    conversationId: conversationId,
                     peerUserId: peerUserId,
                     plaintext: wireText
                 )
                 await MainActor.run {
+                    ChatOutboxDrain.shared.endLiveSend(clientMsgId: msgId.uuidString)
                     switch outcome {
                     case .delivered(let serverMessageId):
                         // W78: bind the server id to the local row so
@@ -337,11 +403,13 @@ final class ChatContainer: ObservableObject {
                             id: msgId, conversationId: conversationId,
                             newStatus: .delivered, deliveredAt: Date()
                         )
-                    case .sent:
-                        self.store.updateMessageStatus(
-                            id: msgId, conversationId: conversationId,
-                            newStatus: .delivered, deliveredAt: Date()
-                        )
+                    case .queued:
+                        // W-MSGOUTBOX — transport failure: the sealed bytes
+                        // are in `chat_outbox`, the row stays `.sending`
+                        // (clock icon) and the drainer owns it from here —
+                        // it re-sends with the same client_msg_id and only
+                        // flips to `.failed` past `OutboxRetryPolicy`'s caps.
+                        ChatOutboxDrain.shared.kick(reason: "live-send-queued")
                     case .failed(let reason):
                         self.markFailed(messageId: msgId, reason: reason)
                     }
@@ -357,7 +425,11 @@ final class ChatContainer: ObservableObject {
                 encryptedPayload: Data(text.utf8),
                 clientMsgId: msg.id.uuidString
             ).encodeAsJsonString() {
-                print("[Chat] would send envelope (no sendService attached): \(envelopeJson.prefix(120))...")
+                // I8 FIX: encodeAsJsonString()'s `encrypted_payload` field is
+                // the raw plaintext bytes in this pre-attach preview stub (no
+                // sendService yet) — printing the JSON leaked message content
+                // + the full recipient id. Log only a structural summary.
+                print("[Chat] would send envelope (no sendService attached): recipient=\(peerUserId.prefix(8))… bytes=\(envelopeJson.utf8.count)")
             }
             Task { [conversationId, msgId = msg.id] in
                 try? await Task.sleep(nanoseconds: 500_000_000)
@@ -397,18 +469,30 @@ final class ChatContainer: ObservableObject {
             return armed
         }
         guard MeshFeature.enabled else { return nil }
-        guard let contact = appState?.cachedContacts.first(where: { $0.userId == peerUserId }),
-              let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return nil }
+        guard let contact = appState?.cachedContacts.first(where: { $0.userId == peerUserId }) else { return nil }
+        let nodeHexes = MeshFeature.nodeHexes(forContact: contact)
+        guard !nodeHexes.isEmpty else { return nil }
         let preference = MeshRoutingPreferenceStore().preference(for: peerUserId)
-        let reachable = MeshRuntime.shared.peers.contains { $0.nodeHex == nodeHex && $0.connected }
+        let reachablePeer = MeshRuntime.shared.peers.first { nodeHexes.contains($0.nodeHex) && $0.connected }
         switch meshRoutingDecision(
-            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachable
+            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachablePeer != nil
         ) {
         case .sendOverMesh, .queueForMesh:
-            // queueForMesh only arises from "solo Bluetooth": the send path
-            // seals the message and the outbox holds it until the peer is back
-            // in range, which is exactly what that choice asked for.
-            return MeshTargetSelection(nodeHex: nodeHex, displayName: contact.displayName)
+            // queueForMesh only arises from "solo Bluetooth": that choice asks
+            // for the message to go out over mesh even when the peer isn't
+            // reachable right now. sendViaMesh below still attempts an
+            // immediate write, but a failed one no longer ends the story —
+            // finishMeshSend hands it to MeshOutboxStore, which
+            // MeshOutboxDrain retries once the peer is back in range (or
+            // gives up past MeshOutboxStore.maxAgeMs). See
+            // docs/ble-mesh/IOS_BLE_MESH_DESIGN.md §6.
+            //
+            // W-MESHUNKNOWN-IOS: prefer the hex a peer is actually
+            // advertising right now (a source may have gone stale); fall
+            // back to any known hex when none is currently reachable, same
+            // as the original single-source behavior for the queued case.
+            let targetHex = reachablePeer?.nodeHex ?? nodeHexes.first!
+            return MeshTargetSelection(nodeHex: targetHex, displayName: contact.displayName)
         case .sendOverNetwork:
             return nil
         }
@@ -422,7 +506,7 @@ final class ChatContainer: ObservableObject {
     ) {
         Task { [weak self, conversationId, peerUserId, target, messageId, wireText] in
             guard let self else { return }
-            guard let selfId = await self.appState?.currentUserId else {
+            guard let selfId = self.appState?.currentUserId else {
                 await MainActor.run { self.markFailed(messageId: messageId, reason: .notAuthenticated) }
                 return
             }
@@ -436,7 +520,7 @@ final class ChatContainer: ObservableObject {
                 conversationId: conversationId.uuidString,
                 body: wireText,
                 sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-                senderNodeHex: await MeshRuntime.shared.localNodeIdHex,
+                senderNodeHex: MeshRuntime.shared.localNodeIdHex,
                 recipientNodeHex: target.nodeHex
             )
             let envelopeText = String(data: envelope.encode(), encoding: .utf8) ?? ""
@@ -476,7 +560,7 @@ final class ChatContainer: ObservableObject {
         target: MeshTargetSelection,
         messageId: UUID
     ) {
-        guard let selfUserId = appState?.currentUserId else {
+        guard appState?.currentUserId != nil else {
             markFailed(messageId: messageId, reason: .notAuthenticated)
             return
         }
@@ -493,13 +577,27 @@ final class ChatContainer: ObservableObject {
                 clientMsgId: messageId.uuidString,
                 sealedB64: sealed.base64EncodedString()
             )
-            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: shell.encode()) { [weak self] delivered in
-                self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId)
+            let shellBytes = shell.encode()
+            // Built up front, not just on failure: if the immediate write
+            // fails, this is exactly the entry MeshOutboxStore needs to
+            // retry later — no re-deriving it from a failure callback that
+            // only has `delivered: Bool` to work with.
+            let pending = MeshPendingSend(
+                messageId: messageId.uuidString,
+                conversationId: conversationId.uuidString,
+                peerUserId: peerUserId,
+                targetNodeHex: target.nodeHex,
+                sealedShellB64: shellBytes.base64EncodedString(),
+                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000),
+                attempts: 0
+            )
+            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: shellBytes) { [weak self] delivered in
+                self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId, pending: pending)
             }
         }
     }
 
-    private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID) {
+    private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID, pending: MeshPendingSend) {
         if delivered {
             // R4 — mark the row as having gone over the mesh, so the sender's
             // own transcript distinguishes it from a normal network message.
@@ -519,7 +617,12 @@ final class ChatContainer: ObservableObject {
                 viaMesh: true
             )
         } else {
-            markFailed(messageId: messageId, reason: .networkError)
+            // Not a terminal failure: an unreachable/busy target is exactly
+            // what MeshOutboxStore exists for. The message stays `.sending`
+            // (its status at creation) until MeshOutboxDrain either lands it
+            // (`.sent`) or gives up past MeshOutboxStore.maxAgeMs (`.failed`)
+            // — see IOS_BLE_MESH_DESIGN.md §6 for the gap this closes.
+            MeshOutboxStore.shared.enqueue(pending)
         }
         refreshFromStore()
     }
@@ -811,10 +914,15 @@ final class ChatContainer: ObservableObject {
             // it via handleControlEnvelope INSTEAD of appending a row.
             // We don't store the envelope locally either (would clutter
             // the chat with unrenderable JSON).
+            // W-CTLNORATCHET (2026-09-10) — a qa_ctl envelope must never
+            // share the real-chat ratchet's chain/skip-key state with this
+            // peer. See ChatMessageSendService.encryptForWire's
+            // forceStatelessFormat doc.
             let outcome = await sendService.sendEncrypted(
                 messageId: envelopeId,
                 peerUserId: peerId,
-                plaintext: json
+                plaintext: json,
+                forceStatelessFormat: true
             )
             if case .failed(let reason) = outcome {
                 print("[ChatContainer] envelope send failed: \(reason)")
@@ -873,7 +981,7 @@ final class ChatContainer: ObservableObject {
         guard !meshInbound.isEmpty else { return }
         let peerId = peerUserId
         guard let contact = appState.cachedContacts.first(where: { $0.userId == peerId }),
-              let nodeHex = MeshFeature.nodeId(forContactPubkey: contact.pubkey)?.hex else { return }
+              let nodeHex = MeshFeature.nodeHexes(forContact: contact).first else { return }
         for msg in meshInbound {
             guard let cid = msg.clientMsgId else { continue }
             appState.sendMeshReceipt(
@@ -1088,7 +1196,7 @@ final class ChatContainer: ObservableObject {
         }
         let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            try await sender.send(
+            let fileId = try await sender.send(
                 data: bytes,
                 mime: recording.mimeType,
                 filename: "voicenote-\(recording.fileURL.deletingPathExtension().lastPathComponent).m4a",
@@ -1096,6 +1204,10 @@ final class ChatContainer: ObservableObject {
                 ephemeralSpecSec: overrideTimerSeconds.map(Int64.init),
                 exportAllowed: !exportBlocked
             )
+            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
+            // doc: without this, the tick never leaves grey no matter what
+            // the recipient does.
+            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
         } catch let e as ChatFileAttachmentSender.SendError {
             print("[ChatContainer] voice note send failed: \(e.localizedDescription)")
             await MainActor.run {
@@ -1112,9 +1224,20 @@ final class ChatContainer: ObservableObject {
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
+            // W-OPTIMISTICTICK (2026-08-20) — was `.delivered` here,
+            // stamped the instant the upload finished, before any real
+            // `qa_att_receipt:1` ack. That made the sent->delivered tick
+            // fictional (see AppState.handleReceivedFileAttachment's
+            // "Bug found live 2026-08-18" note just above the real
+            // receipt handler — the design was always "sender starts at
+            // .sent, the real receipt advances it", this call site just
+            // never honored it). `.sent` is accurate: the upload reached
+            // the server; delivered/read now come only from the peer's
+            // real receipt, matched forward-only by rank in
+            // dispatchInboundOpaque's Path A2.
             self.store.updateMessageStatus(
                 id: msgId, conversationId: convId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .sent
             )
             self.refreshFromStore()
         }
@@ -1297,7 +1420,9 @@ final class ChatContainer: ObservableObject {
         let check = TusResumeStateStore.checkCorruption(state: state, sourcePath: sourcePath)
         guard case .resumable = check else {
             if case .corrupted(let reason) = check {
-                print("[ChatContainer] resumeAttachmentIfPossible: stale TusResumeState for \(clientMsgId): \(reason) — clearing, falling through to tier 3")
+                // I8 FIX: truncate clientMsgId, matching this codebase's
+                // established .prefix(8) identifier convention.
+                print("[ChatContainer] resumeAttachmentIfPossible: stale TusResumeState for \(clientMsgId.prefix(8))…: \(reason) — clearing, falling through to tier 3")
             }
             TusResumeStateStore.clear(clientMsgId: clientMsgId)
             return false
@@ -1438,16 +1563,24 @@ final class ChatContainer: ObservableObject {
                     conversationId: convId,
                     serverMessageId: serverMsgId
                 )
+                // W-OPTIMISTICTICK (2026-08-20) — was `.delivered` here,
+                // stamped the instant the marker reached the server, not
+                // the peer. This path rides the normal msg_send channel
+                // (a real serverMessageId is bound just above), so the
+                // real delivered/read ticks now come from the same
+                // handleDeliveryReceipts/handleReadReceipts path plain
+                // text messages already use — no attachment-specific
+                // receipt needed here.
                 self.store.updateMessageStatus(
                     id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
+                    newStatus: .sent
                 )
                 // Successful full completion — clear the breadcrumb.
                 TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
             case .sent:
                 self.store.updateMessageStatus(
                     id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
+                    newStatus: .sent
                 )
                 TusResumeStateStore.clear(clientMsgId: state.clientMsgId)
             case .failed(let reason):
@@ -1695,13 +1828,17 @@ final class ChatContainer: ObservableObject {
         // identical comment — images now ship over `qa_fa_announce:1`.
         let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            try await sender.send(
+            let fileId = try await sender.send(
                 data: jpeg,
                 mime: "image/jpeg",
                 filename: "image-\(msgId.uuidString).jpg",
                 recipientUserId: peerId,
                 ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
             )
+            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
+            // doc: without this, the tick never leaves grey no matter what
+            // the recipient does.
+            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
         } catch let e as ChatFileAttachmentSender.SendError {
             print("[ChatContainer] sendImage failed: \(e.localizedDescription)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
@@ -1714,9 +1851,11 @@ final class ChatContainer: ObservableObject {
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
+            // W-OPTIMISTICTICK (2026-08-20) — see the identical fix on the
+            // voice-note send completion above for the full rationale.
             self.store.updateMessageStatus(
                 id: msgId, conversationId: convId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .sent
             )
             self.refreshFromStore()
         }
@@ -1898,7 +2037,10 @@ final class ChatContainer: ObservableObject {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else {
-            print("[ChatContainer] sendFileAttachment: could not read \(filename)")
+            // I8 FIX: `filename` is the user's original document name (can
+            // reveal personal/financial/identity content) — log only the
+            // extension, never the name.
+            print("[ChatContainer] sendFileAttachment: could not read file (ext=\(url.pathExtension))")
             return
         }
         let mime = Self.mimeType(for: url)
@@ -2002,13 +2144,17 @@ final class ChatContainer: ObservableObject {
         // `qa_fa_announce:1`.
         let sender = ChatFileAttachmentSender(appState: appState)
         do {
-            try await sender.send(
+            let fileId = try await sender.send(
                 data: data,
                 mime: mime,
                 filename: filename,
                 recipientUserId: peerId,
                 ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
             )
+            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
+            // doc: without this, the tick never leaves grey no matter what
+            // the recipient does.
+            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
         } catch let e as ChatFileAttachmentSender.SendError {
             print("[ChatContainer] sendFileAttachment failed: \(e.localizedDescription)")
             await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
@@ -2021,9 +2167,11 @@ final class ChatContainer: ObservableObject {
         await MainActor.run {
             guard let self = weakContainer.value else { return }
             self.clearUploadProgress(messageId: msgId)
+            // W-OPTIMISTICTICK (2026-08-20) — see the identical fix on the
+            // voice-note send completion above for the full rationale.
             self.store.updateMessageStatus(
                 id: msgId, conversationId: convId,
-                newStatus: .delivered, deliveredAt: Date()
+                newStatus: .sent
             )
             self.refreshFromStore()
         }
@@ -2162,9 +2310,14 @@ final class ChatContainer: ObservableObject {
         guard let sender = sendService else { return }
         let msgId = UUID()
         Task { [peerUserId = peerUserId] in
+            // W-CTLNORATCHET (2026-09-10) — a qa_ctl envelope must never
+            // share the real-chat ratchet's chain/skip-key state with this
+            // peer. See ChatMessageSendService.encryptForWire's
+            // forceStatelessFormat doc.
             _ = await sender.sendEncrypted(messageId: msgId,
                                            peerUserId: peerUserId,
-                                           plaintext: payload)
+                                           plaintext: payload,
+                                           forceStatelessFormat: true)
         }
     }
 }

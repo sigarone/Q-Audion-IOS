@@ -158,6 +158,7 @@ final class MeshRuntime: ObservableObject {
             transport?.stop()
             requestedMode = nil
             activeTargets.removeAll()
+            MeshOutboxDrain.shared.stop()
             return
         }
         // Switching .fullMesh <-> .visibleOnly mid-session: BleMeshTransport
@@ -184,6 +185,7 @@ final class MeshRuntime: ObservableObject {
         transport = t
         requestedMode = mode
         t.start(schedule: MeshRadioSchedule.backgroundIdle, mode: mode)
+        MeshOutboxDrain.shared.start()
     }
 
     func selectTarget(conversationId: String, nodeHex: String, displayName: String) {
@@ -256,6 +258,10 @@ final class MeshRuntime: ObservableObject {
                     relayNodeHexes: info.announcedNeighbors.map(\.hex)
                 )
             }
+        // A peer that just became reachable may be the target of a queued
+        // outbox entry — retry now rather than waiting out the drain
+        // coordinator's backstop timer.
+        MeshOutboxDrain.shared.drainAndSweep()
     }
 
     private static let rssiStrong = -40

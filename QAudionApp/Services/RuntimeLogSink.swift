@@ -98,24 +98,33 @@ public final class RuntimeLogSink: ObservableObject {
         }
     }
 
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     /// Snapshot of the current buffer formatted for log export.
     /// One line per entry, ISO8601-ish timestamp, level, tag, body.
+    /// Every message goes through `redactStructured` (FIX-11, 2026-09-12):
+    /// the export is shared by the user with support and the bug-report
+    /// tail is uploaded; the incremental shipper (`entriesSince`) already
+    /// scrubbed, and the three egress paths must not differ in what they
+    /// strip.
     public func snapshot() -> String {
         lock.lock()
         let copy = entries
         lock.unlock()
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var out = String()
         out.reserveCapacity(copy.count * 200)
         for e in copy {
-            out.append(f.string(from: e.timestamp))
+            out.append(Self.isoFormatter.string(from: e.timestamp))
             out.append(" ")
             out.append(e.level.rawValue.uppercased())
             out.append(" [")
             out.append(e.tag)
             out.append("] ")
-            out.append(e.message)
+            out.append(RuntimeLogSink.redactStructured(e.message))
             out.append("\n")
         }
         return out
@@ -130,18 +139,16 @@ public final class RuntimeLogSink: ObservableObject {
         lock.unlock()
         let cutoff = Date().addingTimeInterval(-minutes * 60.0)
         let recent = copy.filter { $0.timestamp >= cutoff }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var out = String()
         out.reserveCapacity(recent.count * 200)
         for e in recent {
-            out.append(f.string(from: e.timestamp))
+            out.append(Self.isoFormatter.string(from: e.timestamp))
             out.append(" [")
             out.append(e.level.rawValue.uppercased())
             out.append("] [")
             out.append(e.tag)
             out.append("] ")
-            out.append(e.message)
+            out.append(RuntimeLogSink.redactStructured(e.message))
             out.append("\n")
         }
         return out
@@ -160,15 +167,13 @@ public final class RuntimeLogSink: ObservableObject {
         lock.lock()
         let copy = entries
         lock.unlock()
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var lines: [String] = []
         lines.reserveCapacity(min(copy.count, 256))
         var highest: Int64 = since
         for e in copy where e.seq > since {
             if e.tag == "livelog" { continue }
             
-            let ts = f.string(from: e.timestamp)
+            let ts = Self.isoFormatter.string(from: e.timestamp)
             let lvl = e.level.rawValue.uppercased().prefix(1)
             let tag = escapeJson(e.tag)
             let msg = escapeJson(RuntimeLogSink.redactStructured(e.message))
