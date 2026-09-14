@@ -9,6 +9,17 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1156",
+              date: "2026-09-15",
+              title: "v1.0.1156",
+              bullets: [
+                "Remove receipt-based review-detection from the Pro activation gate",
+                "🧪 Add unit tests for VoiceLearningSession state machine (#105)",
+                "Add tests for ConversationExporter export functionality and error handling (#104)",
+                "🛡️ Sentinel: [HIGH] Fix plaintext storage of pending group invites (#99)",
+                "🛡️ Sentinel: [security improvement] Prevent device_id plaintext extraction (#103)",
+                "Stamp call.media.connected on real acceptance, not the caller's own offer-send",
+              ]),
         .init(id: "v1.0.1154",
               date: "2026-09-13",
               title: "v1.0.1154",
@@ -126,12 +137,6 @@ extension ReleaseNote {
               title: "v1.0.1132",
               bullets: [
                 "Diag(ios): log the real error code behind activateAudioSession's setActive failures",
-              ]),
-        .init(id: "v1.0.1131",
-              date: "2026-09-10",
-              title: "v1.0.1131",
-              bullets: [
-                "Diag(ios): widen aunit log bridge to catch the silent CreateAudioUnit guard",
               ]),
     ]
 }
