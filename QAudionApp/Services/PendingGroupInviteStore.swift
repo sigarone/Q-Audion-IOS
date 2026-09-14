@@ -39,9 +39,32 @@ public enum PendingGroupInviteStore {
 
     /// Carica tutte le pending invites, sorted by scannedAt newest-first.
     public static func load() -> [Pending] {
+        if let sealed = UserDefaults.standard.string(forKey: key) {
+            guard let json = LocalStoreCipher.open(sealed),
+                  let entries = try? JSONDecoder().decode([Pending].self, from: Data(json.utf8)) else {
+                return []
+            }
+            return entries.sorted { $0.scannedAt > $1.scannedAt }
+        }
+        // Fallback: read legacy plaintext blob.
         guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
         guard let entries = try? JSONDecoder().decode([Pending].self, from: data) else { return [] }
-        return entries.sorted { $0.scannedAt > $1.scannedAt }
+        let sorted = entries.sorted { $0.scannedAt > $1.scannedAt }
+        // Migrate to encrypted storage seamlessly.
+        persist(sorted)
+        return sorted
+    }
+
+    private static func persist(_ current: [Pending]) {
+        guard let data = try? JSONEncoder().encode(current),
+              let json = String(data: data, encoding: .utf8) else { return }
+
+        let attempt: String?? = try? LocalStoreCipher.seal(json)
+        guard let unwrapped = attempt, let sealed = unwrapped else {
+            RTLog.warn("groupInvite", "pending invites persist deferred sealed=0")
+            return
+        }
+        UserDefaults.standard.set(sealed, forKey: key)
     }
 
     /// Aggiunge una pending invite. Dedup per groupId — se la stessa
@@ -53,9 +76,7 @@ public enum PendingGroupInviteStore {
         if current.count > maxEntries {
             current = Array(current.prefix(maxEntries))
         }
-        if let data = try? JSONEncoder().encode(current) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        persist(current)
     }
 
     /// Rimuove una specific pending dal store. Chiamato dopo replay
@@ -63,9 +84,7 @@ public enum PendingGroupInviteStore {
     public static func remove(id: UUID) {
         var current = load()
         current.removeAll { $0.id == id }
-        if let data = try? JSONEncoder().encode(current) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        persist(current)
     }
 
     /// Wipe completo. Chiamato dal `DevResetScreen` (W46) — la chiave
