@@ -1,3 +1,8 @@
+## 2026-08-16 - Prevent Plaintext Device ID Extraction
+**Vulnerability:** The device ID was being written to `UserDefaults` in plaintext during authentication, even though it was also securely stored in the iOS Keychain. `UserDefaults` is stored as a plaintext `.plist` file inside the app container, making it readable by any process with file access (e.g., on a jailbroken device, or extracted from an unencrypted iTunes/Finder backup). The device ID is a sensitive identifier used for authentication/session renewal.
+**Learning:** Redundant storage of sensitive data in insecure locations defeats the purpose of primary secure storage. When migrating sensitive data to the Keychain, it is crucial to eliminate the legacy plaintext writes entirely, rather than just adding the secure write alongside it.
+**Prevention:** Always remove legacy plaintext storage paths when implementing secure storage solutions. Ensure that no new code writes sensitive data (tokens, IDs, etc.) to `UserDefaults` or other unencrypted storage locations.
+
 ## 2026-08-22 - Token Leakage via Swift Struct Default Reflection
 **Vulnerability:** The authentication credential structs (`OtpAuthResult`, `AuthCredentials`, and `AuthTokenPair`) implicitly relied on Swift's default reflection when logged or printed, which exposed sensitive fields (`accessToken`, `refreshToken`) in plaintext logs.
 **Learning:** In Swift, logging structs directly with `print()` or similar functions will enumerate and output all their stored properties if they don't explicitly override it. This creates a critical risk of leaking tokens or passwords into logs, analytics, or debugging tools.
