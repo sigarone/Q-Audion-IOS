@@ -3919,6 +3919,16 @@ final class CallService: @unchecked Sendable {
                         // calls that motivated this.
                         case -6: why = "wrongtype"
                         case -1: why = "nochan"
+                        // W-DCMUX-3 (2026-09-14) — `-5` is `audioTxIceGateClosed`
+                        // (AppState.swift audioDataChannelDiag closure, W-DCTXICEGATE):
+                        // ICE is not `.connected`/`.completed` right now, so the
+                        // DataChannel is diverted to the WS relay even if `.open`.
+                        // Fell into `default: "unknown"` before this, which is
+                        // exactly how call e866b588's one-way-silence investigation
+                        // (2026-09-14) had to re-derive this same meaning from
+                        // scratch by reading QAudionWebRtcCallController instead of
+                        // reading the log line.
+                        case -5: why = "icegate"
                         case 0:  why = "conn"
                         case 2:  why = "closing"
                         case 3:  why = "closed"

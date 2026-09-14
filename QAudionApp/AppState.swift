@@ -15533,16 +15533,24 @@ final class AppState: ObservableObject {
             }
 
             callState = .active
-            // W548 (iOS): per-call media lifecycle telemetry. Pair
-            // with `call.media.summary` emitted on the .ended edge.
-            do {
-                let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-                CallMediaTelemetry.shared.recordConnected(
-                    callId: cid,
-                    peerPrefix: String(contactId.prefix(8)),
-                    sasSource: "answered"
-                )
-            }
+            // W-TELEMANSWERED (2026-09-14) — `call.media.connected`/
+            // `sas_source: "answered"` used to ship HERE, the instant
+            // beginAndroidOutgoing's own offer-send returns — before the
+            // callee's device has done anything at all. On a call the
+            // callee never even received (offline the whole ring window,
+            // caller gives up first), the server correctly records
+            // `call_missed` while this device told the dashboard
+            // "connected, answered, 18s, user_hangup" for the exact same
+            // call_id (live, call 9e518e71, 2026-09-14). The telemetry
+            // call moved to `finalizeCallActive()`, the caller-only site
+            // already gated on one of the three routes that mean the
+            // callee's device genuinely engaged with this call
+            // (immediate bare answer, a real `call_accepted`, or the
+            // bounded safety-net timeout armed only after a `call_answer`
+            // was received) — see that function's own kdoc. `callState`
+            // itself stays exactly as before: W-ANSWERBEFOREREADY/
+            // `AcceptGateDecisions.shouldAcceptAnswer` still key off this
+            // pre-ring `.active`, untouched by this change.
             // W391: bring up the video pipeline for video calls.
             // Best-effort: if camera permission is denied or hardware
             // is unavailable, the call continues without video (the
@@ -16282,6 +16290,19 @@ final class AppState: ObservableObject {
             if self.isVideoCall {
                 self.videoPipeline?.setVideoPaused(false)
             }
+            // W-TELEMANSWERED (2026-09-14) — moved here from `startCall()`.
+            // This function only runs once the callee's device has
+            // genuinely engaged with the call (see this function's own
+            // kdoc: finalizeNow on a bare answer, a real `call_accepted`,
+            // or the bounded safety-net timeout — all three require a
+            // `call_answer` to have actually arrived), so `sas_source:
+            // "answered"` is now honest instead of firing the instant this
+            // device's own offer-send returned.
+            CallMediaTelemetry.shared.recordConnected(
+                callId: self.callFinalizedCallId,
+                peerPrefix: String((self.callContactId ?? "").prefix(8)),
+                sasSource: "answered"
+            )
         }
         maybeExchangeAvatarOnCallConnect()
     }
