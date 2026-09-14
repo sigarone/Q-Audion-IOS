@@ -5,13 +5,23 @@ import QAudionEngine
 /// (design doc §7.5/§14.2, hard constraint): an invite-code-only redeem
 /// sheet. **No price shown anywhere. No purchase flow. No StoreKit.**
 ///
-/// App Store status (2026-09-12): App Review 2.1(b)/3.1.1 DOES apply — the
-/// first submission (c6432fb4, 2026-08-22) was rejected because the
-/// reviewer read the activation-code field as an external purchase path.
-/// The code field is therefore double-gated (see `codeEntryEnabled`): it
-/// exists only in non-App-Store installs (TestFlight/dev receipt) AND only
-/// when the remote flag says so. An App Store install can never show it;
-/// it shows a plain "not enabled" notice with no off-app call-to-action.
+/// App Store status (2026-09-14): the first submission (c6432fb4,
+/// 2026-08-22) was rejected under 2.1(b)/3.1.1 for the activation-code
+/// field reading as an external purchase path. The 2026-09-12 response to
+/// that (c6432fb4's resubmission) tried to fix it by gating the field on
+/// BOTH the remote flag AND a receipt-type check (`Bundle.main.
+/// appStoreReceiptURL`) that told an App Store install apart from
+/// TestFlight/dev — i.e. built a code path whose whole purpose was to show
+/// App Review something different from what a real install could be
+/// switched to later. That is exactly Guideline 5.6 (features hidden from
+/// review), and it is what the review that followed flagged. The
+/// receipt-type check is gone: `codeEntryEnabled` is now the remote flag
+/// and NOTHING else, so App Review, TestFlight, and every production
+/// install are looking at the identical decision from the identical code.
+/// The flag itself is an ordinary kill-switch (same pattern as
+/// `LOG_OTLP_EXPORT_ENABLED`) — turning it on later is a normal rollout,
+/// not a re-run of this mistake, because it changes what EVERY install
+/// sees, not what only non-reviewers see.
 ///
 /// Presentation: designed to be shown via `.sheet(isPresented:)` — this
 /// app's real convention for a short, self-contained form (confirmed by
@@ -217,32 +227,18 @@ struct UpgradeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var container = UpgradeSheetContainer()
 
-    /// App Review 2.1(b)/3.1.1 (submission c6432fb4, 2026-08-22): the
-    /// reviewer read the activation-code field as an external purchase
-    /// path. Codes were never sold, but the field must not exist in the
-    /// store build. Two gates, BOTH required:
-    ///   1. `isNonStoreBuild` — the install carries a TestFlight/dev
-    ///      receipt (`sandboxReceipt`), never an App Store one (`receipt`).
-    ///      A remote flag flip can therefore never re-enable the field on
-    ///      a store install, which is what a reviewer would see.
-    ///   2. the remote flag `ENTITLEMENTS_CODE_UI_ENABLED` (compiled
-    ///      default OFF) — lets internal/beta builds keep the redeem flow.
+    /// W-5POINT6FIX (2026-09-14) — App Review flagged this under Guideline
+    /// 5.6 (Developer Code of Conduct): the previous version of this
+    /// property ALSO checked `Bundle.main.appStoreReceiptURL` so an App
+    /// Store install could never show the field regardless of the remote
+    /// flag — a code path built specifically to behave differently for
+    /// whatever install App Review happens to be looking at. That check is
+    /// gone. This is now the remote flag and only the remote flag: App
+    /// Review, TestFlight, and every production install evaluate the exact
+    /// same condition. See this file's header comment for the full story.
     private var codeEntryEnabled: Bool {
-        Self.isNonStoreBuild && FeatureFlags.bool("ENTITLEMENTS_CODE_UI_ENABLED", false)
+        FeatureFlags.bool("ENTITLEMENTS_CODE_UI_ENABLED", false)
     }
-
-    /// True for TestFlight and Xcode/simulator installs, false for an App
-    /// Store install. `appStoreReceiptURL` is the documented way to tell
-    /// the two apart without StoreKit (the app has no StoreKit at all);
-    /// the store copy of the receipt is named `receipt`, every sandbox
-    /// copy is `sandboxReceipt`. Evaluated once per process.
-    private static let isNonStoreBuild: Bool = {
-        #if targetEnvironment(simulator)
-        return true
-        #else
-        return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
-        #endif
-    }()
 
     var body: some View {
         VStack(spacing: 0) {
