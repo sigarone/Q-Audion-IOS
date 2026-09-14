@@ -115,19 +115,16 @@ final class AuthService {
         // SECURITY C-5 + W-USERID-PLAINTEXT — tokens AND userId → Keychain
         // (userId is PII tying local data to a real account, not "just an
         // identifier"; see TokenVault.saveUserId doc). deviceId is written
-        // to BOTH: UserDefaults for the existing direct readers (AppState
-        // identity-key/group call sites), and the Keychain
-        // (SEC-DEVICEID-REINSTALL) so it survives an app delete+reinstall
-        // exactly like the refresh token it is paired with — see
-        // `TokenVault.saveDeviceId` doc for the live-device incident this
-        // closes.
+        // to the Keychain (SEC-DEVICEID-REINSTALL) so it survives an app
+        // delete+reinstall exactly like the refresh token it is paired with.
+        // We no longer write deviceId to UserDefaults to prevent plaintext
+        // extraction of device identifiers from unencrypted backups.
         TokenVault.saveAccessToken(creds.accessToken)
         if let refresh = creds.refreshToken, !refresh.isEmpty {
             TokenVault.saveRefreshToken(refresh)
         }
         TokenVault.saveDeviceId(creds.deviceId)
         TokenVault.saveUserId(creds.userId)
-        UserDefaults.standard.set(creds.deviceId, forKey: deviceIdKey)
     }
 
     func saveToken(_ token: String) {

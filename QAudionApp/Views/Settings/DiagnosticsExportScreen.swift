@@ -107,7 +107,7 @@ final class DiagnosticsExportContainer: ObservableObject {
         lines.append("  authenticated : \(snapshot.isAuthenticated)")
         lines.append("  has user id   : \(snapshot.hasUserId)")
         lines.append("  has token     : \(snapshot.hasToken)")
-        let hasDeviceId = UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id") != nil
+        let hasDeviceId = TokenVault.loadDeviceId() != nil || UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id") != nil
         lines.append("  has device id : \(hasDeviceId)")
         lines.append("")
 
