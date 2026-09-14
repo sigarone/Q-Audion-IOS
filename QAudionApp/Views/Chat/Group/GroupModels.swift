@@ -25,8 +25,12 @@ public struct ContactPickerRowUi: Identifiable, Equatable {
 
 public struct CreateGroupUiState: Equatable {
     public var name: String
-    public var query: String
-    public var contacts: [ContactPickerRowUi]      // raw lista da contacts store
+    public var query: String {
+        didSet { updateFilteredContacts() }
+    }
+    public var contacts: [ContactPickerRowUi] {      // raw lista da contacts store
+        didSet { updateFilteredContacts() }
+    }
     public var selectedMemberIds: Set<String>      // userId selezionati
     public var error: String?
     public var creating: Bool
@@ -43,13 +47,25 @@ public struct CreateGroupUiState: Equatable {
         self.selectedMemberIds = selectedMemberIds
         self.error = error
         self.creating = creating
+
+        if query.isEmpty {
+            self.filteredContacts = contacts
+        } else {
+            let q = query.lowercased()
+            self.filteredContacts = contacts.filter { $0.displayName.lowercased().contains(q) }
+        }
     }
 
-    /// Lista filtrata per `query` (case-insensitive su displayName).
-    public var filteredContacts: [ContactPickerRowUi] {
-        guard !query.isEmpty else { return contacts }
+    /// Lista filtrata per `query` (case-insensitive su displayName). Aggiornata su mutazione.
+    public private(set) var filteredContacts: [ContactPickerRowUi] = []
+
+    private mutating func updateFilteredContacts() {
+        guard !query.isEmpty else {
+            filteredContacts = contacts
+            return
+        }
         let q = query.lowercased()
-        return contacts.filter { $0.displayName.lowercased().contains(q) }
+        filteredContacts = contacts.filter { $0.displayName.lowercased().contains(q) }
     }
 }
 

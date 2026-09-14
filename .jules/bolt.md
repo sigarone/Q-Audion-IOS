@@ -5,3 +5,7 @@
 ## 2026-08-13 - DateFormatter inline instantiation in SwiftUI lists
 **Learning:** Instantiating `DateFormatter` inline in SwiftUI list render methods (`ChatListScreen`, `CallHistoryView`) is a known Swift performance bottleneck and causes severe stuttering during scrolling because formatters are repeatedly allocated.
 **Action:** Always extract `DateFormatter` instantiations to `private static let` properties in SwiftUI views, preserving formatting logic. Added static formatters for all timestamp formatting to improve scroll performance.
+
+## 2024-05-30 - Memoize filtered items in mutating view states
+**Learning:** For `@State` structs (like `CreateGroupUiState`) containing arrays that need to be filtered based on another property (like a search `query`), computing the filtered result on read via a computed property (e.g. `var filteredContacts: [ContactPickerRowUi] { return contacts.filter(...) }`) causes the O(N) filtering to run *every time* the property is accessed during a SwiftUI view render cycle.
+**Action:** Memoize these filtered collections. Make the filtered array a stored property (`public private(set) var`) and add `didSet` observers on its dependencies (`query` and `contacts`) to run the filter only when the underlying data actually changes.
