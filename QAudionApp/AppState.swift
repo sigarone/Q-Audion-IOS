@@ -11687,8 +11687,8 @@ final class AppState: ObservableObject {
                     // so the loss is seen instead of invisible, same as
                     // every other "something arrived and could not be
                     // opened" case in this file.
-                    await MainActor.run { [weak self] in
-                        self?.persistFileAttachmentFailurePlaceholder(senderId: senderId)
+                    await MainActor.run {
+                        persistFileAttachmentFailurePlaceholder(senderId: senderId)
                     }
                 }
             }
