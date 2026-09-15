@@ -308,10 +308,31 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// than the nominal cadence each frame arrived, floored at 0. Lateness
     /// rather than raw gap, because depth only has to cover frames that
     /// arrive LATE — an early (bunched) arrival costs no depth.
+    ///
+    /// W-JBREORDERSPLIT (2026-09-15, best-practices audit
+    /// reference_ios_full_audit_2026_09_15.md, audio finding 1) — this ring
+    /// holds RAW lateness ONLY; the reorder penalty used to be added in here
+    /// directly (see `recordArrival`'s prior revision), which meant a handful
+    /// of reorder samples shared one p95 slot with ordinary lateness and
+    /// could get diluted under low reorder frequency. `reorderPenaltyRing`
+    /// below is the reorder track's own separately-decaying estimator.
     private var latenessRing: [Int]
 
+    /// W-JBREORDERSPLIT — the reorder-penalty companion to `latenessRing`,
+    /// same size/window, fed on EVERY arrival (0 when this arrival was not
+    /// reordered, or reorder status is unknown) so it decays back down on
+    /// its own once reordering stops, independent of ordinary lateness.
+    /// `computeTargetMs` takes the MAX of the two tracks' targets rather
+    /// than summing them into one — the reference technique this was
+    /// audited against (a decaying probability histogram plus a SEPARATE
+    /// reorder-optimizer, max-combined) confirmed this is the missing half,
+    /// not merely a style difference; competitor/implementation names are
+    /// intentionally not repeated here, see the audit memory file.
+    private var reorderPenaltyRing: [Int]
+
     /// Number of arrivals recorded since construction / the last `reset()`.
-    /// Can exceed `latenessRing.count`; the ring wraps.
+    /// Can exceed `latenessRing.count`/`reorderPenaltyRing.count`; both rings
+    /// wrap together, indexed by the same counter.
     private var latenessCount: Int = 0
 
     /// The adaptive steady-state target, in ms. Seeded at the shipped
@@ -424,13 +445,18 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// `reset()` clears `lastPushMonotonic`, so the first frame of a
     /// (re)started stream records nothing.
     ///
-    /// W-JBREORDER — `seq` (`nil` if unknown) adds a second, independent
-    /// component on top of lateness: when this arrival is at or behind
-    /// `highestSeqSeen` (the standard definition of "reordered" — the
+    /// W-JBREORDER / W-JBREORDERSPLIT — `seq` (`nil` if unknown) feeds a
+    /// SECOND, independently-tracked estimator: when this arrival is at or
+    /// behind `highestSeqSeen` (the standard definition of "reordered" — the
     /// stream already progressed past this position), the distance behind
-    /// it, in frames, is converted to ms and ADDED to whatever lateness
-    /// this arrival would otherwise record — capped at the same ceiling.
-    /// Ported from Android's `JitterBuffer.recordArrival`.
+    /// it, in frames, is converted to ms and recorded into
+    /// `reorderPenaltyRing` — no longer added into the lateness sample
+    /// itself. Every arrival feeds `reorderPenaltyRing` (0 when this one was
+    /// not reordered), so it decays back down on its own once reordering
+    /// stops, the same way `latenessRing` already decays. Ported from
+    /// Android's `JitterBuffer.recordArrival`; the split against the two
+    /// separately-decaying tracks is this audit's own addition (see
+    /// `reorderPenaltyRing`'s kdoc).
     private func recordArrival(seq: Int64?) {
         let now = nowSeconds()
         var reorderPenaltyMs = 0
@@ -442,6 +468,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
                 highestSeqSeen = seq
             }
         }
+        reorderPenaltyRing[latenessCount % reorderPenaltyRing.count] = reorderPenaltyMs
         guard let prev = lastPushMonotonic else {
             lastPushMonotonic = now
             return
@@ -450,8 +477,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         let gapMs = Int(((now - prev) * 1000.0).rounded())
         guard gapMs >= 0 else { return } // injected/broken clock went backwards: skip the sample
         let rawLateness = max(gapMs - frameMs, 0)
-        let lateness = min(rawLateness + reorderPenaltyMs, Self.adaptTargetMaxMs)
-        latenessRing[latenessCount % latenessRing.count] = lateness
+        latenessRing[latenessCount % latenessRing.count] = rawLateness
         latenessCount += 1
         if latenessCount >= Self.adaptMinSamples, latenessCount % Self.adaptRecomputeEvery == 0 {
             adaptTargetMs = computeTargetMs()
@@ -459,15 +485,29 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         }
     }
 
-    /// p95 of the lateness ring + one frame, clamped. Caller (`recordArrival`)
-    /// already holds `lock`.
+    /// The larger of the two tracks' targets — plain lateness and reorder
+    /// penalty — each its own p95-plus-one-frame-headroom estimate, clamped
+    /// independently before the max. Caller (`recordArrival`) already holds
+    /// `lock`. W-JBREORDERSPLIT: this replaces the old single combined-ring
+    /// p95: a link with frequent reorder but modest raw lateness (or vice
+    /// versa) now gets the depth EITHER problem alone would call for,
+    /// instead of one blended away by the other.
     private func computeTargetMs() -> Int {
         let n = min(latenessCount, latenessRing.count)
         guard n > 0 else { return adaptTargetMs }
-        var sorted = Array(latenessRing.prefix(n))
+        let latenessTarget = Self.p95TargetMs(ring: latenessRing, sampleCount: n, frameMs: frameMs)
+        let reorderTarget = Self.p95TargetMs(ring: reorderPenaltyRing, sampleCount: n, frameMs: frameMs)
+        return max(latenessTarget, reorderTarget)
+    }
+
+    /// p95 of the first `sampleCount` entries of `ring` + one frame of
+    /// headroom, clamped to `[adaptTargetMinMs, adaptTargetMaxMs]`. Shared by
+    /// both tracks in `computeTargetMs` so they clamp identically.
+    private static func p95TargetMs(ring: [Int], sampleCount: Int, frameMs: Int) -> Int {
+        var sorted = Array(ring.prefix(sampleCount))
         sorted.sort()
-        let p95 = sorted[((n - 1) * 95) / 100]
-        return min(max(p95 + frameMs, Self.adaptTargetMinMs), Self.adaptTargetMaxMs)
+        let p95 = sorted[((sampleCount - 1) * 95) / 100]
+        return min(max(p95 + frameMs, adaptTargetMinMs), adaptTargetMaxMs)
     }
 
     /// The adaptive steady-state depth target currently in force, in
@@ -550,6 +590,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     public init(nowSeconds: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
         self.nowSeconds = nowSeconds
         self.latenessRing = [Int](repeating: 0, count: PlayoutJitterBuffer.adaptWindow)
+        self.reorderPenaltyRing = [Int](repeating: 0, count: PlayoutJitterBuffer.adaptWindow)
     }
 
     /// Frames the consumer asked for and the queue could not supply.

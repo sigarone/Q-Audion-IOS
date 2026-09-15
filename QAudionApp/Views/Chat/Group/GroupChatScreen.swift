@@ -387,7 +387,7 @@ struct GroupChatScreen: View {
                         emptyState
                     } else {
                         ForEach(state.messages) { msg in
-                            GroupMessageBubble(message: msg, galleryItems: galleryItems)
+                            GroupMessageBubble(message: msg, galleryItems: galleryItems, onRetry: retryFailedSend)
                                 .id(msg.id)
                         }
                     }
@@ -667,6 +667,12 @@ struct GroupChatScreen: View {
     /// for an inbound (non-mine) row.
     private func deliveryStatus(for m: GroupMessageStore.Stored) -> MessageDelivery? {
         guard m.mine else { return nil }
+        // W-GRPOUTBOX — checked BEFORE the .sending fallback: a row with no
+        // serverMessageId is normally "still sending", but if the send
+        // attempt is known to have failed (no live WS at send time) it must
+        // show as failed instead of spinning forever with nothing the user
+        // can do about it.
+        if m.sendFailed == true { return .failed }
         guard m.serverMessageId != nil else { return .sending }
         let others = otherGroupMemberIds
         guard !others.isEmpty else { return .sent }
@@ -716,6 +722,29 @@ struct GroupChatScreen: View {
         Task {
             await sendGroupOverWire(
                 plaintext: trimmed,
+                memberIds: memberIds,
+                selfId: selfId,
+                clientMsgId: clientMsgId)
+        }
+    }
+
+    /// W-GRPOUTBOX — manual retry for a row `GroupChatScreen.deliveryStatus`
+    /// marked `.failed` (see `GroupMessageStore.Stored.sendFailed`'s kdoc).
+    /// Re-runs the exact same send path with the SAME `clientMsgId`, so a
+    /// successful resend binds to this row instead of duplicating it —
+    /// same idempotency contract `handleSend`'s optimistic row already
+    /// relies on for the ordinary send path.
+    private func retryFailedSend(clientMsgId: String) {
+        guard let row = GroupMessageStore.shared.messages(forGroupHex: groupHex)
+            .first(where: { $0.id == clientMsgId }) else { return }
+        GroupMessageStore.shared.clearSendFailed(groupHex: groupHex, clientMsgId: clientMsgId)
+        let memberRows = makeInfoState().members
+        let memberIds = memberRows.map { $0.userId }
+        let selfId = memberRows.first(where: { $0.isSelf })?.userId
+            ?? (AppState.currentUserIdSnapshot ?? "u-self")
+        Task {
+            await sendGroupOverWire(
+                plaintext: row.text,
                 memberIds: memberIds,
                 selfId: selfId,
                 clientMsgId: clientMsgId)
@@ -1065,6 +1094,9 @@ struct GroupMessageBubble: View {
     /// Fase 2 — see `ImageGalleryItem`; empty default keeps this struct
     /// constructible without callers threading the list through.
     var galleryItems: [ImageGalleryItem] = []
+    /// W-GRPOUTBOX — tap-to-retry for a `.failed` row (message id ==
+    /// clientMsgId). nil for callers that don't need it (e.g. previews).
+    var onRetry: ((String) -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
@@ -1090,7 +1122,15 @@ struct GroupMessageBubble: View {
                         // same 4 icon mappings as the 1:1
                         // `MessageBubble.deliveryIcon(_:)` footer.
                         if message.mine, let delivery = message.delivery {
-                            groupDeliveryIcon(delivery)
+                            if delivery == .failed, let onRetry {
+                                Button(action: { onRetry(message.id) }) {
+                                    groupDeliveryIcon(delivery)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Riprova invio")
+                            } else {
+                                groupDeliveryIcon(delivery)
+                            }
                         }
                         if !message.mine { Spacer(minLength: 0) }
                     }

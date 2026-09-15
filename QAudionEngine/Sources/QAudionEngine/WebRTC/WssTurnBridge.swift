@@ -100,6 +100,17 @@ public final class WssTurnBridge: @unchecked Sendable {
         get { stateLock.withLock { _running } }
         set { stateLock.withLock { _running = newValue } }
     }
+    /// W-WSSTURNHEAL (2026-09-15, audit reference_ios_full_audit_2026_09_15.md
+    /// connectivity finding #1) — this is the exact hostile-network path
+    /// (UDP/TURN/TURNS all firewalled) where losing the bridge silently is
+    /// worst: `pumpWsToUdp` used to `return` permanently on the first read
+    /// error, leaving the local UDP port bound but talking to nobody, with
+    /// no rebuild until the NEXT full call/PC-creation cycle. Bounded
+    /// exponential backoff, capped — same shape as `ChatOutboxDrain`'s wake
+    /// scheduling elsewhere in this app, scaled for a socket instead of a DB
+    /// row. Reset to 0 on every successful frame.
+    private var reconnectAttempt = 0
+    private let maxReconnectBackoffSec: TimeInterval = 8
 
     // Per-STUN-transaction / per-TURN-channel reply correlation (2026-07-09
     // hijack fix — replaces the old single "last UDP sender" scalar, see
@@ -228,7 +239,31 @@ public final class WssTurnBridge: @unchecked Sendable {
         let port = UInt16(bigEndian: bound.sin_port)
         udpFD = fd
 
-        // Open WebSocket with subprotocol + auth header.
+        let task = buildWebSocketTask()
+        wsTask = task
+        running = true
+        task.resume()
+
+        // UDP → WS pump: blocking recvfrom on a dedicated OS thread.
+        // Swift Tasks can't block on a syscall without starving the
+        // cooperative thread pool, so we use Thread.detachNewThread.
+        let capturedFD = fd
+        Thread.detachNewThread { [weak self] in self?.pumpUdpToWs(fd: capturedFD) }
+        // WS → UDP pump: async/await on a detached Task (URLSession
+        // webSocket.receive suspends without blocking a thread).
+        Task.detached(priority: .utility) { [weak self] in
+            await self?.pumpWsToUdp(fd: capturedFD)
+        }
+
+        Self.log.info("start: 127.0.0.1:\(port) ↔ \(self.wssUrl.absoluteString)")
+        return BridgeResult(localPort: port)
+    }
+
+    /// Builds a fresh WS task with subprotocol + auth header + the same
+    /// transport (Reality SOCKS / pinned session / shared) `start()` picked —
+    /// shared by `start()` and `reconnectWebSocket()` so a self-heal
+    /// reconnect can never drift from the initial connection's behavior.
+    private func buildWebSocketTask() -> URLSessionWebSocketTask {
         var req = URLRequest(url: wssUrl)
         req.setValue("turn", forHTTPHeaderField: "Sec-WebSocket-Protocol")
         if let tok = accessToken {
@@ -264,24 +299,28 @@ public final class WssTurnBridge: @unchecked Sendable {
         } else {
             session = URLSession.shared
         }
-        let task = session.webSocketTask(with: req)
+        return session.webSocketTask(with: req)
+    }
+
+    /// W-WSSTURNHEAL — tear down the dead WS task and dial a fresh one,
+    /// with exponential backoff (capped at `maxReconnectBackoffSec`). The
+    /// bound loopback UDP socket (`udpFD`, hence the `turn:127.0.0.1:<port>`
+    /// candidate libwebrtc already holds) is left completely untouched —
+    /// only the WSS leg is rebuilt, so no ICE renegotiation is needed for
+    /// this self-heal to take effect: once the new WS is up, libwebrtc's own
+    /// periodic TURN Allocate/Refresh (RFC 8656) traveling over the SAME
+    /// local port re-establishes the relay allocation end to end.
+    private func reconnectWebSocket() async {
+        guard running else { return }
+        wsTask?.cancel(with: .abnormalClosure, reason: nil)
+        reconnectAttempt += 1
+        let backoffSec = min(pow(2.0, Double(reconnectAttempt - 1)), maxReconnectBackoffSec)
+        Self.log.info("reconnect: scheduling attempt=\(self.reconnectAttempt) backoff=\(backoffSec)s")
+        try? await Task.sleep(nanoseconds: UInt64(backoffSec * 1_000_000_000))
+        guard running else { return }
+        let task = buildWebSocketTask()
         wsTask = task
-        running = true
         task.resume()
-
-        // UDP → WS pump: blocking recvfrom on a dedicated OS thread.
-        // Swift Tasks can't block on a syscall without starving the
-        // cooperative thread pool, so we use Thread.detachNewThread.
-        let capturedFD = fd
-        Thread.detachNewThread { [weak self] in self?.pumpUdpToWs(fd: capturedFD) }
-        // WS → UDP pump: async/await on a detached Task (URLSession
-        // webSocket.receive suspends without blocking a thread).
-        Task.detached(priority: .utility) { [weak self] in
-            await self?.pumpWsToUdp(fd: capturedFD)
-        }
-
-        Self.log.info("start: 127.0.0.1:\(port) ↔ \(self.wssUrl.absoluteString)")
-        return BridgeResult(localPort: port)
     }
 
     public func stop() {
@@ -372,6 +411,7 @@ public final class WssTurnBridge: @unchecked Sendable {
             guard let task = wsTask else { return }
             do {
                 let msg = try await task.receive()
+                reconnectAttempt = 0
                 guard case .data(let data) = msg else { continue }
                 data.withUnsafeBytes { (rawBuf: UnsafeRawBufferPointer) in
                     guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
@@ -385,8 +425,15 @@ public final class WssTurnBridge: @unchecked Sendable {
                     }
                 }
             } catch {
-                if running { Self.log.warning("ws.receive error: \(error)") }
-                return
+                guard running else { return }
+                // W-WSSTURNHEAL — this used to `return` here, permanently
+                // killing the bridge on the FIRST read error (a WS ping
+                // timeout, a proxy hiccup, the server cycling) with no
+                // rebuild until the next full call/PC-creation cycle. Self
+                // -heal in place instead, same reasoning as the Reality
+                // tunnel's own health-triggered restart.
+                Self.log.warning("ws.receive error: \(error) — reconnecting")
+                await reconnectWebSocket()
             }
         }
     }

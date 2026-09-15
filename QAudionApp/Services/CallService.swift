@@ -1414,9 +1414,15 @@ final class CallService: @unchecked Sendable {
     /// floor this decays to (never the ceiling) when `currentRouteTier` is
     /// `.relay` — see `PlpPolicy.minPct(for:)`'s kdoc for why a relay route
     /// is a real, pre-report signal worth provisioning for proactively.
+    ///
+    /// W-PLPRTTFLOOR (2026-09-15): same reasoning, RTT signal. `mediaRttMs`
+    /// is this same object's own latest sample (`sampleWireThroughput`,
+    /// already refreshed every poll tick from `pollMediaRttOnce` — see that
+    /// property's kdoc), so this needs no new wiring, only reading it.
     func applyPeerPacketLossReport(_ observedPct: Int) {
         let clamped = min(max(observedPct, 0), 100)
-        let next = PlpPolicy.next(currentPct: currentAppliedPlpPct, observedLossPct: Double(clamped), routeTier: currentRouteTier)
+        let next = PlpPolicy.next(currentPct: currentAppliedPlpPct, observedLossPct: Double(clamped),
+                                   routeTier: currentRouteTier, rttMs: mediaRttMs)
         guard next != currentAppliedPlpPct else { return }
         currentAppliedPlpPct = next
         callIntegration?.reconfigureAudioCodec(bitrateKbps: AudioCodecPrefs.bitrateKbps, plp: next)

@@ -88,6 +88,21 @@ public final class GroupMessageStore: ObservableObject {
         /// (today's behavior); true = the sender marked this attachment
         /// export-blocked. Client-side/UI honor-system signal only.
         public var exportBlocked: Bool?
+        /// W-GRPOUTBOX (2026-09-15, audit reference_ios_full_audit_2026_09_15
+        /// .md finding #2) — true once the send attempt for this `mine` row
+        /// is known to have failed (no live WS at send time). Before this
+        /// field, a group send with no live socket was silently dropped: the
+        /// optimistic row stayed in `.sending` forever with no way for the
+        /// UI to ever show it as failed or offer a retry, unlike the 1:1
+        /// path's persisted, retried outbox. This is a lighter-weight fix
+        /// than 1:1's full disk-persisted backoff outbox (no survives-a-
+        /// relaunch retry queue) — it closes the "stuck forever, invisible"
+        /// part specifically: the row becomes visibly `.failed`
+        /// (`GroupChatScreen.deliveryStatus`) with a manual retry action,
+        /// same as 1:1. nil/false for every row that hasn't failed and every
+        /// pre-existing persisted row (additive optional field, decodes
+        /// unchanged like every other Fase 1B/2 field above).
+        public var sendFailed: Bool?
 
         public init(id: String, serverMessageId: String?, senderId: String,
                     mine: Bool, text: String, ts: Date,
@@ -96,7 +111,8 @@ public final class GroupMessageStore: ObservableObject {
                     mediaLocalPath: String? = nil, descriptorJson: String? = nil,
                     deliveredBy: [String]? = nil, readBy: [String]? = nil,
                     expiresAt: Date? = nil, isViewOnce: Bool? = nil,
-                    viewOnceOpened: Bool? = nil, exportBlocked: Bool? = nil) {
+                    viewOnceOpened: Bool? = nil, exportBlocked: Bool? = nil,
+                    sendFailed: Bool? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
@@ -115,6 +131,7 @@ public final class GroupMessageStore: ObservableObject {
             self.isViewOnce = isViewOnce
             self.viewOnceOpened = viewOnceOpened
             self.exportBlocked = exportBlocked
+            self.sendFailed = sendFailed
         }
     }
 
@@ -265,6 +282,33 @@ public final class GroupMessageStore: ObservableObject {
               let idx = arr.firstIndex(where: { $0.id == clientMsgId }),
               arr[idx].serverMessageId != serverMessageId else { return }
         arr[idx].serverMessageId = serverMessageId
+        byGroup[groupHex] = arr
+        persist()
+        postDidChange(groupHex)
+    }
+
+    /// W-GRPOUTBOX — flip a `mine` row to the visible failed state (see
+    /// `Stored.sendFailed`'s kdoc). No-op if the row is unknown or already
+    /// bound to a server id (a send that DID reach the server is not a
+    /// failure just because a later step raced it).
+    public func markSendFailed(groupHex: String, clientMsgId: String) {
+        guard var arr = byGroup[groupHex],
+              let idx = arr.firstIndex(where: { $0.id == clientMsgId }),
+              arr[idx].serverMessageId == nil,
+              arr[idx].sendFailed != true else { return }
+        arr[idx].sendFailed = true
+        byGroup[groupHex] = arr
+        persist()
+        postDidChange(groupHex)
+    }
+
+    /// W-GRPOUTBOX — clear the failed flag when the user taps retry, so the
+    /// row goes back to `.sending` while the retried send is in flight.
+    public func clearSendFailed(groupHex: String, clientMsgId: String) {
+        guard var arr = byGroup[groupHex],
+              let idx = arr.firstIndex(where: { $0.id == clientMsgId }),
+              arr[idx].sendFailed == true else { return }
+        arr[idx].sendFailed = false
         byGroup[groupHex] = arr
         persist()
         postDidChange(groupHex)

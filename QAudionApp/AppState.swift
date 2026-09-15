@@ -3284,6 +3284,34 @@ final class AppState: ObservableObject {
             }
         }
 
+        // W-REALITYPORTSYNC (2026-09-15, audit
+        // reference_ios_full_audit_2026_09_15.md connectivity finding #2) —
+        // a health-triggered `RealityManager.restartInPlace()` binds a NEW
+        // local SOCKS5 port; `BCryptoWebSocketClient.currentSocksPort` is
+        // sticky by design (set once at `activateRealityFallback`'s initial
+        // `connect(viaSocksPort:)`, never re-read on its own), so without
+        // this every subsequent internal reconnect kept redialing the now-
+        // dead old port while `transportIsReality` stayed `true` — the app
+        // looked tunneled but never actually reconnected. Route through the
+        // SAME entry point `activateRealityFallback` uses at initial setup
+        // (`disconnect()` then `connect(viaSocksPort:)`) instead of a
+        // bespoke rebind, so this stays byte-identical to the path already
+        // proven to re-point the socket correctly.
+        NotificationCenter.default.addObserver(
+            forName: RealityManager.tunnelRestartedNotification,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let port = note.userInfo?["port"] as? Int else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.transportIsReality, let prov = self.liveProvider else { return }
+                let ws = prov.getWebSocketClient()
+                ws.disconnect()
+                ws.connect(viaSocksPort: port)
+                RTLog.warn("network", "reality socks port resynced after health restart port=\(port)")
+            }
+        }
+
         // W74: re-attempt the persistent WS the moment the app returns
         // to the foreground. iOS suspends URLSessionWebSocketTask while
         // backgrounded — by the time the user opens the app again the
@@ -5464,6 +5492,13 @@ final class AppState: ObservableObject {
                     if prev != .authenticated {
                         Task { @MainActor in
                             ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
+                        }
+                    }
+                    // W-GRPRECEIPTOUTBOX — same once-per-reconnect gate,
+                    // group-chat sibling of the 1:1 drain right above.
+                    if prev != .authenticated {
+                        Task { @MainActor [weak self] in
+                            self?.drainGroupReceiptOutbox()
                         }
                     }
                 }
@@ -9002,7 +9037,7 @@ final class AppState: ObservableObject {
     ///   `group_msg_pending_sync` backlog entry. ACKs only fire on the
     ///   live path (the server clears the pending queue on its own after
     ///   the sync flush write — same rule as Android).
-    private func handleIncomingGroupMessage(_ data: [String: Any], live: Bool) {
+    private func handleIncomingGroupMessage(_ data: [String: Any], live: Bool, isRetry: Bool = false) {
         guard let groupIdUuid = data["group_id"] as? String, !groupIdUuid.isEmpty,
               let senderId = data["sender_id"] as? String, !senderId.isEmpty,
               let serverMsgId = data["server_message_id"] as? String, !serverMsgId.isEmpty,
@@ -9075,17 +9110,39 @@ final class AppState: ObservableObject {
         guard let plaintext = GroupChatService.shared.decrypt(
             wire: wire, senderId: senderId, groupId: groupHex,
             members: entry.members, selfId: selfId) else {
-            // W-GRPSILENT (2026-08-02): this buffer-and-return had NO log of
-            // any kind. A group text frame that never becomes decryptable
-            // (recv chain never installed, epoch moved past it) is not shown
-            // as a placeholder like the 1:1 path — it simply never appears,
-            // and `bufferedGroupWires` silently evicts it once the bound is
-            // hit. "The message never arrived" and "the message arrived and
-            // could not be opened" looked identical from outside, on the
-            // exact path Pavel reports messages going missing.
+            // W-GRPSILENT (2026-08-02), CLOSED 2026-09-15 (audit
+            // reference_ios_full_audit_2026_09_15.md finding #1): this
+            // buffer-and-return used to have no placeholder at all — a
+            // group text frame that never becomes decryptable (recv chain
+            // never installed, epoch moved past it) simply never appeared,
+            // and `bufferedGroupWires` silently evicted it once the bound
+            // was hit. Mirrors the 1:1 path exactly now: `isRetry == true`
+            // means this exact frame already failed once and is being
+            // replayed from `retryBufferedGroupMessages` after a
+            // sender_key_init/rotate install — a second failure is treated
+            // as genuinely undecryptable and persisted as a visible
+            // placeholder row instead of re-buffered, so it surfaces
+            // exactly once and never silently disappears.
             let bufDepth: Int = bufferedGroupWires.count
-            RTLog.warn("group", "text undec=1 g=\(groupHex.prefix(8)) buffered=\(bufDepth)")
-            bufferGroupWire(data, live: live)
+            RTLog.warn("group", "text undec=1 g=\(groupHex.prefix(8)) buffered=\(bufDepth) retry=\(isRetry ? 1 : 0)")
+            if isRetry {
+                let ts = Self.parseGroupServerTs(serverTs)
+                let inserted = GroupMessageStore.shared.append(
+                    groupHex: groupHex,
+                    GroupMessageStore.Stored(
+                        id: clientMsgId ?? serverMsgId,
+                        serverMessageId: serverMsgId,
+                        senderId: senderId,
+                        mine: false,
+                        text: "[messaggio cifrato non leggibile]",
+                        ts: ts))
+                if inserted {
+                    sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
+                }
+                if live { sendGroupDelivered(serverMsgId) }
+            } else {
+                bufferGroupWire(data, live: live)
+            }
             return
         }
 
@@ -9323,9 +9380,48 @@ final class AppState: ObservableObject {
     /// `groupId` MUST be the dashed-UUID wire form (never the hex
     /// registry key) — matches what `group_msg_send`/`group_typing` send.
     private func sendGroupMsgDelivered(groupId: String, serverMsgId: String) {
-        liveProvider?.getWebSocketClient().send(
-            type: "group_msg_delivered",
-            data: ["group_id": groupId, "server_message_id": serverMsgId])
+        // W-GRPRECEIPTOUTBOX (2026-09-15, finding #5) — same authenticated
+        // check `sendOrQueueDeliveryReceipt` uses for the 1:1 case: `send`
+        // silently drops before `.authenticated`, so this used to be a
+        // permanent loss instead of a delayed one.
+        guard liveProvider?.persistentConnection.state == .authenticated,
+              let ws = liveProvider?.getWebSocketClient() else {
+            GroupReceiptOutbox.shared.enqueue(
+                kind: GroupReceiptOutbox.Entry.kindDelivered, groupId: groupId,
+                serverMessageId: serverMsgId, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            RTLog.info("group", "grp_receipt queued=1 kind=delivered")
+            return
+        }
+        ws.send(type: "group_msg_delivered",
+                data: ["group_id": groupId, "server_message_id": serverMsgId])
+    }
+
+    /// W-GRPRECEIPTOUTBOX — flush `GroupReceiptOutbox` now that the socket is
+    /// authenticated again. Scaled-down sibling of `ChatOutboxDrain`'s
+    /// ws-authenticated kick: group receipts are small/low-volume enough that
+    /// a plain synchronous pass (no backoff scheduling, no single-flight
+    /// guard) is sufficient — the next `.authenticated` transition retries
+    /// anything still stuck, and a duplicate ack is harmless (the server-side
+    /// receipt handlers are already idempotent, same as the live path).
+    private func drainGroupReceiptOutbox() {
+        guard let ws = liveProvider?.getWebSocketClient() else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let pending = GroupReceiptOutbox.shared.drainable(nowMs: nowMs)
+        guard !pending.isEmpty else { return }
+        for entry in pending {
+            switch entry.kind {
+            case GroupReceiptOutbox.Entry.kindDelivered:
+                ws.send(type: "group_msg_delivered",
+                        data: ["group_id": entry.groupId, "server_message_id": entry.serverMessageId])
+            case GroupReceiptOutbox.Entry.kindRead:
+                ws.send(type: "group_msg_read",
+                        data: ["group_id": entry.groupId, "server_message_id": entry.serverMessageId])
+            default:
+                break
+            }
+            GroupReceiptOutbox.shared.remove(entry)
+        }
+        RTLog.info("group", "grp_receipt drained=\(pending.count)")
     }
 
     /// Fase 2 — emit `group_msg_read` for every inbound message in this
@@ -9342,12 +9438,25 @@ final class AppState: ObservableObject {
     ///   `groupId.uuidString.lowercased()`).
     func emitGroupReadReceipts(groupId: String) {
         guard PrivacyGate.readReceiptsEnabled else { return }
-        guard let ws = liveProvider?.getWebSocketClient() else { return }
         let groupHex = groupId.replacingOccurrences(of: "-", with: "").lowercased()
         let inboundServerIds = GroupMessageStore.shared.messages(forGroupHex: groupHex)
             .filter { !$0.mine }
             .compactMap { $0.serverMessageId }
         guard !inboundServerIds.isEmpty else { return }
+        // W-GRPRECEIPTOUTBOX (2026-09-15, finding #5) — same reasoning as
+        // `sendGroupMsgDelivered`: queue instead of silently dropping when
+        // the socket can't carry these yet.
+        guard liveProvider?.persistentConnection.state == .authenticated,
+              let ws = liveProvider?.getWebSocketClient() else {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            for serverMsgId in inboundServerIds {
+                GroupReceiptOutbox.shared.enqueue(
+                    kind: GroupReceiptOutbox.Entry.kindRead, groupId: groupId,
+                    serverMessageId: serverMsgId, nowMs: nowMs)
+            }
+            RTLog.info("group", "grp_receipt queued=\(inboundServerIds.count) kind=read")
+            return
+        }
         for serverMsgId in inboundServerIds {
             ws.send(type: "group_msg_read",
                     data: ["group_id": groupId, "server_message_id": serverMsgId])
@@ -9409,15 +9518,17 @@ final class AppState: ObservableObject {
     }
 
     /// Re-run every buffered group frame through the receive path (e.g.
-    /// after a sender_key_init install unblocked a recv chain). Frames
-    /// still undecryptable re-buffer via `handleIncomingGroupMessage`;
-    /// the bound keeps that from growing without limit.
+    /// after a sender_key_init install unblocked a recv chain), with
+    /// `isRetry: true` — a frame still undecryptable on this second attempt
+    /// is persisted as a visible placeholder row instead of re-buffered
+    /// (mirrors `retryBufferedOneToOneMessages`; see the placeholder branch
+    /// inside `handleIncomingGroupMessage`'s decrypt-failure guard).
     private func retryBufferedGroupMessages() {
         guard !bufferedGroupWires.isEmpty else { return }
         let pending = bufferedGroupWires
         bufferedGroupWires = []
         for e in pending {
-            handleIncomingGroupMessage(e.data, live: e.live)
+            handleIncomingGroupMessage(e.data, live: e.live, isRetry: true)
         }
     }
 
@@ -11560,9 +11671,71 @@ final class AppState: ObservableObject {
                     self?.handleReceivedFileAttachment(result, senderId: senderId, fileId: envelope.fileId)
                 } catch {
                     RTLog.warn("chat", "file-attachment receive failed sender=\(senderId.prefix(8)) fileId=\(envelope.fileId.prefix(8)): \(error)")
+                    // W-ATTACHSILENT (2026-09-15, audit
+                    // reference_ios_full_audit_2026_09_15.md finding #3) —
+                    // this transport rides raw opaque_message (self-
+                    // authenticating, no ratchet), so unlike the text path
+                    // it has no retry buffer at all: EVERY failure here
+                    // (bad signature, decrypt fail, truncated download,
+                    // write fail) used to be a silent, permanent, one-shot
+                    // loss — worse than the OLDER `qa_ctl:1 attach_announce`
+                    // transport this one is meant to supersede, which still
+                    // rides the ratchet-decrypted path and so inherits ITS
+                    // retry-then-placeholder behavior. This does not add a
+                    // retry (the envelope itself isn't buffered anywhere to
+                    // retry from), only visibility: a placeholder system row
+                    // so the loss is seen instead of invisible, same as
+                    // every other "something arrived and could not be
+                    // opened" case in this file.
+                    await MainActor.run { [weak self] in
+                        self?.persistFileAttachmentFailurePlaceholder(senderId: senderId)
+                    }
                 }
             }
             return
+        }
+
+        // W-ATTACHSILENT — see the catch block above. A minimal placeholder,
+        // not a full retry/outbox: finds-or-creates the 1:1 conversation
+        // with `senderId` (same resolution the text-decrypt-failure path
+        // above uses) and appends one system-style row, mirroring the
+        // existing `ephemeral_timer` system-bubble pattern a few hundred
+        // lines up in this file rather than inventing a new persistence
+        // shape.
+        func persistFileAttachmentFailurePlaceholder(senderId: String) {
+            let store = ConversationStore()
+            let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
+            let label = "[allegato non ricevuto]"
+            let conv: Conversation
+            if let e = existing {
+                conv = e
+            } else {
+                let resolvedName: String = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+                conv = Conversation(
+                    id: UUID(),
+                    peerUserId: senderId,
+                    peerDisplayName: resolvedName,
+                    lastMessagePreview: label,
+                    lastActivity: Date(),
+                    unreadCount: 1,
+                    pinned: false,
+                    kind: .oneToOne
+                )
+                store.upsertConversation(conv)
+            }
+            let sysMsg = Message(
+                id: UUID(), conversationId: conv.id,
+                direction: .incoming, plaintext: label,
+                sentAt: Date(), deliveredAt: Date(), readAt: nil,
+                status: .delivered, senderUserId: senderId
+            )
+            store.appendMessage(sysMsg)
+            store.recordNewMessage(conversationId: conv.id,
+                                   lastMessagePreview: label,
+                                   lastActivity: Date(), incrementUnread: !conv.muted)
+            NotificationCenter.default.post(name: AppState.chatRefreshNotification,
+                                            object: nil,
+                                            userInfo: ["peerUserId": senderId])
         }
 
         // Path A2 — `qa_att_receipt:1` delivery/read receipt for the
@@ -18791,7 +18964,18 @@ extension AppState {
             // NotificationCenter closure.
             Task { @MainActor [weak self] in
                 guard let ws = self?.liveProvider?.getWebSocketClient() else {
-                    print("[AppState] group_msg_send dropped — no live WS")
+                    // W-GRPOUTBOX (2026-09-15, audit
+                    // reference_ios_full_audit_2026_09_15.md finding #2) —
+                    // this used to be a silent, permanent drop: the
+                    // optimistic row stayed `.sending` forever with no way
+                    // for the UI to ever show it failed. Now flips the row
+                    // to the visible `.failed` state (GroupChatScreen
+                    // .deliveryStatus) so the user sees it and can retry —
+                    // same user-facing contract as the 1:1 outbox, without
+                    // 1:1's disk-persisted backoff-retry machinery.
+                    let groupHex = groupId.replacingOccurrences(of: "-", with: "").lowercased()
+                    GroupMessageStore.shared.markSendFailed(groupHex: groupHex, clientMsgId: clientMsgId)
+                    RTLog.warn("group", "grp_msg_send r=nolp g=\(groupHex.prefix(8))")
                     return
                 }
                 // Byte-exact mirror of Android WsCommand.GroupMsgSend:
@@ -20709,6 +20893,26 @@ extension AppState {
                     serverEpoch: entry.groupEpoch,
                     source: source)
             } else {
+                // W-GRPRECONCILEREKEY (2026-09-15, audit
+                // reference_ios_full_audit_2026_09_15.md finding #4) — capture
+                // the roster BEFORE the overwrite below. The live
+                // `handleGroupMembershipChanged` path drops the whole event,
+                // rekey included, whenever `liveProvider` is nil at the exact
+                // moment it lands (see that function's own `guard let
+                // provider = liveProvider else { return }`) — a removed
+                // member's send chain then stays live indefinitely, since
+                // this reconcile sweep used to only restore the roster and
+                // never replayed the forward-secrecy side effect. Diffing
+                // against THIS device's own already-trusted local roster (not
+                // the unverified `members` array a live event carries) keeps
+                // the same trust boundary `applyServerRoster` itself already
+                // relies on for this exact same REST call — no new exposure.
+                // Deliberately one-directional: a newly-added member is NOT
+                // shipped a sender-key-init from here, since that add was
+                // never covered by a signed envelope the way the live path
+                // requires (cluster 2, 2026-08-05) — only the live, verified
+                // event is trusted to add someone to key distribution.
+                let priorMembers = GroupRegistry.shared.entry(for: groupHex)?.members ?? []
                 applyServerRoster(
                     groupHex: groupHex, members: entry.members, admins: entry.admins,
                     serverEpoch: entry.groupEpoch)
@@ -20716,6 +20920,14 @@ extension AppState {
                     name: AppState.groupRegistryChangedNotification,
                     object: nil,
                     userInfo: ["groupId": groupHex])
+                let missedRemovals = priorMembers.filter { $0 != selfId && !entry.members.contains($0) }
+                for removedMember in missedRemovals {
+                    // `applyRemovalRekey` is idempotent (engine `notMember`
+                    // guard), so this is a safe no-op when the live event
+                    // already handled this same removal.
+                    applyRemovalRekey(groupHex: groupHex, members: priorMembers, selfId: selfId, removed: removedMember)
+                    RTLog.warn("group", "grp_member r=reconrekey g=\(groupHex.prefix(8))")
+                }
                 if let blobB64 = entry.metadataBlobB64, !blobB64.isEmpty {
                     decryptAndApplyGroupMetadataBlob(
                         groupHex: groupHex, blobB64: blobB64,

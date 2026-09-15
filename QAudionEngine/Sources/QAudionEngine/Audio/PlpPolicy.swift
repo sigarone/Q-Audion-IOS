@@ -112,6 +112,43 @@ public enum PlpPolicy {
         }
     }
 
+    /// W-PLPRTTFLOOR (2026-09-15, best-practices audit
+    /// reference_ios_full_audit_2026_09_15.md, audio finding 3) — RTT never
+    /// fed any codec decision here before this. A high round-trip path
+    /// leaves no time for a reactive fix (this same `next()`'s own fast-up
+    /// branch, or a FEC/PLC recovery) to land before the gap it is reacting
+    /// to is already audible, so it should independently push toward more
+    /// conservative forward redundancy — same mechanism `minPct(for:
+    /// routeTier:)` already uses for a relay route, different signal.
+    ///
+    /// Threshold matches this app's own network-condition-simulator "high
+    /// latency" preset (`NetworkConditionSimulator.highLatency`, 300 ms) and
+    /// sits inside the generally-accepted conversational-quality impairment
+    /// band for round-trip delay (ITU-T G.114) — not a newly-invented number.
+    public static let highRttMs: Double = 300
+    /// Same floor value `.relay` already raises to — a slow path and a
+    /// relayed path are two different reasons for the identical proactive
+    /// insurance, not two different amounts of it.
+    public static let rttFloorPct = 10
+
+    /// The floor `next(...)` will never decay below, given a media RTT
+    /// sample. `nil`/non-finite/below-threshold all keep today's floor
+    /// unchanged — this is additive, never a NEW way to be more permissive.
+    public static func minPct(for rttMs: Double?) -> Int {
+        guard let rttMs, rttMs.isFinite, rttMs >= highRttMs else { return minPct }
+        return rttFloorPct
+    }
+
+    /// Route-tier AND RTT-aware variant. The two floors are independent
+    /// signals that can both be true at once (a relay route measured over a
+    /// slow path) — the effective floor is whichever is HIGHER, never
+    /// summed, same "raise the insurance, don't stack it" reasoning the
+    /// route-tier-only overload already documents.
+    public static func next(currentPct: Int, observedLossPct: Double, routeTier: RouteTier, rttMs: Double?) -> Int {
+        let floor = max(minPct(for: routeTier), minPct(for: rttMs))
+        return next(currentPct: currentPct, observedLossPct: observedLossPct, floorPct: floor)
+    }
+
     private static func next(currentPct: Int, observedLossPct: Double, floorPct: Int) -> Int {
         let floor = min(max(floorPct, minPct), maxPct)
         let cur = min(max(currentPct, floor), maxPct)

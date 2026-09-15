@@ -95,6 +95,19 @@ public actor RealityManager {
 
     private static let log = Logger(subsystem: "com.bcrypto.qaudion", category: "RealityManager")
 
+    /// W-REALITYPORTSYNC (2026-09-15, audit
+    /// reference_ios_full_audit_2026_09_15.md connectivity finding #2) —
+    /// posted after a HEALTH-TRIGGERED `restartInPlace()` binds a new local
+    /// SOCKS5 port, `userInfo: ["port": Int]`. `restartInPlace()` used to
+    /// rebuild the tunnel and silently leave every caller pointed at the OLD
+    /// port forever (`BCryptoWebSocketClient.currentSocksPort` is sticky by
+    /// design — set ONCE at initial activation, see that property's own doc
+    /// — so nothing above this actor ever learned the port moved). This is
+    /// the missing half of the pipe: "tunnel restarted" now reaches whoever
+    /// dialed through the old port, the same way Android's equivalent
+    /// health-restart already notifies its caller.
+    public static let tunnelRestartedNotification = Notification.Name("RealityManager.tunnelRestarted")
+
     private init() {}
 
     // MARK: - Public API
@@ -296,6 +309,13 @@ public actor RealityManager {
         }
         state = .running(port: UInt16(bound))
         Self.log.info("health: tunnel restarted OK on 127.0.0.1:\(bound)")
+        // W-REALITYPORTSYNC — see `tunnelRestartedNotification`'s own doc.
+        // `NotificationCenter` is thread-safe to post from off the main
+        // actor/queue; the `userInfo` payload is a plain `Int`, no
+        // cross-isolation reference is captured.
+        let restartedPort = Int(bound)
+        NotificationCenter.default.post(
+            name: Self.tunnelRestartedNotification, object: nil, userInfo: ["port": restartedPort])
     }
 
     /// Raw SOCKS5 handshake + CONNECT to `host:port` through the local
