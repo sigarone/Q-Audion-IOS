@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1159",
+              date: "2026-09-15",
+              title: "v1.0.1159",
+              bullets: [
+                "Close messages/connectivity/audio gaps from 2026-09-15 full audit",
+              ]),
         .init(id: "v1.0.1156",
               date: "2026-09-15",
               title: "v1.0.1156",
@@ -131,12 +137,6 @@ extension ReleaseNote {
               title: "v1.0.1133",
               bullets: [
                 "Drain RTCAudioSession.activationCount fully at call end",
-              ]),
-        .init(id: "v1.0.1132",
-              date: "2026-09-10",
-              title: "v1.0.1132",
-              bullets: [
-                "Diag(ios): log the real error code behind activateAudioSession's setActive failures",
               ]),
     ]
 }
