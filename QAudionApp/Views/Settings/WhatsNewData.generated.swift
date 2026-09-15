@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1160",
+              date: "2026-09-15",
+              title: "v1.0.1160",
+              bullets: [
+                "Call persistFileAttachmentFailurePlaceholder by name, not self.",
+              ]),
         .init(id: "v1.0.1159",
               date: "2026-09-15",
               title: "v1.0.1159",
@@ -131,12 +137,6 @@ extension ReleaseNote {
               title: "v1.0.1134",
               bullets: [
                 "Correct a negative RTCAudioSession.activationCount before activating",
-              ]),
-        .init(id: "v1.0.1133",
-              date: "2026-09-10",
-              title: "v1.0.1133",
-              bullets: [
-                "Drain RTCAudioSession.activationCount fully at call end",
               ]),
     ]
 }
