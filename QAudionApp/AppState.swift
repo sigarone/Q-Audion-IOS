@@ -14179,27 +14179,31 @@ final class AppState: ObservableObject {
         let jitter = Double.random(in: 0...5_000)
         try? await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000))
         let newWss = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
-        // CLEARNET-FIRST fallback to Reality (design doc §6). `reselectExcluding`
-        // returns nil ONLY when every trusted clearnet node it probed was
-        // unreachable — i.e. the network is silently dropping our traffic (the
-        // §1 incident shape), not one dead node. That is the hard-failure signal
-        // to bring up the Reality censorship-bypass tunnel and retry the SAME
-        // wss://voip.bcrypto.com through it. A genuine total-offline also lands
-        // here; Reality's own dial then fails harmlessly and the normal
-        // reconnect resumes when the network returns. This is only ever reached
-        // AFTER clearnet is exhausted — Reality is never the default route.
+        // W-REALITYAUTODISABLE (2026-09-15) — align with Android
+        // (NetworkProtocolRouter.kt, commits 18078eb9c/4b5f42b55, same day):
+        // this used to auto-promote Reality here on a hard clearnet-block
+        // signal (CLEARNET-FIRST fallback, design doc §6). DISABLED — the
+        // trigger only proved every trusted clearnet node was unreachable, it
+        // never proved the Reality tunnel it then brought up actually carried
+        // traffic (activateRealityFallback flips transportIsReality=true on
+        // bare SOCKS-port-bound success, before any real probe). Live
+        // incident on Android: devices auto-promoted into a tunnel that never
+        // carried traffic, stuck silently with no working network, not even
+        // self-clearing across a restart. iOS never independently hit this
+        // (RealityManager's own W-REALITYHEALTH watchdog already covers more
+        // than Android's ever did), but the SAME unproven-activation shape
+        // exists here too, so it gets the same fix: no more auto-trigger.
+        // Reality stays fully available via the manual force path
+        // (setForceRealityTransport → activateRealityFallback(reason:
+        // "manual-force")) — a tester/user who explicitly wants it still
+        // gets it, and would notice if it weren't working. The line below
+        // only logs; it deliberately never calls activateRealityFallback.
+        // The former W-REALITYBREAKER recovery watch, which only ever
+        // started from this AUTO trigger, was removed outright rather than
+        // left orphaned — see its former call site below for the pointer to
+        // Android's matching removal (commit 4b5f42b55).
         if newWss == nil {
-            await activateRealityFallback(reason: "auto-clearnet-block")
-            // W-REALITYBREAKER (2026-09-11) — only for the AUTO trigger, never
-            // for a manual force (setForceRealityTransport has its own ON/OFF
-            // path and must not be silently abandoned once direct recovers —
-            // see startRealityRecoveryWatch's own doc). transportIsReality
-            // only actually flips true here if activateRealityFallback
-            // succeeded; a failed activation (no config, engine unavailable,
-            // never reached Ready) correctly starts nothing.
-            if transportIsReality {
-                startRealityRecoveryWatch()
-            }
+            RTLog.warn("network", "handleNodeStalled: every trusted clearnet node unreachable — Reality auto-promotion is disabled (W-REALITYAUTODISABLE); use Force Reality Transport in Settings to bring up the tunnel manually")
         }
     }
 
@@ -14310,8 +14314,6 @@ final class AppState: ObservableObject {
                 await self.activateRealityFallback(reason: "manual-force")
             } else {
                 // Revert to clearnet: drop the tunnel + re-dial direct.
-                self.realityRecoveryTask?.cancel()
-                self.realityRecoveryTask = nil
                 ws.disconnect()
                 await RealityManager.shared.stop()
                 self.transportIsReality = false
@@ -14321,117 +14323,15 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// W-REALITYBREAKER (2026-09-11) — the backward trip AppState never had:
-    /// once `activateRealityFallback` latched `transportIsReality = true` via
-    /// the AUTO path, nothing ever reverted it short of this manual toggle or
-    /// a full app restart, even after direct clearnet genuinely recovered.
-    /// Mirrors Android's `NetworkProtocolRouter.startRecoveryWatch` — see
-    /// reference_reality_circuitbreaker_audit_2026_09_11.md for the full
-    /// design rationale, confirmed via `nim.ps1 -Mode security` on the
-    /// Android side and ported here unchanged. Two properties that are NOT
-    /// decorative:
-    ///  - Keys OFF ONLY the direct path's own independently-proven health,
-    ///    NEVER off Reality's own reported health — an adversary who can
-    ///    interfere with OUR Reality tunnel specifically must not be able to
-    ///    force repeated fake "Reality failed" signals to bounce us back onto
-    ///    the very clearnet path they want to keep blocking.
-    ///  - `probeDirectRecovered` proves a real APPLICATION-layer round trip,
-    ///    not merely a completed TLS handshake — a censor can transparently
-    ///    forward the TCP handshake then silently drop the stream, which
-    ///    would otherwise fake exactly the signal this breaker looks for.
-    ///
-    /// Only started from `handleNodeStalled`'s AUTO trigger (never for a
-    /// manual force); the trip-back branch below still checks
-    /// `AppState.forceRealityEnabled` a second time in case a tester forces
-    /// Reality on WHILE this loop is already running from an earlier auto
-    /// activation — that manual override must survive direct recovering,
-    /// same separation `setForceRealityTransport`'s own OFF branch respects
-    /// in reverse (never silently drops an auto fallback that is still
-    /// needed).
-    private var realityRecoveryTask: Task<Void, Never>?
-
-    @MainActor
-    private func startRealityRecoveryWatch() {
-        realityRecoveryTask?.cancel()
-        realityRecoveryTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: AppState.recoveryMinDwellNs)
-            var consecutiveOk = 0
-            while !Task.isCancelled, self.transportIsReality {
-                let ok = await AppState.probeDirectRecovered()
-                if Task.isCancelled { return }
-                if ok {
-                    consecutiveOk += 1
-                    print("[AppState] Recovery probe: direct path reachable (\(consecutiveOk)/\(AppState.recoveryHysteresisSamples))")
-                    if consecutiveOk >= AppState.recoveryHysteresisSamples {
-                        print("[AppState] Direct clearnet path recovered (\(consecutiveOk) consecutive real successes) — abandoning Reality")
-                        if !AppState.forceRealityEnabled {
-                            if let prov = self.liveProvider {
-                                let ws = prov.getWebSocketClient()
-                                await RealityManager.shared.stop()
-                                self.transportIsReality = false
-                                ws.disconnect()
-                                ws.connect()
-                            } else {
-                                await RealityManager.shared.stop()
-                                self.transportIsReality = false
-                            }
-                            print("[AppState] Reality fallback abandoned — direct clearnet path recovered")
-                        } else {
-                            print("[AppState] Direct recovered but Reality force is still on — leaving Reality up")
-                        }
-                        return
-                    }
-                } else {
-                    if consecutiveOk > 0 {
-                        print("[AppState] Recovery probe: direct path failed — resetting after \(consecutiveOk) consecutive success(es)")
-                    }
-                    consecutiveOk = 0
-                }
-                try? await Task.sleep(nanoseconds: AppState.recoveryProbeIntervalNs)
-            }
-        }
-    }
-
-    /// Deep, real DIRECT-path probe used ONLY by `startRealityRecoveryWatch`
-    /// — see its doc above for why this must go past a completed TLS
-    /// handshake. A real HTTPS GET to this app's own production endpoint,
-    /// same host/path every other request uses, so it is not distinguishable
-    /// from ordinary app traffic by SNI/host. Deliberately `URLSession`
-    /// rather than a raw socket (contrast `RealityManager.probeSocks5Sync`,
-    /// which must speak SOCKS5 to a local proxy and can't use the app's
-    /// normal HTTP stack) — there is no proxy here, this IS the plain
-    /// clearnet path, so the app's own real request stack is both simpler
-    /// and more representative of genuine app traffic than a hand-rolled
-    /// socket would be. An ephemeral session with no configured proxy
-    /// guarantees this never accidentally reads Reality's own SOCKS state.
-    private static func probeDirectRecovered() async -> Bool {
-        guard let url = URL(string: "https://\(recoveryProbeHost)\(recoveryProbePath)") else { return false }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: recoveryProbeTimeoutSec)
-        request.httpMethod = "GET"
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = recoveryProbeTimeoutSec
-        config.timeoutIntervalForResource = recoveryProbeTimeoutSec
-        config.connectionProxyDictionary = [:]
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
-            guard let body = String(data: data, encoding: .utf8) else { return false }
-            return body.contains(recoveryProbeBodyMarker)
-        } catch {
-            return false
-        }
-    }
-
-    private static let recoveryProbeHost = "voip.bcrypto.com"
-    private static let recoveryProbePath = "/api/v1/health"
-    private static let recoveryProbeBodyMarker = "\"status\":\"ok\""
-    private static let recoveryProbeTimeoutSec: TimeInterval = 6
-    private static let recoveryMinDwellNs: UInt64 = 120 * 1_000_000_000
-    private static let recoveryProbeIntervalNs: UInt64 = 60 * 1_000_000_000
-    private static let recoveryHysteresisSamples = 3
+    // W-REALITYBREAKER (2026-09-11) — the backward trip that reverted an
+    // AUTO-activated Reality tunnel once direct clearnet genuinely recovered
+    // — REMOVED 2026-09-15 (W-REALITYAUTODISABLE) alongside the auto-trigger
+    // it existed to unwind. It only ever started from handleNodeStalled's
+    // auto path, which no longer activates Reality at all; a manual force
+    // is reverted directly by setForceRealityTransport's own OFF branch
+    // above, which never needed this. Mirrors Android's equivalent removal
+    // (NetworkProtocolRouter's onRecoveredToDirect, commit 4b5f42b55) —
+    // dead code deleted outright rather than left orphaned, same call.
 
     func logout() {
         authService.clearToken()
@@ -17907,6 +17807,30 @@ extension AppState {
                 .interruptSpokenAudioAndMixWithOthers
             ]
             #endif
+            // W-IPADSPKR (2026-09-15, live report) — the soft/proximity model
+            // above is built entirely around iPhone's receiver<->speaker pair:
+            // .defaultToSpeaker + override(.none) lets the PROXIMITY SENSOR
+            // pick between the two built-in routes. iPad has no receiver route
+            // at all (only .builtInSpeaker), so on iPad both the "on" and "off"
+            // branches above resolve to the exact same built-in output — the
+            // button visibly toggled but nothing about the actual audio route
+            // ever changed, which is precisely the "stuck on speaker" report.
+            // The toggle that's actually meaningful on iPad is against a
+            // CONNECTED ACCESSORY, not a receiver, so iPad keeps the old
+            // explicit hard override this file's own W-SOFTSPKR comment above
+            // was written to retire for iPhone: "on" forces away from any
+            // Bluetooth/wired accessory back to the built-in speaker, "off"
+            // releases the override so a connected accessory (or, absent one,
+            // the only built-in route there is) takes over — the same
+            // override(.speaker)/(.none) pair a normal iOS speaker button uses.
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                if enabled { opts.insert(.defaultToSpeaker) }
+                try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
+                try session.overrideOutputAudioPort(enabled ? .speaker : .none)
+                RTLog.info("call", "setSpeaker(" + String(describing: enabled) + ") ok (iPad: hard override, no receiver route to soften)")
+                updateProximityMonitoring()
+                return
+            }
             if enabled { opts.insert(.defaultToSpeaker) }
             try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
             // W-SOFTSPKR — never `.speaker` here: an output override pins the
