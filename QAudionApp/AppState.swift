@@ -13214,6 +13214,26 @@ final class AppState: ObservableObject {
         // placeholder ever reaches here.
         integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
             let bootstrap: () -> Void = {
+                // W-V4CONNECTRESET (2026-09-15, live incident, mirrors the
+                // Android fix) — v4Fire/v4InitFire already guard against a
+                // MID-CALL re-key round (`isReKeyRound`), but the call's own
+                // FIRST handshake round still reached here unconditionally,
+                // and bootstrapV4AndPersist has no "already exists" check —
+                // it always overwrites the persisted v4 CHAT ratchet for this
+                // contact (see bootstrapV4FromPreBootstrap's identical guard
+                // above for the fresh-contact path, which already had this).
+                // Confirmed live: a real 1:1 chat message sent around an
+                // ordinary call connect/reconnect with an ALREADY-ESTABLISHED
+                // contact came back "Messaggio non decifrabile" repeatedly —
+                // every call was silently resetting the shared ratchet.
+                // Skipping when a session already exists makes this a
+                // create-if-absent bootstrap: a genuinely new contact still
+                // gets the ratchet readied before their first outbound
+                // message, an established one is left untouched by call setup.
+                if AppState.sharedV4Ratchet.hasV4Session(peerId) {
+                    print("[PQC_DIAG_V4] v4 session already established peer=\(peerId.prefix(8)) — skipping call-handshake bootstrap to avoid resetting the chat ratchet (W-V4CONNECTRESET)")
+                    return
+                }
                 let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                     peerId: peerId,
                     effectiveSecret: effectiveSecret,
@@ -15448,6 +15468,13 @@ final class AppState: ObservableObject {
                 // fires when every input is real, so no placeholder reaches here.
                 integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
                     let bootstrap: () -> Void = {
+                        // W-V4CONNECTRESET — see the identical guard + full
+                        // rationale on the responder leg's onV4BootstrapReady
+                        // above (same fix, both directions of the handshake).
+                        if AppState.sharedV4Ratchet.hasV4Session(peerId) {
+                            print("[PQC_DIAG_V4] v4 session already established peer=\(peerId.prefix(8)) — skipping call-handshake bootstrap to avoid resetting the chat ratchet (W-V4CONNECTRESET)")
+                            return
+                        }
                         let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
                             peerId: peerId,
                             effectiveSecret: effectiveSecret,
