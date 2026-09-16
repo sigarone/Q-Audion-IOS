@@ -9,6 +9,14 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1161",
+              date: "2026-09-16",
+              title: "v1.0.1161",
+              bullets: [
+                "Wire the real CONTROL channel — engine layer + control-envelope routing (iOS)",
+                "Capability-bit anti-downgrade protection (MUST-FIX #1, iOS)",
+                "Migrate all 3 bootstrap call sites onto the atomic ensureBootstrapped",
+              ]),
         .init(id: "v1.0.1160",
               date: "2026-09-15",
               title: "v1.0.1160",
@@ -131,12 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1135",
               bullets: [
                 "Accept call_accepted while caller is still pre-ring .active",
-              ]),
-        .init(id: "v1.0.1134",
-              date: "2026-09-10",
-              title: "v1.0.1134",
-              bullets: [
-                "Correct a negative RTCAudioSession.activationCount before activating",
               ]),
     ]
 }
