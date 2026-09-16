@@ -957,6 +957,50 @@ public final class MessageRatchet {
         }
     }
 
+    /// Atomic "create session if none exists" primitive (closes MUST-FIX #2 of the Q-Audion
+    /// Dual-Channel Ratchet v5 security review — see the Android `MessageRatchet
+    /// .ensureBootstrapped`/`W-ATOMICBOOTSTRAP` kdoc this mirrors 1:1).
+    ///
+    /// W-ATOMICBOOTSTRAP (2026-09-16) — ``v4RoutingLock`` already serializes
+    /// ``bootstrapV4AndPersist(peerId:effectiveSecret:selfEpochId:peerEpochId:selfIdentityPub:peerIdentityPub:transcriptHash:)``'s
+    /// own body (and, since every call site reaches this through the single
+    /// `AppState.sharedV4Ratchet` instance, that lock genuinely IS cross-call-site —
+    /// unlike a per-instance lock would be). It does NOT, on its own, close a
+    /// DIFFERENT race in the BOOTSTRAP path: every call site used to externally call
+    /// ``hasV4Session(_:)`` (a plain, unlocked read) and THEN separately call
+    /// `bootstrapV4AndPersist` (which IS locked, but only around its own body) — two
+    /// lock acquisitions with a gap between them. Two closures racing for the same
+    /// peer (e.g. an inbound call's handshake landing while a KMS pre-bootstrap
+    /// envelope for that same peer is already in flight — see `AppState.swift`'s
+    /// `onV4BootstrapReady` closures) can both observe "no session yet" in that gap
+    /// and both write, the second silently clobbering the first.
+    ///
+    /// This function performs the check AND the conditional write under ONE
+    /// ``v4RoutingLock`` acquisition, so the two can never interleave. `epochId`
+    /// selects which vault row this call concerns (``v4RoutingEpoch`` today; v5
+    /// dual-channel epoch keys once wired). `bootstrap` is invoked AT MOST ONCE, and
+    /// ONLY when no session for `(epochId, peerId)` exists yet — it must derive and
+    /// return a fresh, ready-to-persist native handle, or `0` on its own failure; the
+    /// handle is freed here regardless of outcome. Returns `true` iff a session now
+    /// exists for `(epochId, peerId)` — either because this call just created one, or
+    /// because one already existed, in which case `bootstrap` is never invoked and
+    /// the existing session is left completely untouched.
+    public func ensureBootstrapped(epochId: String, peerId: String, bootstrap: () -> UInt) -> Bool {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        guard isV4Enabled() else { return false }
+        if vault.loadV4(epochId: epochId, peerId: peerId) != nil { return true }
+        let handle = bootstrap()
+        guard handle != 0 else { return false }
+        defer { freeV4Session(handle) }
+        guard let blob = serializeV4Session(handle) else { return false }
+        do {
+            try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// True iff a persisted v4 session exists for [peerId] (and the v4 path is enabled).
     /// Used by the SEND dispatcher to gate the v4 branch synchronously BEFORE any
     /// version selection — a v4 session only EXISTS for a peer once a negotiated +

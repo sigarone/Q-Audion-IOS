@@ -13403,20 +13403,33 @@ final class AppState: ObservableObject {
                 // create-if-absent bootstrap: a genuinely new contact still
                 // gets the ratchet readied before their first outbound
                 // message, an established one is left untouched by call setup.
-                if AppState.sharedV4Ratchet.hasV4Session(peerId) {
-                    print("[PQC_DIAG_V4] v4 session already established peer=\(peerId.prefix(8)) — skipping call-handshake bootstrap to avoid resetting the chat ratchet (W-V4CONNECTRESET)")
-                    return
+                //
+                // W-ATOMICBOOTSTRAP (2026-09-16, mirrors Android's identical fix
+                // in PqcHandshake.kt) — this used to be `if hasV4Session(peerId)
+                // { return } else { bootstrapV4AndPersist(...) }`: an external,
+                // unlocked check followed by a separately-locked write. Two
+                // closures racing for the same peer (this handshake path and the
+                // KMS pre-bootstrap path just above) could both observe "no
+                // session yet" in the gap and both write, the second silently
+                // clobbering the first — the exact class of bug W-V4CONNECTRESET
+                // was written to prevent, one level down. `ensureBootstrapped`
+                // performs the check-and-conditionally-create as ONE atomic,
+                // lock-held step (see its kdoc) — the guard above is now
+                // structural rather than a call-site convention.
+                let ok = AppState.sharedV4Ratchet.ensureBootstrapped(
+                    epochId: MessageRatchet.v4RoutingEpoch,
+                    peerId: peerId
+                ) {
+                    AppState.sharedV4Ratchet.bootstrapV4(
+                        effectiveSecret: effectiveSecret,
+                        selfEpochId: Data(count: 16),
+                        peerEpochId: Data(count: 16),
+                        selfIdentityPub: selfIdentityPub,
+                        peerIdentityPub: peerIdentityPub,
+                        transcriptHash: transcriptHash
+                    )
                 }
-                let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
-                    peerId: peerId,
-                    effectiveSecret: effectiveSecret,
-                    selfEpochId: Data(count: 16),
-                    peerEpochId: Data(count: 16),
-                    selfIdentityPub: selfIdentityPub,
-                    peerIdentityPub: peerIdentityPub,
-                    transcriptHash: transcriptHash
-                )
-                print("[PQC_DIAG_V4] bootstrapV4AndPersist peer=\(peerId.prefix(8)) ok=\(ok)")
+                print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
             }
             // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
             // so resolve the active call's id to key the same gate. Safe: this
@@ -15544,20 +15557,27 @@ final class AppState: ObservableObject {
                         // W-V4CONNECTRESET — see the identical guard + full
                         // rationale on the responder leg's onV4BootstrapReady
                         // above (same fix, both directions of the handshake).
-                        if AppState.sharedV4Ratchet.hasV4Session(peerId) {
-                            print("[PQC_DIAG_V4] v4 session already established peer=\(peerId.prefix(8)) — skipping call-handshake bootstrap to avoid resetting the chat ratchet (W-V4CONNECTRESET)")
-                            return
+                        //
+                        // W-ATOMICBOOTSTRAP (2026-09-16) — see the responder leg's
+                        // identical fix above; same atomic check-and-create via
+                        // ensureBootstrapped, same reasoning (this leg's own race
+                        // partner is the responder leg above plus the KMS
+                        // pre-bootstrap path, all now funneled through the same
+                        // ``v4RoutingLock``-held primitive).
+                        let ok = AppState.sharedV4Ratchet.ensureBootstrapped(
+                            epochId: MessageRatchet.v4RoutingEpoch,
+                            peerId: peerId
+                        ) {
+                            AppState.sharedV4Ratchet.bootstrapV4(
+                                effectiveSecret: effectiveSecret,
+                                selfEpochId: Data(count: 16),
+                                peerEpochId: Data(count: 16),
+                                selfIdentityPub: selfIdentityPub,
+                                peerIdentityPub: peerIdentityPub,
+                                transcriptHash: transcriptHash
+                            )
                         }
-                        let ok = AppState.sharedV4Ratchet.bootstrapV4AndPersist(
-                            peerId: peerId,
-                            effectiveSecret: effectiveSecret,
-                            selfEpochId: Data(count: 16),
-                            peerEpochId: Data(count: 16),
-                            selfIdentityPub: selfIdentityPub,
-                            peerIdentityPub: peerIdentityPub,
-                            transcriptHash: transcriptHash
-                        )
-                        print("[PQC_DIAG_V4] bootstrapV4AndPersist peer=\(peerId.prefix(8)) ok=\(ok)")
+                        print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
                     }
                     // P0-3 — same active-callId resolution as the responder leg
                     // above (this closure carries no callId parameter either).
@@ -22711,18 +22731,25 @@ extension AppState {
         guard selfPub.count == 32 else { return }
         let ratchet = AppState.sharedV4Ratchet
         guard ratchet.isV4Enabled() else { return }
-        if ratchet.hasV4Session(peer) { return }
+        // W-ATOMICBOOTSTRAP (2026-09-16) — see AppState's onV4BootstrapReady
+        // closures for the full rationale (mirrors the identical fix there):
+        // `hasV4Session` was an external, unlocked check ahead of a separately-
+        // locked `bootstrapV4AndPersist` call, leaving a TOCTOU gap this pre-
+        // bootstrap path could race against either handshake leg above for the
+        // same peer. `ensureBootstrapped` closes it — one atomic, lock-held
+        // check-and-create, same primitive every v4 bootstrap trigger now uses.
         let zeroEpoch = Data(count: 16)
-        let ok = ratchet.bootstrapV4AndPersist(
-            peerId: peer,
-            effectiveSecret: rk0,
-            selfEpochId: zeroEpoch,
-            peerEpochId: zeroEpoch,
-            selfIdentityPub: selfPub,
-            peerIdentityPub: peerIdentityEdPub,
-            transcriptHash: transcriptHash
-        )
-        RTLog.info("crypto", "v4 prebootstrap ok=\(ok ? 1 : 0)")
+        let ok = ratchet.ensureBootstrapped(epochId: MessageRatchet.v4RoutingEpoch, peerId: peer) {
+            ratchet.bootstrapV4(
+                effectiveSecret: rk0,
+                selfEpochId: zeroEpoch,
+                peerEpochId: zeroEpoch,
+                selfIdentityPub: selfPub,
+                peerIdentityPub: peerIdentityEdPub,
+                transcriptHash: transcriptHash
+            )
+        }
+        RTLog.info("crypto", "v4 prebootstrap ensureBootstrapped ok=\(ok ? 1 : 0)")
         print("[AppState] KmsPreBootstrap: v4 session bootstrapped=\(ok) peer=\(peer.prefix(8))…")
     }
 
