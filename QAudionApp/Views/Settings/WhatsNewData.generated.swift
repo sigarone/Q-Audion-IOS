@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1162",
+              date: "2026-09-17",
+              title: "v1.0.1162",
+              bullets: [
+                "Ack control envelopes on the msg_pending_sync success path",
+              ]),
         .init(id: "v1.0.1161",
               date: "2026-09-16",
               title: "v1.0.1161",
@@ -133,12 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1136",
               bullets: [
                 "Lock the last raw AVAudioSession call, drop the mix-audio option",
-              ]),
-        .init(id: "v1.0.1135",
-              date: "2026-09-10",
-              title: "v1.0.1135",
-              bullets: [
-                "Accept call_accepted while caller is still pre-ring .active",
               ]),
     ]
 }
