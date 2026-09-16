@@ -993,6 +993,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// bundle advertising the capability verifies, mirroring `setPeerV4Pinned`).
     public var setPeerSrtpDirKeyV1Pinned: ((String) -> Void)?
 
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) —
+    /// `ratchetV5_capable_pinned` analogue: has this peer ever had a SIGNED bundle verify while
+    /// advertising `ratchetV5`? Wired from a UserDefaults-backed set in AppState, mirroring
+    /// `isPeerV4Pinned`/`isPeerSrtpDirKeyV1Pinned`. Once true, a later validly-signed bundle
+    /// that honestly claims `ratchetV5=false` is flagged as a possible downgrade rather than
+    /// silently accepted (see `HandshakeSigningPolicy.evaluate`'s sticky downgrade check).
+    public var isPeerRatchetV5Pinned: ((String) -> Bool)?
+
+    /// Mark this peer ratchetV5-capable-pinned (set the first time a signed bundle advertising
+    /// the capability verifies, mirroring `setPeerV4Pinned`/`setPeerSrtpDirKeyV1Pinned`).
+    public var setPeerRatchetV5Pinned: ((String) -> Void)?
+
     /// Is the channel to this peer trust ≥ VERIFIED_CHANNEL (spec §4 — verified
     /// contacts MUST always present a valid signature)? Wired from the existing
     /// SAS-verification state.
@@ -1443,7 +1455,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // CALL-3/CALL-4 — v3 sibling, same best-effort isolation (nil-safe:
             // `offerTranscriptV3` only fails on the same pathological psk-list case).
             let offerTV3 = Self.offerTranscriptV3(from: offerBundle, callId: callId, signerKeyRaw: idKey)
-            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2, transcriptV3: offerTV3)
+            // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — v4 sibling, same best-effort
+            // isolation (nil-safe: `offerTranscriptV4` only fails on the same pathological
+            // psk-list case, or an absent rekeyNonce/rekeyRound — see its doc).
+            let offerTV4 = Self.offerTranscriptV4(from: offerBundle, callId: callId, signerKeyRaw: idKey)
+            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2, transcriptV3: offerTV3, transcriptV4: offerTV4)
             // Only stash when the sig actually attached (signedCopy returns the
             // input unchanged on signer failure → don't claim a signed OFFER).
             if bundleToSend.signature != nil {
@@ -1699,7 +1715,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // CALL-3/CALL-4 — v3 sibling; signs THIS round's `rekeyRound`
             // (nonce empty — already established at round 1).
             let offerTV3 = Self.offerTranscriptV3(from: offerBundle, callId: callId, signerKeyRaw: idKey)
-            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2, transcriptV3: offerTV3)
+            // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — v4 sibling, same round-carrying
+            // discipline as v3 above.
+            let offerTV4 = Self.offerTranscriptV4(from: offerBundle, callId: callId, signerKeyRaw: idKey)
+            bundleToSend = signedCopy(of: offerBundle, transcript: offerT, transcriptV2: offerTV2, transcriptV3: offerTV3, transcriptV4: offerTV4)
             if bundleToSend.signature != nil {
                 lock.withLock {
                     sentOfferTranscriptByCall[callId.lowercased()] = offerT
@@ -2122,8 +2141,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                             verifiedOfferBindingV2 = HandshakeTranscript.offerBinding(offerTV2)
                         }
                     }
-                case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, ratchetV5Capable: ratchetV5Capable)
                     offerSigOk = true
                     // The signed OFFER's binding the ACCEPT will carry. Rebuilt
                     // under the trusted key (= the bundle's signerIdentityKey,
@@ -2137,13 +2156,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                             verifiedOfferBindingV2 = HandshakeTranscript.offerBinding(offerTV2)
                         }
                     }
-                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable):
+                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                     // D11 trust-on-publish: bundle key ≠ pin but ∈ the server's
                     // published set AND its own signature verified. Silent additive
                     // re-pin per-(peer, device); NO banner. The binding is rebuilt
                     // under the SET-PROVEN device key (the key the policy verified).
                     print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                     offerSigOk = true
                     if let offerT = Self.offerTranscript(from: bundle, callId: callId, signerKeyRaw: deviceKey) {
                         verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
@@ -2245,6 +2264,36 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     acceptedNonceV3 = Self.rekeyNonceRaw(from: bundle.rekeyNonce)
                 } else {
                     print("[QAudionCallIntegration] CALL-3/CALL-4: OFFER carried sigV3/rekeyRound but v3 verification FAILED callId=\(callId.prefix(8))… — falling back to legacy KDF/SAS/re-key-transcript shape, call NOT dropped")
+                }
+            }
+
+            // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — bolt-on
+            // v4 check, mirroring the v3 block above exactly (same signer-key resolution, same
+            // "log and fall back on failure, never drop the call" discipline). UNLIKE v3, this
+            // does NOT feed the KDF/SAS fold or any round-monotonicity tracking — v4 exists ONLY
+            // to exercise the `ratchetV5`-binding signature so a tampered sigV4 is detectable
+            // (defense-in-depth diagnostic). The actual anti-downgrade PROTECTION already ran
+            // above, inside `HandshakeSigningPolicy.evaluate` (the sticky `ratchetV5CapablePinned`
+            // check), reading `bundle.capabilities?.ratchetV5` directly — that check does not
+            // depend on this block succeeding.
+            if bundle.capabilities?.ratchetV5 ?? false,
+               let sigV4B64 = bundle.sigV4, !sigV4B64.isEmpty,
+               let sikB64 = bundle.signerIdentityKey, !sikB64.isEmpty,
+               let sigV4Data = Data(base64Encoded: sigV4B64), sigV4Data.count == 64 {
+                let bundleKeyV4 = Data(base64Encoded: sikB64)
+                let pinnedV4 = peerPinStoreLookup(peerId: callerId, deviceId: callerDeviceId)
+                let serverV4 = resolveServerPeerKey?(callerId)
+                let publishedSetV4 = resolvePublishedKeySet?(callerId, callerDeviceId) ?? []
+                let verifyKeyV4 = HandshakeSigningPolicy.verifyKeyHint(
+                    bundleKey: bundleKeyV4, pinnedKey: pinnedV4, serverFetchedKey: serverV4,
+                    publishedKeySet: publishedSetV4
+                ) ?? Data()
+                if let offerTV4 = Self.offerTranscriptV4(from: bundle, callId: callId, signerKeyRaw: verifyKeyV4),
+                   HandshakeTranscript.verify(transcript: offerTV4, signature: sigV4Data, signerIdentityKey: verifyKeyV4) {
+                    // Verified — no further action needed here; the pin/downgrade decision
+                    // already happened above based on the (now corroborated) capability bit.
+                } else {
+                    print("[QAudionCallIntegration] Q-Audion v5: OFFER carried sigV4 but v4 verification FAILED callId=\(callId.prefix(8))… — ratchetV5 claim uncorroborated this round, call NOT dropped")
                 }
             }
 
@@ -2602,7 +2651,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // this leg cannot actually stand behind.
                 let acceptTV3: Data? = offerBindingV3.isEmpty ? nil
                     : Self.acceptTranscriptV3(from: accept, callId: callId, signerKeyRaw: idKey, offerBindingV3: offerBindingV3)
-                acceptToSend = signedCopy(of: accept, transcript: acceptT, transcriptV2: acceptTV2, transcriptV3: acceptTV3)
+                // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — v4 sibling. UNLIKE v3, this is
+                // NOT gated on `offerBindingV3` (or any offer_binding) — `acceptTranscriptV4`
+                // always uses the empty `offerBinding` per `HandshakeTranscript.acceptV4`'s scope
+                // note, so there is no "verified OFFER binding" precondition to check; the only
+                // guard is `acceptTranscriptV4`'s own internal rekeyNonce/rekeyRound check
+                // (returns `nil`, isolated by `signedCopy`, exactly like a v2/v3-specific
+                // failure).
+                let acceptTV4 = Self.acceptTranscriptV4(from: accept, callId: callId, signerKeyRaw: idKey)
+                acceptToSend = signedCopy(of: accept, transcript: acceptT, transcriptV2: acceptTV2, transcriptV3: acceptTV3, transcriptV4: acceptTV4)
                 if let acceptTV2 { acceptBindingV2ForKc = HandshakeTranscript.offerBinding(acceptTV2) }
                 // CALL-4 — ITEM 2/3 FOLLOW-UP: recompute `combined` from the raw
                 // hybrid shared secrets under the canonical transcript-bound KDF
@@ -3016,16 +3073,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     }
                     // P0-3 — same media-hold signal as the OFFER side above.
                     onHandshakeIdentityUnverified?(callId)
-                case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable):
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable)
+                case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, ratchetV5Capable: ratchetV5Capable)
                     acceptSigOk = true
-                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable):
+                case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                     // D11 trust-on-publish: set-proven rotation → silent additive
                     // re-pin per-(peer, device); NO banner. Proceed to init the
                     // session (the policy already verified the ACCEPT signature
                     // under this set-proven device key).
                     print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
-                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true)
+                    applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                     acceptSigOk = true
                 case .proceedUnsignedWarn(let reason):
                     print("[QAudionCallIntegration] ACCEPT unsigned-legacy peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — proceeding: \(reason)")
@@ -3066,6 +3123,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     } else {
                         print("[QAudionCallIntegration] CALL-3/CALL-4: ACCEPT carried sigV3 but v3 verification FAILED callId=\(callId.prefix(8))… — falling back to legacy KDF/SAS, call NOT dropped")
                     }
+                }
+            }
+
+            // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — bolt-on
+            // v4 check, ACCEPT-side mirror of the OFFER-side block above. No `offerBinding`
+            // lookup needed (unlike the v3 block just above, which stashes/rebuilds
+            // `sentOfferTranscriptV3ByCall`) — `acceptTranscriptV4` always uses the empty
+            // `offerBinding` per `HandshakeTranscript.acceptV4`'s scope note, so there is nothing
+            // to bind to. Same "log and fall back, never drop the call" discipline as the OFFER
+            // side; the actual anti-downgrade protection already ran inside `evaluateVerdict`
+            // above, independent of this block.
+            if bundle.capabilities?.ratchetV5 ?? false,
+               let sigV4B64 = bundle.sigV4, !sigV4B64.isEmpty,
+               let sikB64 = bundle.signerIdentityKey, !sikB64.isEmpty,
+               let sigV4Data = Data(base64Encoded: sigV4B64), sigV4Data.count == 64 {
+                let bundleKeyV4 = Data(base64Encoded: sikB64)
+                let pinnedV4 = peerPinStoreLookup(peerId: callerId, deviceId: callerDeviceId)
+                let serverV4 = resolveServerPeerKey?(callerId)
+                let publishedSetV4 = resolvePublishedKeySet?(callerId, callerDeviceId) ?? []
+                let verifyKeyV4 = HandshakeSigningPolicy.verifyKeyHint(
+                    bundleKey: bundleKeyV4, pinnedKey: pinnedV4, serverFetchedKey: serverV4,
+                    publishedKeySet: publishedSetV4
+                ) ?? Data()
+                if let acceptTV4 = Self.acceptTranscriptV4(from: bundle, callId: callId, signerKeyRaw: verifyKeyV4),
+                   HandshakeTranscript.verify(transcript: acceptTV4, signature: sigV4Data, signerIdentityKey: verifyKeyV4) {
+                    // Verified — no further action needed; the pin/downgrade decision already
+                    // happened inside `evaluateVerdict` above.
+                } else {
+                    print("[QAudionCallIntegration] Q-Audion v5: ACCEPT carried sigV4 but v4 verification FAILED callId=\(callId.prefix(8))… — ratchetV5 claim uncorroborated this round, call NOT dropped")
                 }
             }
 
@@ -3644,6 +3730,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return (c7.ratchetV3, c7.sframeV1, c7.vkeyV1, c7.sessionKdfV3, c7.ratchetV4, c7.srtpDirKeyV1, c7.pskMixV1, caps?.hsTranscriptBindV1 ?? false)
     }
 
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — 9-tuple sibling of `capsFromBundle8`,
+    /// adding `ratchetV5` (bound into the v4 transcript's 9th CAPS byte ONLY —
+    /// `capsFromBundle`/v1's 6-byte, `capsFromBundle7`/v2's 7-byte AND `capsFromBundle8`/v3's
+    /// 8-byte CAPS are completely untouched). Absent/null capabilities → false, same rule as
+    /// every `capsFromBundleN` above.
+    private static func capsFromBundle9(
+        _ caps: AndroidHandshakeBundle.Capabilities?
+    ) -> (ratchetV3: Bool, sframeV1: Bool, vkeyV1: Bool, sessionKdfV3: Bool, ratchetV4: Bool, srtpDirKeyV1: Bool, pskMixV1: Bool, hsTranscriptBindV1: Bool, ratchetV5: Bool) {
+        let c8 = capsFromBundle8(caps)
+        return (c8.ratchetV3, c8.sframeV1, c8.vkeyV1, c8.sessionKdfV3, c8.ratchetV4, c8.srtpDirKeyV1, c8.pskMixV1, c8.hsTranscriptBindV1, caps?.ratchetV5 ?? false)
+    }
+
     /// CALL-3 — decode a bundle's `rekeyNonce` (base64) to raw bytes for
     /// `HandshakeTranscript.offerV3`/`acceptV3`. Returns `nil` for an absent
     /// field AND for any present-but-malformed value (wrong length, bad
@@ -3780,6 +3878,50 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             srtpDirKeyV1: caps.srtpDirKeyV1,
             pskMixV1: caps.pskMixV1,
             hsTranscriptBindV1: caps.hsTranscriptBindV1,
+            ratchetV: HandshakeSigningPolicy.ratchetV,
+            suiteId: HandshakeSigningPolicy.suiteId,
+            pskFingerprints: bundle.pskFingerprints,
+            pskRoles: bundle.pskRoles,
+            rekeyNonce: nonceRaw,
+            rekeyRound: UInt32(roundInt)
+        )
+    }
+
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — v4 sibling of `offerTranscriptV3`. Same
+    /// base64-decode + rekeyNonce/rekeyRound guards (v4 reuses v3's freshness fields verbatim,
+    /// no new v4-only wire field is needed) — a missing/malformed nonce degrades this ENTIRE v4
+    /// transcript to `nil` (same "fall back to v3/v2/v1" contract as `offerTranscriptV3`).
+    private static func offerTranscriptV4(
+        from bundle: AndroidHandshakeBundle,
+        callId: String,
+        signerKeyRaw: Data
+    ) -> Data? {
+        guard let pqcB64 = bundle.pqcPublicKey, let pqcRaw = Data(base64Encoded: pqcB64),
+              let x25B64 = bundle.x25519PublicKey, let x25Raw = Data(base64Encoded: x25B64),
+              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
+            return nil
+        }
+        let strongBox = bundle.strongBoxPublicKey.flatMap { Data(base64Encoded: $0) }
+        let dualCurve = bundle.dualCurvePublicKey.flatMap { Data(base64Encoded: $0) }
+        let caps = capsFromBundle9(bundle.capabilities)
+        return HandshakeTranscript.offerV4(
+            callId: callId,
+            signerIdentityKey: signerKeyRaw,
+            epochId: HandshakeSigningPolicy.placeholderEpochId,
+            pqcPublicKey: pqcRaw,
+            x25519PublicKey: x25Raw,
+            strongBoxPublicKey: strongBox,
+            dualCurvePublicKey: dualCurve,
+            ratchetV3: caps.ratchetV3,
+            sframeV1: caps.sframeV1,
+            vkeyV1: caps.vkeyV1,
+            sessionKdfV3: caps.sessionKdfV3,
+            ratchetV4: caps.ratchetV4,
+            srtpDirKeyV1: caps.srtpDirKeyV1,
+            pskMixV1: caps.pskMixV1,
+            hsTranscriptBindV1: caps.hsTranscriptBindV1,
+            ratchetV5: caps.ratchetV5,
             ratchetV: HandshakeSigningPolicy.ratchetV,
             suiteId: HandshakeSigningPolicy.suiteId,
             pskFingerprints: bundle.pskFingerprints,
@@ -3930,6 +4072,54 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         )
     }
 
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — v4 sibling of `acceptTranscriptV3`.
+    /// `offerBinding` is ALWAYS `Data()` (empty) — see `HandshakeTranscript.acceptV4`'s scope
+    /// note for why v4 deliberately omits the OFFER-ACCEPT cross-binding v1/v2/v3 have. Same
+    /// rekeyNonce/rekeyRound guards as `acceptTranscriptV3` (v4 reuses v3's freshness fields
+    /// verbatim) — a missing/malformed nonce degrades this ENTIRE v4 transcript to `nil`.
+    private static func acceptTranscriptV4(
+        from bundle: AndroidHandshakeBundle,
+        callId: String,
+        signerKeyRaw: Data
+    ) -> Data? {
+        guard let ct = bundle.ciphertext,
+              let pqcRaw = Data(base64Encoded: ct.pqc),
+              let x25Raw = Data(base64Encoded: ct.x25519),
+              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
+            return nil
+        }
+        let strongBox = ct.strongBox.flatMap { Data(base64Encoded: $0) }
+        let dualCurve = ct.dualCurve.flatMap { Data(base64Encoded: $0) }
+        let caps = capsFromBundle9(bundle.capabilities)
+        return HandshakeTranscript.acceptV4(
+            callId: callId,
+            signerIdentityKey: signerKeyRaw,
+            epochId: HandshakeSigningPolicy.placeholderEpochId,
+            ctPqc: pqcRaw,
+            ctX25519: x25Raw,
+            ctStrongBox: strongBox,
+            ctDualCurve: dualCurve,
+            ratchetV3: caps.ratchetV3,
+            sframeV1: caps.sframeV1,
+            vkeyV1: caps.vkeyV1,
+            sessionKdfV3: caps.sessionKdfV3,
+            ratchetV4: caps.ratchetV4,
+            srtpDirKeyV1: caps.srtpDirKeyV1,
+            pskMixV1: caps.pskMixV1,
+            hsTranscriptBindV1: caps.hsTranscriptBindV1,
+            ratchetV5: caps.ratchetV5,
+            ratchetV: HandshakeSigningPolicy.ratchetV,
+            suiteId: HandshakeSigningPolicy.suiteId,
+            selectedPskFingerprint: bundle.selectedPskFingerprint,
+            offerBinding: Data(),
+            responderPskFingerprints: bundle.pskFingerprints,
+            responderPskRoles: bundle.pskRoles,
+            rekeyNonce: nonceRaw,
+            rekeyRound: UInt32(roundInt)
+        )
+    }
+
     /// Compute `require_signed(peer)` (spec §4) from the wired policy closures.
     private func requireSigned(forPeer peerId: String) -> Bool {
         let v4 = isPeerV4Pinned?(peerId) ?? false
@@ -3963,7 +4153,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `signOffer/signAccept`). Returns the ORIGINAL bundle unchanged when the v1 signature
     /// itself fails (degrade to unsigned) so signing can never break a call. No-op (returns
     /// input) when signing is not wired.
-    private func signedCopy(of bundle: AndroidHandshakeBundle, transcript: Data, transcriptV2: Data? = nil, transcriptV3: Data? = nil) -> AndroidHandshakeBundle {
+    private func signedCopy(of bundle: AndroidHandshakeBundle, transcript: Data, transcriptV2: Data? = nil, transcriptV3: Data? = nil, transcriptV4: Data? = nil) -> AndroidHandshakeBundle {
         guard let idKey = localSignerIdentityKey, let sign = signTranscript,
               let sig = sign(transcript), sig.count == 64 else {
             return bundle
@@ -3979,6 +4169,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         var sigV3B64: String?
         if let t3 = transcriptV3, let sig3 = sign(t3), sig3.count == 64 {
             sigV3B64 = sig3.base64EncodedString()
+        }
+        // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — v4 sibling, same
+        // never-blocks-the-v1-signature isolation as sigV2/sigV3 above: a v4-specific failure
+        // (signer error, or `transcriptV4` absent because `bundle` did not carry `rekeyRound`)
+        // never prevents `sig`/`sigV2`/`sigV3` from attaching.
+        var sigV4B64: String?
+        if let t4 = transcriptV4, let sig4 = sign(t4), sig4.count == 64 {
+            sigV4B64 = sig4.base64EncodedString()
         }
         return AndroidHandshakeBundle(
             kind: bundle.kind,
@@ -3996,6 +4194,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             signature: sig.base64EncodedString(),
             sigV2: sigV2B64,
             sigV3: sigV3B64,
+            sigV4: sigV4B64,
             // CALL-3 — carried through verbatim from the input bundle, which
             // the OFFER/ACCEPT builders set BEFORE calling this function.
             rekeyNonce: bundle.rekeyNonce,
@@ -4057,6 +4256,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // SRTP-key capability — only meaningful once the signature verifies
         // (evaluate() only threads it into the .authenticated* verdicts).
         let advertisedSrtpDirKeyV1 = bundle.capabilities?.srtpDirKeyV1 ?? false
+        // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — whether THIS bundle advertised
+        // `ratchetV5` (read straight off it, same "only meaningful once the signature
+        // verifies" caveat as `advertisedSrtpDirKeyV1` above) plus the peer's sticky pin state,
+        // read fresh so a pin committed mid-session takes effect on the very next handshake.
+        let advertisedRatchetV5 = bundle.capabilities?.ratchetV5 ?? false
+        let ratchetV5CapablePinned = isPeerRatchetV5Pinned?(peerId) ?? false
         return HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: bundle.signerIdentityKey,
             signatureB64: bundle.signature,
@@ -4068,7 +4273,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             publishedKeySet: publishedSet.isEmpty ? nil : publishedSet,
             advertisedSrtpDirKeyV1: advertisedSrtpDirKeyV1,
             sigV2B64: bundle.sigV2,
-            transcriptV2: transcriptV2
+            transcriptV2: transcriptV2,
+            advertisedRatchetV5: advertisedRatchetV5,
+            ratchetV5CapablePinned: ratchetV5CapablePinned
         )
     }
 
@@ -4096,7 +4303,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         tofuPinKey: Data?,
         v4Capable: Bool,
         srtpDirKeyV1Capable: Bool = false,
-        setProven: Bool = false
+        setProven: Bool = false,
+        ratchetV5Capable: Bool = false
     ) {
         if let pinKey = tofuPinKey {
             // W-SASPIN — a set-proven rotation is the ONE case allowed to
@@ -4114,6 +4322,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         if srtpDirKeyV1Capable {
             setPeerSrtpDirKeyV1Pinned?(peerId)
+        }
+        if ratchetV5Capable {
+            setPeerRatchetV5Pinned?(peerId)
         }
     }
 

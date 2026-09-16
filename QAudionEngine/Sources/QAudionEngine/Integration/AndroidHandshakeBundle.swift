@@ -160,6 +160,19 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // behaviour, never authenticated.
         public let innerAudioAadV1: Bool?
 
+        // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) —
+        // capability bit for the future dual-channel (CHAT/CONTROL) ratchet split. PARSE-ONLY
+        // this step, same as Android/Desktop today: this build NEVER sets it (untouched by
+        // `selfCapabilities`), so the wire stays byte-identical. MUST still be decoded and bound
+        // into the signed v4 transcript (9th CAPS byte, `HandshakeTranscript.offerV4`/`acceptV4`)
+        // — a verifier reconstructs CAPS from the RECEIVED bundle, so dropping this field would
+        // make a future peer's byte=1 reconstruct as 0 here → v4 signature mismatch. OPTIONAL,
+        // appended LAST, same "omit when not advertising" convention as every capability above:
+        // absent/nil ⇒ 0, `JSONEncoder` omits a nil key. Mirrors Android
+        // `HandshakeBundleCodec.Capabilities.ratchetV5` (`@EncodeDefault(NEVER)`) / Desktop
+        // `AndroidCapabilities.ratchetV5`.
+        public let ratchetV5: Bool?
+
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
@@ -169,7 +182,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             srtpDirKeyV1: Bool? = nil,
             pskMixV1: Bool? = nil,
             hsTranscriptBindV1: Bool? = nil,
-            innerAudioAadV1: Bool? = nil
+            innerAudioAadV1: Bool? = nil,
+            ratchetV5: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -180,6 +194,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.pskMixV1 = pskMixV1
             self.hsTranscriptBindV1 = hsTranscriptBindV1
             self.innerAudioAadV1 = innerAudioAadV1
+            self.ratchetV5 = ratchetV5
         }
     }
 
@@ -269,6 +284,18 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // APPENDED LAST so existing peers' wire bytes are unchanged.
     public let sigV3: String?
 
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — v4
+    /// dual-signature rollout, mirroring `sigV3`'s own additive introduction. base64 (no-wrap,
+    /// padded) of the 64-byte Ed25519 detached signature over `HandshakeTranscript`'s NEW v4
+    /// transcript (`offerV4`/`acceptV4`), computed by the SAME signer ALONGSIDE (never instead
+    /// of) `signature`, `sigV2` and `sigV3`. `nil` on any build that hasn't shipped this fix and
+    /// on the unsigned path — verification prefers `sigV4` when present and falls back to
+    /// `sigV3`/v3 then `sigV2`/v2 then `signature`/v1 exactly as before this fix existed when
+    /// absent, so a peer that hasn't shipped it is never rejected. APPENDED LAST so existing
+    /// peers' wire bytes are unchanged. Mirrors Android `HandshakeBundleCodec.HandshakeBundle
+    /// .sigV4` / Desktop `AndroidOfferBundle.sigV4`/`AndroidAcceptBundle.sigV4`.
+    public let sigV4: String?
+
     /// CALL-3 — the call's own random 64-bit freshness nonce (raw 8 bytes,
     /// base64 no-wrap/padded), generated once at call start.
     ///
@@ -330,6 +357,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         signature: String? = nil,
         sigV2: String? = nil,
         sigV3: String? = nil,
+        sigV4: String? = nil,
         rekeyNonce: String? = nil,
         rekeyRound: Int? = nil,
         rekeyNextPeriodMs: Int? = nil
@@ -349,6 +377,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.signature = signature
         self.sigV2 = sigV2
         self.sigV3 = sigV3
+        self.sigV4 = sigV4
         self.rekeyNonce = rekeyNonce
         self.rekeyRound = rekeyRound
         self.rekeyNextPeriodMs = rekeyNextPeriodMs

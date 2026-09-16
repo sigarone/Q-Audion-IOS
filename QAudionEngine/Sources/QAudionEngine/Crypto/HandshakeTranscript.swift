@@ -72,6 +72,21 @@ public enum HandshakeTranscript {
         return d
     }()
 
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — the v3
+    /// domain string with its trailing "v3" changed to "v4", SAME LENGTH (24 bytes —
+    /// self-verified below). Used ONLY by `offerV4`/`acceptV4` — NONE of `offer`/`accept` (v1)
+    /// NOR `offerV2`/`acceptV2` NOR `offerV3`/`acceptV3` are touched by this addition, exactly
+    /// mirroring how `domainV3` was introduced for CALL-3/CALL-4 above. v4 exists ONLY to bind
+    /// the new `ratchetV5` capability bit into the signed transcript (9th CAPS byte) so a relay
+    /// can no longer strip it without breaking the signature — see `offerV4`'s doc. Mirrors
+    /// Android `HandshakeTranscript.kt DOMAIN_V4` / Desktop `HandshakeTranscript.ts DOMAIN_V4`
+    /// byte-for-byte.
+    private static let domainV4: Data = {
+        let d = Data("qaudion-handshake-sig-v4".utf8)
+        precondition(d.count == domain.count, "domainV4 length \(d.count) != domain length \(domain.count)")
+        return d
+    }()
+
     // MARK: - Low-level encoders
 
     /// `LP(x) = u16_BE(len(x)) || x`. Absent field => `LP(empty) = 0x0000`.
@@ -578,6 +593,145 @@ public enum HandshakeTranscript {
         appendLP(&out, offerBinding)
         appendLP(&out, adv)
         out.append(rekeyNonce)  // CALL-3: 8 RAW bytes, NOT length-prefixed — see doc above
+        appendU32BE(&out, rekeyRound)
+        return out
+    }
+
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — v4 sibling
+    /// of `offerV3`. SAME shape as `offerV3` (`domainV4` instead of `domainV3`) PLUS a 9th
+    /// SIGNED CAPS byte (`ratchetV5`) appended after the existing 8 — everything else
+    /// (`rekeyNonce`/`rekeyRound` reused verbatim, no new freshness field needed) is identical.
+    /// `offer`/`offerV2`/`offerV3` above are NOT touched — a call site emits/verifies v1, v2, v3
+    /// AND v4 side by side (quadruple-signature rollout; v1/v2/v3 stay exactly what an
+    /// already-deployed peer verifies). Mirrors Android `HandshakeTranscript.kt offerV4` /
+    /// Desktop `HandshakeTranscript.ts buildOfferTranscriptV4` byte-for-byte.
+    ///
+    /// Returns `nil` only when `advEnc` does (a pathological `pskFingerprints.count > 255`).
+    public static func offerV4(
+        callId: String,
+        signerIdentityKey: Data,
+        epochId: Data,
+        pqcPublicKey: Data,
+        x25519PublicKey: Data,
+        strongBoxPublicKey: Data?,
+        dualCurvePublicKey: Data?,
+        ratchetV3: Bool,
+        sframeV1: Bool,
+        vkeyV1: Bool,
+        sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
+        pskMixV1: Bool,
+        hsTranscriptBindV1: Bool,
+        ratchetV5: Bool,
+        ratchetV: UInt8,
+        suiteId: UInt8,
+        pskFingerprints: [String]?,
+        pskRoles: [Int]?,
+        rekeyNonce: Data,
+        rekeyRound: UInt32
+    ) -> Data? {
+        guard let adv = advEnc(pskFingerprints, pskRoles) else { return nil }
+        precondition(rekeyNonce.count == 8, "rekeyNonce must be exactly 8 bytes, got \(rekeyNonce.count)")
+        var out = Data()
+        out.append(domainV4)
+        out.append(roleOffer)
+        appendLP(&out, Data(callId.utf8))
+        appendLP(&out, signerIdentityKey)
+        appendLP(&out, epochId)
+        appendLP(&out, pqcPublicKey)
+        appendLP(&out, x25519PublicKey)
+        appendLP(&out, strongBoxPublicKey)
+        appendLP(&out, dualCurvePublicKey)
+        out.append(capByte(ratchetV3))
+        out.append(capByte(sframeV1))
+        out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3))
+        out.append(capByte(ratchetV4))
+        out.append(capByte(srtpDirKeyV1))
+        out.append(capByte(pskMixV1))
+        out.append(capByte(hsTranscriptBindV1))
+        out.append(capByte(ratchetV5))  // Q-Audion Dual-Channel Ratchet v5: 9th CAPS byte, v4-only
+        out.append(ratchetV)
+        out.append(suiteId)
+        appendLP(&out, adv)
+        out.append(rekeyNonce)
+        appendU32BE(&out, rekeyRound)
+        return out
+    }
+
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — v4 sibling
+    /// of `acceptV3`. SAME shape as `acceptV3` (`domainV4`/the 9-byte CAPS instead of
+    /// `domainV3`/8-byte CAPS) — `LP(selectedPskFingerprint)`, `LP(offerBinding)`, the
+    /// responder's `LP(adv)`, and the trailing `rekeyNonce`/`rekeyRound` pair are all RETAINED
+    /// UNCHANGED, same layout/position as v3.
+    ///
+    /// SCOPE NOTE (mirrors Android `HandshakeSigner.signAccept`'s sigV4 kdoc / Desktop
+    /// `buildAcceptTranscriptV4`'s kdoc): unlike v1/v2/v3, the v4 ACCEPT transcript does NOT
+    /// bind a real OFFER-ACCEPT cross-check — callers always pass `offerBinding = Data()`
+    /// (empty). v4 exists ONLY to close MUST-FIX #1 (the `ratchetV5` capability bit must be
+    /// signature-covered and hard-abort on tamper); the separate OFFER-forgery-binding property
+    /// v3 additionally provides is out of that requirement's scope, and adding it would mean
+    /// threading a new offerBindingV4 argument through the call sites for a property this step
+    /// does not need. Both sides use the same empty constant, so signature verification is
+    /// unaffected — v4 simply doesn't do the extra binding check v3 does.
+    ///
+    /// `accept`/`acceptV2`/`acceptV3` above are NOT touched by this addition.
+    ///
+    /// Returns `nil` only when `advEnc` does.
+    public static func acceptV4(
+        callId: String,
+        signerIdentityKey: Data,
+        epochId: Data,
+        ctPqc: Data,
+        ctX25519: Data,
+        ctStrongBox: Data?,
+        ctDualCurve: Data?,
+        ratchetV3: Bool,
+        sframeV1: Bool,
+        vkeyV1: Bool,
+        sessionKdfV3: Bool,
+        ratchetV4: Bool,
+        srtpDirKeyV1: Bool,
+        pskMixV1: Bool,
+        hsTranscriptBindV1: Bool,
+        ratchetV5: Bool,
+        ratchetV: UInt8,
+        suiteId: UInt8,
+        selectedPskFingerprint: String?,
+        offerBinding: Data,
+        responderPskFingerprints: [String]?,
+        responderPskRoles: [Int]?,
+        rekeyNonce: Data,
+        rekeyRound: UInt32
+    ) -> Data? {
+        guard let adv = advEnc(responderPskFingerprints, responderPskRoles) else { return nil }
+        precondition(rekeyNonce.count == 8, "rekeyNonce must be exactly 8 bytes, got \(rekeyNonce.count)")
+        var out = Data()
+        out.append(domainV4)
+        out.append(roleAccept)
+        appendLP(&out, Data(callId.utf8))
+        appendLP(&out, signerIdentityKey)
+        appendLP(&out, epochId)
+        appendLP(&out, ctPqc)
+        appendLP(&out, ctX25519)
+        appendLP(&out, ctStrongBox)
+        appendLP(&out, ctDualCurve)
+        out.append(capByte(ratchetV3))
+        out.append(capByte(sframeV1))
+        out.append(capByte(vkeyV1))
+        out.append(capByte(sessionKdfV3))
+        out.append(capByte(ratchetV4))
+        out.append(capByte(srtpDirKeyV1))
+        out.append(capByte(pskMixV1))
+        out.append(capByte(hsTranscriptBindV1))
+        out.append(capByte(ratchetV5))
+        out.append(ratchetV)
+        out.append(suiteId)
+        appendLP(&out, Data((selectedPskFingerprint ?? "").utf8))
+        appendLP(&out, offerBinding)
+        appendLP(&out, adv)
+        out.append(rekeyNonce)
         appendU32BE(&out, rekeyRound)
         return out
     }

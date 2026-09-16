@@ -58,7 +58,12 @@ public enum HandshakeSigningPolicy {
         /// `srtpDirKeyV1Capable` true when the verified bundle advertised the
         /// directional-SRTP-key capability (TURN_SPOOF/SRTP downgrade fix —
         /// TOFU-pin so a later unauthenticated bundle can't silently strip it).
-        case authenticated(tofuPinKey: Data?, v4Capable: Bool, srtpDirKeyV1Capable: Bool)
+        /// `ratchetV5Capable` true when the verified bundle advertised the Q-Audion
+        /// Dual-Channel Ratchet v5 capability (MUST-FIX #1, security review
+        /// 2026-09-16) — TOFU-pin so a later bundle can't silently claim
+        /// `ratchetV5=false` without being flagged (see `evaluate`'s sticky
+        /// downgrade check).
+        case authenticated(tofuPinKey: Data?, v4Capable: Bool, srtpDirKeyV1Capable: Bool, ratchetV5Capable: Bool)
         /// D11 trust-on-publish: the bundle key DIFFERS from the per-(peer,device)
         /// pin (or there is no pin yet for this device) but IS a member of the
         /// server-published per-device set, and its OWN signature verified under
@@ -66,12 +71,15 @@ public enum HandshakeSigningPolicy {
         /// re-pins `deviceKey` per-(peer,deviceId); NO banner. This is the iOS
         /// mirror of Desktop `new_device_pin`. NEVER blind-pins an observed key:
         /// `deviceKey` was proven ∈ the published set BEFORE this is returned.
-        case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool, srtpDirKeyV1Capable: Bool)
+        case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool, srtpDirKeyV1Capable: Bool, ratchetV5Capable: Bool)
         /// No signature, and policy does NOT require one — proceed but WARN
         /// (legacy peer migration path, §4). `reason` is the user-facing hint.
         case proceedUnsignedWarn(reason: String)
         /// Fatal-shaped verdict: `code` is one of the §4 codes (`sig_invalid`,
-        /// `identity_key_mismatch`, `sig_required_missing`, `sig_malformed`).
+        /// `identity_key_mismatch`, `sig_required_missing`, `sig_malformed`) or
+        /// the MUST-FIX #1 code `ratchet_v5_downgrade` (a previously
+        /// ratchetV5-capable-pinned peer's validly-signed bundle now claims
+        /// `ratchetV5=false`).
         ///
         /// W-NOBRICK (user directive): the call ACTUATOR
         /// (`QAudionCallIntegration`) NEVER hard-drops media on this verdict — an
@@ -133,7 +141,17 @@ public enum HandshakeSigningPolicy {
         publishedKeySet: Set<Data>? = nil,
         advertisedSrtpDirKeyV1: Bool = false,
         sigV2B64: String? = nil,
-        transcriptV2: Data? = nil
+        transcriptV2: Data? = nil,
+        /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — whether
+        /// THIS bundle advertised the `ratchetV5` capability, read straight off the SAME bundle
+        /// the signature covers (`bundle.capabilities?.ratchetV5`), regardless of which sigVN
+        /// tier ultimately verifies it. Drives the sticky downgrade check below.
+        advertisedRatchetV5: Bool = false,
+        /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — the STICKY per-peer pin: has a
+        /// SIGNED bundle from this peer EVER advertised `ratchetV5`? Wired from a
+        /// UserDefaults-backed set in AppState, mirroring `advertisedV4`'s own
+        /// `isPeerV4Pinned` wiring. NEVER cleared once set.
+        ratchetV5CapablePinned: Bool = false
     ) -> Verdict {
 
         // W-TRANSCRIPTV2 dual-signature verify-both/prefer-v2 (multi-PSK-mixing
@@ -244,6 +262,21 @@ public enum HandshakeSigningPolicy {
             return .abort(code: "sig_invalid")
         }
 
+        // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — the STICKY half of the
+        // anti-downgrade invariant (the signed-transcript binding in `offerV4`/`acceptV4` is the
+        // OTHER half): a peer that has ever proven ratchetV5-capable and NOW presents a
+        // validly-signed bundle (any tier above — this runs regardless of which sigVN actually
+        // verified) honestly claiming `ratchetV5=false` is flagged as anomalous rather than
+        // silently accepted as a normal fallback. Checked BEFORE the success verdicts below so
+        // this reflects the peer's PRIOR state, not the one this bundle is about to set.
+        // W-NOBRICK: the caller's existing `.abort` handling already warns + proceeds + holds
+        // media pending SAS reverification for every abort code (the same path
+        // `identity_key_mismatch`/`sig_invalid` already use) — no new consumer wiring needed.
+        // Mirrors Android `HandshakeSigner.verifyBundle` / Desktop `decideSignatureVerdict`.
+        if !advertisedRatchetV5 && ratchetV5CapablePinned {
+            return .abort(code: "ratchet_v5_downgrade")
+        }
+
         if matchesTrusted {
             // W-SASPIN — first verified contact pins the key the signature was
             // verified under (bundle key on genuine TOFU, server-published key
@@ -251,7 +284,8 @@ public enum HandshakeSigningPolicy {
             return .authenticated(
                 tofuPinKey: pinnedKey == nil ? trustedKey : nil,
                 v4Capable: advertisedV4,
-                srtpDirKeyV1Capable: advertisedSrtpDirKeyV1
+                srtpDirKeyV1Capable: advertisedSrtpDirKeyV1,
+                ratchetV5Capable: advertisedRatchetV5
             )
         }
         // Not matching the trusted key but ∈ published set and self-signature
@@ -259,7 +293,8 @@ public enum HandshakeSigningPolicy {
         return .authenticatedRepinFromPublished(
             deviceKey: bundleKey,
             v4Capable: advertisedV4,
-            srtpDirKeyV1Capable: advertisedSrtpDirKeyV1
+            srtpDirKeyV1Capable: advertisedSrtpDirKeyV1,
+            ratchetV5Capable: advertisedRatchetV5
         )
     }
 

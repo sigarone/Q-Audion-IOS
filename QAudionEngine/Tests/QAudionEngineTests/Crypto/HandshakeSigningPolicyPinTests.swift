@@ -37,7 +37,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
         )
         XCTAssertEqual(
             verdict,
-            .authenticated(tofuPinKey: pubRaw, v4Capable: false, srtpDirKeyV1Capable: false),
+            .authenticated(tofuPinKey: pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false),
             "a verified handshake with the server-published key as anchor must hand the key back to be pinned"
         )
     }
@@ -57,7 +57,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
         )
         XCTAssertEqual(
             verdict,
-            .authenticated(tofuPinKey: pubRaw, v4Capable: true, srtpDirKeyV1Capable: false)
+            .authenticated(tofuPinKey: pubRaw, v4Capable: true, srtpDirKeyV1Capable: false, ratchetV5Capable: false)
         )
     }
 
@@ -77,7 +77,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
         )
         XCTAssertEqual(
             verdict,
-            .authenticated(tofuPinKey: nil, v4Capable: false, srtpDirKeyV1Capable: false)
+            .authenticated(tofuPinKey: nil, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false)
         )
     }
 

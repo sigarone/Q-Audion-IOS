@@ -373,6 +373,12 @@ final class AppState: ObservableObject {
     /// `wireHandshakeSigning`'s closures).
     private static let peerSrtpDirKeyV1PinnedDefaultsKey = "qaudion.hs.srtpdirkeyv1pinned.peers"
 
+    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — TOFU-pin
+    /// analogue of `peerV4PinnedDefaultsKey` for the `ratchetV5` capability — the set of peer
+    /// contactIds for which a SIGNED bundle has ever advertised it. Same persistence shape
+    /// (never cleared, read/written off-main inside `wireHandshakeSigning`'s closures).
+    private static let peerRatchetV5PinnedDefaultsKey = "qaudion.hs.ratchetv5pinned.peers"
+
     /// W75: cached PushKit VoIP token. PushKit emits this on first
     /// launch BEFORE the user is authenticated — we stash it here and
     /// retry the server POST after every auth-success transition. Once
@@ -13525,6 +13531,7 @@ final class AppState: ObservableObject {
         let pinStore = peerPinStore                       // PeerIdentityPinStore
         let v4Key = Self.peerV4PinnedDefaultsKey
         let srtpDirKeyV1Key = Self.peerSrtpDirKeyV1PinnedDefaultsKey
+        let ratchetV5Key = Self.peerRatchetV5PinnedDefaultsKey
 
         // Local signer: sign a raw transcript with the long-term Ed25519 seed.
         // Returns nil (→ unsigned) when no identity is loaded or the sign throws.
@@ -13723,6 +13730,25 @@ final class AppState: ObservableObject {
             if !set.contains(peerId) {
                 set.append(peerId)
                 UserDefaults.standard.set(set, forKey: srtpDirKeyV1Key)
+            }
+        }
+        // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) —
+        // TOFU-pin the `ratchetV5` capability the same additive-only way v4/srtpDirKeyV1 are
+        // pinned above — once a SIGNED bundle from this peer has advertised it, a later
+        // validly-signed bundle that honestly claims `ratchetV5=false` is flagged as a possible
+        // downgrade rather than silently accepted (see `HandshakeSigningPolicy.evaluate`'s
+        // sticky downgrade check).
+        integration.isPeerRatchetV5Pinned = { peerId in
+            guard !peerId.isEmpty else { return false }
+            let set = UserDefaults.standard.stringArray(forKey: ratchetV5Key) ?? []
+            return set.contains(peerId)
+        }
+        integration.setPeerRatchetV5Pinned = { peerId in
+            guard !peerId.isEmpty else { return }
+            var set = UserDefaults.standard.stringArray(forKey: ratchetV5Key) ?? []
+            if !set.contains(peerId) {
+                set.append(peerId)
+                UserDefaults.standard.set(set, forKey: ratchetV5Key)
             }
         }
         // Verified-channel = the user has confirmed the SAS for this peer AND that
