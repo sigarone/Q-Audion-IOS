@@ -276,11 +276,14 @@ let package = Package(
         // ─────────────────────────────────────────────────────────────────────────────────────
         .binaryTarget(
             name: "CQaudionCryptoCore",
-            // v0.1.4 — core @ b868067 (same core as the live Android .so / Desktop .node):
-            // adds the empty-plaintext v4-decrypt fix + C-ABI catch_unwind hardening; v4 wire/
-            // derivation byte-identical to v0.1.3 (WIRE-FORMAT §4 + Model A) so iOS v4 interops.
-            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.4/QaudionCryptoCore.xcframework.zip",
-            checksum: "892c956caacd5dd911a617136f9f60de3340d9552d940ba87fa892d6877efc05"
+            // v0.1.5 — core @ 79822fe (2026-09-16): adds the v5 dual-channel ratchet C ABI
+            // (qa_dual_root_0/qa_session_init_channel/qa_ratchet_encrypt_v5/qa_ratchet_decrypt_v5)
+            // that this repo's RatchetNative.swift/MessageRatchet.swift CONTROL-channel wiring
+            // calls — purely additive, v4 wire/derivation byte-identical to v0.1.4 (unaffected).
+            // Bumped specifically to unblock that wiring, which would not otherwise LINK against
+            // the older pin (those 4 symbols didn't exist in v0.1.4's header/binary).
+            url: "https://github.com/sigarone/qaudion-crypto-core-spm/releases/download/v0.1.5/QaudionCryptoCore.xcframework.zip",
+            checksum: "d6166f677f4dd2af98d1a4c629a5e0ecd24e450e1fbbb981e6305f02958248db"
         ),
         .target(
             name: "CLiboqs",
