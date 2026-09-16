@@ -57,11 +57,19 @@ final class ChatMessageSendService {
     /// - Parameter forceStatelessFormat: see `encryptForWire`'s doc — pass
     ///   `true` for a protocol/control envelope (sender_key_init/rotate,
     ///   avatar_announce), never for real user text.
+    /// - Parameter useControlChannel: Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — `true` for a
+    ///   control/service envelope that should route onto the CONTROL channel (independent from the
+    ///   CHAT session real user text uses) instead of the normal v4/v3/v2 ladder — e.g. the
+    ///   attachment-announce marker sent after a TUS-resume completes (`ChatContainer.
+    ///   completeResumeAttachmentSend`). Mutually exclusive in practice with
+    ///   `forceStatelessFormat` (that flag is for the ALREADY-migrated qa_ctl/qa_grp family, which
+    ///   bypasses BOTH ratchets entirely — see `encryptForWire`'s kdoc); never pass both `true`.
     func sendEncrypted(
         messageId: UUID,
         peerUserId: String,
         plaintext: String,
-        forceStatelessFormat: Bool = false
+        forceStatelessFormat: Bool = false,
+        useControlChannel: Bool = false
     ) async -> Outcome {
         // Authentication gate — without a token we can't talk to the
         // server. The container will surface `.notAuthenticated`.
@@ -71,7 +79,7 @@ final class ChatMessageSendService {
         let wireBlob: Data
         switch await encryptForWire(
             messageId: messageId, peerUserId: peerUserId, plaintext: plaintext,
-            forceStatelessFormat: forceStatelessFormat
+            forceStatelessFormat: forceStatelessFormat, useControlChannel: useControlChannel
         ) {
         case .success(let blob):
             wireBlob = blob
@@ -246,12 +254,30 @@ final class ChatMessageSendService {
         peerUserId: String,
         plaintext: String,
         aadOverride: Data? = nil,
-        forceStatelessFormat: Bool = false
+        forceStatelessFormat: Bool = false,
+        useControlChannel: Bool = false
     ) async -> Result<Data, ChatContainer.SendFailureReason> {
         guard let senderId = appState.currentUserId else {
             return .failure(.notAuthenticated)
         }
         let plaintextData = Data(plaintext.utf8)
+
+        // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — CONTROL-first, checked BEFORE the v4
+        // gate below, same graceful-fallback discipline every new encrypt path this redesign added
+        // uses: falls through to the unchanged v4/v3/v2 ladder when no CONTROL session exists yet
+        // for this peer. Mirrors the group-call send ladder's CONTROL branch in `AppState.swift`'s
+        // `onSendControlEnvelope`. `forceStatelessFormat` callers never set `useControlChannel`
+        // (see this method's own `useControlChannel` doc) so the two branches never race.
+        if useControlChannel, !forceStatelessFormat,
+           AppState.sharedV4Ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerUserId) {
+            guard let frame = AppState.sharedV4Ratchet.encryptV5Routed(
+                epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerUserId, plaintext: plaintextData
+            ), let first = frame.first, first == MessageRatchet.magicV5 else {
+                print("[ChatSend] CONTROL selected but v5 encrypt failed/unroutable — failing closed (no downgrade)")
+                return .failure(.cryptoFailure)
+            }
+            return .success(frame)
+        }
 
         // ── Phase 18 — v4 native PQ ratchet gate (checked BEFORE the PSK) ──
         // SYNCHRONOUS, fail-closed: route v4 ONLY when a persisted v4 session

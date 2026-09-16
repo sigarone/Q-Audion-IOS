@@ -141,6 +141,11 @@ public extension PeerCapabilityRegistry {
             observedV3(from: peerId)
         case .v1, .v2:
             observedV1(from: peerId)
+        case .v5:
+            // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — a v5 (0xE6) inbound is a
+            // CONTROL-channel signal, not a CHAT wire-format one; this registry tracks CHAT
+            // capability only (it drives `shouldUseV3Outbound`), so intentionally a no-op here.
+            break
         }
     }
 }

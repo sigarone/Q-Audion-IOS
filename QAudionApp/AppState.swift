@@ -5197,7 +5197,21 @@ final class AppState: ObservableObject {
                 let plaintext = Data(envelopeJson.utf8)
 
                 let outcome: FastPathOutcome = await MainActor.run {
-                    if AppState.sharedV4Ratchet.hasV4Session(peer) {
+                    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — try CONTROL first, same
+                    // graceful-fallback discipline as every other new encrypt path this redesign
+                    // added: falls through to the unchanged v4/v2/KMS-prebootstrap ladder below
+                    // when no CONTROL session exists yet for this peer. Mirrors Android
+                    // `GroupCallController.sealControlEnvelopeForBroadcast` / Desktop
+                    // `Application.ts`'s `gc.onSendControlEnvelope` 3-way branch.
+                    if AppState.sharedV4Ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
+                        guard let frame = AppState.sharedV4Ratchet.encryptV5Routed(
+                            epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer, plaintext: plaintext),
+                              let first = frame.first, first == MessageRatchet.magicV5 else {
+                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v5ctrl_encrypt_failed (hasChannelSession=true)")
+                            return .failed
+                        }
+                        return .sealed(wire: frame, transport: "v5ctrl")
+                    } else if AppState.sharedV4Ratchet.hasV4Session(peer) {
                         guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
                               let first = frame.first, first == MessageRatchet.magicV4 else {
                             print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v4_encrypt_failed (hasV4Session=true)")
@@ -9729,6 +9743,23 @@ final class AppState: ObservableObject {
             // both engines reject the other's format up front.
             let pt: Data
             switch MessageWireFormat.detect(cipher) {
+            case .v5:
+                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — real target on THIS channel
+                // (msg_send): the attachment-announce marker `ChatContainer
+                // .completeResumeAttachmentSend` ships after a TUS resume completes
+                // (`sendEncrypted(..., useControlChannel: true)`) rides here as a normal inbound
+                // message. The rest of the qa_ctl/qa_grp family already bypasses both ratchets
+                // entirely via `forceStatelessFormat` (W-CTLNORATCHET) and never reaches this case;
+                // `qa_grpcall_ctrl` ships via opaque_message (see the group-call receive path in
+                // `dispatchInboundOpaque`), not here. Fail-closed on any decrypt failure — never a
+                // silent fall-through into the v1 fallback below.
+                let v5Plain = AppState.sharedV4Ratchet.decryptV5Routed(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: cipher)
+                print("[PQC_DIAG_V5CTRL] decryptV5 sender=\(senderId.prefix(8)) result=\(v5Plain != nil ? "ok" : "nil")")
+                guard let plain = v5Plain else {
+                    throw RatchetV4DispatchError.unroutableOrFailedClosed
+                }
+                pt = plain
             case .v4:
                 // ── Phase 18 — v4 native PQ ratchet (opaque 0xE5 frame) ──
                 // The frame is OPAQUE (owned by the Rust core); we route by PEER
@@ -10607,6 +10638,12 @@ final class AppState: ObservableObject {
 
         func attempt(withPsk psk: Data) -> Data? {
             switch MessageWireFormat.detect(cipher) {
+            case .v5:
+                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — see the WS dispatcher's
+                // `attemptDecrypt` `.v5` case above for the full rationale (near-duplicate,
+                // by design, of that switch — see this function's own kdoc).
+                return AppState.sharedV4Ratchet.decryptV5Routed(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: cipher)
             case .v4:
                 return ratchetDecryptV4(wire: cipher, senderId: senderId)
             case .v3:
@@ -11922,6 +11959,17 @@ final class AppState: ObservableObject {
             // this exact iPhone in call FB75E465) failed in silence
             // (epochMismatch / wrong AAD, logged only as v1_decrypt_failed).
             switch MessageWireFormat.detect(wire) {
+            case .v5:
+                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — CONTROL-first, tried before v4,
+                // mirroring the send-side ladder in `onSendControlEnvelope` above. Routes by PEER
+                // id against the one wired epoch (``MessageRatchet/v5ControlRoutingEpoch``) — the
+                // opaque frame carries no epoch hint, same constraint v4 already has.
+                json = Self.sharedV4Ratchet.decryptV5Routed(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: wire)
+                    .flatMap { String(data: $0, encoding: .utf8) }
+                if json == nil {
+                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v5ctrl_decrypt_failed")
+                }
             case .v4:
                 json = Self.sharedV4Ratchet.decryptV4Routed(peerId: senderId, frame: wire)
                     .flatMap { String(data: $0, encoding: .utf8) }
@@ -13436,6 +13484,29 @@ final class AppState: ObservableObject {
                     )
                 }
                 print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
+
+                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — ADDITIVE CONTROL bootstrap
+                // alongside the CHAT one above, from the SAME handshake secret. Never replaces the
+                // CHAT bootstrap (Model A still needs it to establish chat capability); only
+                // control-envelope traffic types move onto this session. `ensureBootstrapped` is
+                // itself the atomic create-if-absent primitive (same as the CHAT call above), so no
+                // separate try/catch is needed here for the TOCTOU class W-ATOMICBOOTSTRAP closed —
+                // mirrors Android `PqcHandshake.kt` / Desktop `Application.ts`'s identical addition.
+                let controlOk = AppState.sharedV4Ratchet.ensureBootstrapped(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch,
+                    peerId: peerId
+                ) {
+                    AppState.sharedV4Ratchet.bootstrapV5Control(
+                        peerId: peerId,
+                        effectiveSecret: effectiveSecret,
+                        selfEpochId: Data(count: 16),
+                        peerEpochId: Data(count: 16),
+                        selfIdentityPub: selfIdentityPub,
+                        peerIdentityPub: peerIdentityPub,
+                        transcriptHash: transcriptHash
+                    )
+                }
+                print("[PQC_DIAG_V5CTRL] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(controlOk)")
             }
             // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
             // so resolve the active call's id to key the same gate. Safe: this
@@ -15604,6 +15675,24 @@ final class AppState: ObservableObject {
                             )
                         }
                         print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
+
+                        // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — see the responder leg's
+                        // identical CONTROL bootstrap above (same rationale, both directions).
+                        let controlOk = AppState.sharedV4Ratchet.ensureBootstrapped(
+                            epochId: MessageRatchet.v5ControlRoutingEpoch,
+                            peerId: peerId
+                        ) {
+                            AppState.sharedV4Ratchet.bootstrapV5Control(
+                                peerId: peerId,
+                                effectiveSecret: effectiveSecret,
+                                selfEpochId: Data(count: 16),
+                                peerEpochId: Data(count: 16),
+                                selfIdentityPub: selfIdentityPub,
+                                peerIdentityPub: peerIdentityPub,
+                                transcriptHash: transcriptHash
+                            )
+                        }
+                        print("[PQC_DIAG_V5CTRL] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(controlOk)")
                     }
                     // P0-3 — same active-callId resolution as the responder leg
                     // above (this closure carries no callId parameter either).
@@ -22777,6 +22866,24 @@ extension AppState {
         }
         RTLog.info("crypto", "v4 prebootstrap ensureBootstrapped ok=\(ok ? 1 : 0)")
         print("[AppState] KmsPreBootstrap: v4 session bootstrapped=\(ok) peer=\(peer.prefix(8))…")
+
+        // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — ADDITIVE CONTROL bootstrap from the SAME
+        // rk0, alongside (never instead of) the CHAT bootstrap above. Mirrors Android
+        // `KmsPreBootstrapSender/Receiver.kt`'s identical addition: the CHAT `ensureBootstrapped`
+        // result above is unaffected by this — it already ran and its value is not reused here.
+        let controlOk = ratchet.ensureBootstrapped(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
+            ratchet.bootstrapV5Control(
+                peerId: peer,
+                effectiveSecret: rk0,
+                selfEpochId: zeroEpoch,
+                peerEpochId: zeroEpoch,
+                selfIdentityPub: selfPub,
+                peerIdentityPub: peerIdentityEdPub,
+                transcriptHash: transcriptHash
+            )
+        }
+        RTLog.info("crypto", "v5 control prebootstrap ensureBootstrapped ok=\(controlOk ? 1 : 0)")
+        print("[AppState] KmsPreBootstrap: v5 control session bootstrapped=\(controlOk) peer=\(peer.prefix(8))…")
     }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call

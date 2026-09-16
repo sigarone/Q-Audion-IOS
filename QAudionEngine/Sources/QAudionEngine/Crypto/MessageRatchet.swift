@@ -97,6 +97,27 @@ public final class MessageRatchet {
     /// vault under the same routing tag.
     public static let v4RoutingEpoch = "v4"
 
+    /// Q-Audion Dual-Channel Ratchet v5 (2026-09-16 security review) — v5 wire magic byte,
+    /// distinct from v4 (0xE5)/v3 (0xE3)/v2 (0xE2)/v1. Matches the Rust core's frame magic
+    /// (`MAGIC_V5`, `src/wire.rs`). A `MAGIC_V5` frame carries a `CHANNEL_TAG` (CHAT/CONTROL) bound
+    /// into the AEAD AAD — see ``RatchetNative/channelTagChat``/``RatchetNative/channelTagControl``.
+    public static let magicV5: UInt8 = 0xE6
+
+    /// Vault routing-epoch tag for the v5 CHAT-channel session. Like ``v4RoutingEpoch``, exactly ONE
+    /// active session per peer per tag; MUST equal Android/Desktop `V5_CHAT_ROUTING_EPOCH`
+    /// byte-for-byte ("v5-chat"). Not currently bootstrapped anywhere (existing CHAT traffic stays
+    /// on v4 — see ``RatchetNative/bootstrapV5Control(peerId:effectiveSecret:selfEpochId:peerEpochId:selfIdentityPub:peerIdentityPub:transcriptHash:)``'s
+    /// kdoc); reserved so the CHAT half of `dualRoot0` has a defined home if it's ever wired.
+    public static let v5ChatRoutingEpoch = "v5-chat"
+
+    /// Vault routing-epoch tag for the v5 CONTROL-channel session — the real target of the
+    /// Dual-Channel Ratchet v5 redesign. MUST equal Android/Desktop `V5_CONTROL_ROUTING_EPOCH`
+    /// byte-for-byte ("v5-ctrl"). Control/service traffic (call-handshake bootstrap, KMS
+    /// pre-bootstrap, group-call sender-key) routes here, independent of the CHAT session
+    /// (``v4RoutingEpoch``) real 1:1 text uses — closing the class of bug where a control-envelope
+    /// decrypt failure corrupts/desyncs chat decryption.
+    public static let v5ControlRoutingEpoch = "v5-ctrl"
+
     /// MSG-4 (2026-09-02 protocol audit, backlog item 5C) go-live gate for
     /// widening the v3.1 nonce derivation's chain-index input from its LOW
     /// BYTE (`chainIdx & 0xFF`) to the FULL 64-bit big-endian chain index —
@@ -201,6 +222,14 @@ public final class MessageRatchet {
     public static func isV4Wire(_ wire: Data) -> Bool {
         guard !wire.isEmpty else { return false }
         return wire[wire.startIndex] == magicV4
+    }
+
+    /// True iff `wire[0] == 0xE6` (a v5 dual-channel frame — CHAT or CONTROL, undistinguishable
+    /// without opening it). Cheap probe for the message dispatcher; the frame body (including which
+    /// channel it belongs to) is parsed only by the native core (``RatchetNative``). ADDITIVE.
+    public static func isV5Wire(_ wire: Data) -> Bool {
+        guard !wire.isEmpty else { return false }
+        return wire[wire.startIndex] == magicV5
     }
 
     /// Build the v3.1 AAD: canonical CBOR
@@ -1057,6 +1086,88 @@ public final class MessageRatchet {
         // the last durable state. Best-effort, matching Android's `?.let { save }`.
         if let advanced = RatchetNative.serialize(handle) {
             try? vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: advanced)
+        }
+        return pt
+    }
+
+    // ─── v5 dual-channel (CHAT/CONTROL) vault-routed dispatch ────────────────────
+    //
+    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16 security review) — mirrors Android
+    // `MessageRatchet.bootstrapV5Control / encryptControl / decrypt`'s v5 branch and Desktop
+    // `MessageRatchet.bootstrapV5Control / encryptV5Routed / decryptV5Routed` 1:1. Unlike the single
+    // `v4RoutingEpoch` above, these are EPOCH-PARAMETERIZED — the caller passes ``v5ControlRoutingEpoch``
+    // (the only wired epoch today; ``v5ChatRoutingEpoch`` reserved) so one set of methods serves any
+    // future additional v5 channel without duplicating this block. Same ``v4RoutingLock``-serialized
+    // load→native-op→save triple, same write-ahead persist-before-transmit contract, same
+    // ``ensureBootstrapped(epochId:peerId:bootstrap:)`` atomic-create primitive above (already
+    // epoch-parameterized — no change needed there for v5).
+
+    /// Bootstrap a v5 CONTROL-channel session from the handshake outputs. Thin wrapper around
+    /// ``RatchetNative/bootstrapV5Control(peerId:effectiveSecret:selfEpochId:peerEpochId:selfIdentityPub:peerIdentityPub:transcriptHash:)``,
+    /// gated the same way ``bootstrapV4(effectiveSecret:selfEpochId:peerEpochId:selfIdentityPub:peerIdentityPub:transcriptHash:)``
+    /// is. Returns the opaque handle, or `0` when the native path is disabled/unavailable or the
+    /// inputs are invalid. Callers reach this through ``ensureBootstrapped(epochId:peerId:bootstrap:)``
+    /// (passing ``v5ControlRoutingEpoch``), never directly — mirrors every other bootstrap call site
+    /// in this file.
+    public func bootstrapV5Control(
+        peerId: String, effectiveSecret: Data, selfEpochId: Data, peerEpochId: Data,
+        selfIdentityPub: Data, peerIdentityPub: Data, transcriptHash: Data
+    ) -> UInt {
+        guard isV4Enabled() else { return 0 }
+        return RatchetNative.bootstrapV5Control(
+            peerId: peerId, effectiveSecret: effectiveSecret, selfEpochId: selfEpochId,
+            peerEpochId: peerEpochId, selfIdentityPub: selfIdentityPub,
+            peerIdentityPub: peerIdentityPub, transcriptHash: transcriptHash)
+    }
+
+    /// True iff a persisted v5 session exists for `(epochId, peerId)` (and the native path is
+    /// enabled). Mirrors ``hasV4Session(_:)``, epoch-parameterized. A send call site uses this to
+    /// decide whether to try CONTROL first (``encryptV5Routed(epochId:peerId:plaintext:)``) before
+    /// falling back to the unchanged v4/v3/v2 ladder — same fallback discipline as the rest of this
+    /// file's version negotiation.
+    public func hasChannelSession(epochId: String, peerId: String) -> Bool {
+        guard isV4Enabled() else { return false }
+        return vault.loadV4(epochId: epochId, peerId: peerId) != nil
+    }
+
+    /// Resume the persisted v5 session for `(epochId, peerId)`, encrypt `plaintext`, persist the
+    /// advanced send chain BEFORE returning (write-ahead), and return the opaque `MAGIC_V5` frame.
+    /// Returns `nil` when disabled / no stored session / any error — in which case NOTHING was
+    /// transmitted and NO state was advanced on disk, so the caller may fall back to the v4/v3/v2
+    /// ladder without risking nonce reuse. Mirrors ``encryptV4Routed(peerId:plaintext:)``.
+    public func encryptV5Routed(epochId: String, peerId: String, plaintext: Data) -> Data? {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        guard isV4Enabled() else { return nil }
+        guard let blob = vault.loadV4(epochId: epochId, peerId: peerId) else { return nil }
+        let handle = RatchetNative.deserialize(blob)
+        guard handle != 0 else { return nil }
+        defer { RatchetNative.free(handle) }
+        guard let frame = RatchetNative.encryptV5(handle, plaintext: plaintext) else { return nil }
+        guard let advanced = RatchetNative.serialize(handle) else { return nil }
+        do {
+            try vault.saveV4(epochId: epochId, peerId: peerId, blob: advanced)
+        } catch {
+            return nil
+        }
+        return frame
+    }
+
+    /// Resume the persisted v5 session for `(epochId, peerId)`, decrypt `frame`, persist the
+    /// advanced receive chain, and return the plaintext. Returns `nil` (fail-closed) on disabled
+    /// path / no stored session / channel-mismatch / auth-replay-parse failure; no state is
+    /// persisted on a decrypt failure. Mirrors ``decryptV4Routed(peerId:frame:)``. The dispatcher
+    /// calls this once per known v5 epoch (today just ``v5ControlRoutingEpoch``) when it sees a
+    /// `MAGIC_V5` frame — routing is by PEER id, so the wire itself carries no epoch hint.
+    public func decryptV5Routed(epochId: String, peerId: String, frame: Data) -> Data? {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        guard isV4Enabled() else { return nil }
+        guard let blob = vault.loadV4(epochId: epochId, peerId: peerId) else { return nil }
+        let handle = RatchetNative.deserialize(blob)
+        guard handle != 0 else { return nil }
+        defer { RatchetNative.free(handle) }
+        guard let pt = RatchetNative.decryptV5(handle, frame: frame) else { return nil }
+        if let advanced = RatchetNative.serialize(handle) {
+            try? vault.saveV4(epochId: epochId, peerId: peerId, blob: advanced)
         }
         return pt
     }

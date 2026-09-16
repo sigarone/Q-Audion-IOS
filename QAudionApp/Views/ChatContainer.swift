@@ -1548,10 +1548,19 @@ final class ChatContainer: ObservableObject {
 
         // Resume succeeded — ship using the EXISTING msgId, same
         // seal/announce + status-update tail as a fresh send.
+        //
+        // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — this marker is an attachment-announce
+        // control envelope (metadata about the uploaded file), not real user chat text, but unlike
+        // the qa_ctl/qa_grp family it was never covered by W-CTLNORATCHET's `forceStatelessFormat`
+        // (that fix's own kdoc lists avatar_announce/delete/edit/reaction/ephemeral_timer/
+        // screenshot_lock — attachment_announce is not among them). `useControlChannel: true` routes
+        // it onto CONTROL with the same graceful fallback every other migrated path gets, instead of
+        // consuming the CHAT ratchet's chain state like real text does.
         let outcome = await sendService.sendEncrypted(
             messageId: msgId,
             peerUserId: peerId,
-            plaintext: markerJson
+            plaintext: markerJson,
+            useControlChannel: true
         )
         await MainActor.run {
             guard let self = weakContainer.value else { return }

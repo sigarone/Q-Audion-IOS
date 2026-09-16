@@ -112,6 +112,127 @@ public enum RatchetNative {
         return a.count < b.count
     }
 
+    // MARK: - v5 dual-channel (CHAT/CONTROL) bootstrap
+    //
+    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16 security review) — control/service traffic
+    // (call-handshake bootstrap, KMS pre-bootstrap, group-call sender-key) moves onto its OWN
+    // ratchet session, independent from the CHAT session real 1:1 text uses, so control-envelope
+    // decrypt failures can no longer desync chat decryption. Mirrors Android
+    // `MessageRatchet.bootstrapV5Control` / Desktop `RatchetNative.bootstrapV5Control` 1:1 — see
+    // those files' kdoc for the full rationale. `dualRoot0` is ONE HKDF extract from the handshake
+    // secret with TWO domain-separated labeled expands (`crate::dual_root_0`); `initChannel` mirrors
+    // ``initSession(root:sessionEpochId:transcriptHash:isLexMin:)`` plus a channel tag bound into
+    // the session (and, on the wire, into the AEAD AAD) so a CONTROL frame can never be mistaken
+    // for — or decrypted against — the CHAT session, and vice versa.
+
+    /// CHAT channel tag (`Channel::Chat = 0x01` in the Rust core).
+    public static let channelTagChat: UInt8 = 0x01
+    /// CONTROL channel tag (`Channel::Control = 0x02` in the Rust core).
+    public static let channelTagControl: UInt8 = 0x02
+
+    /// Derive the v5 dual-channel roots (`crate::dual_root_0`) from a 32-byte handshake shared
+    /// secret and the peer's id. Returns `(chatRoot, controlRoot)`, each 32 bytes, or `nil` (wrong
+    /// length / unavailable / error). Purely additive: does not read or write anything
+    /// ``root0(ssHandshake:)`` (the single-channel v4 path) touches.
+    public static func dualRoot0(ssHandshake: Data, peerId: Data) -> (chat: Data, control: Data)? {
+        guard available, ssHandshake.count == 32 else { return nil }
+        var chatOut = [UInt8](repeating: 0, count: 32)
+        var controlOut = [UInt8](repeating: 0, count: 32)
+        let st = ssHandshake.withUnsafeBytesU8 { ssPtr in
+            peerId.withUnsafeBytesU8Len { pidPtr, pidLen in
+                qa_dual_root_0(ssPtr, pidPtr, pidLen, &chatOut, &controlOut)
+            }
+        }
+        guard qaStatusCode(st) == 0 else { return nil }
+        return (Data(chatOut), Data(controlOut))
+    }
+
+    /// v5 dual-channel bootstrap: identical to ``initSession(root:sessionEpochId:transcriptHash:isLexMin:)``
+    /// plus a `channelTag` (``channelTagChat``/``channelTagControl``) that binds the session to one
+    /// channel — a session created here always carries that channel, so `encryptV5`/`decryptV5`
+    /// enforce it on every frame. `root` for the desired channel MUST come from
+    /// ``dualRoot0(ssHandshake:peerId:)`` (NOT ``root0(ssHandshake:)``). Call this twice — once per
+    /// channel, each with that channel's own root — to get two independent session handles sharing
+    /// no field or lock. Returns the handle, or `0` on error. Free exactly once with ``free(_:)``.
+    public static func initChannel(
+        root: Data, sessionEpochId: Data, transcriptHash: Data, isLexMin: Bool, channelTag: UInt8
+    ) -> UInt {
+        guard available, root.count == 32, sessionEpochId.count == 16, transcriptHash.count == 32
+        else { return 0 }
+        var handle: OpaquePointer?
+        let st = root.withUnsafeBytesU8 { rPtr in
+            sessionEpochId.withUnsafeBytesU8 { sPtr in
+                transcriptHash.withUnsafeBytesU8 { tPtr in
+                    qa_session_init_channel(rPtr, sPtr, tPtr, isLexMin ? 1 : 0, channelTag, &handle)
+                }
+            }
+        }
+        guard qaStatusCode(st) == 0, let h = handle else { return 0 }
+        return UInt(bitPattern: Int(bitPattern: h))
+    }
+
+    /// Bootstrap a v5 CONTROL-channel session from the SAME handshake inputs that already
+    /// bootstrap the CHAT (v4) session — ``bootstrapV4(effectiveSecret:selfEpochId:peerEpochId:selfIdentityPub:peerIdentityPub:transcriptHash:)``
+    /// is called unchanged alongside this, never replaced by it. Derives BOTH dual-channel roots
+    /// via ``dualRoot0(ssHandshake:peerId:)`` and keeps only the CONTROL half — the CHAT half is
+    /// intentionally discarded here (migrating existing CHAT sessions onto v5 would need a full
+    /// re-key/protocol cutover, out of scope for this pass; only control-envelope traffic types
+    /// move onto CONTROL). Mirrors Android `MessageRatchet.bootstrapV5Control` / Desktop
+    /// `RatchetNative.bootstrapV5Control` 1:1. Returns the handle, or `0` (disabled / malformed input).
+    public static func bootstrapV5Control(
+        peerId: String, effectiveSecret: Data, selfEpochId: Data, peerEpochId: Data,
+        selfIdentityPub: Data, peerIdentityPub: Data, transcriptHash: Data
+    ) -> UInt {
+        guard available, selfEpochId.count == 16, peerEpochId.count == 16 else { return 0 }
+        // FIX (2026-09-16, adversarial-review workflow caught this before commit): dual_root_0's
+        // HKDF-Expand info includes its peer_id argument verbatim (qaudion-crypto-core/src/lib.rs).
+        // `peerId` (the string) is ASYMMETRIC — device A calls this with peerId=B's id, device B
+        // calls it with peerId=A's id — so passing it directly would make the two sides derive
+        // DIFFERENT roots from the identical `effectiveSecret`, silently breaking CONTROL-channel
+        // decryption on every pair (masked by the automatic fallback to v4/v3/v2 — nothing would
+        // crash, the whole redesign would just be inert). Fixed by feeding dual_root_0 a SYMMETRIC
+        // value instead: the sorted concatenation of both parties' 32-byte Ed25519 identity
+        // pubkeys, using the SAME isLexMin ordering computed below for session_epoch_id — both
+        // devices agree on isLexMin (a byte-compare of public keys), so both compute the identical
+        // 64-byte pairKey and therefore the identical control_root. Mirrors the identical fix in
+        // Android's `MessageRatchet.bootstrapV5Control` / Desktop's `RatchetNative
+        // .bootstrapV5Control`. dual_root_0's own signature/semantics are untouched — this is
+        // caller-side-only, no native rebuild needed.
+        let isLexMin = lexLessBytes([UInt8](selfIdentityPub), [UInt8](peerIdentityPub))
+        let pairKey = isLexMin ? selfIdentityPub + peerIdentityPub : peerIdentityPub + selfIdentityPub
+        guard let roots = dualRoot0(ssHandshake: effectiveSecret, peerId: pairKey) else { return 0 }
+        let sessionEpochId = isLexMin ? selfEpochId : peerEpochId
+        return initChannel(root: roots.control, sessionEpochId: sessionEpochId,
+                           transcriptHash: transcriptHash, isLexMin: isLexMin, channelTag: channelTagControl)
+    }
+
+    /// Encrypt on a v5 channel session's send chain; returns the opaque `MAGIC_V5` (`0xE6`) wire
+    /// frame tagged with the session's own channel, or `nil`. Advances the send chain on success —
+    /// same write-ahead contract as ``encrypt(_:plaintext:)``: the caller MUST ``serialize(_:)`` +
+    /// persist BEFORE transmitting the returned frame.
+    public static func encryptV5(_ handle: UInt, plaintext: Data) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return queryThenFill { out, outLen in
+            plaintext.withUnsafeBytesU8Len { ptPtr, ptLen in
+                qaStatusCode(qa_ratchet_encrypt_v5(p, ptPtr, ptLen, out, outLen))
+            }
+        }
+    }
+
+    /// Parse + decrypt a `MAGIC_V5` wire frame on a v5 channel session's receive chain. Fail-closed
+    /// (no state mutated) before any AEAD open on: a non-v5/malformed frame; a `handle` with no
+    /// channel (a legacy v4 handle from ``initSession(root:sessionEpochId:transcriptHash:isLexMin:)``);
+    /// or a frame whose wire channel tag does not match the session's own — a CONTROL frame can
+    /// never be opened against a CHAT session, and vice versa. Returns the plaintext, or `nil`.
+    public static func decryptV5(_ handle: UInt, frame: Data) -> Data? {
+        guard available, handle != 0, let p = Self.pointer(handle) else { return nil }
+        return queryThenFill { out, outLen in
+            frame.withUnsafeBytesU8Len { fPtr, fLen in
+                qaStatusCode(qa_ratchet_decrypt_v5(p, fPtr, fLen, out, outLen))
+            }
+        }
+    }
+
     /// Rebuild a session handle from a ``serialize(_:)`` buffer (app restart). Returns the new
     /// handle, or `0` (fail-closed) on a malformed/truncated buffer.
     public static func deserialize(_ data: Data) -> UInt {
