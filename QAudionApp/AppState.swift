@@ -9888,6 +9888,15 @@ final class AppState: ObservableObject {
                     break  // fall through to the ad-hoc conversation-level handler
                 case .delete, .edit, .reaction:
                     handleControlEnvelope(env, senderId: senderId)
+                    // W-PENDINGACKGAP (2026-09-17): every early-return branch here
+                    // used to skip the ack — harmless while the server deleted a
+                    // pending message on unconfirmed send, but W-PENDINGACKGAP
+                    // removed that, so an offline-queued control envelope replayed
+                    // via msg_pending_sync would sit in the pending queue forever
+                    // and re-apply on every reconnect (a reaction toggling back and
+                    // forth, a delete/edit reapplied). Ack once the effect is
+                    // applied, same rule as the real-message path below.
+                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
                     return
                 }
             }
@@ -9916,10 +9925,16 @@ final class AppState: ObservableObject {
             do {
                 if let avatarEnv = try AvatarAnnounceEnvelope.parse(decryptedRaw) {
                     handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
+                    // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
+                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
                     return
                 }
             } catch {
                 RTLog.error("avatar", "malformed avatar_announce from=\(senderId.prefix(8)): \(error)")
+                // W-PENDINGACKGAP: malformed on this device means malformed on
+                // every future redelivery too — a retry can never fix it, so ack
+                // now or it loops in the pending queue forever.
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
                 return
             }
             // W390: route `qa_grp:1` envelopes (sender_key_init,
@@ -9974,6 +9989,8 @@ final class AppState: ObservableObject {
                     retryBufferedGroupMessages()
                     retryBufferedGroupMetadata()
                 }
+                // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
                 return
             }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
@@ -10076,6 +10093,8 @@ final class AppState: ObservableObject {
                     NotificationCenter.default.post(name: AppState.screenshotRequestNotification,
                                                     object: nil,
                                                     userInfo: ["peerUserId": senderId])
+                    // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
+                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
                     return
                 }
                 if ctlType == "ss_resp" {
@@ -10103,6 +10122,8 @@ final class AppState: ObservableObject {
                 NotificationCenter.default.post(name: AppState.chatRefreshNotification,
                                                 object: nil,
                                                 userInfo: ["peerUserId": senderId])
+                // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
                 return
             }
         }
