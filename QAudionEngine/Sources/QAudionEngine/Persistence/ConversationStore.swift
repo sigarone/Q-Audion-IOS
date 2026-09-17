@@ -304,6 +304,22 @@ public final class ConversationStore {
         }
     }
 
+    /// W93: delete every Message row for this conversation while leaving
+    /// the Conversation row itself untouched, so the chat stays in the
+    /// list with an empty history rather than disappearing entirely
+    /// (`deleteConversation` is for that latter case). Deliberately no
+    /// attachment-blob cleanup here — same scope as the Android
+    /// equivalent, `ChatRepository.clearConversationMessages`.
+    public func deleteMessages(conversationId: UUID) {
+        do {
+            _ = try db.writer.write { db in
+                try Message.filter(Column("conversationId") == conversationId).deleteAll(db)
+            }
+        } catch {
+            print("[ConversationStore] deleteMessages failed: \(error)")
+        }
+    }
+
     /// `viaMesh: true` marks the row as having travelled over the BLE mesh
     /// rather than the public network. Only the mesh send path passes it; every
     /// other caller leaves it nil and the stored value is carried forward.

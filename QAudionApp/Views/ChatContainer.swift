@@ -706,13 +706,11 @@ final class ChatContainer: ObservableObject {
     /// Conversation row stays around (so the contact remains in the
     /// list with empty preview); only the messages bucket is wiped.
     func clearLocalHistory() {
-        // ConversationStore stores messages under
-        // `qaudion.conv.msgs.<conversationId>`. We can re-purpose the
-        // existing deleteConversation path partially: remove only the
-        // messages bucket without touching the convo list.
-        UserDefaults.standard.removeObject(
-            forKey: "qaudion.conv.msgs.\(conversationId.uuidString.lowercased())"
-        )
+        // Delete only this conversation's Message rows from the GRDB
+        // store (the UI's real source of truth) — keeps the Conversation
+        // row so the chat stays in the list. See `deleteConversation` for
+        // the full-conversation counterpart.
+        store.deleteMessages(conversationId: conversationId)
         // W137: hard-clear nukes the composer draft too — any unsent
         // text the user typed prior to wiping the chat is intentional
         // collateral; we don't want a stray draft surviving a "delete
