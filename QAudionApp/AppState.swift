@@ -9012,6 +9012,20 @@ final class AppState: ObservableObject {
         // Already on the main queue (caller dispatches the batch on .main).
         if (entry["msg_type"] as? String) == "opaque" {
             dispatchInboundOpaque(senderId: senderId, blobStr: cipherB64)
+            // W-OPAQUEACKGAP (2026-09-17, parity with Android's identical
+            // fix) — this branch used to return without ever reading
+            // "message_id", so nothing could ack an offline-queued
+            // KEY_EXCHANGE_OFFER/ACCEPT (or any other opaque call-control
+            // wire): it sat in the server's pending store until the TTL
+            // sweep even though dispatchInboundOpaque had already fully
+            // processed it above. A live opaque_message is never persisted
+            // server-side (fire-and-forget while both parties are
+            // connected) and needs no ack; this one arrived via
+            // msg_pending_sync specifically because the server DID persist
+            // it, so it does.
+            if let serverMsgId = entry["message_id"] as? String, !serverMsgId.isEmpty {
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            }
             return
         }
         // W-MISSEDEVT (2026-08-25) — durable missed-call replay. The server
