@@ -9,6 +9,13 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1163",
+              date: "2026-09-17",
+              title: "v1.0.1163",
+              bullets: [
+                "Ack opaque call-control wires replayed from the pending queue",
+                "ClearLocalHistory deletes real SQLite messages, not a dead UserDefaults key",
+              ]),
         .init(id: "v1.0.1162",
               date: "2026-09-17",
               title: "v1.0.1162",
@@ -133,12 +140,6 @@ extension ReleaseNote {
               bullets: [
                 "Drop the arbitrary capacity floor in NativeAudioPlayoutInjector",
                 "Mix legacy-relay fallback audio into native pipeline on RX, fix TX capture scale",
-              ]),
-        .init(id: "v1.0.1136",
-              date: "2026-09-10",
-              title: "v1.0.1136",
-              bullets: [
-                "Lock the last raw AVAudioSession call, drop the mix-audio option",
               ]),
     ]
 }
