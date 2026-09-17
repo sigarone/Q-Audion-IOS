@@ -450,6 +450,13 @@ public actor RealityManager {
     }
 
     public static let shared = RealityManager()
+
+    /// Mirrors the real actor's notification above — never posted here since
+    /// `start()` always throws, but the member must exist so call sites that
+    /// subscribe unconditionally (e.g. AppState.swift) compile under both
+    /// branches of this #if.
+    public static let tunnelRestartedNotification = Notification.Name("RealityManager.tunnelRestarted")
+
     private init() {}
 
     public func start(params: Params) async throws -> UInt16 {
