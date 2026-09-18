@@ -9967,6 +9967,25 @@ final class AppState: ObservableObject {
             // wait out. Buffer and wait for the CONTROL session instead.
             if wireClass != .v5 {
                 triggerKeyExchange(with: senderId, force: true)
+            } else if AppState.sharedV4Ratchet.hasChannelSession(
+                epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId
+            ) {
+                // W-CTRLDROPRECV (2026-09-19) — a PRESENT CONTROL session that
+                // still fails to decrypt is a diverged session, not a missing
+                // one: `ensureV4Session`'s send-time check below only re-sends
+                // a prebootstrap envelope when the session is ABSENT, so a
+                // present-but-broken one would sit unrepaired until the next
+                // call forever (the exact "converges only at next call" gap).
+                // Dropping it here makes it absent, so the next outgoing
+                // message to this peer (or this peer's own recovery) re-
+                // bootstraps a fresh one. Mirrors Android's identical drop in
+                // `ReceiveMessageUseCase.maybeRecoverControlChannel`.
+                AppState.sharedV4Ratchet.dropChannelSession(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId
+                )
+                if let selfId = self.currentUserId, !selfId.isEmpty {
+                    AppState.ensureV4Session(selfId: selfId, peerId: senderId, liveProvider: self.liveProvider)
+                }
             }
             // W-AVATARPOLLUTE — a FIRST failure buffers instead of showing
             // "[messaggio cifrato non leggibile]": most of these are an
@@ -9981,6 +10000,16 @@ final class AppState: ObservableObject {
                     senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
                     serverTs: serverTs)
                 return
+            }
+            // W-DECRYPTNACK (2026-09-19) — this is the "recovered channel,
+            // permanently lost frame" point: a retry only reaches here after
+            // the drop/ensure (v5) or PSK re-derive (legacy) above already
+            // ran once, so a reply to `senderId` over this now-repaired
+            // channel is deliverable. Best-effort, debounced — mirrors
+            // Android's identical hook in
+            // `ReceiveMessageUseCase.retryOneBufferedControlFailure`.
+            if let clientMsgId {
+                sendDecryptNackDebounced(to: senderId, targetClientMsgId: clientMsgId)
             }
             plaintext = "[messaggio cifrato non leggibile]"
         }
@@ -10024,6 +10053,20 @@ final class AppState: ObservableObject {
            let ctlType = json["t"] as? String {
             let isScreenshotCtl = ctlType == "ss_req" || ctlType == "ss_resp" || ctlType == "ss_lock"
             let isTimerCtl = ctlType == "ephemeral_timer"
+            // W-DECRYPTNACK (2026-09-19) — silent, conversation-independent
+            // control envelope: the peer is telling us one of OUR prior
+            // sends never decrypted on their end even after their session
+            // with us recovered (mirrors Android's identical addition; see
+            // that platform's ChatControlEnvelope.TYPE_DECRYPT_NACK kdoc for
+            // the full rationale). No chat bubble, ever.
+            let isDecryptNackCtl = ctlType == "decrypt_nack"
+            if isDecryptNackCtl {
+                if let target = json["target"] as? String, !target.isEmpty {
+                    resendAfterDecryptNack(peerUserId: senderId, targetClientMsgId: target)
+                }
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                return
+            }
             if isScreenshotCtl || isTimerCtl {
                 // Android parity fix (2026-08-13): ReceiveMessageUseCase.kt's
                 // ss_req/ss_resp/ss_lock branches never touch the message
@@ -14246,6 +14289,75 @@ final class AppState: ObservableObject {
     /// device's X25519 public key; the peer's response (ACCEPT) is
     /// handled automatically by `wireOpaqueMessageHandler`.
     /// Fire-and-forget — failure is logged, never surfaced to the UI.
+    /// W-DECRYPTNACK — per (senderId, clientMsgId) debounce, mirrors
+    /// Android's identical map in `ReceiveMessageUseCase`.
+    private static var decryptNackLastSentMs: [String: Int64] = [:]
+    private static let decryptNackDebounceMs: Int64 = 60_000
+
+    /// W-DECRYPTNACK (2026-09-19) — tell `peerId` that `targetClientMsgId`
+    /// (one of THEIR sends to us) never decrypted even after our
+    /// CONTROL/legacy session with them recovered. Fire-and-forget,
+    /// debounced. Only call site: the "recovered but still lost" branch in
+    /// `handleIncomingMessage`'s decrypt-failure catch.
+    private func sendDecryptNackDebounced(to peerId: String, targetClientMsgId: String) {
+        let key = "\(peerId):\(targetClientMsgId)"
+        let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        if let last = AppState.decryptNackLastSentMs[key], now - last < AppState.decryptNackDebounceMs {
+            return
+        }
+        AppState.decryptNackLastSentMs[key] = now
+        let payload = "{\"qa_ctl\":1,\"t\":\"decrypt_nack\",\"target\":\"\(targetClientMsgId)\",\"ts\":\(Int64(Date().timeIntervalSince1970))}"
+        let sendService = ChatMessageSendService(appState: self)
+        Task {
+            _ = await sendService.sendEncrypted(
+                messageId: UUID(), peerUserId: peerId, plaintext: payload, forceStatelessFormat: true
+            )
+            print("[AppState] W-DECRYPTNACK sent target=\(targetClientMsgId.prefix(8))… peer=\(peerId.prefix(8))…")
+        }
+    }
+
+    /// W-DECRYPTNACK — re-send a specific prior message after the recipient
+    /// reports it never decrypted on their end. Ships the SAME plaintext
+    /// under a FRESH message id and whatever session is current now — mirrors
+    /// Android's `SendMessageUseCase.resendAfterDecryptNack`. Refuses unless
+    /// `targetClientMsgId` resolves to a row THIS device genuinely sent TO
+    /// `peerUserId` (an attacker naming an arbitrary/inbound id must trigger
+    /// nothing), and text-only (an attachment's `plaintext` is its already-
+    /// consumed upload envelope, not real content to re-ship).
+    private func resendAfterDecryptNack(peerUserId: String, targetClientMsgId: String) {
+        let store = ConversationStore()
+        guard let (convId, original) = store.findByClientMsgId(targetClientMsgId) else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not found — ignoring")
+            return
+        }
+        guard original.direction == .outgoing, original.mediaLocalPath == nil else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not our own text send — ignoring")
+            return
+        }
+        let plaintext = original.plaintext
+        let sendService = ChatMessageSendService(appState: self)
+        let newId = UUID()
+        Task {
+            let outcome = await sendService.sendEncrypted(messageId: newId, peerUserId: peerUserId, plaintext: plaintext)
+            guard case .failed = outcome else {
+                let msg = Message(
+                    id: newId, conversationId: convId, direction: .outgoing,
+                    plaintext: plaintext, sentAt: Date(), deliveredAt: nil, readAt: nil,
+                    status: .sent, clientMsgId: newId.uuidString
+                )
+                store.appendMessage(msg)
+                store.recordNewMessage(conversationId: convId, lastMessagePreview: plaintext, lastActivity: Date(), incrementUnread: false)
+                NotificationCenter.default.post(
+                    name: AppState.chatRefreshNotification, object: nil,
+                    userInfo: ["peerUserId": peerUserId, "conversationId": convId]
+                )
+                print("[AppState] W-DECRYPTNACK resent target=\(targetClientMsgId.prefix(8))… as new=\(newId.uuidString.prefix(8))… peer=\(peerUserId.prefix(8))…")
+                return
+            }
+            print("[AppState] W-DECRYPTNACK resend FAILED target=\(targetClientMsgId.prefix(8))… peer=\(peerUserId.prefix(8))…")
+        }
+    }
+
     func triggerKeyExchange(with contactId: String, force: Bool = false) {
         guard let cke = contactKeyExchange else {
             print("[AppState] triggerKeyExchange called before WS up — pending")
@@ -22366,6 +22478,72 @@ extension AppState {
     /// vault as ``ratchet`` so v3.1 and v4 share the device trust boundary.
     static let sharedV4Ratchet: MessageRatchet = MessageRatchet(vault: KeychainRatchetVault())
 
+    /// W-CTRLENSURESEND (2026-09-19) — per-peer state for `ensureV4Session`,
+    /// mirroring Android's `EnsureV4SessionUseCase` (`firstWanted`/
+    /// `lastAttempt`, identical `PATIENT_INITIATOR_DELAY_MS`/
+    /// `RETRY_INTERVAL_MS` values). Closes the "CONTROL sessions only
+    /// converge at the next call" gap: the receive-time half of convergence
+    /// (`replaceChannelSession` inside `bootstrapV4FromPreBootstrap` above)
+    /// only fires once a `qa_kms_prebootstrap` envelope actually arrives, and
+    /// until now NOTHING on iOS ever sent one outside of an active call or
+    /// the group-call-ctrl-send-failure fallback (`attemptGroupCtrlKmsPreBootstrap`'s
+    /// only prior call site). `ensureV4Session` is that missing sender,
+    /// called from every outgoing chat send (`ChatMessageSendService.
+    /// encryptForWire`) and from a present-but-broken CONTROL decrypt
+    /// failure (`handleIncomingMessage`, after `dropChannelSession`).
+    private static var v4EnsureFirstWantedMs: [String: Int64] = [:]
+    private static var v4EnsureLastAttemptMs: [String: Int64] = [:]
+    private static let v4EnsurePatientDelayMs: Int64 = 45_000
+    private static let v4EnsureRetryIntervalMs: Int64 = 120_000
+
+    /// Fire-and-forget: sends a fresh `qa_kms_prebootstrap` envelope to
+    /// `peerId` when this device is missing either the CHAT or CONTROL
+    /// session with them. Throttled to one envelope per peer per
+    /// `v4EnsureRetryIntervalMs`, and lexicographically tie-broken exactly
+    /// like Android's `EnsureV4SessionUseCase.mayInitiate` so two devices
+    /// that both notice the gap at once don't each seal a different root
+    /// into the same vault slot. Safe to call on every send — the
+    /// already-converged case (the overwhelming majority) returns after one
+    /// cheap `hasV4Session`/`hasChannelSession` check.
+    static func ensureV4Session(selfId: String, peerId: String, liveProvider: BCryptoBackendProvider?) {
+        guard !selfId.isEmpty, !peerId.isEmpty, selfId != peerId else { return }
+        guard let kmsClient = liveProvider?.kmsClient else { return }
+        let ratchet = AppState.sharedV4Ratchet
+        guard ratchet.isV4Enabled() else { return }
+        let hasSession = ratchet.hasV4Session(peerId) &&
+            ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerId)
+        let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        if hasSession {
+            v4EnsureFirstWantedMs.removeValue(forKey: peerId)
+            return
+        }
+        let wantedSince: Int64
+        if let existing = v4EnsureFirstWantedMs[peerId] {
+            wantedSince = existing
+        } else {
+            wantedSince = now
+            v4EnsureFirstWantedMs[peerId] = now
+        }
+        let initiator = selfId < peerId || now - wantedSince >= v4EnsurePatientDelayMs
+        let last = v4EnsureLastAttemptMs[peerId]
+        let throttled = last != nil && now - last! < v4EnsureRetryIntervalMs
+        guard initiator, !throttled else { return }
+        v4EnsureLastAttemptMs[peerId] = now
+        print("[AppState] ensureV4Session: peer=\(peerId.prefix(8))… missing session, sending prebootstrap")
+        Task {
+            let marker = "{\"qa_v4_bootstrap\":1,\"from\":\"\(selfId)\"}"
+            guard let wrapped = await AppState.attemptGroupCtrlKmsPreBootstrap(
+                peer: peerId, selfId: selfId, envelopeJson: marker, kmsClient: kmsClient
+            ) else {
+                print("[AppState] ensureV4Session: prebootstrap build failed peer=\(peerId.prefix(8))…")
+                return
+            }
+            guard let ws = liveProvider?.getWebSocketClient() else { return }
+            ws.sendOpaqueMessageString(recipientId: peerId, payload: wrapped)
+            print("[AppState] ensureV4Session: prebootstrap sent peer=\(peerId.prefix(8))…")
+        }
+    }
+
     /// GAP A2 (2026-07-15 group-video-call incident recon) — group-call
     /// KMS-prebootstrap fallback, mirroring Android's ADR-014a
     /// `KmsPreBootstrapSender` (`core-data/.../kms/KmsPreBootstrapSender.kt`,
@@ -22748,7 +22926,13 @@ extension AppState {
         // rk0, alongside (never instead of) the CHAT bootstrap above. Mirrors Android
         // `KmsPreBootstrapSender/Receiver.kt`'s identical addition: the CHAT `ensureBootstrapped`
         // result above is unaffected by this — it already ran and its value is not reused here.
-        let controlOk = ratchet.ensureBootstrapped(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
+        // W-CTRLREPLACERECV (2026-09-19) — REPLACE, not create-if-absent: this envelope
+        // arrives outside any call (chat activity, KMS pre-bootstrap), so it was the only
+        // receive-time convergence point left on a create-if-absent primitive — a pair
+        // whose CONTROL sessions had already diverged stayed diverged until their next
+        // call. Mirrors the call-handshake fix (W-CTRLREPLACE, ~line 13489) and Android's
+        // `KmsPreBootstrapReceiver.bootstrapV4FromEnvelope`, which already replaces here.
+        let controlOk = ratchet.replaceChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
             ratchet.bootstrapV5Control(
                 peerId: peer,
                 effectiveSecret: rk0,
@@ -22759,8 +22943,8 @@ extension AppState {
                 transcriptHash: transcriptHash
             )
         }
-        RTLog.info("crypto", "v5 control prebootstrap ensureBootstrapped ok=\(controlOk ? 1 : 0)")
-        print("[AppState] KmsPreBootstrap: v5 control session bootstrapped=\(controlOk) peer=\(peer.prefix(8))…")
+        RTLog.info("crypto", "v5 control prebootstrap replaceChannelSession ok=\(controlOk ? 1 : 0)")
+        print("[AppState] KmsPreBootstrap: v5 control session replaced=\(controlOk) peer=\(peer.prefix(8))…")
     }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call

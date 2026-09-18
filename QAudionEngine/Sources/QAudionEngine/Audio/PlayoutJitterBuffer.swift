@@ -100,6 +100,12 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     static let highWatermarkMs = 160
     /// Tier 3 entry: 300 ms.
     static let emergencyWatermarkMs = 300
+    /// W-JBMINFRAMES (2026-09-18) — frame-count floor under [emergencyWatermarkMs],
+    /// same 6-frame floor Android's emergency rung carries: at 60 ms a 300 ms
+    /// rung is only 5 frames, one short of clearing `high` (4 frames) by the
+    /// required margin — see [recomputeTierGeometry]'s use of this constant.
+    /// Inert at 20 ms (6 × 20 = 120 < 300).
+    static let emergencyWatermarkMinFrames = 6
     /// Where tier 3 stops: 40 ms.
     static let emergencyDrainTargetMs = 40
     /// The bound that makes tier 3 acceptable: it may never delete more than

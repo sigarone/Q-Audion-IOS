@@ -280,6 +280,13 @@ final class ChatMessageSendService {
         // v4 relationship, where nothing refuses it.
         let peerIsV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
         let controlToV4Peer = forceStatelessFormat && peerIsV4
+
+        // W-CTRLENSURESEND (2026-09-19) — mirrors Android's
+        // `EnsureV4SessionUseCase.ensure`, called at the top of every send:
+        // fire-and-forget check for a missing CHAT/CONTROL session with this
+        // peer, so convergence no longer waits for either side to place a
+        // call. See `AppState.ensureV4Session`'s doc for the full rationale.
+        AppState.ensureV4Session(selfId: senderId, peerId: peerUserId, liveProvider: appState.liveProvider)
         if (useControlChannel || controlToV4Peer),
            AppState.sharedV4Ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerUserId) {
             guard let frame = AppState.sharedV4Ratchet.encryptV5Routed(
