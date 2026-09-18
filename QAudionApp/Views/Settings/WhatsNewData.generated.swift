@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1169",
+              date: "2026-09-18",
+              title: "v1.0.1169",
+              bullets: [
+                "Never send v1 control envelopes to a v4 peer; converge CONTROL; floor depth in frames",
+              ]),
         .init(id: "v1.0.1168",
               date: "2026-09-18",
               title: "v1.0.1168",
@@ -133,13 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1141",
               bullets: [
                 "Diag(audio): add per-call cdi (call-did-init) native-audio-unit checkpoint",
-              ]),
-        .init(id: "v1.0.1140",
-              date: "2026-09-10",
-              title: "v1.0.1140",
-              bullets: [
-                "Resample RX-injected PCM to the APM's actual negotiated rate",
-                "Let LiveLogStreamer recover from an expired token instead of failing 401 forever",
               ]),
     ]
 }
