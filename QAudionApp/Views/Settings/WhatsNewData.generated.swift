@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1166",
+              date: "2026-09-18",
+              title: "v1.0.1166",
+              bullets: [
+                "Close two residual 5.6 gaps found by the post-removal audit",
+              ]),
         .init(id: "v1.0.1163",
               date: "2026-09-17",
               title: "v1.0.1163",
@@ -133,13 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1138",
               bullets: [
                 "Diag(audio): instrument the RX fallback-injection path end to end",
-              ]),
-        .init(id: "v1.0.1137",
-              date: "2026-09-10",
-              title: "v1.0.1137",
-              bullets: [
-                "Drop the arbitrary capacity floor in NativeAudioPlayoutInjector",
-                "Mix legacy-relay fallback audio into native pipeline on RX, fix TX capture scale",
               ]),
     ]
 }
