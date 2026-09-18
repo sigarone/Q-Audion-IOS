@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1167",
+              date: "2026-09-18",
+              title: "v1.0.1167",
+              bullets: [
+                "Buffer+retry a failed avatar-payload decrypt, not just the outer wire",
+              ]),
         .init(id: "v1.0.1166",
               date: "2026-09-18",
               title: "v1.0.1166",
@@ -133,12 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1139",
               bullets: [
                 "Wire renderPreProcessingDelegate via the setter, not the initializer",
-              ]),
-        .init(id: "v1.0.1138",
-              date: "2026-09-10",
-              title: "v1.0.1138",
-              bullets: [
-                "Diag(audio): instrument the RX fallback-injection path end to end",
               ]),
     ]
 }
