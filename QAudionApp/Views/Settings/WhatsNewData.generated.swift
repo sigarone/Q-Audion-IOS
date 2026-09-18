@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1170",
+              date: "2026-09-19",
+              title: "v1.0.1170",
+              bullets: [
+                "Converge CONTROL sessions without a call; add decrypt-nack resend; fix v1.0.1169 build break",
+              ]),
         .init(id: "v1.0.1169",
               date: "2026-09-18",
               title: "v1.0.1169",
@@ -133,12 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1142",
               bullets: [
                 "Flip audio-srtp-v1 kill switch off, isolate defect vs legacy protocol",
-              ]),
-        .init(id: "v1.0.1141",
-              date: "2026-09-10",
-              title: "v1.0.1141",
-              bullets: [
-                "Diag(audio): add per-call cdi (call-did-init) native-audio-unit checkpoint",
               ]),
     ]
 }
