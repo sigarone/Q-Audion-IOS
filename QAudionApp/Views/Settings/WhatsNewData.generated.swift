@@ -9,6 +9,13 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1168",
+              date: "2026-09-18",
+              title: "v1.0.1168",
+              bullets: [
+                "Frame-floor the adaptive jitter-target ceiling for 60ms",
+                "Defer call-connect avatar/name-refresh exchange by 5s instead of firing synchronously",
+              ]),
         .init(id: "v1.0.1167",
               date: "2026-09-18",
               title: "v1.0.1167",
@@ -133,12 +140,6 @@ extension ReleaseNote {
               bullets: [
                 "Resample RX-injected PCM to the APM's actual negotiated rate",
                 "Let LiveLogStreamer recover from an expired token instead of failing 401 forever",
-              ]),
-        .init(id: "v1.0.1139",
-              date: "2026-09-10",
-              title: "v1.0.1139",
-              bullets: [
-                "Wire renderPreProcessingDelegate via the setter, not the initializer",
               ]),
     ]
 }
