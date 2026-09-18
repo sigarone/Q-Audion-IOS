@@ -197,6 +197,32 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// on the scale of seconds.
     static let adaptRecomputeEvery = 16
 
+    /// W-JBFRAMEFLOOR (2026-09-18) — `adaptTargetMaxMs` (160) is a frame-count
+    /// margin (4 frames) frozen at the 20 ms cadence this class shipped with
+    /// first; at a larger inbound frame duration it silently shrinks to fewer
+    /// frames of headroom (e.g. under 3 at 60 ms), capping the adaptive
+    /// estimator below what it measures on a genuinely jittery link even
+    /// though the estimator itself (p95 over a time window, decoupled from
+    /// ptime) was never the problem — see
+    /// `reference_jitterbuffer_60ms_tier_scaling_audit_2026_09_18.md`
+    /// (external memory; ported from Android's `JitterBuffer.kt`
+    /// `ADAPT_TARGET_MAX_MIN_FRAMES` fix, same audit). `effectiveAdaptTargetMaxMs`
+    /// floors the ceiling at this many frames instead, and is a no-op at
+    /// 20 ms (`max(160, 4*20=80) == 160`).
+    static let adaptTargetMaxMinFrames = 4
+
+    /// The live adaptive-target ceiling for the given inbound frame duration —
+    /// use this everywhere `adaptTargetMaxMs` used to gate a value derived
+    /// from a live measurement (`p95TargetMs`, the reorder-penalty cap in
+    /// `recordArrival`). `recomputeTierGeometry`'s own `max(prev + 1, ...)`
+    /// chain for trim/high/emergency/`timeStretchWatermark` needs no separate
+    /// change: each already derives from `nominal`, which derives from
+    /// `adaptTargetMs`, which is itself clamped against THIS ceiling —
+    /// raising it here is enough to widen the whole chain correctly.
+    static func effectiveAdaptTargetMaxMs(frameMs: Int) -> Int {
+        max(adaptTargetMaxMs, adaptTargetMaxMinFrames * frameMs)
+    }
+
     // MARK: - W-JBSTRETCH (2026-08-25) — time-stretch correction band
     //
     // Ported from Android's `JitterBuffer.kt` (`TIME_STRETCH_*`) and
@@ -463,7 +489,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         if let seq = seq {
             if let highest = highestSeqSeen, seq <= highest {
                 let framesBehind = highest - seq + 1
-                reorderPenaltyMs = min(Int(framesBehind) * frameMs, Self.adaptTargetMaxMs)
+                reorderPenaltyMs = min(Int(framesBehind) * frameMs, Self.effectiveAdaptTargetMaxMs(frameMs: frameMs))
             } else {
                 highestSeqSeen = seq
             }
@@ -507,7 +533,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         var sorted = Array(ring.prefix(sampleCount))
         sorted.sort()
         let p95 = sorted[((sampleCount - 1) * 95) / 100]
-        return min(max(p95 + frameMs, adaptTargetMinMs), adaptTargetMaxMs)
+        return min(max(p95 + frameMs, adaptTargetMinMs), effectiveAdaptTargetMaxMs(frameMs: frameMs))
     }
 
     /// The adaptive steady-state depth target currently in force, in
