@@ -11631,12 +11631,18 @@ final class AppState: ObservableObject {
                     // W-AVATARPOLLUTE — this PSK is exactly what a buffered
                     // decrypt failure from this sender was probably missing.
                     self?.retryBufferedOneToOneMessages(for: senderId)
+                    // W-AVATARPAYLOADRETRY — same reasoning, one layer down:
+                    // an inbound avatar_announce whose INNER payload decrypt
+                    // failed (every PSK candidate exhausted) gets replayed
+                    // too, instead of waiting on the sender's own cooldown.
+                    self?.avatarAnnounceCoordinator.retryBufferedAvatarAnnounces(for: senderId)
                 }
             case .keyExchangeAccept(let pub):
                 Task { [weak self] in
                     await cke.handleAccept(senderId: senderId, peerPubKey: pub)
                     self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                     self?.retryBufferedOneToOneMessages(for: senderId)
+                    self?.avatarAnnounceCoordinator.retryBufferedAvatarAnnounces(for: senderId)
                 }
             case .offer:
                 Task { @MainActor [weak self] in

@@ -280,14 +280,64 @@ final class AvatarAnnounceCoordinator {
             RTLog.warn("avatar", "recv applied=0 code=2 from=\(peer8) error=\(error)")
             return
         }
-        await downloadAndApply(envelope, senderId: senderId, peer8: peer8, version: version)
+        await downloadAndApply(envelope, senderId: senderId, peer8: peer8, version: version, isRetry: false)
+    }
+
+    // MARK: - Inner-payload buffer+retry (W-AVATARPAYLOADRETRY, 2026-09-18)
+    //
+    // The OUTER chat ciphertext carrying this envelope already decrypted
+    // fine (that failure mode is W-AVATARPOLLUTE's job, above). This is a
+    // SEPARATE, later failure: `AvatarAnnounceReceiver.downloadAndDecrypt`
+    // exhausted every PSK candidate bound to `senderId` and still could not
+    // open the attachment AEAD — same race as W-AVATARPSKPICK (a call
+    // rebinds a fresh PSK on both ends at slightly different moments), just
+    // with nothing retrying the ALREADY-DOWNLOADED ciphertext afterward.
+    // Before this, recovery depended entirely on the SENDER re-broadcasting
+    // on its own cooldown (up to 1 hour) — this buffers the one envelope
+    // that revealed the desync and replays it the instant a fresh PSK
+    // lands for that sender, mirroring `bufferedOneToOneCiphertexts` /
+    // `retryBufferedOneToOneMessages` exactly.
+    private struct BufferedAvatarAnnounce {
+        let envelope: AvatarAnnounceEnvelope
+        let version: Int
+    }
+    private static let maxBufferedAvatarAnnouncesPerSender = 4
+    private var bufferedAvatarAnnounces: [String: [BufferedAvatarAnnounce]] = [:]
+
+    private func bufferAvatarAnnounce(_ envelope: AvatarAnnounceEnvelope, senderId: String, version: Int) {
+        var list = bufferedAvatarAnnounces[senderId] ?? []
+        list.append(BufferedAvatarAnnounce(envelope: envelope, version: version))
+        if list.count > Self.maxBufferedAvatarAnnouncesPerSender {
+            list.removeFirst()
+        }
+        bufferedAvatarAnnounces[senderId] = list
+    }
+
+    /// Replay every buffered avatar_announce for `senderId` — called
+    /// alongside `retryBufferedOneToOneMessages` the moment this device's
+    /// `ContactKeyExchange` completes for them (see `AppState
+    /// .dispatchInboundOpaque`). A wire that still fails on retry is simply
+    /// dropped (already logged once at first failure); this is exactly one
+    /// extra attempt, never an unbounded loop.
+    func retryBufferedAvatarAnnounces(for senderId: String) {
+        guard let list = bufferedAvatarAnnounces.removeValue(forKey: senderId), !list.isEmpty else { return }
+        let peer8 = String(senderId.prefix(8))
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for buffered in list {
+                await self.downloadAndApply(
+                    buffered.envelope, senderId: senderId, peer8: peer8,
+                    version: buffered.version, isRetry: true)
+            }
+        }
     }
 
     private func downloadAndApply(
         _ envelope: AvatarAnnounceEnvelope,
         senderId: String,
         peer8: String,
-        version: Int
+        version: Int,
+        isRetry: Bool
     ) async {
         do {
             let plaintext = try await AvatarAnnounceReceiver(appState: appState)
@@ -306,7 +356,8 @@ final class AvatarAnnounceCoordinator {
                 RTLog.info("avatar", "recv applied=0 code=3 from=\(peer8) version=\(version)")
                 return
             }
-            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version)")
+            let retryTag: String = isRetry ? " retry=1" : ""
+            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version)" + retryTag)
             NotificationCenter.default.post(
                 name: AppState.chatRefreshNotification,
                 object: nil,
@@ -314,9 +365,16 @@ final class AvatarAnnounceCoordinator {
             )
         } catch AvatarAnnounceReceiver.ReceiveError.pskMissing {
             RTLog.warn("avatar", "recv applied=0 code=4 from=\(peer8)")
+            if !isRetry {
+                bufferAvatarAnnounce(envelope, senderId: senderId, version: version)
+            }
             appState.triggerKeyExchange(with: senderId)
         } catch {
-            RTLog.error("avatar", "recv applied=0 code=5 from=\(peer8): \(error)")
+            let retryTag: String = isRetry ? " retry=1" : ""
+            RTLog.error("avatar", "recv applied=0 code=5 from=\(peer8): \(error)" + retryTag)
+            if !isRetry {
+                bufferAvatarAnnounce(envelope, senderId: senderId, version: version)
+            }
         }
     }
 
