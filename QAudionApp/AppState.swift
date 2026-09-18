@@ -16376,6 +16376,13 @@ final class AppState: ObservableObject {
     /// exists, [maybeAnnounceAvatarTo] is called directly instead —
     /// covers the common case immediately rather than waiting for the
     /// next chat message.
+    /// W-AVATARDEFER (2026-09-18): how long [maybeExchangeAvatarOnCallConnect]
+    /// waits before actually sending anything — see that function's own kdoc
+    /// for why. Not tuned against any measured settle time; picked as a
+    /// comfortably safe margin past a call's own PQC handshake without being
+    /// long enough to feel like the avatar "never arrives" in a short call.
+    private static let avatarConnectExchangeDelaySeconds: TimeInterval = 5
+
     @MainActor
     private func maybeExchangeAvatarOnCallConnect() {
         // W-AVATARCALLEE (2026-08-01): every branch here logs. This whole
@@ -16387,6 +16394,35 @@ final class AppState: ObservableObject {
         // performAcceptIncoming look like it had done nothing at all.
         guard let peerId = self.callContactId else {
             RTLog.warn("avatar", "call-connect exchange skipped — callContactId is nil")
+            return
+        }
+        // W-AVATARDEFER (2026-09-18): this used to do its work right here,
+        // synchronously inside call_answer handling. Live evidence (Pavel,
+        // Android<->iOS test calls the same night): the message this sends
+        // can reach the peer before that peer's OWN pairwise-PSK/session
+        // state has settled from the call's own handshake, fail to decrypt
+        // there, and trigger Android's auto-rekey recovery — which repairs
+        // the SESSION for every later message but can never retroactively
+        // recover the one ciphertext that revealed the desync (a freshly
+        // negotiated session cannot decrypt something sealed before it
+        // existed). Neither the avatar nor the name-refresh riding this same
+        // hook is time-critical — arriving a few seconds into an already-
+        // stable call is exactly as good as arriving in the first instant —
+        // so defer the actual send instead of racing whatever the call's own
+        // connect sequence is still settling. Preconditions (`callContactId`,
+        // `callState`) are re-checked after the delay in
+        // [performAvatarExchangeOnCallConnect], since the call can end or
+        // move to a different peer during the wait.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.avatarConnectExchangeDelaySeconds) { [weak self] in
+            self?.performAvatarExchangeOnCallConnect(peerId: peerId)
+        }
+    }
+
+    @MainActor
+    private func performAvatarExchangeOnCallConnect(peerId: String) {
+        guard self.callContactId == peerId,
+              self.callState == .active || self.callState == .encrypted else {
+            RTLog.info("avatar", "call-connect exchange skipped — call no longer active for this peer after defer")
             return
         }
         let hasPsk = (try? PairwiseChainKeyResolver.resolvePsk(
