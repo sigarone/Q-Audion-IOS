@@ -127,21 +127,25 @@ final class PlayoutStarvation60msTests: XCTestCase {
 
     /// W-TRIMFLOOR re-run at 60 ms with REAL push/pop traffic (not just the
     /// derived-geometry assertions `FrameQuantisationInvariantsTests`
-    /// already makes). At 60 ms: nominal=1, trim=2, high=3 — a queue of 4
-    /// silent frames sits strictly between trim and emergency(5), so tier
-    /// 1/2 fires with `highDropBudget=1`; the floor the tier must not
-    /// breach is `nominal=1`. This is the exact shape of the historical bug
-    /// (entering just above nominal, discarding down to AT or below it) at
-    /// the profile whose small integers made `drainTarget`/`nominal`
-    /// collapse to 1 and turned "one frame of margin" into "zero".
+    /// already makes). W-JBMINFRAMES (2026-09-18): at 60 ms the ladder is
+    /// now nominal=2 (the two-frame floor), trim=3, high=4 (== the
+    /// time-stretch ceiling), emergency=6 — a queue of 5 silent frames sits
+    /// strictly between the time-stretch band and emergency, so tier 1/2
+    /// fires with `highDropBudget=1`; the floor the tier must not breach is
+    /// `nominal=2`. This is the exact shape of the historical bug (entering
+    /// just above nominal, discarding down to AT or below it) at the profile
+    /// whose small integers turned "one frame of margin" into "zero".
     func test60ms_trimNeverBreachesTheFloorItDefends() {
         let jb = buffer60()
         let g = jb.tierGeometryForTesting
-        XCTAssertEqual(g.nominal, 1)
-        XCTAssertEqual(g.trim, 2)
-        XCTAssertEqual(g.high, 3)
-        for _ in 0..<4 { jb.push(silent60()) }
+        XCTAssertEqual(g.nominal, 2)
+        XCTAssertEqual(g.trim, 3)
+        XCTAssertEqual(g.high, 4)
+        XCTAssertEqual(g.emergency, 6)
+        for _ in 0..<5 { jb.push(silent60()) }
         XCTAssertNotNil(jb.popWithDriftCatchup(), "pop must still deliver")
+        XCTAssertEqual(1, jb.silenceDrops, "one silent frame excised by tier 1/2, not time-stretched or emergency-drained")
+        XCTAssertEqual(0, jb.hardDrops)
         XCTAssertGreaterThanOrEqual(
             jb.depth, g.nominal,
             "at the 60 ms profile a tier-2 firing left the queue at \(jb.depth), " +

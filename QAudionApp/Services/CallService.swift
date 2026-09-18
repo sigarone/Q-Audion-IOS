@@ -2799,6 +2799,16 @@ final class CallService: @unchecked Sendable {
                             + " cc=" + s.concealed.description
                             + " dp=" + s.depth.description
                         print(stats)
+                        // W-JBMINFRAMES / W-JBREACTIVE (2026-09-18) — its own
+                        // line, per the structured-shape budget note above:
+                        //   tg = adaptive target ms   ef = effective target ms
+                        //   tf = target frames        rb = reactive bumps
+                        let target: String = "[CallService] RX target:"
+                            + " tg=" + s.adaptiveTargetMs.description
+                            + " ef=" + s.effectiveTargetMs.description
+                            + " tf=" + s.targetFrames.description
+                            + " rb=" + s.reactiveBumps.description
+                        print(target)
                     }
                     // W-FECDECODE (2026-08-25) — same cadence as the playout
                     // block above (~5 s), and ships to the remote timeline

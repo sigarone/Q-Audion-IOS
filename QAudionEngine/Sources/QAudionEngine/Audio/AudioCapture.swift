@@ -788,6 +788,12 @@ public final class AudioCapture {
         /// W-JBADAPT (2026-08-25) — the adaptive steady-state depth target
         /// in force when this snapshot was taken, in ms.
         public let adaptiveTargetMs: Int
+        /// W-JBMINFRAMES / W-JBREACTIVE (2026-09-18) — the target the ladder
+        /// actually sits on (frame-floored, plus the underrun extra), in ms
+        /// and as frames, and how often an underrun raised it.
+        public let effectiveTargetMs: Int
+        public let targetFrames: Int
+        public let reactiveBumps: Int64
     }
 
     /// Snapshot of [PlayoutStats]. Cheap (lock-guarded reads); safe from
@@ -803,6 +809,9 @@ public final class AudioCapture {
             depth: playoutJitter.depth,
             timeStretchFrames: playoutJitter.timeStretchFrames,
             adaptiveTargetMs: playoutJitter.adaptiveTargetMs,
+            effectiveTargetMs: playoutJitter.effectiveTargetMs,
+            targetFrames: playoutJitter.targetFrames,
+            reactiveBumps: playoutJitter.reactiveBumps,
         )
     }
 

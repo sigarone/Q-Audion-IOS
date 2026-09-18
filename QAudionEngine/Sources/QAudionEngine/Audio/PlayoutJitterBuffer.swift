@@ -223,6 +223,27 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         max(adaptTargetMaxMs, adaptTargetMaxMinFrames * frameMs)
     }
 
+    /// W-JBMINFRAMES (2026-09-18) — the standing depth never resolves below
+    /// this many frames either. 2 × 20 ms = 40 ms = `adaptTargetMinMs`, so
+    /// the shipped cadence is untouched; at 60 ms it is 120 ms where the bare
+    /// floor let `framesForMs(p95 + 60)` round to a single queued frame —
+    /// one late arrival away from an underrun. Ported from Android's
+    /// `JitterBuffer.ADAPT_TARGET_MIN_FRAMES`, same audit as
+    /// `adaptTargetMaxMinFrames` above.
+    static let adaptTargetMinFrames = 2
+
+    static func effectiveAdaptTargetMinMs(frameMs: Int) -> Int {
+        max(adaptTargetMinMs, adaptTargetMinFrames * frameMs)
+    }
+
+    /// W-JBREACTIVE (2026-09-18) — a genuine underrun raises the effective
+    /// target by one frame at once, up to this many extra frames; the extra
+    /// decays only after `reactiveDecaySeconds` without another underrun.
+    /// p95 needs `adaptRecomputeEvery` more arrivals to move; the underrun is
+    /// direct evidence the depth was already short (fast up, slow down).
+    static let reactiveMaxExtraFrames = 2
+    static let reactiveDecaySeconds: Double = 10
+
     // MARK: - W-JBSTRETCH (2026-08-25) — time-stretch correction band
     //
     // Ported from Android's `JitterBuffer.kt` (`TIME_STRETCH_*`) and
@@ -366,6 +387,21 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// the window has `adaptMinSamples` observations.
     private var adaptTargetMs: Int = PlayoutJitterBuffer.adaptDefaultTargetMs
 
+    /// W-JBREACTIVE — extra frames of standing depth demanded by recent
+    /// underruns, 0...`reactiveMaxExtraFrames`. Raised at every underrun site
+    /// (all under `lock`), cleared by `recordArrival` once
+    /// `reactiveDecaySeconds` pass without another underrun.
+    private var reactiveExtraFrames: Int = 0
+    private var lastUnderrunMonotonic: Double?
+    private var _reactiveBumps: Int64 = 0
+
+    /// W-JBMINFRAMES / W-JBREACTIVE — the target the ladder actually sits on:
+    /// the adaptive estimate, never below the frame floor, plus the reactive
+    /// extra. Caller must hold `lock`.
+    private var effectiveTargetMsLocked: Int {
+        max(adaptTargetMs, Self.effectiveAdaptTargetMinMs(frameMs: frameMs)) + reactiveExtraFrames * frameMs
+    }
+
     // MARK: - W-JBSTRETCH (2026-08-25): time-stretch correction
 
     /// Reusable output buffer for `tryTimeStretch`. A compressed frame is a
@@ -435,10 +471,22 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         // `FrameQuantisationInvariantsTests`) than Android's two, and a
         // silently-empty tier band is exactly the class of bug that net
         // already exists to catch.
-        nominal = AudioConstants.framesForMs(adaptTargetMs, frameDurationMs: ms)
+        // W-JBMINFRAMES / W-JBREACTIVE (2026-09-18) — `nominal` sits on the
+        // EFFECTIVE target (frame-floored, plus the underrun extra), so at
+        // 60 ms it is never the single frame the bare 80 ms default rounded
+        // to. The monotonic chain below already keeps every rung strictly
+        // above it whatever it resolves to.
+        let targetMs = effectiveTargetMsLocked
+        nominal = AudioConstants.framesForMs(targetMs, frameDurationMs: ms)
         trim = max(nominal + 1, AudioConstants.framesForMs(Self.trimWatermarkMs, frameDurationMs: ms))
         high = max(trim + 1, AudioConstants.framesForMs(Self.highWatermarkMs, frameDurationMs: ms))
-        emergency = max(high + 1, AudioConstants.framesForMs(Self.emergencyWatermarkMs, frameDurationMs: ms))
+        // W-JBMINFRAMES — with `nominal` at 2 frames at 60 ms the chain
+        // pushes `high` to 4, and a 300 ms emergency rung (5 frames) would
+        // leave the silence-drop band between them empty; the same 6-frame
+        // floor Android's emergency rung carries keeps it one frame wide.
+        // Inert at 20 ms (6 × 20 = 120 < 300).
+        let emergencyMs = max(Self.emergencyWatermarkMs, Self.emergencyWatermarkMinFrames * ms)
+        emergency = max(high + 1, AudioConstants.framesForMs(emergencyMs, frameDurationMs: ms))
         capFrames = max(emergency + 1, capFrames)
         // W-JBSTRETCH — the "try compression first" ceiling. Same monotonic
         // safety net as above: must sit strictly above `trim`, or the band
@@ -447,7 +495,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         // W-JBADAPT — the tier-3 drain target tracks the adaptive target at
         // the same 40 ms undershoot the shipped constants had (80→40), floored
         // at the clamp floor so the drain never targets less than it ever did.
-        let undershootTargetMs = max(adaptTargetMs - Self.adaptDrainUndershootMs, Self.adaptTargetMinMs)
+        let undershootTargetMs = max(targetMs - Self.adaptDrainUndershootMs, Self.adaptTargetMinMs)
         drainTarget = AudioConstants.framesForMs(undershootTargetMs, frameDurationMs: ms)
         maxDropsPerPop = AudioConstants.boundedFramesForMs(Self.emergencyMaxDropsPerPopMs, frameDurationMs: ms)
         silenceScan = AudioConstants.boundedFramesForMs(Self.silenceScanLimitMs, frameDurationMs: ms)
@@ -485,6 +533,10 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// `reorderPenaltyRing`'s kdoc).
     private func recordArrival(seq: Int64?) {
         let now = nowSeconds()
+        if reactiveExtraFrames > 0, let t = lastUnderrunMonotonic, now - t > Self.reactiveDecaySeconds {
+            reactiveExtraFrames = 0
+            recomputeTierGeometry()
+        }
         var reorderPenaltyMs = 0
         if let seq = seq {
             if let highest = highestSeqSeen, seq <= highest {
@@ -533,7 +585,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         var sorted = Array(ring.prefix(sampleCount))
         sorted.sort()
         let p95 = sorted[((sampleCount - 1) * 95) / 100]
-        return min(max(p95 + frameMs, adaptTargetMinMs), effectiveAdaptTargetMaxMs(frameMs: frameMs))
+        return min(max(p95 + frameMs, effectiveAdaptTargetMinMs(frameMs: frameMs)), effectiveAdaptTargetMaxMs(frameMs: frameMs))
     }
 
     /// The adaptive steady-state depth target currently in force, in
@@ -541,6 +593,13 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// observed. Exposed for diagnostics and for parity with Android's
     /// `BufferStats.adaptiveTargetMs`.
     public var adaptiveTargetMs: Int { lock.lock(); defer { lock.unlock() }; return adaptTargetMs }
+
+    /// W-JBMINFRAMES / W-JBREACTIVE — the target the ladder actually sits on
+    /// (frame-floored, plus the underrun extra), in ms, and as frames.
+    public var effectiveTargetMs: Int { lock.lock(); defer { lock.unlock() }; return effectiveTargetMsLocked }
+    public var targetFrames: Int { lock.lock(); defer { lock.unlock() }; return nominal }
+    /// W-JBREACTIVE — how many times an underrun raised the standing depth by a frame.
+    public var reactiveBumps: Int64 { lock.lock(); defer { lock.unlock() }; return _reactiveBumps }
 
     /// The inbound frame duration the tiers are currently sized for, in ms.
     public var inboundFrameDurationMs: Int { lock.lock(); defer { lock.unlock() }; return frameMs }
@@ -642,6 +701,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         emergencyDraining = false
         _underruns = 0; _overruns = 0; _hardDrops = 0; _silenceDrops = 0; _pushed = 0
         _timeStretchFrames = 0
+        _reactiveBumps = 0
         // W-JBADAPT — the NEXT push must not record the stopped interval as a
         // giant inter-arrival gap. The learned target itself is deliberately
         // kept (see `recordArrival`'s kdoc): it describes the link, and the
@@ -747,7 +807,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         var anyDropped = false
         for _ in 0..<scanLimit {
             guard !queue.isEmpty else {
-                if !anyDropped { _underruns += 1 }
+                if !anyDropped { noteUnderrunLocked() }
                 return nil
             }
             let head = queue.removeFirst()
@@ -779,9 +839,22 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
         return popLocked()
     }
 
+    /// W-JBREACTIVE — every underrun site funnels through here: count it and
+    /// raise the standing depth by one frame at once (bounded). Caller holds
+    /// `lock`.
+    private func noteUnderrunLocked() {
+        _underruns += 1
+        if reactiveExtraFrames < Self.reactiveMaxExtraFrames {
+            reactiveExtraFrames += 1
+            _reactiveBumps += 1
+            recomputeTierGeometry()
+        }
+        lastUnderrunMonotonic = nowSeconds()
+    }
+
     private func popLocked() -> Data? {
         if queue.isEmpty {
-            _underruns += 1
+            noteUnderrunLocked()
             return nil
         }
         return queue.removeFirst()

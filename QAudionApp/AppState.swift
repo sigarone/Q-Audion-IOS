@@ -9950,14 +9950,24 @@ final class AppState: ObservableObject {
             // the counters carry a numeric tail because the redactor blobs
             // every non-numeric token (see PairwiseChainKeyResolver's own
             // note): `undec=1` is what survives the trip.
-            RTLog.error("chat", "msg_receive undec=1 from=\(senderId.prefix(8)) retry=\(isRetry): \(error)")
+            let wireClass = MessageWireFormat.detect(cipher)
+            RTLog.error("chat", "msg_receive undec=1 wire=\(wireClass) from=\(senderId.prefix(8)) retry=\(isRetry): \(error)")
             // W77b: auto-rekey on decrypt failure. Same pattern as
             // qaudion-desktop's `MessageService.on('needRekey')` → fires
             // a fresh KEY_EXCHANGE_OFFER with `force=true` so the next
             // message from this peer rides a freshly-derived PSK. Saves
             // the user from having to manually re-pair when keychains
             // get desynced (e.g. after one side reinstalls).
-            triggerKeyExchange(with: senderId, force: true)
+            //
+            // W-CTRLWIRECLASS (2026-09-18) — NOT for a v5 CONTROL frame
+            // (0xE6): that is a session on a separate channel, the pairwise
+            // PSK is not what failed, and a forced OFFER purges the working
+            // PSK and drags the peer through a re-derive it did not need —
+            // the very session churn the buffered retry below exists to
+            // wait out. Buffer and wait for the CONTROL session instead.
+            if wireClass != .v5 {
+                triggerKeyExchange(with: senderId, force: true)
+            }
             // W-AVATARPOLLUTE — a FIRST failure buffers instead of showing
             // "[messaggio cifrato non leggibile]": most of these are an
             // avatar_announce (or another control payload) racing its own
@@ -11627,7 +11637,13 @@ final class AppState: ObservableObject {
                     // the NEXT chat message. Safe no-op if the derive
                     // above actually failed (maybeAnnounceAvatarTo fails
                     // closed on a missing PSK).
-                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    // W-AVATARQUIET (2026-09-18) — but never NEXT to the
+                    // exchange itself: the announce waits a quiet period so
+                    // it is sealed well after both sides have settled.
+                    Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: Self.keyExchangeAvatarQuietNanos)
+                        self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    }
                     // W-AVATARPOLLUTE — this PSK is exactly what a buffered
                     // decrypt failure from this sender was probably missing.
                     self?.retryBufferedOneToOneMessages(for: senderId)
@@ -11640,9 +11656,13 @@ final class AppState: ObservableObject {
             case .keyExchangeAccept(let pub):
                 Task { [weak self] in
                     await cke.handleAccept(senderId: senderId, peerPubKey: pub)
-                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                     self?.retryBufferedOneToOneMessages(for: senderId)
                     self?.avatarAnnounceCoordinator.retryBufferedAvatarAnnounces(for: senderId)
+                    // W-AVATARQUIET — the announce that used to fire right here
+                    // was the 16:14:12 "Messaggio non decifrabile": sealed one
+                    // second after the peer's connect-time session install.
+                    try? await Task.sleep(nanoseconds: Self.keyExchangeAvatarQuietNanos)
+                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                 }
             case .offer:
                 Task { @MainActor [weak self] in
@@ -13460,7 +13480,13 @@ final class AppState: ObservableObject {
                 // itself the atomic create-if-absent primitive (same as the CHAT call above), so no
                 // separate try/catch is needed here for the TOCTOU class W-ATOMICBOOTSTRAP closed —
                 // mirrors Android `PqcHandshake.kt` / Desktop `Application.ts`'s identical addition.
-                let controlOk = AppState.sharedV4Ratchet.ensureBootstrapped(
+                // W-CTRLREPLACE (2026-09-18) — REPLACE, not create-if-absent: both
+                // peers re-derive CONTROL from this same handshake, so a pair whose
+                // CONTROL sessions had diverged (present on both sides, every 0xE6
+                // failing) converges at every call; the replaced session is
+                // retained for frames still in flight under it. CHAT above stays
+                // create-if-absent (W-V4CONNECTRESET). Same change on Android/Desktop.
+                let controlOk = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v5ControlRoutingEpoch,
                     peerId: peerId
                 ) {
@@ -13474,7 +13500,7 @@ final class AppState: ObservableObject {
                         transcriptHash: transcriptHash
                     )
                 }
-                print("[PQC_DIAG_V5CTRL] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                print("[PQC_DIAG_V5CTRL] replaceChannelSession (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(controlOk)")
             }
             // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
             // so resolve the active call's id to key the same gate. Safe: this
@@ -16381,7 +16407,14 @@ final class AppState: ObservableObject {
     /// for why. Not tuned against any measured settle time; picked as a
     /// comfortably safe margin past a call's own PQC handshake without being
     /// long enough to feel like the avatar "never arrives" in a short call.
-    private static let avatarConnectExchangeDelaySeconds: TimeInterval = 5
+    // W-AVATARQUIET (2026-09-18) — 5 s still landed inside the peer's
+    // connect-time session work; the exchange must sit well clear of any
+    // session change (see the Android twin's CALL_CONNECT_AVATAR_QUIET_MS).
+    private static let avatarConnectExchangeDelaySeconds: TimeInterval = 25
+
+    /// W-AVATARQUIET — same quiet period after a KEY_EXCHANGE_OFFER/ACCEPT
+    /// lands before the `.keyExchange` avatar trigger may seal anything.
+    static let keyExchangeAvatarQuietNanos: UInt64 = 20_000_000_000
 
     @MainActor
     private func maybeExchangeAvatarOnCallConnect() {

@@ -1030,6 +1030,47 @@ public final class MessageRatchet {
         }
     }
 
+    /// W-CTRLREPLACE (2026-09-18) — the CONTROL-channel counterpart of
+    /// `ensureBootstrapped`: ALWAYS installs the fresh session `bootstrap`
+    /// derives, retaining the one it replaces under `previousEpochId` so a
+    /// frame the peer sealed under the old chain before it learned of the new
+    /// one still opens (`decryptV5Routed` falls back to it). CONTROL only:
+    /// CHAT keeps create-if-absent (W-V4CONNECTRESET). Two peers whose CONTROL
+    /// sessions diverged (present on both sides, every 0xE6 failing — live
+    /// 2026-09-18) converge at the next handshake by construction. Mirrors
+    /// Android `MessageRatchet.replaceChannelSession`.
+    public func replaceChannelSession(epochId: String, peerId: String, bootstrap: () -> UInt) -> Bool {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        guard isV4Enabled() else { return false }
+        let handle = bootstrap()
+        guard handle != 0 else { return false }
+        defer { freeV4Session(handle) }
+        guard let blob = serializeV4Session(handle) else { return false }
+        do {
+            let previous = vault.loadV4(epochId: epochId, peerId: peerId)
+            if let previous = previous {
+                try vault.saveV4(epochId: Self.previousEpochId(epochId), peerId: peerId, blob: previous)
+            }
+            try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
+            print("[MessageRatchet] BOOT epoch=\(epochId) peer=\(peerId.suffix(6)) replaced=\(previous != nil)")
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// W-CTRLREPLACE — forget the CURRENT session for `(epochId, peerId)` (the
+    /// retained previous one stays) so the absent-session recovery re-bootstraps
+    /// it. Called when a frame fails against a session that IS present.
+    public func dropChannelSession(epochId: String, peerId: String) {
+        v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
+        vault.deleteV4(epochId: epochId, peerId: peerId)
+        print("[MessageRatchet] DROP epoch=\(epochId) peer=\(peerId.suffix(6)) reason=present-but-undecryptable")
+    }
+
+    /// Vault row that keeps the session `replaceChannelSession` most recently replaced.
+    static func previousEpochId(_ epochId: String) -> String { epochId + "-prev" }
+
     /// True iff a persisted v4 session exists for [peerId] (and the v4 path is enabled).
     /// Used by the SEND dispatcher to gate the v4 branch synchronously BEFORE any
     /// version selection — a v4 session only EXISTS for a peer once a negotiated +
@@ -1161,13 +1202,27 @@ public final class MessageRatchet {
     public func decryptV5Routed(epochId: String, peerId: String, frame: Data) -> Data? {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
         guard isV4Enabled() else { return nil }
-        guard let blob = vault.loadV4(epochId: epochId, peerId: peerId) else { return nil }
+        if let current = decryptV5Under(rowEpochId: epochId, peerId: peerId, frame: frame) {
+            return current
+        }
+        // W-CTRLREPLACE — a frame the peer sealed under the session we just
+        // replaced (see `replaceChannelSession`) still opens. Its own chain
+        // advances on its own row, never the current one.
+        let previous = decryptV5Under(rowEpochId: Self.previousEpochId(epochId), peerId: peerId, frame: frame)
+        let present = vault.loadV4(epochId: epochId, peerId: peerId) != nil
+        print("[MessageRatchet] OPEN epoch=\(epochId) peer=\(peerId.suffix(6)) result=\(previous != nil ? "previous" : "fail") present=\(present)")
+        return previous
+    }
+
+    /// One decrypt attempt against the session stored under `rowEpochId`; `nil` on any failure.
+    private func decryptV5Under(rowEpochId: String, peerId: String, frame: Data) -> Data? {
+        guard let blob = vault.loadV4(epochId: rowEpochId, peerId: peerId) else { return nil }
         let handle = RatchetNative.deserialize(blob)
         guard handle != 0 else { return nil }
         defer { RatchetNative.free(handle) }
         guard let pt = RatchetNative.decryptV5(handle, frame: frame) else { return nil }
         if let advanced = RatchetNative.serialize(handle) {
-            try? vault.saveV4(epochId: epochId, peerId: peerId, blob: advanced)
+            try? vault.saveV4(epochId: rowEpochId, peerId: peerId, blob: advanced)
         }
         return pt
     }

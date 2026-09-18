@@ -268,7 +268,19 @@ final class ChatMessageSendService {
         // for this peer. Mirrors the group-call send ladder's CONTROL branch in `AppState.swift`'s
         // `onSendControlEnvelope`. `forceStatelessFormat` callers never set `useControlChannel`
         // (see this method's own `useControlChannel` doc) so the two branches never race.
-        if useControlChannel, !forceStatelessFormat,
+        // W-CTLV4PEER (2026-09-18) — a peer that has a v4 session with us is
+        // v4-bootstrapped, and Android's receive floor (W-RECVFLOOR) refuses
+        // every v1/v2 wire from such a peer as a downgrade: the whole
+        // `forceStatelessFormat` family (avatar_announce, delete, edit,
+        // reaction, ephemeral_timer, screenshot_lock, group sender-key) was
+        // dying on the Android side as "Messaggio non decifrabile" after any
+        // call (live 2026-09-18, S26 ← iPhone, 16:14:12). To a v4 peer a control
+        // envelope rides the CONTROL channel when that session exists, else the
+        // v4 CHAT session; the stateless v1 path stays ONLY for peers with no
+        // v4 relationship, where nothing refuses it.
+        let peerIsV4 = AppState.sharedV4Ratchet.hasV4Session(peerUserId)
+        let controlToV4Peer = forceStatelessFormat && peerIsV4
+        if (useControlChannel || controlToV4Peer),
            AppState.sharedV4Ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerUserId) {
             guard let frame = AppState.sharedV4Ratchet.encryptV5Routed(
                 epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerUserId, plaintext: plaintextData
@@ -295,8 +307,10 @@ final class ChatMessageSendService {
         // regardless of hasV4Session: a control envelope must never touch EITHER
         // ratchet, v3 or v4, both of which are stateful chain designs this fix
         // exists to keep control traffic away from.
-        let useV4 = !forceStatelessFormat && AppState.sharedV4Ratchet.hasV4Session(peerUserId)
-        print("[PQC_DIAG_V4] send peer=\(peerUserId.prefix(8))… useV4=\(useV4) hasV4Session=\(useV4)")
+        // W-CTLV4PEER — see above: a control envelope to a v4 peer without a
+        // CONTROL session takes the v4 CHAT session rather than v1.
+        let useV4 = peerIsV4
+        print("[PQC_DIAG_V4] send peer=\(peerUserId.prefix(8))… useV4=\(useV4) hasV4Session=\(peerIsV4) control=\(forceStatelessFormat)")
 
         let wireBlob: Data
         if useV4 {
