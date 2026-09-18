@@ -287,42 +287,6 @@ final class AppState: ObservableObject {
     /// Epoch-ms of the last node failover — damps ping-pong if both nodes flap.
     private var lastFailoverMs: Double = 0
 
-    // MARK: - Reality censorship-bypass transport (additive; clearnet-FIRST)
-    //
-    // Reality (VLESS+REALITY over xray-core, via RealityManager) is a SECOND
-    // signaling backend, activated ONLY as a fallback after clearnet is
-    // exhausted — never the default route (design doc §6, bcrypto-server
-    // CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Reality is the SOLE
-    // censorship-bypass mechanism on iOS — embedded Tor (EmbeddedTorManager /
-    // TorObfsTransport) was removed entirely 2026-09-14, on every platform.
-
-    /// UserDefaults key for the MANUAL force toggle (TransportSettingsScreen).
-    /// When set, the persistent socket brings Reality up BEFORE trying
-    /// clearnet, so a tester can verify the tunnel on an OPEN network where the
-    /// automatic hard-failure trigger would never fire.
-    static let forceRealityDefaultsKey = "qaudion.transport.force_reality"
-    /// Read/write the persisted force-Reality preference. Static + UserDefaults
-    /// so a SwiftUI `@AppStorage` binding and the connect path share one source
-    /// of truth.
-    static var forceRealityEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: forceRealityDefaultsKey) }
-        set { UserDefaults.standard.set(newValue, forKey: forceRealityDefaultsKey) }
-    }
-    /// True while signaling is tunneled through the Reality SOCKS5 (either the
-    /// auto fallback or the manual force). Drives a quiet UI indicator and
-    /// guards against re-activating an already-active tunnel. Never persisted.
-    @Published private(set) var transportIsReality: Bool = false
-    /// REALITY_PIN fix: true when `activateRealityFallback` observed the
-    /// server-issued Reality front public key CHANGE from a previously-pinned
-    /// value (`RealityPinStore.Verdict.changed`) — a compromised/coerced CDN
-    /// edge swapping the key would show up here. Non-blocking (signal-not-kill):
-    /// the tunnel still comes up under the new key; this only drives a quiet
-    /// advisory in TransportSettingsScreen. Never auto-clears — same "sticky
-    /// until surfaced" shape as `callIdentityUnauthenticatedChange`.
-    @Published var realityKeyChanged: Bool = false
-    /// Re-entrancy guard so overlapping stall signals / toggle taps can't fire
-    /// two concurrent RealityManager.start() attempts.
-    private var realityActivationInFlight: Bool = false
     /// W90: peer userId of the currently-open chat. ChatContainer.markRead
     /// sets this on .onAppear; ChatContainer deinits clear it. Used by
     /// `handleIncomingMessage` to suppress local-notification banners
@@ -3290,33 +3254,6 @@ final class AppState: ObservableObject {
             }
         }
 
-        // W-REALITYPORTSYNC (2026-09-15, audit
-        // reference_ios_full_audit_2026_09_15.md connectivity finding #2) —
-        // a health-triggered `RealityManager.restartInPlace()` binds a NEW
-        // local SOCKS5 port; `BCryptoWebSocketClient.currentSocksPort` is
-        // sticky by design (set once at `activateRealityFallback`'s initial
-        // `connect(viaSocksPort:)`, never re-read on its own), so without
-        // this every subsequent internal reconnect kept redialing the now-
-        // dead old port while `transportIsReality` stayed `true` — the app
-        // looked tunneled but never actually reconnected. Route through the
-        // SAME entry point `activateRealityFallback` uses at initial setup
-        // (`disconnect()` then `connect(viaSocksPort:)`) instead of a
-        // bespoke rebind, so this stays byte-identical to the path already
-        // proven to re-point the socket correctly.
-        NotificationCenter.default.addObserver(
-            forName: RealityManager.tunnelRestartedNotification,
-            object: nil,
-            queue: .main
-        ) { note in
-            guard let port = note.userInfo?["port"] as? Int else { return }
-            Task { @MainActor [weak self] in
-                guard let self, self.transportIsReality, let prov = self.liveProvider else { return }
-                let ws = prov.getWebSocketClient()
-                ws.disconnect()
-                ws.connect(viaSocksPort: port)
-                RTLog.warn("network", "reality socks port resynced after health restart port=\(port)")
-            }
-        }
 
         // W74: re-attempt the persistent WS the moment the app returns
         // to the foreground. iOS suspends URLSessionWebSocketTask while
@@ -5524,17 +5461,7 @@ final class AppState: ObservableObject {
                 }
             }
         }
-        Task { [weak self] in
-            // Clearnet-FIRST (design doc §6): the normal direct WSS dial is the
-            // default for the 99% of users on an open network. ONLY the explicit
-            // manual force flag (tester / known-censored network) brings Reality
-            // up before trying clearnet; the automatic path instead waits for a
-            // hard clearnet failure (handleNodeStalled → no reachable node).
-            if AppState.forceRealityEnabled {
-                print("[AppState] force-Reality enabled — bringing up tunnel before clearnet dial")
-                await self?.activateRealityFallback(reason: "manual-force-at-connect")
-                return
-            }
+        Task {
             do {
                 try await provider.initialize()
                 print("[AppState] persistent WS opened (online presence active)")
@@ -14496,160 +14423,8 @@ final class AppState: ObservableObject {
         lastFailoverMs = now
         let jitter = Double.random(in: 0...5_000)
         try? await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000))
-        let newWss = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
-        // W-REALITYAUTODISABLE (2026-09-15) — align with Android
-        // (NetworkProtocolRouter.kt, commits 18078eb9c/4b5f42b55, same day):
-        // this used to auto-promote Reality here on a hard clearnet-block
-        // signal (CLEARNET-FIRST fallback, design doc §6). DISABLED — the
-        // trigger only proved every trusted clearnet node was unreachable, it
-        // never proved the Reality tunnel it then brought up actually carried
-        // traffic (activateRealityFallback flips transportIsReality=true on
-        // bare SOCKS-port-bound success, before any real probe). Live
-        // incident on Android: devices auto-promoted into a tunnel that never
-        // carried traffic, stuck silently with no working network, not even
-        // self-clearing across a restart. iOS never independently hit this
-        // (RealityManager's own W-REALITYHEALTH watchdog already covers more
-        // than Android's ever did), but the SAME unproven-activation shape
-        // exists here too, so it gets the same fix: no more auto-trigger.
-        // Reality stays fully available via the manual force path
-        // (setForceRealityTransport → activateRealityFallback(reason:
-        // "manual-force")) — a tester/user who explicitly wants it still
-        // gets it, and would notice if it weren't working. The line below
-        // only logs; it deliberately never calls activateRealityFallback.
-        // The former W-REALITYBREAKER recovery watch, which only ever
-        // started from this AUTO trigger, was removed outright rather than
-        // left orphaned — see its former call site below for the pointer to
-        // Android's matching removal (commit 4b5f42b55).
-        if newWss == nil {
-            RTLog.warn("network", "handleNodeStalled: every trusted clearnet node unreachable — Reality auto-promotion is disabled (W-REALITYAUTODISABLE); use Force Reality Transport in Settings to bring up the tunnel manually")
-        }
+        _ = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
     }
-
-    /// Bring up the Reality censorship-bypass tunnel and re-point the persistent
-    /// signaling WebSocket through its local SOCKS5 (start() → local SOCKS5
-    /// port → dial the WSS through it), for the app's real
-    /// `wss://voip.bcrypto.com` transport.
-    ///
-    /// Reuses the EXISTING `RealityManager` + its xray config builder: this only
-    /// sources the server-issued params and feeds them in. The WSS TLS + cert
-    /// pinning above the socket run UNCHANGED through the tunnel (see
-    /// `BCryptoWebSocketClient.connect(viaSocksPort:)`), so nothing above the
-    /// transport layer knows Reality exists.
-    ///
-    /// Params come from the SAME `/calling/relays` bundle the TURN
-    /// selectors already use: the warm in-memory cache first (populated while
-    /// clearnet was healthy — covers a mid-session block), then a best-effort
-    /// fresh fetch (works on the open network of the manual-force test path). On
-    /// a truly blocked cold start neither is available and this no-ops — a known
-    /// v1 bootstrap limit the design doc §6.3 explicitly defers, not something
-    /// this last-mile solves.
-    @MainActor
-    func activateRealityFallback(reason: String) async {
-        guard let prov = liveProvider else { return }
-        // Already tunneling, or a concurrent activation is mid-flight → no-op.
-        if transportIsReality || realityActivationInFlight { return }
-        realityActivationInFlight = true
-        defer { realityActivationInFlight = false }
-
-        guard let relayProvider = ensureRelayProvider() else { return }
-        var params = await relayProvider.cachedOrNil()?.reality
-        if params == nil {
-            params = await relayProvider.currentOrRefresh()?.reality
-        }
-        guard let reality = params, reality.isUsable else {
-            print("[AppState] Reality fallback (\(reason)): server has no usable reality params — cannot bypass")
-            return
-        }
-
-        // REALITY_PIN fix: TOFU-pin the front's public key by hostname. A
-        // mismatch means the server-issued key CHANGED since we last saw it —
-        // a compromised/coerced CDN edge could do this with zero other signal.
-        // Non-blocking (signal-not-kill): log loud, re-pin to the new value
-        // (already done inside checkAndPin), still connect — refusing to
-        // connect would break the user's only censorship-bypass path.
-        let pinVerdict = RealityPinStore.checkAndPin(hostname: reality.hostname, publicKey: reality.publicKey)
-        if pinVerdict == .changed {
-            RTLog.error("security", "Reality front public key CHANGED for \(reality.hostname)")
-            realityKeyChanged = true
-        }
-
-        // Map the server-issued relay block into RealityManager's config shape.
-        // The client hardcodes NOTHING — every field is server-chosen (design
-        // doc §4.2). fingerprint defaults to "chrome" inside RealityManager.
-        let managerParams = RealityManager.Params(
-            serverAddress: reality.hostname,
-            serverPort: reality.port,
-            uuid: reality.uuid,
-            publicKey: reality.publicKey,
-            shortId: reality.shortId,
-            serverName: reality.serverName,
-            flow: reality.flow
-        )
-
-        do {
-            let socksPort = try await RealityManager.shared.start(params: managerParams)
-            let ws = prov.getWebSocketClient()
-            // Tear the (blocked / direct) socket down first so
-            // connect(viaSocksPort:) — which only proceeds from `.disconnected`
-            // — takes effect, then re-dial the SAME WSS through the tunnel. The
-            // socks port is sticky across the socket's own internal reconnects
-            // (see BCryptoWebSocketClient.currentSocksPort), so a later drop
-            // keeps routing through Reality instead of silently reverting to the
-            // blocked clearnet path.
-            ws.disconnect()
-            ws.connect(viaSocksPort: Int(socksPort))
-            transportIsReality = true
-            print("[AppState] Reality fallback (\(reason)) ACTIVE — WSS tunneled via 127.0.0.1:\(socksPort)")
-        } catch {
-            print("[AppState] Reality fallback (\(reason)) FAILED to start: \(error)")
-            errorMessage = "Tunnel Reality non disponibile: \(error.localizedDescription). Connessione diretta in corso."
-            // start() threw before we ever got to disconnect()/connect(viaSocksPort:)
-            // above, so the socket is left exactly as this function found it — which,
-            // for the "auto-clearnet-block" caller, means already disconnected (every
-            // trusted clearnet node was just exhausted) with nothing left to bring it
-            // back. Without this, the client stays silently offline forever. Fall back
-            // to a plain clearnet connect — same call the manual OFF path uses in
-            // setForceRealityTransport(_:) — so at minimum normal reconnect/backoff
-            // resumes instead of the client going dark.
-            let ws = prov.getWebSocketClient()
-            ws.connect()
-        }
-    }
-
-    /// Manual force path (TransportSettingsScreen toggle / debug hook). Persists
-    /// the preference and applies it immediately when a live provider exists:
-    /// ON → bring Reality up now; OFF → tear the tunnel down and re-dial
-    /// clearnet directly. Lets a tester verify the Reality path on an OPEN
-    /// network, where the automatic hard-failure trigger would never fire.
-    @MainActor
-    func setForceRealityTransport(_ on: Bool) {
-        AppState.forceRealityEnabled = on
-        guard let prov = liveProvider else { return } // applied at next connect
-        let ws = prov.getWebSocketClient()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if on {
-                await self.activateRealityFallback(reason: "manual-force")
-            } else {
-                // Revert to clearnet: drop the tunnel + re-dial direct.
-                ws.disconnect()
-                await RealityManager.shared.stop()
-                self.transportIsReality = false
-                ws.connect()
-                print("[AppState] Reality force OFF — reverted to direct clearnet WSS")
-            }
-        }
-    }
-
-    // W-REALITYBREAKER (2026-09-11) — the backward trip that reverted an
-    // AUTO-activated Reality tunnel once direct clearnet genuinely recovered
-    // — REMOVED 2026-09-15 (W-REALITYAUTODISABLE) alongside the auto-trigger
-    // it existed to unwind. It only ever started from handleNodeStalled's
-    // auto path, which no longer activates Reality at all; a manual force
-    // is reverted directly by setForceRealityTransport's own OFF branch
-    // above, which never needed this. Mirrors Android's equivalent removal
-    // (NetworkProtocolRouter's onRecoveredToDirect, commit 4b5f42b55) —
-    // dead code deleted outright rather than left orphaned, same call.
 
     func logout() {
         authService.clearToken()
@@ -14678,14 +14453,6 @@ final class AppState: ObservableObject {
         // cache re-fetches fail with the old (invalidated) auth token.
         _relayProvider = nil
         wsConnectionState = .disconnected
-        // Reality lifecycle: reset the runtime tunnel state so the next login
-        // starts clearnet-first with a correct indicator, and tear the tunnel
-        // down (idempotent, fire-and-forget). The PERSISTED force preference
-        // (`forceRealityEnabled`) is intentionally left as the tester set it.
-        if transportIsReality {
-            transportIsReality = false
-            Task { await RealityManager.shared.stop() }
-        }
         // W72: drop presence subscriptions + cached statuses so the next
         // login starts with a clean slate.
         presenceService.reset()

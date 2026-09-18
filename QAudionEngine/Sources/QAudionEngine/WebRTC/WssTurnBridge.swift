@@ -52,24 +52,11 @@ public final class WssTurnBridge: @unchecked Sendable {
     private let username: String?
     private let credential: String?
     private let accessToken: String?
-    /// Local loopback SOCKS5 port to dial THIS bridge's WebSocket through
-    /// (Reality active) — same shape as
-    /// `BCryptoWebSocketClient.connect(viaSocksPort:)`'s `currentSocksPort`.
-    /// `nil` (the default) preserves today's direct-dial behavior
-    /// byte-for-byte: the signaling socket already tunnels through
-    /// Reality when active (see `BCryptoWebSocketClient`), but this
-    /// TURN-fallback bridge used to always dial clearnet regardless —
-    /// leaking the call's TURN traffic outside the tunnel. Caller resolves
-    /// the port from `RealityManager.shared.activeSocksPort` before
-    /// constructing the bridge.
-    private let socksPort: Int?
     /// W-AUXPIN (2026-09-02) — the caller's already cert-pinned REST
     /// `URLSession` (SECURITY C-6), reused for this bridge's WSS-TURN
-    /// handshake instead of `URLSession.shared` (no pin) when no SOCKS
-    /// proxy is in play. `nil` (the default) preserves today's behavior
-    /// byte-for-byte — no caller before this change passed one. See
-    /// `start()`'s session-selection comment for why the SOCKS-proxy
-    /// branch is untouched.
+    /// handshake instead of `URLSession.shared` (no pin). `nil` (the
+    /// default) preserves today's behavior byte-for-byte — no caller before
+    /// this change passed one. See `start()`'s session-selection comment.
     private let pinnedSession: URLSession?
 
     public init(
@@ -77,14 +64,12 @@ public final class WssTurnBridge: @unchecked Sendable {
         username: String? = nil,
         credential: String? = nil,
         accessToken: String? = nil,
-        socksPort: Int? = nil,
         pinnedSession: URLSession? = nil
     ) {
         self.wssUrl = wssUrl
         self.username = username
         self.credential = credential
         self.accessToken = accessToken
-        self.socksPort = socksPort
         self.pinnedSession = pinnedSession
     }
 
@@ -260,33 +245,17 @@ public final class WssTurnBridge: @unchecked Sendable {
     }
 
     /// Builds a fresh WS task with subprotocol + auth header + the same
-    /// transport (Reality SOCKS / pinned session / shared) `start()` picked —
-    /// shared by `start()` and `reconnectWebSocket()` so a self-heal
-    /// reconnect can never drift from the initial connection's behavior.
+    /// transport (pinned session / shared) `start()` picked — shared by
+    /// `start()` and `reconnectWebSocket()` so a self-heal reconnect can
+    /// never drift from the initial connection's behavior.
     private func buildWebSocketTask() -> URLSessionWebSocketTask {
         var req = URLRequest(url: wssUrl)
         req.setValue("turn", forHTTPHeaderField: "Sec-WebSocket-Protocol")
         if let tok = accessToken {
             req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         }
-        // Reality censorship-bypass path (additive, default off — mirrors
-        // BCryptoWebSocketClient.connect(viaSocksPort:)). When SOCKS is set,
-        // route this bridge's WSS-TURN socket through the SAME local tunnel
-        // the signaling socket already uses, so a call's TURN relay traffic
-        // doesn't leak outside Reality while signaling does — a custom
-        // proxy config, so it cannot reuse `pinnedSession` below (that
-        // session was built with no proxy) without risking exactly the kind
-        // of behavior change this bridge's happy path must not get.
         let session: URLSession
-        if let socksPort {
-            let sessionConfig = URLSessionConfiguration.default
-            sessionConfig.connectionProxyDictionary = [
-                "SOCKSEnable": true,
-                "SOCKSProxy": "127.0.0.1",
-                "SOCKSPort": socksPort
-            ] as [String: Any]
-            session = URLSession(configuration: sessionConfig)
-        } else if PinnedSessionPolicy.auxiliaryClientsUsePinnedSession, let pinnedSession {
+        if PinnedSessionPolicy.auxiliaryClientsUsePinnedSession, let pinnedSession {
             // W-AUXPIN (2026-09-02) — no SOCKS proxy in play, so the
             // caller's pinned REST session (see init doc, B11 / audit P1
             // item 6) is a drop-in replacement for `.shared`: identical

@@ -239,13 +239,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// connection as dead and tear it down so the reconnect loop picks it up.
     /// ADAPTIVE by transport: WiFi 30 s, cellular 120 s, wired/other 45 s.
     private var pongTimeoutSec: TimeInterval = 30
-    /// SOCKS5 port from the most recent explicit `connect(viaSocksPort:)` call
-    /// (nil = direct dial). Sticky across INTERNAL reconnects (forceReconnect,
-    /// the backoff retry below) so a Reality-routed session keeps routing
-    /// through Reality after a drop instead of silently falling back to a
-    /// direct dial the network may be blocking. Only an explicit external
-    /// `connect(viaSocksPort:)` call changes it.
-    private var currentSocksPort: Int?
     /// Debounce flag for `forceReconnect()`. iOS suspends URLSessionWebSocketTask
     /// silently when the app is backgrounded; the very first send() after
     /// foregrounding may discover task==nil and kick a reconnect. Without this
@@ -277,7 +270,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     // none of them should have to know about the others to avoid stepping on
     // each other's `disconnect()`.
     //
-    // `connect(viaSocksPort:)` keeps its existing public contract — it is
+    // `connect()` keeps its existing public contract — it is
     // still safe to call directly with no token in hand — but it now also
     // holds one FOR the caller (`legacyStandingToken`) so a caller that never
     // adopts the token API sees no behavior change: as long as nobody calls
@@ -359,10 +352,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         if shouldBeConnected() {
             lock.lock()
             let isDisconnected = (_state == .disconnected)
-            let socksPort = currentSocksPort
             lock.unlock()
             if isDisconnected {
-                connect(viaSocksPort: socksPort)
+                connect()
             }
         } else {
             lock.lock()
@@ -380,13 +372,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// have reconnected it). Retrying blind in either case would either
     /// reopen a socket nobody wants anymore or race a second concurrent
     /// connect attempt.
-    private func retryConnectIfStillDesired(viaSocksPort socksPort: Int?) {
+    private func retryConnectIfStillDesired() {
         guard shouldBeConnected() else { return }
         lock.lock()
         let isDisconnected = (_state == .disconnected)
         lock.unlock()
         guard isDisconnected else { return }
-        connect(viaSocksPort: socksPort)
+        connect()
     }
 
     // MARK: - IOS-E1 — outbound WS media-frame bound
@@ -974,14 +966,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// Diagnostic only. See `_lastDisconnectReason` for why this exists.
     public var lastDisconnectReason: String? { lock.lock(); defer { lock.unlock() }; return _lastDisconnectReason }
 
-    /// - Parameter viaSocksPort: when set, routes the WS connection through a
-    ///   local loopback SOCKS5 proxy on `127.0.0.1:<port>` instead of dialing
-    ///   directly — used by the Reality censorship-bypass backend
-    ///   (RealityManager); default `nil` preserves today's direct-dial
-    ///   behavior unchanged. Caller is responsible for having the tunnel
-    ///   already up (e.g. `await RealityManager.shared.start(params:)`)
-    ///   before passing its port.
-    public func connect(viaSocksPort socksPort: Int? = nil) {
+    public func connect() {
         lock.lock()
         // W-CONNWANT — a caller that reaches the socket directly (no token
         // in hand) still gets one held on its behalf, so shouldBeConnected()
@@ -1001,7 +986,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
         _state = .connecting
-        currentSocksPort = socksPort
         // IOS-E5 — any explicit connect() (forceReconnect, willEnterForeground,
         // the un-park call from handlePathUpdate itself) takes ownership away
         // from a park, exactly like it cancels a timer-based backoff retry.
@@ -1055,19 +1039,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // and (with the voip UIBackgroundMode) keeps the socket alive longer
         // when the app is in background.
         sessionConfig.networkServiceType = .callSignaling
-
-        // Reality censorship-bypass path (additive, default off — see
-        // RealityManager.swift / bcrypto-server's CENSORSHIP_RESISTANT_
-        // TRANSPORT_DESIGN.md §4.4). The WSS handshake + cert pinning below
-        // runs UNCHANGED through this tunnel — nothing above the transport
-        // layer needs to know Reality exists.
-        if let socksPort {
-            sessionConfig.connectionProxyDictionary = [
-                "SOCKSEnable": true,
-                "SOCKSProxy": "127.0.0.1",
-                "SOCKSPort": socksPort
-            ] as [String: Any]
-        }
 
         // SECURITY C-6 / H-1 / H-5 — pick the TLS-challenge mode the same
         // way BCryptoRestClient does, and route the WS-open event so the
@@ -1248,10 +1219,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // backoff actually throttle a runaway loop; a genuinely successful
         // reconnect still resets it to 0 in handleMessage("authenticated").
         let listeners = stateListeners
-        let socksPort = currentSocksPort
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
-        connect(viaSocksPort: socksPort)
+        connect()
 
         // Failsafe (per OpenRouter glm-5.1 review 2026-05-08 Bug 1):
         // if `connect()` opens a task that NEVER authenticates AND NEVER
@@ -2609,7 +2579,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             reconnectAttempt = 0
             shouldUnpark = true
         }
-        let socksPortForUnpark = currentSocksPort
         lock.unlock()
 
         if shouldUnpark {
@@ -2618,7 +2587,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // "offlinepark unpark reconnect_attempt=N" (prose-heavy, two
             // unrecognized words) does not, re-verified 2026-08-25.
             print("[BCryptoWS] net park=0 attempt=0")
-            retryConnectIfStillDesired(viaSocksPort: socksPortForUnpark)
+            retryConnectIfStillDesired()
             return
         }
 
@@ -2783,7 +2752,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         pingTimer?.cancel()
         pingTimer = nil
         let listeners = stateListeners
-        let socksPort = currentSocksPort
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
 
@@ -2820,7 +2788,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let jitter = baseDelay * (Double.random(in: -0.25...0.25))
         let delay = max(0.5, baseDelay + jitter)
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.retryConnectIfStillDesired(viaSocksPort: socksPort)
+            self?.retryConnectIfStillDesired()
         }
     }
 }

@@ -3868,13 +3868,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
            }),
            firstTurn.username != nil,
            firstTurn.credential != nil {
-            // Route this bridge's WSS-TURN socket through the SAME Reality
-            // tunnel the signaling socket uses when active (see
-            // WssTurnBridge.socksPort doc) — otherwise a call's TURN media
-            // traffic dials clearnet directly even while signaling is
-            // tunneled. `activeSocksPort` is `nil` when Reality isn't
-            // running, which preserves today's direct-dial behavior.
-            let socksPort = await RealityManager.shared.activeSocksPort
             // W-AUXPIN (2026-09-02, B11) — reuse callingApi's already
             // cert-pinned REST session for this bridge's WSS-TURN handshake
             // instead of URLSession.shared (no pin). nil for any CallingApi
@@ -3885,7 +3878,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 username: firstTurn.username,
                 credential: firstTurn.credential,
                 accessToken: accessToken,
-                socksPort: socksPort.map(Int.init),
                 pinnedSession: callingApi.pinnedUrlSession()
             )
             // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that

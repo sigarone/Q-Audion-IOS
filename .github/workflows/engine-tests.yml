@@ -64,44 +64,6 @@ jobs:
           BUILD=$(xcodebuild -version | grep '^Build version' | awk '{print $3}')
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
-      # ----------------------------------------------------------
-      # Build Reality.xcframework -- VLESS+REALITY-over-xray-core transport
-      # (see ios-testflight.yml's own "Build reality xcframework" step for
-      # the full design-doc context). This job is what actually PROVES the
-      # QAudionEngine/Package.swift binaryTarget wiring compiles and
-      # RealityManager's real `#if canImport(Reality)` branch links, on
-      # every push -- the tag-triggered TestFlight job alone would only
-      # catch a break once per release.
-      #
-      # go-version MUST track RealityCore/go.mod's own `go` directive
-      # (currently 1.26.3): actions/setup-go@v6 sets GOTOOLCHAIN=local at
-      # the job level, so an older pinned Go here can't auto-fetch a newer
-      # toolchain to satisfy go.mod. A stale pin doesn't fail cleanly with
-      # a version-mismatch error -- it breaks `gomobile bind`'s `tool`
-      # directive resolution instead ("gomobile bind requires
-      # golang.org/x/mobile in the current module, but it is not in the
-      # module dependency graph"), which is a much more confusing failure
-      # to debug than the real cause. Root-caused 2026-07-08 after
-      # RealityCore/go.mod bumped its go directive without this pin
-      # following.
-      # ----------------------------------------------------------
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.3'
-          cache: false
-
-      - name: Cache reality xcframework
-        id: cache-reality
-        uses: actions/cache@v5
-        with:
-          path: QAudionApp/Vendor/Reality.xcframework
-          key: reality-xcframework-sim-${{ runner.os }}-${{ hashFiles('RealityCore/go.sum', 'scripts/build-reality-xcframework.sh') }}
-
-      - name: Build reality xcframework
-        if: steps.cache-reality.outputs.cache-hit != 'true'
-        run: bash scripts/build-reality-xcframework.sh
-
       - name: Cache SPM (iOS Simulator)
         id: cache-spm-ios
         uses: actions/cache@v5
@@ -136,20 +98,20 @@ jobs:
       # cached: ModuleCache.noindex (system frameworks -- SwiftUI, Vision,
       # CoreML, AVFoundation, ...) and Build/Intermediates.noindex/
       # SwiftExplicitPrecompiledModules (this package's own binaryTargets --
-      # WebRTC, LiveKitWebRTC, LKObjCHelpers, Reality). The latter is not
-      # optional: in every failing run's log, the LAST module line before
-      # output went silent (the OOM kill point) was always one of exactly
-      # these four -- WebRTC/LiveKitWebRTC/LKObjCHelpers/Reality are the
-      # heaviest ObjC++ module builds this target does, so leaving that
-      # directory uncached would still force a cold rebuild of precisely the
-      # frameworks most implicated in the crash.
+      # WebRTC, LiveKitWebRTC, LKObjCHelpers). The latter is not optional:
+      # in every failing run's log, the LAST module line before output went
+      # silent (the OOM kill point) was always one of exactly these three --
+      # WebRTC/LiveKitWebRTC/LKObjCHelpers are the heaviest ObjC++ module
+      # builds this target does, so leaving that directory uncached would
+      # still force a cold rebuild of precisely the frameworks most
+      # implicated in the crash.
       #
       # Root cause (2026-08-26): this job runs on macos-latest,
       # which is 3 vCPU / 7 GB RAM (confirmed against GitHub's own runner
       # spec table, not assumed) -- and until this cache existed, EVERY push
       # cold-rebuilt the explicit-module graph for the entire system-
       # framework set this target touches (SwiftUI, Vision, CoreML,
-      # AVFoundation, WebRTC, LiveKitWebRTC, Reality, ~30 frameworks total,
+      # AVFoundation, WebRTC, LiveKitWebRTC, ~30 frameworks total,
       # confirmed by grepping a failing run's log for
       # SwiftExplicitDependencyGeneratePcm) from scratch, with xcodebuild's
       # default (unthrottled) build concurrency. That cold burst is the
@@ -237,15 +199,6 @@ jobs:
           # (rather than in Package.swift's unsafeFlags, which would make
           # this package ineligible as a remote SPM dependency for any other
           # consumer) keeps this a CI-only concession.
-          #
-          # OTHER_LDFLAGS -lresolv: Reality.xcframework embeds a gomobile-
-          # compiled Go runtime, which needs libresolv's res_9_ninit/
-          # res_9_nsearch/res_9_nclose symbols for DNS resolution. A THIRD
-          # previously-masked break, same root cause as the two above --
-          # this job never linked QAudionEngineTests against Reality until
-          # now. QAudionApp/project.yml already carries the identical
-          # `-lresolv` for the main app target (same comment, same reason);
-          # this test target just never had it.
           #
           # 2026-07-10: test_markViewOnceOpened_incomingRow_armsExpiryAndOpensIt
           # was skipped here (commit 89a221a) on the theory that it was a
@@ -365,7 +318,6 @@ jobs:
               SWIFT_ENABLE_TESTABILITY=YES \
               COMPILER_INDEX_STORE_ENABLE=NO \
               SWIFT_ENABLE_EXPLICIT_MODULES=NO \
-              OTHER_LDFLAGS="\$(inherited) -lresolv" \
               -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
               -derivedDataPath /tmp/dd-ios-sim \
               -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
@@ -492,33 +444,6 @@ jobs:
         uses: docker://ghcr.io/realm/swiftlint:latest
         with:
           args: lint --config .swiftlint-qaudionapp.yml --path QAudionApp
-
-  # RealityCore (VLESS+REALITY Go core, see ios-simulator-tests above
-  # for the gomobile-bind build of the same module) has go.mod/tests
-  # but was never checked by `go vet`/`go test` in CI. go-version pinned
-  # to match RealityCore/go.mod's own `go` directive, same as the
-  # ios-simulator-tests job's Go setup above.
-  realitycore-go-report:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.3'
-          cache: true
-          cache-dependency-path: RealityCore/go.sum
-      - name: go vet (report only)
-        continue-on-error: true
-        run: |
-          cd RealityCore
-          go vet ./...
-      - name: go test (report only)
-        continue-on-error: true
-        run: |
-          cd RealityCore
-          go test ./... -v
 
   # Secret scan over the full repo (including history) via the
   # official gitleaks Docker image. Report only: a hit here (e.g. an

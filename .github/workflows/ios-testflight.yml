@@ -220,66 +220,6 @@ jobs:
           cache: false
 
       # ----------------------------------------------------------
-      # 3c) Build Reality.xcframework -- VLESS+REALITY-over-xray-core
-      #     censorship-bypass transport (github.com/xtls/libxray), the
-      #     SOLE bypass mechanism per bcrypto-server's
-      #     CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md -- embedded Tor was
-      #     removed entirely 2026-09-14, on every platform (was additive,
-      #     design doc §7). Source lives in ../RealityCore (this
-      #     repo, not an external clone); cache key is that module's own
-      #     go.sum + this build script, since there is no external ref to pin.
-      #     Produces QAudionApp/Vendor/Reality.xcframework (the `Reality`
-      #     module). Runs BEFORE xcodegen, though Reality is consumed via
-      #     QAudionEngine (SPM), not project.yml.
-      #
-      #     NOTE (2026-07-08): wired for real -- QAudionEngine/Package.swift's
-      #     `hasRealityXcframework` check adds this as a real binaryTarget +
-      #     `.target(name: "Reality", ...)` dependency once this step
-      #     produces the file (see Package.swift's top-of-file comment).
-      #     RealityManager.swift's real `#if canImport(Reality)` branch is
-      #     now what actually compiles for a release build. Also verified on
-      #     every push (not just tag releases) via engine-tests.yml's
-      #     ios-simulator-tests job, which builds the same universal
-      #     (device+simulator) xcframework and is REQUIRED there (no
-      #     continue-on-error) -- kept non-blocking here so a transient
-      #     Reality build hiccup (network fetch of xray-core deps, etc.)
-      #     never blocks shipping an otherwise-ready TestFlight release.
-      # ----------------------------------------------------------
-      - name: Cache reality xcframework
-        id: cache-reality
-        uses: actions/cache@v5
-        with:
-          path: QAudionApp/Vendor/Reality.xcframework
-          key: reality-xcframework-${{ runner.os }}-${{ hashFiles('RealityCore/go.sum', 'scripts/build-reality-xcframework.sh') }}
-
-      - name: Build reality xcframework
-        if: steps.cache-reality.outputs.cache-hit != 'true'
-        # Kept non-blocking on the release path -- see NOTE above.
-        continue-on-error: true
-        # v1.0.796 (2026-07-16): this step hung for 1h13m+ on a shared
-        # runner -- continue-on-error only forgives a step that actually
-        # EXITS (success or failure); it does nothing for a hang, since the
-        # step never reaches an exit code to forgive. The same script ran
-        # successfully in engine-tests.yml's ios-simulator-tests job the
-        # same day (6-13 min total job time), so this looks like transient
-        # runner/network flakiness rather than a deterministic bug -- but
-        # cap it hard either way so a repeat never silently burns an hour+
-        # of the 150-minute job budget again.
-        timeout-minutes: 20
-        env:
-          # actions/setup-go@v6 sets GOTOOLCHAIN=local at the job level when
-          # go-version is pinned (here: 1.22, for WireGuardKitGo's CGO build
-          # a few steps up) -- that's correct for WireGuard but blocks
-          # `go install golang.org/x/mobile/cmd/gomobile@latest`, which
-          # requires Go >= 1.25 (device-confirmed 2026-07-07: "requires go
-          # >= 1.25.0 (running go 1.22.12; GOTOOLCHAIN=local)"). `auto`
-          # (Go's own default outside this pin) lets THIS step's `go`
-          # invocations self-select a newer per-module toolchain without
-          # touching the job-level pin the WireGuard step still needs.
-          GOTOOLCHAIN: auto
-        run: bash scripts/build-reality-xcframework.sh
-
-      # ----------------------------------------------------------
       # 4) Generate the Xcode project from project.yml.
       # ----------------------------------------------------------
       - name: Generate Xcode project
@@ -925,14 +865,15 @@ jobs:
           # Re-sign EVERY embedded framework with the distribution cert, not
           # just onnxruntime. Signing the .app bundle below is NOT recursive
           # (no --deep, which Apple discourages), so any framework that was
-          # patched (onnxruntime's MinimumOSVersion) OR arrived unsigned from a
-          # gomobile-built xcframework (Reality.framework — VLESS+REALITY
-          # transport) must be signed here or altool rejects the upload with
-          # 90034 "not signed using an Apple submission certificate"
-          # (device-confirmed on v1.0.743, 2026-07-08: Reality.framework
-          # unsigned). Sign inner frameworks before the outer app so nested
-          # signatures are sealed by the app signature. Frameworks can live at
-          # the app root OR under Frameworks/ — find covers both.
+          # patched (onnxruntime's MinimumOSVersion) OR arrived unsigned from
+          # a binary xcframework must be signed here or altool rejects the
+          # upload with 90034 "not signed using an Apple submission
+          # certificate" (device-confirmed on v1.0.743, 2026-07-08, against
+          # the since-removed Reality.xcframework — the failure mode is
+          # general to any unsigned embedded framework, so this step stays).
+          # Sign inner frameworks before the outer app so nested signatures
+          # are sealed by the app signature. Frameworks can live at the app
+          # root OR under Frameworks/ — find covers both.
           find "Payload/QAudionApp.app" -name "*.framework" -type d | while read -r EMBED_FW; do
             codesign --force --sign "$IDENTITY" "$EMBED_FW"
             echo "re-signed: $EMBED_FW"

@@ -1584,10 +1584,9 @@ extension LiveKitGroupCallRoom: TrackDelegate {
 
 /// LiveKit SPM dependency did not resolve/compile in this build environment
 /// (see `Package.swift`'s `.package(url: ".../client-sdk-swift", ...)` pin
-/// for the version-compatibility rationale). Mirrors the `#if
-/// canImport(Reality)` stub pattern already used in this package: the real
-/// implementation above compiles wherever the dependency resolves; every
-/// other build configuration gets this inert stub so the rest of
+/// for the version-compatibility rationale). Conditional-compile stub: the
+/// real implementation above compiles wherever the dependency resolves;
+/// every other build configuration gets this inert stub so the rest of
 /// QAudionEngine is never blocked on it. `GroupCallController` treats a
 /// throw from `connect` exactly like a `group_call_sfu_unavailable` server
 /// reply and falls back to the existing WS-relay mesh path.

@@ -68,21 +68,6 @@ targets:
           # the plain recursive sweep, XcodeGen classifies .xcprivacy as a
           # bundle resource and it lands at Payload/QAudionApp.app/
           # PrivacyInfo.xcprivacy, which ios-testflight.yml now asserts.
-          # Reality.xcframework (VLESS+REALITY, built by
-          # scripts/build-reality-xcframework.sh into Vendor/) is NOT YET
-          # wired as a real dependency anywhere (no `framework:` entry
-          # below, no SPM binaryTarget in QAudionEngine/Package.swift —
-          # see that file's own comment). Without this exclude, the blind
-          # recursive `sources: path: .` sweep picks it up as a loose
-          # folder resource and copies its RAW, unprocessed binary into
-          # the app bundle — never going through Xcode's real embed/link
-          # pipeline. altool then rejects the upload outright: "The
-          # executable 'Reality.framework/Reality' has type 'OBJECT' that
-          # is not valid. Only 'EXECUTE' is permitted. (90124)" — device-
-          # confirmed 2026-07-08, blocked v1.0.744 (every TestFlight
-          # release, not just Reality). Remove this exclude in the same
-          # change that adds the real `.binaryTarget`/`framework:` wiring.
-          - "Vendor/Reality.xcframework"
           # NOTE: it.lproj/AppIntentVocabulary.plist (ITMS-90626) is
           # deliberately NOT excluded here. Two earlier attempts (v1.0.1099,
           # v1.0.1101) both excluded it from this sweep and re-added it as
@@ -134,13 +119,10 @@ targets:
         # add `-DQAUDION_DEV_TOOLS` via OTHER_SWIFT_FLAGS or append the
         # condition to this line on a throwaway branch; never commit it.
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited)
-        # -lresolv: Reality.xcframework embeds a gomobile-compiled Go runtime
-        # that needs libresolv's res_9_ninit/res_9_nsearch/res_9_nclose for DNS
-        # resolution (engine-tests.yml passes the identical flag for the same
-        # reason). -lc++ was originally added for the quiche/BoringSSL static
-        # lib, which is gone; kept because the other C++-backed binary
-        # frameworks may rely on it and it is harmless when already satisfied.
-        OTHER_LDFLAGS: $(inherited) -lresolv -lc++
+        # -lc++ was originally added for the quiche/BoringSSL static lib,
+        # which is gone; kept because the other C++-backed binary frameworks
+        # may rely on it and it is harmless when already satisfied.
+        OTHER_LDFLAGS: $(inherited) -lc++
         # CarPlay (Tier B custom in-car app) is gated behind QAUDION_CARPLAY and
         # is OFF by default so `v*` TestFlight builds stay green WITHOUT the
         # Apple-approval-gated `com.apple.developer.carplay-communication`

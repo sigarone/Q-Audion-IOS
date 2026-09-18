@@ -1,19 +1,5 @@
 // swift-tools-version: 5.9
 import PackageDescription
-import Foundation
-
-// Reality.xcframework is built on-demand by scripts/build-reality-xcframework.sh
-// (CI: the "Build reality xcframework" step in ios-testflight.yml and
-// engine-tests.yml's ios-simulator-tests job) — it is NOT committed to git and
-// is absent on any job that doesn't run that step (e.g. the macOS-native
-// `swift test` job, which has no Xcode/gomobile step for it and would fail
-// package resolution outright on a missing local-path binaryTarget). Resolved
-// dynamically here instead of declared unconditionally so resolution never
-// hard-fails wherever the file doesn't exist — RealityManager.swift's
-// `#if canImport(Reality)` real branch compiles only where it's actually
-// present, its stub `#else` branch everywhere else, exactly like before.
-let realityXcframeworkPath = "../QAudionApp/Vendor/Reality.xcframework"
-let hasRealityXcframework = FileManager.default.fileExists(atPath: realityXcframeworkPath)
 
 let package = Package(
     name: "QAudionEngine",
@@ -244,21 +230,16 @@ let package = Package(
         // real-time voice, and the app shipped no pluggable-transport
         // bridges (no obfs4/meek/snowflake), so plain Tor was often blocked
         // outright by real state-level censorship anyway (well-known guard-
-        // relay IPs get blocklisted) while Reality's TLS-disguise approach
-        // is comparably or more resistant AND single-hop. `EmbeddedTorManager`
-        // and `TorObfsTransport` were deleted along with this dependency
-        // entry (they only ever compiled against the `#else` stub branch —
-        // the SPM package URL https://github.com/iCepa/Tor.swift 404s, so a
-        // working embedded Tor build never actually shipped on iOS). Reality
-        // (VLESS+REALITY over xray-core) is now the sole censorship-bypass
-        // mechanism, on every platform, for consistency. Do not re-attempt
-        // sourcing a working Tor SPM package — this line of work is closed.
-        //
-        // REALITY: RealityManager.swift's real `#if canImport(Reality)` branch is wired
-        // below — see `hasRealityXcframework` at the top of this file for how the
-        // binaryTarget/dependency are added only where QAudionApp/Vendor/Reality.xcframework
-        // actually exists (built by scripts/build-reality-xcframework.sh, iOS-only,
-        // .iOS platform condition on the target dependency).
+        // relay IPs get blocklisted). `EmbeddedTorManager` and
+        // `TorObfsTransport` were deleted along with this dependency entry
+        // (they only ever compiled against the `#else` stub branch — the
+        // SPM package URL https://github.com/iCepa/Tor.swift 404s, so a
+        // working embedded Tor build never actually shipped on iOS). Do not
+        // re-attempt sourcing a working Tor SPM package — this line of work
+        // is closed. The Reality/xray-core integration that briefly
+        // replaced it was itself removed 2026-09-18 (no upside for the
+        // App-Review-surface cost); iOS ships no dedicated censorship-bypass
+        // transport today.
     ],
     targets: [
         // ─────────────────────────────────────────────────────────────────────────────────────
@@ -377,7 +358,7 @@ let package = Package(
                 // rationale (LK-prefixed symbols, renamed framework bundle).
                 .product(name: "LiveKit", package: "client-sdk-swift"),
                 // Tor.swift removed entirely (W610, 2026-09-14) — see note in dependencies above.
-            ] + (hasRealityXcframework ? [.target(name: "Reality", condition: .when(platforms: [.iOS]))] : []),
+            ],
             path: "Sources/QAudionEngine",
             resources: [
                 .copy("Resources/aasist_raw_base_maxdata_int8.onnx"),
@@ -480,7 +461,5 @@ let package = Package(
                 .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/decap.json")
             ]
         )
-    ] + (hasRealityXcframework ? [
-        Target.binaryTarget(name: "Reality", path: realityXcframeworkPath),
-    ] : [])
+    ]
 )
