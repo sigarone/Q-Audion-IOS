@@ -17899,47 +17899,6 @@
         }
       }
     },
-    "Instrada segnale e media nel tunnel Reality (VLESS+Reality) invece che in chiaro. Sperimentale.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Instrada segnale e media nel tunnel Reality (VLESS+Reality) invece che in chiaro. Sperimentale."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Routes signaling and media through the Reality tunnel (VLESS+Reality) instead of in the clear. Experimental."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enruta la señalización y el media por el túnel Reality (VLESS+Reality) en lugar de en texto plano. Experimental."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Route le signal et les médias dans le tunnel Reality (VLESS+Reality) au lieu du réseau en clair. Expérimental."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leitet Signalisierung und Medien durch den Reality-Tunnel (VLESS+Reality) statt im Klartext. Experimentell."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Roteia sinalização e mídia pelo túnel Reality (VLESS+Reality) em vez de texto simples. Experimental."
-          }
-        }
-      }
-    },
     "Interno": {
       "extractionState": "manual",
       "localizations": {

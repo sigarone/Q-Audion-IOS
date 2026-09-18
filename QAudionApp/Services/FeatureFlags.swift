@@ -40,7 +40,10 @@ import Foundation
 ///
 /// **Known keys** (the ONLY keys the app reads from flags.json; any other
 /// key in the remote file is ignored, and an absent key resolves to the
-/// caller's compiled default):
+/// caller's compiled default). Per-user overlay targeting is itself
+/// allowlisted (`overlayEligibleKeys`, W-5POINT6HARDEN) -- a key not on
+/// that list can never resolve differently for one account than another,
+/// even via the authenticated overlay:
 ///
 ///   | key                      | type | default               | effect                                   |
 ///   |--------------------------|------|-----------------------|------------------------------------------|
@@ -261,14 +264,38 @@ public final class FeatureFlags {
         }
     }
 
+    // MARK: - Overlay allowlist (W-5POINT6HARDEN, 2026-09-18)
+
+    /// Keys the per-user AUTHENTICATED overlay is permitted to answer for.
+    /// Guideline 5.6 forbids behavior that differs by WHO is looking at the
+    /// app; the public flags.json is safe by construction (one file, one
+    /// value, for everyone -- including App Review). The authenticated
+    /// overlay is per-user/per-group BY DESIGN (see `startAuthenticated`'s
+    /// doc), so any key resolved through it could in principle be set
+    /// differently for one account than another. Default-deny: a key not
+    /// in this set NEVER reads the overlay, no matter what the server
+    /// sends -- only a key explicitly reviewed and added here can be
+    /// account-targeted. `LOG_OTLP_EXPORT_ENABLED` is the only member: it
+    /// can only ever turn telemetry SHIPPING off (never on, and it changes
+    /// no rendered UI), so per-account targeting of it changes no visible
+    /// behavior. `ENTITLEMENTS_CODE_UI_ENABLED` is deliberately NOT here --
+    /// see its doc row above (W-5POINT6FIX): a reviewer-differential value
+    /// on that flag is exactly what got this app rejected under 5.6, and
+    /// this keeps that true even if the overlay service is ever misused to
+    /// target it, not just for the client-side check that was removed.
+    private static let overlayEligibleKeys: Set<String> = ["LOG_OTLP_EXPORT_ENABLED"]
+
     // MARK: - Typed lookups (compiled default always wins on absence)
 
     /// Resolve a Bool flag. Returns `def` when the key is absent or the
     /// stored value is not a Bool. The compiled default is the fail-safe.
     public static func bool(_ key: String, _ def: Bool) -> Bool {
-        // Overlay first: it is what the server resolved for THIS user, with
-        // per-group and per-user overrides already applied.
-        if let b = FeatureFlags.shared.overlay[key] as? Bool { return b }
+        // Overlay first, but only for an allowlisted key -- see
+        // `overlayEligibleKeys`. Every other key ignores the overlay
+        // entirely and reads the SAME public cache every install does.
+        if overlayEligibleKeys.contains(key), let b = FeatureFlags.shared.overlay[key] as? Bool {
+            return b
+        }
         let value = FeatureFlags.shared.cache[key]
         guard let b = value as? Bool else { return def }
         return b
@@ -277,7 +304,9 @@ public final class FeatureFlags {
     /// Resolve a String flag. Returns `def` when the key is absent or the
     /// stored value is not a String. The compiled default is the fail-safe.
     public static func string(_ key: String, _ def: String) -> String {
-        if let s = FeatureFlags.shared.overlay[key] as? String { return s }
+        if overlayEligibleKeys.contains(key), let s = FeatureFlags.shared.overlay[key] as? String {
+            return s
+        }
         let value = FeatureFlags.shared.cache[key]
         guard let s = value as? String else { return def }
         return s
