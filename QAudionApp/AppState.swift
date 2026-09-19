@@ -9967,9 +9967,14 @@ final class AppState: ObservableObject {
             // wait out. Buffer and wait for the CONTROL session instead.
             if wireClass != .v5 {
                 triggerKeyExchange(with: senderId, force: true)
-            } else if AppState.sharedV4Ratchet.hasChannelSession(
+            } else if !isRetry, AppState.sharedV4Ratchet.hasChannelSession(
                 epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId
             ) {
+                // FIRST failure only (`!isRetry`): a buffered frame replayed later
+                // is by definition sealed under whatever session the peer had
+                // BEFORE the repair, so it fails against the repaired session for
+                // good — and dropping on that failure destroyed the fresh session
+                // the repair had just installed (live 2026-09-19 08:49:23, iPhone).
                 // W-CTRLDROPRECV (2026-09-19) — a PRESENT CONTROL session that
                 // still fails to decrypt is a diverged session, not a missing
                 // one: `ensureV4Session`'s send-time check below only re-sends
@@ -10001,13 +10006,23 @@ final class AppState: ObservableObject {
                     serverTs: serverTs)
                 return
             }
-            // W-DECRYPTNACK (2026-09-19) — this is the "recovered channel,
-            // permanently lost frame" point: a retry only reaches here after
-            // the drop/ensure (v5) or PSK re-derive (legacy) above already
-            // ran once, so a reply to `senderId` over this now-repaired
-            // channel is deliverable. Best-effort, debounced — mirrors
-            // Android's identical hook in
-            // `ReceiveMessageUseCase.retryOneBufferedControlFailure`.
+            // A 0xE6 frame is a control envelope (avatar/reaction/delete/...), never
+            // user text: there is nothing for the sender to resend and nothing the
+            // user should see as a "message". Android already suppresses the row for
+            // this class; iOS showed "[messaggio cifrato non leggibile]" for it.
+            // ACK so the server stops redelivering, then stop.
+            if wireClass == .v5 {
+                RTLog.warn("chat", "msg_receive undec=1 wire=v5 giveup=1 suppressed=1")
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                return
+            }
+            // W-DECRYPTNACK (2026-09-19) — a CHAT-class message that stayed
+            // undecryptable through the retry: ask the sender to resend it. The nack
+            // rides the CONTROL channel ONLY (see `sendDecryptNackDebounced`); it is
+            // skipped when no CONTROL session exists rather than falling back to the
+            // chat session, whose own failure was the point (a chat-class nack that
+            // fails to open surfaces on the peer as the very "Messaggio non
+            // decifrabile" it was meant to fix — live 2026-09-19 08:49:23, A36).
             if let clientMsgId {
                 sendDecryptNackDebounced(to: senderId, targetClientMsgId: clientMsgId)
             }
@@ -14300,6 +14315,14 @@ final class AppState: ObservableObject {
     /// debounced. Only call site: the "recovered but still lost" branch in
     /// `handleIncomingMessage`'s decrypt-failure catch.
     private func sendDecryptNackDebounced(to peerId: String, targetClientMsgId: String) {
+        // CONTROL channel only — never let `encryptForWire` fall back to the chat
+        // session for a nack (see the call site's note).
+        guard AppState.sharedV4Ratchet.hasChannelSession(
+            epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerId
+        ) else {
+            print("[AppState] W-DECRYPTNACK skipped: no CONTROL session with peer=\(peerId.prefix(8))…")
+            return
+        }
         let key = "\(peerId):\(targetClientMsgId)"
         let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
         if let last = AppState.decryptNackLastSentMs[key], now - last < AppState.decryptNackDebounceMs {
@@ -15624,7 +15647,16 @@ final class AppState: ObservableObject {
 
                         // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — see the responder leg's
                         // identical CONTROL bootstrap above (same rationale, both directions).
-                        let controlOk = AppState.sharedV4Ratchet.ensureBootstrapped(
+                        // W-CTRLREPLACECALLER (2026-09-19) — REPLACE, like the responder leg.
+                        // W-CTRLREPLACE (2026-09-18) only fixed the responder closure: when
+                        // THIS device placed the call, its CONTROL stayed create-if-absent
+                        // while the Android callee replaced its own with the call-derived
+                        // session — a one-way mismatch (live 2026-09-19 08:49, iPhone → A36):
+                        // the iPhone's frames still opened on the peer through its retained
+                        // previous session, the peer's new frames never opened here. Both
+                        // handshake completion sites now replace, so a call converges the
+                        // pair no matter who dialled.
+                        let controlOk = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v5ControlRoutingEpoch,
                             peerId: peerId
                         ) {
@@ -15638,7 +15670,7 @@ final class AppState: ObservableObject {
                                 transcriptHash: transcriptHash
                             )
                         }
-                        print("[PQC_DIAG_V5CTRL] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                        print("[PQC_DIAG_V5CTRL] replaceChannelSession (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(controlOk)")
                     }
                     // P0-3 — same active-callId resolution as the responder leg
                     // above (this closure carries no callId parameter either).
@@ -22495,6 +22527,18 @@ extension AppState {
     private static var v4EnsureLastAttemptMs: [String: Int64] = [:]
     private static let v4EnsurePatientDelayMs: Int64 = 45_000
     private static let v4EnsureRetryIntervalMs: Int64 = 120_000
+    private static var v4EnsureRecheckScheduled: Set<String> = []
+
+    /// One pending re-check per peer, fired just after the patient-initiator wait.
+    private static func scheduleEnsureRecheck(selfId: String, peerId: String, liveProvider: BCryptoBackendProvider?) {
+        guard !v4EnsureRecheckScheduled.contains(peerId) else { return }
+        v4EnsureRecheckScheduled.insert(peerId)
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(AppState.v4EnsurePatientDelayMs + 1_000) * 1_000_000)
+            AppState.v4EnsureRecheckScheduled.remove(peerId)
+            AppState.ensureV4Session(selfId: selfId, peerId: peerId, liveProvider: liveProvider)
+        }
+    }
 
     /// Fire-and-forget: sends a fresh `qa_kms_prebootstrap` envelope to
     /// `peerId` when this device is missing either the CHAT or CONTROL
@@ -22527,7 +22571,15 @@ extension AppState {
         let initiator = selfId < peerId || now - wantedSince >= v4EnsurePatientDelayMs
         let last = v4EnsureLastAttemptMs[peerId]
         let throttled = last != nil && now - last! < v4EnsureRetryIntervalMs
-        guard initiator, !throttled else { return }
+        guard initiator, !throttled else {
+            // The larger-id side is meant to wait `v4EnsurePatientDelayMs` and then
+            // start anyway — but nothing called this function again once the wait
+            // was over, so a device that dropped its CONTROL session waited on the
+            // peer forever if the peer (whose own copy looked fine) never started
+            // (live 2026-09-19 08:48 → 08:49, S26: "poll gave up after 40 attempts").
+            if !initiator { scheduleEnsureRecheck(selfId: selfId, peerId: peerId, liveProvider: liveProvider) }
+            return
+        }
         v4EnsureLastAttemptMs[peerId] = now
         print("[AppState] ensureV4Session: peer=\(peerId.prefix(8))… missing session, sending prebootstrap")
         Task {
