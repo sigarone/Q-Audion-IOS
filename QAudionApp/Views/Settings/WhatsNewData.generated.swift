@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1176",
+              date: "2026-09-19",
+              title: "v1.0.1176",
+              bullets: [
+                "Ack call_missed, adopt a SAS-verified identity rotation, audible foreground ring",
+              ]),
         .init(id: "v1.0.1175",
               date: "2026-09-19",
               title: "v1.0.1175",
@@ -133,12 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1152",
               bullets: [
                 "App Store readiness pass — privacy manifest in the IPA, no external CTA, report next to block, no TestFlight surfaces",
-              ]),
-        .init(id: "v1.0.1151",
-              date: "2026-09-12",
-              title: "v1.0.1151",
-              bullets: [
-                "Debounce the \"Riconnessione in corso\" banner like the disconnected one",
               ]),
     ]
 }
