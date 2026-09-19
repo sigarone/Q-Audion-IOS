@@ -186,7 +186,14 @@ final class ServerSelector {
     /// path this exists for) has a real userId to check against.
     private func candidateServesCurrentUser(httpsUrl: String, provider: BCryptoBackendProvider) async -> Bool {
         guard let token = provider.config.accessToken, !token.isEmpty else { return true }
-        guard let expectedUserId = provider.config.userId, !expectedUserId.isEmpty else { return true }
+        // 2026-09-19 — the live provider is built without a userId (nothing ever passes one to
+        // `pinnedConfig`), so this guard used to return true for every real failover and the
+        // check below never ran: a reselect chose fi1.bcrypto.com although that node answers
+        // `account_locked` for this device (its database holds no active row for it) and the
+        // client sat there unable to authenticate. The Keychain mirror of the user id is what
+        // the app already treats as the current account.
+        let configured = provider.config.userId.flatMap { $0.isEmpty ? nil : $0 }
+        guard let expectedUserId = configured ?? TokenVault.loadUserId(), !expectedUserId.isEmpty else { return true }
         guard let url = URL(string: httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/profile")
         else { return false }
         var req = URLRequest(url: url, timeoutInterval: probeTimeoutSec)
