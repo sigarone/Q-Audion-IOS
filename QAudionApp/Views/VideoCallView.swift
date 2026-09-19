@@ -721,10 +721,12 @@ struct VideoCallView: View {
         let words = appState.callSasWords
         // C-3 — a confirmation with no pinned identity to bind it to is exactly the
         // record this finding was about, so refuse to write one.
-        guard !words.isEmpty, let peer = appState.callContactId,
-              let pinned = PeerIdentityPinStore().pinnedKey(
-                contactId: peer, deviceId: appState.peerDeviceId(for: peer)
-              ) else { return }
+        guard !words.isEmpty, let peer = appState.callContactId else { return }
+        // 2026-09-19 — adopt a rotated key this call presented BEFORE binding the confirmation to a pin.
+        appState.adoptPendingIdentityRotationIfEligible()
+        guard let pinned = PeerIdentityPinStore().pinnedKey(
+            contactId: peer, deviceId: appState.peerDeviceId(for: peer)
+        ) else { return }
         let fp = SasVerificationStore.fingerprint(forWords: words)
         SasVerificationStore.shared.recordVerified(
             peerUserId: peer, fingerprint: fp,

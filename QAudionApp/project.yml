@@ -167,6 +167,9 @@ targets:
       - path: Assets.xcassets
       # Custom incoming-call ringtone (CallKit cfg.ringtoneSound). Bundle root.
       - path: Resources/qaudion_ringtone.caf
+      # 3 s unit of the same ring, replayed by the in-app foreground ring (AppState.startInAppRingtone).
+      # Same explicit-resource pattern as the file above (which does land in the IPA).
+      - path: Resources/qaudion_ringtone_unit.caf
       # Apple privacy manifest (PrivacyInfo.xcprivacy) and ITMS-90626's
       # it.lproj/AppIntentVocabulary.plist deliberately have NO explicit
       # resources: entry here (see `sources.excludes` comment above for

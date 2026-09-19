@@ -357,6 +357,7 @@ struct LiveInCallScreen: View {
                 peerScreenSharing: appState.peerScreenShareActive,
                 // D11 / W-NOBRICK — non-blocking identity-change advisory banner.
                 identityUnauthenticatedChange: appState.callIdentityUnauthenticatedChange,
+                identityRotationAwaitingSas: appState.callIdentityRotationAwaitingSas,
                 // XC-1 — sibling advisory for the sig_invalid verdict (distinct
                 // copy from the identity-change banner above).
                 handshakeSignatureInvalid: appState.callHandshakeSignatureInvalid,
@@ -510,6 +511,9 @@ struct LiveInCallScreen: View {
             RTLog.warn("call", "sasConfirm noop=1 reason=2")  // 2 = no call peer
             return
         }
+        // 2026-09-19 — a rotated key the server published and this call's handshake presented is adopted
+        // by THIS confirmation, before it is bound to a key below (see the AppState function's doc).
+        appState.adoptPendingIdentityRotationIfEligible()
         guard let identityTag = sasIdentityTag(for: peer) else {
             RTLog.warn("call", "sasConfirm noop=1 reason=3")  // 3 = no pinned identity tag
             return

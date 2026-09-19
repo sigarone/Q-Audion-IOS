@@ -128,6 +128,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// In-memory only, cleared in `onCallEnded`.
     private var lastAcceptedRekeyRoundByCall: [String: UInt32] = [:]
 
+    /// 2026-09-19 — lowercased callIds whose session key was derived with the signed handshake
+    /// transcript folded in (CALL-4, `deriveTranscriptBoundSessionKey`). Only for those calls do the SAS
+    /// words depend on the signer identity keys carried in the transcript, so only then can a matching
+    /// SAS vouch for a rotated identity key. In-memory, cleared in `onCallEnded`.
+    private var transcriptBoundCallIds: Set<String> = []
+
+    /// True when this call's session key (and therefore its SAS words) is bound to the handshake
+    /// transcript, which contains both signer identity keys. See `transcriptBoundCallIds`.
+    public func isSessionKeyTranscriptBound(callId: String) -> Bool {
+        lock.withLock { transcriptBoundCallIds.contains(callId.lowercased()) }
+    }
+
     /// I3 §5 — one in-flight caller-initiated mid-call re-key attempt at a
     /// time (glare-avoidance: `performPqcReKey` only ever runs on the
     /// device that originated the call, mirrors Android's `!isInitiator`
@@ -2684,6 +2696,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         transcriptHash: transcriptHashV3
                     )
                     print("[QAudionCallIntegration] CALL-4: transcript-bound session key active (responder) callId=\(callId.prefix(8))…")
+                    lock.withLock { _ = transcriptBoundCallIds.insert(callId.lowercased()) }
+                } else {
+                    lock.withLock { _ = transcriptBoundCallIds.remove(callId.lowercased()) }
                 }
             }
             let wire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: acceptToSend)
@@ -3323,6 +3338,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     transcriptHash: h3
                 )
                 print("[QAudionCallIntegration] CALL-4: transcript-bound session key active (caller) callId=\(callId.prefix(8))…")
+                lock.withLock { _ = transcriptBoundCallIds.insert(callId.lowercased()) }
+            } else {
+                lock.withLock { _ = transcriptBoundCallIds.remove(callId.lowercased()) }
             }
 
             // I3 §5 — stale-attempt guard, found by adversarial review
@@ -5290,6 +5308,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         rekeyNonceByCall.removeAll()
         rekeyRoundByCall.removeAll()
         lastAcceptedRekeyRoundByCall.removeAll()
+        transcriptBoundCallIds.removeAll()
         // W-KCMAC — same reasoning, the stashed sent-OFFER PSK advert list.
         sentOfferPskFingerprintsByCall.removeAll()
         // W-KCMACROLES — the parallel role list is stashed and cleared in lockstep

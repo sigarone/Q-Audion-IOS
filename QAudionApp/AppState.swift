@@ -890,6 +890,19 @@ final class AppState: ObservableObject {
     /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
     /// MainActor); reset at the start of every new call.
     @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// 2026-09-19 — true while the active call holds a ROTATED identity key that the server publishes for
+    /// the peer and that `commitSetProvenRepinForDevice` refused to pin, because the user had SAS-verified
+    /// the previous key. Drives the banner copy (the key IS published, and one SAS confirmation resolves
+    /// it). Cleared when the key is adopted or the next call starts.
+    @Published var callIdentityRotationAwaitingSas: Bool = false
+    /// The key behind `callIdentityRotationAwaitingSas`: exactly what THIS call's verified handshake
+    /// presented, kept only until the user confirms the SAS (adoption) or the next call starts. In memory only.
+    private struct PendingIdentityRotation {
+        let peerId: String
+        let deviceId: String?
+        let key: Data
+    }
+    private var pendingIdentityRotation: PendingIdentityRotation?
     /// XC-1 (2026-08-05, post-remediation audit follow-up) — true when the
     /// active call's peer presented a signature that FAILED to verify UNDER
     /// THE KEY WE ALREADY TRUST (pin or server-fetched) — i.e. NOT a key
@@ -927,6 +940,50 @@ final class AppState: ObservableObject {
     /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
     /// their media-install work immediately or stash it above.
     private var identityUnverifiedCallIds: Set<String> = []
+
+    /// 2026-09-19 — the user is confirming the SAS of the ACTIVE call. If that call's verified handshake
+    /// presented a ROTATED identity key (one the server publishes for the peer) that
+    /// `commitSetProvenRepinForDevice` refused only because the previous key had been SAS-verified, this
+    /// confirmation IS the fresh out-of-band verification that refusal was waiting for: adopt the new key now
+    /// (re-pin it, drop the SAS record bound to the old key) and let the caller bind the confirmation to the
+    /// new key. Nothing else ever adopted it: tapping CONFERMA used to re-record the verification against
+    /// the OLD pin, so the banner came back on every call.
+    ///
+    /// Anti-substitution: only for the peer of this call, only for the key this call's own handshake
+    /// presented and verified, and only when the session key (hence the SAS words) is bound to the signed
+    /// handshake transcript, which contains the signer identity key: a relay that swapped that key would
+    /// have produced different words on the two ends. Without that binding the words say nothing about the
+    /// identity key and the refusal stays. Call it BEFORE the confirmation is recorded.
+    @discardableResult
+    func adoptPendingIdentityRotationIfEligible() -> Bool {
+        guard let pending = pendingIdentityRotation else { return false }
+        let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        let bound: Bool = activeCallId.flatMap {
+            callService.callIntegration?.isSessionKeyTranscriptBound(callId: $0)
+        } ?? false
+        guard IdentityRotationAdoptionPolicy.mayAdopt(
+            pendingPeerId: pending.peerId,
+            activePeerId: callContactId,
+            sessionKeyTranscriptBound: bound
+        ) else {
+            RTLog.warn("call", "tofupin adopt=0 gate=1 bound=\(bound ? 1 : 0)")
+            return false
+        }
+        switch PeerIdentityPinStore().repin(
+            contactId: pending.peerId, ed25519Pub: pending.key, deviceId: pending.deviceId
+        ) {
+        case .overwritten, .added, .unchanged:
+            SasVerificationStore.shared.clear(peerUserId: pending.peerId)
+            pendingIdentityRotation = nil
+            callIdentityUnauthenticatedChange = false
+            callIdentityRotationAwaitingSas = false
+            RTLog.info("call", "tofupin adopt=1 sas=1")
+            return true
+        case .failed:
+            RTLog.warn("call", "tofupin adopt=0 fail=1")
+            return false
+        }
+    }
 
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
     /// the responder (OFFER-verify) and caller (ACCEPT-verify) integration
@@ -5998,6 +6055,8 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            self.callIdentityRotationAwaitingSas = false
+            self.pendingIdentityRotation = nil
             // XC-1: same reset for the sibling sig_invalid banner.
             self.callHandshakeSignatureInvalid = false
             // P0-3: a fresh incoming call must not inherit a stale media hold
@@ -8000,7 +8059,13 @@ final class AppState: ObservableObject {
         let sanitisedWireDisplay = StringSanitiser.displayName(rawWireDisplay, fallback: "")
         // Dedup BEFORE any side effect — beginCall's own id dedup only
         // silences the insert, not the notification banner.
-        if PersistentCallRecordStore.shared.records.contains(where: { $0.id == callIdStr }) {
+        // Case-insensitive: the server spells the id in lowercase while the record written when this
+        // device answered the call carries `UUID.uuidString` (uppercase). The strict comparison never
+        // matched, so an answered call replayed as missed got a second history row and a "Chiamata
+        // persa" banner.
+        if PersistentCallRecordStore.shared.records.contains(where: {
+            $0.id.caseInsensitiveCompare(callIdStr) == .orderedSame
+        }) {
             let line: String = "missedevt dup=1 id=" + String(callIdStr.prefix(8))
             RTLog.info("call", line)
             return
@@ -9039,6 +9104,14 @@ final class AppState: ObservableObject {
                 handleMissedCallEvent(missed, source: "durable")
             } else {
                 RTLog.warn("call", "missedevt parse=0 len=" + String(cipherB64.count))
+            }
+            // 2026-09-19 — the outcome is final whichever branch ran (recorded and notified, deduped,
+            // or unparseable), so ack it. Without the ack the server keeps the entry and replays it on
+            // every reconnect until its 24 h staleness cutoff: the iPhone showed the same one
+            // call_missed as "undelivered" for hours.
+            if let serverMsgId = entry["message_id"] as? String, !serverMsgId.isEmpty {
+                sendOrQueueDeliveryReceipt(
+                    serverMsgId: serverMsgId, senderId: entry["sender_id"] as? String)
             }
             return
         }
@@ -14112,6 +14185,11 @@ final class AppState: ObservableObject {
                         guard let self else { return }
                         if self.callContactId == nil || self.callContactId == peerId {
                             self.callIdentityUnauthenticatedChange = true
+                            // Remember the refused key so the SAS confirmation of this call can adopt it
+                            // (`adoptPendingIdentityRotationIfEligible`); before, nothing ever did.
+                            self.pendingIdentityRotation = PendingIdentityRotation(
+                                peerId: peerId, deviceId: deviceId, key: key)
+                            self.callIdentityRotationAwaitingSas = true
                         }
                     }
                     return
@@ -15512,6 +15590,8 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        callIdentityRotationAwaitingSas = false
+        pendingIdentityRotation = nil
         // XC-1: same reset for the sibling sig_invalid banner.
         callHandshakeSignatureInvalid = false
         // P0-3: a fresh outgoing call must not inherit a stale media hold
@@ -16612,11 +16692,18 @@ final class AppState: ObservableObject {
 
     /// Start the in-app ringtone using AudioServicesPlayAlertSound.
     /// Repeats every 3 s. Safe to call multiple times (idempotent).
+    ///
+    /// 2026-09-19 — the ring is the SAME sound CallKit rings with in the background (two rings of
+    /// `qaudion_ringtone.caf`, cut to a 3 s unit and normalized to a -3 dBFS peak). It was
+    /// `AudioServicesPlayAlertSound(1005)`, the one-second SMS chime, every 3 s: on a phone in hand it
+    /// was barely audible and nothing like the ring the same call has when the app is in the
+    /// background. Falls back to that chime only if the resource is missing from the bundle, so a
+    /// packaging slip never means a silent ring. A system sound (not an audio player) on purpose:
+    /// it seizes no audio session, which CallKit and WebRTC configure when the call is answered.
     func startInAppRingtone() {
         guard ringtoneTimer == nil else { return }
-        // 1005 = "sms-received5.caf" — short, distinctive, non-intrusive.
-        // Using 1000 (classic tring) would clash with system notifications.
-        let soundId: SystemSoundID = 1005
+        // 1005 = "sms-received5.caf" — the fallback only.
+        let soundId: SystemSoundID = Self.registerInAppRingSound() ?? 1005
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: 3.0)
         timer.setEventHandler { AudioServicesPlayAlertSound(soundId) }
@@ -16628,6 +16715,33 @@ final class AppState: ObservableObject {
     func stopInAppRingtone() {
         ringtoneTimer?.cancel()
         ringtoneTimer = nil
+        // Disposing the id also stops a unit that is still playing, so the ring does not tail into the
+        // call, and frees it: the next ring registers a fresh one.
+        Self.disposeInAppRingSound()
+    }
+
+    /// SystemSoundID of the bundled 3 s ring unit while a ring is active; nil otherwise.
+    private static var inAppRingSoundId: SystemSoundID?
+
+    private static func registerInAppRingSound() -> SystemSoundID? {
+        if let id = inAppRingSoundId { return id }
+        guard let url = Bundle.main.url(forResource: "qaudion_ringtone_unit", withExtension: "caf") else {
+            RTLog.warn("call", "inappring res=0")
+            return nil
+        }
+        var id: SystemSoundID = 0
+        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError else {
+            RTLog.warn("call", "inappring reg=0")
+            return nil
+        }
+        inAppRingSoundId = id
+        return id
+    }
+
+    private static func disposeInAppRingSound() {
+        guard let id = inAppRingSoundId else { return }
+        AudioServicesDisposeSystemSoundID(id)
+        inAppRingSoundId = nil
     }
 
     /// W-RINGBACKCONFIRMED (2026-09-02) — re-evaluate and (if changed)
@@ -18003,6 +18117,9 @@ extension AppState {
         incomingCallRingVisible = false
         guard !isEndingCall else { return }
         isEndingCall = true
+        // 2026-09-19 — a rotated identity key awaiting this call's SAS confirmation does not outlive the call.
+        pendingIdentityRotation = nil
+        callIdentityRotationAwaitingSas = false
 
         // W-DCHANGUP (2026-08-25) — third, fastest hangup channel: a sealed
         // control frame on the active media leg (DataChannel when open, WS

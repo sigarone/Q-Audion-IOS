@@ -302,6 +302,10 @@ struct InCallScreen: View {
     /// server-published per-device set). Drives a NON-BLOCKING advisory banner
     /// only; it MUST NOT gate audio/video. SAS remains the terminal gate.
     let identityUnauthenticatedChange: Bool
+    /// 2026-09-19 — a refinement of `identityUnauthenticatedChange`: the key IS published by the server
+    /// and was refused only because the user had verified the previous one; confirming the SAS adopts it.
+    /// Selects the banner copy (the old copy claimed the key was not published, which is false here).
+    let identityRotationAwaitingSas: Bool
     /// XC-1 (2026-08-05, post-remediation audit follow-up) — true when the
     /// active call's peer presented a signature that failed to verify UNDER
     /// THE KEY WE ALREADY TRUST (a forgery-shaped failure), as distinct from
@@ -455,6 +459,7 @@ struct InCallScreen: View {
          onToggleScreenShare: @escaping () -> Void = {},
          peerScreenSharing: Bool = false,
          identityUnauthenticatedChange: Bool = false,
+         identityRotationAwaitingSas: Bool = false,
          handshakeSignatureInvalid: Bool = false,
          awaitingIdentityConfirmation: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
@@ -512,6 +517,7 @@ struct InCallScreen: View {
         self.onToggleScreenShare = onToggleScreenShare
         self.peerScreenSharing = peerScreenSharing
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
+        self.identityRotationAwaitingSas = identityRotationAwaitingSas
         self.handshakeSignatureInvalid = handshakeSignatureInvalid
         self.awaitingIdentityConfirmation = awaitingIdentityConfirmation
         self.assurancePresentation = assurancePresentation
@@ -634,7 +640,9 @@ struct InCallScreen: View {
                     .qaudionStyle(type.labelSmall)
                     .tracking(0.6)
                     .foregroundStyle(extras.warning)
-                Text("La chiave del contatto è cambiata e non risulta pubblicata dal server. Confronta le parole SAS per verificare.")
+                Text(identityRotationAwaitingSas
+                    ? "La chiave del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono con quelle del contatto, tocca CONFERMA COINCIDONO per accettarla."
+                    : "La chiave del contatto è cambiata e non risulta pubblicata dal server. Confronta le parole SAS per verificare.")
                     .qaudionStyle(type.labelMedium)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .fixedSize(horizontal: false, vertical: true)
@@ -651,7 +659,9 @@ struct InCallScreen: View {
                 )
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Avviso di sicurezza: la chiave identità del contatto è cambiata e non è pubblicata dal server. Verifica le parole SAS.")
+        .accessibilityLabel(identityRotationAwaitingSas
+            ? "Avviso di sicurezza: la chiave identità del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono, conferma per accettarla."
+            : "Avviso di sicurezza: la chiave identità del contatto è cambiata e non è pubblicata dal server. Verifica le parole SAS.")
     }
 
     /// XC-1 advisory: the peer's handshake signature did NOT verify under the
