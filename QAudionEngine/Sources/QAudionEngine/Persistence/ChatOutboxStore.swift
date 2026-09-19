@@ -94,14 +94,16 @@ public final class ChatOutboxStore {
         }
     }
 
-    /// Upsert a delivery-receipt entry keyed by the server message id.
-    public func enqueueDeliveryReceipt(serverMessageId: String, nowMs: Int64) {
+    /// Upsert a delivery-receipt entry keyed by the server message id. `senderUserId` (the
+    /// original sender of the acked message) is kept in `peerUserId` so the drained ack can be
+    /// addressed: the server drops a `msg_delivered` that names no recipient.
+    public func enqueueDeliveryReceipt(serverMessageId: String, senderUserId: String? = nil, nowMs: Int64) {
         let entry = ChatOutboxEntry(
             id: serverMessageId,
             kind: ChatOutboxEntry.kindDeliveryReceipt,
             conversationId: nil,
             messageId: nil,
-            peerUserId: nil,
+            peerUserId: senderUserId,
             payloadB64: "",
             attempts: 0,
             createdAtMs: nowMs,

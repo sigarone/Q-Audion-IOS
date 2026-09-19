@@ -51,7 +51,7 @@ final class ChatOutboxDrain {
 
     typealias TransportReadyProvider = @MainActor () -> Bool
     typealias WireSender = @MainActor (_ peerUserId: String, _ wireBlob: Data, _ clientMsgId: String) async throws -> Void
-    typealias ReceiptSender = @MainActor (_ serverMessageId: String) async throws -> Void
+    typealias ReceiptSender = @MainActor (_ serverMessageId: String, _ senderUserId: String?) async throws -> Void
     typealias WireEncrypter = @MainActor (_ messageId: UUID, _ peerUserId: String, _ plaintext: String) async -> EncryptOutcome
 
     /// `chatRefreshNotification` userInfo keys the drainer adds when it
@@ -151,7 +151,7 @@ final class ChatOutboxDrain {
                 continue
             }
             do {
-                try await sendReceipt(entry.id)
+                try await sendReceipt(entry.id, entry.peerUserId)
                 outbox.remove(id: entry.id)
                 receipts += 1
             } catch {

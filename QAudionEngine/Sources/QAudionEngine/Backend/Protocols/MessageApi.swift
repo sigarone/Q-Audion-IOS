@@ -14,10 +14,22 @@ public protocol MessageApi {
     ///     envelope under `client_msg_id`.
     func sendMessage(recipientId: String, content: Data, clientMsgId: String) async throws -> String
     func sendDeliveryReceipt(messageId: String) async throws
+    /// 2026-09-19 — the same ack, addressed to the original sender. The server deletes a
+    /// message on the recipient's own ack, but it drops any `msg_delivered` frame that carries
+    /// no `recipient_id` before it gets there: an id-only ack never cleared the pending store,
+    /// so every message to an iPhone was replayed at each reconnect until the stale sweep. A
+    /// default implementation forwards to the id-only form, so other conformers keep compiling.
+    func sendDeliveryReceipt(messageId: String, recipientId: String) async throws
     func sendReadReceipt(messageId: String) async throws
     /// W84 — batch read receipt with explicit `sender_id` so the server
     /// can relay the relevant ids to the original sender's open
     /// session(s) (✓✓ blue check on their UI).
     func sendReadReceipts(senderId: String, messageIds: [String]) async throws
     func sendTypingIndicator(recipientId: String, isTyping: Bool) async throws
+}
+
+public extension MessageApi {
+    func sendDeliveryReceipt(messageId: String, recipientId: String) async throws {
+        try await sendDeliveryReceipt(messageId: messageId)
+    }
 }

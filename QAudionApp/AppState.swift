@@ -4691,11 +4691,16 @@ final class AppState: ObservableObject {
                 _ = try await live.messageApi.sendMessage(
                     recipientId: peerUserId, content: wireBlob, clientMsgId: clientMsgId)
             },
-            sendReceipt: { [weak self] serverMessageId in
+            sendReceipt: { [weak self] serverMessageId, senderUserId in
                 guard let live = self?.liveProvider else {
                     throw ChatOutboxDrain.TransportError.unavailable
                 }
-                try await live.messageApi.sendDeliveryReceipt(messageId: serverMessageId)
+                if let senderUserId, !senderUserId.isEmpty {
+                    try await live.messageApi.sendDeliveryReceipt(
+                        messageId: serverMessageId, recipientId: senderUserId)
+                } else {
+                    try await live.messageApi.sendDeliveryReceipt(messageId: serverMessageId)
+                }
             },
             encrypt: { [weak self] messageId, peerUserId, plaintext in
                 guard let self else {
@@ -8183,7 +8188,8 @@ final class AppState: ObservableObject {
                 // it on every reconnect for 24 h. Nothing to ack without a message id.
                 if let malformedId = data["message_id"] as? String, !malformedId.isEmpty {
                     DispatchQueue.main.async {
-                        self.sendOrQueueDeliveryReceipt(serverMsgId: malformedId)
+                        self.sendOrQueueDeliveryReceipt(
+                            serverMsgId: malformedId, senderId: data["sender_id"] as? String)
                     }
                 }
                 return
@@ -8981,7 +8987,8 @@ final class AppState: ObservableObject {
             // msg_pending_sync specifically because the server DID persist
             // it, so it does.
             if let serverMsgId = entry["message_id"] as? String, !serverMsgId.isEmpty {
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                sendOrQueueDeliveryReceipt(
+                    serverMsgId: serverMsgId, senderId: entry["sender_id"] as? String)
             }
             return
         }
@@ -9027,7 +9034,7 @@ final class AppState: ObservableObject {
     private func ackUnprocessablePendingEntry(_ entry: [String: Any]) {
         if let messageId = entry["message_id"] as? String, !messageId.isEmpty {
             RTLog.warn("chat", "msg_pending_sync malformed=1 acked=1")
-            sendOrQueueDeliveryReceipt(serverMsgId: messageId)
+            sendOrQueueDeliveryReceipt(serverMsgId: messageId, senderId: entry["sender_id"] as? String)
         }
     }
 
@@ -9725,7 +9732,7 @@ final class AppState: ObservableObject {
         // placeholder in a self-conversation. Ack so the server stops holding it.
         if let selfUserId = currentUserId, !selfUserId.isEmpty, senderId == selfUserId {
             RTLog.warn("chat", "msg_receive self=1 dropped=1")
-            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
             return
         }
         // IOS-18 — a frame whose outcome is already final is acked again and
@@ -9734,7 +9741,7 @@ final class AppState: ObservableObject {
             serverMessageId: serverMsgId, senderId: senderId, clientMsgId: clientMsgId
         ) {
             RTLog.info("chat", "msg_receive settled=1 retry=\(isRetry ? 1 : 0)")
-            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
             return
         }
         // W-MSGDEDUP (2026-09-01) — consumer-side dedup BEFORE decrypt, the
@@ -9759,7 +9766,7 @@ final class AppState: ObservableObject {
             }
             if seenByServerId || seenByClientId {
                 RTLog.info("chat", "msg_receive dup=1 byserver=\(seenByServerId ? 1 : 0) retry=\(isRetry ? 1 : 0)")
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
                 return
             }
         }
@@ -10407,7 +10414,7 @@ final class AppState: ObservableObject {
         settledInboundFrames.insertFrame(
             serverMessageId: serverMsgId, senderId: senderId,
             clientMsgId: clientMsgId, includeClientKey: settleClientKey)
-        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
     }
 
     /// A 0xE6 (CONTROL) frame that would not open. Silent by construction:
@@ -10422,7 +10429,7 @@ final class AppState: ObservableObject {
     ) {
         // Ack now, retry or not: a control frame has nothing the server must
         // keep for us, and an un-acked one is replayed on every reconnect.
-        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
         if isRetry {
             RTLog.warn("chat", "msg_receive undec=1 wire=v5 giveup=1 suppressed=1")
             settledInboundFrames.insertFrame(
@@ -11310,11 +11317,17 @@ final class AppState: ObservableObject {
     /// `.authenticated`. A lost ack is not cosmetic: the server keeps
     /// re-delivering the message until one lands, and every re-delivery
     /// now costs a dedup lookup instead of a ratchet replay failure.
-    private func sendOrQueueDeliveryReceipt(serverMsgId: String) {
+    ///
+    /// 2026-09-19 — `senderId` (the original sender of the acked message) is sent as the
+    /// frame's `recipient_id`. The server deletes a message only on an ack that names one and
+    /// silently drops the id-only form, which is why every message to this device stayed in
+    /// the server's pending queue and was replayed at each reconnect.
+    private func sendOrQueueDeliveryReceipt(serverMsgId: String, senderId: String? = nil) {
         let socketUp = liveProvider?.persistentConnection.state == .authenticated
         if OutboxRetryPolicy.enabled, !socketUp {
             ChatOutboxStore().enqueueDeliveryReceipt(
                 serverMessageId: serverMsgId,
+                senderUserId: senderId,
                 nowMs: Int64(Date().timeIntervalSince1970 * 1000))
             RTLog.info("chat", "receipt queued=1")
             ChatOutboxDrain.shared.kick(reason: "receipt-queued")
@@ -11322,7 +11335,12 @@ final class AppState: ObservableObject {
         }
         if let provider = liveProvider {
             Task {
-                try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
+                if let senderId, !senderId.isEmpty {
+                    try? await provider.messageApi.sendDeliveryReceipt(
+                        messageId: serverMsgId, recipientId: senderId)
+                } else {
+                    try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
+                }
             }
         }
     }

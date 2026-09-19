@@ -133,4 +133,15 @@ final class ChatOutboxStoreTests: XCTestCase {
         ConversationStore(db: db, defaults: defaults).wipeAll()
         XCTAssertEqual(store.count(), 0)
     }
+
+    // 2026-09-19 — the server drops a msg_delivered that names no recipient, so a queued ack
+    // has to remember who sent the message it acknowledges.
+    func test_deliveryReceipt_keepsTheSenderForAnAddressedAck() {
+        store.enqueueDeliveryReceipt(serverMessageId: "srv-a", senderUserId: "peer-9", nowMs: 5)
+        store.enqueueDeliveryReceipt(serverMessageId: "srv-b", nowMs: 6)
+
+        XCTAssertEqual(store.entry(id: "srv-a")?.peerUserId, "peer-9")
+        XCTAssertNil(store.entry(id: "srv-b")?.peerUserId, "an id-only ack stays id-only")
+        XCTAssertEqual(store.pendingDeliveryReceipts().map { $0.id }, ["srv-a", "srv-b"])
+    }
 }

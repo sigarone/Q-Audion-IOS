@@ -59,6 +59,15 @@ public final class BCryptoMessageApiImpl: MessageApi {
         )
     }
 
+    /// Addressed delivery ack: `recipient_id` is the original sender of the message being
+    /// acked. The server needs it to accept the frame (see `MessageApi.sendDeliveryReceipt`).
+    public func sendDeliveryReceipt(messageId: String, recipientId: String) async throws {
+        ws.send(
+            type: "msg_delivered",
+            data: ["message_ids": [messageId], "recipient_id": recipientId]
+        )
+    }
+
     public func sendReadReceipt(messageId: String) async throws {
         // `MsgReadData` requires `sender_id` (the original sender of the
         // messages we're acking) — but the legacy single-arg protocol
@@ -81,10 +90,14 @@ public final class BCryptoMessageApiImpl: MessageApi {
     /// fire-and-forget; no inline ack from the server.
     public func sendReadReceipts(senderId: String, messageIds: [String]) async throws {
         guard !messageIds.isEmpty else { return }
+        // `recipient_id` is what the server routes on (it stamps `sender_id` itself from the
+        // authenticated socket and drops a msg_read that names no recipient): without it the
+        // read receipt never reached the sender and their ticks stayed grey.
         ws.send(
             type: "msg_read",
             data: [
                 "sender_id": senderId,
+                "recipient_id": senderId,
                 "message_ids": messageIds,
             ]
         )
