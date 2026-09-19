@@ -1030,15 +1030,32 @@ public final class MessageRatchet {
         }
     }
 
-    /// W-CTRLREPLACE (2026-09-18) — the CONTROL-channel counterpart of
-    /// `ensureBootstrapped`: ALWAYS installs the fresh session `bootstrap`
-    /// derives, retaining the one it replaces under `previousEpochId` so a
-    /// frame the peer sealed under the old chain before it learned of the new
-    /// one still opens (`decryptV5Routed` falls back to it). CONTROL only:
-    /// CHAT keeps create-if-absent (W-V4CONNECTRESET). Two peers whose CONTROL
-    /// sessions diverged (present on both sides, every 0xE6 failing — live
-    /// 2026-09-18) converge at the next handshake by construction. Mirrors
-    /// Android `MessageRatchet.replaceChannelSession`.
+    /// W-CTRLREPLACE (2026-09-18) — the counterpart of `ensureBootstrapped`
+    /// for a channel whose two ends must converge: ALWAYS installs the fresh
+    /// session `bootstrap` derives, retaining the one it replaces under
+    /// `previousEpochId` so a frame the peer sealed under the old chain before
+    /// it learned of the new one still opens (`decryptV5Routed` and, since
+    /// W-CHATREPLACE, `decryptV4Routed` fall back to it). Two peers whose
+    /// sessions diverged (present on both sides, every frame failing — live
+    /// 2026-09-18 CONTROL, 2026-09-19 CHAT) converge at the next handshake by
+    /// construction. Mirrors Android `MessageRatchet.replaceChannelSession`.
+    ///
+    /// W-CHATREPLACE (2026-09-19) — CHAT (the v4 row) replaces at a call
+    /// handshake too. It used to stay create-if-absent (W-V4CONNECTRESET) so a
+    /// call could not reset a live chat ratchet; that guarded one failure (an
+    /// in-flight message lost to a reset) by leaving a worse one (chat
+    /// sessions that differ never converge). The retained previous session now
+    /// covers the in-flight case. The KMS pre-bootstrap paths keep CHAT
+    /// create-if-absent — their sender installs before the peer has consumed
+    /// the envelope, so replacing there could break a working session on one
+    /// side only.
+    ///
+    /// Idempotent per source material: a fresh session is a pure function of
+    /// its inputs, so the SHA-256 of the freshly derived blob names them. When
+    /// the current row was already installed from exactly this material,
+    /// replacing it again would RESET a chain that has since advanced and
+    /// re-emit its (key, nonce) pairs for new plaintexts — so it is skipped.
+    /// The fingerprint lives in a `sourceEpochId` row next to the session.
     public func replaceChannelSession(epochId: String, peerId: String, bootstrap: () -> UInt) -> Bool {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
         guard isV4Enabled() else { return false }
@@ -1046,12 +1063,19 @@ public final class MessageRatchet {
         guard handle != 0 else { return false }
         defer { freeV4Session(handle) }
         guard let blob = serializeV4Session(handle) else { return false }
+        let fingerprint = Data(SHA256.hash(data: blob))
         do {
             let previous = vault.loadV4(epochId: epochId, peerId: peerId)
             if let previous = previous {
+                if let installedFrom = vault.loadV4(epochId: Self.sourceEpochId(epochId), peerId: peerId),
+                   installedFrom == fingerprint {
+                    print("[MessageRatchet] BOOT-SKIP epoch=\(epochId) peer=\(peerId.suffix(6)) same-source")
+                    return true
+                }
                 try vault.saveV4(epochId: Self.previousEpochId(epochId), peerId: peerId, blob: previous)
             }
             try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
+            try vault.saveV4(epochId: Self.sourceEpochId(epochId), peerId: peerId, blob: fingerprint)
             print("[MessageRatchet] BOOT epoch=\(epochId) peer=\(peerId.suffix(6)) replaced=\(previous != nil)")
             return true
         } catch {
@@ -1070,6 +1094,9 @@ public final class MessageRatchet {
 
     /// Vault row that keeps the session `replaceChannelSession` most recently replaced.
     static func previousEpochId(_ epochId: String) -> String { epochId + "-prev" }
+
+    /// Vault row holding the fingerprint of the material the current session was installed from.
+    static func sourceEpochId(_ epochId: String) -> String { epochId + "-src" }
 
     /// True iff a persisted v4 session exists for [peerId] (and the v4 path is enabled).
     /// Used by the SEND dispatcher to gate the v4 branch synchronously BEFORE any
@@ -1120,13 +1147,36 @@ public final class MessageRatchet {
         let handle = RatchetNative.deserialize(blob)
         guard handle != 0 else { return nil }
         defer { RatchetNative.free(handle) }
-        guard let pt = RatchetNative.decrypt(handle, frame: frame) else { return nil }
+        guard let pt = RatchetNative.decrypt(handle, frame: frame) else {
+            // W-CHATREPLACE — a frame the peer sealed under the CHAT session we just
+            // replaced (see `replaceChannelSession`) still opens. Its own chain
+            // advances on its own row, never the current one.
+            let previous = decryptV4Under(
+                rowEpochId: Self.previousEpochId(Self.v4RoutingEpoch), peerId: peerId, frame: frame)
+            if previous != nil {
+                print("[MessageRatchet] OPEN epoch=\(Self.v4RoutingEpoch) peer=\(peerId.suffix(6)) result=previous")
+            }
+            return previous
+        }
         // Persist the advanced recv chain after a successful decrypt. A persist
         // failure here is non-fatal to the returned plaintext (the message WAS
         // authenticated); on the next inbound the worst case is a re-derive from
         // the last durable state. Best-effort, matching Android's `?.let { save }`.
         if let advanced = RatchetNative.serialize(handle) {
             try? vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: advanced)
+        }
+        return pt
+    }
+
+    /// One v4 (CHAT) decrypt attempt against the session stored under `rowEpochId`; `nil` on any failure.
+    private func decryptV4Under(rowEpochId: String, peerId: String, frame: Data) -> Data? {
+        guard let blob = vault.loadV4(epochId: rowEpochId, peerId: peerId) else { return nil }
+        let handle = RatchetNative.deserialize(blob)
+        guard handle != 0 else { return nil }
+        defer { RatchetNative.free(handle) }
+        guard let pt = RatchetNative.decrypt(handle, frame: frame) else { return nil }
+        if let advanced = RatchetNative.serialize(handle) {
+            try? vault.saveV4(epochId: rowEpochId, peerId: peerId, blob: advanced)
         }
         return pt
     }

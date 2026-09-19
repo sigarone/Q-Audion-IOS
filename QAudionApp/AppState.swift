@@ -13516,7 +13516,23 @@ final class AppState: ObservableObject {
                 // performs the check-and-conditionally-create as ONE atomic,
                 // lock-held step (see its kdoc) — the guard above is now
                 // structural rather than a call-site convention.
-                let ok = AppState.sharedV4Ratchet.ensureBootstrapped(
+                //
+                // W-CHATREPLACE (2026-09-19) — REPLACE, retaining the previous
+                // session. The guard above stopped a call from resetting a live
+                // chat ratchet (an in-flight message lost to the reset) but left
+                // two peers whose chat sessions DIFFER permanently unable to
+                // read each other: create-if-absent never repairs a divergence
+                // (live 2026-09-19 08:49:23, A36 could not open the iPhone's chat
+                // frame). Both peers re-derive CHAT from this same handshake, so
+                // it replaces; `decryptV4Routed` falls back to the retained
+                // previous session for frames still in flight, and a repeat
+                // install from the same material is skipped (see
+                // `replaceChannelSession`). Same change on Android/Desktop, and
+                // on the caller leg below. The KMS pre-bootstrap path keeps CHAT
+                // create-if-absent: its sender installs before the peer has
+                // consumed the envelope, so replacing there could break a working
+                // session on one side only.
+                let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v4RoutingEpoch,
                     peerId: peerId
                 ) {
@@ -13529,7 +13545,7 @@ final class AppState: ObservableObject {
                         transcriptHash: transcriptHash
                     )
                 }
-                print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
+                print("[PQC_DIAG_V4] replaceChannelSession CHAT (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(ok)")
 
                 // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — ADDITIVE CONTROL bootstrap
                 // alongside the CHAT one above, from the SAME handshake secret. Never replaces the
@@ -15630,7 +15646,10 @@ final class AppState: ObservableObject {
                         // partner is the responder leg above plus the KMS
                         // pre-bootstrap path, all now funneled through the same
                         // ``v4RoutingLock``-held primitive).
-                        let ok = AppState.sharedV4Ratchet.ensureBootstrapped(
+                        // W-CHATREPLACE (2026-09-19) — REPLACE, like the responder leg
+                        // above: see its note for why CHAT can no longer stay
+                        // create-if-absent (a diverged pair never repairs).
+                        let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v4RoutingEpoch,
                             peerId: peerId
                         ) {
@@ -15643,7 +15662,7 @@ final class AppState: ObservableObject {
                                 transcriptHash: transcriptHash
                             )
                         }
-                        print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
+                        print("[PQC_DIAG_V4] replaceChannelSession CHAT (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(ok)")
 
                         // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — see the responder leg's
                         // identical CONTROL bootstrap above (same rationale, both directions).
@@ -22961,6 +22980,11 @@ extension AppState {
         // same peer. `ensureBootstrapped` closes it — one atomic, lock-held
         // check-and-create, same primitive every v4 bootstrap trigger now uses.
         let zeroEpoch = Data(count: 16)
+        // W-CHATREPLACE (2026-09-19) — CHAT deliberately stays create-if-absent HERE while the
+        // call handshake now replaces it: this path installs on the SENDER before the peer has
+        // consumed the envelope (and the peer may fail to decode it), so replacing a working
+        // CHAT session here could break it on one side only. CONTROL, whose frames are
+        // re-sendable envelopes, replaces below.
         let ok = ratchet.ensureBootstrapped(epochId: MessageRatchet.v4RoutingEpoch, peerId: peer) {
             ratchet.bootstrapV4(
                 effectiveSecret: rk0,
