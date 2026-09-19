@@ -9,6 +9,13 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1174",
+              date: "2026-09-19",
+              title: "v1.0.1174",
+              bullets: [
+                "A rejected token recovers, and no longer drives failover to the replica",
+                "Address the delivery and read receipts so the server honours them",
+              ]),
         .init(id: "v1.0.1173",
               date: "2026-09-19",
               title: "v1.0.1173",
@@ -132,12 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1149",
               bullets: [
                 "Visible C badge now reads Tier-2's 3-signal combine, matches Android",
-              ]),
-        .init(id: "v1.0.1146",
-              date: "2026-09-11",
-              title: "v1.0.1146",
-              bullets: [
-                "Stop responder-side confidence from desyncing the RE-KEY display",
               ]),
     ]
 }
