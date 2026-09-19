@@ -227,7 +227,24 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     public var onNodeStalled: ((String) -> Void)?
     /// Consecutive failed reconnects to the same node after which `onNodeStalled`
     /// fires. High enough that a flap (counter resets on auth) never trips it.
+    /// Only failures the node did NOT answer count: a server that closes the socket
+    /// with an authentication rejection is demonstrably up (see `handleDisconnect`).
     private let failoverAfterAttempts = 3
+    /// Newest access token held in the app's shared credential store, or nil when
+    /// there is none. Consulted at every `connect()`: the app builds several
+    /// providers and any of them can rotate the token pair, but each keeps the pair
+    /// only in its OWN config, so a client built earlier would keep presenting a
+    /// token the server has since retired (`bad_token` on every reconnect). The
+    /// store is the one place every rotation lands.
+    public var latestAccessToken: (() -> String?)?
+    /// The access token carried by the most recent `authenticate` frame this client
+    /// sent. Lets the recovery hook tell "the stored pair is newer than what was
+    /// rejected" from "the stored pair is exactly what was rejected".
+    private var _lastPresentedAccessToken: String?
+    public var lastPresentedAccessToken: String? {
+        lock.lock(); defer { lock.unlock() }
+        return _lastPresentedAccessToken
+    }
     /// Interval between outbound ping keepalives. ADAPTIVE by transport (set by
     /// `applyAdaptiveTiming(for:)` from the NWPathMonitor): WiFi 20 s (beats
     /// carrier/NAT idle timeouts and keeps the server from marking us stale),
@@ -1070,7 +1087,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // queued on (or dropped by) a socket that had not finished the
         // HTTP→WS handshake — the server then saw an unauthenticated
         // socket and silently dropped subsequent frames.
-        let pendingToken = config.accessToken
+        let pendingToken = Self.tokenForConnect(stored: latestAccessToken?(), configured: config.accessToken)
         let delegate = WSSessionDelegate(mode: challengeMode) { [weak self] in
             guard let self = self, let token = pendingToken else { return }
             self.authenticate(token: token)
@@ -1909,6 +1926,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     }
 
     private func authenticate(token: String) {
+        lock.lock()
+        _lastPresentedAccessToken = token
+        lock.unlock()
         var data: [String: Any] = ["token": token]
         // Binary relay framing is negotiated per socket, inside the existing
         // auth handshake — no new message type, one added field. An old server
@@ -1931,6 +1951,33 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             data["active_call_id"] = liveCallId
         }
         send(type: "authenticate", data: data)
+    }
+
+    /// Token a new connection presents: the shared store's newest when it has one,
+    /// else whatever this client's own config holds. Internal so a test can pin the
+    /// preference without opening a socket.
+    static func tokenForConnect(stored: String?, configured: String?) -> String? {
+        if let stored, !stored.isEmpty { return stored }
+        return configured
+    }
+
+    /// Whether a failed reconnect counts as "this node looks dead". Only after `threshold`
+    /// consecutive failures, and never for a close that carried an authentication
+    /// rejection (the node answered). Internal for tests.
+    static func shouldSignalNodeStalled(attempt: Int, threshold: Int, authRejected: Bool) -> Bool {
+        attempt >= threshold && !authRejected
+    }
+
+    /// True when the server closed the socket because it rejected the token: policy
+    /// violation with the reason `auth_failed`. The server answers a bad token with an
+    /// `error` frame followed by that close, but the frame is queued behind the close
+    /// and does not reliably reach the client, so the close is the signal that always
+    /// does. Policy violation is also used for other closes (auth deadline, revoked
+    /// device keys, reconnect rate limit, inbound flood), none of which a new token
+    /// can fix, so the reason string is part of the test. Internal for tests.
+    static func isAuthRejectionClose(code: URLSessionWebSocketTask.CloseCode, reason: Data?) -> Bool {
+        guard code == .policyViolation, let reason else { return false }
+        return String(data: reason, encoding: .utf8) == "auth_failed"
     }
 
     /// The ONE input that may turn binary framing on for a socket: a literal
@@ -2037,9 +2084,29 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 }
                 self.receiveLoop(generation: generation)
             case .failure(let error):
-                self.handleDisconnect(generation: generation, reason: (error as NSError).description)
+                // A rejected token reaches us as a close frame (policy violation /
+                // "auth_failed"), not as a frame this class can rely on. Run the same
+                // silent recovery the `error` frame would, BEFORE handleDisconnect so
+                // the reconnect that follows waits for it instead of racing it.
+                let authRejected = Self.isAuthRejectionClose(code: task.closeCode, reason: task.closeReason)
+                if authRejected { self.handleAuthRejectedClose(generation: generation) }
+                self.handleDisconnect(
+                    generation: generation,
+                    reason: (error as NSError).description,
+                    authRejected: authRejected)
             }
         }
+    }
+
+    /// Server closed the socket over our token. Ignored when a newer `connect()` has
+    /// already replaced this socket (its verdict says nothing about the live one).
+    private func handleAuthRejectedClose(generation: Int) {
+        lock.lock()
+        let live = (generation == connectionGeneration)
+        lock.unlock()
+        guard live else { return }
+        print("[BCryptoWS] auth rejected by close frame — starting silent recovery")
+        handleAuthFailed()
     }
 
     /// Inbound WebSocket BINARY frame.
@@ -2682,7 +2749,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
     }
 
-    private func handleDisconnect(generation: Int? = nil, reason: String? = nil) {
+    private func handleDisconnect(generation: Int? = nil, reason: String? = nil, authRejected: Bool = false) {
         lock.lock()
         // Drop stale disconnect callbacks from zombie connections. This fires when
         // a cancelled task's receive closure delivers its .failure result AFTER a
@@ -2739,7 +2806,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // DEAD. Signal the app to fail over to a different node (it re-selects +
         // reconnects). The backoff reconnect below still proceeds and is superseded
         // when the app switches the server URL.
-        if attempt >= failoverAfterAttempts, let onStalled = onNodeStalled {
+        // A close that carried an authentication rejection was ANSWERED by the node: it is
+        // reachable and working, the problem is this client's token. Counting it toward
+        // failover moved a healthy user onto the disaster-recovery replica (which holds a
+        // different database and never authenticated this device) every time a stale token
+        // looped three times.
+        if Self.shouldSignalNodeStalled(attempt: attempt, threshold: failoverAfterAttempts, authRejected: authRejected),
+           let onStalled = onNodeStalled {
             let deadWss = config.serverUrl
                 .replacingOccurrences(of: "https://", with: "wss://")
                 .replacingOccurrences(of: "http://", with: "ws://") + "/ws"

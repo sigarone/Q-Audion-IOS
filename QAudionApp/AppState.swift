@@ -283,7 +283,27 @@ final class AppState: ObservableObject {
     /// so ChatContainer can access `messageApi` for read-receipt
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
     /// logout / token refresh.
-    internal var liveProvider: BCryptoBackendProvider?
+    ///
+    /// 2026-09-19 — replacing (or clearing) it retires the provider it replaces. The old
+    /// provider owns a WebSocket client with its own reconnect loop and its own token; left
+    /// alone it kept reconnecting forever with that (soon retired) token, and its
+    /// `onNodeStalled` signal drove the failover of the NEW provider away from the primary
+    /// node. A live capture showed four such clients in one process, one per rebuild.
+    internal var liveProvider: BCryptoBackendProvider? {
+        didSet {
+            guard let old = oldValue, old !== liveProvider else { return }
+            retireProvider(old)
+        }
+    }
+
+    /// Shut down a replaced provider for good: drop the connection tokens AppState holds
+    /// (they are only reasons to keep THAT client open) and disconnect it, which also
+    /// withdraws the standing token the client took on its own `connect()`.
+    private func retireProvider(_ old: BCryptoBackendProvider) {
+        foregroundConnectionToken = nil
+        activeCallConnectionToken = nil
+        old.shutdown()
+    }
     /// Epoch-ms of the last node failover — damps ping-pong if both nodes flap.
     private var lastFailoverMs: Double = 0
 
@@ -5054,8 +5074,13 @@ final class AppState: ObservableObject {
         }
         // FAILOVER: the WS client signals a stalled (dead) node after enough
         // consecutive reconnects. Re-select a different trusted node and switch.
-        ws.onNodeStalled = { [weak self] deadWss in
-            Task { @MainActor in await self?.handleNodeStalled(deadWss) }
+        ws.onNodeStalled = { [weak self, weak provider] deadWss in
+            Task { @MainActor [weak self, weak provider] in
+                // A retired provider's client can still report a stall; that says nothing
+                // about the node the current provider is on.
+                guard let self, let provider, self.liveProvider === provider else { return }
+                await self.handleNodeStalled(deadWss)
+            }
         }
         let cke = ContactKeyExchange(
             identity: sovereignIdentity,
@@ -5354,8 +5379,14 @@ final class AppState: ObservableObject {
         // which buffers (W481) if no integration is bound yet.
         callService.attachIncomingAudioHandler(wsClient: ws)
         // Subscribe state listener so the UI can show "Connecting → Online".
-        provider.persistentConnection.addStateListener { [weak self] state in
+        provider.persistentConnection.addStateListener { [weak self, weak provider] state in
             DispatchQueue.main.async {
+                // Only the current live provider drives app-level connection state. A retired
+                // provider's final `.disconnected` (or a straggler's `.connecting`) used to
+                // overwrite it, flapping the banner and re-arming the stuck watchdog. The
+                // listener also held `provider` strongly, a cycle (provider → client →
+                // listener → provider) that kept every replaced provider alive.
+                guard let provider, self?.liveProvider === provider else { return }
                 // W550 — emit a sealed telemetry event on every WS
                 // state change so the maintainer dashboard can see
                 // which device is flapping. Pair with the server's
