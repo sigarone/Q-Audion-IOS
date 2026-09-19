@@ -199,34 +199,21 @@ final class AvatarAnnounceCoordinator {
         do {
             let json = try await AvatarAnnounceSender(appState: appState).prepareEnvelopeJson(
                 avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
-            // W-CTLNORATCHET (2026-09-10) — avatar_announce is a protocol
-            // envelope, never real chat text: it must not share the real-
-            // chat ratchet's chain/skip-key state with this peer. See
-            // ChatMessageSendService.encryptForWire's forceStatelessFormat
-            // doc for the live incident this closes.
-            let outcome = await ChatMessageSendService(appState: appState).sendEncrypted(
-                messageId: UUID(), peerUserId: peerId, plaintext: json,
-                forceStatelessFormat: true)
-            // `sendEncrypted` NEVER throws — every failure (WS down, auth
-            // timeout, PSK missing, crypto error) is a RETURNED `.failed`.
-            // Only an outcome that actually left the device may be marked.
-            switch outcome {
-            case .delivered, .sent:
+            // 2026-09-19 service-message root fix — avatar_announce is SERVICE
+            // traffic: CONTROL only, never the chat ladder. It is best-effort
+            // (the coordinator re-announces on the next trigger), so with no
+            // CONTROL session it is dropped rather than held, and — exactly as
+            // before — the version is marked sent ONLY when the frame really
+            // left the device.
+            let submission = await ChatMessageSendService(appState: appState).sendService(
+                peerUserId: peerId, plaintext: json, label: "avatar_announce",
+                delivery: .bestEffort)
+            switch submission {
+            case .sent:
                 Self.markSent(version: version, toPeer: peerId)
-                // W-AVATARDELIVERY (2026-08-13) — `.delivered` (peer
-                // confirmed) and `.sent` (queued/left the device, no
-                // delivery confirmation) used to collapse into the same
-                // `ok=1` — indistinguishable from here whether the peer's
-                // device ever actually got this. Reported live:
-                // `AvatarAnnounceCoordinator` shows a clean `send ok=1` for
-                // a peer that ALSO never shows a single `recv applied=`
-                // line at that version, hours later. `del` separates
-                // "confirmed reaching them" from "left here, unconfirmed"
-                // without a new log line.
-                let delivered: Int = { if case .delivered = outcome { return 1 }; return 0 }()
-                RTLog.info("avatar", "send ok=1 del=\(delivered) to=\(peer8) version=\(version) trig=\(trigCode)")
-            case .failed(let reason):
-                RTLog.warn("avatar", "send ok=0 code=1 to=\(peer8) version=\(version) trig=\(trigCode) reason=\(reason)")
+                RTLog.info("avatar", "send ok=1 del=0 to=\(peer8) version=\(version) trig=\(trigCode)")
+            case .held, .dropped:
+                RTLog.warn("avatar", "send ok=0 code=4 to=\(peer8) version=\(version) trig=\(trigCode) reason=nocontrol")
             }
         } catch AvatarAnnounceSender.SendError.pskMissing {
             // Fail-closed, exactly like Android's send path: no PSK bound to

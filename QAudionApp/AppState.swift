@@ -1710,6 +1710,10 @@ final class AppState: ObservableObject {
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
     private var groupFanOutWired: Bool = false
+    /// 2026-09-19 — the CONTROL-install observer of `wireServiceSendHub` is
+    /// registered once per AppState lifetime; the hub hooks themselves are
+    /// swapped on every call.
+    private var serviceSendHubWired: Bool = false
     /// W-GRPMSG: bounded retry buffer for inbound group TEXT messages
     /// whose recv chain isn't installed yet (the sender's
     /// `sender_key_init` is still in flight, or arrived out of order).
@@ -1738,9 +1742,38 @@ final class AppState: ObservableObject {
     /// failure (a genuinely undecryptable message, or the exchange truly
     /// didn't fix it) still surfaces to the user. Capped for the same
     /// flood-safety reason as `bufferedGroupWires`.
-    private var bufferedOneToOneCiphertexts:
-        [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
+    private typealias BufferedOneToOneFrame = (
+        senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?,
+        bufferedAtMs: Int64)
+    private var bufferedOneToOneCiphertexts: [BufferedOneToOneFrame] = []
     private static let maxBufferedOneToOneCiphertexts = 64
+    /// 2026-09-19 service-message root fix (IOS-18) — bounded memory (512) of
+    /// inbound 1:1 frames whose outcome is FINAL (consumed service frame,
+    /// dropped frame, persisted user row, placeholder). Consulted BEFORE
+    /// decrypt on the live, pending-sync and retry paths so a frame that came
+    /// back (the server replays an un-acked entry on every reconnect) is never
+    /// decrypted a second time — a consumed ratchet key cannot open it again,
+    /// and that failure used to become a placeholder row.
+    private var settledInboundFrames = SettledFrameSet()
+    /// 2026-09-19 — decides when a PRESENT-but-failing CONTROL session is
+    /// really diverged (3 distinct failed frames in 2 minutes), so one failed
+    /// frame can never drop a healthy session.
+    private static var controlFailureTracker = ControlFailureTracker()
+    /// 2026-09-19 — when this process last installed a CONTROL session for a
+    /// peer (`noteControlSessionInstalled`). A failed 0xE6 frame only counts
+    /// towards the tracker's quorum when it is evidence about THAT session, not
+    /// about an earlier one (see `ControlFailureTracker.isEvidence`).
+    private static var controlInstalledAtMs: [String: Int64] = [:]
+    /// 2026-09-19 — one final-retry timer per sender for frames buffered after
+    /// a first decrypt failure; the retry (or the session install that
+    /// precedes it) is what turns a still-undecryptable CHAT frame into the
+    /// single placeholder row.
+    private static var bufferedFinalizeScheduled: Set<String> = []
+    private static let bufferedFinalizeDelaySec: UInt64 = 25
+    /// 2026-09-19 (IOS-19) — resends already made per nacked `client_msg_id`
+    /// (cap 2), so a looping or hostile peer cannot multiply them.
+    private static var nackResendCounts: [String: Int] = [:]
+    private static let maxNackResendsPerTarget = 2
     /// 2026-07-17 — same buffering idea as `bufferedGroupWires`, but for a
     /// `group_metadata_changed`/GET-fetched metadata blob whose decrypt
     /// failed because the ACTOR's (the renaming admin's) recv chain isn't
@@ -2864,6 +2897,12 @@ final class AppState: ObservableObject {
     }
 
     func initialize() {
+        // 2026-09-19 service-message root fix — bind the service hold queue and
+        // the CONTROL-install observer before ANY provider can exist. The hooks
+        // read `liveProvider` at call time, so binding this early is safe, and
+        // it is what lets `submit` hold a payload instead of dropping it as
+        // "unconfigured" when the provider came from a refresh, not a connect.
+        wireServiceSendHub()
         // I4: materialize the presence objectWillChange forwarding before
         // anything can publish a presence update. `lazy` means touching it
         // here is a no-op on every call after the first.
@@ -4672,6 +4711,11 @@ final class AppState: ObservableObject {
                 }
             }
         )
+        // 2026-09-19 service-message root fix — the service hold queue is bound
+        // once at `initialize()` (a provider assigned by `performProactiveRefresh`
+        // never reaches this function, so binding only here left the hub
+        // unconfigured); re-binding is idempotent and keeps the held queue.
+        wireServiceSendHub()
         // Server selection: probe all nodes and connect to the fastest one.
         // Runs in background — does not delay the login flow.
         Task { [weak self] in
@@ -5134,10 +5178,9 @@ final class AppState: ObservableObject {
                 let plaintext = Data(envelopeJson.utf8)
 
                 let outcome: FastPathOutcome = await MainActor.run {
-                    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — try CONTROL first, same
-                    // graceful-fallback discipline as every other new encrypt path this redesign
-                    // added: falls through to the unchanged v4/v2/KMS-prebootstrap ladder below
-                    // when no CONTROL session exists yet for this peer. Mirrors Android
+                    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — try CONTROL first; when
+                    // no CONTROL session exists yet for this peer (2026-09-19: the v4/v2 ladder
+                    // is gone) it goes to the KMS-prebootstrap path below. Mirrors Android
                     // `GroupCallController.sealControlEnvelopeForBroadcast` / Desktop
                     // `Application.ts`'s `gc.onSendControlEnvelope` 3-way branch.
                     if AppState.sharedV4Ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
@@ -5148,51 +5191,22 @@ final class AppState: ObservableObject {
                             return .failed
                         }
                         return .sealed(wire: frame, transport: "v5ctrl")
-                    } else if AppState.sharedV4Ratchet.hasV4Session(peer) {
-                        guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
-                              let first = frame.first, first == MessageRatchet.magicV4 else {
-                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v4_encrypt_failed (hasV4Session=true)")
-                            return .failed
-                        }
-                        return .sealed(wire: frame, transport: "v4")
-                    } else if let pskMeta = AppState.resolveGroupCtrlPskNamed(peer: peer) {
-                        // W-GRPCTRL-PARITY (2026-07-20, call FB75E465): the
-                        // old fallback sealed a v3 wire under the HARDCODED
-                        // session epoch 'v1' — a recipe no flag-day peer can
-                        // open: Desktop's `handleGroupCtrlOpaque` and
-                        // Android's `MessageCrypto.decryptV3` both parse the
-                        // epoch tag FROM THE WIRE and look the PSK up BY NAME
-                        // (Android's v3 open has NO contact-newest fallback
-                        // at all, so an epoch of 'v1' matches nothing and the
-                        // envelope dies silently). Mirror Desktop's
-                        // chat-proven `encryptDispatch` recipe instead:
-                        // contact-bound-newest PSK, epoch tag = the PSK NAME
-                        // (minus any `call-` prefix), version-routed. iOS's
-                        // `SovereignKeyVault` has no ratchet-version field
-                        // and never stores call-derived `call-*` (rv>=3)
-                        // names — every contact-bound PSK here is
-                        // X25519/RK_0-derived, i.e. the rv=2 class Desktop
-                        // seals via v2 AEAD — so this seals a v2 (0xE2) wire
-                        // under the channel AAD
-                        // `grpcall-ctrl:<sender>:<recipient>` (the AAD
-                        // Android's `onOpaqueMessage` and Desktop's v2 open
-                        // branch verify). The rv>=3 v3-ratchet branch Desktop
-                        // has is structurally unreachable on iOS: a v3-class
-                        // pairing here is exactly a v4-session pairing,
-                        // already handled above.
-                        let epochTag = pskMeta.name.hasPrefix("call-")
-                            ? String(pskMeta.name.dropFirst("call-".count))
-                            : pskMeta.name
-                        let aad = Data("grpcall-ctrl:\(senderId):\(peer)".utf8)
-                        do {
-                            let wire = try MessageCryptoV2.seal(
-                                plaintext: plaintext, psk: pskMeta.psk, epochTag: epochTag, aad: aad)
-                            return .sealed(wire: wire, transport: "v2:\(epochTag.prefix(16))")
-                        } catch {
-                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v2_encrypt_failed epoch=\(epochTag.prefix(16)): \(error)")
-                            return .failed
-                        }
                     } else {
+                        // 2026-09-19 service-message root fix (IOS-04) — group-call
+                        // control is SERVICE traffic: CONTROL only. This ladder used
+                        // to fall back to the v4 CHAT session and then to a v2 (0xE2)
+                        // PSK seal when no CONTROL session existed; both consumed
+                        // chat-class chain state with control traffic (the collateral
+                        // damage W-CTLNORATCHET documents) and put a control payload
+                        // on a wire the peer treats as user chat. Whatever pairwise
+                        // state exists (v4 CHAT session, contact PSK, nothing), a
+                        // missing CONTROL session goes down ONE path: the qa_kms
+                        // pre-bootstrap below, which carries this very envelope and
+                        // installs CONTROL on both ends (CHAT is create-if-absent
+                        // there, so an existing CHAT session is left alone). A
+                        // separate "no CONTROL" outcome used to return false and
+                        // lose sender_key_rotate / sender_key_nack for good, since
+                        // only sender_key_init is re-sent by the controller.
                         return .noPsk
                     }
                 }
@@ -5223,7 +5237,8 @@ final class AppState: ObservableObject {
                     print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) cmid=\(msgId.prefix(8)) transport=\(transport)")
                     return true
                 case .noPsk:
-                    // GAP A2 — no pairwise v4/v1 session yet: attempt the
+                    // GAP A2 — no CONTROL session for this peer (with or without
+                    // a pairwise CHAT session / PSK): attempt the
                     // KMS-prebootstrap fallback (REAL now, not a documented
                     // no-op — mirrors Android's ADR-014a bootstrap-off-
                     // published-bundle path). Real network round-trip
@@ -5240,7 +5255,7 @@ final class AppState: ObservableObject {
                         print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) transport=kms_prebootstrap")
                         return true
                     }
-                    print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_v4_session_and_no_psk_and_prebootstrap_failed (pairwise 1:1 relationship never established)")
+                    print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_control_session_and_prebootstrap_failed (no CONTROL session and the qa_kms pre-bootstrap could not be built)")
                     return false
                 }
             }
@@ -5449,6 +5464,9 @@ final class AppState: ObservableObject {
                     if prev != .authenticated {
                         Task { @MainActor in
                             ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
+                            // 2026-09-19 service-message root fix — held service
+                            // payloads (CONTROL only) flush once a socket exists.
+                            ServiceSendHub.shared.socketBecameReady()
                         }
                     }
                     // W-GRPRECEIPTOUTBOX — same once-per-reconnect gate,
@@ -8160,6 +8178,14 @@ final class AppState: ObservableObject {
                   let serverMsgId = data["message_id"] as? String,
                   let cipher = Data(base64Encoded: cipherB64) else {
                 print("[AppState] msg_receive missing required fields: \(data.keys)")
+                // 2026-09-19 — a frame that can never be processed (malformed base64,
+                // missing fields) is a TERMINAL outcome: ack it, or the server replays
+                // it on every reconnect for 24 h. Nothing to ack without a message id.
+                if let malformedId = data["message_id"] as? String, !malformedId.isEmpty {
+                    DispatchQueue.main.async {
+                        self.sendOrQueueDeliveryReceipt(serverMsgId: malformedId)
+                    }
+                }
                 return
             }
             let clientMsgId = data["client_msg_id"] as? String
@@ -8285,6 +8311,7 @@ final class AppState: ObservableObject {
                 // behavior.
                 self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
+                self.resetAccountScopedRuntimeState()
                 self.errorMessage = "Account cancellato remotamente."
             }
         }
@@ -8924,6 +8951,9 @@ final class AppState: ObservableObject {
         guard let senderId = entry["sender_id"] as? String,
               !senderId.isEmpty,
               let cipherB64 = entry["encrypted_payload"] as? String else {
+            // 2026-09-19 — a replayed entry that can never be processed is a
+            // TERMINAL outcome: ack it or the server replays it on every reconnect.
+            ackUnprocessablePendingEntry(entry)
             return
         }
         // CRITICAL (Android→iOS key sync): opaque call-signalling queued while
@@ -8976,6 +9006,7 @@ final class AppState: ObservableObject {
         }
         guard let serverMsgId = entry["message_id"] as? String,
               let cipher = Data(base64Encoded: cipherB64) else {
+            ackUnprocessablePendingEntry(entry)
             return
         }
         handleIncomingMessage(
@@ -8983,8 +9014,21 @@ final class AppState: ObservableObject {
             serverMsgId: serverMsgId,
             cipher: cipher,
             clientMsgId: entry["client_msg_id"] as? String,
-            serverTs: entry["server_ts"] as? String
+            serverTs: entry["server_ts"] as? String,
+            // A backlog replay: its decrypt failure says nothing about the CONTROL
+            // session installed since (see `ControlFailureTracker.isEvidence`).
+            live: false
         )
+    }
+
+    /// Acks a `msg_pending_sync` entry that can never be processed (malformed
+    /// base64, missing fields): its outcome is final, and an un-acked entry is
+    /// replayed on every reconnect until the server's 24 h TTL. No id, no ack.
+    private func ackUnprocessablePendingEntry(_ entry: [String: Any]) {
+        if let messageId = entry["message_id"] as? String, !messageId.isEmpty {
+            RTLog.warn("chat", "msg_pending_sync malformed=1 acked=1")
+            sendOrQueueDeliveryReceipt(serverMsgId: messageId)
+        }
     }
 
     // MARK: - W-GRPMSG: group TEXT message receive
@@ -9108,6 +9152,19 @@ final class AppState: ObservableObject {
         }
 
         let ts = Self.parseGroupServerTs(serverTs)
+
+        // 2026-09-19 service-message root fix (IOS-21) — the same structural
+        // service gate as the 1:1 and mesh paths: a group TEXT frame whose body is
+        // a service envelope (or an attachment descriptor, which rides msg_type 1)
+        // is dropped and acked, never appended as a row or a banner.
+        if msgType != GroupAttachmentEnvelope.msgTypeAttachment,
+           ServicePayloadDetector.classify(plaintext) != .notService {
+            let dropGroup: String = String(groupHex.prefix(8))
+            let dropLine: String = "text service=1 dropped=1 g=" + dropGroup
+            RTLog.warn("group", dropLine)
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
 
         // Fase 1B — attachment frame: the decrypted 0xE4 plaintext is a
         // GroupAttachmentEnvelope JSON, NOT text. Branch on the transport
@@ -9498,9 +9555,14 @@ final class AppState: ObservableObject {
     private func bufferOneToOneCiphertext(
         senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?
     ) {
+        // 2026-09-19 (IOS-09) — a frame the server replays on reconnect while it
+        // is still waiting in this buffer must not be buffered twice.
+        if bufferedOneToOneCiphertexts.contains(where: { $0.serverMsgId == serverMsgId }) { return }
+        // `bufferedAtMs` lets the final-retry timer (one per sender) tell a frame
+        // that has waited its full patience window from one buffered a moment ago.
         bufferedOneToOneCiphertexts.append(
             (senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
-             serverTs: serverTs))
+             serverTs: serverTs, bufferedAtMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())))
         if bufferedOneToOneCiphertexts.count > Self.maxBufferedOneToOneCiphertexts {
             bufferedOneToOneCiphertexts.removeFirst(
                 bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)
@@ -9516,8 +9578,8 @@ final class AppState: ObservableObject {
     /// still surfaces exactly once, never disappears.
     private func retryBufferedOneToOneMessages(for senderId: String) {
         guard bufferedOneToOneCiphertexts.contains(where: { $0.senderId == senderId }) else { return }
-        var remaining: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
-        var toRetry: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
+        var remaining: [BufferedOneToOneFrame] = []
+        var toRetry: [BufferedOneToOneFrame] = []
         for e in bufferedOneToOneCiphertexts {
             if e.senderId == senderId { toRetry.append(e) } else { remaining.append(e) }
         }
@@ -9526,6 +9588,43 @@ final class AppState: ObservableObject {
             handleIncomingMessage(
                 senderId: e.senderId, serverMsgId: e.serverMsgId, cipher: e.cipher,
                 clientMsgId: e.clientMsgId, serverTs: e.serverTs, isRetry: true)
+        }
+    }
+
+    /// The final-retry timer's version of `retryBufferedOneToOneMessages`: it
+    /// only gives up on frames that have themselves waited the full
+    /// `bufferedFinalizeDelaySec` (the timer is armed per SENDER, so a frame
+    /// buffered at t=24 s of a 25 s timer would otherwise be turned into a
+    /// placeholder + nack a second later, long before the patient session
+    /// convergence in `ensureV4Session` has had its ~45 s). Younger frames stay
+    /// buffered and the timer is re-armed for the earliest of them.
+    private func finalizeBufferedOneToOneMessages(for senderId: String) {
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        let patienceMs = Int64(AppState.bufferedFinalizeDelaySec) * 1_000
+        var remaining: [BufferedOneToOneFrame] = []
+        var due: [BufferedOneToOneFrame] = []
+        var earliestDueInMs: Int64? = nil
+        for e in bufferedOneToOneCiphertexts {
+            guard e.senderId == senderId else {
+                remaining.append(e)
+                continue
+            }
+            let dueInMs = patienceMs - (nowMs - e.bufferedAtMs)
+            if dueInMs <= 0 {
+                due.append(e)
+            } else {
+                remaining.append(e)
+                earliestDueInMs = min(earliestDueInMs ?? dueInMs, dueInMs)
+            }
+        }
+        bufferedOneToOneCiphertexts = remaining
+        for e in due {
+            handleIncomingMessage(
+                senderId: e.senderId, serverMsgId: e.serverMsgId, cipher: e.cipher,
+                clientMsgId: e.clientMsgId, serverTs: e.serverTs, isRetry: true)
+        }
+        if let waitMs = earliestDueInMs {
+            scheduleBufferedOneToOneFinalize(for: senderId, afterMs: waitMs)
         }
     }
 
@@ -9579,10 +9678,25 @@ final class AppState: ObservableObject {
     /// Persist an incoming peer message to the local store + post a
     /// NotificationCenter event so any active `ChatContainer` for the
     /// peer refreshes. Decryption uses the same MessageCrypto wire
-    /// format as the send path; if decryption fails we still persist
-    /// a placeholder ("[messaggio cifrato non leggibile]") so the
-    /// conversation history at least shows that something arrived —
-    /// helps debugging when peers are on different protocol versions.
+    /// format as the send path.
+    ///
+    /// 2026-09-19 service-message root fix — this is the single inbound choke
+    /// point for 1:1 frames (live msg_receive, msg_pending_sync replay, retry
+    /// drain), and it is a typed router:
+    ///   1. self-echo and already-settled frames are acked and dropped before any
+    ///      decrypt (`settledInboundFrames`);
+    ///   2. the frame is decrypted, then classified by wire class (0xE6 CONTROL vs
+    ///      CHAT) and by the STRUCTURE of the plaintext (`InboundRouter`);
+    ///   3. service payloads are consumed by `handleInboundServicePayload` (never a
+    ///      row, preview, unread, banner or conversation), anything unrecognised is
+    ///      dropped, and every terminal outcome is acked;
+    ///   4. only genuine user content reaches the persistence tail, whose one write
+    ///      is `ConversationStore.recordInboundUserMessage`;
+    ///   5. a decrypt failure never touches session state. A CONTROL frame fails
+    ///      silently; a CHAT frame is retried once and, if it still fails, leaves
+    ///      the single placeholder row ("[messaggio cifrato non leggibile]", no
+    ///      banner) plus a CONTROL-only nack — the resend of that `client_msg_id`
+    ///      replaces the row in place.
     private func handleIncomingMessage(
         senderId: String,
         serverMsgId: String,
@@ -9594,8 +9708,35 @@ final class AppState: ObservableObject {
         // W-AVATARPOLLUTE — true only when this exact ciphertext already
         // failed once and is being replayed from `bufferedOneToOneCiphertexts`
         // after a fresh key-exchange leg landed. See that buffer's kdoc.
-        isRetry: Bool = false
+        isRetry: Bool = false,
+        // 2026-09-19 — false for a `msg_pending_sync` replay: such a frame can be
+        // older than the CONTROL session installed since, so its decrypt failure
+        // says nothing about that session (`ControlFailureTracker.isEvidence`).
+        live: Bool = true
     ) {
+        // ── 2026-09-19 service-message root fix — router entry gates ──────────
+        // Everything below this point can decrypt, persist or notify, so the two
+        // questions that never need a decrypt are answered first, on every path
+        // (live msg_receive, msg_pending_sync replay, retry drain).
+        //
+        // IOS-20 — a frame whose sender is THIS device is never processed: it
+        // used to fall through to a decrypt with the wrong-direction AAD, a
+        // forced key exchange with ourselves and, after the retry, a
+        // placeholder in a self-conversation. Ack so the server stops holding it.
+        if let selfUserId = currentUserId, !selfUserId.isEmpty, senderId == selfUserId {
+            RTLog.warn("chat", "msg_receive self=1 dropped=1")
+            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            return
+        }
+        // IOS-18 — a frame whose outcome is already final is acked again and
+        // never decrypted twice (see `settledInboundFrames`).
+        if settledInboundFrames.containsFrame(
+            serverMessageId: serverMsgId, senderId: senderId, clientMsgId: clientMsgId
+        ) {
+            RTLog.info("chat", "msg_receive settled=1 retry=\(isRetry ? 1 : 0)")
+            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            return
+        }
         // W-MSGDEDUP (2026-09-01) — consumer-side dedup BEFORE decrypt, the
         // 1:1 mirror of `handleIncomingGroupMessage`'s
         // `GroupMessageStore.contains(groupHex:serverMessageId:)` gate
@@ -9668,6 +9809,9 @@ final class AppState: ObservableObject {
         // marker JSON would already have been replaced by the
         // "(download in arrivo)" placeholder before we get to parse.
         var decryptedRaw: String = ""
+        // 2026-09-19 — true only for the single placeholder row a CHAT frame
+        // leaves behind when it is still undecryptable after its retry.
+        var isUndecryptablePlaceholder = false
         // W-MSGPSKPICK (2026-08-02): the decrypt attempt is a closure so it
         // can be re-run against the OTHER PSKs bound to this peer. A peer on
         // an older build still picks `auto:` where we now pick the newest,
@@ -9685,15 +9829,14 @@ final class AppState: ObservableObject {
             let pt: Data
             switch MessageWireFormat.detect(cipher) {
             case .v5:
-                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — real target on THIS channel
-                // (msg_send): the attachment-announce marker `ChatContainer
-                // .completeResumeAttachmentSend` ships after a TUS resume completes
-                // (`sendEncrypted(..., useControlChannel: true)`) rides here as a normal inbound
-                // message. The rest of the qa_ctl/qa_grp family already bypasses both ratchets
-                // entirely via `forceStatelessFormat` (W-CTLNORATCHET) and never reaches this case;
-                // `qa_grpcall_ctrl` ships via opaque_message (see the group-call receive path in
-                // `dispatchInboundOpaque`), not here. Fail-closed on any decrypt failure — never a
-                // silent fall-through into the v1 fallback below.
+                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — the CONTROL channel. Since
+                // 2026-09-19 (service-message root fix) this is where EVERY service payload
+                // on msg_send arrives (qa_ctl/qa_grp envelopes, sender keys, nacks, avatar,
+                // timer, screenshot signals); the frame is routed by `InboundRouter`
+                // (0xE6 => the service dispatcher only, never a row). Attachment announces no
+                // longer ride it. `qa_grpcall_ctrl` ships via opaque_message (see the group-call
+                // receive path in `dispatchInboundOpaque`), not here. Fail-closed on any decrypt
+                // failure — never a silent fall-through into the v1 fallback below.
                 let v5Plain = AppState.sharedV4Ratchet.decryptV5Routed(
                     epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: cipher)
                 print("[PQC_DIAG_V5CTRL] decryptV5 sender=\(senderId.prefix(8)) result=\(v5Plain != nil ? "ok" : "nil")")
@@ -9776,7 +9919,32 @@ final class AppState: ObservableObject {
                 RTLog.warn("chat", "msg_receive undec=0 alt=1 from=\(senderId.prefix(8))")
                 pt = ok
             }
-            decryptedRaw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+            // ── 2026-09-19 service-message root fix — typed inbound router ────────
+            // The wire class (first byte: 0xE6 = CONTROL, everything else = CHAT)
+            // and the structure of the plaintext decide what this frame MAY
+            // become, before anything renders or persists:
+            //   0xE6            → the service dispatcher only; unknown / malformed /
+            //                     plain text on CONTROL is dropped, never a row.
+            //   CHAT, service-  → dropped (channel-is-kind: control is never accepted
+            //   shaped            from CHAT, and never rendered either).
+            //   non-UTF8        → dropped (IOS-12): it used to be replaced by the
+            //                     placeholder string and persisted as a normal row.
+            //   CHAT, otherwise → user content, the only thing that reaches the
+            //                     conversation-persistence tail below.
+            let inboundWireClass = InboundWireClass.of(cipher)
+            if inboundWireClass == .control {
+                AppState.controlFailureTracker.recordSuccess(peerId: senderId)
+            }
+            let routed = InboundRouter.verdict(wireClass: inboundWireClass, plaintext: pt)
+            if case .drop(let dropReason) = routed {
+                let controlFlag: Int = inboundWireClass == .control ? 1 : 0
+                RTLog.warn("chat", "msg_receive drop=1 reason=\(dropReason.rawValue) control=\(controlFlag)")
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
+            decryptedRaw = String(decoding: pt, as: UTF8.self)
             // E2EE avatar transport (2026-07-30) — a successful decrypt
             // from `senderId` proves a real pairwise PSK exists with
             // them right now. Opportunistically deliver our current
@@ -9797,141 +9965,27 @@ final class AppState: ObservableObject {
             // Safe against clobbering a manual rubrica rename — see
             // NameResolutionService.maybeRefreshFromChatActivity's kdoc.
             NameResolutionService.shared.maybeRefreshFromChatActivity(userId: senderId)
-            // W78: cross-platform attachment placeholder. Desktop and
-            // Android send voice notes / files via the qa_ctl:1
-            // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
-            // iOS does not yet implement that download/decrypt path
-            // (deferred until the engine ships the Double Ratchet
-            // chain-key snapshot needed for parity), so when one of
-            // those envelopes arrives we surface a friendly placeholder
-            // instead of pasting raw JSON into the chat history. Same
-            // shape for `qfile` markers (legacy iOS-internal file
-            // transfer) so a stray Desktop-FileTransfer marker doesn't
-            // leak as text either.
-            // W86: route qa_ctl:1 control envelopes (delete / edit / reaction)
-            // BEFORE persisting as a new inbound row. These mutate
-            // an EXISTING row keyed by clientMsgId rather than
-            // appending. A successful route returns early — the chat
-            // refresh notification fires from inside the route helper.
-            //
-            // Screenshot-lock family (ss_req / ss_resp / ss_lock) now ALSO
-            // parses into a typed case, but it is CONVERSATION-level (no target
-            // row to mutate) and is applied — as a transient dialog signal
-            // (ss_req) or `setScreenshotGranted` state (ss_resp/ss_lock), never
-            // a chat row — by the conversation-level ad-hoc JSON handler
-            // further down this function. So we deliberately let it
-            // FALL THROUGH here (do not route to `handleControlEnvelope`, which
-            // treats it as a no-op) to keep that ad-hoc handler as the single
-            // source of truth and avoid a parse-then-drop regression.
-            if let env = try? ChatControlEnvelope.parse(decryptedRaw) {
-                switch env {
-                case .screenshotRequest, .screenshotResponse, .screenshotLock:
-                    break  // fall through to the ad-hoc conversation-level handler
-                case .delete, .edit, .reaction:
-                    handleControlEnvelope(env, senderId: senderId)
-                    // W-PENDINGACKGAP (2026-09-17): every early-return branch here
-                    // used to skip the ack — harmless while the server deleted a
-                    // pending message on unconfirmed send, but W-PENDINGACKGAP
-                    // removed that, so an offline-queued control envelope replayed
-                    // via msg_pending_sync would sit in the pending queue forever
-                    // and re-apply on every reconnect (a reaction toggling back and
-                    // forth, a delete/edit reapplied). Ack once the effect is
-                    // applied, same rule as the real-message path below.
-                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                    return
-                }
-            }
-            // E2EE avatar transport (2026-07-30, see
-            // docs/E2EE_AVATAR_TRANSPORT_DESIGN.md) — like delete/edit/
-            // reaction above, this must be routed BEFORE message
-            // persistence: it is never a visible chat row, only a
-            // silent local-cache update.
-            //
-            // 2026-08-02: the version-dedup pre-check that used to sit here
-            // moved INTO the coordinator, where it runs inside the per-sender
-            // serialisation. Checking it out here was racy against a second
-            // announce from the same peer (both could read the same cached
-            // version and both proceed), and — worse for diagnosis — a skip
-            // produced no log at all, which is precisely the "did it run or
-            // not?" ambiguity that made this feature so hard to debug.
-            // Fix (2026-07-31, found during full-audit): `try?` here used to
-            // collapse two very different outcomes into the same silent
-            // `nil` — "this JSON just isn't an avatar_announce" (expected,
-            // falls through to other handlers) and "this IS an
-            // avatar_announce but a required field is missing/malformed" (a
-            // real wire-format bug, e.g. the att/avatar key mismatch fixed
-            // earlier today). The malformed case produced ZERO log anywhere
-            // and fell through to being persisted+rendered as raw garbage
-            // JSON in the chat UI. Distinguish them explicitly.
-            do {
-                if let avatarEnv = try AvatarAnnounceEnvelope.parse(decryptedRaw) {
-                    handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
-                    // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                    return
-                }
-            } catch {
-                RTLog.error("avatar", "malformed avatar_announce from=\(senderId.prefix(8)): \(error)")
-                // W-PENDINGACKGAP: malformed on this device means malformed on
-                // every future redelivery too — a retry can never fix it, so ack
-                // now or it loops in the pending queue forever.
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            if routed == .dispatchService {
+                // Service payload: consumed here, acked, settled. It has no
+                // path to a row, a preview, an unread count, a notification or
+                // a conversation (IOS-15/16) — `handleInboundServicePayload`
+                // never touches the conversation-persistence tail below.
+                handleInboundServicePayload(decryptedRaw, senderId: senderId)
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
                 return
             }
-            // W390: route `qa_grp:1` envelopes (sender_key_init,
-            // sender_key_rotate) to the GroupChatService BEFORE
-            // persisting as a chat row. These are protocol messages,
-            // not user-visible text. The handler installs the recv
-            // chain so subsequent group ciphertexts from this sender
-            // can decrypt; if no group session exists locally yet, the
-            // handler drops silently (the peer will re-ship after we
-            // join via the membership signaling layer).
-            if let groupCtlType = GroupChatService.detectGroupCtlType(decryptedRaw) {
-                let mySelfId = currentUserId ?? ""
-                switch groupCtlType {
-                case "sender_key_init":
-                    GroupChatService.shared.handleInboundSenderKeyInit(
-                        envelopeJson: decryptedRaw,
-                        fromUserId: senderId,
-                        selfId: mySelfId)
-                case "sender_key_rotate":
-                    GroupChatService.shared.handleInboundSenderKeyRotate(
-                        envelopeJson: decryptedRaw,
-                        fromUserId: senderId,
-                        selfId: mySelfId)
-                case "group_invite":
-                    // W399 — iOS-only enhancement: full state on first contact.
-                    handleInboundGroupInvite(json: decryptedRaw, fromUserId: senderId)
-                case "member_added":
-                    // W403 — Desktop-aligned wire.
-                    handleInboundMemberAdded(json: decryptedRaw, fromUserId: senderId)
-                case "member_removed":
-                    handleInboundMemberRemoved(json: decryptedRaw, fromUserId: senderId)
-                case "member_left":
-                    handleInboundMemberLeft(json: decryptedRaw, fromUserId: senderId)
-                case "group_member_added":
-                    // W403 LEGACY — accept with epoch gate (drop if env.e
-                    // is present and < state.epoch), then route to the
-                    // canonical handler. Will be removed in a future release.
-                    handleLegacyMemberDelta(
-                        json: decryptedRaw, fromUserId: senderId, isAdded: true)
-                case "group_member_removed":
-                    handleLegacyMemberDelta(
-                        json: decryptedRaw, fromUserId: senderId, isAdded: false)
-                default:
-                    // W403: dropped "group_invite_decline" (was dead code:
-                    // a declined invite is just an ignored sender_key_init).
-                    print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId.prefix(8))…")
-                }
-                // W-GRPMSG: a freshly-installed recv chain may unblock
-                // group TEXT frames we buffered because they arrived
-                // before this sender's sender_key_init. Retry them now.
-                if groupCtlType == "sender_key_init" || groupCtlType == "sender_key_rotate" {
-                    retryBufferedGroupMessages()
-                    retryBufferedGroupMetadata()
-                }
-                // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            // A `qa_ctl` `attach_announce` that does not parse (e.g. `att` missing) is
+            // shaped like an attachment, so the router lets it through as user content;
+            // rendered as-is it would be the raw JSON as a chat row. Drop and ack it
+            // (the write boundary also refuses announce JSON, as a backstop).
+            if ServicePayloadDetector.classify(decryptedRaw) == .attachmentAnnounce,
+               (try? AttachAnnounceEnvelope.parse(decryptedRaw)) == nil {
+                RTLog.warn("chat", "msg_receive drop=1 reason=5 control=0")
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
                 return
             }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
@@ -9952,81 +10006,44 @@ final class AppState: ObservableObject {
             // note): `undec=1` is what survives the trip.
             let wireClass = MessageWireFormat.detect(cipher)
             RTLog.error("chat", "msg_receive undec=1 wire=\(wireClass) from=\(senderId.prefix(8)) retry=\(isRetry): \(error)")
-            // W77b: auto-rekey on decrypt failure. Same pattern as
-            // qaudion-desktop's `MessageService.on('needRekey')` → fires
-            // a fresh KEY_EXCHANGE_OFFER with `force=true` so the next
-            // message from this peer rides a freshly-derived PSK. Saves
-            // the user from having to manually re-pair when keychains
-            // get desynced (e.g. after one side reinstalls).
+            // ── 2026-09-19 service-message root fix — failure policy ──────────────
+            // A decrypt failure is NEVER a reason to touch session state: the old
+            // W77b auto-rekey (`triggerKeyExchange(force: true)` on the first failure
+            // of every non-CONTROL frame, which purges the working PSK and drags the
+            // peer through a re-derive) and W-CTRLDROPRECV (drop a present CONTROL
+            // session on one failed frame) turned every leaked or replayed frame
+            // into pairing churn (IOS-25, IOS-09). Repair belongs to the
+            // `ensureV4Session` state machine and to the call/pre-bootstrap
+            // handshakes that replace sessions; a failed frame only feeds it.
             //
-            // W-CTRLWIRECLASS (2026-09-18) — NOT for a v5 CONTROL frame
-            // (0xE6): that is a session on a separate channel, the pairwise
-            // PSK is not what failed, and a forced OFFER purges the working
-            // PSK and drags the peer through a re-derive it did not need —
-            // the very session churn the buffered retry below exists to
-            // wait out. Buffer and wait for the CONTROL session instead.
-            if wireClass != .v5 {
-                triggerKeyExchange(with: senderId, force: true)
-            } else if !isRetry, AppState.sharedV4Ratchet.hasChannelSession(
-                epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId
-            ) {
-                // FIRST failure only (`!isRetry`): a buffered frame replayed later
-                // is by definition sealed under whatever session the peer had
-                // BEFORE the repair, so it fails against the repaired session for
-                // good — and dropping on that failure destroyed the fresh session
-                // the repair had just installed (live 2026-09-19 08:49:23, iPhone).
-                // W-CTRLDROPRECV (2026-09-19) — a PRESENT CONTROL session that
-                // still fails to decrypt is a diverged session, not a missing
-                // one: `ensureV4Session`'s send-time check below only re-sends
-                // a prebootstrap envelope when the session is ABSENT, so a
-                // present-but-broken one would sit unrepaired until the next
-                // call forever (the exact "converges only at next call" gap).
-                // Dropping it here makes it absent, so the next outgoing
-                // message to this peer (or this peer's own recovery) re-
-                // bootstraps a fresh one. Mirrors Android's identical drop in
-                // `ReceiveMessageUseCase.maybeRecoverControlChannel`.
-                AppState.sharedV4Ratchet.dropChannelSession(
-                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId
-                )
-                if let selfId = self.currentUserId, !selfId.isEmpty {
-                    AppState.ensureV4Session(selfId: selfId, peerId: senderId, liveProvider: self.liveProvider)
-                }
+            // CONTROL (0xE6): silent by construction — never a row, always acked.
+            if wireClass == .v5 {
+                handleUndecryptableControlFrame(
+                    senderId: senderId, serverMsgId: serverMsgId, cipher: cipher,
+                    clientMsgId: clientMsgId, serverTs: serverTs, isRetry: isRetry, live: live)
+                return
             }
-            // W-AVATARPOLLUTE — a FIRST failure buffers instead of showing
-            // "[messaggio cifrato non leggibile]": most of these are an
-            // avatar_announce (or another control payload) racing its own
-            // key exchange, and a retry once that exchange's next leg lands
-            // usually opens it silently. Only a retry that ALSO fails falls
-            // through below — this is the one path allowed to actually show
-            // the failure row, so a truly undecryptable message still
-            // surfaces exactly once rather than vanishing.
+            // CHAT, first failure: keep the frame (deduped, bounded) and retry
+            // once a session lands or the final-retry timer fires. NOT acked yet —
+            // the server keeps it pending, so a frame that only needed a repaired
+            // session is delivered again after a restart instead of being lost.
             if !isRetry {
                 bufferOneToOneCiphertext(
                     senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
                     serverTs: serverTs)
+                scheduleBufferedOneToOneFinalize(for: senderId)
                 return
             }
-            // A 0xE6 frame is a control envelope (avatar/reaction/delete/...), never
-            // user text: there is nothing for the sender to resend and nothing the
-            // user should see as a "message". Android already suppresses the row for
-            // this class; iOS showed "[messaggio cifrato non leggibile]" for it.
-            // ACK so the server stops redelivering, then stop.
-            if wireClass == .v5 {
-                RTLog.warn("chat", "msg_receive undec=1 wire=v5 giveup=1 suppressed=1")
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                return
-            }
-            // W-DECRYPTNACK (2026-09-19) — a CHAT-class message that stayed
-            // undecryptable through the retry: ask the sender to resend it. The nack
-            // rides the CONTROL channel ONLY (see `sendDecryptNackDebounced`); it is
-            // skipped when no CONTROL session exists rather than falling back to the
-            // chat session, whose own failure was the point (a chat-class nack that
-            // fails to open surfaces on the peer as the very "Messaggio non
-            // decifrabile" it was meant to fix — live 2026-09-19 08:49:23, A36).
+            // CHAT, still undecryptable after the retry: a genuine user message was
+            // lost. Ask the sender to resend it — over CONTROL only, held until a
+            // CONTROL session exists (`sendDecryptNackDebounced`) — and leave the
+            // single placeholder row (written by the persistence tail below, no
+            // notification, replaced in place when the resend arrives).
             if let clientMsgId {
                 sendDecryptNackDebounced(to: senderId, targetClientMsgId: clientMsgId)
             }
-            plaintext = "[messaggio cifrato non leggibile]"
+            plaintext = InboundMessagePolicy.undecryptablePlaceholderText
+            isUndecryptablePlaceholder = true
         }
 
         // Persist into the conversation store. The conversation is
@@ -10047,95 +10064,29 @@ final class AppState: ObservableObject {
             // `looksLikeUUID`, not the full placeholder set — now the
             // canonical `DisplayName.forUser`.
             let resolvedName: String = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            // Created EMPTY (no preview, unread 0): the write boundary below owns
+            // the preview and the unread bump, and can still refuse or fail. With the
+            // frame's text and unread=1 written here, a failed write left a phantom
+            // conversation showing that text, and first contact counted unread twice.
             conv = Conversation(
                 id: UUID(),
                 peerUserId: senderId,
                 peerDisplayName: resolvedName,
-                lastMessagePreview: plaintext,
+                lastMessagePreview: nil,
                 lastActivity: Date(),
-                unreadCount: 1,
+                unreadCount: 0,
                 pinned: false,
                 kind: .oneToOne
             )
             store.upsertConversation(conv)
         }
-        // qa_ctl control envelope detection (Android-compatible wire format).
-        // These are NOT stored as normal message rows — they trigger state changes
-        // and optionally store a system bubble for user visibility.
-        if let data = plaintext.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let qaCtl = json["qa_ctl"] as? Int, qaCtl == 1,
-           let ctlType = json["t"] as? String {
-            let isScreenshotCtl = ctlType == "ss_req" || ctlType == "ss_resp" || ctlType == "ss_lock"
-            let isTimerCtl = ctlType == "ephemeral_timer"
-            // W-DECRYPTNACK (2026-09-19) — silent, conversation-independent
-            // control envelope: the peer is telling us one of OUR prior
-            // sends never decrypted on their end even after their session
-            // with us recovered (mirrors Android's identical addition; see
-            // that platform's ChatControlEnvelope.TYPE_DECRYPT_NACK kdoc for
-            // the full rationale). No chat bubble, ever.
-            let isDecryptNackCtl = ctlType == "decrypt_nack"
-            if isDecryptNackCtl {
-                if let target = json["target"] as? String, !target.isEmpty {
-                    resendAfterDecryptNack(peerUserId: senderId, targetClientMsgId: target)
-                }
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                return
-            }
-            if isScreenshotCtl || isTimerCtl {
-                // Android parity fix (2026-08-13): ReceiveMessageUseCase.kt's
-                // ss_req/ss_resp/ss_lock branches never touch the message
-                // store — they only emit to ScreenshotConsentRepository (a
-                // transient SharedFlow) or flip the persisted grant column.
-                // iOS used to ALSO drop a "📸 ..." system bubble into the
-                // conversation for all three, which is what the user flagged
-                // as a stray message that "stays in the chat" — worse, ss_req
-                // had NO approve/deny UI wired to it at all (grantScreenshotPermission()
-                // had zero callers), so the bubble was purely decorative and
-                // the request could never actually be granted from the UI.
-                // Fixed: ss_req now posts a transient notification consumed by
-                // the live ChatContainer/ChatDetailScreen as an approve/deny
-                // dialog (mirrors Android's incomingScreenshotRequest dialog);
-                // ss_resp/ss_lock keep their state mutation but no longer
-                // persist a chat row, matching Android exactly.
-                if ctlType == "ss_req" {
-                    NotificationCenter.default.post(name: AppState.screenshotRequestNotification,
-                                                    object: nil,
-                                                    userInfo: ["peerUserId": senderId])
-                    // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                    return
-                }
-                if ctlType == "ss_resp" {
-                    let approved = json["approved"] as? Bool ?? false
-                    store.setScreenshotGranted(conversationId: conv.id, granted: approved)
-                } else if ctlType == "ss_lock" {
-                    store.setScreenshotGranted(conversationId: conv.id, granted: false)
-                } else if ctlType == "ephemeral_timer" {
-                    let sec = json["timer_sec"] as? Int ?? 0
-                    store.setEphemeralTimer(conversationId: conv.id, seconds: sec == 0 ? nil : sec)
-                    let label = sec == -1 ? "⏱ Messaggi: visualizza una volta"
-                         : sec == 0 ? "⏱ Messaggi a scomparsa: disattivati"
-                         : "⏱ Messaggi a scomparsa: \(sec)s"
-                    let sysMsg = Message(
-                        id: UUID(), conversationId: conv.id,
-                        direction: .incoming, plaintext: label,
-                        sentAt: Date(), deliveredAt: Date(), readAt: nil,
-                        status: .delivered, senderUserId: senderId
-                    )
-                    store.appendMessage(sysMsg)
-                    store.recordNewMessage(conversationId: conv.id,
-                                           lastMessagePreview: label,
-                                           lastActivity: Date(), incrementUnread: !conv.muted)
-                }
-                NotificationCenter.default.post(name: AppState.chatRefreshNotification,
-                                                object: nil,
-                                                userInfo: ["peerUserId": senderId])
-                // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                return
-            }
-        }
+        // 2026-09-19 service-message root fix — this is the USER-CONTENT tail only.
+        // The qa_ctl branches that used to sit here (decrypt_nack, ss_req/resp/lock,
+        // ephemeral_timer) ran AFTER the conversation was created above, so a service
+        // envelope could resurrect a deleted conversation with a raw-JSON preview and
+        // unread=1 (IOS-15), and ephemeral_timer wrote a system bubble (IOS-17). They
+        // are service payloads now: consumed by `handleInboundServicePayload` before
+        // this point, with no path that can create a conversation or a row.
 
         let msgUUID = UUID()
         // W80: voice-note receive.
@@ -10221,22 +10172,62 @@ final class AppState: ObservableObject {
             clientMsgId: clientMsgId,
             expiresAt: ephExpiry,
             isViewOnce: isViewOnce ? true : nil,
-            exportBlocked: exportBlocked
+            exportBlocked: exportBlocked,
+            isPlaceholder: isUndecryptablePlaceholder ? true : nil
         )
-        store.appendMessage(msg)
         // W83: bump conversation preview + activity + unread so the
         // chat list reflects new messages and the count badge shows.
         // Use the already-rendered `plaintext` (placeholder for media)
         // so cross-platform attachments don't leak raw JSON to the list.
         // W89: muted conversations skip the unread bump so the badge
         // stays clean (the message still lands and re-orders the list).
+        //
+        // 2026-09-19 service-message root fix (IOS-22/23/24) — the row, the
+        // preview and the unread bump go through the ONE inbound write
+        // boundary, which refuses service-shaped text (there is no render-time
+        // filter anywhere: a leak fails here, loudly) and replaces a
+        // placeholder in place when its resend arrives. The banner below is
+        // only ever scheduled from this point.
         let isMuted = conv.muted
-        store.recordNewMessage(
-            conversationId: conv.id,
-            lastMessagePreview: plaintext,
-            lastActivity: Date(),
-            incrementUnread: !isMuted
-        )
+        let inboundKind: ConversationStore.InboundUserMessageKind
+        if isUndecryptablePlaceholder {
+            inboundKind = .placeholder
+        } else if pendingMarker != nil || pendingAttachAnnounce != nil {
+            inboundKind = .attachment
+        } else {
+            inboundKind = .text
+        }
+        let recorded = store.recordInboundUserMessage(
+            msg, preview: plaintext, incrementUnread: !isMuted, kind: inboundKind)
+        switch recorded {
+        case .inserted:
+            break
+        case .replacedPlaceholder:
+            // The resend of a message we had given up on landed: the
+            // placeholder row now carries the real text. No second row, no
+            // second unread, no banner.
+            RTLog.info("chat", "msg_receive placeholder_replaced=1")
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification, object: nil,
+                userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+            )
+            finishInboundFrame(
+                serverMsgId: serverMsgId, senderId: senderId,
+                clientMsgId: clientMsgId, settleClientKey: true)
+            return
+        case .duplicatePlaceholder, .refusedServiceShaped:
+            RTLog.warn("chat", "msg_receive record=0 dup=1")
+            finishInboundFrame(
+                serverMsgId: serverMsgId, senderId: senderId,
+                clientMsgId: clientMsgId, settleClientKey: !isUndecryptablePlaceholder)
+            return
+        case .failed:
+            // Not acked, not settled: the server keeps the frame, and a redelivery
+            // that can no longer decrypt becomes the placeholder + nack that gets
+            // the sender to resend it — better than acking a message never stored.
+            RTLog.error("chat", "msg_receive record=0 failed=1")
+            return
+        }
         // W90: local-notification banner for inbound messages.
         // Suppression rules:
         //   - skip if conversation is muted (W89).
@@ -10256,10 +10247,13 @@ final class AppState: ObservableObject {
         // muted convs from the banner, but THIS path runs even when
         // the banner is suppressed (active chat) so the user still
         // gets a tactile cue.
-        if !isMuted && activePeerUserId == senderId {
+        // 2026-09-19 — the placeholder row is the honest "a message was lost"
+        // signal and NOTHING else: no haptic, no banner (it used to raise a
+        // banner whose body was the placeholder text).
+        if !isMuted && !isUndecryptablePlaceholder && activePeerUserId == senderId {
             HapticFeedback.messageSent()
         }
-        if bannersGlobalEnabled && !isMuted && activePeerUserId != senderId {
+        if bannersGlobalEnabled && !isMuted && !isUndecryptablePlaceholder && activePeerUserId != senderId {
             let title = conv.peerDisplayName.isEmpty
                 ? DisplayName.forUser(senderId, contacts: self.cachedContacts)
                 : conv.peerDisplayName
@@ -10389,13 +10383,268 @@ final class AppState: ObservableObject {
         // W-MSGOUTBOX (2026-09-01) — queued when the socket is down instead
         // of dropped (`BCryptoWebSocketClient.send` discards the frame when
         // the task is nil); see `sendOrQueueDeliveryReceipt`.
-        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+        // 2026-09-19 — also settles the frame (see `settledInboundFrames`). A
+        // placeholder settles only its server id: the resend of the same
+        // `client_msg_id` must still get through to replace it.
+        finishInboundFrame(
+            serverMsgId: serverMsgId, senderId: senderId,
+            clientMsgId: clientMsgId, settleClientKey: !isUndecryptablePlaceholder)
         // Notify any open ChatContainer to refresh from the store.
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification,
             object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
         )
+    }
+
+    // MARK: - Inbound router helpers (2026-09-19 service-message root fix)
+
+    /// Terminal outcome of an inbound 1:1 frame: settle it (never decrypt it
+    /// again) and ack it (the server stops replaying it).
+    private func finishInboundFrame(
+        serverMsgId: String, senderId: String, clientMsgId: String?, settleClientKey: Bool
+    ) {
+        settledInboundFrames.insertFrame(
+            serverMessageId: serverMsgId, senderId: senderId,
+            clientMsgId: clientMsgId, includeClientKey: settleClientKey)
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+    }
+
+    /// A 0xE6 (CONTROL) frame that would not open. Silent by construction:
+    /// never a row, never a preview/unread/banner, ALWAYS acked, and it never
+    /// forces a key exchange, purges a PSK or drops a session because of ONE
+    /// failed frame. The frame is kept once for a single retry — it can have
+    /// raced ahead of the pre-bootstrap that installs its session — and the
+    /// failure only feeds the quiet CONTROL-session recovery.
+    private func handleUndecryptableControlFrame(
+        senderId: String, serverMsgId: String, cipher: Data,
+        clientMsgId: String?, serverTs: String?, isRetry: Bool, live: Bool
+    ) {
+        // Ack now, retry or not: a control frame has nothing the server must
+        // keep for us, and an un-acked one is replayed on every reconnect.
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+        if isRetry {
+            RTLog.warn("chat", "msg_receive undec=1 wire=v5 giveup=1 suppressed=1")
+            settledInboundFrames.insertFrame(
+                serverMessageId: serverMsgId, senderId: senderId,
+                clientMsgId: clientMsgId, includeClientKey: true)
+            return
+        }
+        bufferOneToOneCiphertext(
+            senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
+            serverTs: serverTs)
+        scheduleBufferedOneToOneFinalize(for: senderId)
+        guard let selfUserId = currentUserId, !selfUserId.isEmpty else { return }
+        let control = AppState.sharedV4Ratchet.hasChannelSession(
+            epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId)
+        if !control {
+            // Absent session: the ordinary recovery (throttled and tie-broken
+            // inside ensureV4Session).
+            AppState.ensureV4Session(selfId: selfUserId, peerId: senderId, liveProvider: liveProvider)
+            return
+        }
+        // Present session that keeps failing: only a QUORUM of distinct failed
+        // frames proves it diverged (see ControlFailureTracker). Then drop it
+        // so the ensure step re-bootstraps it — never on a single failure.
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        // ...and only frames that are evidence about THIS session count: a replay
+        // older than the session, or a frame the peer sealed on its new session
+        // before its pre-bootstrap reached us, fails by construction and three of
+        // them used to drop a healthy session (a ping-pong with the peer's repair).
+        let serverTsMs = Self.parseServerTs(serverTs).map { Int64(($0.timeIntervalSince1970 * 1000).rounded()) }
+        guard ControlFailureTracker.isEvidence(
+            arrivedLive: live, serverTimestampMs: serverTsMs,
+            sessionInstalledAtMs: AppState.controlInstalledAtMs[senderId], nowMs: nowMs
+        ) else {
+            RTLog.info("chat", "control failure stale=1 live=\(live ? 1 : 0)")
+            return
+        }
+        let diverged = AppState.controlFailureTracker.record(
+            peerId: senderId, frameId: serverMsgId, nowMs: nowMs)
+        if diverged {
+            RTLog.warn("chat", "control session diverged=1 dropping=1 from=\(senderId.prefix(8))")
+            AppState.sharedV4Ratchet.dropChannelSession(
+                epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId)
+            AppState.ensureV4Session(selfId: selfUserId, peerId: senderId, liveProvider: liveProvider)
+        }
+    }
+
+    /// One final-retry timer per sender: re-runs the frames buffered for them
+    /// that have waited the full patience window, once, `isRetry: true`
+    /// (`finalizeBufferedOneToOneMessages`; younger ones re-arm it). A frame
+    /// that opens is consumed normally; a CONTROL frame that still fails is
+    /// dropped silently; a CHAT frame that still fails becomes the single
+    /// placeholder row + a nack. `afterMs` is only passed by that re-arm.
+    private func scheduleBufferedOneToOneFinalize(for senderId: String, afterMs: Int64? = nil) {
+        guard !AppState.bufferedFinalizeScheduled.contains(senderId) else { return }
+        AppState.bufferedFinalizeScheduled.insert(senderId)
+        let delayMs = max(afterMs ?? Int64(AppState.bufferedFinalizeDelaySec) * 1_000, 1)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            AppState.bufferedFinalizeScheduled.remove(senderId)
+            self?.finalizeBufferedOneToOneMessages(for: senderId)
+        }
+    }
+
+    /// A CONTROL session was just installed for `peerId` (call handshake or
+    /// pre-bootstrap): flush the service payloads held for them and retry the
+    /// frames that were waiting on the session.
+    fileprivate func noteControlSessionInstalled(peerId: String) {
+        // A new session starts with a clean slate: when it was installed is what
+        // separates a failed frame that is evidence about it from one that is not
+        // (`ControlFailureTracker.isEvidence`), and failures recorded against the
+        // session it replaced say nothing about it.
+        AppState.controlInstalledAtMs[peerId] = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        AppState.controlFailureTracker.recordSuccess(peerId: peerId)
+        ServiceSendHub.shared.controlSessionInstalled(peerId: peerId)
+        retryBufferedOneToOneMessages(for: peerId)
+    }
+
+    /// Single consumer of a decrypted SERVICE payload (CONTROL wire, structurally
+    /// service). Every branch consumes; NONE of them can reach the conversation
+    /// persistence tail of `handleIncomingMessage`, so no service payload can
+    /// become a row, a preview, an unread count, a notification or a
+    /// conversation — including an unknown, malformed or newer-schema envelope,
+    /// which is dropped here instead of falling through to the text path.
+    private func handleInboundServicePayload(_ raw: String, senderId: String) {
+        // W86: typed message-targeted control (delete / edit / reaction) mutates
+        // an EXISTING row keyed by clientMsgId. The screenshot-lock family also
+        // parses into a typed case but is conversation-level and applied by
+        // `applyInboundConversationControl` below, so it falls through here.
+        if let env = try? ChatControlEnvelope.parse(raw) {
+            switch env {
+            case .screenshotRequest, .screenshotResponse, .screenshotLock:
+                break
+            case .delete, .edit, .reaction:
+                handleControlEnvelope(env, senderId: senderId)
+                return
+            }
+        }
+        // E2EE avatar transport (2026-07-30): never a visible chat row, only a
+        // silent local-cache update. `try?` would collapse "not an avatar_announce"
+        // and "an avatar_announce with a missing field" into the same silent nil,
+        // so the malformed case is distinguished (and logged) explicitly — and
+        // dropped, never rendered as raw JSON.
+        do {
+            if let avatarEnv = try AvatarAnnounceEnvelope.parse(raw) {
+                handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
+                return
+            }
+        } catch {
+            RTLog.error("avatar", "malformed avatar_announce from=\(senderId.prefix(8)): \(error)")
+            return
+        }
+        // W390: `qa_grp:1` envelopes (sender_key_init / rotate / member deltas /
+        // invite) go to the group layer.
+        if let groupCtlType = GroupChatService.detectGroupCtlType(raw) {
+            handleInboundGroupControl(groupCtlType, json: raw, senderId: senderId)
+            return
+        }
+        if applyInboundConversationControl(raw, senderId: senderId) { return }
+        RTLog.warn("chat", "service payload unrecognised dropped=1 from=\(senderId.prefix(8))")
+    }
+
+    /// `qa_grp:1` dispatch (moved out of the receive path unchanged).
+    private func handleInboundGroupControl(_ groupCtlType: String, json: String, senderId: String) {
+        let mySelfId = currentUserId ?? ""
+        switch groupCtlType {
+        case "sender_key_init":
+            GroupChatService.shared.handleInboundSenderKeyInit(
+                envelopeJson: json,
+                fromUserId: senderId,
+                selfId: mySelfId)
+        case "sender_key_rotate":
+            GroupChatService.shared.handleInboundSenderKeyRotate(
+                envelopeJson: json,
+                fromUserId: senderId,
+                selfId: mySelfId)
+        case "group_invite":
+            // W399 — iOS-only enhancement: full state on first contact.
+            handleInboundGroupInvite(json: json, fromUserId: senderId)
+        case "member_added":
+            // W403 — Desktop-aligned wire.
+            handleInboundMemberAdded(json: json, fromUserId: senderId)
+        case "member_removed":
+            handleInboundMemberRemoved(json: json, fromUserId: senderId)
+        case "member_left":
+            handleInboundMemberLeft(json: json, fromUserId: senderId)
+        case "group_member_added":
+            // W403 LEGACY — accept with epoch gate (drop if env.e
+            // is present and < state.epoch), then route to the
+            // canonical handler. Will be removed in a future release.
+            handleLegacyMemberDelta(json: json, fromUserId: senderId, isAdded: true)
+        case "group_member_removed":
+            handleLegacyMemberDelta(json: json, fromUserId: senderId, isAdded: false)
+        default:
+            // W403: dropped "group_invite_decline" (was dead code:
+            // a declined invite is just an ignored sender_key_init).
+            print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId.prefix(8))…")
+        }
+        // W-GRPMSG: a freshly-installed recv chain may unblock group TEXT
+        // frames we buffered because they arrived before this sender's
+        // sender_key_init. Retry them now.
+        if groupCtlType == "sender_key_init" || groupCtlType == "sender_key_rotate" {
+            retryBufferedGroupMessages()
+            retryBufferedGroupMetadata()
+        }
+    }
+
+    /// The ad-hoc `qa_ctl:1` family that has no typed variant a row could hang
+    /// on: decrypt_nack, ss_req / ss_resp / ss_lock, ephemeral_timer. Returns
+    /// `true` when `raw` is one of them (consumed).
+    ///
+    /// The conversation is only LOOKED UP here, never created (IOS-15): these
+    /// used to run after the conversation had already been created with the raw
+    /// JSON as its preview and unread=1, so a stray one resurrected a deleted
+    /// conversation. `ephemeral_timer` no longer writes a system bubble, bumps
+    /// unread or changes the preview (IOS-17): the timer is conversation
+    /// metadata, and the chat header's timer button already shows it. Applying
+    /// it is idempotent, so a redelivery changes nothing.
+    private func applyInboundConversationControl(_ raw: String, senderId: String) -> Bool {
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let qaCtl = json["qa_ctl"] as? Int, qaCtl == 1,
+              let ctlType = json["t"] as? String else {
+            return false
+        }
+        switch ctlType {
+        case "decrypt_nack":
+            // W-DECRYPTNACK (2026-09-19) — the peer is telling us one of OUR prior
+            // sends never decrypted on their end even after their session with us
+            // recovered. No chat bubble, ever.
+            if let target = json["target"] as? String, !target.isEmpty {
+                resendAfterDecryptNack(peerUserId: senderId, targetClientMsgId: target)
+            }
+            return true
+        case "ss_req":
+            // Android parity (2026-08-13): a transient approve/deny dialog signal,
+            // never a chat row.
+            NotificationCenter.default.post(name: AppState.screenshotRequestNotification,
+                                            object: nil,
+                                            userInfo: ["peerUserId": senderId])
+            return true
+        case "ss_resp", "ss_lock", "ephemeral_timer":
+            let store = ConversationStore()
+            guard let conv = store.loadConversations().first(where: { $0.peerUserId == senderId }) else {
+                RTLog.info("chat", "conversation control ignored=1 noconv=1")
+                return true
+            }
+            if ctlType == "ss_resp" {
+                let approved = json["approved"] as? Bool ?? false
+                store.setScreenshotGranted(conversationId: conv.id, granted: approved)
+            } else if ctlType == "ss_lock" {
+                store.setScreenshotGranted(conversationId: conv.id, granted: false)
+            } else {
+                let sec = json["timer_sec"] as? Int ?? 0
+                store.setEphemeralTimer(conversationId: conv.id, seconds: sec == 0 ? nil : sec)
+            }
+            NotificationCenter.default.post(name: AppState.chatRefreshNotification,
+                                            object: nil,
+                                            userInfo: ["peerUserId": senderId])
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - BLE mesh receive (branch claude/ble-mesh-cleanroom-spike)
@@ -10411,9 +10660,9 @@ final class AppState: ObservableObject {
     /// Deliberately scoped to the CORE text-message case only — control
     /// envelopes (delete/edit/reaction), avatar transport, and group-chat
     /// routing stay WS-only for this increment; a mesh-delivered qa_ctl/
-    /// qa_grp envelope renders as plain (decrypted) text rather than being
-    /// silently dropped, which is an honest if unpolished fallback until
-    /// that parity work happens. `MeshChatMessage.senderUserId`/
+    /// qa_grp envelope (any service payload, an attachment descriptor
+    /// included) is DROPPED below, never rendered as text: service traffic
+    /// must not become a chat row (2026-09-19). `MeshChatMessage.senderUserId`/
     /// `recipientUserId` are the SAME cleartext routing metadata the WS
     /// transport already sends — not secret, and needed to rebuild the
     /// Associated Data the sender bound the ciphertext to.
@@ -10429,6 +10678,14 @@ final class AppState: ObservableObject {
         // spending a decryption on it.
         guard store.findByClientMsgId(shell.clientMsgId) == nil else { return }
         guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
+        // 2026-09-19 service-message root fix (IOS-21) — channel-is-kind on the
+        // mesh too: a chat MESSAGE never rides CONTROL (0xE6 is service traffic
+        // only), so a message packet sealed as one is dropped before any
+        // decryption is spent on it.
+        guard InboundWireClass.of(sealedBytes) == .chat else {
+            RTLog.warn("mesh", "msg_receive control=1 dropped=1")
+            return
+        }
 
         // The key is chosen from the only identifier the public header carries:
         // the sender's node id. Resolving it through the contact list also means
@@ -10440,6 +10697,12 @@ final class AppState: ObservableObject {
             return
         }
         let senderId = senderContact.userId
+        // Our own id in the contact cache would otherwise open a conversation with
+        // ourselves (IOS-20 does the same for the WS path); nothing to decrypt.
+        guard senderId != selfId else {
+            RTLog.warn("mesh", "msg_receive self=1 dropped=1")
+            return
+        }
 
         guard let decrypted = attemptDecryptMeshWireBlob(
             cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId,
@@ -10468,6 +10731,14 @@ final class AppState: ObservableObject {
             return
         }
         let plaintext = envelope.body
+        // 2026-09-19 (IOS-21) — the same structural service gate as the 1:1 and
+        // group paths, BEFORE any conversation is created: a mesh body that is a
+        // service envelope (or an attachment descriptor, which the mesh does not
+        // carry) is dropped, never rendered as raw JSON.
+        guard ServicePayloadDetector.classify(plaintext) == .notService else {
+            RTLog.warn("mesh", "msg_receive service=1 dropped=1")
+            return
+        }
 
         let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
         let conv: Conversation
@@ -10475,9 +10746,12 @@ final class AppState: ObservableObject {
             conv = e
         } else {
             let resolvedName = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            // Created EMPTY: the write boundary below owns preview and unread (a failed
+            // or duplicate write must not leave a phantom conversation, and unread was
+            // counted here AND by the boundary on first contact).
             conv = Conversation(
                 id: UUID(), peerUserId: senderId, peerDisplayName: resolvedName,
-                lastMessagePreview: plaintext, lastActivity: Date(), unreadCount: 1,
+                lastMessagePreview: nil, lastActivity: Date(), unreadCount: 0,
                 pinned: false, kind: .oneToOne
             )
             store.upsertConversation(conv)
@@ -10489,11 +10763,13 @@ final class AppState: ObservableObject {
             status: .delivered, senderUserId: senderId, clientMsgId: envelope.clientMsgId,
             viaMesh: true
         )
-        store.appendMessage(msg)
-        store.recordNewMessage(
-            conversationId: conv.id, lastMessagePreview: plaintext,
-            lastActivity: Date(), incrementUnread: !conv.muted
-        )
+        // The one inbound write boundary (refuses service-shaped text again).
+        let meshRecorded = store.recordInboundUserMessage(
+            msg, preview: plaintext, incrementUnread: !conv.muted, kind: .text)
+        guard meshRecorded == .inserted else {
+            RTLog.warn("mesh", "msg_receive record=0")
+            return
+        }
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification, object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
@@ -10537,9 +10813,14 @@ final class AppState: ObservableObject {
         )
         let sender = ChatMessageSendService(appState: self)
         Task {
+            // 2026-09-19 service-message root fix (IOS-05) — a receipt is SERVICE
+            // traffic: sealed on CONTROL only, and DROPPED (never held, never on
+            // the CHAT ladder) when there is no CONTROL session. It used to be
+            // sealed on the CHAT chain, where a lost or failed receipt burned
+            // skipped-key slots real messages need.
             let outcome = await sender.encryptForWire(
                 messageId: receiptId, peerUserId: peerUserId, plaintext: receiptText,
-                aadOverride: aad
+                aadOverride: aad, payloadClass: .service
             )
             guard case .success(let sealed) = outcome else {
                 RTLog.warn("mesh", "receipt_send undec=0 sealfail=1")
@@ -10741,14 +11022,14 @@ final class AppState: ObservableObject {
                                        senderId envelopeSenderId: String) {
         let store = ConversationStore()
         // Screenshot-lock family (ss_req / ss_resp / ss_lock) is
-        // CONVERSATION-level, not message-targeted, and is applied by the
-        // ad-hoc JSON handler earlier in `handleIncomingMessage` (which also
-        // renders the system bubble + updates `setScreenshotGranted`). We must
+        // CONVERSATION-level, not message-targeted, and is applied by
+        // `applyInboundConversationControl` (which updates
+        // `setScreenshotGranted` and never writes a system bubble). We must
         // NOT re-apply it here — that path is the single source of truth. These
         // cases are typed-model completeness only; treat them as a safe no-op so
         // the message-targeted dispatch below never runs on them. (In practice
         // the caller doesn't route these variants here — see the parse-guard in
-        // `handleIncomingMessage`.)
+        // `handleInboundServicePayload`.)
         switch env {
         case .screenshotRequest, .screenshotResponse, .screenshotLock:
             return
@@ -10799,6 +11080,13 @@ final class AppState: ObservableObject {
         case .delete:
             applied = store.applyDeleteByClientMsgId(target)
         case .edit(_, let newBody, _):
+            // An edit rewrites an existing row's text BEHIND the inbound write
+            // boundary, so it must pass the same structural gate: otherwise a peer
+            // could turn one of its messages into service-shaped text (2026-09-19).
+            guard ServicePayloadDetector.classify(newBody) == .notService else {
+                RTLog.warn("chat", "edit refused=1 reason=1")
+                return
+            }
             applied = store.applyEditByClientMsgId(target, newPlaintext: newBody)
         case .reaction:
             applied = false  // handled above
@@ -11225,12 +11513,21 @@ final class AppState: ObservableObject {
     /// fan-out. Each emission has userInfo:
     ///   - "recipient": the peer userId to ship to
     ///   - "envelopeJson": the JSON-encoded `qa_grp:1` envelope
-    /// AppState.wireGroupSenderKeyCtlFanOut wraps each emission in the
-    /// 1:1 ratchet via ChatMessageSendService.sendEncrypted, so the
-    /// envelope rides the same per-pair PSK / v3 ratchet path text
-    /// chat uses. The recipient's chat dispatcher detects the
-    /// `qa_grp:1` marker and routes to GroupChatService.
+    /// AppState.wireGroupSenderKeyCtlFanOut ships each emission through
+    /// `ChatMessageSendService.sendService` (2026-09-19: CONTROL channel only,
+    /// held until a CONTROL session exists — no longer the per-pair PSK / v3
+    /// chat ratchet path). The recipient's dispatcher detects the `qa_grp:1`
+    /// marker on the CONTROL wire and routes to GroupChatService.
     static let groupSenderKeyCtlNotification = Notification.Name("qaudion.group.senderKeyCtl")
+
+    /// 2026-09-19 service-message root fix — a CONTROL session was just
+    /// installed for a peer (call handshake or KMS pre-bootstrap). Posted from
+    /// the install sites, which run in closures of assorted isolation, so a
+    /// plain notification keeps them free of any actor hop. userInfo:
+    ///   - "peerId": String
+    /// AppState observes it once (`wireGroupChatFanOut`) and flushes the
+    /// service payloads held for that peer and retries frames that waited on it.
+    static let controlSessionInstalledNotification = Notification.Name("qaudion.crypto.controlSessionInstalled")
 
     /// Fase 2 — group typing indicator, relayed from the WS `group_typing`
     /// handler in `wireIncomingChatHandlers`. userInfo:
@@ -13575,6 +13872,12 @@ final class AppState: ObservableObject {
                     )
                 }
                 print("[PQC_DIAG_V5CTRL] replaceChannelSession (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                if controlOk {
+                    // 2026-09-19 — flush service payloads held for this peer.
+                    NotificationCenter.default.post(
+                        name: AppState.controlSessionInstalledNotification,
+                        object: nil, userInfo: ["peerId": peerId])
+                }
             }
             // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
             // so resolve the active call's id to key the same gate. Safe: this
@@ -14323,75 +14626,116 @@ final class AppState: ObservableObject {
     /// W-DECRYPTNACK — per (senderId, clientMsgId) debounce, mirrors
     /// Android's identical map in `ReceiveMessageUseCase`.
     private static var decryptNackLastSentMs: [String: Int64] = [:]
-    private static let decryptNackDebounceMs: Int64 = 60_000
+    /// Held nacks live for `ServiceSendQueue.ttlMs` when no CONTROL session
+    /// exists. A shorter debounce re-enqueued the same target about once a
+    /// minute meanwhile, and up to ~10 duplicate nacks flushed together once
+    /// the session landed.
+    private static let decryptNackDebounceMs: Int64 = ServiceSendQueue.ttlMs
 
     /// W-DECRYPTNACK (2026-09-19) — tell `peerId` that `targetClientMsgId`
-    /// (one of THEIR sends to us) never decrypted even after our
-    /// CONTROL/legacy session with them recovered. Fire-and-forget,
-    /// debounced. Only call site: the "recovered but still lost" branch in
-    /// `handleIncomingMessage`'s decrypt-failure catch.
+    /// (one of THEIR sends to us) never decrypted even after our session with
+    /// them recovered. Fire-and-forget, debounced. Only call site: the "still
+    /// lost after the retry" branch in `handleIncomingMessage`'s decrypt-failure
+    /// catch.
+    ///
+    /// 2026-09-19 service-message root fix — the nack is SERVICE traffic: it is
+    /// sealed on the CONTROL channel ONLY and, with no CONTROL session, HELD in
+    /// the bounded per-peer queue (which also drives session convergence) and
+    /// flushed in order once one exists. It is never sealed on the chat ladder:
+    /// a chat-class nack that fails to open surfaces on the peer as the very
+    /// "Messaggio non decifrabile" it was meant to repair (live 2026-09-19
+    /// 08:49:23, A36).
     private func sendDecryptNackDebounced(to peerId: String, targetClientMsgId: String) {
-        // CONTROL channel only — never let `encryptForWire` fall back to the chat
-        // session for a nack (see the call site's note).
-        guard AppState.sharedV4Ratchet.hasChannelSession(
-            epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerId
-        ) else {
-            print("[AppState] W-DECRYPTNACK skipped: no CONTROL session with peer=\(peerId.prefix(8))…")
-            return
-        }
         let key = "\(peerId):\(targetClientMsgId)"
         let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
         if let last = AppState.decryptNackLastSentMs[key], now - last < AppState.decryptNackDebounceMs {
             return
         }
         AppState.decryptNackLastSentMs[key] = now
-        let payload = "{\"qa_ctl\":1,\"t\":\"decrypt_nack\",\"target\":\"\(targetClientMsgId)\",\"ts\":\(Int64(Date().timeIntervalSince1970))}"
+        // Built as JSON (not interpolated): `target` is a peer-supplied string.
+        let object: [String: Any] = [
+            "qa_ctl": 1,
+            "t": "decrypt_nack",
+            "target": targetClientMsgId,
+            "ts": Int64(Date().timeIntervalSince1970),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let payload = String(data: data, encoding: .utf8) else {
+            return
+        }
         let sendService = ChatMessageSendService(appState: self)
         Task {
-            _ = await sendService.sendEncrypted(
-                messageId: UUID(), peerUserId: peerId, plaintext: payload, forceStatelessFormat: true
-            )
-            print("[AppState] W-DECRYPTNACK sent target=\(targetClientMsgId.prefix(8))… peer=\(peerId.prefix(8))…")
+            let submission = await sendService.sendService(
+                peerUserId: peerId, plaintext: payload, label: "decrypt_nack", delivery: .hold)
+            let heldFlag: Int = submission == .sent ? 0 : 1
+            RTLog.info("chat", "decrypt_nack submitted held=\(heldFlag)")
         }
     }
 
     /// W-DECRYPTNACK — re-send a specific prior message after the recipient
-    /// reports it never decrypted on their end. Ships the SAME plaintext
-    /// under a FRESH message id and whatever session is current now — mirrors
-    /// Android's `SendMessageUseCase.resendAfterDecryptNack`. Refuses unless
+    /// reports it never decrypted on their end. Mirrors Android's
+    /// `SendMessageUseCase.resendAfterDecryptNack`. Refuses unless
     /// `targetClientMsgId` resolves to a row THIS device genuinely sent TO
     /// `peerUserId` (an attacker naming an arbitrary/inbound id must trigger
     /// nothing), and text-only (an attachment's `plaintext` is its already-
     /// consumed upload envelope, not real content to re-ship).
+    ///
+    /// 2026-09-19 (IOS-19) — the resend reuses the ORIGINAL `client_msg_id` and
+    /// the ORIGINAL row: nothing is appended, so this device never grows a
+    /// second outgoing bubble, and the peer's placeholder for that id is
+    /// replaced IN PLACE when the resend arrives. Capped at
+    /// `maxNackResendsPerTarget` per id, and ignored for a deleted row.
     private func resendAfterDecryptNack(peerUserId: String, targetClientMsgId: String) {
         let store = ConversationStore()
         guard let (convId, original) = store.findByClientMsgId(targetClientMsgId) else {
             print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not found — ignoring")
             return
         }
+        // The row must belong to the conversation with the peer who NACKED it: any
+        // contact can name a client_msg_id from another conversation, and without
+        // this that conversation's plaintext would be re-sealed to the caller.
+        guard store.loadConversations().first(where: { $0.id == convId })?.peerUserId == peerUserId else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… is not in the conversation with the nacking peer — ignoring")
+            return
+        }
         guard original.direction == .outgoing, original.mediaLocalPath == nil else {
             print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not our own text send — ignoring")
             return
         }
+        // A deleted (tombstoned) row has nothing left to resend.
+        guard original.deletedAt == nil else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… was deleted — ignoring")
+            return
+        }
+        // The frame must ship under the id the peer recorded: the wire client_msg_id
+        // is `messageId.uuidString`, so the row's own id/clientMsgId has to be that UUID.
+        let resendId: UUID
+        if let stored = original.clientMsgId, let parsed = UUID(uuidString: stored), parsed.uuidString == stored {
+            resendId = parsed
+        } else if original.id.uuidString == targetClientMsgId {
+            resendId = original.id
+        } else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… id is not a canonical UUID — ignoring")
+            return
+        }
+        let already = AppState.nackResendCounts[targetClientMsgId] ?? 0
+        guard already < AppState.maxNackResendsPerTarget else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… resend cap reached — ignoring")
+            return
+        }
+        AppState.nackResendCounts[targetClientMsgId] = already + 1
         let plaintext = original.plaintext
         let sendService = ChatMessageSendService(appState: self)
-        let newId = UUID()
-        Task {
-            let outcome = await sendService.sendEncrypted(messageId: newId, peerUserId: peerUserId, plaintext: plaintext)
+        Task { @MainActor in
+            let outcome = await sendService.sendEncrypted(messageId: resendId, peerUserId: peerUserId, plaintext: plaintext)
             guard case .failed = outcome else {
-                let msg = Message(
-                    id: newId, conversationId: convId, direction: .outgoing,
-                    plaintext: plaintext, sentAt: Date(), deliveredAt: nil, readAt: nil,
-                    status: .sent, clientMsgId: newId.uuidString
-                )
-                store.appendMessage(msg)
-                store.recordNewMessage(conversationId: convId, lastMessagePreview: plaintext, lastActivity: Date(), incrementUnread: false)
-                NotificationCenter.default.post(
-                    name: AppState.chatRefreshNotification, object: nil,
-                    userInfo: ["peerUserId": peerUserId, "conversationId": convId]
-                )
-                print("[AppState] W-DECRYPTNACK resent target=\(targetClientMsgId.prefix(8))… as new=\(newId.uuidString.prefix(8))… peer=\(peerUserId.prefix(8))…")
+                print("[AppState] W-DECRYPTNACK resent target=\(targetClientMsgId.prefix(8))… peer=\(peerUserId.prefix(8))… (same id, no new row) conv=\(convId.uuidString.prefix(8))…")
                 return
+            }
+            // The counter was taken before the send: a transient failure must not
+            // burn one of the two resends the peer is allowed to ask for.
+            if let used = AppState.nackResendCounts[targetClientMsgId], used > 0 {
+                AppState.nackResendCounts[targetClientMsgId] = used - 1
             }
             print("[AppState] W-DECRYPTNACK resend FAILED target=\(targetClientMsgId.prefix(8))… peer=\(peerUserId.prefix(8))…")
         }
@@ -14609,6 +14953,29 @@ final class AppState: ObservableObject {
         _ = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
     }
 
+    /// 2026-09-19 — drops every piece of IN-MEMORY state that belongs to the
+    /// account that is leaving. `LocalCryptoWipe.wipeAll()` clears the
+    /// persisted stores; this is its counterpart for what only lives in the
+    /// process and would otherwise outlive a logout / remote wipe / account
+    /// deletion and act under the NEXT identity: the held service payloads
+    /// (plaintext, e.g. group sender-key seeds, up to 10 minutes), the
+    /// receive-side ledgers keyed by the previous account's peers and frames,
+    /// the buffered undecryptable ciphertexts, and the per-peer throttles of
+    /// `ensureV4Session` (a throttle armed by the old account must not delay the
+    /// new one's first session convergence). Call it right after every
+    /// `LocalCryptoWipe.wipeAll()`.
+    func resetAccountScopedRuntimeState() {
+        ServiceSendHub.shared.reset()
+        AppState.nackResendCounts.removeAll()
+        AppState.decryptNackLastSentMs.removeAll()
+        AppState.controlFailureTracker = ControlFailureTracker()
+        AppState.controlInstalledAtMs.removeAll()
+        AppState.v4EnsureFirstWantedMs.removeAll()
+        AppState.v4EnsureLastAttemptMs.removeAll()
+        settledInboundFrames = SettledFrameSet()
+        bufferedOneToOneCiphertexts.removeAll()
+    }
+
     func logout() {
         authService.clearToken()
         // The per-user flag overlay belongs to the account that just left. Not
@@ -14621,6 +14988,7 @@ final class AppState: ObservableObject {
         // A user-initiated logout used to leave every crypto key + contact/
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
+        resetAccountScopedRuntimeState()
         engine?.destroySession()
         engine?.release()
         engine = nil
@@ -15690,6 +16058,12 @@ final class AppState: ObservableObject {
                             )
                         }
                         print("[PQC_DIAG_V5CTRL] replaceChannelSession (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                        if controlOk {
+                            // 2026-09-19 — flush service payloads held for this peer.
+                            NotificationCenter.default.post(
+                                name: AppState.controlSessionInstalledNotification,
+                                object: nil, userInfo: ["peerId": peerId])
+                        }
                     }
                     // P0-3 — same active-callId resolution as the responder leg
                     // above (this closure carries no callId parameter either).
@@ -19184,23 +19558,76 @@ extension AppState {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 let sender = ChatMessageSendService(appState: self)
-                // W-CTLNORATCHET (2026-09-10) — sender_key_init/rotate must
-                // never share the real-chat ratchet's chain/skip-key state
-                // with this peer. See encryptForWire's forceStatelessFormat
-                // doc for the live incident this closes.
-                let outcome = await sender.sendEncrypted(
-                    messageId: UUID(),
+                // 2026-09-19 service-message root fix — sender_key_init/rotate and
+                // the member/invite envelopes are SERVICE traffic: CONTROL only,
+                // held (bounded per-peer queue, in order) until a CONTROL session
+                // exists, never sealed on the chat ladder. A sender key that never
+                // arrives is what leaves the group's frames undecryptable, so this
+                // is a hold, not a best-effort drop.
+                let submission = await sender.sendService(
                     peerUserId: recipient,
                     plaintext: envelopeJson,
-                    forceStatelessFormat: true)
-                switch outcome {
-                case .delivered, .sent:
-                    break
-                case .failed(let reason):
+                    label: "group_ctl",
+                    delivery: .hold)
+                if submission == .held {
                     // I8 FIX: recipient is a full userId — truncate to match
                     // this file's established identifier convention.
-                    print("[AppState] sender_key_ctl ship to \(recipient.prefix(8))… failed: \(reason)")
+                    print("[AppState] sender_key_ctl to \(recipient.prefix(8))… held until a CONTROL session exists")
                 }
+            }
+        }
+        // 2026-09-19 service-message root fix — QA tripwire: in DEBUG builds the
+        // inbound user-message write boundary asserts (instead of only dropping
+        // and logging) when service-shaped text reaches it, so a leak is loud on
+        // a developer device. Release builds drop + log.
+        #if DEBUG
+        ConversationStore.assertOnServiceRefusal = true
+        #endif
+    }
+
+    /// 2026-09-19 service-message root fix — binds the bounded per-peer hold
+    /// queue for service payloads (CONTROL only, fail closed) and the observer
+    /// that flushes it when a CONTROL session lands. Primitive closures only
+    /// (CLAUDE.md §16), each reading the CURRENT provider / ratchet at call
+    /// time, so calling this before any provider exists is safe and calling it
+    /// again is idempotent: the hooks are swapped, the held queue survives and
+    /// the observer is registered exactly once. Runs from `initialize()` (not
+    /// from `wireGroupChatFanOut`, which only runs on a connect and never for a
+    /// provider assigned by `performProactiveRefresh`) and again from
+    /// `connectPersistentSocket`.
+    func wireServiceSendHub() {
+        ServiceSendHub.shared.configure(
+            hasControlSession: { peerId in
+                AppState.sharedV4Ratchet.hasChannelSession(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerId)
+            },
+            isSocketReady: { [weak self] in
+                self?.liveProvider?.persistentConnection.state == .authenticated
+            },
+            ensureSession: { [weak self] peerId in
+                guard let self, let selfId = self.currentUserId, !selfId.isEmpty else { return }
+                AppState.ensureV4Session(selfId: selfId, peerId: peerId, liveProvider: self.liveProvider)
+            },
+            sealAndSend: { [weak self] entry in
+                guard let self else { return .failed }
+                return await ChatMessageSendService(appState: self).shipServiceNow(
+                    messageId: entry.id, peerUserId: entry.peerId, plaintext: entry.plaintext)
+            }
+        )
+        guard !serviceSendHubWired else { return }
+        serviceSendHubWired = true
+        // A CONTROL session just landed for a peer: flush what is held for them
+        // and retry frames that waited on it.
+        NotificationCenter.default.addObserver(
+            forName: AppState.controlSessionInstalledNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let installedPeer = note.userInfo?["peerId"] as? String, !installedPeer.isEmpty else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                self?.noteControlSessionInstalled(peerId: installedPeer)
             }
         }
     }
@@ -23021,6 +23448,14 @@ extension AppState {
         }
         RTLog.info("crypto", "v5 control prebootstrap replaceChannelSession ok=\(controlOk ? 1 : 0)")
         print("[AppState] KmsPreBootstrap: v5 control session replaced=\(controlOk) peer=\(peer.prefix(8))…")
+        if controlOk {
+            // 2026-09-19 — flush service payloads held for this peer (after a short
+            // grace inside the coordinator, so this envelope's own pre-bootstrap
+            // reaches the wire ahead of frames sealed on the new session).
+            NotificationCenter.default.post(
+                name: AppState.controlSessionInstalledNotification,
+                object: nil, userInfo: ["peerId": peer])
+        }
     }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call

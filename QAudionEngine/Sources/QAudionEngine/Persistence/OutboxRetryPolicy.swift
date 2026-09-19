@@ -11,10 +11,11 @@ import Foundation
 /// flipped to `.failed` and only a manual tap retried it. A process kill in
 /// that window left the row `.sending` forever, and nothing ever swept it.
 /// The generic fix is a transactional outbox: the row IS the record of
-/// intent, the sealed wire bytes are persisted next to it, and a drainer
-/// re-sends them with the SAME `client_msg_id` (the idempotency key the
-/// server already echoes and the receiver already stores) until the socket
-/// accepts them or a hard cap is hit.
+/// intent (its text is the only payload), and a drainer re-seals that text at
+/// transmit time (2026-09-19: bytes sealed earlier can be stranded by a
+/// session the peer has replaced since) and re-sends it with the SAME
+/// `client_msg_id` (the idempotency key the server already echoes and the
+/// receiver already stores) until the socket accepts it or a hard cap is hit.
 ///
 /// No I/O, no clock, no WebRTC/WebSocket state in here — same discipline as
 /// `RestartIceDecisions` / `IceTerminationPolicy` / `DatabaseOpenRecoveryPolicy`,
@@ -149,6 +150,13 @@ public enum InboundMessagePolicy {
     /// (RFC3339, stamped by the server at store time). `false` = arrival
     /// time, the pre-2026-09-01 behavior.
     public static let orderByServerTimestampEnabled: Bool = true
+
+    /// 2026-09-19 service-message root fix — the body of the one row a CHAT-class
+    /// frame leaves behind when it stays undecryptable after its retry (the only
+    /// honest signal that a real message was lost). Written by a single
+    /// function, marked with `Message.isPlaceholder`, and replaced in place when
+    /// a resend of the same `client_msg_id` arrives.
+    public static let undecryptablePlaceholderText: String = "[messaggio cifrato non leggibile]"
 
     /// The `sentAt` an inbound row should carry: the parsed server
     /// timestamp when the wire had one and the switch is on, otherwise the

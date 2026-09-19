@@ -39,7 +39,8 @@ final class ChatOutboxDrain {
 
     enum TransportError: Error { case unavailable }
 
-    /// What the orphan path gets back from the app's sealer. `refused`
+    /// What the drain gets back from the app's sealer on EVERY attempt
+    /// (2026-09-19: bodies are sealed at transmit time). `refused`
     /// carries the `ChatContainer.SendFailureReason` raw value so the
     /// container can show the same snackbar copy it shows for a live
     /// failure, without this file naming that type.
@@ -61,9 +62,6 @@ final class ChatOutboxDrain {
     /// `ChatContainer.SendFailureReason.networkError.rawValue` — the reason
     /// a row exhausted on transport failures reports.
     static let transportFailureReasonCode = "network_error"
-    /// `ChatContainer.SendFailureReason.cryptoFailure.rawValue` — a queued
-    /// payload that no longer decodes (should never happen; belt and braces).
-    static let payloadFailureReasonCode = "crypto_failure"
 
     private let store: ConversationStore
     private let outbox: ChatOutboxStore
@@ -186,21 +184,15 @@ final class ChatOutboxDrain {
             var entry = outbox.entry(id: clientMsgId)
             if entry == nil {
                 // Orphan: the process died between the row write and the
-                // live attempt's enqueue. Seal from the stored body ONCE and
-                // persist the bytes so every later attempt re-sends them.
-                switch await encrypt(row.id, peerUserId, row.plaintext) {
-                case .sealed(let blob):
-                    outbox.enqueueMessage(
-                        clientMsgId: clientMsgId, messageId: row.id,
-                        conversationId: row.conversationId, peerUserId: peerUserId,
-                        wireBlob: blob, attempts: 0,
-                        createdAtMs: Self.ms(row.sentAt), nextAttemptAtMs: 0)
-                    entry = outbox.entry(id: clientMsgId)
-                case .refused(let reasonCode):
-                    fail(row: row, peerUserId: peerUserId, reasonCode: reasonCode, attempts: 0)
-                    failed += 1
-                    continue
-                }
+                // live attempt's enqueue. 2026-09-19 (IOS-14) — the entry is
+                // retry bookkeeping only; nothing is sealed here. The body is
+                // sealed at TRANSMIT time below, from the row.
+                outbox.enqueueMessage(
+                    clientMsgId: clientMsgId, messageId: row.id,
+                    conversationId: row.conversationId, peerUserId: peerUserId,
+                    wireBlob: Data(), attempts: 0,
+                    createdAtMs: Self.ms(row.sentAt), nextAttemptAtMs: 0)
+                entry = outbox.entry(id: clientMsgId)
             }
             guard let current = entry else { continue }
 
@@ -221,10 +213,26 @@ final class ChatOutboxDrain {
                 break
             }
 
-            guard let blob = Data(base64Encoded: current.payloadB64), !blob.isEmpty else {
+            // 2026-09-19 (IOS-14) — seal at TRANSMIT time from the row's text,
+            // never re-send bytes sealed at enqueue time: a peer that replaced
+            // its CHAT session since (call handshake, recovery) can no longer
+            // open them, and the row would surface there as undecryptable.
+            // Any sealed bytes an older build left in the entry are ignored.
+            // Every await above (and the previous row's send) yields, so the socket
+            // can have dropped since the pass began: `sendWire` only resolves its
+            // transport AFTER the seal, so sealing now would burn a ratchet step
+            // for a frame that cannot leave, and the next pass would burn another.
+            guard isTransportReady() else {
+                transportDown = true
+                break
+            }
+            let blob: Data
+            switch await encrypt(row.id, peerUserId, row.plaintext) {
+            case .sealed(let sealed):
+                blob = sealed
+            case .refused(let reasonCode):
                 outbox.remove(id: clientMsgId)
-                fail(row: row, peerUserId: peerUserId,
-                     reasonCode: Self.payloadFailureReasonCode, attempts: current.attempts)
+                fail(row: row, peerUserId: peerUserId, reasonCode: reasonCode, attempts: current.attempts)
                 failed += 1
                 continue
             }

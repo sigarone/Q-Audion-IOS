@@ -5,20 +5,23 @@ import GRDB
 /// (`chat_outbox`, migration v8 in `QAudionDatabase`).
 ///
 /// Two kinds share the table, told apart by `kind`:
-///   - `kindMessage`: a sealed wire blob waiting to be (re)sent. `id` is
-///     the sender's `client_msg_id` — the idempotency key the server
-///     echoes verbatim and the receiver stores, so a resend can never
-///     become a second message on the far side. `payloadB64` is the EXACT
-///     ciphertext the first attempt produced (`ChatMessageSendService
-///     .encryptForWire`), persisted so a retry re-sends the same bytes
-///     instead of running the ratchet again for the same message.
+///   - `kindMessage`: a message waiting to be (re)sent. `id` is the
+///     sender's `client_msg_id` — the idempotency key the server echoes
+///     verbatim and the receiver stores, so a resend can never become a
+///     second message on the far side. 2026-09-19 service-message root fix:
+///     the entry is retry BOOKKEEPING only (attempts, backoff) and
+///     `payloadB64` is empty — the body is sealed at TRANSMIT time from the
+///     message row (`ChatOutboxDrain`), because bytes sealed under a session
+///     the peer has since replaced no longer open on the far side and used to
+///     surface there as an undecryptable row. Entries written by an older
+///     build still carry sealed bytes; the drain ignores them.
 ///   - `kindDeliveryReceipt`: a `msg_delivered` ack the socket could not
 ///     carry at the time. `id` is the server message id; payload is empty.
 ///
 /// This table carries NO plaintext and NO key material: message bodies
-/// stay sealed in `messages.plaintext` (see `LocalStoreCipher`), and what
-/// sits here is already end-to-end ciphertext for the peer — the same
-/// bytes that go on the wire. Timestamps are epoch milliseconds so the
+/// stay sealed in `messages.plaintext` (see `LocalStoreCipher`), a
+/// `kindMessage` entry holds no bytes at all, and only a legacy row can still
+/// carry an already-sealed payload. Timestamps are epoch milliseconds so the
 /// ordering / backoff arithmetic in `OutboxRetryPolicy` never touches a
 /// date-format strategy.
 public struct ChatOutboxEntry: Codable, Equatable, FetchableRecord, PersistableRecord {
