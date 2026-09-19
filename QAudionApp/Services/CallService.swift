@@ -504,6 +504,14 @@ final class CallService: @unchecked Sendable {
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
+    // W-RXGATE (2026-09-19) — the receive-side twin of W-TXGATE below. Frames that
+    // reach the decoder while this side has no session key yet (the CALLER between
+    // sending the OFFER and processing the ACCEPT, while the callee already sends)
+    // used to be counted in `rxDecryptErrorCount`, which fed rx_dec_err, the
+    // post-call tuner (it persists a PLP for the NEXT call from errors/received)
+    // and the AEAD failure burst meter (a burst forces a mid-call re-key). Counted
+    // apart here so `rxDecryptErrorCount` stays a clean real-failure signal.
+    private var rxPreSessionDropped: Int64 = 0
     // W-TXGATE (2026-07-12) — the mic starts capturing the instant the call UI
     // appears, but the PQC session key isn't derived until the handshake
     // completes (~0.8 s later). Every mic frame in that window used to hit
@@ -2163,6 +2171,12 @@ final class CallService: @unchecked Sendable {
                 noteRealInboundDecode()
                 playDecodedLegacyPcm(pcm)  // single-engine: playback lives on the capture engine (or native, see kdoc)
             } catch {
+                // W-RXGATE (2026-09-19) — a buffered frame that still has no session
+                // behind it is expected, not a decrypt failure.
+                if RxDecodeFailureKind.classify(error) == .preSession {
+                    notePreSessionRxDrop()
+                    continue
+                }
                 rxDecryptErrorCount &+= 1
                 noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
             }
@@ -2187,6 +2201,24 @@ final class CallService: @unchecked Sendable {
         guard !firedFirstRealDecode else { return }
         firedFirstRealDecode = true
         onFirstRealDecode?()
+    }
+
+    /// W-RXGATE (2026-09-19) — one inbound audio frame reached the decoder before
+    /// this side had a session key. Routine for the caller (the callee derives its
+    /// key on the OFFER and starts sending as soon as it answers; the caller only
+    /// derives its own when the ACCEPT has been processed), so it is counted in its
+    /// own counter (`rx_pre_hs`) and kept out of `rxDecryptErrorCount`, the AEAD
+    /// failure burst meter and the post-call tuner. See `RxDecodeFailureKind`.
+    /// Called from the same RX branches as the counter it replaces.
+    private func notePreSessionRxDrop() {
+        rxPreSessionDropped &+= 1
+        // Shapes verified against the log shipper's redactor: `rxpre first=1` and
+        // `rxpre n=25` ship, `rxpre first n=1` is dropped whole.
+        if rxPreSessionDropped == 1 {
+            RTLog.info("call", "rxpre first=1")
+        } else if rxPreSessionDropped % 25 == 0 {
+            RTLog.info("call", "rxpre n=" + rxPreSessionDropped.description)
+        }
     }
 
     /// W-AUDIOAEADREKEY (2026-09-02) — B3: note one audio AEAD decrypt
@@ -2840,6 +2872,12 @@ final class CallService: @unchecked Sendable {
                 }
                 self.rxLevelSampleCount &+= Int64(rxSamples.count)
             } catch {
+                // W-RXGATE (2026-09-19) — no session key on this side yet: expected, not a
+                // decrypt failure. Kept out of rx_dec_err, the burst meter and the tuner.
+                if RxDecodeFailureKind.classify(error) == .preSession {
+                    self.notePreSessionRxDrop()
+                    return
+                }
                 self.rxDecryptErrorCount &+= 1
                 self.noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
                 if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
@@ -2877,6 +2915,10 @@ final class CallService: @unchecked Sendable {
         //       silent call then means PLAYBACK/route (Bug B / speaker).
         //   rx_recv>0 & rx_dec≈0 & rx_dec_err high       → KEY MISMATCH (the
         //       two sides derived different session keys → SAS won't match).
+        //   rx_recv>0 & rx_dec≈0 & rx_dec_err≈0 & rx_pre_hs high
+        //                                                 → THIS side never got a
+        //       session key (W-RXGATE): the ACCEPT was never processed, or was
+        //       processed far later than the peer started sending.
         //   rx_recv≈0                                     → audio never arrived
         //       (peer not capturing / transport / wrong call_id).
         //   engines_started=false                         → engines never ran.
@@ -2889,6 +2931,9 @@ final class CallService: @unchecked Sendable {
                 "rx_recv":         framesReceivedRx,
                 "rx_dec":          framesDecryptedRx,
                 "rx_dec_err":      rxDecryptErrorCount,
+                // W-RXGATE — inbound frames that arrived before this side had a session
+                // key; NOT a fault, kept out of rx_dec_err (see rxPreSessionDropped).
+                "rx_pre_hs":       rxPreSessionDropped,
                 "tx_enc_err":      txEncryptErrorCount,
                 // W-TXGATE — expected mic frames dropped before the session key
                 // existed (~0.8 s handshake window); NOT a fault. Kept separate
@@ -2913,7 +2958,9 @@ final class CallService: @unchecked Sendable {
             // W574c: callId attached so the tune decision (or skip reason)
             // shows up on the server's per-call telemetry timeline.
             AudioAutoTuner.shared.tunePostCall(
-                framesReceived:  framesReceivedRx,
+                // W-RXGATE — pre-session frames were never decryptable by design; leaving
+                // them in the denominator would only dilute the real loss estimate.
+                framesReceived:  max(0, framesReceivedRx &- rxPreSessionDropped),
                 framesDecrypted: framesDecryptedRx,
                 rxDecryptErrors: rxDecryptErrorCount,
                 callId:          getCallId?()
@@ -3191,6 +3238,7 @@ final class CallService: @unchecked Sendable {
         framesReceivedRx = 0
         txEncryptErrorCount = 0
         rxDecryptErrorCount = 0
+        rxPreSessionDropped = 0           // W-RXGATE
         // W-AUDIOAEADREKEY (2026-09-02) — B3: a fresh call must not inherit
         // the previous call's failure history or cooldown clock, same
         // discipline every other per-call counter on this page follows.
