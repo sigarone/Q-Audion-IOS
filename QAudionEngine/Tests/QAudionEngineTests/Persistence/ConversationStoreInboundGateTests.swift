@@ -213,7 +213,7 @@ final class ConversationStoreInboundGateTests: XCTestCase {
             inbound("testo originale", server: "srv-2"), preview: "testo originale",
             incrementUnread: true, kind: .text)
 
-        let edited = store.loadMessages(conversationId: convId).first(where: { $0.edited })
+        let edited = store.loadMessages(conversationId: convId).first(where: { $0.edited == true })
         XCTAssertEqual(edited?.plaintext, "testo corretto")
         XCTAssertNil(edited?.isPlaceholder)
     }
