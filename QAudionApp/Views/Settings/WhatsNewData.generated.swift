@@ -9,6 +9,12 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1172",
+              date: "2026-09-19",
+              title: "v1.0.1172",
+              bullets: [
+                "Replace CHAT at both call-handshake sites, retain the previous session",
+              ]),
         .init(id: "v1.0.1171",
               date: "2026-09-19",
               title: "v1.0.1171",
@@ -132,13 +138,6 @@ extension ReleaseNote {
               title: "v1.0.1144",
               bullets: [
                 "Runtime A/B toggle for audio-srtp-v1 vs the custom wire",
-              ]),
-        .init(id: "v1.0.1143",
-              date: "2026-09-10",
-              title: "v1.0.1143",
-              bullets: [
-                "NACK/RTX loss repair for the custom sealed-audio wire",
-                "Port Android's rekey countdown freeze + cross-leg desync fix to iOS",
               ]),
     ]
 }
