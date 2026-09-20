@@ -155,6 +155,18 @@ public final class NackRxTracker {
         return true
     }
 
+    /// W-REKEYSEQGATE (2026-09-20) — read-only twin of `accept`: would this seq be delivered?
+    /// Changes NOTHING. The receive path uses it as its duplicate check BEFORE decryption and
+    /// calls `accept` (which records the seq) only AFTER the frame really opened: a frame that
+    /// fails to decrypt (a still-in-flight old-key frame around a re-key) must never raise
+    /// `highestSeq`, otherwise the peer's counter — which restarts at 0 with the new key — is
+    /// dropped as "too old" and the call stays silent.
+    public func wouldAccept(_ seq: Int64) -> Bool {
+        if seq < 0 { return false }
+        if highestSeq >= 0 && seq <= highestSeq - Int64(lookbackWindow) { return false }
+        return seenWindow[slot(for: seq)] != seq
+    }
+
     /// Gaps that have aged past `nackAgeThresholdMs` and have not been
     /// requested yet — each is marked requested (never asked for twice),
     /// and a gap `lookbackWindow` or more behind `highestSeq` is dropped

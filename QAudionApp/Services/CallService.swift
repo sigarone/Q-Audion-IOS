@@ -2726,12 +2726,12 @@ final class CallService: @unchecked Sendable {
             // `unsealRelayFrame` is the same operation as `openInbound`,
             // pass-through until the recv sealer is installed.
             self.wireRxBytes &+= Int64(inner.count)
-            // W-AUDIONACK — duplicate guard FIRST, before decrypt: a
+            // W-AUDIONACK — duplicate guard: a
             // retransmit racing a late original must never reach playback
             // twice (this wire has no replay window of its own on the
-            // legacy no-AAD path — see NackRxTracker's kdoc). Also the
-            // gap-aging clock: any arrival, decryptable or not, can retire
-            // or start a pending gap. `inner`'s wire shape follows the same
+            // legacy no-AAD path — see NackRxTracker's kdoc). The gap-aging
+            // clock advances only for frames that opened (W-REKEYSEQGATE,
+            // below). `inner`'s wire shape follows the same
             // `androidAudioWireCompat` choice `encodeAudioForWire` makes on
             // TX, so the same flag picks the right decoder here.
             let nackSeq: Int64?
@@ -2740,15 +2740,24 @@ final class CallService: @unchecked Sendable {
             } else {
                 nackSeq = (try? FrameEncoder.deserialize(inner)).map { Int64($0.sequenceNumber) }
             }
-            if let seq = nackSeq {
-                let nowMsForNack = Int64(Date().timeIntervalSince1970 * 1000)
-                guard self.nackRxTracker.accept(seq, nowMs: nowMsForNack) else { return }
-                for missingSeq in self.nackRxTracker.gapsReadyToNack(nowMs: nowMsForNack) {
-                    self.sendNackRequest(seq: missingSeq)
-                }
-            }
+            // W-REKEYSEQGATE (2026-09-20) — this used to `accept` (i.e. RECORD) the seq here, before
+            // decryption. At a re-key the peer's audio counter restarts at 0 with the new key, but
+            // still-in-flight OLD-key frames (high seq, which this side can no longer open) had
+            // already raised `highestSeq`, so every new-key frame was dropped as "too old" and never
+            // decrypted: silence both ways until the end of the call (S26 <-> iOS, 2026-09-20).
+            // Now the pre-decrypt step is a READ-ONLY duplicate check and the tracker is updated
+            // only after the frame really opened.
+            if let seq = nackSeq, !self.nackRxTracker.wouldAccept(seq) { return }
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
+                // W-REKEYSEQGATE — commit + gap aging, now fed only by frames that decrypted.
+                if let seq = nackSeq {
+                    let nowMsForNack = Int64(Date().timeIntervalSince1970 * 1000)
+                    self.nackRxTracker.accept(seq, nowMs: nowMsForNack)
+                    for missingSeq in self.nackRxTracker.gapsReadyToNack(nowMs: nowMsForNack) {
+                        self.sendNackRequest(seq: missingSeq)
+                    }
+                }
                 self.framesDecryptedRx &+= 1
                 self.noteRealInboundDecode()
                 if !self.loggedFirstRxDecrypt {

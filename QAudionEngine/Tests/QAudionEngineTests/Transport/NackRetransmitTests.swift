@@ -61,6 +61,43 @@ final class NackRetransmitTests: XCTestCase {
         XCTAssertFalse(tracker.accept(5, nowMs: 10))
     }
 
+    // MARK: - W-REKEYSEQGATE (re-key: the peer's counter restarts at 0 with the new key)
+
+    func test_wouldAccept_isReadOnly_andAgreesWithAccept() {
+        let tracker = NackRxTracker()
+        XCTAssertTrue(tracker.wouldAccept(3))
+        XCTAssertTrue(tracker.wouldAccept(3), "a read-only check must not consume the seq")
+        XCTAssertTrue(tracker.accept(3, nowMs: 0))
+        XCTAssertFalse(tracker.wouldAccept(3))
+        XCTAssertFalse(tracker.accept(3, nowMs: 1))
+    }
+
+    func test_recordingFramesThatNeverOpened_poisonsTheTracker_whichIsWhyOnlyOpenedFramesAreCommitted() {
+        let tracker = NackRxTracker()
+        for seq in 0...5000 { XCTAssertTrue(tracker.accept(Int64(seq), nowMs: 0)) }
+        tracker.reset() // key install (resetNackState)
+        // old-key frames still in flight: they cannot be opened. Recording them (the pre-fix
+        // behaviour) raises highestSeq ...
+        for seq in 5001...5040 { XCTAssertTrue(tracker.accept(Int64(seq), nowMs: 0)) }
+        // ... and the peer's restarted counter is then dropped as "too old".
+        for seq in 0...20 { XCTAssertFalse(tracker.wouldAccept(Int64(seq)), "seq \(seq)") }
+    }
+
+    func test_onlyOpenedFramesCommitted_restartedCounterIsFollowed() {
+        let tracker = NackRxTracker()
+        for seq in 0...5000 { _ = tracker.accept(Int64(seq), nowMs: 0) }
+        tracker.reset() // key install (resetNackState)
+        // old-key frames still in flight: checked read-only, never opened, never committed
+        for seq in 5001...5040 { XCTAssertTrue(tracker.wouldAccept(Int64(seq))) }
+        // the peer switches: its counter restarts at 0 and every frame opens
+        for seq in 0...200 {
+            XCTAssertTrue(tracker.wouldAccept(Int64(seq)), "seq \(seq)")
+            XCTAssertTrue(tracker.accept(Int64(seq), nowMs: Int64(seq) * 20), "seq \(seq)")
+        }
+        // duplicates inside the new epoch are still dropped
+        XCTAssertFalse(tracker.wouldAccept(200))
+    }
+
     func test_gap_notNackEligible_beforeAgingPastThreshold() {
         let tracker = NackRxTracker(nackAgeThresholdMs: 120)
         _ = tracker.accept(0, nowMs: 0)
