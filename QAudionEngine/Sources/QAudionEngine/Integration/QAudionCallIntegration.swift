@@ -684,6 +684,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// unconditionally, so caller and callee install identically.
     public var onRelaySessionReady: ((Data, String) -> Void)?
 
+    /// W-M15SEALERONCE (2026-09-20) — true ONLY while ``onRelaySessionReady`` is
+    /// being invoked for a RE-KEY round (mid-call session-key rotation), false
+    /// for the call's first handshake. The M-15 outer relay seal is a
+    /// call-lifetime object bound to the FIRST handshake's key on every
+    /// platform (Android installs it exactly once per call:
+    /// `CallController.outerSealersInstalledOnce`); a re-key rotates the INNER
+    /// audio key only. Re-deriving the outer pair here while the peer keeps its
+    /// original one made both directions fail the M-15 open (`unseal
+    /// failed/replay`) right after every re-key -- live call ab7f643b, 21:47:39Z:
+    /// 100% of Android's frames dropped on iOS and 0 arriving on Android, until
+    /// the call was hung up. The callback reads this flag SYNCHRONOUSLY, before
+    /// it hops to another actor.
+    public var relaySessionReadyIsReKey: Bool {
+        lock.withLock { _relaySessionReadyIsReKey }
+    }
+    private var _relaySessionReadyIsReKey: Bool = false
+
+    /// Fires ``onRelaySessionReady`` with ``relaySessionReadyIsReKey`` set for
+    /// the duration of the call.
+    func fireRelaySessionReady(_ sessionKey: Data, callId: String, isReKey: Bool) {
+        lock.withLock { _relaySessionReadyIsReKey = isReKey }
+        onRelaySessionReady?(sessionKey, callId)
+        lock.withLock { _relaySessionReadyIsReKey = false }
+    }
+
     /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — everything AppState
     /// needs to run the `KCMAC:` piggy-back exchange, fired at the SAME two
     /// handshake-completion sites as ``onPqcSessionKeyEstablished``
@@ -2797,7 +2822,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiated, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
-            onRelaySessionReady?(combined, callId)
+            // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
+            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound)
             lock.withLock { state = .active }
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()
@@ -3422,7 +3448,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
                 logTiming("hs-derive-complete", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
             }
-            onRelaySessionReady?(combined, callId)
+            // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
+            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyAccept)
             lock.withLock {
                 state = .active
                 // 7. Zero the stashed privs immediately — the session key is

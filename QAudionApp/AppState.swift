@@ -13785,6 +13785,9 @@ final class AppState: ObservableObject {
         // been set yet (the old onPqcSessionKeyEstablished install raced
         // it and skipped the callee → Android→iOS 100% AEAD fail).
         integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
+            // W-M15SEALERONCE — read SYNCHRONOUSLY (the integration clears the flag
+            // as soon as this closure returns, before the Task below runs).
+            let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
             Task { @MainActor [weak self, weak integration] in
                 guard let self = self, !cid.isEmpty else { return }
                 // W574x — directional relay-sealer keys when both peers
@@ -13803,7 +13806,8 @@ final class AppState: ObservableObject {
                 let installAudioMedia: () -> Void = { [weak self] in
                     self?.callService.installRelaySealers(
                         sessionKey: sessionKey, callId: cid,
-                        srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                        srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                        isReKeyRound: isReKeyRound)
                 }
                 if self.identityUnverifiedCallIds.contains(cidLower) {
                     self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
@@ -16045,6 +16049,8 @@ final class AppState: ObservableObject {
                 // captured by-value from `contactId`.
                 // W574g — race-free M-15 relay sealer install (caller side).
                 integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
+                    // W-M15SEALERONCE — read SYNCHRONOUSLY (see the responder wiring).
+                    let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
                     Task { @MainActor [weak self, weak integration] in
                         guard let self = self, !cid.isEmpty else { return }
                         // W574x — directional relay-sealer keys when both peers
@@ -16058,7 +16064,8 @@ final class AppState: ObservableObject {
                         let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
                         self.callService.installRelaySealers(
                             sessionKey: sessionKey, callId: cid,
-                            srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                            srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                            isReKeyRound: isReKeyRound)
                         // W-GRPDIAG-4 — see persistMessagePsk doc above.
                         self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                     }

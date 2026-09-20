@@ -1176,8 +1176,23 @@ final class CallService: @unchecked Sendable {
     /// Pure iOS-side logic — no wire-format / HKDF change, so Android, the
     /// firmware earbud counterparty, Desktop and the server are unaffected.
     public func installRelaySealers(sessionKey: Data, callId: String,
-                                    srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false) {
+                                    srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false,
+                                    isReKeyRound: Bool = false) {
         let cid = callId.lowercased()
+        // W-M15SEALERONCE (2026-09-20) — the M-15 outer pair belongs to the call's
+        // FIRST handshake and lives for the whole call, exactly like Android's
+        // `CallController.outerSealersInstalledOnce`: a re-key rotates the inner
+        // audio key, never this layer. Rebuilding it here while the peer keeps
+        // its original pair made every frame in both directions fail the M-15
+        // open right after the re-key (`unseal failed/replay` x N on iOS, 0 frames
+        // arriving on Android): live call ab7f643b, 2026-09-20 21:47:39Z. This
+        // also covers a first install that is still parked behind the identity
+        // gate: that parked action keeps the FIRST handshake's key.
+        if isReKeyRound {
+            let p: String = String(cid.prefix(8))
+            print("[CallService] W-M15SEALERONCE: re-key round — M-15 sealers left unchanged callId=" + p + "…")
+            return
+        }
         // Stale-call guard: only (re)key for the call media actually flows on.
         if let active = getCallId?()?.lowercased(), !active.isEmpty, active != cid {
             let a: String = String(cid.prefix(8))
