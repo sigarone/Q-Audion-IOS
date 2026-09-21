@@ -152,7 +152,10 @@ actor LiveLogWorker {
         runEpoch += 1
         startPathMonitor()
         let thisEpoch: Int = runEpoch
-        loopTask = Task { [weak self] in
+        // `start` is reached from a task the main actor created, so a plain `Task { }` here would
+        // inherit its high priority and run the regex work at the same QoS as the UI. A log
+        // shipper has no deadline: `.utility` keeps it out of the way of the audio and UI work.
+        loopTask = Task(priority: .utility) { [weak self] in
             await self?.runLoop(runEpoch: thisEpoch)
         }
     }
@@ -241,6 +244,12 @@ actor LiveLogWorker {
         // work is off-main, bounded, and each line is prepared exactly once.
         await collect(expected: expected)
         guard runEpoch == expected else { return }
+        // SECURITY C-10 -- the auth read and the collection above each hopped through the main
+        // thread, which can be busy for seconds, and `stop` reaches this actor through a main-actor
+        // task of its own. The consent written by `setEnabled(false)` is already visible here, so
+        // it is read again immediately before an upload can start: withdrawing consent must not
+        // let one more chunk go out from a tick that was already suspended.
+        guard LiveLogConsent.isEnabled else { return }
 
         if inflight {
             skippedDueToInflight += 1
@@ -261,9 +270,14 @@ actor LiveLogWorker {
             if now - cachedAuthAt < ttl { return cached }
         }
         let provider = cfg.authProvider
+        let epochAtStart: Int = runEpoch
         let fresh: AuthSnapshot = await provider()
-        cachedAuth = fresh
-        cachedAuthAt = LiveLogWorker.monotonicNow()
+        // A `stop` that landed during the main-actor hop already dropped the cache (SECURITY C-10):
+        // do not put the token back behind it.
+        if runEpoch == epochAtStart {
+            cachedAuth = fresh
+            cachedAuthAt = LiveLogWorker.monotonicNow()
+        }
         return fresh
     }
 
@@ -361,6 +375,15 @@ actor LiveLogWorker {
                                lastSeq: Int64,
                                runEpoch expected: Int,
                                isRetryAfterRefresh: Bool) async {
+        // SECURITY C-10 -- last gate before anything is built or sent, for the first attempt (it
+        // starts in a task of its own, after the tick that launched it) and for the retry after a
+        // 401 refresh (which awaited the main thread twice). A stopped run does nothing; the
+        // consent flag alone (stop not yet delivered) also ends this chunk without a failure.
+        guard runEpoch == expected else { return }
+        guard LiveLogConsent.isEnabled else {
+            if chunkSeq == seq { inflight = false }
+            return
+        }
         let backendConfig: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: backendConfig)
         var tusClient: TusUploadClient?
@@ -397,6 +420,10 @@ actor LiveLogWorker {
         if chunkSeq == seq { inflight = false }
         uploadedChunks += 1
         if lastSeq > ackSeq { ackSeq = lastSeq }
+        // A confirmation that arrives after a `stop` (which rewound `collectedSeq` to the OLD
+        // `ackSeq`) must not leave the read cursor behind what the server now holds: the lines in
+        // between would be collected again after a restart and shipped twice.
+        if lastSeq > collectedSeq { collectedSeq = lastSeq }
         backlog.removeThrough(seq: lastSeq)
         backoff.recordSuccess()
         if uploadedChunks <= 3 || (uploadedChunks % 50) == 0 {
@@ -438,6 +465,10 @@ actor LiveLogWorker {
             let refresh = cfg.refreshProvider
             await refresh()
             let fresh: AuthSnapshot = await currentAuth(cfg: cfg, force: true)
+            // Both awaits above went through the main thread: the run may have been stopped (or
+            // stopped and started again) meanwhile, and the state below then belongs to the newer
+            // run. Consent itself is re-read by `performUpload` before the retry is sent.
+            guard chunkSeq == seq, runEpoch == expected else { return }
             if !fresh.token.isEmpty, fresh.token != token {
                 await performUpload(serverUrl: serverUrl,
                                     token: fresh.token,
