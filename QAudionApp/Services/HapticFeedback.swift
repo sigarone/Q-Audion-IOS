@@ -35,6 +35,14 @@ enum HapticFeedback {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
+    /// Light tap when the user marks an audible glitch during a call
+    /// (the "Disturbo" pill on the in-call screen). Same kill-switch as
+    /// every other helper here.
+    static func callMarker() {
+        guard isEnabled else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
     /// Medium bump when releasing a voice-note (= sending it).
     static func recordingStop() {
         guard isEnabled else { return }

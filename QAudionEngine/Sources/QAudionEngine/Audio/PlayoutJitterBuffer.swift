@@ -610,6 +610,27 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// The inbound frame duration the tiers are currently sized for, in ms.
     public var inboundFrameDurationMs: Int { lock.lock(); defer { lock.unlock() }; return frameMs }
 
+    /// W-HBTELEM (2026-09-21) — the largest gap between two consecutive arrivals, in ms,
+    /// over the most recent arrivals that span `windowMs`: the `iat_max_ms` heartbeat
+    /// attribute. READ-ONLY over `latenessRing`, which the adaptive target already
+    /// maintains (each entry is `max(gap - frameMs, 0)`), so it adds nothing to the
+    /// arrival path. A gap shorter than one frame reads as one frame: a steady stream
+    /// never has a largest gap below its own cadence. Nil before the second arrival.
+    public func recentInterArrivalMaxMs(windowMs: Int) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        guard latenessCount > 0, frameMs > 0, !latenessRing.isEmpty else { return nil }
+        let wanted = max(windowMs / frameMs, 1)
+        let samples = min(latenessCount, latenessRing.count, wanted)
+        var worstLateness = 0
+        var back = 0
+        while back < samples {
+            let index = (latenessCount - 1 - back) % latenessRing.count
+            if latenessRing[index] > worstLateness { worstLateness = latenessRing[index] }
+            back += 1
+        }
+        return worstLateness + frameMs
+    }
+
     /// The resolved tier geometry, for asserting the invariants that hold
     /// BETWEEN these numbers rather than the numbers themselves.
     ///

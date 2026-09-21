@@ -3694,6 +3694,14 @@ final class AppState: ObservableObject {
                 await self.sendPlpAnnounce(pct: pct, peerId: peerId)
             }
         }
+        // W-HBTELEM (2026-09-21) — the 5 s `call.media.heartbeat` reads the 1:1 call's health
+        // counters (jitter buffer, loss, FEC, frames by transport) through this one provider;
+        // `CallMediaTelemetry` turns two readings into per-window deltas. Group calls are marked
+        // `isGroup` where they connect (`groupTelemetry` wiring below) and never read it, so their
+        // heartbeat keeps its old shape.
+        CallMediaTelemetry.shared.heartbeatSnapshotProvider = { [weak self] in
+            self?.callService.makeHeartbeatSnapshot()
+        }
         // I3 §5 (2026-08-21) — drives a real PQC re-handshake via
         // QAudionCallIntegration.performPqcReKey. Only ever does anything on
         // the device that originated the call — performPqcReKey's own
@@ -23086,7 +23094,7 @@ extension AppState {
                 let peerPrefix = (attrs["peer_prefix"] as? String) ?? "group"
                 let sasSource = (attrs["sas_source"] as? String) ?? "sfu"
                 Task { @MainActor in
-                    CallMediaTelemetry.shared.recordConnected(callId: cid, peerPrefix: peerPrefix, sasSource: sasSource)
+                    CallMediaTelemetry.shared.recordConnected(callId: cid, peerPrefix: peerPrefix, sasSource: sasSource, isGroup: true)
                 }
             case "call.media.ended":
                 let reason = (attrs["reason"] as? String) ?? "unknown"

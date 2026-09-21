@@ -109,6 +109,13 @@ public final class TusUploadClient {
     private let refreshToken: (() async throws -> Bool)?
     let chunkSize: Int
 
+    /// W-LIVELOGOFFMAIN (2026-09-21) — the raw `Retry-After` header of the MOST RECENT
+    /// HTTP response this client received (nil when that response had none). Read-only
+    /// side channel: the thrown `TusError` cases stay exactly as they were, so no
+    /// existing caller changes. The log shipper (`LiveLogWorker`) reads it after a 429/503 to
+    /// honour the server's own back-off hint instead of guessing.
+    public private(set) var lastRetryAfterHeader: String?
+
     static let defaultChunkSize = 512 * 1024   // 512 KB
 
     /// W-TUSRESUME: bounded per-chunk retry — tier 2 of the 3-tier retry
@@ -153,11 +160,13 @@ public final class TusUploadClient {
         guard let req = build() else { return nil }
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { return nil }
+        lastRetryAfterHeader = http.value(forHTTPHeaderField: "Retry-After")
         guard http.statusCode == 401, let refreshToken else { return (data, http) }
         guard try await refreshToken() else { return (data, http) }
         guard let retryReq = build() else { return (data, http) }
         let (retryData, retryResponse) = try await session.data(for: retryReq)
         guard let retryHttp = retryResponse as? HTTPURLResponse else { return (data, http) }
+        lastRetryAfterHeader = retryHttp.value(forHTTPHeaderField: "Retry-After")
         return (retryData, retryHttp)
     }
 

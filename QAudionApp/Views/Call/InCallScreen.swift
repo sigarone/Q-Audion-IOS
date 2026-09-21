@@ -366,6 +366,10 @@ struct InCallScreen: View {
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
+    /// W-HBTELEM (2026-09-21) — the "Disturbo" pill: marks the instant the user heard an
+    /// audio glitch (telemetry marker `call.disturbance.marker`). nil hides it: only the live
+    /// 1:1 call screen (`LiveInCallScreen`) passes it, so previews and group calls never show it.
+    let onMarkDisturbance: (() -> Void)?
     /// Feature B ("voce verificata") — state of the per-contact call-time
     /// voice-learning session, fed from the SAME decoded RX audio as
     /// `voiceBiometrics`/`voiceSpectrum` above. nil ⇒ no session has run
@@ -472,6 +476,7 @@ struct InCallScreen: View {
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
+         onMarkDisturbance: (() -> Void)? = nil,
          voiceLearningState: VoiceLearningSession.State? = nil,
          onStartVoiceLearning: @escaping () -> Void = {},
          voiceConfidenceHistory: [Float] = [],
@@ -530,6 +535,7 @@ struct InCallScreen: View {
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
+        self.onMarkDisturbance = onMarkDisturbance
         self.voiceLearningState = voiceLearningState
         self.onStartVoiceLearning = onStartVoiceLearning
         self.voiceConfidenceHistory = voiceConfidenceHistory
@@ -2611,6 +2617,9 @@ struct InCallScreen: View {
                      accent: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
                      filled: transportMode == .p2pSrtp)
             Spacer()
+            if let markDisturbance = onMarkDisturbance {
+                DisturbanceMarkButton(action: markDisturbance)
+            }
             Button(action: onToggleDiagnostics) {
                 Image(systemName: "chart.bar.fill")
                     .font(.system(size: 13, weight: .semibold))
