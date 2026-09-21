@@ -83,7 +83,7 @@ public enum KeyMaterialScrubber {
         return line
     }
 
-    // MARK: - Matches (internal, for tests and for the corpus tooling)
+    // MARK: - Matches (internal, for tests)
 
     enum Kind: Equatable {
         case derivedKey
