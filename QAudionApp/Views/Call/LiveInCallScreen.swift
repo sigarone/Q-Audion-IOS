@@ -398,6 +398,8 @@ struct LiveInCallScreen: View {
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
                 onToggleDiagnostics: handleToggleDiagnostics,
+                // W-HBTELEM — the "Disturbo" marker pill (1:1 call screen only).
+                onMarkDisturbance: handleMarkDisturbance,
                 // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
                 // fed from AppState.voiceLearningState (itself fed from the
                 // SAME decoded RX audio the Guardian ribbon above already
@@ -551,6 +553,13 @@ struct LiveInCallScreen: View {
 
     private func handleToggleDiagnostics() {
         showDiagnostics.toggle()
+    }
+
+    /// W-HBTELEM (2026-09-21) — "Disturbo" tapped: record the instant through the same
+    /// telemetry emitter as the other call events. The one-per-second debounce and the
+    /// no-op-outside-a-call guard live in `CallMediaTelemetry`.
+    private func handleMarkDisturbance() {
+        CallMediaTelemetry.shared.recordDisturbanceMarker()
     }
 
     // MARK: - Diagnostics panel (W502)

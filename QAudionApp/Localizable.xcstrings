@@ -4369,6 +4369,90 @@
         }
       }
     },
+    "in_call.disturbance_button": {
+      "extractionState": "manual",
+      "comment": "In-call transport row — small pill the user taps to mark the instant an audio glitch was heard (a telemetry marker for the maintainer). Keep it one short word.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disturbo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Glitch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fallo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Problème"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Störung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha"
+          }
+        }
+      }
+    },
+    "in_call.disturbance_button_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the in-call Disturbo pill — reports that an audio glitch was just heard.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Segnala disturbo audio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report audio glitch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informar de un fallo de audio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signaler un problème audio"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audiostörung melden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relatar falha de áudio"
+          }
+        }
+      }
+    },
     "video_call.stress_word_calm": {
       "extractionState": "manual",
       "comment": "Video call diagnostics row — interpreted voice-stress band label for a low composite stress score",
