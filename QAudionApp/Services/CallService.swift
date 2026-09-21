@@ -1190,7 +1190,9 @@ final class CallService: @unchecked Sendable {
         // gate: that parked action keeps the FIRST handshake's key.
         if isReKeyRound {
             let p: String = String(cid.prefix(8))
-            print("[CallService] W-M15SEALERONCE: re-key round — M-15 sealers left unchanged callId=" + p + "…")
+            // CLAUDE.md sec.13: the `+` concatenation must live OUTSIDE print(...).
+            let line: String = "[CallService] W-M15SEALERONCE: re-key round — M-15 sealers left unchanged callId=" + p + "…"
+            print(line)
             return
         }
         // Stale-call guard: only (re)key for the call media actually flows on.
