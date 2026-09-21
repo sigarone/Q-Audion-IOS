@@ -294,6 +294,73 @@ final class TusUploadClientTests: XCTestCase {
         }
     }
 
+    // MARK: - W-LIVELOGOFFMAIN: Retry-After side channel
+
+    /// The log shipper honours the server's `Retry-After` on 429/503. The thrown
+    /// `TusError` cases stay as they were; the raw header is exposed separately.
+    func test_create429_keepsTheThrownErrorAndExposesRetryAfter() async throws {
+        TusStubProtocol.responseHandler = { request in
+            let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
+                url: request.url!, statusCode: 429, httpVersion: nil,
+                headerFields: ["Retry-After": "7"]
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
+            )!
+            return (resp, nil)
+        }
+        let client = TusUploadClient(
+            session: session, serverUrl: "https://test", getToken: { "tok" }
+        )
+        XCTAssertNil(client.lastRetryAfterHeader, "nothing has been received yet")
+        do {
+            _ = try await client.upload(data: Data(repeating: 0x41, count: 10))
+            XCTFail("expected createFailed to be thrown")
+        } catch let error as TusUploadClient.TusError {
+            guard case .createFailed(let code) = error else {
+                XCTFail("expected .createFailed, got \(error)")
+                return
+            }
+            XCTAssertEqual(code, 429)
+        }
+        XCTAssertEqual(client.lastRetryAfterHeader, "7")
+    }
+
+    func test_lastRetryAfterHeader_followsTheMostRecentResponse() async throws {
+        var withHint = true
+        TusStubProtocol.responseHandler = { request in
+            let resp = HTTPURLResponse(
+                // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                // swiftlint:disable:next force_unwrapping
+                url: request.url!, statusCode: withHint ? 503 : 500, httpVersion: nil,
+                headerFields: withHint ? ["Retry-After": "Sun, 06 Nov 1994 08:49:37 GMT"] : nil
+            // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+            // swiftlint:disable:next force_unwrapping
+            )!
+            return (resp, nil)
+        }
+        let client = TusUploadClient(
+            session: session, serverUrl: "https://test", getToken: { "tok" }
+        )
+        do {
+            _ = try await client.upload(data: Data(repeating: 0x41, count: 10))
+            XCTFail("expected createFailed to be thrown")
+        } catch is TusUploadClient.TusError {
+            // expected
+        }
+        XCTAssertEqual(client.lastRetryAfterHeader, "Sun, 06 Nov 1994 08:49:37 GMT")
+
+        withHint = false
+        do {
+            _ = try await client.upload(data: Data(repeating: 0x41, count: 10))
+            XCTFail("expected createFailed to be thrown")
+        } catch is TusUploadClient.TusError {
+            // expected
+        }
+        XCTAssertNil(client.lastRetryAfterHeader, "a later response without the header clears it")
+    }
+
     // MARK: - W-TUSRESUME: resume()
 
     func test_resume_startsMidFile_skipsCreate_completesRemainder() async throws {
