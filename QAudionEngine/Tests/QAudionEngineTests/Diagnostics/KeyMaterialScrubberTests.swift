@@ -165,13 +165,13 @@ final class KeyMaterialScrubberTests: XCTestCase {
     /// The real shapes cut at EVERY byte offset, the way a 4096-byte pipe read cuts them: no key
     /// number may survive in either half.
     func test_aKeyLineCutAtAnyOffsetLeaksNothing() {
-        let key = list(200, 231)
-        let shapes: [String] = [
-            "derived_key [" + key + "] len 32",
-            "(x.cc:118): secret [" + key + "] len 32 slat [" + list(200, 215) + "] len 16",
-            "(x.cc:118): secret [" + key + "] len 32 slat << [] len 0",
-            "key bytes [" + key + "] len 32"
-        ]
+        let key: String = list(200, 231)
+        let salt: String = list(200, 215)
+        var shapes: [String] = []
+        shapes.append("derived_key [\(key)] len 32")
+        shapes.append("(x.cc:118): secret [\(key)] len 32 slat [\(salt)] len 16")
+        shapes.append("(x.cc:118): secret [\(key)] len 32 slat << [] len 0")
+        shapes.append("key bytes [\(key)] len 32")
         for line in shapes {
             let bytes: [UInt8] = Array(line.utf8)
             var offset: Int = 0
