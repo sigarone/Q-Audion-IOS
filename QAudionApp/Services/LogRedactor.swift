@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// W-LIVELOGOFFMAIN (2026-09-21) -- the log redactors, moved here VERBATIM from
 /// `RuntimeLogSink` (regexes, ordering, sentinels and placeholder unchanged).
@@ -15,7 +16,29 @@ import Foundation
 /// SAME single implementation.
 ///
 /// The doc comments below are the originals and still describe the rules.
+///
+/// W-KEYSCRUB (2026-09-21) -- BOTH redactors now start with `scrubKeyMaterial` (the pure
+/// `KeyMaterialScrubber` of QAudionEngine): key bytes the native library prints to stdout
+/// (`derived_key [..] len 32`, `secret [..] len 32 slat [..]`, byte lists, hex byte runs) are
+/// replaced by `[REDACTED:keybytes]` before any of the regexes below run. `RuntimeLogSink.record`
+/// applies the same function at ring entry, so this is the second layer (defence in depth) for
+/// every path that reads text: the stdout tee (`redact`, off-main), the text export, the bug
+/// report tail, the live-log worker and the telemetry attribute scrub (`redactStructured`).
 enum LogRedactor {
+
+    /// W-KEYSCRUB -- one-line forward so `RuntimeLogSink` needs no import of the engine module.
+    /// Pure, thread-safe, linear in the length of `text`; a clean text comes back untouched.
+    ///
+    /// LINE ORIENTED on purpose (`scrubLines`, not `scrub`): `redactStructured` also runs on a
+    /// composed multi-line text (`ReportCrypto.buildDiagSummary` gets the whole 2-minute
+    /// `recentLogsAsString` tail, whose lines were already scrubbed), and `scrub` reads
+    /// "everything after `derived_key`" as the rest of the TEXT, so on such a blob one
+    /// `derived_key <marker>` line would swallow every line after it (the newest ones, the ones
+    /// the 200-character diag summary keeps). `scrubLines` scans each line on its own, so the
+    /// lines around a key line survive and scrubbing twice gives the same text.
+    static func scrubKeyMaterial(_ text: String) -> String {
+        return KeyMaterialScrubber.scrubLines(text)
+    }
 
     /// SECURITY H-2 — best-effort secret scrubber for the
     /// stdout/stderr tee. Masks bearer tokens, `token=`/`token:`
@@ -55,7 +78,7 @@ enum LogRedactor {
     }()
 
     static func redact(_ line: String) -> String {
-        var working: String = line
+        var working: String = LogRedactor.scrubKeyMaterial(line)
         for rx in redactRegexes {
             let full = NSRange(working.startIndex..<working.endIndex, in: working)
             let template: String = redactPlaceholder
@@ -125,7 +148,8 @@ enum LogRedactor {
     /// path before `sealBatch`. Exposed (public) for that second egress;
     /// the implementation and its UNCONDITIONAL nature are unchanged.
     static func redactStructured(_ line: String) -> String {
-        var work: String = line
+        // --- 0. W-KEYSCRUB: key bytes first, before anything can be stashed or restored ---
+        var work: String = LogRedactor.scrubKeyMaterial(line)
         var stash: [String] = []
 
         // --- 1a. stash call_id UUIDs ---

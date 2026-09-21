@@ -136,6 +136,35 @@ shipper, `livelog backlog drop=N` undercounts: it counts lines the worker left o
 collection (the first collection after a (re)start or a long period without a token keeps only
 the newest 2000 ring lines), not lines the 5000-entry ring had already evicted before it looked.
 
+**Since v1.0.1181 (W-KEYSCRUB) -- key bytes never enter the app log.** The iPhone native crypto
+library prints key material to stdout during handshakes and re-keys (`derived_key [1,2,..,32] len 32`,
+`secret [..] len 32 slat << [] len 0`; "slat" is the library's typo of salt) and the stdout tee
+recorded it, so the live-log shipper uploaded it in clear (299 lines in 90 blobs in 7 days). The pure
+function `KeyMaterialScrubber` (`QAudionEngine/.../Diagnostics/KeyMaterialScrubber.swift`, a
+hand-written linear byte scanner, no regex) replaces it with `[REDACTED:keybytes]`. It runs at ring
+entry (`RuntimeLogSink.record`: the ring, the on-screen viewer, the export, the bug-report tail, the
+shipper, the OSLog mirror and `BugReporter.onError` only see scrubbed text) and again at the start of
+both `LogRedactor` entry points (`redact` for the stdout tee, off-main; `redactStructured` for every
+egress incl. `TelemetryService` attrs and `ReportCrypto`), plus on the `OSLogStore` lines of the log
+export. **The app calls `scrubLines(_:)` only** (via `LogRedactor.scrubKeyMaterial`): it cuts the text
+at every line feed and scans each line on its own (per-line 256 KiB cap), because
+`ReportCrypto.buildDiagSummary` runs `redactStructured` on the whole multi-line `recentLogsAsString`
+tail, and `scrub(_:)` (one log entry: `derived_key` takes the rest of the TEXT) is not idempotent on a
+blob of already-scrubbed lines: it turned every line after a `derived_key <marker>` line into one
+marker, so the 200-character `diag_summary` showed an old slice instead of the newest lines.
+Patterns: `derived_key` + the rest of the line; `secret`/`slat`/`salt` + a bracketed group;
+any `[..]`/`(..)` list of 8+ integers 0-255; 8+ hex bytes separated by space or colon; the head and the
+tail of a key line that the 4096-byte pipe read cut in two. **Policy: over-scrubbing is deliberate** (8
+small numbers in brackets are scrubbed in ANY line). To see where it acted: `grep REDACTED:keybytes`.
+Known limits: builds up to 1.0.1180 still ship the bytes; the raw byte forward of the tee to the
+original stdout (a debugger console) is not scrubbed; a key in a shape none of the patterns knows
+(bare base64 with no keyword) is left to `LogRedactor`'s long-run rules; hex runs cut in two below 8
+pairs each are not caught; a list of integers spread over 3+ lines is not caught in its middle lines
+(one line feed, the way the tee cuts a key line, is). Tests: `KeyMaterialScrubberTests` (engine) and
+`python scripts/test_keymaterial_scrub_parity.py` (Python port, same golden vectors
+`Diagnostics/Resources/key-material-scrub-vectors.json`, `vectors` for `scrub` and `lineVectors` for
+`scrubLines`); the port is what replays the real blobs.
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`

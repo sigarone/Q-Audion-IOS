@@ -1,0 +1,614 @@
+{
+ "schema": "qaudion-key-material-scrub-vectors:1",
+ "notes": "Synthetic inputs only. 'expected' is composed by hand from the KeyMaterialScrubber spec, not produced by running a scrubber. 'vectors' are checked with scrub() (one log entry) and, when the input has no line feed, also with scrubLines(); 'lineVectors' are checked with scrubLines() (a text of several lines). Consumed by KeyMaterialScrubberTests.swift (Swift) and scripts/test_keymaterial_scrub_parity.py (Python port): both must agree with every entry.",
+ "marker": "[REDACTED:keybytes]",
+ "vectors": [
+  {
+   "name": "derived_key real shape",
+   "input": "derived_key [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32",
+   "expected": "derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key trailing comma",
+   "input": "derived_key [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,] len 32",
+   "expected": "derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key spaces after commas",
+   "input": "derived_key [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] len 32",
+   "expected": "derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key upper case and colon",
+   "input": "DERIVED_KEY: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32",
+   "expected": "DERIVED_KEY: [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key mixed case",
+   "input": "DeRiVeD_kEy [1,2,3]",
+   "expected": "DeRiVeD_kEy [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key with a file prefix",
+   "input": "(x.cc:118): derived_key [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32",
+   "expected": "(x.cc:118): derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key equals sign and no list",
+   "input": "call ok derived_key=abc123 rest of line",
+   "expected": "call ok derived_key=[REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key nothing after it",
+   "input": "derived_key",
+   "expected": "derived_key"
+  },
+  {
+   "name": "derived_key only spaces after it",
+   "input": "got derived_key ",
+   "expected": "got derived_key "
+  },
+  {
+   "name": "derived_key head fragment",
+   "input": "derived_key [123,200,",
+   "expected": "derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key already scrubbed",
+   "input": "derived_key [REDACTED:keybytes]",
+   "expected": "derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key marker followed by more text",
+   "input": "derived_key [REDACTED:keybytes] len 32",
+   "expected": "derived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key on the second line",
+   "input": "first line\nderived_key [1,2,3]\nlast line",
+   "expected": "first line\nderived_key [REDACTED:keybytes]"
+  },
+  {
+   "name": "derived_key inside a longer word (no word boundary)",
+   "input": "hkdf_derived_key_len=32 ok",
+   "expected": "hkdf_derived_key[REDACTED:keybytes]"
+  },
+  {
+   "name": "secret and slat real shape",
+   "input": "(x.cc:118): secret [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32 slat [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16] len 16",
+   "expected": "(x.cc:118): secret [REDACTED:keybytes] len 32 slat [REDACTED:keybytes] len 16"
+  },
+  {
+   "name": "secret list and empty slat",
+   "input": "(x.cc:118): secret [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32 slat << [] len 0",
+   "expected": "(x.cc:118): secret [REDACTED:keybytes] len 32 slat << [] len 0"
+  },
+  {
+   "name": "secret head fragment (unterminated group)",
+   "input": "(x.cc:118): secret [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17",
+   "expected": "(x.cc:118): secret [REDACTED:keybytes]"
+  },
+  {
+   "name": "secret short list still scrubbed",
+   "input": "secret [1,2,3] len 3",
+   "expected": "secret [REDACTED:keybytes] len 3"
+  },
+  {
+   "name": "secret upper case equals and parentheses",
+   "input": "SECRET=(1,2,3,4,5,6,7,8,9,10) ok",
+   "expected": "SECRET=[REDACTED:keybytes] ok"
+  },
+  {
+   "name": "slat typo keyword",
+   "input": "slat [5,6] len 2",
+   "expected": "slat [REDACTED:keybytes] len 2"
+  },
+  {
+   "name": "salt with a non numeric group (over-scrubbed on purpose)",
+   "input": "salt (ok) len 0",
+   "expected": "salt [REDACTED:keybytes] len 0"
+  },
+  {
+   "name": "salt empty group untouched",
+   "input": "salt [] len 0",
+   "expected": "salt [] len 0"
+  },
+  {
+   "name": "salt blank group untouched",
+   "input": "salt [  ] len 0",
+   "expected": "salt [  ] len 0"
+  },
+  {
+   "name": "secret nested group",
+   "input": "secret [[1,2],[3,4]] len 4",
+   "expected": "secret [REDACTED:keybytes] len 4"
+  },
+  {
+   "name": "secret nested parentheses in brackets",
+   "input": "secret [a (b) c] end",
+   "expected": "secret [REDACTED:keybytes] end"
+  },
+  {
+   "name": "secret without a group",
+   "input": "secret handshake ok",
+   "expected": "secret handshake ok"
+  },
+  {
+   "name": "secretary is not the keyword plus group",
+   "input": "secretary [1,2,3]",
+   "expected": "secretary [1,2,3]"
+  },
+  {
+   "name": "keyword not adjacent to the list",
+   "input": "secret len 32 [1,2,3]",
+   "expected": "secret len 32 [1,2,3]"
+  },
+  {
+   "name": "secret unclosed group with words",
+   "input": "secret [abc def",
+   "expected": "secret [REDACTED:keybytes]"
+  },
+  {
+   "name": "secret marker already there",
+   "input": "secret [REDACTED:keybytes] len 32",
+   "expected": "secret [REDACTED:keybytes] len 32"
+  },
+  {
+   "name": "secret with the words after the group kept",
+   "input": "the secret [9,8] is len 2 fine",
+   "expected": "the secret [REDACTED:keybytes] is len 2 fine"
+  },
+  {
+   "name": "list of 8 in brackets",
+   "input": "x [1,2,3,4,5,6,7,8] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list of 7 untouched",
+   "input": "x [1,2,3,4,5,6,7] y",
+   "expected": "x [1,2,3,4,5,6,7] y"
+  },
+  {
+   "name": "list of 32 in parentheses",
+   "input": "x (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32) y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list of 32 with semicolons",
+   "input": "x [1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20;21;22;23;24;25;26;27;28;29;30;31;32] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list with mixed separators and spaces",
+   "input": "x [1,2;3, 4 ;5 , 6,7;8] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list with trailing comma",
+   "input": "x [1,2,3,4,5,6,7,8,] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list with trailing semicolon",
+   "input": "x [1,2,3,4,5,6,7,8;] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list with spaces inside the brackets",
+   "input": "x [ 1, 2, 3, 4, 5, 6, 7, 8 ] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list of extreme byte values",
+   "input": "x [0,255,0,255,0,255,0,255] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list with 256 untouched",
+   "input": "x [1,2,3,4,5,6,7,256] y",
+   "expected": "x [1,2,3,4,5,6,7,256] y"
+  },
+  {
+   "name": "list with a four digit number untouched",
+   "input": "x [1,2,3,4,5,6,7,0008] y",
+   "expected": "x [1,2,3,4,5,6,7,0008] y"
+  },
+  {
+   "name": "list of three digit numbers with leading zeros",
+   "input": "x [001,002,003,004,005,006,007,008] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list with a negative number untouched",
+   "input": "x [1,2,3,4,5,6,7,-8] y",
+   "expected": "x [1,2,3,4,5,6,7,-8] y"
+  },
+  {
+   "name": "list of decimals untouched",
+   "input": "x [1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5] y",
+   "expected": "x [1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5] y"
+  },
+  {
+   "name": "list ending in a word untouched",
+   "input": "x [1,2,3,4,5,6,7,8,ab] y",
+   "expected": "x [1,2,3,4,5,6,7,8,ab] y"
+  },
+  {
+   "name": "list with an empty element untouched",
+   "input": "x [1,2,3,4,5,,6,7,8] y",
+   "expected": "x [1,2,3,4,5,,6,7,8] y"
+  },
+  {
+   "name": "unterminated list of 8",
+   "input": "x [1,2,3,4,5,6,7,8",
+   "expected": "x [REDACTED:keybytes]"
+  },
+  {
+   "name": "unterminated list of 7 is a head fragment",
+   "input": "x [1,2,3,4,5,6,7",
+   "expected": "x [REDACTED:keybytes]"
+  },
+  {
+   "name": "unterminated list of one number is a head fragment",
+   "input": "index [1",
+   "expected": "index [REDACTED:keybytes]"
+  },
+  {
+   "name": "unterminated parenthesis with a trailing comma",
+   "input": "text (5, ",
+   "expected": "text [REDACTED:keybytes]"
+  },
+  {
+   "name": "unterminated bracket without numbers untouched",
+   "input": "x [",
+   "expected": "x ["
+  },
+  {
+   "name": "unterminated bracket with a word untouched",
+   "input": "x [ab",
+   "expected": "x [ab"
+  },
+  {
+   "name": "two lists in one line",
+   "input": "a [1,2,3,4,5,6,7,8] b (9,10,11,12,13,14,15,16) c",
+   "expected": "a [REDACTED:keybytes] b [REDACTED:keybytes] c"
+  },
+  {
+   "name": "touching lists become one marker",
+   "input": "[1,2,3,4,5,6,7,8][1,2,3,4,5,6,7,8]",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "list of 8 small numbers in an unrelated context (over-scrubbed on purpose)",
+   "input": "histogram buckets [1,2,3,4,5,6,7,8] ok",
+   "expected": "histogram buckets [REDACTED:keybytes] ok"
+  },
+  {
+   "name": "list broken over two lines",
+   "input": "x [1,2,3,4,5,6,7,\n8] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "list inside another bracket",
+   "input": "x [[1,2,3,4,5,6,7,8]] y",
+   "expected": "x [[REDACTED:keybytes]] y"
+  },
+  {
+   "name": "empty brackets untouched",
+   "input": "x [] y () z",
+   "expected": "x [] y () z"
+  },
+  {
+   "name": "small list untouched",
+   "input": "channels [0,1] ok",
+   "expected": "channels [0,1] ok"
+  },
+  {
+   "name": "tail fragment real shape",
+   "input": "18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32 slat << [] len 0",
+   "expected": "[REDACTED:keybytes] len 32 slat << [] len 0"
+  },
+  {
+   "name": "tail fragment with leading comma",
+   "input": ",18,19,20] len 32",
+   "expected": "[REDACTED:keybytes] len 32"
+  },
+  {
+   "name": "tail fragment with trailing comma",
+   "input": "5,17,200,] len 32 slat << [] len 0",
+   "expected": "[REDACTED:keybytes] len 32 slat << [] len 0"
+  },
+  {
+   "name": "tail fragment after leading spaces",
+   "input": "  18,19,20] len 32",
+   "expected": "[REDACTED:keybytes] len 32"
+  },
+  {
+   "name": "tail fragment of one number and a bracket",
+   "input": "5] foo",
+   "expected": "[REDACTED:keybytes] foo"
+  },
+  {
+   "name": "tail fragment of two numbers and a parenthesis",
+   "input": "12,34) foo",
+   "expected": "[REDACTED:keybytes] foo"
+  },
+  {
+   "name": "tail fragment with semicolons",
+   "input": "18;19;20] len 32",
+   "expected": "[REDACTED:keybytes] len 32"
+  },
+  {
+   "name": "one number and a parenthesis untouched (numbered item)",
+   "input": "1) first item",
+   "expected": "1) first item"
+  },
+  {
+   "name": "tail of a file prefix untouched",
+   "input": "118): voice send channel options",
+   "expected": "118): voice send channel options"
+  },
+  {
+   "name": "numbers that never close untouched",
+   "input": "12,34,56 not closed",
+   "expected": "12,34,56 not closed"
+  },
+  {
+   "name": "numbers followed by a key name untouched",
+   "input": "12, rid: x, payload_type: 96",
+   "expected": "12, rid: x, payload_type: 96"
+  },
+  {
+   "name": "tail with a number over 255 untouched",
+   "input": "300,4] foo",
+   "expected": "300,4] foo"
+  },
+  {
+   "name": "numbers and a bracket after the start untouched",
+   "input": "text 18,19,20] len 32",
+   "expected": "text 18,19,20] len 32"
+  },
+  {
+   "name": "number then words untouched",
+   "input": "32 slat << [] len 0",
+   "expected": "32 slat << [] len 0"
+  },
+  {
+   "name": "8 hex bytes with spaces",
+   "input": "aa bb cc dd ee ff 00 11",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "8 hex bytes with colons",
+   "input": "aa:bb:cc:dd:ee:ff:00:11",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "hex bytes inside a sentence",
+   "input": "key: aa bb cc dd ee ff 00 11 end",
+   "expected": "key: [REDACTED:keybytes] end"
+  },
+  {
+   "name": "hex bytes in upper case",
+   "input": "AA BB CC DD EE FF 00 11",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "32 hex bytes",
+   "input": "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "hex bytes with mixed separators",
+   "input": "aa:bb cc:dd ee:ff 00:11",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "7 hex bytes untouched",
+   "input": "aa bb cc dd ee ff 00",
+   "expected": "aa bb cc dd ee ff 00"
+  },
+  {
+   "name": "MAC address untouched",
+   "input": "02:42:ac:11:00:02",
+   "expected": "02:42:ac:11:00:02"
+  },
+  {
+   "name": "MAC address with a suffix untouched",
+   "input": "AA:BB:CC:DD:EE:FF-tsco name = x",
+   "expected": "AA:BB:CC:DD:EE:FF-tsco name = x"
+  },
+  {
+   "name": "IPv6 address untouched",
+   "input": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+   "expected": "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+  },
+  {
+   "name": "hex without separators untouched",
+   "input": "aabbccddeeff0011",
+   "expected": "aabbccddeeff0011"
+  },
+  {
+   "name": "last pair glued to more digits untouched",
+   "input": "aa bb cc dd ee ff 00 112 x",
+   "expected": "aa bb cc dd ee ff 00 112 x"
+  },
+  {
+   "name": "decimal pairs are hex bytes too (over-scrubbed on purpose)",
+   "input": "10 20 30 40 50 60 70 80",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "0x prefixed bytes untouched",
+   "input": "0xaa 0xbb 0xcc 0xdd 0xee 0xff 0x00 0x11",
+   "expected": "0xaa 0xbb 0xcc 0xdd 0xee 0xff 0x00 0x11"
+  },
+  {
+   "name": "hex bytes after a punctuation mark",
+   "input": "id=aa bb cc dd ee ff 00 11",
+   "expected": "id=[REDACTED:keybytes]"
+  },
+  {
+   "name": "hex run must start at a token",
+   "input": "xaa bb cc dd ee ff 00 11 22",
+   "expected": "xaa [REDACTED:keybytes]"
+  },
+  {
+   "name": "timestamp and counters",
+   "input": "2026-09-21T13:54:00.123Z rx=12 tx=13",
+   "expected": "2026-09-21T13:54:00.123Z rx=12 tx=13"
+  },
+  {
+   "name": "version strings",
+   "input": "app 1.0.1180 build 1180 v1.0.1181",
+   "expected": "app 1.0.1180 build 1180 v1.0.1181"
+  },
+  {
+   "name": "IPv4 addresses",
+   "input": "peer 1.2.3.4:5060 via 192.168.0.1",
+   "expected": "peer 1.2.3.4:5060 via 192.168.0.1"
+  },
+  {
+   "name": "UUID",
+   "input": "call 3f2504e0-4f89-11d3-9a0c-0305e82c3301 ended",
+   "expected": "call 3f2504e0-4f89-11d3-9a0c-0305e82c3301 ended"
+  },
+  {
+   "name": "base64 text",
+   "input": "blob SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IHRleHQ= ok",
+   "expected": "blob SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IHRleHQ= ok"
+  },
+  {
+   "name": "unicode text",
+   "input": "caffè ☕ 日本語 [1,2,3] 🚀 ok",
+   "expected": "caffè ☕ 日本語 [1,2,3] 🚀 ok"
+  },
+  {
+   "name": "empty string",
+   "input": "",
+   "expected": ""
+  },
+  {
+   "name": "white space only",
+   "input": "   ",
+   "expected": "   "
+  },
+  {
+   "name": "bracketed words",
+   "input": "[call] [rekey] (x.cc:118): started",
+   "expected": "[call] [rekey] (x.cc:118): started"
+  },
+  {
+   "name": "crash frame and address",
+   "input": "QAudionApp + 123456 at 0x0000000102abc000",
+   "expected": "QAudionApp + 123456 at 0x0000000102abc000"
+  },
+  {
+   "name": "call statistics",
+   "input": "heartbeat rx_frames_d=250 tx_frames_d=250 jb_depth_now=3 iat_max_ms=40",
+   "expected": "heartbeat rx_frames_d=250 tx_frames_d=250 jb_depth_now=3 iat_max_ms=40"
+  },
+  {
+   "name": "list of words",
+   "input": "[alpha, beta, gamma]",
+   "expected": "[alpha, beta, gamma]"
+  },
+  {
+   "name": "the marker alone",
+   "input": "[REDACTED:keybytes]",
+   "expected": "[REDACTED:keybytes]"
+  },
+  {
+   "name": "a scrubbed line",
+   "input": "x [REDACTED:keybytes] y",
+   "expected": "x [REDACTED:keybytes] y"
+  },
+  {
+   "name": "unicode around a list",
+   "input": "héllo [1,2,3,4,5,6,7,8] wörld 🚀",
+   "expected": "héllo [REDACTED:keybytes] wörld 🚀"
+  },
+  {
+   "name": "unicode right before derived_key",
+   "input": "日本 derived_key [1,2,3]",
+   "expected": "日本 derived_key [REDACTED:keybytes]"
+  }
+ ],
+ "lineVectors": [
+  {
+   "name": "lines: derived_key keeps the lines around it",
+   "input": "first\nderived_key [1,2,3]\nlast",
+   "expected": "first\nderived_key [REDACTED:keybytes]\nlast"
+  },
+  {
+   "name": "lines: derived_key real shape in a log row",
+   "input": "ts [INFO] [stdout] derived_key [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32] len 32\nnext row",
+   "expected": "ts [INFO] [stdout] derived_key [REDACTED:keybytes]\nnext row"
+  },
+  {
+   "name": "lines: an already scrubbed derived_key row is left alone",
+   "input": "ts derived_key [REDACTED:keybytes]\nnext\nlast",
+   "expected": "ts derived_key [REDACTED:keybytes]\nnext\nlast"
+  },
+  {
+   "name": "lines: a blob of scrubbed rows is a fixed point",
+   "input": "2026-09-21T10:00:00.000Z [INFO] [stdout] derived_key [REDACTED:keybytes]\n2026-09-21T10:00:01.000Z [INFO] [call] rekey round 2 done\n2026-09-21T10:00:02.000Z [INFO] [stdout] (x.cc:118): secret [REDACTED:keybytes] len 32 slat << [] len 0\n2026-09-21T10:00:03.000Z [WARN] [stdout] secret [\n2026-09-21T10:00:04.000Z [INFO] [call] media resumed\n",
+   "expected": "2026-09-21T10:00:00.000Z [INFO] [stdout] derived_key [REDACTED:keybytes]\n2026-09-21T10:00:01.000Z [INFO] [call] rekey round 2 done\n2026-09-21T10:00:02.000Z [INFO] [stdout] (x.cc:118): secret [REDACTED:keybytes] len 32 slat << [] len 0\n2026-09-21T10:00:03.000Z [WARN] [stdout] secret [\n2026-09-21T10:00:04.000Z [INFO] [call] media resumed\n"
+  },
+  {
+   "name": "lines: an unclosed secret group without content stays in its line",
+   "input": "secret [\nnext line\nlast",
+   "expected": "secret [\nnext line\nlast"
+  },
+  {
+   "name": "lines: an unclosed salt parenthesis without content stays in its line",
+   "input": "salt (\nfoo (bar\nlast",
+   "expected": "salt (\nfoo (bar\nlast"
+  },
+  {
+   "name": "lines: an unclosed secret group with content is cut at its line",
+   "input": "secret [1,2\nnext line",
+   "expected": "secret [REDACTED:keybytes]\nnext line"
+  },
+  {
+   "name": "lines: a list cut by one line feed is a head and a tail",
+   "input": "x [1,2,3,4,5,6,7,\n8] y",
+   "expected": "x [REDACTED:keybytes]\n[REDACTED:keybytes] y"
+  },
+  {
+   "name": "lines: a tail fragment on the second row",
+   "input": "2026-09-21 [INFO] first\n5,17,200,] len 32\nlast",
+   "expected": "2026-09-21 [INFO] first\n[REDACTED:keybytes] len 32\nlast"
+  },
+  {
+   "name": "lines: CRLF rows keep their carriage returns",
+   "input": "a\r\nsecret [1,2,3] len 3\r\nb\r\n",
+   "expected": "a\r\nsecret [REDACTED:keybytes] len 3\r\nb\r\n"
+  },
+  {
+   "name": "lines: blank rows and a trailing line feed are kept",
+   "input": "\n\n[1,2,3,4,5,6,7,8]\n\n",
+   "expected": "\n\n[REDACTED:keybytes]\n\n"
+  },
+  {
+   "name": "lines: two key rows in a row",
+   "input": "derived_key [1,2,3]\nsecret [4,5,6] len 3\n",
+   "expected": "derived_key [REDACTED:keybytes]\nsecret [REDACTED:keybytes] len 3\n"
+  },
+  {
+   "name": "lines: a hex run cannot span a line feed",
+   "input": "aa bb cc dd\nee ff 00 11",
+   "expected": "aa bb cc dd\nee ff 00 11"
+  },
+  {
+   "name": "lines: a line feed alone",
+   "input": "\n",
+   "expected": "\n"
+  },
+  {
+   "name": "lines: unicode rows around a match survive",
+   "input": "héllo\nx [1,2,3,4,5,6,7,8] wörld\n🚀 ok",
+   "expected": "héllo\nx [REDACTED:keybytes] wörld\n🚀 ok"
+  }
+ ]
+}

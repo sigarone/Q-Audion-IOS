@@ -441,6 +441,9 @@ let package = Package(
                 // vector's own "notes" field — NOT bit-reproduced by encode()).
                 .copy("Resources/kat/kms-prebootstrap-kat.json"),
                 .copy("Integration/Resources/earbud-excl-v2-kat.json"),
+                // W-KEYSCRUB (2026-09-21) -- golden vectors of KeyMaterialScrubber, shared with
+                // scripts/test_keymaterial_scrub_parity.py (the Python port); synthetic data only.
+                .copy("Diagnostics/Resources/key-material-scrub-vectors.json"),
                 // Cross-platform canonical vectors from bcrypto-server's
                 // test/kat/wire_v1.0.0/ — see WireV1CrossPlatformKatTests.swift
                 // and that repo's test/kat/README.md. VENDORED (bcrypto-server
