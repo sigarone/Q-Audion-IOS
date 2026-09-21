@@ -11,6 +11,16 @@ import Foundation
 /// scrub makes sure the text never reaches the ring, the on-screen viewer, the log export, a
 /// bug report, the shipper or the telemetry attributes.
 ///
+/// TWO ENTRY POINTS. `scrub(_:)` treats its argument as ONE log entry: "the text" below is the
+/// whole argument, so `derived_key` takes everything after it, even over several lines.
+/// `scrubLines(_:)` is for a text that is COMPOSED of several entries (the bug-report tail
+/// `recentLogsAsString`, a multi-line message): it cuts the text at every line feed and scans each
+/// line on its own, so "the text" below is ONE LINE and the lines after a key line survive. The app
+/// calls only `scrubLines` (`LogRedactor.scrubKeyMaterial`), because the same text is scrubbed
+/// more than once on its way out: `scrub` on a blob of lines that were already scrubbed is NOT a
+/// fixed point (the marker after `derived_key` is not "nothing after the word", so it would eat
+/// every later line), `scrubLines` is.
+///
 /// WHAT IT MATCHES (all on the UTF-8 bytes; every pattern is ASCII, so a multi-byte character
 /// can never be cut). Each match is replaced by `marker` and the rest of the text is kept:
 ///
@@ -39,7 +49,8 @@ import Foundation
 ///   (f) OVERLONG: only the first `maxScanBytes` (256 KiB) of a text are scanned, the rest is
 ///       replaced by the marker (fail closed): the work per text is bounded. The stdout tee
 ///       never produces a line longer than 4096 bytes, so this only ever applies to a very
-///       long `RTLog` message.
+///       long `RTLog` message. With `scrubLines` the bound is per LINE, so a blob made of many
+///       short lines is never cut, however long it is.
 ///
 /// POLICY: over-scrubbing is deliberate. A list of 8 or more small integers in brackets is
 /// scrubbed in ANY log line, whatever it means (`hist [1,2,3,4,5,6,7,8]` becomes
@@ -54,9 +65,13 @@ import Foundation
 /// attempt either matches (and the scan continues after it) or fails within the same run of
 /// characters, so the worst case is linear in the length of the text.
 ///
-/// Idempotent: `scrub(scrub(x)) == scrub(x)` (the marker itself is never matched again), for
-/// every text whose scrubbed form is not itself longer than `maxScanBytes`, that is every real
-/// log line. Past that size a second pass may cut the text again: it only ever makes it shorter.
+/// Idempotent PER LINE: `scrub(scrub(x)) == scrub(x)` for a text WITHOUT a line feed (the marker
+/// itself is never matched again) whose scrubbed form is not longer than `maxScanBytes`, that is
+/// every real log line. Past that size a second pass may cut the text again: it only ever makes
+/// it shorter. For a text with line feeds the fixed point is `scrubLines`:
+/// `scrubLines(scrubLines(x)) == scrubLines(x)`, and a blob whose lines were each scrubbed on
+/// their own (`scrub` of one line) comes back from `scrubLines` unchanged. `scrub` alone is not
+/// idempotent on such a blob (see above).
 public enum KeyMaterialScrubber {
 
     /// What replaces a match. `grep REDACTED:keybytes` finds every place the scrub acted.
@@ -81,6 +96,25 @@ public enum KeyMaterialScrubber {
         }
         if let result = replaced { return result }
         return line
+    }
+
+    /// Like `scrub`, for a text that is made of several lines (a bug-report tail, a message with
+    /// line feeds): the text is cut at every line feed (byte 0x0A), each line is scanned on its own,
+    /// with its own `maxScanBytes` cap, and the line feeds are kept. So a `derived_key` (or an
+    /// unclosed group after `secret`) takes the rest of ITS line only, and the lines after it
+    /// survive. A text without a line feed gives exactly `scrub`. Nothing is copied when no line
+    /// matches (the same string comes back). A list of integers cut by ONE line feed is still
+    /// caught (its first line is a head fragment, its second a tail fragment, the way the stdout
+    /// tee cuts a key line); a list spread over three or more lines is not (the middle lines are
+    /// plain numbers and are left alone: the native library never prints one like that).
+    public static func scrubLines(_ text: String) -> String {
+        if text.isEmpty { return text }
+        var work: String = text
+        let replaced: String? = work.withUTF8 { (buf: UnsafeBufferPointer<UInt8>) -> String? in
+            return KeyMaterialScrubber.scrubLinesBytes(buf)
+        }
+        if let result = replaced { return result }
+        return text
     }
 
     // MARK: - Matches (internal, for tests)
@@ -125,13 +159,19 @@ public enum KeyMaterialScrubber {
         if found.isEmpty { return nil }
         var out: [UInt8] = []
         out.reserveCapacity(buf.count + 32)
+        appendReplaced(buf, found, into: &out)
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    /// Appends `buf` to `out` with every match of `found` (in order, from `scan(buf)`) replaced by
+    /// the marker. Matches that touch or overlap are one replacement (one marker, not two).
+    private static func appendReplaced(_ buf: UnsafeBufferPointer<UInt8>, _ found: [Match], into out: inout [UInt8]) {
         var pos: Int = 0
         var index: Int = 0
         while index < found.count {
             let start: Int = found[index].start
             var end: Int = found[index].end
             index += 1
-            // Matches that touch or overlap are one replacement (one marker, not two).
             while index < found.count && found[index].start <= end {
                 if found[index].end > end { end = found[index].end }
                 index += 1
@@ -144,6 +184,41 @@ public enum KeyMaterialScrubber {
         }
         if pos < buf.count {
             out.append(contentsOf: buf[pos..<buf.count])
+        }
+    }
+
+    /// nil when no line matched (the caller then returns the original string). Each line (the bytes
+    /// between two 0x0A) is scanned on its own; the line feeds are copied as they are.
+    private static func scrubLinesBytes(_ buf: UnsafeBufferPointer<UInt8>) -> String? {
+        let n: Int = buf.count
+        var out: [UInt8] = []
+        var changed: Bool = false
+        // Once `changed`, the bytes of `buf` before `copied` are already in `out`.
+        var copied: Int = 0
+        var start: Int = 0
+        while start <= n {
+            var end: Int = start
+            while end < n && buf[end] != 0x0A {
+                end += 1
+            }
+            if end > start {
+                let line: UnsafeBufferPointer<UInt8> = UnsafeBufferPointer<UInt8>(rebasing: buf[start..<end])
+                let found: [Match] = scan(line)
+                if !found.isEmpty {
+                    if !changed {
+                        changed = true
+                        out.reserveCapacity(n + 32)
+                    }
+                    out.append(contentsOf: buf[copied..<start])
+                    appendReplaced(line, found, into: &out)
+                    copied = end
+                }
+            }
+            start = end + 1
+        }
+        if !changed { return nil }
+        if copied < n {
+            out.append(contentsOf: buf[copied..<n])
         }
         return String(decoding: out, as: UTF8.self)
     }

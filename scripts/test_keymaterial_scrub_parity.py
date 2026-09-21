@@ -306,10 +306,9 @@ def scan(b, limit):
     return spans
 
 
-def scan_line(line):
-    """(spans, data, n) for a str: the matches, its UTF-8 bytes and their count. (f) adds an
-    'overlong' span for the part beyond the scan window."""
-    data = line.encode("utf-8", "surrogatepass")
+def scan_data(data):
+    """The matches of one text given as UTF-8 bytes: a list of (start, end, kind). (f) adds an
+    'overlong' span for the part beyond the scan window. (Swift: `scan`, which does both.)"""
     n = len(data)
     limit = n
     if n > MAX_SCAN_BYTES:
@@ -319,13 +318,18 @@ def scan_line(line):
     spans = scan(data, limit)
     if n > limit:
         spans.append((limit, n, KIND_OVERLONG))
-    return spans, data, n
+    return spans
 
 
-def scrub(line):
-    spans, data, _n = scan_line(line)
-    if not spans:
-        return line
+def scan_line(line):
+    """(spans, data, n) for a str: the matches, its UTF-8 bytes and their count."""
+    data = line.encode("utf-8", "surrogatepass")
+    return scan_data(data), data, len(data)
+
+
+def append_replaced(data, spans, out):
+    """Appends data to the bytearray out with every span replaced by the marker. Spans that touch or
+    overlap are one replacement (one marker, not two). (Swift: `appendReplaced`.)"""
     merged = []
     cur_start = None
     cur_end = None
@@ -338,13 +342,53 @@ def scrub(line):
                 merged.append((cur_start, cur_end))
             cur_start, cur_end = s, e
     merged.append((cur_start, cur_end))
-    out = bytearray()
     pos = 0
     for (s, e) in merged:
         out += data[pos:s]
         out += MARKER
         pos = e
     out += data[pos:]
+
+
+def scrub(line):
+    """ONE log entry: 'the text' of the rules is the whole argument (derived_key takes the rest of
+    it, even over several lines)."""
+    spans, data, _n = scan_line(line)
+    if not spans:
+        return line
+    out = bytearray()
+    append_replaced(data, spans, out)
+    return bytes(out).decode("utf-8", "surrogatepass")
+
+
+def scrub_lines(text):
+    """A text made of several lines (a blob of entries): cut at every line feed (byte 0x0A), each
+    line scanned on its own with its own cap ('the text' of the rules is ONE LINE), the line feeds
+    kept. A text without a line feed gives exactly scrub(). (Swift: `scrubLines`.)"""
+    if not text:
+        return text
+    data = text.encode("utf-8", "surrogatepass")
+    n = len(data)
+    out = bytearray()
+    changed = False
+    copied = 0                       # once changed, data[:copied] is already in out
+    start = 0
+    while start <= n:
+        end = data.find(b"\n", start)
+        if end < 0:
+            end = n
+        if end > start:
+            line = data[start:end]
+            spans = scan_data(line)
+            if spans:
+                changed = True
+                out += data[copied:start]
+                append_replaced(line, spans, out)
+                copied = end
+        start = end + 1
+    if not changed:
+        return text
+    out += data[copied:n]
     return bytes(out).decode("utf-8", "surrogatepass")
 
 
@@ -372,7 +416,20 @@ def check_vectors(failures):
             failures.append("vector '%s': got %r expected %r" % (v["name"], got[:80], v["expected"][:80]))
         if scrub(v["expected"]) != v["expected"]:
             failures.append("vector '%s': expected text is not a fixed point" % v["name"])
-    print("  vectors: %d checked" % len(vectors))
+        if "\n" not in v["input"]:
+            # a text without a line feed: scrub_lines is exactly scrub
+            got_lines = scrub_lines(v["input"])
+            if got_lines != v["expected"]:
+                failures.append("vector '%s': scrub_lines got %r expected %r"
+                                % (v["name"], got_lines[:80], v["expected"][:80]))
+    line_vectors = doc["lineVectors"]
+    for v in line_vectors:
+        got = scrub_lines(v["input"])
+        if got != v["expected"]:
+            failures.append("line vector '%s': got %r expected %r" % (v["name"], got[:120], v["expected"][:120]))
+        if scrub_lines(v["expected"]) != v["expected"]:
+            failures.append("line vector '%s': expected text is not a fixed point" % v["name"])
+    print("  vectors: %d checked (scrub), %d line vectors (scrub_lines)" % (len(vectors), len(line_vectors)))
 
 
 def check_split_lines(failures):
@@ -395,6 +452,55 @@ def check_split_lines(failures):
     print("  split lines: %d shapes cut at every offset" % len(shapes))
 
 
+def per_line_reference(text):
+    """Independent formulation of scrub_lines: cut at every line feed, scrub each piece with scrub,
+    join with a line feed. (In Swift the test builds the same reference from the UTF-8 bytes.)"""
+    return "\n".join(scrub(piece) for piece in text.split("\n"))
+
+
+def check_lines(failures):
+    """scrub_lines on composed texts: the lines around a key line survive, a blob of already
+    scrubbed lines is a fixed point (the bug that made ReportCrypto.buildDiagSummary keep an old
+    slice of the log), and the result is the per-line reference."""
+    key = lst(1, 32)
+    prefix = "2026-09-21T10:00:00.000Z [INFO] [stdout] "
+    entries = [
+        "derived_key [" + key + "] len 32",
+        "rekey round 2 done",
+        "(x.cc:118): secret [" + key + "] len 32 slat << [] len 0",
+        "secret [",
+        "18,19,20,21] len 32",              # the tail of a key line the tee cut in two
+        "media resumed",
+    ]
+    # the ring holds every entry scrubbed at entry (the tail fragment is a whole entry there)
+    blob = "\n".join(prefix + scrub(e) for e in entries) + "\n"
+    if scrub_lines(blob) != blob:
+        failures.append("lines: a blob of scrubbed rows is not a fixed point of scrub_lines")
+    if not blob.endswith("media resumed\n") or "media resumed" not in scrub_lines(blob):
+        failures.append("lines: the newest row was lost")
+    if "1,2,3" in blob or "18,19" in blob:
+        failures.append("lines: the scrubbed blob still holds key digits")
+    raw_blob = "\n".join(prefix + e for e in entries) + "\n"
+    once = scrub_lines(raw_blob)
+    if "1,2,3" in once or "media resumed" not in once:
+        failures.append("lines: scrubbing a raw blob lost a row or left key digits")
+    if scrub_lines(once) != once:
+        failures.append("lines: scrub_lines is not idempotent on a blob")
+    # the documented contract of scrub(): one entry, derived_key takes the rest of the TEXT, so a
+    # blob is not a fixed point of it
+    two_rows = "ts derived_key " + M + "\nnewest row"
+    if scrub(two_rows) == two_rows:
+        failures.append("lines: scrub() no longer reads derived_key as the rest of the text")
+    for text in (raw_blob, blob, "a\nderived_key [1,2,3]\nb", "x [1,2,3,4,5,6,7,\n8] y", "\n\n", "",
+                 "salt (\nfoo\n", "secret [1,2\nnext\nlast", "a\r\nsecret [1,2,3] len 3\r\nb\r\n"):
+        if scrub_lines(text) != per_line_reference(text):
+            failures.append("lines: scrub_lines differs from the per-line reference for %r" % text[:50])
+    # the diag summary: the last 200 characters of the blob are the newest rows, not an old slice
+    if not scrub_lines(blob)[-200:].endswith("media resumed\n"):
+        failures.append("lines: the 200-character tail is not made of the newest rows")
+    print("  lines: composed-text checks")
+
+
 def check_cap(failures):
     cap = MAX_SCAN_BYTES
     long_clean = "abcdefghij klm " * 70000                       # about 1 MB, no match
@@ -412,7 +518,22 @@ def check_cap(failures):
     cut_in_char = "a" * (cap - 1) + "é" + "z" * 10           # the 2-byte char straddles the cap
     if scrub(cut_in_char) != "a" * (cap - 1) + M:
         failures.append("cap: cutting inside a multi-byte character")
-    print("  cap: 4 checks")
+    # scrub_lines: the cap is per LINE. A blob of many short rows longer than the cap is not cut ...
+    row = "2026-09-21T10:00:00.000Z [INFO] [call] media heartbeat rx_frames_d=250 tx_frames_d=250"
+    rows = [row] * (cap // (len(row) + 1) + 50)
+    blob = "\n".join(rows + ["derived_key [" + lst(1, 32) + "] len 32", "last row"])
+    expected = "\n".join(rows + ["derived_key " + M, "last row"])
+    if len(blob.encode("utf-8")) <= cap:
+        failures.append("cap: the test blob is not longer than the cap")
+    if scrub_lines(blob) != expected:
+        failures.append("cap: a blob of short rows longer than the cap was cut or changed by scrub_lines")
+    # ... and one overlong row inside a blob loses only its own tail
+    overlong = "abcdefghij klm " * 20000                          # 300000 bytes
+    blob2 = "before\n" + overlong + "\nafter [" + lst(1, 8) + "]\nlast"
+    expected2 = "before\n" + overlong[:cap] + M + "\nafter " + M + "\nlast"
+    if scrub_lines(blob2) != expected2:
+        failures.append("cap: an overlong row inside a blob is not cut on its own")
+    print("  cap: 6 checks")
 
 
 def check_linear_time(failures):
@@ -432,7 +553,21 @@ def check_linear_time(failures):
         took = time.time() - t0
         if took > 30.0:
             failures.append("linear time: '%s' took %.1f s for %d bytes" % (name, took, len(text)))
-    print("  linear time: %d pathological 250 KB texts" % len(cases))
+    line_cases = {
+        "secret [ on every line": "secret [\n" * (n // 9),
+        "derived_key on every line": "derived_key [1,2,3]\n" * (n // 20),
+        "open brackets, one per line": "[1,2,3,4,5,6,7,\n" * (n // 16),
+        "tail fragments, one per line": "1]\n" * (n // 3),
+        "line feeds only": "\n" * n,
+        "clean rows": "call media heartbeat rx_frames_d=250 tx_frames_d=250\n" * (n // 52),
+    }
+    for name, text in line_cases.items():
+        t0 = time.time()
+        scrub_lines(text)
+        took = time.time() - t0
+        if took > 30.0:
+            failures.append("linear time: scrub_lines '%s' took %.1f s for %d bytes" % (name, took, len(text)))
+    print("  linear time: %d pathological 250 KB texts, %d multi-line texts" % (len(cases), len(line_cases)))
 
 
 def check_fuzz(failures):
@@ -446,13 +581,35 @@ def check_fuzz(failures):
         if scrub(out) != out:
             failures.append("fuzz: not idempotent for %r" % line[:60])
             return
-    print("  fuzz: 20000 random lines, no exception, idempotent")
+    # scrub_lines: idempotent on any text with line feeds, equal to scrub without one, equal to the
+    # per-line reference, and a blob of rows that were each scrubbed is a fixed point
+    for _ in range(20000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(0, 80)))
+        out = scrub_lines(text)
+        if scrub_lines(out) != out:
+            failures.append("fuzz: scrub_lines not idempotent for %r" % text[:60])
+            return
+        if out != per_line_reference(text):
+            failures.append("fuzz: scrub_lines differs from the per-line reference for %r" % text[:60])
+            return
+        if "\n" not in text and out != scrub(text):
+            failures.append("fuzz: scrub_lines differs from scrub on a single line %r" % text[:60])
+            return
+        rows = [rng.choice(pieces) + "".join(rng.choice(pieces) for _ in range(rng.randint(0, 12)))
+                for _ in range(rng.randint(1, 8))]
+        rows = [r.replace("\n", " ") for r in rows]
+        blob = "\n".join(scrub(r) for r in rows)
+        if scrub_lines(blob) != blob:
+            failures.append("fuzz: a blob of scrubbed rows is not a fixed point: %r" % blob[:80])
+            return
+    print("  fuzz: 20000 random lines and 20000 random multi-line texts, idempotent")
 
 
 def main():
     failures = []
     print("=== KeyMaterialScrubber parity (Python port) ===")
     check_vectors(failures)
+    check_lines(failures)
     check_split_lines(failures)
     check_cap(failures)
     check_linear_time(failures)

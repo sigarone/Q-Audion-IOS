@@ -8,6 +8,11 @@ import XCTest
 /// The golden vectors in `key-material-scrub-vectors.json` are shared with the Python port
 /// (`scripts/test_keymaterial_scrub_parity.py`): their expected texts were composed by hand from the
 /// spec, so the Swift scanner, the Python port and the spec all have to agree on every one.
+/// `vectors` are checked with `scrub` (one log entry), `lineVectors` with `scrubLines` (a text of
+/// several lines, what the app calls).
+///
+/// String expectations are built with interpolation and typed `let`s, never with a chain of three
+/// or more `+` inside an `XCTAssertEqual` (CLAUDE.md section 13: type-checker timeouts).
 final class KeyMaterialScrubberTests: XCTestCase {
 
     private let marker: String = KeyMaterialScrubber.marker
@@ -29,6 +34,27 @@ final class KeyMaterialScrubberTests: XCTestCase {
         return KeyMaterialScrubber.scrub(text)
     }
 
+    private func scrubLines(_ text: String) -> String {
+        return KeyMaterialScrubber.scrubLines(text)
+    }
+
+    /// Independent reference for `scrubLines`: cut the text at every line feed BYTE, scrub each
+    /// piece with `scrub`, join the pieces with a line feed.
+    private func scrubEachLine(_ text: String) -> String {
+        var pieces: [String] = []
+        var current: [UInt8] = []
+        for byte in text.utf8 {
+            if byte == 0x0A {
+                pieces.append(scrub(String(decoding: current, as: UTF8.self)))
+                current = []
+            } else {
+                current.append(byte)
+            }
+        }
+        pieces.append(scrub(String(decoding: current, as: UTF8.self)))
+        return pieces.joined(separator: "\n")
+    }
+
     private func kinds(_ text: String) -> [KeyMaterialScrubber.Kind] {
         return KeyMaterialScrubber.matches(in: text).map { $0.kind }
     }
@@ -42,20 +68,24 @@ final class KeyMaterialScrubberTests: XCTestCase {
     // MARK: - (a) derived_key
 
     func test_derivedKeyRealShapeIsScrubbedAndTheWordStays() {
-        let line = "derived_key [" + list(1, 32) + "] len 32"
-        XCTAssertEqual(scrub(line), "derived_key " + marker)
+        let line: String = "derived_key [\(list(1, 32))] len 32"
+        XCTAssertEqual(scrub(line), "derived_key \(marker)")
         XCTAssertEqual(kinds(line), [.derivedKey])
     }
 
     func test_derivedKeyWithATrailingCommaAndWithSpacesAfterCommas() {
-        XCTAssertEqual(scrub("derived_key [" + list(1, 32) + ",] len 32"), "derived_key " + marker)
-        XCTAssertEqual(scrub("derived_key [" + list(1, 32, separator: ", ") + "] len 32"), "derived_key " + marker)
+        let spacedList: String = list(1, 32, separator: ", ")
+        let trailing: String = "derived_key [\(list(1, 32)),] len 32"
+        let spaced: String = "derived_key [\(spacedList)] len 32"
+        XCTAssertEqual(scrub(trailing), "derived_key \(marker)")
+        XCTAssertEqual(scrub(spaced), "derived_key \(marker)")
     }
 
     func test_derivedKeyIsCaseInsensitiveAndKeepsItsSeparator() {
-        XCTAssertEqual(scrub("DERIVED_KEY: [" + list(1, 32) + "] len 32"), "DERIVED_KEY: " + marker)
-        XCTAssertEqual(scrub("DeRiVeD_kEy [1,2,3]"), "DeRiVeD_kEy " + marker)
-        XCTAssertEqual(scrub("call ok derived_key=abc123 rest"), "call ok derived_key=" + marker)
+        let upper: String = "DERIVED_KEY: [\(list(1, 32))] len 32"
+        XCTAssertEqual(scrub(upper), "DERIVED_KEY: \(marker)")
+        XCTAssertEqual(scrub("DeRiVeD_kEy [1,2,3]"), "DeRiVeD_kEy \(marker)")
+        XCTAssertEqual(scrub("call ok derived_key=abc123 rest"), "call ok derived_key=\(marker)")
     }
 
     func test_derivedKeyWithNothingAfterItIsLeftAlone() {
@@ -64,7 +94,8 @@ final class KeyMaterialScrubberTests: XCTestCase {
     }
 
     func test_derivedKeyTakesTheRestOfTheTextEvenOverSeveralLines() {
-        XCTAssertEqual(scrub("first\nderived_key [1,2,3]\nlast"), "first\nderived_key " + marker)
+        // `scrub` is for ONE log entry: the rest of the TEXT goes. (The app uses `scrubLines`.)
+        XCTAssertEqual(scrub("first\nderived_key [1,2,3]\nlast"), "first\nderived_key \(marker)")
     }
 
     // MARK: - (b) secret / slat / salt
@@ -77,17 +108,20 @@ final class KeyMaterialScrubberTests: XCTestCase {
     }
 
     func test_anEmptySlatGroupIsNotKeyMaterialAndStaysReadable() {
-        let line = "(x.cc:118): secret [" + list(1, 32) + "] len 32 slat << [] len 0"
-        XCTAssertEqual(scrub(line), "(x.cc:118): secret " + marker + " len 32 slat << [] len 0")
+        let line: String = "(x.cc:118): secret [\(list(1, 32))] len 32 slat << [] len 0"
+        let expected: String = "(x.cc:118): secret \(marker) len 32 slat << [] len 0"
+        XCTAssertEqual(scrub(line), expected)
         XCTAssertEqual(scrub("salt [] len 0"), "salt [] len 0")
         XCTAssertEqual(scrub("salt [  ] len 0"), "salt [  ] len 0")
     }
 
     func test_keywordGroupsMayBeParenthesisedNestedOrUnclosed() {
-        XCTAssertEqual(scrub("SECRET=(" + list(1, 10) + ") ok"), "SECRET=" + marker + " ok")
-        XCTAssertEqual(scrub("secret [[1,2],[3,4]] len 4"), "secret " + marker + " len 4")
-        XCTAssertEqual(scrub("(x.cc:118): secret [" + list(1, 17)), "(x.cc:118): secret " + marker)
-        XCTAssertEqual(scrub("secret [abc def"), "secret " + marker)
+        let parenthesised: String = "SECRET=(\(list(1, 10))) ok"
+        XCTAssertEqual(scrub(parenthesised), "SECRET=\(marker) ok")
+        XCTAssertEqual(scrub("secret [[1,2],[3,4]] len 4"), "secret \(marker) len 4")
+        let unclosed: String = "(x.cc:118): secret [\(list(1, 17))"
+        XCTAssertEqual(scrub(unclosed), "(x.cc:118): secret \(marker)")
+        XCTAssertEqual(scrub("secret [abc def"), "secret \(marker)")
     }
 
     func test_aKeywordWithoutAdjacentGroupIsLeftAlone() {
@@ -99,26 +133,29 @@ final class KeyMaterialScrubberTests: XCTestCase {
     // MARK: - (c) lists of 8 or more integers
 
     func test_aListOfEightIsScrubbedAndAListOfSevenIsNot() {
-        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,8] y"), "x " + marker + " y")
+        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,8] y"), "x \(marker) y")
         XCTAssertEqual(scrub("x [1,2,3,4,5,6,7] y"), "x [1,2,3,4,5,6,7] y")
         XCTAssertEqual(kinds("x [1,2,3,4,5,6,7,8] y"), [.intList])
     }
 
     func test_parenthesisedAndSemicolonSeparatedLists() {
-        XCTAssertEqual(scrub("x (" + list(1, 32) + ") y"), "x " + marker + " y")
-        XCTAssertEqual(scrub("x [" + list(1, 32, separator: ";") + "] y"), "x " + marker + " y")
-        XCTAssertEqual(scrub("x [1,2;3, 4 ;5 , 6,7;8] y"), "x " + marker + " y")
+        let semicolons: String = list(1, 32, separator: ";")
+        let parenthesised: String = "x (\(list(1, 32))) y"
+        let separated: String = "x [\(semicolons)] y"
+        XCTAssertEqual(scrub(parenthesised), "x \(marker) y")
+        XCTAssertEqual(scrub(separated), "x \(marker) y")
+        XCTAssertEqual(scrub("x [1,2;3, 4 ;5 , 6,7;8] y"), "x \(marker) y")
     }
 
     func test_optionalSpacesAndATrailingSeparatorAreAccepted() {
-        XCTAssertEqual(scrub("x [ 1, 2, 3, 4, 5, 6, 7, 8 ] y"), "x " + marker + " y")
-        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,8,] y"), "x " + marker + " y")
-        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,8;] y"), "x " + marker + " y")
+        XCTAssertEqual(scrub("x [ 1, 2, 3, 4, 5, 6, 7, 8 ] y"), "x \(marker) y")
+        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,8,] y"), "x \(marker) y")
+        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,8;] y"), "x \(marker) y")
     }
 
     func test_onlyDecimalIntegersUpTo255CountAsBytes() {
-        XCTAssertEqual(scrub("x [0,255,0,255,0,255,0,255] y"), "x " + marker + " y")
-        XCTAssertEqual(scrub("x [001,002,003,004,005,006,007,008] y"), "x " + marker + " y")
+        XCTAssertEqual(scrub("x [0,255,0,255,0,255,0,255] y"), "x \(marker) y")
+        XCTAssertEqual(scrub("x [001,002,003,004,005,006,007,008] y"), "x \(marker) y")
         XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,256] y"), "x [1,2,3,4,5,6,7,256] y")
         XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,0008] y"), "x [1,2,3,4,5,6,7,0008] y")
         XCTAssertEqual(scrub("x [1,2,3,4,5,6,7,-8] y"), "x [1,2,3,4,5,6,7,-8] y")
@@ -128,7 +165,7 @@ final class KeyMaterialScrubberTests: XCTestCase {
 
     func test_policyAListOfEightSmallNumbersIsScrubbedInAnyContext() {
         // Over-scrubbing is deliberate: the scrub cannot know what the numbers mean.
-        XCTAssertEqual(scrub("histogram buckets [1,2,3,4,5,6,7,8] ok"), "histogram buckets " + marker + " ok")
+        XCTAssertEqual(scrub("histogram buckets [1,2,3,4,5,6,7,8] ok"), "histogram buckets \(marker) ok")
     }
 
     func test_severalAndTouchingListsGetOneMarkerEach() {
@@ -140,15 +177,16 @@ final class KeyMaterialScrubberTests: XCTestCase {
     // MARK: - (e) a key line split in two by the stdout tee
 
     func test_theTailOfASplitKeyLineIsScrubbed() {
-        XCTAssertEqual(scrub(list(18, 32) + "] len 32 slat << [] len 0"), marker + " len 32 slat << [] len 0")
-        XCTAssertEqual(scrub(",18,19,20] len 32"), marker + " len 32")
-        XCTAssertEqual(scrub("5,17,200,] len 32 slat << [] len 0"), marker + " len 32 slat << [] len 0")
-        XCTAssertEqual(kinds(list(18, 32) + "] len 32"), [.tailFragment])
+        let tailKey: String = list(18, 32)
+        XCTAssertEqual(scrub("\(tailKey)] len 32 slat << [] len 0"), "\(marker) len 32 slat << [] len 0")
+        XCTAssertEqual(scrub(",18,19,20] len 32"), "\(marker) len 32")
+        XCTAssertEqual(scrub("5,17,200,] len 32 slat << [] len 0"), "\(marker) len 32 slat << [] len 0")
+        XCTAssertEqual(kinds("\(tailKey)] len 32"), [.tailFragment])
     }
 
     func test_theHeadOfASplitKeyLineIsScrubbedEvenWithoutAKeyword() {
-        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7"), "x " + marker)
-        XCTAssertEqual(scrub("index [1"), "index " + marker)
+        XCTAssertEqual(scrub("x [1,2,3,4,5,6,7"), "x \(marker)")
+        XCTAssertEqual(scrub("index [1"), "index \(marker)")
         XCTAssertEqual(scrub("x ["), "x [")
         XCTAssertEqual(scrub("x [ab"), "x [ab")
     }
@@ -178,7 +216,7 @@ final class KeyMaterialScrubberTests: XCTestCase {
             while offset <= bytes.count {
                 let head: String = String(decoding: bytes[0..<offset], as: UTF8.self)
                 let tail: String = String(decoding: bytes[offset..<bytes.count], as: UTF8.self)
-                let joined: String = scrub(head) + "\n" + scrub(tail)
+                let joined: String = "\(scrub(head))\n\(scrub(tail))"
                 var number: Int = 200
                 while number <= 231 {
                     let digits: String = String(describing: number)
@@ -196,7 +234,7 @@ final class KeyMaterialScrubberTests: XCTestCase {
     func test_eightHexBytesWithSpacesOrColonsAreScrubbed() {
         XCTAssertEqual(scrub("aa bb cc dd ee ff 00 11"), marker)
         XCTAssertEqual(scrub("aa:bb:cc:dd:ee:ff:00:11"), marker)
-        XCTAssertEqual(scrub("key: AA BB CC DD EE FF 00 11 end"), "key: " + marker + " end")
+        XCTAssertEqual(scrub("key: AA BB CC DD EE FF 00 11 end"), "key: \(marker) end")
         XCTAssertEqual(scrub("aa:bb cc:dd ee:ff 00:11"), marker)
         XCTAssertEqual(kinds("aa bb cc dd ee ff 00 11"), [.hexRun])
     }
@@ -232,23 +270,25 @@ final class KeyMaterialScrubberTests: XCTestCase {
         ]
         for line in clean {
             XCTAssertEqual(scrub(line), line)
+            XCTAssertEqual(scrubLines(line), line)
             XCTAssertTrue(KeyMaterialScrubber.matches(in: line).isEmpty)
         }
     }
 
     func test_unicodeAroundAMatchSurvivesIntact() {
-        XCTAssertEqual(scrub("h\u{E9}llo [1,2,3,4,5,6,7,8] w\u{F6}rld \u{1F680}"),
-                       "h\u{E9}llo " + marker + " w\u{F6}rld \u{1F680}")
-        XCTAssertEqual(scrub("\u{65E5}\u{672C} derived_key [1,2,3]"), "\u{65E5}\u{672C} derived_key " + marker)
+        let input: String = "h\u{E9}llo [1,2,3,4,5,6,7,8] w\u{F6}rld \u{1F680}"
+        let expected: String = "h\u{E9}llo \(marker) w\u{F6}rld \u{1F680}"
+        XCTAssertEqual(scrub(input), expected)
+        XCTAssertEqual(scrub("\u{65E5}\u{672C} derived_key [1,2,3]"), "\u{65E5}\u{672C} derived_key \(marker)")
     }
 
     // MARK: - Marker, idempotence
 
     func test_theMarkerIsNeverMatchedAgain() {
         XCTAssertEqual(scrub(marker), marker)
-        XCTAssertEqual(scrub("x " + marker + " y"), "x " + marker + " y")
-        XCTAssertEqual(scrub("derived_key " + marker), "derived_key " + marker)
-        XCTAssertEqual(scrub("secret " + marker + " len 32"), "secret " + marker + " len 32")
+        XCTAssertEqual(scrub("x \(marker) y"), "x \(marker) y")
+        XCTAssertEqual(scrub("derived_key \(marker)"), "derived_key \(marker)")
+        XCTAssertEqual(scrub("secret \(marker) len 32"), "secret \(marker) len 32")
     }
 
     func test_scrubbingTwiceEqualsScrubbingOnce() throws {
@@ -257,6 +297,126 @@ final class KeyMaterialScrubberTests: XCTestCase {
             let once = scrub(vector.input)
             XCTAssertEqual(scrub(once), once, vector.name)
         }
+        let everyVector: [Vector] = file.vectors + file.lineVectors
+        for vector in everyVector {
+            let once: String = scrubLines(vector.input)
+            XCTAssertEqual(scrubLines(once), once, vector.name)
+        }
+    }
+
+    // MARK: - scrubLines: a text of several lines (what the app calls)
+
+    func test_scrubLinesKeepsTheLinesAroundAKeyLine() {
+        XCTAssertEqual(scrubLines("first\nderived_key [1,2,3]\nlast"), "first\nderived_key \(marker)\nlast")
+        let realShape: String = "ts [INFO] [stdout] derived_key [\(list(1, 32))] len 32\nnext row"
+        XCTAssertEqual(scrubLines(realShape), "ts [INFO] [stdout] derived_key \(marker)\nnext row")
+        let twoKeyRows: String = "derived_key [1,2,3]\nsecret [4,5,6] len 3\n"
+        XCTAssertEqual(scrubLines(twoKeyRows), "derived_key \(marker)\nsecret \(marker) len 3\n")
+    }
+
+    /// The regression the reviewers found: `ReportCrypto.buildDiagSummary` runs the redactor on the
+    /// whole 2-minute `recentLogsAsString` blob, every row of which was already scrubbed at ring
+    /// entry. The blob must come back unchanged and its last rows must still be there.
+    func test_aBlobOfScrubbedRowsIsAFixedPointOfScrubLines() {
+        let key: String = list(1, 32)
+        let prefix: String = "2026-09-21T10:00:00.000Z [INFO] [stdout] "
+        let entries: [String] = [
+            "derived_key [\(key)] len 32",
+            "rekey round 2 done",
+            "(x.cc:118): secret [\(key)] len 32 slat << [] len 0",
+            "secret [",
+            "18,19,20,21] len 32",
+            "media resumed"
+        ]
+        var rows: [String] = []
+        var rawRows: [String] = []
+        for entry in entries {
+            rows.append(prefix + scrub(entry))
+            rawRows.append(prefix + entry)
+        }
+        let blob: String = rows.joined(separator: "\n") + "\n"
+        XCTAssertEqual(scrubLines(blob), blob)
+        XCTAssertTrue(blob.hasSuffix("media resumed\n"))
+        XCTAssertFalse(blob.contains("1,2,3"))
+        XCTAssertFalse(blob.contains("18,19"))
+        // what the 200-character diag summary keeps is the newest rows, not an old slice
+        XCTAssertTrue(String(scrubLines(blob).suffix(200)).hasSuffix("media resumed\n"))
+
+        // the same rows scrubbed for the first time, as one blob: key-free, nothing else lost
+        let rawBlob: String = rawRows.joined(separator: "\n") + "\n"
+        let once: String = scrubLines(rawBlob)
+        XCTAssertFalse(once.contains("1,2,3"))
+        XCTAssertTrue(once.contains("media resumed"))
+        XCTAssertEqual(scrubLines(once), once)
+    }
+
+    func test_scrubLinesAnUnclosedKeywordGroupStaysInsideItsLine() {
+        XCTAssertEqual(scrubLines("secret [\nnext line\nlast"), "secret [\nnext line\nlast")
+        XCTAssertEqual(scrubLines("salt (\nfoo (bar\nlast"), "salt (\nfoo (bar\nlast")
+        XCTAssertEqual(scrubLines("secret [1,2\nnext line"), "secret \(marker)\nnext line")
+    }
+
+    func test_scrubLinesCatchesAListCutByOneLineFeedAndKeepsTheLineFeeds() {
+        XCTAssertEqual(scrubLines("x [1,2,3,4,5,6,7,\n8] y"), "x \(marker)\n\(marker) y")
+        XCTAssertEqual(scrubLines("a\r\nsecret [1,2,3] len 3\r\nb\r\n"), "a\r\nsecret \(marker) len 3\r\nb\r\n")
+        XCTAssertEqual(scrubLines("\n\n[1,2,3,4,5,6,7,8]\n\n"), "\n\n\(marker)\n\n")
+        XCTAssertEqual(scrubLines("\n"), "\n")
+        XCTAssertEqual(scrubLines(""), "")
+    }
+
+    func test_scrubLinesEqualsScrubOnEachLine() {
+        let key: String = list(1, 32)
+        let texts: [String] = [
+            "a\nderived_key [1,2,3]\nb",
+            "x [1,2,3,4,5,6,7,\n8] y",
+            "\n\n",
+            "",
+            "salt (\nfoo\n",
+            "secret [1,2\nnext\nlast",
+            "a\r\nsecret [1,2,3] len 3\r\nb\r\n",
+            "no key here\nat all\n",
+            "h\u{E9}llo\nx [\(key)] w\u{F6}rld\n\u{1F680} ok",
+            "\(key)] tail on the first row\nsecond row",
+            "first row\n\(key)] tail on the second row\nthird row"
+        ]
+        for text in texts {
+            XCTAssertEqual(scrubLines(text), scrubEachLine(text), text)
+        }
+    }
+
+    func test_scrubLinesOfASingleLineIsScrub() throws {
+        let file = try loadVectors()
+        for vector in file.vectors where !vector.input.utf8.contains(0x0A) {
+            XCTAssertEqual(scrubLines(vector.input), vector.expected, vector.name)
+        }
+    }
+
+    func test_scrubLinesCapsEachLineNotTheWholeText() {
+        let cap: Int = KeyMaterialScrubber.maxScanBytes
+        let row: String = "2026-09-21T10:00:00.000Z [INFO] [call] media heartbeat rx_frames_d=250 tx_frames_d=250"
+        let rowCount: Int = cap / (row.utf8.count + 1) + 50
+        var rows: [String] = Array(repeating: row, count: rowCount)
+        // a blob of short rows that is longer than the cap is not cut ...
+        let plain: String = rows.joined(separator: "\n")
+        XCTAssertGreaterThan(plain.utf8.count, cap)
+        XCTAssertEqual(scrubLines(plain), plain)
+        // ... and a key row at its very end is scrubbed while no row is lost
+        rows.append("derived_key [\(list(1, 32))] len 32")
+        rows.append("last row")
+        var expectedRows: [String] = Array(repeating: row, count: rowCount)
+        expectedRows.append("derived_key \(marker)")
+        expectedRows.append("last row")
+        XCTAssertEqual(scrubLines(rows.joined(separator: "\n")), expectedRows.joined(separator: "\n"))
+    }
+
+    func test_scrubLinesCutsAnOverlongRowOnItsOwn() {
+        let cap: Int = KeyMaterialScrubber.maxScanBytes
+        let overlong: String = String(repeating: "abcdefghij klm ", count: 20_000)   // 300000 bytes
+        XCTAssertGreaterThan(overlong.utf8.count, cap)
+        let blob: String = "before\n\(overlong)\nafter [\(list(1, 8))]\nlast"
+        let head: String = String(overlong.prefix(cap))
+        let expected: String = "before\n\(head)\(marker)\nafter \(marker)\nlast"
+        XCTAssertEqual(scrubLines(blob), expected)
     }
 
     // MARK: - Bounded work
@@ -265,28 +425,33 @@ final class KeyMaterialScrubberTests: XCTestCase {
         let cap: Int = KeyMaterialScrubber.maxScanBytes
         let clean: String = String(repeating: "abcdefghij klm ", count: 70_000)   // about 1 MB
         XCTAssertGreaterThan(clean.utf8.count, cap)
-        XCTAssertEqual(scrub(clean), String(clean.prefix(cap)) + marker)
+        let cleanExpected: String = "\(String(clean.prefix(cap)))\(marker)"
+        XCTAssertEqual(scrub(clean), cleanExpected)
 
         // a key that starts after the cap is never looked at, and never survives
         let padding: String = String(repeating: "x", count: cap + 10)
-        let keyAfterCap: String = padding + " derived_key [\(list(1, 32))] len 32"
+        let keyAfterCap: String = "\(padding) derived_key [\(list(1, 32))] len 32"
         let scrubbedAfter: String = scrub(keyAfterCap)
         XCTAssertFalse(scrubbedAfter.contains("derived_key"))
         XCTAssertFalse(scrubbedAfter.contains("1,2,3"))
         XCTAssertTrue(scrubbedAfter.hasSuffix(marker))
 
         // a key inside the scanned part is still scrubbed
-        let keyBeforeCap: String = "y [\(list(1, 32))] " + padding
+        let keyBeforeCap: String = "y [\(list(1, 32))] \(padding)"
         let scrubbedBefore: String = scrub(keyBeforeCap)
-        XCTAssertTrue(scrubbedBefore.hasPrefix("y " + marker + " "))
+        let expectedPrefix: String = "y \(marker) "
+        XCTAssertTrue(scrubbedBefore.hasPrefix(expectedPrefix))
         XCTAssertFalse(scrubbedBefore.contains("1,2,3"))
     }
 
     func test_theCapNeverCutsInsideAMultiByteCharacter() {
         let cap: Int = KeyMaterialScrubber.maxScanBytes
         // the 2-byte character straddles the cap: it goes, whole, with the tail
-        let text: String = String(repeating: "a", count: cap - 1) + "\u{E9}" + String(repeating: "z", count: 10)
-        XCTAssertEqual(scrub(text), String(repeating: "a", count: cap - 1) + marker)
+        let head: String = String(repeating: "a", count: cap - 1)
+        let tail: String = String(repeating: "z", count: 10)
+        let text: String = "\(head)\u{E9}\(tail)"
+        let expected: String = "\(head)\(marker)"
+        XCTAssertEqual(scrub(text), expected)
     }
 
     func test_aOneMegabyteLineIsScannedInBoundedTime() {
@@ -309,6 +474,22 @@ final class KeyMaterialScrubberTests: XCTestCase {
         }
     }
 
+    func test_scrubLinesIsLinearOnManyShortLines() {
+        let n: Int = 250_000
+        var cases: [(String, String)] = []
+        cases.append(("secret [ on every line", String(repeating: "secret [\n", count: n / 9)))
+        cases.append(("derived_key on every line", String(repeating: "derived_key [1,2,3]\n", count: n / 20)))
+        cases.append(("open brackets, one per line", String(repeating: "[1,2,3,4,5,6,7,\n", count: n / 16)))
+        cases.append(("tail fragments, one per line", String(repeating: "1]\n", count: n / 3)))
+        cases.append(("line feeds only", String(repeating: "\n", count: n)))
+        for (name, text) in cases {
+            var result: String = ""
+            let took: TimeInterval = seconds { result = scrubLines(text) }
+            XCTAssertLessThan(took, 10.0, name)
+            XCTAssertFalse(result.isEmpty, name)
+        }
+    }
+
     // MARK: - Shared golden vectors
 
     private struct Vector: Decodable {
@@ -321,6 +502,7 @@ final class KeyMaterialScrubberTests: XCTestCase {
         let schema: String
         let marker: String
         let vectors: [Vector]
+        let lineVectors: [Vector]
     }
 
     private func loadVectors() throws -> VectorFile {
@@ -340,6 +522,15 @@ final class KeyMaterialScrubberTests: XCTestCase {
         XCTAssertGreaterThan(file.vectors.count, 100)
         for vector in file.vectors {
             XCTAssertEqual(scrub(vector.input), vector.expected, vector.name)
+        }
+    }
+
+    func test_everySharedLineVectorMatches() throws {
+        let file = try loadVectors()
+        XCTAssertGreaterThan(file.lineVectors.count, 10)
+        for vector in file.lineVectors {
+            XCTAssertEqual(scrubLines(vector.input), vector.expected, vector.name)
+            XCTAssertEqual(scrubLines(vector.expected), vector.expected, vector.name)
         }
     }
 }
