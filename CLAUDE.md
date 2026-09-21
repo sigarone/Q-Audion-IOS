@@ -91,6 +91,33 @@ The maintainer always has a trail server-side.
 `GET /api/v1/files/recent` server-side and use HTTP fetch instead of
 SSH. Until that's done, SSH+SFTP is the working path.
 
+**Since v1.0.1180 (W-LIVELOGOFFMAIN) — where the pump lives now.** Redaction, JSON
+serialisation, the bounded backlog and the upload run OFF the main thread on the
+`LiveLogWorker` actor (`QAudionApp/Services/LiveLogWorker.swift`); `LiveLogStreamer` is only
+the consent / start / stop facade, and `LogRedactor` is the (unchanged) redactor split out of
+the main-actor `RuntimeLogSink`. Only a short per-tick copy of the NEW ring entries and the
+token / kill-switch read (every 30 s) still touch the main thread. On HTTP 429 / 503 the pump
+honours `Retry-After`, else backs off 5 s doubling to 120 s (+ up to 20% jitter), and keeps
+collecting into a bounded backlog (2000 lines / 512 KiB, oldest dropped and counted) instead
+of retrying. Lines to look for in the shipped log (tag `net`): `livelog upload error seq=..
+reason=..` (unchanged), `livelog backoff n=<streak> s=<seconds> ra=<0|1>` (one per throttled
+failure) and `livelog backlog drop=<n>` (reported after the next confirmed chunk). The chunk
+format is unchanged and pinned by `LiveLogBlobTests`; the pure decisions are `LiveLogBackoff`,
+`LiveLogBacklog`, `LiveLogBlob` in `QAudionEngine/.../Diagnostics/`.
+
+**Since v1.0.1180 (W-HBTELEM) — call-quality telemetry.** The 5 s `call.media.heartbeat` now
+also carries, when the counter exists: `rx_frames_d`, `tx_frames_d`, `rx_gap_d`,
+`jb_underrun_d`, `jb_overrun_d`, `jb_hard_drop_d`, `jb_silence_drop_d`, `jb_concealed_d`,
+`jb_stretch_d`, `jb_depth_now`, `jb_target_now`, `iat_max_ms`, `fec_rec_d`, `transport`
+(`dc` / `ws` / `dc+ws` / `srtp`) and `main_stall_ms_max` (how much later than 5 s the heartbeat
+timer fired = how long the main thread was blocked at that instant). `_d` = count since the
+previous heartbeat of the same call (`HeartbeatDeltaTracker`, never negative, survives counter
+resets). `nack_req_d` / `nack_srv_d` are NOT sent: iOS has no NACK counters. The new 1:1
+in-call "Disturbo" pill emits `call.disturbance.marker` (`since_start_ms`, `source=button`, a
+copy of the last completed window's attributes and the live `jb_depth_now`), at most one per
+second; same consent gate, batching and transport as the heartbeat. Query them in the server's
+`telemetry/*.jsonl` by `kind`.
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`
