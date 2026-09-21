@@ -426,7 +426,7 @@ public final class TelemetryService {
 
     /// P2 -- recursively scrub every STRING value in a sanitized attrs
     /// dict through `RuntimeLogSink.redactStructured`, the SAME fail-closed
-    /// egress redactor the text path (`entriesSince`) uses. Keys are
+    /// egress redactor the text path (`LiveLogWorker`, via `LogRedactor`) uses. Keys are
     /// app-controlled identifiers and are NOT redacted; only values.
     /// Non-string scalars (Int/Int64/Double/Bool) pass through untouched.
     /// MainActor-isolated because `redactStructured` is. Preserves

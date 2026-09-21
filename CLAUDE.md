@@ -118,6 +118,24 @@ copy of the last completed window's attributes and the live `jb_depth_now`), at 
 second; same consent gate, batching and transport as the heartbeat. Query them in the server's
 `telemetry/*.jsonl` by `kind`.
 
+**Reading those numbers (known limits, W-HBTELEM / W-LIVELOGOFFMAIN).**
+`main_stall_ms_max` is ONE sample per window (how late the 5 s heartbeat timer fired), not a
+maximum: it only sees a stall that overlaps the timer's due instant, and timer coalescing gives
+it a floor of a few tens of ms, so read anything under ~100-150 ms as zero.
+`iat_max_ms` is the largest arrival gap over the last `5000 / frameMs` arrivals of the jitter
+buffer (about the last 5 s, not aligned to the heartbeat): it never reads below one frame; a
+stall late in a window shows up again in the next one; a burst right after a stall can push the
+stall out of the window before the heartbeat looks; and an arrival is the push after
+decrypt/decode on the main thread, so a main-thread stall also appears here (compare it with
+`main_stall_ms_max`). On the native SRTP path (`transport=srtp`) the sealed-frame counters do not
+exist, so `rx_frames_d` / `tx_frames_d` are LEFT OUT there, never sent as 0; and a window in which
+no sealed frame moved has no `transport` at all (on the server that window forms its own cluster,
+because `transport` is part of the cluster signature). The "Disturbo" pill is shown only while the
+operational-diagnostics consent is on (without it the emitter discards every event). In the log
+shipper, `livelog backlog drop=N` undercounts: it counts lines the worker left out of a
+collection (the first collection after a (re)start or a long period without a token keeps only
+the newest 2000 ring lines), not lines the 5000-entry ring had already evicted before it looked.
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`

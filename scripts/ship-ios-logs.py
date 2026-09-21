@@ -24,7 +24,9 @@ NO app build. NO prod write. NO external LLM. Pure ASCII output.
 === HARD PRIVACY INVARIANT (read before editing the redaction) ==============
 This ships logs from a post-quantum ENCRYPTED VOICE app into a QUERYABLE Loki
 backend. After shipping, anyone with Grafana/query access can full-text search
-every body. The on-device redaction is INCOMPLETE: RuntimeLogSink.redact()
+every body. [Note, v1.0.1180: the redactors moved to LogRedactor.swift and the shipper is now
+LiveLogWorker.swift; the RuntimeLogSink line numbers below are those of the older layout.]
+The on-device redaction is INCOMPLETE: RuntimeLogSink.redact()
 (RuntimeLogSink.swift line 257) runs ONLY on the stdout-tee path (line 311);
 the PRIMARY structured path RTLog.info/warn/error -> record() (line 68) is
 NEVER redacted, and entriesSince() (line 159) JSON-escapes but does NOT redact.
