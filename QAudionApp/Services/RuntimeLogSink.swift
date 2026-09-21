@@ -108,7 +108,7 @@ public final class RuntimeLogSink: ObservableObject {
     /// One line per entry, ISO8601-ish timestamp, level, tag, body.
     /// Every message goes through `redactStructured` (FIX-11, 2026-09-12):
     /// the export is shared by the user with support and the bug-report
-    /// tail is uploaded; the incremental shipper (`entriesSince`) already
+    /// tail is uploaded; the incremental shipper (`LiveLogWorker`) already
     /// scrubbed, and the three egress paths must not differ in what they
     /// strip.
     public func snapshot() -> String {
@@ -154,44 +154,39 @@ public final class RuntimeLogSink: ObservableObject {
         return out
     }
 
-    /// W417 — incremental reader for LiveLogStreamer. Returns all
-    /// entries with seq > since, plus the highest seq seen, so the
-    /// caller can pass that back next time and skip what was already
-    /// uploaded. Filters out lines tagged "livelog" to avoid feedback.
-    public struct IncrementalSnapshot {
-        public let lines: [String]
-        public let highestSeq: Int64
-    }
-
-    public func entriesSince(seq since: Int64) -> IncrementalSnapshot {
+    /// W-LIVELOGOFFMAIN (2026-09-21) -- raw, UNREDACTED read for `LiveLogStreamer`'s off-main
+    /// worker (replaces `entriesSince`). This is the ONLY part of the shipper that has to touch
+    /// the main actor, because the ring is main-actor state; it does the least possible there:
+    /// under the lock it walks back from the newest entry to the first one the caller has not
+    /// seen, so the cost is proportional to the NEW entries (typically a few dozen every 3 s),
+    /// and copies at most `maxCount` of them. Redaction and JSON building, which used to run
+    /// here for the WHOLE unshipped ring on every attempt, now happen on the worker.
+    ///
+    /// `skippedOlder` counts entries newer than `since` that were left out because more than
+    /// `maxCount` were pending (the newest `maxCount` are returned, oldest-first): the worker
+    /// records them as dropped instead of preparing lines it has no room for.
+    func rawEntriesSince(seq since: Int64, maxCount: Int) -> LiveLogRawBatch {
         lock.lock()
-        let copy = entries
-        lock.unlock()
-        var lines: [String] = []
-        lines.reserveCapacity(min(copy.count, 256))
-        var highest: Int64 = since
-        for e in copy where e.seq > since {
-            if e.tag == "livelog" { continue }
-            
-            let ts = Self.isoFormatter.string(from: e.timestamp)
-            let lvl = e.level.rawValue.uppercased().prefix(1)
-            let tag = escapeJson(e.tag)
-            let msg = escapeJson(RuntimeLogSink.redactStructured(e.message))
-            
-            let json = "{\"ts\":\"\(ts)\",\"lvl\":\"\(lvl)\",\"tag\":\"\(tag)\",\"msg\":\"\(msg)\"}"
-            lines.append(json)
-            
-            if e.seq > highest { highest = e.seq }
+        defer { lock.unlock() }
+        var firstNew = entries.count
+        while firstNew > 0 && entries[firstNew - 1].seq > since {
+            firstNew -= 1
         }
-        return IncrementalSnapshot(lines: lines, highestSeq: highest)
-    }
-
-    private func escapeJson(_ s: String) -> String {
-        return s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\t", with: "\\t")
+        let available = entries.count - firstNew
+        let take = min(available, max(maxCount, 0))
+        var out: [LiveLogRawEntry] = []
+        out.reserveCapacity(take)
+        var index = entries.count - take
+        while index < entries.count {
+            let e = entries[index]
+            out.append(LiveLogRawEntry(seq: e.seq,
+                                       timestamp: e.timestamp,
+                                       level: e.level.rawValue,
+                                       tag: e.tag,
+                                       message: e.message))
+            index += 1
+        }
+        return LiveLogRawBatch(entries: out, skippedOlder: available - take)
     }
 
     /// Drop everything. Used by Settings → "Pulisci log".
@@ -218,6 +213,23 @@ public final class RuntimeLogSink: ObservableObject {
     private var stdoutPipeSource: DispatchSourceRead?
     private var teeAttached: Bool = false
 
+    // W-LIVELOGOFFMAIN (2026-09-21) -- the redactors (SECURITY H-2 stdout-tee scrub and the
+    // P2 fail-closed EGRESS scrub) now live, unchanged, in `LogRedactor`, which is not
+    // main-actor isolated: the log shipper's worker runs them off the main thread. These
+    // forwards keep every existing call site exactly as it was, on the one implementation.
+    private static func redact(_ line: String) -> String {
+        return LogRedactor.redact(line)
+    }
+
+    /// P2 EGRESS redactor, also reused by `TelemetryService.emit()` so the
+    /// structured-event path gets the SAME fail-closed scrub as the text
+    /// path before `sealBatch`. Exposed (public) for that second egress;
+    /// the implementation and its UNCONDITIONAL nature are unchanged (see
+    /// `LogRedactor.redactStructured`).
+    public static func redactStructured(_ line: String) -> String {
+        return LogRedactor.redactStructured(line)
+    }
+
     /// W416 — capture every `print(...)` (stdlib, third-party, OS-level
     /// stderr noise) into the ring buffer too, so the user doesn't have
     /// to hand-convert ~100 existing print sites to RTLog. Idempotent.
@@ -239,182 +251,6 @@ public final class RuntimeLogSink: ObservableObject {
     /// Combined with the FIFO ring buffer eviction (oldest 10% dropped
     /// when capacity exceeded), the system stays bounded — after 50
     /// telephone calls the buffer simply wraps over, never grows.
-    /// SECURITY H-2 — best-effort secret scrubber for the
-    /// stdout/stderr tee. Masks bearer tokens, `token=`/`token:`
-    /// values, Authorization headers, and any long hex/base64 run
-    /// (>= 24 chars, which catches raw keys / JWTs / hashes). Not a
-    /// substitute for not logging secrets, but stops the common
-    /// leak paths from reaching the uploadable ring buffer.
-    ///
-    /// Compiled once; the regexes are static-let so the per-line
-    /// hot path only does `stringByReplacingMatches`.
-    private static let redactPlaceholder: String = "***REDACTED***"
-
-    // Single source of truth for the keyword alternation, shared by the
-    // stdout-tee redact() and the egress redactStructured(). P2 extends
-    // the set with crypto-secret keywords (psk|seed|mnemonic|privkey|
-    // private-key|mlkem|sframe|kyber). `keyfp` is deliberately NOT in
-    // the alternation, so keyfp=<8-16hex> short fingerprints survive.
-    //
-    // Value-introducer is ['":=] (quote/colon/equals) optionally followed
-    // by whitespace -- a BARE SPACE after the keyword does NOT arm the
-    // rule, so prose like "PSK selected keyfp=..." keeps the keyfp the
-    // unseal-debug diagnostics need (the old [\"'\s:=]+ armed on a space
-    // and ate the following token). The value run is [^\s\x{0001}]+ which
-    // EXCLUDES the U+0001 sentinel byte used by redactStructured() to
-    // stash call_id UUIDs / fingerprints, so a keyworded value can never
-    // swallow a stashed-and-restored diagnostic. (Harmless to the
-    // stdout-tee redact() path, which never produces sentinels.)
-    private static let secretPrefixedEgress: NSRegularExpression = try! NSRegularExpression(
-        pattern: #"(?i)(bearer|authorization|token|secret|api[-_]?key|password|psk|seed|mnemonic|privkey|private[-_]?key|mlkem|sframe|kyber)([\"':=]\s*)[^\s\x{0001}]+"#)
-
-    private static let redactRegexes: [NSRegularExpression] = {
-        // Patterns are compile-time constants; force-try is safe.
-        let secretPrefixed = secretPrefixedEgress
-        let longBlob = try! NSRegularExpression(
-            pattern: #"[A-Za-z0-9+/=_-]{24,}"#)
-        return [secretPrefixed, longBlob]
-    }()
-
-    private static func redact(_ line: String) -> String {
-        var working: String = line
-        for rx in redactRegexes {
-            let full = NSRange(working.startIndex..<working.endIndex, in: working)
-            let template: String = redactPlaceholder
-            working = rx.stringByReplacingMatches(in: working,
-                                                  options: [],
-                                                  range: full,
-                                                  withTemplate: template)
-        }
-        return working
-    }
-
-    // P2 - EGRESS redactor for the upload boundary (entriesSince()).
-    // Distinct from redact(_:) (stdout-tee): this MUST preserve
-    // diagnostics that fetch-ios-live.py / correlate-call.py /
-    // symbolicate.py / ship-ios-logs.py parse, while still removing
-    // secrets at rest. Unconditional security control - never flag-gated.
-    //
-    // Strategy (ASCII-only U+0001 sentinels):
-    //   1a. STASH call_id UUIDs (8-4-4-4-12) so neither the blob rule nor
-    //       the residual sweep can eat them (correlate-call / shipper
-    //       derive short8/h8 from full UUIDs).
-    //   1b. STASH labelled short-hex fingerprints (keyfp/short8/h8/fp/
-    //       selectedPskFingerprint = <8-16 hex>) -- these are the exact
-    //       identifiers the W574n PSK-convergence / unseal diagnostics
-    //       reference. Stashing them BEFORE any scrub is what makes the
-    //       keyfp= form survive (the residual sweep would otherwise eat a
-    //       run that includes the '=' separator).
-    //   2.  Redact dot-delimited JWTs (3 base64url segments) explicitly --
-    //       the '.' fragments each segment below the blob/residual bars,
-    //       so a JWT is invisible to length-only rules.
-    //   3.  Run secretPrefixed (keyworded VALUES) + blob scrub (continuous
-    //       base64url/hex run >= 24). The blob/residual charset now
-    //       INCLUDES '-' because UUIDs AND fingerprints are already stashed
-    //       out of the way, so '-' can no longer span a call_id -- this
-    //       closes the base64url/JWT-with-hyphen fail-OPEN hole.
-    //   4.  FAIL-CLOSED residual sweep: any mixed-alnum run >= 20 left over
-    //       (charset incl '-') gets redacted. Runs BEFORE restore so the
-    //       sentinels (which the U+0001 bytes break into short tokens)
-    //       survive.
-    //   5.  RESTORE stashed UUIDs + fingerprints.
-    private static let uuidRegex = try! NSRegularExpression(
-        pattern: #"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"#)
-    // Labelled short-hex fingerprint (8-16 hex) preceded by a known label.
-    // Stash the WHOLE match so neither the secret-keyword rule nor the
-    // residual sweep can touch the fingerprint regardless of separator.
-    private static let fingerprintRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b(keyfp|selectedpskfingerprint|short8|h8|fp)([\s:=]+)([0-9a-fA-F]{8,16})\b"#)
-    // Dot-delimited JWT: three base64url segments. Caught explicitly because
-    // '.' fragments each segment below the length bars of the blob/residual
-    // rules (the classic base64url fail-open).
-    private static let jwtRegex = try! NSRegularExpression(
-        pattern: #"[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}"#)
-    // High-entropy run: base64/base64url/hex >= 24. INCLUDES '-' (safe now
-    // that UUIDs + fingerprints are sentinel-stashed) so it catches
-    // base64url tokens, raw keys, ML-KEM ciphertext, hyphen-chunked blobs.
-    private static let blobWithHyphen = try! NSRegularExpression(
-        pattern: #"[A-Za-z0-9+/=_-]{24,}"#)
-    // Fail-closed residual: mixed run >= 20 (lower bar than the blob rule),
-    // charset incl '-'. Crash frames ("QAudionApp ... + 12345") are pure
-    // digits after '+' and survive; hex offsets "0x..." are guarded by the
-    // leading-[0-9a-fA-Fx] negative lookbehind.
-    private static let residualRegex = try! NSRegularExpression(
-        pattern: #"(?<![0-9a-fA-Fx])[A-Za-z0-9+/=_-]{20,}"#)
-
-    /// P2 EGRESS redactor, also reused by `TelemetryService.emit()` so the
-    /// structured-event path gets the SAME fail-closed scrub as the text
-    /// path before `sealBatch`. Exposed (public) for that second egress;
-    /// the implementation and its UNCONDITIONAL nature are unchanged.
-    public static func redactStructured(_ line: String) -> String {
-        var work: String = line
-        var stash: [String] = []
-
-        // --- 1a. stash call_id UUIDs ---
-        work = RuntimeLogSink.stashMatches(of: uuidRegex, in: work, stash: &stash)
-        // --- 1b. stash labelled short-hex fingerprints ---
-        work = RuntimeLogSink.stashMatches(of: fingerprintRegex, in: work, stash: &stash)
-
-        // --- 2. dot-delimited JWT scrub ---
-        let fullJwt = NSRange(work.startIndex..<work.endIndex, in: work)
-        work = jwtRegex.stringByReplacingMatches(
-            in: work, options: [], range: fullJwt, withTemplate: redactPlaceholder)
-
-        // --- 3. secret keyword + hyphen-inclusive blob scrub ---
-        let full1 = NSRange(work.startIndex..<work.endIndex, in: work)
-        work = secretPrefixedEgress.stringByReplacingMatches(
-            in: work, options: [], range: full1, withTemplate: redactPlaceholder)
-        let full2 = NSRange(work.startIndex..<work.endIndex, in: work)
-        work = blobWithHyphen.stringByReplacingMatches(
-            in: work, options: [], range: full2, withTemplate: redactPlaceholder)
-
-        // --- 4. fail-closed residual (run BEFORE restore so the U+0001
-        //         sentinel bytes break stashed runs into short tokens) ---
-        let full3 = NSRange(work.startIndex..<work.endIndex, in: work)
-        work = residualRegex.stringByReplacingMatches(
-            in: work, options: [], range: full3, withTemplate: redactPlaceholder)
-
-        // --- 5. restore stashed UUIDs + fingerprints ---
-        if !stash.isEmpty {
-            for (i, u) in stash.enumerated() {
-                work = work.replacingOccurrences(
-                    of: "\u{0001}K\(i)\u{0001}", with: u)
-            }
-        }
-        return work
-    }
-
-    /// Replace every match of `rx` in `text` with a U+0001-delimited
-    /// sentinel (`\u{0001}K<idx>\u{0001}`) and append the original matched
-    /// substring to `stash` at that index. The sentinel bytes are control
-    /// chars outside every scrub charset, so the stashed value is immune to
-    /// the secret/blob/residual rules until restored by index. Left-to-
-    /// right, non-overlapping; indices are assigned in match order.
-    private static func stashMatches(of rx: NSRegularExpression,
-                                     in text: String,
-                                     stash: inout [String]) -> String {
-        let ns = text as NSString
-        let matches = rx.matches(
-            in: text, options: [],
-            range: NSRange(location: 0, length: ns.length))
-        if matches.isEmpty { return text }
-        var out: String = ""
-        out.reserveCapacity(text.count)
-        var lastEnd = text.startIndex
-        for m in matches {
-            guard let r = Range(m.range, in: text) else { continue }
-            out.append(contentsOf: text[lastEnd..<r.lowerBound])
-            let idx: Int = stash.count
-            stash.append(String(text[r]))
-            out.append("\u{0001}K")
-            out.append(String(idx))
-            out.append("\u{0001}")
-            lastEnd = r.upperBound
-        }
-        out.append(contentsOf: text[lastEnd..<text.endIndex])
-        return out
-    }
-
     public func attachStdoutTee() {
         guard !teeAttached else { return }
         var pipeFds = [Int32](repeating: 0, count: 2)

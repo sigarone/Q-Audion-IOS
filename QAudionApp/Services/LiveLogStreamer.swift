@@ -1,8 +1,6 @@
 import Foundation
 import QAudionEngine
-import Network
 import UIKit
-import CryptoKit
 
 /// W417 — Opt-in real-time telemetry pump (SECURITY C-10).
 ///
@@ -23,9 +21,9 @@ import CryptoKit
 ///
 /// **What it does (only when consented):** every `flushIntervalSeconds`
 /// (default 3s) the streamer reads new entries from `RuntimeLogSink`
-/// since the last successful flush, formats them as a UTF-8 .log
-/// chunk, and uploads it via `storageApi.uploadFile` — the shared
-/// tus-always pipeline (`/api/v1/files/tus`, see W-STORAGESPLIT on
+/// since the last collection, redacts and formats them as JSON lines, keeps them in a
+/// bounded backlog until the server confirms them, and uploads them as a UTF-8 .log
+/// chunk via the shared tus-always pipeline (`/api/v1/files/tus`, see W-STORAGESPLIT on
 /// `BCryptoStorageApiImpl.uploadFile`), NOT the legacy multipart
 /// `/api/v1/files/upload` endpoint this comment used to (incorrectly)
 /// describe. That mismatch is what let these chunks slip past the
@@ -49,15 +47,25 @@ import CryptoKit
 /// without dragging the whole AppState type into the signature.
 /// See CLAUDE.md "Hard-won lesson 16" for the full story.
 ///
+/// **Off-main design (W-LIVELOGOFFMAIN, 2026-09-21):** this class is only the main-actor
+/// FAÇADE (consent, start/stop, the providers). Everything expensive — redaction,
+/// serialisation, blob building, the bounded backlog, the upload, the back-off on
+/// HTTP 429/503, the timer, the network monitor — runs on `LiveLogWorker`, an actor, off
+/// the main thread. Before this, all of it ran on the main actor and, when the server
+/// answered 429, re-processed the whole unshipped ring on every attempt: five main-thread
+/// stalls of 0.7-4.5 s in one perfect-network call. See `LiveLogWorker.swift` for the exact
+/// list of what still touches the main thread.
+///
 /// **Non-interference design:**
-///   1. `Task { ... }` (inherits @MainActor) — `await uploadFile`
-///      suspends so URLSession's network I/O runs off-main internally.
+///   1. Off-main: see above.
 ///   2. Single-flight: one upload concurrent max.
 ///   3. Throttle: ≥ 2s between upload starts.
-///   4. Hard caps: 64 KB / 256 lines per chunk.
-///   5. Self-suppression: "livelog"-tagged entries filtered by
-///      `RuntimeLogSink.entriesSince(...)` to avoid feedback loop.
+///   4. Hard caps: 64 KB / 256 lines per chunk (extra lines wait in the bounded backlog).
+///   5. Self-suppression: "livelog"-tagged entries are never shipped, to avoid a feedback
+///      loop.
 ///   6. Auth-gated, fail-silent: skip when no token.
+///   7. Back-off: HTTP 429/503 → honour `Retry-After`, else 5 s doubling to 120 s with
+///      jitter; the backlog keeps collecting (oldest dropped, counted) and nothing retries.
 ///
 /// **Lifetime:** singleton, started once from `AppState.initialize()`.
 @MainActor
@@ -68,7 +76,7 @@ public final class LiveLogStreamer {
     /// SECURITY C-10 — UserDefaults bool that gates ALL telemetry
     /// upload. Absent / false ⇒ the pump is fully inert. A future
     /// Settings toggle flips it through `setEnabled(_:)`.
-    public static let consentKey: String = "qaudion.diagnostics.liveStreamEnabled"
+    public static let consentKey: String = LiveLogConsent.key
 
     /// SECURITY C-10 — current consent state.
     ///
@@ -87,10 +95,7 @@ public final class LiveLogStreamer {
     /// "Log diagnostici in tempo reale" under DIAGNOSTICA) and is the only
     /// way this ever becomes `true`.
     public static var isEnabled: Bool {
-        if let explicit = UserDefaults.standard.object(forKey: consentKey) as? Bool {
-            return explicit
-        }
-        return false
+        return LiveLogConsent.isEnabled
     }
 
     /// SECURITY C-10 — flip the consent flag. When disabled we also
@@ -123,14 +128,6 @@ public final class LiveLogStreamer {
     public let maxChunkBytes: Int = 64 * 1024
     public let maxLinesPerChunk: Int = 256
 
-    public private(set) var lastUploadedFileId: String?
-    public private(set) var lastUploadedAt: Date?
-    public private(set) var totalUploadedChunks: Int = 0
-    public private(set) var totalUploadedBytes: Int = 0
-    public private(set) var failedUploads: Int = 0
-    public private(set) var skippedDueToInflight: Int = 0
-    public private(set) var skippedDueToNoAuth: Int = 0
-
     public typealias TokenProvider = @MainActor () -> String?
     public typealias UserIdProvider = @MainActor () -> String?
     /// W-LIVELOGAUTHREFRESH (2026-09-10) — ask the caller (AppState) to run
@@ -143,35 +140,18 @@ public final class LiveLogStreamer {
     /// own kdoc); a second, independent refresh attempt from this
     /// low-priority telemetry pipeline could race it and burn that
     /// single-use token out from under a real, in-flight refresh. See
-    /// [uploadChunk] for how a 401 uses this.
+    /// `LiveLogWorker.uploadFailed` for how a 401 uses this.
     public typealias RefreshRequestProvider = @MainActor () async -> Void
 
     private var serverUrl: String?
     private var tokenProvider: TokenProvider?
     private var userIdProvider: UserIdProvider?
     private var refreshRequestProvider: RefreshRequestProvider?
-    private var timer: Timer?
-    private var lastSeq: Int64 = 0
-    private var chunkSeq: Int = 0
-    private var inflight: Bool = false
-    private var lastUploadStartedAt: Date = Date.distantPast
-    private let minSecondsBetweenUploads: TimeInterval = 2.0
-    // W-LIVELOG429 (2026-08-29): flushOnce() used to retry every fixed
-    // flushIntervalSeconds (3s) regardless of WHY the previous attempt
-    // failed. Against a server-side rate limit (HTTP 429) that just
-    // re-triggers the same 429 every 3s forever, confirmed live — a
-    // device logged 20+ consecutive "TUS create failed: HTTP 429" lines
-    // three seconds apart. Exponential backoff (with jitter, capped)
-    // only on 429/5xx so a transient network blip doesn't get penalized
-    // the same as sustained rate-limiting.
-    private var backoffUntil: Date = Date.distantPast
-    private var consecutiveThrottleFailures: Int = 0
-    private static let backoffBaseSeconds: TimeInterval = 3.0
-    private static let backoffMaxSeconds: TimeInterval = 60.0
     private var isStarted: Bool = false
-    
-    private let pathMonitor = NWPathMonitor()
-    private var currentPath: NWPath?
+
+    /// Orders start/stop as they reach the worker actor (see `LiveLogWorker.start`).
+    private var epoch: Int = 0
+    private let worker: LiveLogWorker = LiveLogWorker()
 
     private init() {}
 
@@ -203,16 +183,37 @@ public final class LiveLogStreamer {
         guard LiveLogStreamer.isEnabled else { return }
         if isStarted { return }
         isStarted = true
-        
-        pathMonitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                self?.currentPath = path
-            }
-        }
-        pathMonitor.start(queue: DispatchQueue.global(qos: .background))
-        
-        scheduleTimer()
+
+        // Device facts are main-actor state (UIDevice): read once, here, and handed over.
+        let model: String = UIDevice.current.model
+        let os: String = "ios-" + UIDevice.current.systemVersion
+        let appVer: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
         let session: String = bootSessionId
+
+        // The one place the worker needs the main actor for: token, user id and the remote
+        // kill-switch (`LOG_OTLP_EXPORT_ENABLED`, W-FLAGS). Sampled by the worker at most every
+        // 30 s, not on every tick.
+        let authProvider: @MainActor () -> LiveLogWorker.AuthSnapshot = {
+            let token: String = getToken() ?? ""
+            let user: String = getUserId() ?? "anon"
+            let ship: Bool = FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", true)
+            return LiveLogWorker.AuthSnapshot(token: token, userId: user, shipEnabled: ship)
+        }
+        let config = LiveLogWorker.Config(serverUrl: serverUrl,
+                                          bootSessionId: session,
+                                          model: model,
+                                          os: os,
+                                          appVer: appVer,
+                                          flushIntervalSeconds: flushIntervalSeconds,
+                                          maxChunkBytes: maxChunkBytes,
+                                          maxLinesPerChunk: maxLinesPerChunk,
+                                          authProvider: authProvider,
+                                          refreshProvider: requestTokenRefresh)
+        epoch += 1
+        let thisEpoch: Int = epoch
+        let w: LiveLogWorker = worker
+        Task { await w.start(epoch: thisEpoch, config: config) }
+
         let line: String = "LiveLogStreamer started session=" + session
         RTLog.info("livelog", line)
     }
@@ -237,342 +238,13 @@ public final class LiveLogStreamer {
 
     /// Fully tear down the pump. Safe to call when not started.
     /// SECURITY C-10 — invoked on consent withdrawal so no timer or
-    /// network monitor survives after the user opts out.
+    /// network monitor survives after the user opts out, and the buffered
+    /// (already redacted) lines are dropped.
     public func stop() {
-        timer?.invalidate()
-        timer = nil
-        if isStarted {
-            pathMonitor.cancel()
-        }
-        inflight = false
         isStarted = false
-    }
-
-    private func scheduleTimer() {
-        timer?.invalidate()
-        let interval: TimeInterval = flushIntervalSeconds
-        let t: Timer = Timer(timeInterval: interval, repeats: true) { _ in
-            Task { @MainActor in
-                LiveLogStreamer.shared.flushOnce()
-            }
-        }
-        RunLoop.main.add(t, forMode: RunLoop.Mode.common)
-        timer = t
-    }
-
-    private func flushOnce() {
-        // W-FLAGS -- RUNTIME kill-switch for the log SHIPPER. Checked on
-        // EVERY flush (not just start()) so a VPS edit to flags.json can
-        // STOP/allow uploads on an already-shipped TestFlight build within
-        // the FeatureFlags refresh window, without a rebuild. The compiled
-        // default is the existing consent gate (`isEnabled`), so absent /
-        // unparseable flag => unchanged behaviour (fail-safe to consent).
-        //
-        // SECURITY -- this gates SHIP only. Egress REDACTION
-        // (`RuntimeLogSink.entriesSince` -> `redactStructured`) is the
-        // load-bearing privacy control and stays UNCONDITIONAL: returning
-        // here skips an UPLOAD, never a scrub. Redaction is never flagged.
-        // FIX-19 (2026-09-12): consent is ANDed with the remote flag, not
-        // used as its default — a remote `true` could otherwise replace a
-        // local `false` (FeatureFlags overlay wins). Harmless today because
-        // the timer only exists past the consent guard in start(), but a
-        // future refactor must not be able to flip a non-consented device on.
-        guard LiveLogStreamer.isEnabled, FeatureFlags.bool("LOG_OTLP_EXPORT_ENABLED", true) else { return }
-        if inflight {
-            skippedDueToInflight += 1
-            return
-        }
-        let now: Date = Date()
-        let elapsed: TimeInterval = now.timeIntervalSince(lastUploadStartedAt)
-        if elapsed < minSecondsBetweenUploads { return }
-        if now < backoffUntil { return }
-
-        guard let serverUrlLocal = serverUrl,
-              let getToken = tokenProvider,
-              let getUserId = userIdProvider else {
-            skippedDueToNoAuth += 1
-            return
-        }
-        guard let tokenLocal = getToken(), !tokenLocal.isEmpty else {
-            skippedDueToNoAuth += 1
-            return
-        }
-
-        let snap = RuntimeLogSink.shared.entriesSince(seq: lastSeq)
-        if snap.lines.isEmpty { return }
-
-        var lines: [String] = snap.lines
-        if lines.count > maxLinesPerChunk {
-            lines = Array(lines.prefix(maxLinesPerChunk))
-        }
-
-        let model = UIDevice.current.model
-        let os = "ios-" + UIDevice.current.systemVersion
-        let net = getNetworkType()
-        let metered = currentPath?.isExpensive ?? false
-        let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-
-        let header = "{\"type\":\"header\",\"session\":\"\(bootSessionId)\",\"model\":\"\(model)\",\"brand\":\"Apple\",\"os\":\"\(os)\",\"net\":\"\(net)\",\"metered\":\(metered),\"app_ver\":\"\(appVer)\"}"
-        
-        var body: String = ""
-        body.reserveCapacity(lines.count * 220 + 256)
-        body.append(header)
-        body.append("\n")
-        for line in lines {
-            body.append(line)
-            body.append("\n")
-        }
-        var data: Data = Data()
-        if let encoded = body.data(using: String.Encoding.utf8) {
-            data = encoded
-        }
-        if data.count > maxChunkBytes {
-            let cap: Int = maxChunkBytes - 64
-            let upper: Int = min(cap, data.count)
-            let head: Data = data.subdata(in: 0..<upper)
-            let markerStr: String = "\n[livelog-truncated]\n"
-            var combined: Data = head
-            if let markerData = markerStr.data(using: String.Encoding.utf8) {
-                combined.append(markerData)
-            }
-            data = combined
-        }
-
-        chunkSeq += 1
-        let mySeq: Int = chunkSeq
-        let chunkBytes: Int = data.count
-        let highestSeqInChunk: Int64 = snap.highestSeq
-
-        let userIdRaw: String = getUserId() ?? "anon"
-        // SECURITY L-6 — do NOT leak the raw user-id prefix in the
-        // filename (server-side enumeration). Use an HMAC-SHA256 of
-        // the user id keyed by the per-boot session UUID, hex-
-        // truncated to 8 chars. Stable within a session so the
-        // maintainer's pattern-based log fetch still groups chunks;
-        // unlinkable across sessions and not reversible to the id.
-        let userPrefix: String = LiveLogStreamer.sessionScopedTag(userId: userIdRaw,
-                                                                  sessionKey: bootSessionId)
-        let seqStr: String = LiveLogStreamer.zeroPad(mySeq, width: 6)
-        let session: String = bootSessionId
-        let filename: String = "qaudion-live-" + userPrefix + "-" + session + "-" + seqStr + ".log"
-
-        inflight = true
-        lastUploadStartedAt = now
-        // W-LIVELOGHANG (2026-08-03): a hung tus PATCH (no per-attempt bound
-        // on the underlying `TusUploadClient` call — network-saturated by
-        // live call RTP is exactly when this hits) used to leave `inflight`
-        // stuck `true` forever, silently freezing this pump for the rest of
-        // the process lifetime. `skippedDueToInflight` never logs, so the
-        // ONE window this evidence matters most (a live call) went dark
-        // with zero trace — confirmed live: a real receiving device
-        // produced exactly ONE chunk across an entire ~8-minute call, then
-        // resumed only after something unrelated eventually unstuck it.
-        //
-        // Fix: a watchdog keyed on `mySeq` force-clears `inflight` if the
-        // matching upload hasn't finished within `uploadTimeoutSeconds`.
-        // The original upload keeps running in the background (nothing
-        // here cancels it — `TusUploadClient`/`URLSession` own that), but
-        // the PUMP no longer waits on it forever; if it later succeeds,
-        // its own completion still runs and advances `lastSeq`/counters
-        // (harmless double-report if the watchdog already logged the
-        // timeout). A `[weak self]` + sequence-number guard means a
-        // watchdog for an OLD chunk can never clobber a NEWER upload that
-        // is already legitimately in flight.
-        let watchdogSeq: Int = mySeq
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: LiveLogStreamer.uploadTimeoutSeconds * 1_000_000_000)
-            guard let self, self.inflight, self.chunkSeq == watchdogSeq else { return }
-            self.inflight = false
-            self.failedUploads += 1
-            let seqStr: String = String(watchdogSeq)
-            let line: String = "livelog upload timeout seq=" + seqStr
-            RTLog.warn("net", line)
-        }
-        Task {
-            await self.uploadChunk(
-                serverUrl: serverUrlLocal,
-                token: tokenLocal,
-                filename: filename,
-                data: data,
-                chunkBytes: chunkBytes,
-                seq: mySeq,
-                highestSeqInChunk: highestSeqInChunk)
-        }
-    }
-
-    /// Bound for the watchdog above — see its comment for why it exists.
-    private static let uploadTimeoutSeconds: UInt64 = 12
-
-    /// W-LIVELOG429 — true for a rate-limited (429) or server-error (5xx)
-    /// TUS response, the cases worth backing off from. A create/patch/head
-    /// failure with any other status (network drop, 401, 404, ...) is left
-    /// on the normal flushIntervalSeconds cadence instead.
-    private static func isThrottleStatus(_ error: Error) -> Bool {
-        httpStatus(of: error).map { $0 == 429 || (500...599).contains($0) } ?? false
-    }
-
-    /// W-LIVELOGAUTHREFRESH — extracted out of `isThrottleStatus` so the
-    /// 401 check in `uploadChunk` shares the same status-code extraction
-    /// instead of duplicating the switch.
-    private static func httpStatus(of error: Error) -> Int? {
-        switch error {
-        case TusUploadClient.TusError.createFailed(let c): return c
-        case TusUploadClient.TusError.patchFailed(let c): return c
-        case TusUploadClient.TusError.headFailed(let c): return c
-        default: return nil
-        }
-    }
-
-    private func uploadChunk(serverUrl: String,
-                             token: String,
-                             filename: String,
-                             data: Data,
-                             chunkBytes: Int,
-                             seq: Int,
-                             highestSeqInChunk: Int64,
-                             isRetryAfterRefresh: Bool = false) async {
-        let cfg: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
-        let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: cfg)
-        do {
-            let fileId: String = try await provider.storageApi.uploadFile(
-                data: data, filename: filename)
-            // A watchdog may already have timed THIS seq out and moved on
-            // (see enqueueSend) — a late success arriving after that must
-            // not resurrect `inflight`/`lastSeq` state for a chunk the pump
-            // has already given up on and possibly superseded.
-            guard chunkSeq == seq else { return }
-            lastUploadedFileId = fileId
-            lastUploadedAt = Date()
-            totalUploadedChunks += 1
-            totalUploadedBytes += chunkBytes
-            // W-LIVELOGHANG — only advance the read cursor on a CONFIRMED
-            // send. Advancing it unconditionally in flushOnce() (the old
-            // behaviour) meant a failed/timed-out chunk's lines were gone
-            // forever — the next flush started reading past them, so a
-            // transient failure silently and permanently dropped evidence
-            // instead of retrying it on the next tick.
-            lastSeq = highestSeqInChunk
-            inflight = false
-            consecutiveThrottleFailures = 0
-            let shouldLog: Bool = totalUploadedChunks <= 3 || (totalUploadedChunks % 50) == 0
-            if shouldLog {
-                let seqStr: String = String(seq)
-                let bytesStr: String = String(chunkBytes)
-                let line: String = "chunk #" + seqStr + " fileId=" + fileId + " bytes=" + bytesStr
-                RTLog.info("livelog", line)
-            }
-        } catch {
-            // A watchdog may have already cleared `inflight` and logged a
-            // timeout for this same `seq` (see enqueueSend) — only bump
-            // the failure counter/log here if this completion is still the
-            // one the pump is waiting on, so a late-arriving failure after
-            // a watchdog timeout doesn't double-count.
-            guard chunkSeq == seq else { return }
-            // W-LIVELOGAUTHREFRESH (2026-09-10) — a 401 here almost always
-            // means this process's access token expired with no unrelated
-            // API call around to trigger AppState's own reactive refresh:
-            // this throwaway per-chunk provider (`BackendConfig.pinned`,
-            // just above) has no refresh token and no device-renew fallback
-            // of its own, by design (see `RefreshRequestProvider`'s kdoc for
-            // why it stays that way). Ask AppState to run its EXISTING
-            // single-flight-coalesced refresh instead of trying to refresh
-            // independently, then retry this one chunk once with whatever
-            // token comes out the other side. `isRetryAfterRefresh` bounds
-            // this to exactly one attempt — a device whose refresh token is
-            // ALSO dead (or offline) falls straight through to the normal
-            // failure/backoff path below instead of looping.
-            if !isRetryAfterRefresh,
-               LiveLogStreamer.httpStatus(of: error) == 401,
-               let refresh = refreshRequestProvider,
-               let getToken = tokenProvider {
-                await refresh()
-                if let freshToken = getToken(), freshToken != token {
-                    await uploadChunk(
-                        serverUrl: serverUrl, token: freshToken, filename: filename,
-                        data: data, chunkBytes: chunkBytes, seq: seq,
-                        highestSeqInChunk: highestSeqInChunk, isRetryAfterRefresh: true)
-                    return
-                }
-            }
-            failedUploads += 1
-            inflight = false
-            if LiveLogStreamer.isThrottleStatus(error) {
-                consecutiveThrottleFailures += 1
-                let exponent: Int = min(consecutiveThrottleFailures, 5)
-                let raw: TimeInterval = LiveLogStreamer.backoffBaseSeconds * pow(2.0, Double(exponent - 1))
-                let capped: TimeInterval = min(raw, LiveLogStreamer.backoffMaxSeconds)
-                let jitter: TimeInterval = TimeInterval.random(in: 0...(capped * 0.2))
-                backoffUntil = Date().addingTimeInterval(capped + jitter)
-            } else {
-                consecutiveThrottleFailures = 0
-            }
-            // W-LIVELOGHANG — the OLD catch block was silent (no RTLog at
-            // all), so a run of failures was indistinguishable from the
-            // pump never having started. "net" (not "livelog") so this
-            // actually ships once the pump recovers, instead of being
-            // filtered out by entriesSince's own livelog self-exclusion.
-            //
-            // W-LIVELOGSILENTFAIL (2026-08-21): the line used to stop at
-            // seq/totalfail — a bare failure COUNT with no REASON, so a run
-            // of failures was visible but undiagnosable from the server
-            // side (confirmed live: a call session logged
-            // "totalfail=4" and nothing else ever shipped from that
-            // device for the rest of the call, no way to tell why).
-            // `TusUploadClient.TusError` already conforms to
-            // `LocalizedError` with a real per-case message ("TUS create
-            // failed: HTTP 401", "TUS patch failed: HTTP 404", ...) — it
-            // was just never read here. Appending it costs nothing (this
-            // whole pump is already gated on explicit consent, C-10) and
-            // turns the next occurrence into an actionable line instead of
-            // a dead end.
-            let seqStr: String = String(seq)
-            let failStr: String = String(failedUploads)
-            let reason: String = error.localizedDescription
-            let line: String = "livelog upload error seq=" + seqStr + " totalfail=" + failStr + " reason=" + reason
-            RTLog.warn("net", line)
-        }
-    }
-
-    /// SECURITY L-6 — HMAC-SHA256(userId) keyed by the per-boot
-    /// session UUID, hex, first 8 chars. Stable per session so the
-    /// server-side `qaudion-live-<tag>-<session>-<seq>` grep still
-    /// groups a session's chunks, but the tag reveals nothing about
-    /// the user id and differs every boot.
-    private static func sessionScopedTag(userId: String, sessionKey: String) -> String {
-        let keyData: Data = Data(sessionKey.utf8)
-        let msgData: Data = Data(userId.utf8)
-        let mac = HMAC<SHA256>.authenticationCode(for: msgData,
-                                                  using: SymmetricKey(data: keyData))
-        var hex: String = ""
-        hex.reserveCapacity(16)
-        for byte in mac {
-            let b: UInt8 = byte
-            hex.append(String(format: "%02x", b))
-            if hex.count >= 8 { break }
-        }
-        return String(hex.prefix(8))
-    }
-
-    private static func zeroPad(_ value: Int, width: Int) -> String {
-        let s: String = String(value)
-        if s.count >= width { return s }
-        let padding: Int = width - s.count
-        var prefix: String = ""
-        prefix.reserveCapacity(padding)
-        var i: Int = 0
-        while i < padding {
-            prefix.append("0")
-            i += 1
-        }
-        return prefix + s
-    }
-
-    private func getNetworkType() -> String {
-        guard let path = currentPath else { return "NONE" }
-        if path.usesInterfaceType(.wifi) { return "WIFI" }
-        if path.usesInterfaceType(.cellular) { return "CELLULAR" }
-        if path.usesInterfaceType(.wiredEthernet) { return "ETHERNET" }
-        if path.usesInterfaceType(.loopback) { return "LOOPBACK" }
-        return "OTHER"
+        epoch += 1
+        let thisEpoch: Int = epoch
+        let w: LiveLogWorker = worker
+        Task { await w.stop(epoch: thisEpoch) }
     }
 }
