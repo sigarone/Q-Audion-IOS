@@ -219,6 +219,53 @@ final class HeartbeatDeltaTrackerTests: XCTestCase {
         XCTAssertEqual(window.transport, "ws")
     }
 
+    // MARK: - Native SRTP (the sealed-frame counters do not apply)
+
+    private func srtpSnapshot() -> HeartbeatSnapshot {
+        var s = base()
+        s.rxFramesDc = 0
+        s.txFramesDc = 0
+        s.nativeSrtpActive = true
+        return s
+    }
+
+    func test_aNativeSrtpCallOmitsTheSealedFrameCountersInsteadOfReportingZero() {
+        var tracker = primedTracker(baseline: srtpSnapshot())
+        var next = srtpSnapshot()
+        next.jbUnderruns = 12          // +2: the rest of the window is still reported
+        let window = tracker.advance(to: next)
+        XCTAssertNil(window.numbers["rx_frames_d"], "no counter on this path: omitted, not 0")
+        XCTAssertNil(window.numbers["tx_frames_d"])
+        XCTAssertEqual(window.transport, "srtp")
+        XCTAssertEqual(window.numbers["jb_underrun_d"], 2)
+        XCTAssertEqual(window.numbers["jb_depth_now"], 3)
+    }
+
+    func test_fallingBackFromNativeSrtpToTheSealedPathReportsTheFramesAgain() {
+        var tracker = primedTracker(baseline: srtpSnapshot())
+        var next = base()              // nativeSrtpActive == nil: the sealed path is carrying audio
+        next.rxFramesDc = 120
+        next.txFramesDc = 110
+        let window = tracker.advance(to: next)
+        XCTAssertEqual(window.numbers["rx_frames_d"], 120)
+        XCTAssertEqual(window.numbers["tx_frames_d"], 110)
+        XCTAssertEqual(window.transport, "dc")
+    }
+
+    func test_aNativeSrtpWindowStillNamesEveryOtherSpecifiedAttribute() {
+        var tracker = primedTracker(baseline: srtpSnapshot())
+        var next = srtpSnapshot()
+        next.mainStallMsMax = 0
+        let names = Set(tracker.advance(to: next).attributes().keys)
+        let expected: Set<String> = [
+            "rx_gap_d",
+            "jb_underrun_d", "jb_overrun_d", "jb_hard_drop_d", "jb_silence_drop_d",
+            "jb_concealed_d", "jb_stretch_d", "jb_depth_now", "jb_target_now",
+            "iat_max_ms", "fec_rec_d", "main_stall_ms_max", "transport"
+        ]
+        XCTAssertEqual(names, expected)
+    }
+
     // MARK: - What leaves the device
 
     func test_attributesAreNumbersAndOneFixedString() {

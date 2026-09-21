@@ -35,6 +35,9 @@ struct DisturbanceMarkButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Self.accessibilityText())
+        // The two-second green check is visual only; VoiceOver hears the same as a sighted person
+        // sees: the tap was recorded.
+        .accessibilityValue(Self.accessibilityValueText(confirmed: confirmed))
     }
 
     private func handleTap() {
@@ -69,6 +72,18 @@ struct DisturbanceMarkButton: View {
             localized: "in_call.disturbance_button_a11y",
             defaultValue: "Segnala disturbo audio",
             comment: "VoiceOver label of the in-call \"Disturbo\" pill — reports that an audio glitch was just heard."
+        )
+    }
+
+    /// Empty while idle; the confirmation word for the two seconds after a tap.
+    private static func accessibilityValueText(confirmed: Bool) -> String {
+        if !confirmed {
+            return ""
+        }
+        return String(
+            localized: "in_call.disturbance_button_done_a11y",
+            defaultValue: "Segnalato",
+            comment: "VoiceOver value of the in-call \"Disturbo\" pill for two seconds after a tap — the audio glitch was recorded. One word."
         )
     }
 }

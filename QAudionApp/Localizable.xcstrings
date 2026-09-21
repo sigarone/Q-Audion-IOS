@@ -4453,6 +4453,48 @@
         }
       }
     },
+    "in_call.disturbance_button_done_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver value of the in-call Disturbo pill for two seconds after a tap — the audio glitch was recorded. One word.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Segnalato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reported"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signalé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gemeldet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relatado"
+          }
+        }
+      }
+    },
     "video_call.stress_word_calm": {
       "extractionState": "manual",
       "comment": "Video call diagnostics row — interpreted voice-stress band label for a low composite stress score",

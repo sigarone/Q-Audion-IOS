@@ -66,7 +66,8 @@ public struct HeartbeatSnapshot: Equatable, Sendable {
     public var interArrivalMaxMs: Int?
 
     /// True when the call's audio rides the native SRTP path, where the sealed-frame
-    /// counters above legitimately stay at 0. Only used to label `transport`.
+    /// counters above legitimately stay at 0. It labels `transport` as `srtp` and makes the
+    /// tracker leave `rx_frames_d` / `tx_frames_d` out (no counter, not "0 frames").
     public var nativeSrtpActive: Bool?
 
     /// Largest amount the heartbeat timer fired late in this window, in ms.
@@ -112,6 +113,9 @@ public struct HeartbeatWindow: Equatable, Sendable {
 ///    restart there: the window simply reports 0, the same convention the PLP loss
 ///    reporter uses.
 ///  * A counter missing from either snapshot yields no attribute.
+///  * While the CURRENT snapshot is on the native SRTP path the sealed-frame counters are not
+///    applicable, so `rx_frames_d` / `tx_frames_d` are omitted (never sent as 0). A call that
+///    falls back from native SRTP to the sealed path reports them again from that window on.
 public struct HeartbeatDeltaTracker: Equatable, Sendable {
 
     private var previous: HeartbeatSnapshot?
@@ -135,8 +139,13 @@ public struct HeartbeatDeltaTracker: Equatable, Sendable {
             let rxWs = HeartbeatDeltaTracker.monotonicDelta(current.rxFramesWs, prev.rxFramesWs)
             let txDc = HeartbeatDeltaTracker.monotonicDelta(current.txFramesDc, prev.txFramesDc)
             let txWs = HeartbeatDeltaTracker.monotonicDelta(current.txFramesWs, prev.txFramesWs)
-            numbers[HeartbeatAttribute.rxFramesD] = rxDc + rxWs
-            numbers[HeartbeatAttribute.txFramesD] = txDc + txWs
+            // On the native SRTP path the sealed-frame counters never move (the protection runs
+            // inside libwebrtc), so they would read 0 for a call that is carrying audio. That is
+            // "no counter", not "no frames": the attribute is left out, and `transport` says why.
+            if current.nativeSrtpActive != true {
+                numbers[HeartbeatAttribute.rxFramesD] = rxDc + rxWs
+                numbers[HeartbeatAttribute.txFramesD] = txDc + txWs
+            }
             transport = HeartbeatDeltaTracker.transportLabel(dcFrames: rxDc + txDc,
                                                              wsFrames: rxWs + txWs,
                                                              nativeSrtp: current.nativeSrtpActive)

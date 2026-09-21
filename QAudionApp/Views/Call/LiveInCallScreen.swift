@@ -398,8 +398,9 @@ struct LiveInCallScreen: View {
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
                 onToggleDiagnostics: handleToggleDiagnostics,
-                // W-HBTELEM — the "Disturbo" marker pill (1:1 call screen only).
-                onMarkDisturbance: handleMarkDisturbance,
+                // W-HBTELEM — the "Disturbo" marker pill (1:1 call screen only, and only
+                // while the operational-diagnostics consent is on; see disturbanceMarkAction).
+                onMarkDisturbance: disturbanceMarkAction,
                 // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
                 // fed from AppState.voiceLearningState (itself fed from the
                 // SAME decoded RX audio the Guardian ribbon above already
@@ -560,6 +561,16 @@ struct LiveInCallScreen: View {
     /// no-op-outside-a-call guard live in `CallMediaTelemetry`.
     private func handleMarkDisturbance() {
         CallMediaTelemetry.shared.recordDisturbanceMarker()
+    }
+
+    /// The handler handed to the in-call screen, or nil to hide the "Disturbo" pill. Without the
+    /// operational-diagnostics consent `TelemetryService.emit` discards every event, so a pill that
+    /// showed its green confirmation would tell the person a marker was recorded when nothing was.
+    /// Kept out of the big `InCallScreen(...)` call so that call stays cheap for the type-checker
+    /// (CLAUDE.md lesson 13).
+    private var disturbanceMarkAction: (() -> Void)? {
+        guard TelemetryService.isEnabled else { return nil }
+        return handleMarkDisturbance
     }
 
     // MARK: - Diagnostics panel (W502)
