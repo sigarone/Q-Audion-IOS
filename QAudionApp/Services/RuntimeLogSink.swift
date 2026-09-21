@@ -66,10 +66,18 @@ public final class RuntimeLogSink: ObservableObject {
     private init() {}
 
     public func record(level: Level, tag: String, _ message: String) {
+        // W-KEYSCRUB (2026-09-21) -- THE choke point for key material. Every line that enters the
+        // app's log (RTLog from app code AND the stdout/stderr tee, i.e. whatever the native
+        // library prints) passes here, so the ring, the on-screen viewer, the text export, the
+        // bug-report tail, the live-log shipper, the OSLog mirror and `BugReporter.onError` only
+        // ever see `safeMessage`. `LogRedactor` applies the same function again at every egress
+        // (defence in depth). Cost on this (main) thread: one linear pass over the bytes of the
+        // line, no allocation for a clean line (see `KeyMaterialScrubber`).
+        let safeMessage: String = LogRedactor.scrubKeyMaterial(message)
         lock.lock()
         let seq = nextSeq
         nextSeq &+= 1
-        let entry = Entry(seq: seq, timestamp: Date(), level: level, tag: tag, message: message)
+        let entry = Entry(seq: seq, timestamp: Date(), level: level, tag: tag, message: safeMessage)
         entries.append(entry)
         if entries.count > maxEntries {
             // Drop the oldest 10% in one shot so we don't pay the
@@ -85,16 +93,16 @@ public final class RuntimeLogSink: ObservableObject {
         // still sees the full text. Prevents inadvertent leak of
         // app-authored diagnostics through OS-level log collection.
         switch level {
-        case .debug: osLogger.debug("[\(tag, privacy: .private)] \(message, privacy: .private)")
-        case .info:  osLogger.info("[\(tag, privacy: .private)] \(message, privacy: .private)")
-        case .warn:  osLogger.warning("[\(tag, privacy: .private)] \(message, privacy: .private)")
-        case .error: osLogger.error("[\(tag, privacy: .private)] \(message, privacy: .private)")
+        case .debug: osLogger.debug("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+        case .info:  osLogger.info("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+        case .warn:  osLogger.warning("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+        case .error: osLogger.error("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
         }
         // Bump observable count on main (we're already @MainActor).
         entryCount &+= 1
         // W559 — feed errors into the auto-detection window.
         if level == .error {
-            BugReporter.shared.onError(tag: tag, message: message)
+            BugReporter.shared.onError(tag: tag, message: safeMessage)
         }
     }
 
@@ -282,7 +290,11 @@ public final class RuntimeLogSink: ObservableObject {
             let n = read(readFd, &buf, buf.count)
             if n > 0 {
                 // 1) Forward to the saved original stdout/stderr so
-                //    Console.app + Xcode still see the line.
+                //    Console.app + Xcode still see the line. W-KEYSCRUB: this raw
+                //    byte forward is the ONE consumer that is deliberately not scrubbed
+                //    (chunks are cut at arbitrary bytes, and it goes to the developer
+                //    console of an attached debugger, never to a file, the ring or the
+                //    network); the parsed lines below are scrubbed by `redact` and `record`.
                 _ = write(self.origStdoutFd, buf, n)
                 // 2) Parse + record into the ring buffer.
                 if let chunk = String(bytes: buf[0..<n], encoding: .utf8) {
@@ -292,6 +304,9 @@ public final class RuntimeLogSink: ObservableObject {
                         // captured stdout/stderr BEFORE they enter the
                         // ring buffer (which can be uploaded by the
                         // diagnostics dump). Redaction runs off-main.
+                        // W-KEYSCRUB: `redact` starts with the key-material scrub,
+                        // so the key bytes are already gone before the hop to the
+                        // main actor; `record` scrubs once more (idempotent).
                         let safe: String = RuntimeLogSink.redact(String(line))
                         Task { @MainActor [weak self] in
                             self?.record(level: .info, tag: "stdout", safe)
