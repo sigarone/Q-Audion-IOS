@@ -815,6 +815,13 @@ public final class AudioCapture {
         )
     }
 
+    /// W-HBTELEM (2026-09-21) — largest inter-arrival gap of the playout stream over the
+    /// last `windowMs`, for the `iat_max_ms` heartbeat attribute. Read-only pass-through to
+    /// `PlayoutJitterBuffer.recentInterArrivalMaxMs`; nil before there is a second arrival.
+    public func recentInterArrivalMaxMs(windowMs: Int) -> Int? {
+        playoutJitter.recentInterArrivalMaxMs(windowMs: windowMs)
+    }
+
     public func consumeLevelStats() -> LevelStats {
         let rms = rmsSampleCount > 0 ? (sumSqAmplitude / Double(rmsSampleCount)).squareRoot() : 0
         let limiterPct = rmsSampleCount > 0

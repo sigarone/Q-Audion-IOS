@@ -829,6 +829,49 @@ final class CallService: @unchecked Sendable {
         let rtp = getAudioRtpPacketsReceived?() ?? -1
         return rtp >= 0 ? rtp : framesDecryptedRx
     }
+
+    /// W-HBTELEM (2026-09-21) — one reading of the call-health counters that already exist,
+    /// for the extra attributes of the 5 s `call.media.heartbeat` (and the `jb_depth_now` of a
+    /// `call.disturbance.marker`). The heartbeat's `HeartbeatDeltaTracker` turns two of these
+    /// into per-window deltas. Nothing here counts anything new:
+    ///   * sealed audio frames by transport: the `dcmux tx/rx` counters above;
+    ///   * `rxGapLost`: `rxLossSnapshot().lost`, the meter the PLP reporter already reads;
+    ///   * `fecRecovered`: `rxFecStats().recovered` (`fec fr=`);
+    ///   * jitter buffer: `AudioCapture.playoutStats` (`RX playout pu/un/ov/hd/cc/dp` and the
+    ///     `tf=` target), plus `timeStretchFrames` and `silenceDrops`, which the log line omits;
+    ///   * `interArrivalMaxMs`: a read-only view of the arrival tracker the jitter buffer keeps.
+    /// A group with no audio engine or no call integration simply leaves those fields nil.
+    /// Read on the main actor (the RTP-path probe is main-affine); the underlying counters are
+    /// diagnostics that tolerate being one frame stale, as everywhere else in this file.
+    @MainActor
+    func makeHeartbeatSnapshot() -> HeartbeatSnapshot {
+        var snapshot = HeartbeatSnapshot()
+        snapshot.rxFramesDc = rxFramesDc
+        snapshot.rxFramesWs = rxFramesWs
+        snapshot.txFramesDc = txFramesDc
+        snapshot.txFramesWs = txFramesWs
+        if let integration = callIntegration {
+            snapshot.rxGapLost = integration.rxLossSnapshot().lost
+            snapshot.fecRecovered = integration.rxFecStats().recovered
+        }
+        if let cap = audioCapture {
+            let stats = cap.playoutStats
+            snapshot.jbUnderruns = stats.underruns
+            snapshot.jbOverruns = stats.overruns
+            snapshot.jbHardDrops = stats.hardDrops
+            snapshot.jbSilenceDrops = stats.silenceDrops
+            snapshot.jbConcealed = Int64(stats.concealed)
+            snapshot.jbStretch = stats.timeStretchFrames
+            snapshot.jbDepthNow = stats.depth
+            snapshot.jbTargetNow = stats.targetFrames
+            snapshot.interArrivalMaxMs = cap.recentInterArrivalMaxMs(windowMs: 5_000)
+        }
+        if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
+            snapshot.nativeSrtpActive = true
+        }
+        return snapshot
+    }
+
     /// W-SRTPFALLBACK — true while the manual capture/decode path has been
     /// explicitly RE-ENGAGED during a native-audio-srtp call's ICE outage
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
