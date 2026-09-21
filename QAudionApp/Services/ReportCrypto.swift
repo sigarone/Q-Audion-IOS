@@ -75,6 +75,10 @@ enum ReportCrypto {
         // server-side (report_routes.go keeps diag_summary verbatim), so
         // it gets the same structured redaction (bearer/JWT/psk/base64
         // runs) as every other log egress before the PII patterns below.
+        // W-KEYSCRUB: `logs` is the whole multi-line 2-minute tail, every line already
+        // scrubbed at ring entry; the key-material scrub inside `redactStructured` is line
+        // oriented (`scrubLines`), so a `derived_key <marker>` line does not swallow the
+        // newer lines below it and the 200-character tail below stays the LAST lines.
         let scrubbed = RuntimeLogSink.redactStructured(logs)
         let recentLogs = scrubbed.count > 200 ? String(scrubbed.suffix(200)) : scrubbed
         let safeNote = String(note.prefix(100))

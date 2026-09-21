@@ -27,9 +27,17 @@ import QAudionEngine
 enum LogRedactor {
 
     /// W-KEYSCRUB -- one-line forward so `RuntimeLogSink` needs no import of the engine module.
-    /// Pure, thread-safe, linear in the length of `line`; a clean line comes back untouched.
-    static func scrubKeyMaterial(_ line: String) -> String {
-        return KeyMaterialScrubber.scrub(line)
+    /// Pure, thread-safe, linear in the length of `text`; a clean text comes back untouched.
+    ///
+    /// LINE ORIENTED on purpose (`scrubLines`, not `scrub`): `redactStructured` also runs on a
+    /// composed multi-line text (`ReportCrypto.buildDiagSummary` gets the whole 2-minute
+    /// `recentLogsAsString` tail, whose lines were already scrubbed), and `scrub` reads
+    /// "everything after `derived_key`" as the rest of the TEXT, so on such a blob one
+    /// `derived_key <marker>` line would swallow every line after it (the newest ones, the ones
+    /// the 200-character diag summary keeps). `scrubLines` scans each line on its own, so the
+    /// lines around a key line survive and scrubbing twice gives the same text.
+    static func scrubKeyMaterial(_ text: String) -> String {
+        return KeyMaterialScrubber.scrubLines(text)
     }
 
     /// SECURITY H-2 — best-effort secret scrubber for the

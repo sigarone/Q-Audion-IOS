@@ -117,7 +117,7 @@ public final class LogExportService {
                 out.append("] ")
                 // W-KEYSCRUB: os_log lines from the engine never pass through
                 // RuntimeLogSink.record, so they get the key-material scrub here.
-                out.append(KeyMaterialScrubber.scrub(e.composedMessage))
+                out.append(KeyMaterialScrubber.scrubLines(e.composedMessage))
                 out.append("\n")
             }
             if entries.isEmpty {
