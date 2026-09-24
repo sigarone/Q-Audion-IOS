@@ -191,6 +191,19 @@ public final class AudioCapture {
     // per field, per-call diagnostic counters, not correctness-critical).
     private var lastLoudPlayoutAtMs: Int64 = 0
     private var echoBucketThisCall = EchoBucketTotals()
+    // W-BYPASSDUCK (2026-09-25) — TX echo ducker for the degraded state VP-IO bypassed + built-in
+    // loudspeaker (see `BypassEchoDuck`). All of it is tap-thread state except `lastLoudPlayoutRms`
+    // (the RMS of the last audible RX frame, written next to `lastLoudPlayoutAtMs` on the playback
+    // path: a Float store, same benign single-writer race) and `bypassEchoDuckEnabled` (set once by
+    // CallService from the remote flag before `start()`; false = no ducking, the default for every
+    // capture that is not a 1:1 call). `echoLastFrameRms` / `echoLastFarEndActive` hand the values
+    // `updateEchoBucket` already computed on the same buffer to the ducker: no second scan.
+    public var bypassEchoDuckEnabled = false
+    private var lastLoudPlayoutRms: Float = 0
+    private var echoLastFrameRms: Float = 0
+    private var echoLastFarEndActive = false
+    private var echoDuckState = BypassEchoDuck.State()
+    private var echoDuckTotals = BypassEchoDuck.Totals()
     // W-DEZIPPER (2026-07-12) — the gain actually applied to the LAST sample of
     // the previous frame. The make-up gain is ramped per-sample from this to the
     // current frame's target so the gain is continuous across the 20 ms frame
@@ -737,10 +750,13 @@ public final class AudioCapture {
     ///    200 ms hold window is deliberately generous for exactly this
     ///    reason (matching Android's own hold, which has the same slack).
     ///  - Unlike Android's `SpeakerEchoSuppressor`, iOS runs no software
-    ///    residual-echo suppression, so there is no `echo_gain_min`
-    ///    equivalent to ship — Apple's VP-IO is the only canceler in the
-    ///    chain and it is opaque past `setVoiceProcessingEnabled`. This
-    ///    struct is purely a MEASUREMENT; it does not attenuate anything.
+    ///    residual-echo suppression while VP-IO works — Apple's VP-IO is the
+    ///    only canceler in the chain and it is opaque past
+    ///    `setVoiceProcessingEnabled`. This struct is purely a MEASUREMENT;
+    ///    it does not attenuate anything. (The one exception, added by
+    ///    W-BYPASSDUCK, is `BypassEchoDuck`: a TX duck only in the degraded
+    ///    state VP-IO bypassed + loudspeaker, graded on the same raw buffer;
+    ///    its telemetry is `echo_duck_*`.)
     struct EchoBucketTotals: Equatable {
         var activeSumSq: Double = 0
         var activeFrames: Int64 = 0
@@ -1067,6 +1083,20 @@ public final class AudioCapture {
         // the "who owns AGC" decision (double-AGC risk) for buffers already in
         // flight on the old engine (each rebuild captures its own fresh value).
         let vpioActiveThisEngine = audioPipeline.voiceProcessingIsActive
+        // W-BYPASSDUCK — per-engine latch, like the VP-IO one above: the ducker runs only when the remote
+        // switch is on AND this engine has no VP-IO AND the output is the built-in loudspeaker. A route
+        // flip rebuilds the engine (W-SPKFIX), which re-evaluates it. Fresh gain state per engine.
+        let onSpeakerAtBuild = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
+        let duckEligible = BypassEchoDuck.isEligible(flagEnabled: bypassEchoDuckEnabled,
+                                                     vpioActive: vpioActiveThisEngine,
+                                                     onSpeaker: onSpeakerAtBuild)
+        echoDuckState = BypassEchoDuck.State()
+        if bypassEchoDuckEnabled {
+            emitDiagLine(BypassEchoDuck.startLine(gen: vpioWatchdogGen,
+                                                  flagEnabled: bypassEchoDuckEnabled,
+                                                  vpioActive: vpioActiveThisEngine,
+                                                  onSpeaker: onSpeakerAtBuild))
+        }
 
         // 4. Install the input tap to capture PCM frames
         let inputNode = engine.inputNode
@@ -1161,8 +1191,11 @@ public final class AudioCapture {
             self.lastMicFrameAtMs = tapNowMs  // W-AUDIOBEACON — one store, no other work on this thread
             guard var raw = self.convertTapBufferToInt16(buffer, rateConverter: rateConverter, canonicalFormat: format) else { return }
             self.updateEchoBucket(rawPcm: raw)
+            // W-BYPASSDUCK — the gain is decided from the RAW buffer (above) and folded into the AGC
+            // stage as its last multiplier; see `BypassEchoDuck` for why it must not sit before it.
+            let duckGain: Float = (duckEligible && Self.micAgcEnabled) ? self.nextEchoDuckGain(bufferBytes: raw.count) : 1
             if Self.micAgcEnabled {
-                self.applyMicMakeUpAgc(rawPcm: &raw, vpioActiveThisEngine: vpioActiveThisEngine)
+                self.applyMicMakeUpAgc(rawPcm: &raw, vpioActiveThisEngine: vpioActiveThisEngine, echoDuckGain: duckGain)
             }
             self.recordLevelDiagnostics(rawPcm: raw)
             if !vpioActiveThisEngine {
@@ -1327,12 +1360,31 @@ public final class AudioCapture {
         emitDiagLine(VpioObservability.configChangeLine(gen: vpioWatchdogGen, sinceEngineMs: sinceEngineMs))
     }
 
-    /// W-VPIOOBS — the `call.audio.diag` attributes for this capture (one call), read and reset at
-    /// call teardown next to `consumeLevelStats()`. See `VpioObservability.diagAttrs`.
+    /// W-BYPASSDUCK — one tap buffer of the ducker (tap thread; plain arithmetic on a small struct, no
+    /// allocation, no lock, no log). Reads what `updateEchoBucket` just computed for the same buffer.
+    private func nextEchoDuckGain(bufferBytes: Int) -> Float {
+        let next = BypassEchoDuck.step(state: echoDuckState,
+                                       farEndActive: echoLastFarEndActive,
+                                       micRms: echoLastFrameRms,
+                                       playedRms: lastLoudPlayoutRms,
+                                       bufferMs: BypassEchoDuck.bufferMs(byteCount: bufferBytes))
+        echoDuckState = next
+        echoDuckTotals.note(gain: next.gain, farEndActive: echoLastFarEndActive, nearDominant: next.nearLatched)
+        return next.gain
+    }
+
+    /// W-VPIOOBS / W-BYPASSDUCK — the `call.audio.diag` attributes for this capture (one call), read and
+    /// reset at call teardown next to `consumeLevelStats()`. See `VpioObservability.diagAttrs` and
+    /// `BypassEchoDuck.diagAttrs`.
     public func consumeVpioDiagAttrs() -> [String: Any] {
-        let attrs = VpioObservability.diagAttrs(ledger: vpioLedger, gen: vpioWatchdogGen, env: vpioEnvironment)
+        var attrs = VpioObservability.diagAttrs(ledger: vpioLedger, gen: vpioWatchdogGen, env: vpioEnvironment)
+        let duckAttrs = BypassEchoDuck.diagAttrs(totals: echoDuckTotals, enabled: bypassEchoDuckEnabled)
+        for (key, value) in duckAttrs {
+            attrs[key] = value
+        }
         vpioLedger = VpioObservability.Ledger()
         vpioEnvironment = nil
+        echoDuckTotals = BypassEchoDuck.Totals()
         return attrs
     }
 
@@ -1416,6 +1468,7 @@ public final class AudioCapture {
             }
             if Self.isLoudPlayout(rms: frameRms) {
                 lastLoudPlayoutAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+                lastLoudPlayoutRms = frameRms  // W-BYPASSDUCK — reference level for the near-end test
             }
         }
         // W-IOSJITTER wiring (2026-07-26) — from here the frame goes into the
@@ -1558,6 +1611,8 @@ public final class AudioCapture {
             self.echoBucketThisCall = Self.accumulatingEchoBucket(self.echoBucketThisCall,
                                                                    frameRms: frameRms,
                                                                    farEndActive: farEndActive)
+            self.echoLastFrameRms = frameRms          // W-BYPASSDUCK — same raw buffer, same far-end proxy
+            self.echoLastFarEndActive = farEndActive
         }
     }
 
@@ -1590,7 +1645,13 @@ public final class AudioCapture {
     /// the original inline code did — kept at the call site rather than
     /// inside here so the "AGC disabled entirely" case is visible at the
     /// tap-callback level, not buried inside this method.
-    private func applyMicMakeUpAgc(rawPcm raw: inout Data, vpioActiveThisEngine: Bool) {
+    ///
+    /// W-BYPASSDUCK (2026-09-25) — `echoDuckGain` (1 = none) is the TX echo ducker's multiplier and is
+    /// folded in HERE as the LAST factor of the per-sample ramp (Android's `MicMakeUpAgc.process`
+    /// does the same with `echoGain`): the AGC law above keeps measuring the raw buffer, so it can
+    /// neither compensate the duck nor be limited by it, and the ramp / de-zipper state records the
+    /// gain actually applied.
+    private func applyMicMakeUpAgc(rawPcm raw: inout Data, vpioActiveThisEngine: Bool, echoDuckGain: Float = 1) {
         let configuredMaxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
         raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
             guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
@@ -1653,7 +1714,7 @@ public final class AudioCapture {
             // and should essentially never fire. `limiter_pct` telemetry
             // measures whether that is actually true in the field.
             let gStart = self.micAgcRampFrom
-            let gTarget = self.micAgcGain
+            let gTarget = self.micAgcGain * echoDuckGain
             // W-TXHEADROOM-DEAD (2026-07-21) — this guard used to read
             // `gTarget > 1.001 || gStart > 1.001`, i.e. "only do work
             // when we are BOOSTING". That silently made the entire
