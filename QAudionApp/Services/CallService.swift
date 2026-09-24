@@ -1498,13 +1498,18 @@ final class CallService: @unchecked Sendable {
     }
 
     /// W-VPIOOBS (2026-09-25) — the engine package cannot see `RTLog`, so the numeric VP-IO lines
-    /// AudioCapture emits (`audioVp ev=arm|ff|fire|cfg ...`, one per watchdog arm / first tap buffer /
-    /// watchdog expiry / engine configuration change) are routed here with an accurate timestamp. The
-    /// lines are numeric on purpose: the log shipper's redactor keeps `key=number` bodies.
-    private func wireVpioDiagLines(_ capture: AudioCapture) {
+    /// AudioCapture emits (`audioVp ev=arm|ff|fire|stale|noop|cfg|duck ...`, one per watchdog arm / first
+    /// tap buffer / watchdog expiry / ignored expiry / ignored route override / engine configuration
+    /// change / engine start with the ducker armed) are routed here with an accurate timestamp. The lines
+    /// are numeric on purpose: the log shipper's redactor keeps `key=number` bodies.
+    ///
+    /// W-BYPASSDUCK (2026-09-25) — the same wiring point hands the capture its remote kill switch
+    /// (`ios_bypass_echo_duck`, default ON), read once per call.
+    private func wireVpioCapture(_ capture: AudioCapture) {
         capture.onDiagLine = { line in
             RTLog.info("call", line)
         }
+        capture.bypassEchoDuckEnabled = CallsGate.bypassEchoDuckEnabled()
     }
 
     func startCall(engine: QAudionEngine, contactId: String) throws {
@@ -1550,7 +1555,7 @@ final class CallService: @unchecked Sendable {
         // 3 s) instead of leaving the engine dead, and the 10 s engine-state
         // beacon is armed. See AudioInterruptionRecoveryPolicy.
         capture.sessionOwnership = .voiceCall
-        wireVpioDiagLines(capture)  // W-VPIOOBS
+        wireVpioCapture(capture)  // W-VPIOOBS / W-BYPASSDUCK
         let playback = AudioPlayback()
 
         // Encrypt-on-mic-frame callback: ogni PCM dal mic passa attraverso
@@ -1879,7 +1884,7 @@ final class CallService: @unchecked Sendable {
         // W-AUDIORESUME (2026-09-01) — same voice-call ownership as the
         // outgoing side (see startCall): bounded resume retry + state beacon.
         capture.sessionOwnership = .voiceCall
-        wireVpioDiagLines(capture)  // W-VPIOOBS
+        wireVpioCapture(capture)  // W-VPIOOBS / W-BYPASSDUCK
         let playback = AudioPlayback()
 
         // TX path: mic → VP DSP → encrypt → WS send (same as outgoing).
@@ -3252,10 +3257,13 @@ final class CallService: @unchecked Sendable {
                     //  * echo_gain_min — DELIBERATELY OMITTED. This is
                     //    Android's OWN software residual-echo-suppressor gain
                     //    floor (`SpeakerEchoSuppressor`); iOS runs no
-                    //    equivalent software suppression stage (Apple's VP-IO
-                    //    is the only canceler in the chain, opaque past
-                    //    `setVoiceProcessingEnabled`), so there is nothing
-                    //    honest to report under this name.
+                    //    equivalent software suppression stage while VP-IO
+                    //    works (Apple's VP-IO is the only canceler in the
+                    //    chain, opaque past `setVoiceProcessingEnabled`), so
+                    //    there is nothing honest to report under this name.
+                    //    The one iOS ducker (W-BYPASSDUCK: VP-IO bypassed AND
+                    //    loudspeaker only) reports `echo_duck_*` instead,
+                    //    merged in below with the W-VPIOOBS fields.
                     "echo_active_frames":  level.echoActiveFrames,
                     "echo_active_rms_pct": (level.echoActiveRmsPct * 10).rounded() / 10,
                     "echo_idle_frames":    level.echoIdleFrames,
