@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// W-GRPRECEIPTOUTBOX (2026-09-15, audit
 /// reference_ios_full_audit_2026_09_15.md finding #5) — durable retry for
@@ -33,15 +34,31 @@ public final class GroupReceiptOutbox {
     /// as `OutboxRetryPolicy`'s own give-up window.
     private let maxAgeMs: Int64 = 24 * 60 * 60 * 1000
 
+    /// At-rest protection: the persisted form is the same `LocalStoreCipher`
+    /// sealed String `GroupMessageStore` and `ComposerDraftStore` use (group
+    /// ids + server message ids + timestamps are social-graph / read-timing
+    /// metadata and used to sit in the UserDefaults plist in the clear). A
+    /// legacy plaintext `Data` blob written by earlier builds is still read
+    /// (it is re-persisted sealed by the next mutation, i.e. the next
+    /// `enqueue` or the drain's `remove`). The setter fails closed: if the Keychain key
+    /// is unreachable nothing is written and the previous value stays.
     private var entries: [Entry] {
         get {
+            if let sealed = UserDefaults.standard.string(forKey: defaultsKey),
+               let json = LocalStoreCipher.open(sealed),
+               let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) {
+                return decoded
+            }
             guard let data = UserDefaults.standard.data(forKey: defaultsKey),
                   let decoded = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
             return decoded
         }
         set {
-            guard let data = try? JSONEncoder().encode(newValue) else { return }
-            UserDefaults.standard.set(data, forKey: defaultsKey)
+            guard let data = try? JSONEncoder().encode(newValue),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            let attempt: String?? = try? LocalStoreCipher.seal(json)
+            guard let unwrapped = attempt, let sealed = unwrapped else { return }
+            UserDefaults.standard.set(sealed, forKey: defaultsKey)
         }
     }
 
