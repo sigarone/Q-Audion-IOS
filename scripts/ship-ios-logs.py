@@ -94,6 +94,7 @@ import re
 import sys
 import json
 import time
+import functools
 import hashlib
 import argparse
 import unicodedata
@@ -392,9 +393,26 @@ SAS_DROP_SUBSTRINGS = [
 #   - a run of >= 8 two-hex-digit bytes ("11 22 33 44 ..", "0x11,0x22,..")
 # Fail-closed on purpose: a legit telemetry line with a very long number list
 # is dropped too; that costs a log line, never a key.
+#
+# W-KEYWORDS 2026-09-24 (red-team finding 3): the numeric-list rules alone were
+# not enough. The same native trace also prints "secret [WORD:WORD] len 32 slat
+# << [] len 0" (8 real lines / 14 days, tag stdout): the bracket held words, not
+# numbers, so _has_key_bytes() said False and the line shipped (`slat [..]` /
+# `salt [..]` / `raw_key [..]` with any content shipped VERBATIM when the line
+# had a few key=value neighbours). The redactor must not depend on WHAT is
+# printed after a key-material word, so the WHOLE line is now also dropped on
+#   - the words derived key / raw key (derived_key, raw-key, "raw key", rawkey),
+#   - the words secret / slat / salt (and any word ending in key / keys:
+#     session_key, root_key ...) followed, within a few non-word characters, by
+#     an opening bracket [ ( { <  (whatever the group contains, even empty),
+#   - a run of >= 6 indexed key=value tokens sharing one stem (k0=17 k1=203 ...:
+#     a key printed one byte per kv pair is not a "list" for the rules above).
 KEYBYTES_MIN_RUN = 8
 _KB_N = KEYBYTES_MIN_RUN - 1
-RE_KEY_WORDS = re.compile(r"derived[\s_\-]*key")
+RE_KEY_WORDS = re.compile(r"(?:derived|raw)[\s_\-]*key")
+RE_SECRET_GROUP = re.compile(r"(?:secret|slat|salt|\w*keys?)\W{0,8}[\[({<]")
+RE_INDEXED_KV = re.compile(r"(?<![a-z0-9_.\-])([a-z][a-z_.\-]{0,23}?)\d{1,3}[=:]")
+INDEXED_KV_MAX = 5      # 6+ same-stem indexed kv tokens in one body -> DROP
 RE_DEC_BYTE_LIST_BARE = re.compile(
     r"(?<![\w.])\d{1,3}(?:\s*[,;]\s*\d{1,3}){%d,}(?:\s*[,;])?(?![\w.])" % _KB_N)
 RE_DEC_BYTE_LIST_BRACKETED = re.compile(
@@ -404,13 +422,28 @@ RE_HEX_BYTE_RUN = re.compile(
     r"(?![0-9a-f])" % _KB_N)
 
 
+def _has_indexed_kv_run(low):
+    """True if 6+ key=value tokens of one body share the same alphabetic stem
+    and end in an index (k0=.. k1=.. k2=..): raw bytes printed one per pair."""
+    counts = {}
+    for m in RE_INDEXED_KV.finditer(low):
+        stem = m.group(1)
+        counts[stem] = counts.get(stem, 0) + 1
+        if counts[stem] > INDEXED_KV_MAX:
+            return True
+    return False
+
+
 def _has_key_bytes(low):
     """True if the (NFKC-folded, lowercased) body looks like printed key bytes
-    or names a derived key. See the 1c-bis block above."""
+    or names key material (derived/raw key, secret/slat/salt + a bracket
+    group). See the 1c-bis block above."""
     return bool(RE_KEY_WORDS.search(low)
+                or RE_SECRET_GROUP.search(low)
                 or RE_DEC_BYTE_LIST_BARE.search(low)
                 or RE_DEC_BYTE_LIST_BRACKETED.search(low)
-                or RE_HEX_BYTE_RUN.search(low))
+                or RE_HEX_BYTE_RUN.search(low)
+                or _has_indexed_kv_run(low))
 
 # 1d. Residual high-entropy tripwire (run AFTER scrub). base64 AND base64url.
 RE_RESIDUAL_B64 = re.compile(r"[A-Za-z0-9+/=_\-]{12,}")
@@ -468,6 +501,296 @@ RE_FREEWORD = re.compile(r"^[A-Za-z][A-Za-z'\-]{2,}$")  # candidate NL word
 # match (those are caught as free words / numbers respectively).
 RE_MIXED_ALNUM_SECRET = re.compile(
     r"^(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}$")
+
+# ---------------------------------------------------------------------------
+# 1e-bis. FREE-WORD PLAUSIBILITY (W-FREEWORD 2026-09-24, red-team finding 1).
+#
+# The gate above only COUNTED "free" words; it never asked whether a token reads
+# like a word. Any alphabetic token of 3-11 letters was accepted as ordinary
+# text, so a secret written in base26 / base52 (letters only), cut into
+# 11-letter blocks and interleaved with structural tokens ("... <block> active
+# <block> ice=connected ...") shipped VERBATIM: the red-team round-tripped 32
+# synthetic bytes through the shipped body. Sibling holes in the same gate: a
+# 1-2 character token was "neutral" (unlimited), an UNPROTECTED key=value token
+# was structural whatever followed the '=' / ':' (`k=abcdefghi`, `abcdefghijk:`),
+# a "number" token could carry 5 trailing letters (`1abcdefghij`), a token with
+# non-ASCII look-alike letters was judged as free text, and a comma list of
+# <= 7 numbers per token (`1,2,3,4,5,6,7 8,9,...`) dodged the byte-list rule.
+# Now EVERY token that reaches the gate must earn its place:
+#   * a word is KNOWN (TELEMETRY_VOCAB / APP_VOCAB, or a camel/Pascal compound of
+#     known words) or it must LOOK like a word: clean case shape (lower,
+#     Capitalized, UPPER, or 2-4 camel parts -- aBcDeFgHiJk, the shape of a
+#     base52/base62 block, is rejected), a vowel, no run of 5 consonants or 5
+#     vowels, no tripled letter, vowels >= 20% of a 5+ letter word, and no
+#     bigram that (almost) never occurs in English / app identifiers;
+#   * the number of words that are NOT known is capped per body
+#     (MAX_UNKNOWN_WORDS). A lexical filter cannot stop an encoder that emits
+#     pronounceable words -- the cap bounds what one body can carry;
+#   * kv keys and values, number units, "id-like" values (a hex id prefix such as
+#     to=8bc24df8 stays readable; so does a number of 6+ digits; at most
+#     MAX_IDLIKE_TOKENS of them per body: the 14-day corpus has 2 at most, and 3
+#     hex blocks / big numbers per body would carry a third of a 16-byte key), 1-2 letter
+#     tokens, runs of number tokens and separator-joined tokens follow the same
+#     rules (_gate_kv_ok / _num_token_ok / _ident_ok). A bare number token is one
+#     number (or two joined by one separator); 3+ numbers in one token fail.
+#   * NOT closed: single numbers between vocabulary words ("rtt 1234 ok 5678 ...",
+#     23 bits per number) look exactly like the call-statistics lines that make
+#     up much of the corpus; only the key-byte list rules (1c-bis) stop the
+#     natural ways of printing a key as numbers. Documented residual.
+# A failed check is a HARD FAIL: the body falls back to the attribute summary.
+# APP_VOCAB = the words the app itself prints (class / state / enum names),
+# taken from the app sources and confirmed on the 14-day corpus, so the lines
+# that ship readable today keep shipping unchanged.
+# ---------------------------------------------------------------------------
+MAX_UNKNOWN_WORDS = 2     # per body: words that are neither TELEMETRY_VOCAB nor APP_VOCAB
+UNKNOWN_MAX_LEN = 9       # an unknown word longer than this is not a plausible word
+MAX_IDLIKE_TOKENS = 2     # per body: hex id prefixes (4-8 hex) + numbers of 6+ digits
+MAX_NUM_RUN = 3           # consecutive bare number tokens
+
+APP_VOCAB = frozenset("""
+    abs accept accepted activated activation active add aead aec aes agc age
+    allocation already android annullato answer answered apns appeared
+    appstate aprof apt armed arrival as atomic audio audiobeacon audioio
+    audionack audiosrtp audiovp aunit available average background base
+    bcrypto bcryptorest bcryptows beta binding bitrates ble block boot bound
+    bps bridge buf bw bw-cap bwe bypassed callconnect callctrl callee caller
+    callkit callservice calltiming camera cancelled capture cbor cc cd
+    cellular changed changing channel check client closed code com complete
+    component compression conf config conn connecting connection connessione
+    control controller cores corrected cos cpu crc create created cum dash
+    db dc dchangup dcmux decode decoded deferred delta destroyed di diag
+    dialandcall dispatch dp drain dtls dtx dup duplicate dupoffer during
+    echo ef empty enabled encoded encrypted endcall ended eng entry epoch
+    exchange extension fail failure false features fec feed fetch fetched
+    fir fire flags flush forced fps frameheight framewidth gain gate gcm gen
+    giveup grp handshake handshakeready hangup hangupecho hasv4session hb hd
+    headroom hf high hkdf hmac host http https icegate id idle idr idrfrc
+    idx if in inactive inbound index ing initiator inp install integration
+    intr ipv6 isincall islocked iterations jitter json kbps kcmac kdf kem
+    key keys kfr kind kms knew la learning len level lookup loss lost low lv
+    max maxbps mediadead mesh message metrickit mic mid min mis missedevt
+    mobile moderate msg mtu nack nalu nat negative negotiated negotiatedv4
+    net netchange network nil no nocontrol noctl noinput noise noop not ns
+    null nullptr number off offer offline offset ok old on online opaquehang
+    options opus origin out outbox outp outstanding ov overlay ownercont p2p
+    packet pad parameters patch paused payload pcm pcma pcmu persa piggy-
+    back ping pinned pipeline placeholder playout plc pli plp plpfeedback
+    ply poll pong port post pqc pre prebootstrap predictor pref present
+    prflx priorsent processing profile prx psk pt ptr ptt ptx pu qp queued
+    rb re reality reason rec receipt receipts receive receiveonly receiving
+    recv redacted reduction relay render renderer report requested reset
+    resolution resolved responder result retained richiesta ringing rollback
+    route routing rows rsn rst rtcp rtp rtt run rw rxdc rxpre sample
+    satisfied scaduto scorex sctp sdp selfver send sender sequence server
+    session set setactive settings sfu sha signaling sigsend skip skipped
+    source spk spkchg sr srflx srtcp srtp srtpkeyfwd ssrc st stable stata
+    stats stun suppressed swap target tcp terminate tf tg thresholds time
+    timestamp tls tofupin took total totalfail track transport trig true
+    turn txdc txfall type udp un unc uncertain undec unknown unseal
+    untracked updating upgrade upload upok us user usev4 uvk va vad vbind
+    vbwcap vbwcaprx vcap verified version vidcap video voice voiced voip vol
+    vpio vpn vpostneg vspostneg w-callawake wait watchdog wdstart wdstop
+    webrtc why wifi wire writable ws wss wsunavailable x xw yet
+""".split())
+
+# Second letters that (almost) never follow the first in English / app
+# identifiers (fewer than 6 of ~13k distinct words): a random letter block hits
+# one of them with high probability (a random 11-letter block passes ~4%).
+_BIGRAM_FORBID = {
+    "a": "jo",
+    "b": "hqxz",
+    "c": "jwxz",
+    "d": "qxz",
+    "f": "hjkqvxz",
+    "g": "bjkqvxz",
+    "h": "cgjkpqvwxz",
+    "i": "wy",
+    "j": "bcdfghjklmnpqrtvwxyz",
+    "k": "hjkqvxz",
+    "l": "hjqwxz",
+    "m": "gjqrvwxz",
+    "n": "x",
+    "o": "q",
+    "p": "jqxz",
+    "q": "abcdefghijklmnopqrtvwxyz",
+    "r": "jqz",
+    "s": "jxz",
+    "t": "jkqz",
+    "u": "hjkqvwy",
+    "v": "dghjklmqtwxyz",
+    "w": "bfgjkmquvxyz",
+    "x": "bgjklnoqrsuvwxz",
+    "y": "hjkquvxy",
+    "z": "bcdfghjklmnpqrstuvwxy",
+}
+_RE_CASE_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
+_CAMEL_SHORT_OK = frozenset(
+    "of to in on at is as if or by id up no ok do go it my re us".split())
+_RE_CONS5 = re.compile(r"[^aeiouy]{5}")
+_RE_VOW5 = re.compile(r"[aeiouy]{5}")
+_RE_TRIPLE = re.compile(r"(.)\1\1")
+_RE_ID_SPLIT = re.compile(r"[^A-Za-z0-9]+")
+_RE_ALNUM_RUNS = re.compile(r"[A-Za-z]+|[0-9]+")
+_RE_PH_INSIDE = re.compile(r"\[REDACTED:[a-z]+\]")
+_RE_KV_GATE = re.compile(r"^([A-Za-z][A-Za-z0-9_.\-]*)[=:](.*)$", re.DOTALL)
+_RE_HEX_PREFIX = re.compile(r"^(?:0x)?[0-9a-fA-F]{4,8}$")
+_RE_BIGNUM = re.compile(r"\d{6}")
+_RE_NUMTOK = re.compile(r"^[+\-]?\d{1,9}(?:[.,:]\d{1,9})?[.,:]?([A-Za-z%]{0,5})$")
+_GATE_WRAP = "[](){}<>.,:;!?\"'"          # wrappers stripped before judging a token
+_KV_VAL_STRIP = "()[]{}<>,;:.!?\"'`/\\*"
+# units a bare number token may carry (35ms 1.5s 64kbps 48khz 20dbfs 3x 12%).
+_NUM_UNITS = frozenset(
+    "ms us ns s sec secs min mins h hz khz mhz kbps mbps gbps bps fps kb mb gb "
+    "b db dbfs dbm px x k m g kib mib pkts pps %".split())
+
+
+def _word_known(low):
+    return low in TELEMETRY_VOCAB or low in APP_VOCAB
+
+
+def _case_shape_ok(w):
+    """w: ASCII letters, case preserved. lower / Capitalized / UPPER, or clean
+    camel/Pascal (2-4 parts, every part after the first 3+ letters, or a common
+    2-letter word, or a 2-letter acronym)."""
+    if len(w) < 2 or w.islower() or w.isupper():
+        return True
+    if w[0].isupper() and w[1:].islower():
+        return True
+    parts = _RE_CASE_PARTS.findall(w)
+    if len(parts) < 2 or len(parts) > 4:
+        return False
+    for p in parts[1:]:
+        if (len(p) >= 3 or p.lower() in _CAMEL_SHORT_OK or _word_known(p.lower())
+                or (p.isupper() and len(p) == 2)):
+            continue
+        return False
+    return True
+
+
+def _lex_ok(low):
+    """True if the lower-case letter string reads like a word (see 1e-bis)."""
+    n = len(low)
+    if n <= 2 or _word_known(low):
+        return True
+    vowels = sum(1 for c in low if c in "aeiouy")
+    if (vowels == 0 or _RE_CONS5.search(low) or _RE_VOW5.search(low)
+            or _RE_TRIPLE.search(low)):
+        return False
+    if n >= 5 and vowels * 5 < n:
+        return False
+    for a, b in zip(low, low[1:]):
+        if b in _BIGRAM_FORBID.get(a, ""):
+            return False
+    return True
+
+
+@functools.lru_cache(maxsize=16384)
+def _word_ok(w):
+    """(ok, n_unknown) for one ASCII-letter piece: case shape + known/lexical.
+    n_unknown = how many of its camel/Pascal parts are not app vocabulary; an
+    unknown part must read like a word and is at most UNKNOWN_MAX_LEN letters
+    (a long random block is never "a word we have not seen yet")."""
+    if len(w) > 24 or not _case_shape_ok(w):
+        return False, 0
+    low = w.lower()
+    if _word_known(low):
+        return True, 0
+    subs = [s.lower() for s in _RE_CASE_PARTS.findall(w)]
+    unknown = 0
+    for s in subs:
+        if _word_known(s):
+            continue
+        if len(s) > UNKNOWN_MAX_LEN or not _lex_ok(s):
+            return False, 0
+        unknown += 1
+    return True, unknown
+
+
+@functools.lru_cache(maxsize=16384)
+def _ident_ok(tok):
+    """(ok, n_unknown_words) for an identifier-like token (kv key / value, or a
+    gate token that is not a placeholder / number / kv). Non-ASCII letters,
+    digits or marks (look-alikes) fail; the token splits on non-alphanumerics
+    into <= 4 pieces; a piece is digits (<= 5), a word (_word_ok) or a short
+    letter/digit mix (h264, p2p, x25519: <= 3 alternations)."""
+    for ch in tok:
+        if ch > "\x7f" and unicodedata.category(ch)[0] in "LMN":
+            return False, 0
+    if _word_known(tok.lower()):
+        return True, 0                    # the whole token is vocabulary (w-callawake)
+    pieces = [p for p in _RE_ID_SPLIT.split(tok) if p]
+    if len(pieces) > 8 or sum(1 for p in pieces if p.isdigit()) > 2:
+        return False, 0                   # 1,2,3,4,5,6,7 / 1.2.3.4: a number list
+    unknown = 0
+    for p in pieces:
+        if p.isdigit():
+            if len(p) > 5:
+                return False, 0
+            continue
+        if p.isalpha():
+            ok, n = _word_ok(p)
+            if not ok or (n and len(pieces) > 4):
+                return False, 0
+            unknown += n
+            continue
+        if _word_known(p.lower()):
+            continue
+        if len(pieces) > 4:
+            return False, 0       # long joined tokens: every piece must be known
+        runs = _RE_ALNUM_RUNS.findall(p)
+        if len(runs) > 3:
+            return False, 0
+        for r in runs:
+            if r.isdigit():
+                if len(r) > 5:
+                    return False, 0
+            elif len(r) >= 3 and not _word_ok(r)[0]:
+                return False, 0
+        unknown += 1
+    return True, unknown
+
+
+def _is_bignum(tok):
+    """A number token of 6+ digits (an "id-like" value: budgeted per body)."""
+    return _RE_BIGNUM.search(tok) is not None
+
+
+def _num_token_ok(tok):
+    """A bare number token: one number, or two joined by ONE '.' ',' ':' (12.5,
+    1,234, 1:23), an optional trailing separator and, optionally, a known unit
+    suffix. A longer comma list (1,2,3,4,5,6,7) is not a number: the corpus has
+    none, and 7 bytes per token dodged the >= 8-number list rule."""
+    m = _RE_NUMTOK.match(tok)
+    if not m:
+        return False
+    unit = m.group(1)
+    return not unit or unit.lower() in _NUM_UNITS
+
+
+def _gate_kv_ok(tok):
+    """Judge an UNPROTECTED key=value / key:value gate token (the old gate
+    trusted everything after the separator). Returns (ok, is_idlike, n_unknown_words):
+    is_idlike = the value is a hex id prefix or a number of 6+ digits. The key must read like an identifier; the value must be
+    empty, a [REDACTED:*] placeholder, a number (+ known unit), a short hex id
+    prefix, or identifier-like."""
+    m = _RE_KV_GATE.match(tok)
+    if not m:
+        return False, False, 0
+    ok, unknown = _ident_ok(m.group(1))
+    if not ok:
+        return False, False, 0
+    v = _RE_PH_INSIDE.sub("", m.group(2)).strip(_KV_VAL_STRIP)
+    if not v:
+        return True, False, unknown
+    if _num_token_ok(v):
+        return True, _is_bignum(v), unknown
+    if _RE_HEX_PREFIX.match(v):
+        return True, True, unknown
+    ok, n = _ident_ok(v)
+    if not ok:
+        return False, False, 0
+    return True, False, unknown + n
+
 
 # 1f. hard length cap.
 BODY_CAP = 512
@@ -543,11 +866,16 @@ cookie ticket cert pubkey privkey ufrag pwd verify verification confirm
 confirmation activation sms unlock passcode challenge invite
 """.split())
 # A numeric value under a key whose LAST word is a measurement (peerReadyAgeMs,
-# userCount, retryAttempts) is a measurement, not an identity: the deny WORDS
-# are waived for it (the deny SUBSTRINGS below still apply).
+# userCount, retryAttempts) is a measurement, not an identity: the ROLE words of
+# _KV_MEASURE_WAIVE are waived for it. The identity words (id, name, email,
+# phone, ip, number, ...) and the deny SUBSTRINGS below are never waived.
 _KV_MEASURE_SUFFIX = frozenset("""
 ms sec secs seconds age count counts len length size bytes bps kbps fps hz rate
 ratio attempts retries total idx index seq score rtt ttl pct percent
+""".split())
+_KV_MEASURE_WAIVE = frozenset("""
+peer user caller callee from to sender recipient owner account acct contact
+host activation
 """.split())
 # ... and concatenated spellings the word splitter cannot see.
 _KV_DENY_SUBSTR = ("passw", "secret", "token", "cred", "fingerprint",
@@ -567,15 +895,26 @@ RE_KV_DEC = re.compile(r"^-?\d{1,6}\.\d{1,4}$", re.ASCII)
 RE_KV_UNITNUM = re.compile(
     r"^-?\d{1,7}(?:\.\d{1,3})?(?:ms|us|ns|s|sec|min|h|hz|khz|kbps|mbps|bps|"
     r"fps|kb|mb|gb|b|db|dbfs|px|x|%)$", re.ASCII)
-RE_KV_VERSION = re.compile(r"^\d{1,4}(?:\.\d{1,4}){1,2}$", re.ASCII)  # 4 parts = IPv4-shaped
-RE_KV_VTAG = re.compile(r"^v\d{1,3}(?:-[a-z]{2,8})?$", re.ASCII)
+# W-KVPRECISION-2: closed shapes. A version is major.minor[.patch] (a 3-digit
+# first group, i.e. an IPv4 fragment, is not a version); a routing-epoch tag is
+# v<1-2 digits> with one of the suffixes the app defines (MessageRatchet:
+# v4, v5-chat, v5-ctrl, v1-fallback).
+RE_KV_VERSION = re.compile(r"^\d{1,2}\.\d{1,3}(?:\.\d{1,4})?$", re.ASCII)
+RE_KV_VTAG = re.compile(r"^v\d{1,2}(?:-(?:ctrl|chat|fallback))?$", re.ASCII)
 # enum: one '_' at most (snake_case constants); a hyphen-joined value could be a
 # pair of passphrase / SAS words, so hyphenated constants live in KV_FIXED_VOCAB.
 RE_KV_ENUM = re.compile(r"^[a-z][a-z0-9]{1,11}(?:_[a-z][a-z0-9]{1,11})?$")
 RE_KV_LCAMEL = re.compile(r"^[a-z]{2,10}(?:[A-Z][a-z]{2,10}){1,3}$")
 RE_KV_EPOCH10 = re.compile(r"^1[5-9]\d{8}$", re.ASCII)        # 2017..2033 in seconds
-_RE_KV_TIME_KEY = re.compile(
-    r"(?i)(?:ver|version|epoch|cached|stamp|since|created|updated|expires?)$")
+# keys (whole key, lower-cased) allowed to carry each of the closed value shapes:
+# the ones the app / the 14-day corpus actually use, plus their obvious siblings.
+_KV_VTAG_KEYS = frozenset(["epoch", "wire"])
+_KV_VERSION_KEYS = frozenset(["version", "ver", "appversion", "osversion",
+                              "sdkversion"])
+_KV_EPOCH_KEYS = frozenset(["version", "ver", "selfver", "peerver", "cached"])
+# per-body budgets for the protected key=value tokens (corpus maxima: 3 open
+# tokens; see _protect_benign_kv).
+KV_MAX_OPEN = 6
 
 # Fixed (constant) mixed-case strings the app prints. CLOSED set: a value that
 # is not lower-case / lowerCamel / number-shaped and not listed here is masked.
@@ -638,87 +977,156 @@ def _kv_enum_key(key):
 
 
 def _kv_key_ok(key, numeric=False):
-    """Key half of the grammar: word-like parts, no identity/secret word."""
+    """Key half of the grammar: word-like parts, no identity/secret word.
+    Returns the number of key words that are not app vocabulary (>= 0) when the
+    key is acceptable, else -1."""
     if not key or len(key) > 40 or key[-1] in "._-":
-        return False
+        return -1
     for part in re.split(r"[._\-]+", key):
         # whole part: length / digit / hex shape; consonant runs are judged per
         # camelCase word below (lastKfrAgeMs is fine, 'qzxvbnmk' is not).
         if not part or not _kv_plausible_word(part, consonants=False):
-            return False
+            return -1
         for cw in _KV_WORD_SPLIT.findall(part):
             if cw.isdigit():
                 continue
             if _RE_CONSONANT_RUN.search(cw):
-                return False
+                return -1
     words = _kv_key_words(key)
     low = key.lower()
+    # W-KVPRECISION-2 (red-team finding 4): the identity words (id, name, email,
+    # phone, ip, number, ...) are NEVER waived. Only the ROLE words in
+    # _KV_MEASURE_WAIVE (peer, user, caller, ...) are, and only for a numeric
+    # value under a measurement key (peerReadyAgeMs, userCount): the old code
+    # waived EVERY deny word there, so peerSessionIdMs=1234567 shipped.
     measurement = numeric and bool(words) and words[-1] in _KV_MEASURE_SUFFIX
-    if not measurement and any(w in _KV_DENY_WORDS for w in words):
-        return False
+    for w in words:
+        if w in _KV_DENY_WORDS and not (measurement and w in _KV_MEASURE_WAIVE):
+            return -1
     if any(s in low for s in _KV_DENY_SUBSTR):
-        return False
+        return -1
     if "code" in words and _KV_CODE_CONTEXT.intersection(words):
-        return False
-    return True
+        return -1
+    # W-FREEWORD: the key is free text too (`qzkmxvplwtrnh=1`): it must read like
+    # an identifier -- known words, or word-like ones.
+    ok, n_unknown = _ident_ok(key)
+    return n_unknown if ok else -1
 
 
-def _kv_value_ok(key, val):
-    """Value half of the grammar (see the 1g block)."""
-    if not val or len(val) > 24:
-        return False
-    if val.lower() in _KV_BOOLS and val in (val.lower(), val.capitalize(),
-                                            val.upper()):
-        return True
-    if RE_KV_INT.match(val) or RE_KV_DEC.match(val) or RE_KV_UNITNUM.match(val):
-        return True
-    if RE_KV_VERSION.match(val) or RE_KV_VTAG.match(val):
-        return True
-    if RE_KV_EPOCH10.match(val):
-        return bool(_RE_KV_TIME_KEY.search(key))
-    if val in KV_FIXED_VOCAB:
-        return True
-    # an open-vocabulary WORD is only trusted under an enum-like key (state,
-    # reason, mode, kind, ...): a lower-case string under key `x` or `sessionkey`
-    # could be anything, so it takes the unchanged masking path.
-    if RE_KV_ENUM.match(val):
-        return _kv_enum_key(key) and all(
-            _kv_plausible_word(p, 12, 3) for p in val.split("_"))
-    if RE_KV_LCAMEL.match(val):
-        return _kv_enum_key(key) and all(
-            _kv_plausible_word(p, 12, 0) for p in _KV_WORD_SPLIT.findall(val))
-    return False
-
-
-def _kv_is_benign(key, val):
-    """True only if key=val is provably-benign structured telemetry."""
+@functools.lru_cache(maxsize=16384)
+def _kv_classify(key, val):
+    """Value class of a provably-benign key=val token, else None. Returns
+    (kind, n_unknown_words): n_unknown counts the words of the key and of the
+    value that are not app vocabulary (budgeted per body by the caller)."""
     tok = key + "=" + val
     # the keyed deny rules always win (call id / device / psk|key|tag|iv|...).
     if (RE_CALLID_KEY.search(tok) or RE_DEVICE_KEY.search(tok)
             or RE_SECRET_KV.search(tok) or RE_SECRET_PREFIXED.search(tok)):
-        return False
-    if not _kv_value_ok(key, val):
-        return False
-    if val.lower() in _KV_BOOLS:
+        return None, 0
+    if not val or len(val) > 24:
+        return None, 0
+    klow = key.lower()
+    low = val.lower()
+    kind = None
+    n_val = 0
+    if low in _KV_BOOLS and val in (low, val.capitalize(), val.upper()):
+        kind = "bool"
+    elif RE_KV_INT.match(val) or RE_KV_DEC.match(val) or RE_KV_UNITNUM.match(val):
+        kind = "num"
+    # W-KVPRECISION-2 (red-team finding 2): the version / tag / epoch channels
+    # used to survive under ANY key. Now they need a key from a short list and
+    # a value from a closed shape (v<1-2 digits>[-ctrl|-chat|-fallback];
+    # major.minor[.patch]; epoch seconds), so they cannot smuggle data.
+    elif RE_KV_VERSION.match(val):
+        if klow in _KV_VERSION_KEYS:
+            kind = "version"
+    elif RE_KV_VTAG.match(val):
+        if klow in _KV_VTAG_KEYS:
+            kind = "vtag"
+    elif RE_KV_EPOCH10.match(val):
+        if klow in _KV_EPOCH_KEYS:
+            kind = "epoch"
+    elif val in KV_FIXED_VOCAB:
+        kind = "fixed"
+    # an open-vocabulary WORD is only trusted under an enum-like key (state,
+    # reason, mode, kind, ...): a lower-case string under key `x` or `sessionkey`
+    # could be anything, so it takes the unchanged masking path. It must also
+    # read like a word / be app vocabulary (W-FREEWORD), and unknown ones are
+    # budgeted per body.
+    elif RE_KV_ENUM.match(val):
+        if _kv_enum_key(key) and all(
+                _kv_plausible_word(p, 12, 3) for p in val.split("_")):
+            ok, n_val = _ident_ok(val)
+            if ok:
+                kind = "enum"
+    elif RE_KV_LCAMEL.match(val):
+        if _kv_enum_key(key) and all(
+                _kv_plausible_word(p, 12, 0) for p in _KV_WORD_SPLIT.findall(val)):
+            ok, n_val = _word_ok(val)
+            if ok:
+                kind = "lcamel"
+    if kind is None:
+        return None, 0
+    if kind == "bool":
         # a bare boolean carries one bit: any word-like key (identity words are
         # fine here -- there is nothing to hide in true/false).
-        return len(key) <= 40 and key[-1] not in "._-" and all(
-            _kv_plausible_word(p, consonants=False)
-            for p in re.split(r"[._\-]+", key) if p)
-    numeric = bool(RE_KV_INT.match(val) or RE_KV_DEC.match(val)
-                   or RE_KV_UNITNUM.match(val))
-    return _kv_key_ok(key, numeric=numeric)
+        if len(key) > 40 or key[-1] in "._-" or not all(
+                _kv_plausible_word(p, consonants=False)
+                for p in re.split(r"[._\-]+", key) if p):
+            return None, 0
+        ok, n_key = _ident_ok(key)
+        return ("bool", n_key) if ok else (None, 0)
+    n_key = _kv_key_ok(key, numeric=(kind == "num"))
+    if n_key < 0:
+        return None, 0
+    return kind, n_key + n_val
+
+
+def _kv_is_benign(key, val):
+    """True only if key=val is provably-benign structured telemetry."""
+    return _kv_classify(key, val)[0] is not None
+
+
+# kinds whose value is not a plain number / boolean: budgeted per body.
+_KV_OPEN_KINDS = frozenset(["version", "vtag", "epoch", "enum", "lcamel", "fixed"])
+
+
+class _ProtList(list):
+    """The protected key=value tokens of one body; `.unknown` = how many of their
+    key / value words are not app vocabulary, `.idlike` = how many carry a number
+    of 6+ digits (both shared with the gate's budgets)."""
+    unknown = 0
+    idlike = 0
 
 
 def _protect_benign_kv(s):
     """Swap every benign key=value token for a sentinel. Returns (text, list of
-    the protected tokens); restore with _restore_kv()."""
-    prot = []
+    the protected tokens); restore with _restore_kv(). Per-body budgets (W-
+    KVPRECISION-2): at most KV_MAX_OPEN tokens with a non-numeric, non-boolean
+    value, MAX_UNKNOWN_WORDS key/value words that are not app vocabulary and
+    MAX_IDLIKE_TOKENS numbers of 6+ digits (the gate spends the same budgets on
+    the rest of the body); any further token is simply swept (masked) like before
+    the precision work."""
+    prot = _ProtList()
+    budget = {"open": 0, "unknown": 0, "idlike": 0}
 
     def _sub(m):
-        if len(prot) >= KV_MAX_PROTECTED or not _kv_is_benign(m.group(1),
-                                                              m.group(2)):
+        if len(prot) >= KV_MAX_PROTECTED:
             return m.group(0)
+        kind, n_unk = _kv_classify(m.group(1), m.group(2))
+        if kind is None:
+            return m.group(0)
+        is_open = 1 if kind in _KV_OPEN_KINDS else 0
+        is_big = 1 if kind == "num" and _is_bignum(m.group(2)) else 0
+        if (budget["open"] + is_open > KV_MAX_OPEN
+                or budget["unknown"] + n_unk > MAX_UNKNOWN_WORDS
+                or budget["idlike"] + is_big > MAX_IDLIKE_TOKENS):
+            return m.group(0)
+        budget["open"] += is_open
+        budget["unknown"] += n_unk
+        budget["idlike"] += is_big
+        prot.unknown = budget["unknown"]
+        prot.idlike = budget["idlike"]
         prot.append(m.group(0))
         return KV_OPEN + chr(KV_IDX_BASE + len(prot) - 1) + KV_CLOSE
 
@@ -799,9 +1207,9 @@ def _has_residual_secret(body):
     return False
 
 
-def _passes_structured_gate(scrubbed):
+def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
     """POSITIVE allow-list. A body ships ONLY if it is recognizably structured
-    telemetry. TWO conditions, BOTH required (fail-closed):
+    telemetry. THREE conditions, ALL required (fail-closed):
 
       (A) NO run of more than MAX_FREEWORD_RUN consecutive free
           natural-language words; AND
@@ -810,34 +1218,67 @@ def _passes_structured_gate(scrubbed):
           (key=value / [REDACTED:*] / number / known state-enum vocab) and the
           free words must be the minority. A plaintext sentence ("he said meet
           at noon tomorrow") has ZERO structural anchors and many free words,
-          so it fails (B) and is replaced by the attribute summary.
+          so it fails (B) and is replaced by the attribute summary; AND
+      (C) (W-FREEWORD) every token must be PLAUSIBLE (see 1e-bis): words must
+          be known or read like words, at most MAX_UNKNOWN_WORDS words that are
+          not known, key=value values / units / hex prefixes / separator-joined
+          tokens / runs of numbers are checked too. A token that fails is a
+          HARD FAIL (a random letter block is not "just a free word").
 
     Bracketed placeholders, key=value tokens, numbers, known-vocab words and
     punctuation are "structural"; unknown alphabetic words >=3 chars are
-    "free". Connectors (<=2 chars) are neutral (counted as neither)."""
+    "free". Connectors (<=2 chars) are neutral for (A)/(B) but count as unknown
+    words for (C) unless they are app vocabulary."""
     run = 0
     free = 0
     structural = 0
+    unknown = unknown_used   # (C) words that are neither TELEMETRY_VOCAB nor APP_VOCAB
+                             # (already spent by the protected key=value tokens)
+    idlike = idlike_used   # (C) hex id prefixes / 6+ digit numbers (kv values too)
+    numrun = 0      # (C) consecutive bare number tokens
     # each protected benign key=value sentinel (1g) becomes its own token, so a
     # neighbouring word or punctuation is judged on its own merits.
     for tok in RE_KVSENT.sub(lambda m: " %s " % m.group(0), scrubbed).split():
         if RE_PLACEHOLDER_TOKEN.match(tok):
             run = 0
+            numrun = 0
             structural += 1
             continue
         if RE_KVSENT_TOKEN.match(tok):
             # a protected benign key=value token: structural by construction.
             run = 0
+            numrun = 0
             structural += 1
             continue
         if RE_KV_TOKEN.match(tok):
+            # W-FREEWORD: an unprotected key=value token used to be structural
+            # whatever followed the separator; key and value are judged now.
+            ok, is_idlike, n_unk = _gate_kv_ok(tok)
+            if not ok:
+                return False
+            if is_idlike:
+                idlike += 1
+                if idlike > MAX_IDLIKE_TOKENS:
+                    return False
+            unknown += n_unk
+            if unknown > MAX_UNKNOWN_WORDS:
+                return False
+            run = 0
+            numrun = 0
+            structural += 1
+            continue
+        if RE_NUM_TOKEN.match(tok) and _num_token_ok(tok):
+            numrun += 1
+            if numrun > MAX_NUM_RUN:
+                return False
+            if _is_bignum(tok):
+                idlike += 1
+                if idlike > MAX_IDLIKE_TOKENS:
+                    return False
             run = 0
             structural += 1
             continue
-        if RE_NUM_TOKEN.match(tok):
-            run = 0
-            structural += 1
-            continue
+        numrun = 0
         if RE_PUNCT_TOKEN.match(tok):
             run = 0
             continue
@@ -849,7 +1290,14 @@ def _passes_structured_gate(scrubbed):
         core = tok.strip("[](){}<>.,:;!?\"'").lower()
         if RE_MIXED_ALNUM_SECRET.match(core):
             return False
+        # (C) what is left of the token once redactor placeholders and wrapper
+        # punctuation are removed: judged for plausibility below. A placeholder
+        # glued to punctuation ("[REDACTED:blob]:") is the redactor's own
+        # output: it keeps its legacy free-word count but nothing to judge.
+        eff = _RE_PH_INSIDE.sub("", tok).strip(_GATE_WRAP + "*")
         if core in TELEMETRY_VOCAB:
+            if eff.isalpha() and not _case_shape_ok(eff):
+                return False
             run = 0
             structural += 1
             continue
@@ -857,18 +1305,24 @@ def _passes_structured_gate(scrubbed):
             # Short connector: neutral, but it does NOT break a free-word run
             # (so "meet at noon" is two free words in one run, not reset by
             # "at"). This is what catches plaintext prose.
+            if eff.isalpha() and not _word_known(eff.lower()):
+                unknown += 1
+                if unknown > MAX_UNKNOWN_WORDS:
+                    return False
             continue
-        if RE_FREEWORD.match(core):
-            run += 1
-            free += 1
-            if run > MAX_FREEWORD_RUN:
-                return False
-            continue
-        # Unknown token shape (residual mixed alnum): conservative -> free.
+        # a free word (RE_FREEWORD) or an unknown token shape: conservative ->
+        # free, and it must also be plausible (C).
         run += 1
         free += 1
         if run > MAX_FREEWORD_RUN:
             return False
+        if eff:
+            ok, n_unk = _ident_ok(eff)
+            if not ok:
+                return False
+            unknown += n_unk
+            if unknown > MAX_UNKNOWN_WORDS:
+                return False
     # (B) -- if there are free words, require positive structure AND that the
     # free words do not dominate. Pure structure (free==0) always passes.
     if free == 0:
@@ -939,7 +1393,8 @@ def redact_body(orig_body, tag_is_safe, attrs):
         scrubbed = _attribute_summary(attrs)
 
     # 7 -- positive structured-shape gate.
-    elif not _passes_structured_gate(scrubbed):
+    elif not _passes_structured_gate(scrubbed, getattr(protected, "unknown", 0),
+                                     getattr(protected, "idlike", 0)):
         scrubbed = _attribute_summary(attrs)
 
     # 7b -- put the protected benign key=value tokens back (only reached when
@@ -2127,14 +2582,18 @@ def run_selftest():
         failures.append("KV-SENTINEL: forged sentinel not neutralised: %r" % (body,))
     # more benign tokens than the per-body cap: the surplus is swept, not lost
     # to an IndexError and never restored wrongly.
-    def _kvkey(i):
-        s = ""
-        for _ in range(6):
-            s += "aeiou"[i % 5]
-            i //= 5
-        return "n" + s
-
-    many = " ".join("%s=%d" % (_kvkey(i), i % 7)
+    # keys = pairs of app-vocabulary words (audioVideo, ...): word-like, no deny
+    # word, no unknown word -> every one is protectable until the cap.
+    _kvw = sorted(w for w in APP_VOCAB
+                  if w.isalpha() and 4 <= len(w) <= 7 and w not in _KV_DENY_WORDS)
+    _kvkeys = []
+    for _a in _kvw:
+        for _b in _kvw:
+            if _a != _b and _kv_is_benign(_a + _b.capitalize(), "1"):
+                _kvkeys.append(_a + _b.capitalize())
+        if len(_kvkeys) >= KV_MAX_PROTECTED + 50:
+            break
+    many = " ".join("%s=%d" % (_kvkeys[i], i % 7)
                     for i in range(KV_MAX_PROTECTED + 50))
     _t, _p = _protect_benign_kv(many)
     if len(_p) != KV_MAX_PROTECTED or _restore_kv(_t, _p) != many:
@@ -2142,6 +2601,76 @@ def run_selftest():
     # keyed deny rules run even when the token would be benign by shape.
     if "[REDACTED" not in _scrub_body("callId=none role=caller"):
         failures.append("KV-DENY: callId=none was not masked")
+
+    # 26. RED-TEAM HARDENING 2026-09-24 (W-FREEWORD / W-KEYWORDS / W-KVPRECISION-2).
+    #     Compact version of scripts/test_ship_ios_redactor_hardening.py; every
+    #     value is SYNTHETIC (the bytes 1..32 / letter runs / fixed words).
+    def _enc(data, alphabet):
+        n = int.from_bytes(data, "big")
+        s = ""
+        while n:
+            n, r = divmod(n, len(alphabet))
+            s = alphabet[r] + s
+        return s
+
+    def _body(line, tag="stdout"):
+        _sc, _safe = resolve_scope(tag)
+        _k, _b = redact_body(line, _safe, extract_attributes(line))
+        return _b if _k else ""
+
+    _syn = bytes(range(1, 33))
+    # 26a. free words: letter blocks (base26 / base52) between structural tokens.
+    for _alpha, _lab in (("abcdefghijklmnopqrstuvwxyz", "b26"),
+                         ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "b52")):
+        _s = _enc(_syn, _alpha)
+        for _k in (3, 5, 8, 11):
+            _bl = [_s[i:i + _k] for i in range(0, len(_s), _k)]
+            for _line in ("state=active " + " active ".join(_bl) + " ice=connected",
+                          "ice=connected " + " retry=1 ".join(_bl) + " node=helsinki"):
+                _got = [b for b in _bl if b in _body(_line).split()]
+                if len(_got) > MAX_UNKNOWN_WORDS or any(len(b) >= 10 for b in _got):
+                    failures.append("LEAK[freeword/%s/%d]: %d block(s) survived"
+                                    % (_lab, _k, len(_got)))
+    for _blk in ("aBcDeFgHiJk", "kXqJmZvBnRt", "1abcdefghij", "abcd\u0435fghijk"):
+        if _blk in _body("state=active ice=connected %s role=caller" % _blk):
+            failures.append("LEAK[freeword/shape]: %r survived" % _blk)
+    _c = ["".join(chr(97 + (i * 7 + j * 3) % 26) for j in range(9)) for i in range(4)]
+    for _mk, _lab in (("%s=true", "key"), ("x=%s", "value"), ("%s:", "emptyvalue")):
+        _b = _body("state=active " + " ".join(_mk % c for c in _c))
+        if sum(1 for c in _c if c in _b) > MAX_UNKNOWN_WORDS:
+            failures.append("LEAK[freeword/kv-%s]: carrier tokens survived" % _lab)
+    # 26b. kv-precision side channels (any key) + the legit forms that stay.
+    for _line, _sec in (("chunk0=v1-abcdefgh state=active", "v1-abcdefgh"),
+                        ("netSeq=192.168.1 state=active", "192.168.1"),
+                        ("ver=203.0.113 state=active", "203.0.113"),
+                        ("somethingCached=1758433211 state=active", "1758433211"),
+                        ("epoch=v5-abcdefgh state=active", "v5-abcdefgh"),
+                        ("state=abcdefghijk role=caller", "abcdefghijk")):
+        if _sec in _body(_line):
+            failures.append("LEAK[kv-channel]: %r survived in %r" % (_sec, _line))
+    for _line in ("epoch=v5-ctrl wire=v4 state=active", "version=1.0.1177 state=active",
+                  "selfver=1758433211 cached=1758433211 state=active"):
+        if _body(_line) != _line:
+            failures.append("REGRESS[kv-channel]: legit line altered: %r" % _line)
+    # 26c. key-material words followed by a group are dropped whole, any content.
+    for _line in ("(x.cc:1): secret [ABCDEF:GHIJKL] len 32",
+                  "(x.cc:1): secret (ABCDEF:GHIJKL) slat << [] len 0",
+                  "state=active raw_key [ABCD:EFGH] ice=connected",
+                  "state=active salt [ab:cd] ice=connected",
+                  "state=active slat (7) ice=connected",
+                  "state=active derived_key ok ice=connected",
+                  "state=active raw key computed ice=connected",
+                  "state=active " + " ".join("k%d=%d" % (i, b) for i, b in enumerate(_syn))):
+        if _body(_line):
+            failures.append("LEAK[key-words]: line was not dropped: %r" % _line[:60])
+    if not _body("state=active k0=1 k1=2 k2=3 k3=4 k4=5"):
+        failures.append("REGRESS[key-words]: 5 indexed kv tokens must still ship")
+    # 26d. identity word before the measure suffix.
+    for _k, _v, _want in (("peerSessionIdMs", "1234567", False), ("userIdCount", "5", False),
+                          ("peerReadyAgeMs", "-1", True), ("userCount", "3", True),
+                          ("activationCount", "1", True), ("userId", "3", False)):
+        if _kv_is_benign(_k, _v) != _want:
+            failures.append("KV-IDENTITY: _kv_is_benign(%r, %r) != %r" % (_k, _v, _want))
 
     out("=" * 72)
     out("SELF-TEST: privacy redaction regression")
@@ -2152,7 +2681,7 @@ def run_selftest():
         out("")
         out("  RESULT: NO-GO (%d leak/regression)" % len(failures))
         return 1
-    out("  25/25 cases pass: no forbidden value survived; structured telemetry")
+    out("  26/26 cases pass: no forbidden value survived; structured telemetry")
     out("  still ships (benign key=value tokens kept, adversarial key=value")
     out("  secrets masked, sentinels unforgeable); call_id hashed;")
     out("  SSID/serial/SDP/SAS/plaintext blocked;")
@@ -2161,6 +2690,9 @@ def run_selftest():
     out("  ship order is oldest-first; --local-dir mirror mode lists/reads")
     out("  W417 blobs with canonical prod paths, ignores symlinks/non-W417;")
     out("  key-byte lists (derived_key / >=8 decimal or hex bytes) DROPPED whole;")
+    out("  secret/slat/salt + bracket group, raw_key, indexed k0=..k5= bytes DROPPED;")
+    out("  free-word blocks (base26/base52), kv side channels, identity+measure keys")
+    out("  (peerSessionIdMs) masked; unknown words capped per body;")
     out("  restricted-exec ios-list parser / ios-cat reader accept only uuid paths.")
     out("  RESULT: GO")
     return 0
