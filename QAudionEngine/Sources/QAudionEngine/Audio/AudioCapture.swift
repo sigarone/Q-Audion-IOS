@@ -100,6 +100,9 @@ public final class AudioCapture {
     private var engineStartCalledAtMs: Int64 = 0
     private var startEndedAtMs: Int64 = 0
     private var vpioWatchdogGen = 0
+    /// W-VPIOWD — the effective route (ports + speaker flag) when the latest `start()` finished; what an
+    /// `.override` route-change notification is compared against (`VpioWatchdogDecisions.isOverrideNoOp`).
+    private var builtRoute: VpioWatchdogDecisions.RouteSignature?
     private var vpioLedger = VpioObservability.Ledger()
     private var vpioEnvironment: VpioObservability.Environment?
     private var engineConfigObserver: NSObjectProtocol?
@@ -1213,6 +1216,7 @@ public final class AudioCapture {
         // by a previous start() of this same call).
         armStateBeaconIfNeeded()
         startEndedAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the watchdog window
+        builtRoute = Self.currentRouteSignature()  // W-VPIOWD — what an `.override` echo of this start is compared to
 
         // 7. W-AEC-FIX — if VP-IO is active, arm the starve watchdog. If the
         //    input tap never delivers a buffer within the window (the iPad
@@ -1238,20 +1242,33 @@ public final class AudioCapture {
     /// working call beats a dead one). One-shot per start(); a delivering tap
     /// (firstFrameReceived) cancels it.
     ///
-    /// W-VPIOOBS — the timer remembers the engine generation it was armed for. In this build
-    /// that only feeds the measurements (`stale` in the fire line / `vpio_starve_stale`): a timer
-    /// of an older generation still acts exactly as before.
+    /// W-VPIOWD (2026-09-25) — the timer remembers the engine generation it was armed for and does
+    /// NOTHING if a later `start()` (route restart, interruption resume) or `stop()` has replaced that
+    /// engine since: judging the new engine against the old engine's window was a false "starved"
+    /// whenever the new engine was younger than 1.2 s (call 7727f262: second start 0.69 s after the
+    /// first, "starved" 0.8 s later). The new engine's own start armed its own timer.
+    /// `VpioWatchdogDecisions.starveVerdict` holds the decision.
     private func scheduleVpioStarveWatchdog() {
         let armedGen = vpioWatchdogGen
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self, self.isRunning else { return }
-            let stale = armedGen != self.vpioWatchdogGen
-            if self.firstFrameReceived {
-                // Measured only against the engine this timer belongs to.
-                if !stale { self.noteVpioFirstFrame(gen: armedGen) }
+            guard let self else { return }
+            let verdict = VpioWatchdogDecisions.starveVerdict(armedGen: armedGen,
+                                                              currentGen: self.vpioWatchdogGen,
+                                                              isRunning: self.isRunning,
+                                                              firstFrameReceived: self.firstFrameReceived)
+            switch verdict {
+            case .stale:
+                self.noteVpioStaleExpiry(armedGen: armedGen)
+                return
+            case .notRunning:
+                return
+            case .delivering:
+                self.noteVpioFirstFrame(gen: armedGen)
                 return  // VP-IO tap is delivering — keep AEC
+            case .starved:
+                break
             }
-            self.noteVpioStarve(gen: armedGen, stale: stale)
+            self.noteVpioStarve(gen: armedGen)
             print("[AudioCapture] W-AEC-FIX: VP-IO input tap starved (no frame in 1.2s) — restarting without VP-IO so the mic transmits")
             self.audioPipeline.forceDisableVoiceProcessing = true
             self.restartEngineForRoute()
@@ -1268,12 +1285,20 @@ public final class AudioCapture {
     }
 
     /// W-VPIOOBS — the watchdog is about to restart the engine without VP-IO.
-    private func noteVpioStarve(gen: Int, stale: Bool) {
+    private func noteVpioStarve(gen: Int) {
         let sinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
         let running = engine?.isRunning ?? false
-        vpioLedger.noteStarve(gen: gen, sinceStartMs: sinceStartMs, stale: stale)
+        vpioLedger.noteStarve(gen: gen, sinceStartMs: sinceStartMs, stale: false)
         emitDiagLine(VpioObservability.fireLine(gen: gen, sinceStartMs: sinceStartMs,
-                                                stale: stale, engineRunning: running))
+                                                stale: false, engineRunning: running))
+    }
+
+    /// W-VPIOWD — a timer of a superseded engine generation expired and was ignored.
+    private func noteVpioStaleExpiry(armedGen: Int) {
+        let sinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
+        vpioLedger.noteStaleExpiry()
+        emitDiagLine(VpioWatchdogDecisions.staleLine(gen: armedGen, cur: vpioWatchdogGen,
+                                                     firstFrame: firstFrameReceived, sinceStartMs: sinceStartMs))
     }
 
     /// W-VPIOOBS — main-queue only (see `onDiagLine`).
@@ -1339,6 +1364,22 @@ public final class AudioCapture {
         env.inputPorts = VpioObservability.portsList(inputTypes)
         env.preferredInput = VpioObservability.sanitizedToken(session.preferredInput?.portType.rawValue ?? "none", maxLen: 24)
         return env
+    }
+
+    /// W-VPIOWD — the live session route as a comparable value (ports + uids + speaker flag).
+    private static func currentRouteSignature() -> VpioWatchdogDecisions.RouteSignature {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        var inputs: [VpioWatchdogDecisions.RoutePort] = []
+        for port in route.inputs {
+            inputs.append(VpioWatchdogDecisions.RoutePort(type: port.portType.rawValue, uid: port.uid))
+        }
+        var outputs: [VpioWatchdogDecisions.RoutePort] = []
+        var speaker = false
+        for port in route.outputs {
+            outputs.append(VpioWatchdogDecisions.RoutePort(type: port.portType.rawValue, uid: port.uid))
+            if port.portType == .builtInSpeaker { speaker = true }
+        }
+        return VpioWatchdogDecisions.RouteSignature(inputs: inputs, outputs: outputs, speaker: speaker)
     }
 
     private static func tapFormatDescription(_ format: AVAudioFormat) -> String {
@@ -2166,6 +2207,24 @@ public final class AudioCapture {
             // W574o fixed for the other two cases, just not this one. Apply the same
             // throttle/suppress guard: the first tap still restarts immediately
             // (nothing to skip yet), only the self-provoked echoes are now dropped.
+            //
+            // W-VPIOWD (2026-09-25) — an `.override` that arrives just after a start() and leaves the
+            // effective route exactly as the engine was built for (same input/output ports and uids,
+            // same speaker flag) is the echo of the start itself — enabling voice processing changes
+            // the mic data source, which posts it — not a toggle: rebuilding on it restarted VP-IO
+            // 0.69 s after the first start on call 7727f262. A REAL toggle changes the outputs or the
+            // speaker flag, is never a no-op, and keeps restarting the engine below. (The shared
+            // throttle / suppress window is deliberately NOT armed at the end of start(): a real
+            // setSpeaker(true) lands right after start() on the CallKit didActivate path — AppState's
+            // W-CALLSPKR re-assert — and such a window would drop exactly that rebuild.)
+            let overrideSinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
+            if VpioWatchdogDecisions.isOverrideNoOp(msSinceStartEnded: overrideSinceStartMs,
+                                                    built: builtRoute,
+                                                    current: Self.currentRouteSignature()) {
+                emitDiagLine(VpioWatchdogDecisions.overrideNoOpLine(gen: vpioWatchdogGen,
+                                                                    sinceStartMs: overrideSinceStartMs))
+                return
+            }
             if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: output override (speaker toggle) — restarting engine to re-evaluate VP-IO")
             restartEngineForRoute(routeDriven: true)
