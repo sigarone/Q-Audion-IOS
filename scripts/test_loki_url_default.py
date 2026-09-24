@@ -153,12 +153,27 @@ for name, base_args in SCRIPTS:
     code, out, err = run_main(name + ".py", base_args + ["--loki-url", BASE, "--loki-pw", "x"])
     check(_Fake.seen and (_Fake.seen[0][1] or "").startswith("Basic "), "%s: --loki-pw did not send Basic auth" % tag)
 
-    # ---- 404 from the old public host name is explained (host check is textual)
-    _Fake.seen[:] = []
-    _Fake.status = 404
-    code, out, err = run_main(name + ".py", base_args + ["--loki-url", BASE + "/loki/api/v1/query_range#dash.bcrypto.com"])
-    check(code == 1, "%s: HTTP 404 exit %r" % (tag, code))
-    _Fake.status = 200
+    # ---- 404 from the old public host is explained; the check parses the HOST
+    #      (no substring match: CodeQL py/incomplete-url-substring-sanitization)
+    check(m.is_public_dash_url("https://dash.bcrypto.com/loki/api/v1/query_range"), "%s: dash host not recognised" % tag)
+    check(not m.is_public_dash_url("http://127.0.0.1:13100/x#dash.bcrypto.com"), "%s: fragment matched as host" % tag)
+    check(not m.is_public_dash_url("https://dash.bcrypto.com.evil.example/x"), "%s: look-alike host matched" % tag)
+    check(not m.is_public_dash_url("not a url"), "%s: junk matched" % tag)
+    saved_q = m._loki_query_once
+    try:
+        m._loki_query_once = lambda *a, **k: (404, None, "")
+        try:
+            m.query_loki("https://dash.bcrypto.com/loki/api/v1/query_range", "admin", "", "91fe5cf7", 120)
+            check(False, "%s: 404 from dash did not raise" % tag)
+        except RuntimeError as e:
+            check("removed" in str(e) and "ssh -N -L" in str(e), "%s: 404 message lacks the explanation: %r" % (tag, str(e)[:120]))
+        try:
+            m.query_loki(BASE + "/loki/api/v1/query_range", "admin", "", "91fe5cf7", 120)
+            check(False, "%s: 404 from a local Loki did not raise" % tag)
+        except RuntimeError as e:
+            check("removed" not in str(e), "%s: local 404 wrongly blamed on the removed route" % tag)
+    finally:
+        m._loki_query_once = saved_q
 
 srv.shutdown()
 print("checks=%d failures=%d" % (checks, len(failures)))

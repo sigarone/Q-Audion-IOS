@@ -141,6 +141,15 @@ def default_loki_url():
                               or os.environ.get("LOKI_URL") or "")
 
 
+def is_public_dash_url(url):
+    """True if the HOST of `url` is the old public dash.bcrypto.com (parsed, not a substring)."""
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == "dash.bcrypto.com"
+
+
 def loki_access_hint():
     """How to reach Loki now that /loki is not public (printed after a connection error)."""
     return (
@@ -215,7 +224,7 @@ def query_loki(url, user, pw, short8, minutes):
 
     status, obj, body = _loki_query_once(url, user, pw, _loki_logql(short8),
                                          start_ns, end_ns)
-    if status == 404 and "dash.bcrypto.com" in url:
+    if status == 404 and is_public_dash_url(url):
         raise RuntimeError(
             "HTTP 404 from %s: the public /loki route was removed on 2026-09-24.\n%s"
             % (url, loki_access_hint()))
