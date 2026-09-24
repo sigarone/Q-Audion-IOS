@@ -204,6 +204,22 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         return (factory, audioProcessingModule)
     }
 
+    /// W-KEYLOGGATE (2026-09-24) — the minimum severity WebRTC's own DEBUG
+    /// output (which on iOS is stderr) may reach. Deliberately `.warning`,
+    /// never `.info` or lower: the native FrameCryptor prints derived key
+    /// material at INFO (`api/crypto/frame_crypto_transformer.cc`, the
+    /// `secret [..] ... slat << [..] ... derived_key [..]` and `raw_key [..]`
+    /// prints; "slat" is upstream's typo of salt), and the app's stdout/stderr
+    /// tee copies everything on stderr into the log ring that the live-log
+    /// shipper uploads. `RTCSetMinDebugLogLevel` sets ONLY this stderr
+    /// severity (`webrtc::LogMessage::LogToDebug`): a registered
+    /// `RTCCallbackLogger` sink filters on its OWN severity, so the
+    /// W-AUNITTRACE bridge below keeps receiving INFO lines while this is
+    /// `.warning`. That callback still sees the key prints too, so
+    /// `handleNativeLogLine` must never store or log `message` verbatim.
+    /// Pinned by `QAudionPeerConnectionFactoryTests`; do not lower it.
+    static let stderrDebugLogLevel: RTCLoggingSeverity = .warning
+
     /// W-AUNITTRACE (2026-09-10) — the persistent-factory fix (this file's
     /// own W-PERSISTENTFACTORY, shipped and live-tested v1.0.1129) did NOT
     /// resolve the dead-TX-at-call-2 defect: the same symptom reproduced
@@ -222,8 +238,13 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// own conclusion. Pure instrumentation: emits short, numeric-tailed
     /// lines only for a small set of known messages (see
     /// `handleNativeLogLine`), changes no audio behavior.
+    ///
+    /// W-KEYLOGGATE (2026-09-24) — the DEBUG (stderr) severity is no longer
+    /// `.info`: it is `stderrDebugLogLevel` (`.warning`). Only that stderr
+    /// severity changed; the callback logger below keeps its own `.info`
+    /// severity, so the bridge above still receives every INFO line.
     private func installNativeAudioUnitLogBridge() {
-        RTCSetMinDebugLogLevel(.info)
+        RTCSetMinDebugLogLevel(Self.stderrDebugLogLevel)
         let logger = RTCCallbackLogger()
         logger.severity = .info
         logger.start { [weak self] message in
