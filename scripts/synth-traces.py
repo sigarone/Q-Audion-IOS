@@ -18,8 +18,10 @@ Pipeline (all pure Python stdlib -- urllib, hashlib, base64, json):
      build_matcher) and validate it is 8-char lowercase hex.
   2. Query Loki query_range for {service_name=~"qaudion-.+"} | qa_call_short8=`X`
      (the maintainer source-of-truth filter; matches stream-label OR structured
-     metadata in Loki 3.x). Reuses the Caddy @lq basic_auth route + the same
-     QA_LOKI_QUERY_PW env contract.
+     metadata in Loki 3.x). Loki is NOT public any more (dash.bcrypto.com/loki
+     answers 404 since 2026-09-24): use an ssh tunnel (default URL
+     http://127.0.0.1:13100/loki/api/v1/query_range) or set QAUDION_LOKI_URL /
+     LOKI_URL / --loki-url. No password is needed for the direct / tunnel Loki.
   3. Group the returned lines by service_name (= platform leg). For each leg,
      classify each line into a canonical lifecycle PHASE by matching the REAL
      body markers ('call started', 'call_offer', 'ICE state -> connected',
@@ -38,7 +40,9 @@ Pipeline (all pure Python stdlib -- urllib, hashlib, base64, json):
      (Authorization: Bearer <TEMPO_INGEST_TOKEN>, Content-Type application/json).
 
 Usage:
-  export QA_LOKI_QUERY_PW=...        # Loki basic_auth pw (Caddy @lq)
+  ssh -N -L 13100:<loki-container-ip>:3100 helsinki   # Loki is not public: tunnel it
+  export QAUDION_LOKI_URL=...        # optional (or LOKI_URL); default = the tunnel end
+  export QA_LOKI_QUERY_PW=...        # only if something in front of Loki asks for it
   export TEMPO_INGEST_TOKEN=...      # Tempo write token (Caddy @traces)
   python scripts/synth-traces.py --call-id 136e4e0d
   python scripts/synth-traces.py --call-id 91FE5CF7-3572-42F1-9B84-29883F47BAB6
@@ -48,8 +52,9 @@ Usage:
 Exit codes: 0 ok (spans pushed or dry-run printed), 1 usage/auth/transport error,
 2 no log lines matched in the window (nothing to synthesize).
 
-No app build. No prod write. No SSH (pure HTTP to Loki + Tempo via Caddy).
-No external LLM. No data leaves the dash.bcrypto.com perimeter.
+No app build. No prod write. No SSH from this script (pure HTTP to Loki -- through
+the tunnel you open -- and to Tempo via Caddy). No external LLM. No data leaves the
+dash.bcrypto.com perimeter.
 """
 
 import os
@@ -103,11 +108,51 @@ def derive_short8(call_id):
 
 
 # ---------------------------------------------------------------------------
-# Loki query backend -- reuse correlate-call.py's exact route + auth contract:
-#   GET https://dash.bcrypto.com/loki/api/v1/query_range
-#   -> Caddy @lq path /loki/* -> basic_auth { admin ... } -> reverse_proxy loki:3100
+# Loki query backend -- same URL contract as correlate-call.py (see "Loki URL" below):
+#   GET <loki>/loki/api/v1/query_range  (public dash.bcrypto.com/loki: GONE, 404)
 #   LogQL source of truth: {service_name=~"qaudion-.+"} | qa_call_short8=`X`
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Loki URL (W-LOKIURL 2026-09-24). https://dash.bcrypto.com/loki is NO LONGER PUBLIC: it
+# answers 404 since 2026-09-24 (Loki is reachable only from the VPS itself or over an ssh
+# tunnel). The default is therefore the LOCAL end of that tunnel; override it with
+# --loki-url, or with the environment variable QAUDION_LOKI_URL / LOKI_URL (LOKI_URL is
+# the one kit-logs.py uses on the VPS). A base URL such as http://172.18.0.6:3100 is fine:
+# /loki/api/v1/query_range is appended. The scripts never call the public /loki route.
+# ---------------------------------------------------------------------------
+LOKI_QUERY_PATH = "/loki/api/v1/query_range"
+LOKI_TUNNEL_URL = "http://127.0.0.1:13100" + LOKI_QUERY_PATH
+
+
+def normalize_loki_url(url):
+    """Accept a full query_range URL or a bare base URL; empty -> the tunnel default."""
+    u = (url or "").strip()
+    if not u:
+        return LOKI_TUNNEL_URL
+    if "/loki/api/v1/" not in u:
+        u = u.rstrip("/") + LOKI_QUERY_PATH
+    return u
+
+
+def default_loki_url():
+    """--loki-url default: env QAUDION_LOKI_URL, else env LOKI_URL, else the ssh tunnel."""
+    return normalize_loki_url(os.environ.get("QAUDION_LOKI_URL")
+                              or os.environ.get("LOKI_URL") or "")
+
+
+def loki_access_hint():
+    """How to reach Loki now that /loki is not public (printed after a connection error)."""
+    return (
+        "  Loki is not public any more (https://dash.bcrypto.com/loki answers 404 since\n"
+        "  2026-09-24). Reach it over an ssh tunnel to the Loki container, e.g.:\n"
+        "    ssh -N -L 13100:<loki-container-ip>:3100 helsinki      (leave it open)\n"
+        "  (container ip: on the VPS, docker inspect -f\n"
+        "   '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' loki)\n"
+        "  then run this script again: the default URL is the tunnel end\n"
+        "  (%s). Other URL: --loki-url, or env QAUDION_LOKI_URL / LOKI_URL.\n"
+        "  On the VPS itself: LOKI_URL=http://<loki-container-ip>:3100" % LOKI_TUNNEL_URL)
+
 
 # OTLP service.name (-> Loki stream label service_name) -> the OTLP service.name
 # we re-stamp on the span resource, plus the [tag] used in dry-run output and the
@@ -141,8 +186,9 @@ def _loki_query_once(url, user, pw, logql, start_ns, end_ns, limit=5000):
     })
     full = url + ("&" if "?" in url else "?") + params
     req = urllib.request.Request(full, method="GET")
-    basic = base64.b64encode(("%s:%s" % (user, pw)).encode("utf-8")).decode("ascii")
-    req.add_header("Authorization", "Basic " + basic)
+    if pw:
+        basic = base64.b64encode(("%s:%s" % (user, pw)).encode("utf-8")).decode("ascii")
+        req.add_header("Authorization", "Basic " + basic)
     req.add_header("Accept", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -169,10 +215,15 @@ def query_loki(url, user, pw, short8, minutes):
 
     status, obj, body = _loki_query_once(url, user, pw, _loki_logql(short8),
                                          start_ns, end_ns)
+    if status == 404 and "dash.bcrypto.com" in url:
+        raise RuntimeError(
+            "HTTP 404 from %s: the public /loki route was removed on 2026-09-24.\n%s"
+            % (url, loki_access_hint()))
     if status in (401, 403):
         raise RuntimeError(
-            "Loki auth failed (HTTP %d). Set QA_LOKI_QUERY_PW / --loki-pw. "
-            "Caddy basic_auth gates /loki/*." % status)
+            "Loki auth failed (HTTP %d). Something in front of Loki asks for a "
+            "password: set QA_LOKI_QUERY_PW / --loki-pw. The direct / tunnel Loki "
+            "needs none." % status)
     if status >= 500:
         raise RuntimeError("Loki server error (HTTP %d): %s"
                            % (status, (body or "").strip()[:300]))
@@ -604,11 +655,15 @@ def main():
     ap.add_argument("--minutes", type=int, default=120,
                     help="Loki lookback window in minutes (floored at 120)")
     # Loki query route -- identical defaults to correlate-call.py.
-    ap.add_argument("--loki-url", default="https://dash.bcrypto.com/loki/api/v1/query_range",
-                    help="Loki query_range endpoint (Caddy @lq)")
+    ap.add_argument("--loki-url", default=default_loki_url(),
+                    help="Loki query_range endpoint or base URL (default: env "
+                         "QAUDION_LOKI_URL, else env LOKI_URL, else the ssh tunnel "
+                         "end %s; the public dash.bcrypto.com/loki no longer "
+                         "exists)" % LOKI_TUNNEL_URL)
     ap.add_argument("--loki-user", default="admin", help="Loki basic_auth user")
     ap.add_argument("--loki-pw", default="",
-                    help="Loki basic_auth pw; overrides env QA_LOKI_QUERY_PW")
+                    help="Loki basic_auth pw; overrides env QA_LOKI_QUERY_PW "
+                         "(optional: the direct / tunnel Loki has no auth)")
     # Tempo ingest route.
     ap.add_argument("--tempo-url", default="https://dash.bcrypto.com/tempo/v1/traces",
                     help="Tempo OTLP/HTTP ingest endpoint (Caddy @traces)")
@@ -617,6 +672,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="print the synthesized spans; do NOT POST to Tempo")
     args = ap.parse_args()
+    args.loki_url = normalize_loki_url(args.loki_url)
 
     short8, norm = derive_short8(args.call_id)
     if not short8:
@@ -625,23 +681,21 @@ def main():
               "Got normalized id '%s'." % (norm or ""), file=sys.stderr)
         return 1
 
-    loki_pw = args.loki_pw or os.environ.get("QA_LOKI_QUERY_PW", "")
-    if not loki_pw:
-        print("ERROR: no Loki password. Set env QA_LOKI_QUERY_PW or --loki-pw.",
-              file=sys.stderr)
-        return 1
+    loki_pw = args.loki_pw or os.environ.get("QA_LOKI_QUERY_PW", "")   # optional
 
     window_min = max(args.minutes, 120)
-    print("=== Loki query @ %s (user=%s, window=%dm) ==="
-          % (args.loki_url, args.loki_user, window_min))
+    print("=== Loki query @ %s (%s, window=%dm) ==="
+          % (args.loki_url, ("user=%s" % args.loki_user) if loki_pw else "no auth",
+             window_min))
     print("short8=%s  query={service_name=~\"qaudion-.+\"} | qa_call_short8=`%s`"
           % (short8, short8))
     try:
         records = query_loki(args.loki_url, args.loki_user, loki_pw, short8,
                              args.minutes)
-    except urllib.error.URLError as e:
+    except OSError as e:     # URLError, connection refused, timeout
         print("ERROR: cannot reach Loki at %s: %s"
               % (args.loki_url, getattr(e, "reason", e)), file=sys.stderr)
+        print(loki_access_hint(), file=sys.stderr)
         return 1
     except RuntimeError as e:
         print("ERROR: %s" % e, file=sys.stderr)
