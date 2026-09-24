@@ -80,7 +80,9 @@ public enum VpioObservability {
         public private(set) var lastStartFrameMs: Int = -1
         /// Watchdog expiries that restarted the engine without VP-IO.
         public private(set) var starveFired: Int = 0
-        /// Watchdog expiries whose generation was no longer the current one.
+        /// Watchdog expiries whose generation was no longer the current one (a timer armed for an
+        /// engine that had already been replaced). W-VPIOWD ignores them; the first build of the
+        /// observability package still acted on them, and counted them here as well as in `starveFired`.
         public private(set) var starveStale: Int = 0
         /// Generation of the last expiry that restarted the engine, and the age of the latest start then.
         public private(set) var lastStarveGen: Int = 0
@@ -108,6 +110,10 @@ public enum VpioObservability {
             if stale { starveStale += 1 }
             lastStarveGen = gen
             lastStarveMs = sinceStartMs
+        }
+
+        public mutating func noteStaleExpiry() {
+            starveStale += 1
         }
 
         public mutating func noteConfigChange(sinceEngineMs: Int) {
