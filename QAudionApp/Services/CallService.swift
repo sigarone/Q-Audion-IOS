@@ -1497,6 +1497,16 @@ final class CallService: @unchecked Sendable {
         RTLog.info("call", "plpfeedback peer=\(clamped) applied=\(next)")
     }
 
+    /// W-VPIOOBS (2026-09-25) — the engine package cannot see `RTLog`, so the numeric VP-IO lines
+    /// AudioCapture emits (`audioVp ev=arm|ff|fire|cfg ...`, one per watchdog arm / first tap buffer /
+    /// watchdog expiry / engine configuration change) are routed here with an accurate timestamp. The
+    /// lines are numeric on purpose: the log shipper's redactor keeps `key=number` bodies.
+    private func wireVpioDiagLines(_ capture: AudioCapture) {
+        capture.onDiagLine = { line in
+            RTLog.info("call", line)
+        }
+    }
+
     func startCall(engine: QAudionEngine, contactId: String) throws {
         // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
         teardownAudioStack(resetDcCounters: true)
@@ -1540,6 +1550,7 @@ final class CallService: @unchecked Sendable {
         // 3 s) instead of leaving the engine dead, and the 10 s engine-state
         // beacon is armed. See AudioInterruptionRecoveryPolicy.
         capture.sessionOwnership = .voiceCall
+        wireVpioDiagLines(capture)  // W-VPIOOBS
         let playback = AudioPlayback()
 
         // Encrypt-on-mic-frame callback: ogni PCM dal mic passa attraverso
@@ -1868,6 +1879,7 @@ final class CallService: @unchecked Sendable {
         // W-AUDIORESUME (2026-09-01) — same voice-call ownership as the
         // outgoing side (see startCall): bounded resume retry + state beacon.
         capture.sessionOwnership = .voiceCall
+        wireVpioDiagLines(capture)  // W-VPIOOBS
         let playback = AudioPlayback()
 
         // TX path: mic → VP DSP → encrypt → WS send (same as outgoing).
@@ -3048,6 +3060,10 @@ final class CallService: @unchecked Sendable {
             // below. peak_pct is peak/32767 rounded to 1dp.
             if let capture = audioCapture, let pipeline = audioPipeline {
                 let level = capture.consumeLevelStats()
+                // W-VPIOOBS (2026-09-25) — latch "was the engine alive at hangup" NOW, before the
+                // pipeline stats are consumed: AudioCapture.stop() used to be the only latch and it
+                // runs AFTER this read, so engine_running_at_end came out false on 92 of 92 records.
+                capture.noteRunningAtEndNow()
                 let diag = pipeline.consumeAudioDiagStats()
                 let peakPct = Double(level.peak) / Double(Int16.max) * 100
                 // TX mic RMS (% of full scale) alongside the existing TX peak.
@@ -3248,6 +3264,13 @@ final class CallService: @unchecked Sendable {
                     "speaker_ms":          diag.speakerMs,
                     "aec_ever_active":     diag.vpioEverActive
                 ]
+                // W-VPIOOBS (2026-09-25) — VP-IO tap latency (first frame after start), watchdog
+                // expiries with their engine generation, and the once-per-call hardware / OS / mic
+                // mode / port / tap-format snapshot. Same emit, so the same operational-diagnostics
+                // consent gate as every field above. See VpioObservability.diagAttrs.
+                for (vpioKey, vpioValue) in capture.consumeVpioDiagAttrs() {
+                    diagAttrs[vpioKey] = vpioValue
+                }
                 // W-KCMAC/W-ASSURANCE (ship step 5, telemetry-only) — riding the
                 // EXISTING call.audio.diag emission rather than a new channel
                 // (per the design). `nil` when this call never fired
