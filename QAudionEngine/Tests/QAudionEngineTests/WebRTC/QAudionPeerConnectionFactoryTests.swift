@@ -34,6 +34,17 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
         XCTAssertFalse(before.audioProcessingModule === after.audioProcessingModule, "resetForWedgeRecovery must force a fresh ADM")
     }
 
+    /// W-KEYLOGGATE (2026-09-24) — WebRTC's INFO-level native prints include
+    /// derived key material (frame_crypto_transformer.cc), and whatever the
+    /// debug (stderr) severity lets through ends up in the uploaded app log.
+    /// Guards against lowering it back to `.info` (or below) by accident.
+    func testStderrDebugLogLevelStaysAtWarningOrAbove() {
+        let level = QAudionPeerConnectionFactory.stderrDebugLogLevel
+        XCTAssertNotEqual(level, .info)
+        XCTAssertNotEqual(level, .verbose)
+        XCTAssertGreaterThanOrEqual(level.rawValue, RTCLoggingSeverity.warning.rawValue)
+    }
+
     func testDefaultConfigurationHasUnifiedPlan() {
         let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [])
         XCTAssertEqual(cfg.sdpSemantics, .unifiedPlan)

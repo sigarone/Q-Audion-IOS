@@ -165,6 +165,22 @@ pairs each are not caught; a list of integers spread over 3+ lines is not caught
 `Diagnostics/Resources/key-material-scrub-vectors.json`, `vectors` for `scrub` and `lineVectors` for
 `scrubLines`); the port is what replays the real blobs.
 
+**Since v1.0.1182 (W-KEYLOGGATE) -- the iPhone no longer lets WebRTC INFO lines reach stderr.** The key
+prints (`api/crypto/frame_crypto_transformer.cc`, `RTC_LOG(LS_INFO)` at ~260 and ~284) only got into the
+stdout/stderr tee because W-AUNITTRACE (2026-09-10) called `RTCSetMinDebugLogLevel(.info)`. It now uses
+`QAudionPeerConnectionFactory.stderrDebugLogLevel` = `.warning` (pinned by
+`testStderrDebugLogLevelStaysAtWarningOrAbove`; do not lower it). `RTCSetMinDebugLogLevel` sets ONLY the
+debug/stderr severity (`LogMessage::LogToDebug`, `rtc_base/logging.cc`); the `RTCCallbackLogger` (severity
+`.info`, same function) filters on its own level, so the W-AUNITTRACE `aunit ...` lines keep coming (they
+never depended on stderr). Trade-off: WebRTC INFO lines are gone from the shipped log (in the last 7 days
+these were `channel.cc` "Changing voice/video state", `thread.cc` "took Nms to dispatch", `connection.cc`
+"Updating local candidate type", `cpu_info.cc`); WARNING and ERROR lines stay (TURN "Connection with server
+failed", `RTCAudioSession` "Failed to setActive", ...) and can hold IP addresses, which the shipper redactor
+handles. Limits: builds up to 1.0.1181 still print; the callback still receives the key prints in memory
+(`handleNativeLogLine` only pattern-matches, it must never store `message`); `LiveKitWebRTC` (group calls) is a
+separate WebRTC copy with its own debug level, untouched here; rebuilding WebRTC without the two prints is the
+complete fix, and `KeyMaterialScrubber` stays as defence in depth.
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`
