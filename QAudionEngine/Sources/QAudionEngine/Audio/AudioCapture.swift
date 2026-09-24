@@ -91,6 +91,22 @@ public final class AudioCapture {
     // W-AEC-FIX — set true by the tap callback on its first delivered buffer.
     // The starve watchdog checks it to detect the VP-IO "tap never fires" case.
     private var firstFrameReceived = false
+    // W-VPIOOBS (2026-09-25) — VP-IO tap-latency / watchdog observability, telemetry only (see
+    // `VpioObservability`). `firstFrameAtMs` is written by the tap thread on the first buffer of an
+    // engine (one plain store, like `lastMicFrameAtMs`); everything else is main-queue only.
+    // `vpioWatchdogGen` is bumped by every real `start()` and by `stop()`: it names which engine a
+    // watchdog timer was armed for.
+    private var firstFrameAtMs: Int64 = 0
+    private var engineStartCalledAtMs: Int64 = 0
+    private var startEndedAtMs: Int64 = 0
+    private var vpioWatchdogGen = 0
+    private var vpioLedger = VpioObservability.Ledger()
+    private var vpioEnvironment: VpioObservability.Environment?
+    private var engineConfigObserver: NSObjectProtocol?
+    /// W-VPIOOBS — receives the numeric VP-IO diagnostic lines (`audioVp ev=...`). `CallService` points
+    /// it at `RTLog`, which the engine package cannot see; the lines are emitted from the main
+    /// queue only, never from the tap thread. nil = the lines are simply not emitted.
+    public var onDiagLine: ((String) -> Void)?
     private let audioPipeline: AudioProcessingPipeline
     // W475 — re-chunking accumulator. `installTap` delivers buffers of
     // an arbitrary size; the Opus encoder needs EXACTLY bytesPerFrame.
@@ -979,6 +995,8 @@ public final class AudioCapture {
         // pre-interruption session can't desync the frame boundaries.
         pcmAccumulator = Data()
         firstFrameReceived = false  // W-AEC-FIX — re-arm the VP-IO starve watchdog
+        firstFrameAtMs = 0          // W-VPIOOBS — first-buffer stamp belongs to THIS engine
+        vpioWatchdogGen += 1        // W-VPIOOBS — a new engine generation
         micAgcGain = 1.0            // W-MICAGC — start each call at unity gain
         micAgcMaxGainThisCall = 1.0
         micAgcRampFrom = 1.0        // W-DEZIPPER — reset the per-sample gain-ramp state
@@ -1023,6 +1041,17 @@ public final class AudioCapture {
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
+        // W-VPIOOBS — once per call (this AudioCapture's first start that gets as far as reading
+        // the tap format): what the phone looks like and what the input node's format is BEFORE
+        // Voice Processing is enabled (the format after is read below, where the tap format is).
+        // Read-only queries, no engine state touched.
+        let firstStartOfCall = vpioEnvironment?.tapFmtAfter == nil
+        if firstStartOfCall {
+            var env = Self.captureEnvironment()
+            env.tapFmtBefore = Self.tapFormatDescription(engine.inputNode.outputFormat(forBus: 0))
+            vpioEnvironment = env
+        }
+
         // 3. Enable Voice Processing I/O on the input node BEFORE installing the tap.
         //    This activates Apple's full VoIP DSP chain:
         //    - Echo cancellation (AEC)
@@ -1051,6 +1080,9 @@ public final class AudioCapture {
         // safe; fall back to our canonical format only if the node reports an
         // invalid (0-channel / 0-Hz) format before the engine is prepared.
         let nodeFormat = inputNode.outputFormat(forBus: 0)
+        if firstStartOfCall {
+            vpioEnvironment?.tapFmtAfter = Self.tapFormatDescription(nodeFormat)  // W-VPIOOBS
+        }
         let tapFormat: AVAudioFormat = (nodeFormat.channelCount > 0 && nodeFormat.sampleRate > 0)
             ? nodeFormat
             : format
@@ -1120,8 +1152,10 @@ public final class AudioCapture {
         // I/O duration and ignores this value entirely.)
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            let tapNowMs = Self.monotonicNowMs()
+            if !self.firstFrameReceived { self.firstFrameAtMs = tapNowMs }  // W-VPIOOBS — first buffer of this engine: one store
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
-            self.lastMicFrameAtMs = Self.monotonicNowMs()  // W-AUDIOBEACON — one store, no other work on this thread
+            self.lastMicFrameAtMs = tapNowMs  // W-AUDIOBEACON — one store, no other work on this thread
             guard var raw = self.convertTapBufferToInt16(buffer, rateConverter: rateConverter, canonicalFormat: format) else { return }
             self.updateEchoBucket(rawPcm: raw)
             if Self.micAgcEnabled {
@@ -1136,6 +1170,7 @@ public final class AudioCapture {
 
         // 5. Start the engine, then the player node (single engine drives both).
         engine.prepare()
+        engineStartCalledAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the *_eng_ms measurements
         try engine.start()
         // W-PLAYERSTATEGUARD (2026-09-07) — live crash, this exact build:
         // `com.apple.coreaudio.avfaudio` / "player started when in a
@@ -1172,17 +1207,26 @@ public final class AudioCapture {
         // 6. M-12 — observe AVAudioSession interruptions so we can
         //    pause on .began and resume on .ended (.shouldResume).
         registerInterruptionObserver()
+        registerEngineConfigObserver()  // W-VPIOOBS — count config changes in the first 2 s
         // W-AUDIOBEACON — periodic engine-state line while a voice-call
         // capture is alive (no-op for .passive owners; no-op if already armed
         // by a previous start() of this same call).
         armStateBeaconIfNeeded()
+        startEndedAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the watchdog window
 
         // 7. W-AEC-FIX — if VP-IO is active, arm the starve watchdog. If the
         //    input tap never delivers a buffer within the window (the iPad
         //    VP-IO + builtInSpeaker starve, W574f), restart WITHOUT VP-IO so the
         //    mic transmits. Worst case = the pre-fix behaviour (echo, working
-        //    TX); never a dead mic. iPhone / no-VP-IO never arms it.
+        //    TX); never a dead mic. Armed by EVERY start with VP-IO active — the
+        //    iPhone too, since W-CANONICAL (a5427273, 2026-07-12) made VP-IO the
+        //    default on every route; only a start WITHOUT VP-IO (bypass, user
+        //    toggles off) never arms it. (This used to claim "iPhone never arms
+        //    it", false since that commit.)
         if audioPipeline.voiceProcessingIsActive {
+            vpioLedger.noteArmed()
+            let armEngMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: startEndedAtMs)
+            emitDiagLine(VpioObservability.armLine(gen: vpioWatchdogGen, engMs: armEngMs))
             scheduleVpioStarveWatchdog()
         }
     }
@@ -1193,14 +1237,112 @@ public final class AudioCapture {
     /// no-VP-IO restart so the call still has a live mic (echo returns, but a
     /// working call beats a dead one). One-shot per start(); a delivering tap
     /// (firstFrameReceived) cancels it.
+    ///
+    /// W-VPIOOBS — the timer remembers the engine generation it was armed for. In this build
+    /// that only feeds the measurements (`stale` in the fire line / `vpio_starve_stale`): a timer
+    /// of an older generation still acts exactly as before.
     private func scheduleVpioStarveWatchdog() {
+        let armedGen = vpioWatchdogGen
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard let self, self.isRunning else { return }
-            if self.firstFrameReceived { return }  // VP-IO tap is delivering — keep AEC
+            let stale = armedGen != self.vpioWatchdogGen
+            if self.firstFrameReceived {
+                // Measured only against the engine this timer belongs to.
+                if !stale { self.noteVpioFirstFrame(gen: armedGen) }
+                return  // VP-IO tap is delivering — keep AEC
+            }
+            self.noteVpioStarve(gen: armedGen, stale: stale)
             print("[AudioCapture] W-AEC-FIX: VP-IO input tap starved (no frame in 1.2s) — restarting without VP-IO so the mic transmits")
             self.audioPipeline.forceDisableVoiceProcessing = true
             self.restartEngineForRoute()
         }
+    }
+
+    /// W-VPIOOBS — the tap delivered inside the watchdog window: record how long it took.
+    private func noteVpioFirstFrame(gen: Int) {
+        guard firstFrameAtMs > 0 else { return }
+        let ms = VpioObservability.elapsedMs(from: startEndedAtMs, to: firstFrameAtMs)
+        let engMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: firstFrameAtMs)
+        vpioLedger.noteFirstFrame(ms: ms, engMs: engMs)
+        emitDiagLine(VpioObservability.firstFrameLine(gen: gen, ms: ms, engMs: engMs))
+    }
+
+    /// W-VPIOOBS — the watchdog is about to restart the engine without VP-IO.
+    private func noteVpioStarve(gen: Int, stale: Bool) {
+        let sinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
+        let running = engine?.isRunning ?? false
+        vpioLedger.noteStarve(gen: gen, sinceStartMs: sinceStartMs, stale: stale)
+        emitDiagLine(VpioObservability.fireLine(gen: gen, sinceStartMs: sinceStartMs,
+                                                stale: stale, engineRunning: running))
+    }
+
+    /// W-VPIOOBS — main-queue only (see `onDiagLine`).
+    private func emitDiagLine(_ line: String) {
+        onDiagLine?(line)
+    }
+
+    /// W-VPIOOBS — count `AVAudioEngineConfigurationChange` on the live engine within the first 2 s
+    /// after `engine.start()`: a configuration change stops the engine, which reads as a silent tap.
+    /// Observation only; nothing is restarted here. One observer per capture, removed by stop()/deinit.
+    private func registerEngineConfigObserver() {
+        guard engineConfigObserver == nil else { return }
+        engineConfigObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.noteEngineConfigurationChange(note)
+        }
+    }
+
+    private func noteEngineConfigurationChange(_ note: Notification) {
+        guard let posted = note.object as? AVAudioEngine, let current = engine, posted === current else { return }
+        let sinceEngineMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: Self.monotonicNowMs())
+        vpioLedger.noteConfigChange(sinceEngineMs: sinceEngineMs)
+        emitDiagLine(VpioObservability.configChangeLine(gen: vpioWatchdogGen, sinceEngineMs: sinceEngineMs))
+    }
+
+    /// W-VPIOOBS — the `call.audio.diag` attributes for this capture (one call), read and reset at
+    /// call teardown next to `consumeLevelStats()`. See `VpioObservability.diagAttrs`.
+    public func consumeVpioDiagAttrs() -> [String: Any] {
+        let attrs = VpioObservability.diagAttrs(ledger: vpioLedger, gen: vpioWatchdogGen, env: vpioEnvironment)
+        vpioLedger = VpioObservability.Ledger()
+        vpioEnvironment = nil
+        return attrs
+    }
+
+    /// W-VPIOOBS — engine_running_at_end fix. `stop()` latches whether the engine was alive at
+    /// teardown, but `CallService` reads `consumeAudioDiagStats()` BEFORE calling `stop()` and drops
+    /// the pipeline right after, so the latch was always read as false (92 of 92 iOS records since
+    /// 14/9). CallService calls this first, while the engine is still up; idempotent.
+    public func noteRunningAtEndNow() {
+        audioPipeline.noteEngineRunningAtEnd(isRunning && (engine?.isRunning ?? false))
+    }
+
+    /// W-VPIOOBS — one-time environment read (no engine access): hardware model, OS build, the
+    /// system microphone mode, the session's input ports. Values that cannot be read are left nil.
+    private static func captureEnvironment() -> VpioObservability.Environment {
+        var env = VpioObservability.Environment()
+        if let machine = VpioObservability.sysctlString("hw.machine") {
+            env.hwMachine = VpioObservability.sanitizedToken(machine, maxLen: 24)
+        }
+        if let build = VpioObservability.sysctlString("kern.osversion") {
+            env.osBuild = VpioObservability.sanitizedToken(build, maxLen: 16)
+        }
+        #if os(iOS)
+        if #available(iOS 15.0, *) {
+            env.micMode = AVCaptureDevice.activeMicrophoneMode.rawValue
+        }
+        #endif
+        let session = AVAudioSession.sharedInstance()
+        let inputTypes: [String] = (session.availableInputs ?? []).map { $0.portType.rawValue }
+        env.inputPorts = VpioObservability.portsList(inputTypes)
+        env.preferredInput = VpioObservability.sanitizedToken(session.preferredInput?.portType.rawValue ?? "none", maxLen: 24)
+        return env
+    }
+
+    private static func tapFormatDescription(_ format: AVAudioFormat) -> String {
+        return VpioObservability.tapFormatString(sampleRate: format.sampleRate, channels: Int(format.channelCount))
     }
 
     /// SINGLE-ENGINE FIX — schedule a decoded PCM frame for playback on the
@@ -2442,7 +2584,10 @@ public final class AudioCapture {
         // reported healthy rx_dec counts is the fingerprint of a dead-playout call
         // (see `restartEngineWithRecovery`); it is the one fact the live incident
         // could not establish from any log or telemetry record we shipped.
-        audioPipeline.noteEngineRunningAtEnd(isRunning && (engine?.isRunning ?? false))
+        // (W-VPIOOBS: CallService now latches it earlier, via `noteRunningAtEndNow()`, because the
+        // diag stats are consumed before this runs.)
+        noteRunningAtEndNow()
+        vpioWatchdogGen += 1  // W-VPIOOBS — a watchdog timer armed for this engine must not judge a later one
         // W-SPKFIX — cancel any pending debounced route restart so it cannot
         // fire after the call has torn down the engine.
         pendingRouteRestart?.cancel()
@@ -2462,6 +2607,10 @@ public final class AudioCapture {
         if let obs = routeChangeObserver {
             NotificationCenter.default.removeObserver(obs)
             routeChangeObserver = nil
+        }
+        if let obs = engineConfigObserver {  // W-VPIOOBS
+            NotificationCenter.default.removeObserver(obs)
+            engineConfigObserver = nil
         }
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
@@ -2503,6 +2652,9 @@ public final class AudioCapture {
             NotificationCenter.default.removeObserver(obs)
         }
         if let obs = mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        if let obs = engineConfigObserver {  // W-VPIOOBS
             NotificationCenter.default.removeObserver(obs)
         }
         stateBeaconTimer?.cancel()
