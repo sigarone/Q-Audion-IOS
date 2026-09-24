@@ -1008,7 +1008,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// .recomputeSenderParameters()`'s read of it — both verified
     /// module-internal against the pinned fork's real source
     /// (client-sdk-swift 2.16.0, byte-identical to this file's
-    /// 2.16.0-aes256-raw6 tag) — so there is no safe PUBLIC lever to
+    /// 2.16.0-aes256-raw7 tag) — so there is no safe PUBLIC lever to
     /// graduate an already-published group video track's bitrate the way
     /// the 1:1 path does. Unpublish+republish with a lower
     /// `VideoPublishOptions` would fake one, but at the cost of a new track
@@ -1115,7 +1115,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// canImport(LiveKit)` split). This is the SAME per-publication API
     /// `adaptiveStream`'s own internal timer would be driving automatically
     /// if it were on — verified against the pinned fork's real source
-    /// (2.16.0-aes256-raw6, byte-identical to upstream client-sdk-swift
+    /// (2.16.0-aes256-raw7, byte-identical to upstream client-sdk-swift
     /// 2.16.0 for this file per `Package.swift`'s own audit comment):
     /// `RemoteTrackPublication.set(enabled:)` and `.set(videoQuality:)`
     /// both gate on `checkUserCanModifyTrackSettings()`, which requires

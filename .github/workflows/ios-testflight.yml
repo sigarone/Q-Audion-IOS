@@ -80,15 +80,16 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       # WebRTC key-material logging gate (scripts/ci/assert-no-key-logging.sh, step
       # "Assert no WebRTC key-material logging in the IPA" below).
-      #   '0' = REPORT-ONLY (default): scans the shipped IPA, prints what it found, never
-      #         fails the step or the release. Merging this cannot break a build.
-      #   '1' = ENFORCE: the step fails the job (before the TestFlight upload) if any Mach-O
-      #         in the app still contains the upstream WebRTC key-dump log strings, or if
-      #         nothing could be scanned.
-      # Flip to '1' in the SAME PR that pins the rebuilt WebRTC.xcframework /
-      # LiveKitWebRTC.xcframework (sigarone/webrtc-aes256-build, no-key-log.patch) in
-      # QAudionEngine/Package.swift + QAudionApp/project.yml.
-      WEBRTC_KEYLOG_GATE: '0'
+      #   '1' = ENFORCE (current): the step fails the job, BEFORE the TestFlight upload, if
+      #         any Mach-O in the app still contains the upstream WebRTC key-dump log strings,
+      #         or if nothing could be scanned. Flipped on in the same PR that pinned the
+      #         rebuilt WebRTC.xcframework / LiveKitWebRTC.xcframework
+      #         (sigarone/webrtc-aes256-build, no-key-log.patch) in QAudionEngine/Package.swift
+      #         + QAudionApp/project.yml.
+      #   '0' = REPORT-ONLY: same scan, prints what it found, never fails the step or the
+      #         release. Use it (one-line change) only to roll back to binaries that still
+      #         carry the strings.
+      WEBRTC_KEYLOG_GATE: '1'
 
     steps:
       # ----------------------------------------------------------
