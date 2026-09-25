@@ -45,8 +45,8 @@ final class PhonebookSyncCoordinator {
         let processedContacts: Int
         let validE164Count: Int
         let resolvedUserCount: Int
-        /// Hashes the server did not look up in this pass (it stopped answering or cut
-        /// the batches). 0 means the whole address book was checked. Defaulted so the
+        /// Hashes that were not looked up in this pass (for example after a rate
+        /// limit). 0 means the whole address book was checked. Defaulted so the
         /// snapshots that predate the discovery step stay valid as written.
         var pendingHashCount: Int = 0
         /// The wait the server asked for (`Retry-After`), in seconds, when it did.
@@ -234,7 +234,7 @@ final class PhonebookSyncCoordinator {
             }
         }
 
-        // Step 5 — discover-v2, sent in bounded chunks. A pass that the server
+        // Step 5 — discover-v2, sent in chunks. A pass that the server
         // stopped part-way (rate limit) keeps what the earlier chunks found: those
         // contacts are persisted below and the rest is reported through the final
         // ScanProgress (pendingHashCount / retryAfterSeconds) instead of being

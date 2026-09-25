@@ -13,7 +13,7 @@ import Foundation
 ///    have OUR phone in their contact book never get matched on
 ///    discovery; iOS users were one-way-invisible to Android peers.
 ///
-/// Lookups are sent in bounded chunks (`maxHashesPerRequest`), like Android;
+/// Lookups are sent in chunks of at most `maxHashesPerRequest` hashes;
 /// `discoverChunked(alg:hashes:chunkSize:)` reports how far a pass got.
 public final class BCryptoContactsDiscoverV2Client {
 
@@ -128,11 +128,7 @@ public final class BCryptoContactsDiscoverV2Client {
 
     // MARK: - Discover
 
-    /// Most hashes sent in ONE `discover-v2` request (same value as Android's
-    /// `DiscoverContactsUseCase.MAX_BATCH`). The server bounds the size of a batch
-    /// and ignores whatever exceeds its bound, so a larger request would be only
-    /// partly looked up with nothing telling the client. Address books bigger than
-    /// this are sent as several sequential requests instead.
+    /// Requests are chunked to stay within the server's per-request limit.
     public static let maxHashesPerRequest: Int = 500
 
     /// Why a chunked pass ended before every hash was looked up.
@@ -164,12 +160,12 @@ public final class BCryptoContactsDiscoverV2Client {
         /// Set when the pass stopped early; nil when every chunk was sent.
         public let stopReason: DiscoverStopReason?
 
-        /// Hashes that were not looked up (never sent, or cut by the server).
+        /// Hashes that were not looked up (never sent, or reported as not processed).
         public var pendingHashes: Int {
             return max(totalHashes - processedHashes, 0)
         }
 
-        /// True only when every hash was sent and the server did not report cutting any.
+        /// True only when every hash was sent and none was reported as not processed.
         public var isComplete: Bool {
             if stopReason != nil { return false }
             if serverTruncated { return false }
