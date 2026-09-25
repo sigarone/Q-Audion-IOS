@@ -412,6 +412,10 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 4. **Always bump the tag** for a new release (e.g. `v1.0.23`). Don't re-use old tags; don't build from branches.
 5. **Treat Apple emails after upload as canonical**. The publish step reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
+7. **New testable logic (parsing, policy, formatting, decision functions) goes into `QAudionEngine`**, where
+   `engine-tests.yml` runs `QAudionEngineTests` on pushes to main/develop and on PRs. `QAudionAppTests/` is not wired into any
+   build target (`QAudionApp/project.yml` declares no unit-test target and no workflow runs that folder), so
+   app-level tests do not run today; keep the app side a thin call into the engine.
 
 ### 13. Swift type-checker timeout traps (Xcode 26.4)
 
