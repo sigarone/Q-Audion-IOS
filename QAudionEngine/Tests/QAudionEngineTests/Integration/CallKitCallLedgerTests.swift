@@ -136,6 +136,143 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertEqual(ledger.outstandingCount, 1)
     }
 
+    // MARK: - beginReport / finishReport (W-GHOSTCALL single-flight)
+
+    /// Incident e3acecd7 03.221/03.222: two reports of the same uuid inside the
+    /// same millisecond. Only the first may be "the first report".
+    func test_beginReport_firstCallerWins_secondIsADuplicate() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.beginReport(uuid), "second report while the first is in flight")
+    }
+
+    /// The claim is not a native report: CallKit has not answered yet.
+    func test_beginReport_doesNotMarkReportedOrOutstanding() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.isNativelyReported(uuid))
+        XCTAssertEqual(ledger.outstandingCount, 0)
+    }
+
+    /// After a SUCCESSFUL report the uuid stays a duplicate for good (it is in
+    /// the natively-reported set), whether or not the claim was released.
+    func test_beginReport_afterSuccess_isStillADuplicate() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        ledger.recordNativeReport(uuid)
+        ledger.finishReport(uuid)
+        XCTAssertFalse(ledger.beginReport(uuid))
+    }
+
+    /// A refused report (Focus / block list) releases its claim: a later report
+    /// of the same uuid is a first report again, as it always was.
+    func test_finishReport_afterFailure_letsALaterReportBeFirst() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid))
+    }
+
+    func test_finishReport_isIdempotent_andUnknownUuidIsANoOp() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid))
+        ledger.finishReport(uuid)
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid))
+    }
+
+    func test_beginReport_differentUuids_areIndependent() {
+        let ledger = CallKitCallLedger()
+        XCTAssertTrue(ledger.beginReport(UUID()))
+        XCTAssertTrue(ledger.beginReport(UUID()))
+    }
+
+    /// W-WAKEONLY releases the native-UI mark while the call stays live; the
+    /// old `isNativelyReported` read went false at that point and so does this.
+    func test_beginReport_afterReleaseFromSystemUI_matchesTheOldRead() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        ledger.recordNativeReport(uuid)
+        XCTAssertFalse(ledger.beginReport(uuid))
+        XCTAssertTrue(ledger.releaseNativeReport(uuid))
+        XCTAssertTrue(ledger.beginReport(uuid))
+    }
+
+    /// The point of the claim: from many threads at once exactly one caller gets
+    /// `true` (each winner leaves one outstanding entry, so the count is the
+    /// number of winners).
+    func test_concurrentBeginReport_exactlyOneWinner() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        DispatchQueue.concurrentPerform(iterations: 200) { _ in
+            if ledger.beginReport(uuid) {
+                ledger.recordOutstanding(UUID())
+            }
+        }
+        XCTAssertEqual(ledger.outstandingCount, 1)
+    }
+
+    // MARK: - CallKitReportFailurePolicy (W-GHOSTCALL)
+
+    func test_shouldArm_doNotDisturbAndBlockList_stillArmTheFallback() {
+        for code in [3, 4] {
+            XCTAssertTrue(
+                CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: false, errorCode: code),
+                "code \(code): the system UI never appeared, so the in-app answer path is armed as before")
+        }
+    }
+
+    /// e3acecd7 03.222: `ok=0 code=2` and the fallback was armed with the native
+    /// UI alive. Code 2 means CallKit already has the call.
+    func test_shouldArm_callUuidAlreadyExists_neverArms() {
+        XCTAssertEqual(CallKitReportFailurePolicy.callUUIDAlreadyExistsCode, 2)
+        XCTAssertFalse(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: false, errorCode: 2))
+        XCTAssertFalse(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: true, errorCode: 2))
+    }
+
+    func test_shouldArm_duplicateReport_neverArms_whateverTheCode() {
+        for code in [0, 1, 2, 3, 4, 5] {
+            XCTAssertFalse(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: true, errorCode: code))
+        }
+    }
+
+    /// Unknown / unentitled refusals keep the old behaviour: the UI did not
+    /// appear, so the fallback stays armed.
+    func test_shouldArm_otherCodes_keepTheOldBehaviour() {
+        for code in [0, 1, 5] {
+            XCTAssertTrue(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: false, errorCode: code))
+        }
+    }
+
+    /// The whole doubled-push race through the ledger and the policy: the first
+    /// report claims, the second is a duplicate, CallKit refuses the second with
+    /// Code=2 — and nothing is armed.
+    func test_doubledPushKitReport_neverArmsTheManualAnswerPath() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        let firstIsFirst = ledger.beginReport(uuid)
+        let secondIsFirst = ledger.beginReport(uuid)
+        XCTAssertTrue(firstIsFirst)
+        XCTAssertFalse(secondIsFirst)
+        // First: CallKit accepts.
+        ledger.recordNativeReport(uuid)
+        ledger.finishReport(uuid)
+        // Second: CallKit refuses with Code=2.
+        if CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: !secondIsFirst, errorCode: 2) {
+            ledger.recordRejected(uuid)
+        }
+        ledger.finishReport(uuid)
+        XCTAssertFalse(ledger.takeRejected(uuid), "no in-app manual-answer arming over a live native UI")
+        XCTAssertTrue(ledger.isNativelyReported(uuid))
+        XCTAssertEqual(ledger.outstandingCount, 1)
+    }
+
     // MARK: - Concurrency
 
     /// The reason this type exists: concurrent mutation from many threads

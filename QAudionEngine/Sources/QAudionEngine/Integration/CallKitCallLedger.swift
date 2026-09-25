@@ -82,6 +82,15 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// once.
     private var audioSelfActivated = false
 
+    /// W-GHOSTCALL (2026-09-25) — uuids whose `reportNewIncomingCall` has been
+    /// asked of CallKit and has not answered yet. Exists only to make "am I the
+    /// first report of this uuid?" one atomic test-and-set taken BEFORE the await
+    /// (see `beginReport`): the old check read `nativelyReportedUUIDs`, which is
+    /// only filled AFTER CallKit answers, so two reports of the same uuid issued
+    /// within the same millisecond (a doubled PushKit push, e3acecd7: 03.221 and
+    /// 03.222) both saw "not reported yet".
+    private var reportsInFlight: Set<UUID> = []
+
     init() {}
 
     /// Called the instant `activateAudioSession` successfully calls
@@ -113,10 +122,39 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// Whether `reportNewIncomingCall` already succeeded for this uuid. Read
     /// BEFORE the provider awaits CallKit, so a second report of the same
     /// uuid (PushKit + WS) can be told apart from a genuine rejection.
+    /// W-GHOSTCALL: the provider now uses `beginReport`, which also covers a
+    /// report that is still in flight; this plain read stays for diagnostics.
     func isNativelyReported(_ uuid: UUID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return nativelyReportedUUIDs.contains(uuid)
+    }
+
+    /// W-GHOSTCALL — atomic claim, taken right before `reportNewIncomingCall` is
+    /// awaited. `true` for exactly one caller per uuid: the first one, while no
+    /// other report of it is in flight and none has succeeded. Every later caller
+    /// gets `false` and must treat its report as a duplicate (it still reports to
+    /// CallKit — the PushKit mandate is one report per push — but must not arm the
+    /// manual-answer fallback if CallKit refuses it). The claimer calls
+    /// `finishReport` when CallKit has answered, success or failure.
+    func beginReport(_ uuid: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if nativelyReportedUUIDs.contains(uuid) || reportsInFlight.contains(uuid) {
+            return false
+        }
+        reportsInFlight.insert(uuid)
+        return true
+    }
+
+    /// W-GHOSTCALL — release the claim taken by `beginReport`. Idempotent. Called
+    /// after `recordNativeReport` on success, so there is no instant at which the
+    /// uuid is in neither set; on failure the uuid simply stops being "in flight"
+    /// and a later report of it is a first report again.
+    func finishReport(_ uuid: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        reportsInFlight.remove(uuid)
     }
 
     /// `reportNewIncomingCall` succeeded: the native UI is up (W-WAKEONLY) and
@@ -216,5 +254,32 @@ final class CallKitCallLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return outstandingUUIDs.count
+    }
+}
+
+/// W-GHOSTCALL (2026-09-25) — whether a refused `reportNewIncomingCall` may arm
+/// the in-app manual-answer fallback (`CallKitCallLedger.recordRejected`).
+///
+/// Arming means "CallKit never showed this call, so answer it by hand from the
+/// in-app banner": `answerCall` then skips `CXAnswerCallAction` and self-activates
+/// audio. That is only right when the system UI genuinely never appeared. Two
+/// refusals say the opposite:
+/// - this report is a duplicate of one already in flight or already up
+///   (`alreadyReported`, from `CallKitCallLedger.beginReport`): the first report's
+///   own outcome decides;
+/// - CallKit's own answer is Code=2 `callUUIDAlreadyExists`: CallKit already HAS
+///   this call, its native UI is live and answerable. Arming the fallback over it
+///   is what e3acecd7 did at 15:04:03.222 (`callkit report ok=0 code=2 dup=0`,
+///   then "arming in-app manual answer path" with the native UI alive), and a
+///   later in-app answer would then skip the real CXAnswerCallAction.
+/// Code 3 (Focus/DnD) and 4 (block list) still arm it, as before.
+enum CallKitReportFailurePolicy {
+
+    /// `CXErrorCodeIncomingCallError.callUUIDAlreadyExists`.
+    static let callUUIDAlreadyExistsCode: Int = 2
+
+    static func shouldArmManualAnswer(alreadyReported: Bool, errorCode: Int) -> Bool {
+        guard !alreadyReported else { return false }
+        return errorCode != callUUIDAlreadyExistsCode
     }
 }
