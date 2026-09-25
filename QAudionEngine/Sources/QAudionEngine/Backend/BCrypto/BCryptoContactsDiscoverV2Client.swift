@@ -12,6 +12,9 @@ import Foundation
 ///    phones to `POST /api/v1/contacts/phones`. Without this PEERS who
 ///    have OUR phone in their contact book never get matched on
 ///    discovery; iOS users were one-way-invisible to Android peers.
+///
+/// Lookups are sent in bounded chunks (`maxHashesPerRequest`), like Android;
+/// `discoverChunked(alg:hashes:chunkSize:)` reports how far a pass got.
 public final class BCryptoContactsDiscoverV2Client {
 
     public struct PepperBundle: Equatable {
@@ -125,11 +128,235 @@ public final class BCryptoContactsDiscoverV2Client {
 
     // MARK: - Discover
 
+    /// Most hashes sent in ONE `discover-v2` request (same value as Android's
+    /// `DiscoverContactsUseCase.MAX_BATCH`). The server bounds the size of a batch
+    /// and ignores whatever exceeds its bound, so a larger request would be only
+    /// partly looked up with nothing telling the client. Address books bigger than
+    /// this are sent as several sequential requests instead.
+    public static let maxHashesPerRequest: Int = 500
+
+    /// Why a chunked pass ended before every hash was looked up.
+    public enum DiscoverStopReason: Equatable {
+        /// HTTP 429. `retryAfterSeconds` is the parsed `Retry-After` header, nil when
+        /// the header was absent or unusable.
+        case rateLimited(retryAfterSeconds: TimeInterval?)
+        /// Any other failure that happened after at least one chunk had been answered
+        /// (a failure of the very first chunk is thrown instead, like a single request).
+        case failed(message: String)
+    }
+
+    /// What a chunked pass achieved. The entries of the chunks that were answered are
+    /// always kept, whatever happened to the later ones.
+    public struct DiscoverOutcome: Equatable {
+        /// Contacts returned by the answered chunks, in request order.
+        public let entries: [DiscoveredEntry]
+        /// Number of hashes the caller asked about.
+        public let totalHashes: Int
+        /// Hashes the server reports as looked up. A chunk's `processed` field is used
+        /// when the server sends it (clamped to the chunk size); an older server does
+        /// not send it, and then the whole chunk counts as looked up, unless the answer
+        /// says `truncated` without saying by how much (then none of it counts).
+        public let processedHashes: Int
+        /// HTTP responses received (a 429 counts, a transport failure does not).
+        public let requestCount: Int
+        /// True when at least one answer carried `"truncated": true`.
+        public let serverTruncated: Bool
+        /// Set when the pass stopped early; nil when every chunk was sent.
+        public let stopReason: DiscoverStopReason?
+
+        /// Hashes that were not looked up (never sent, or cut by the server).
+        public var pendingHashes: Int {
+            return max(totalHashes - processedHashes, 0)
+        }
+
+        /// True only when every hash was sent and the server did not report cutting any.
+        public var isComplete: Bool {
+            if stopReason != nil { return false }
+            if serverTruncated { return false }
+            return processedHashes >= totalHashes
+        }
+
+        /// True when the pass ended on an HTTP 429.
+        public var wasRateLimited: Bool {
+            guard let reason = stopReason else { return false }
+            if case .rateLimited = reason { return true }
+            return false
+        }
+
+        /// The `Retry-After` of the 429 that ended the pass, when it carried one.
+        public var retryAfterSeconds: TimeInterval? {
+            guard let reason = stopReason else { return nil }
+            if case .rateLimited(retryAfterSeconds: let wait) = reason { return wait }
+            return nil
+        }
+    }
+
     /// Discover contacts via `POST /api/v1/contacts/discover-v2`.
     /// Hashes are pre-computed by caller via `PepperedPhoneHash.hash(...)`.
     /// Body shape: `{"alg":"sha256","hashes":[...]}` (matches Android
     /// `DiscoverContactsV2Request`).
+    ///
+    /// Up to `maxHashesPerRequest` hashes go out as one request, exactly as before.
+    /// A longer list is sent as sequential chunks of that size and the results are
+    /// concatenated in order. An empty list sends nothing. This overload keeps the
+    /// all-or-nothing contract: any failure, including HTTP 429, is thrown. Callers
+    /// that want to keep the progress made before a failure use
+    /// `discoverChunked(alg:hashes:chunkSize:)`.
     public func discover(alg: String, hashes: [String]) async throws -> [DiscoveredEntry] {
+        let outcome: DiscoverOutcome = try await runChunks(
+            alg: alg,
+            hashes: hashes,
+            chunkSize: BCryptoContactsDiscoverV2Client.maxHashesPerRequest,
+            salvagePartial: false
+        )
+        return outcome.entries
+    }
+
+    /// Like `discover(alg:hashes:)`, but reports how far the pass got instead of
+    /// discarding it.
+    ///
+    ///  - HTTP 429 stops the loop (no further request is sent) and is reported in
+    ///    `stopReason` with the parsed `Retry-After`; the entries already received
+    ///    are returned. Resuming later is up to the caller.
+    ///  - A failure of the first chunk is thrown, like a single request would.
+    ///    A failure after that stops the loop and is reported in `stopReason`.
+    ///  - The answer's optional `truncated` (Bool) and `processed` (Int) fields are
+    ///    read when present and ignored when absent, mistyped or accompanied by
+    ///    unknown fields, so old and new servers both decode.
+    ///  - An empty list sends nothing.
+    public func discoverChunked(
+        alg: String,
+        hashes: [String],
+        chunkSize: Int = BCryptoContactsDiscoverV2Client.maxHashesPerRequest
+    ) async throws -> DiscoverOutcome {
+        return try await runChunks(
+            alg: alg,
+            hashes: hashes,
+            chunkSize: chunkSize,
+            salvagePartial: true
+        )
+    }
+
+    /// Answer of one request, before it is folded into the pass.
+    private struct ChunkResult {
+        let entries: [DiscoveredEntry]
+        let truncated: Bool?
+        let processed: Int?
+    }
+
+    private enum ChunkResponse {
+        case answered(ChunkResult)
+        case rateLimited(retryAfterSeconds: TimeInterval?)
+    }
+
+    /// Real server shape (handleDiscoverContactsV2): `{"contacts": [...]}`, plus the
+    /// optional `truncated` / `processed` fields of newer servers. Those two are read
+    /// leniently on purpose: a missing, null or wrongly typed value must never fail
+    /// the whole answer (the contacts are what matters).
+    private struct DiscoverResponseBody: Decodable {
+        let contacts: [DiscoveredEntry]
+        let truncated: Bool?
+        let processed: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case contacts
+            case truncated
+            case processed
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.contacts = try container.decode([DiscoveredEntry].self, forKey: .contacts)
+            let truncatedValue: Bool? = try? container.decodeIfPresent(Bool.self, forKey: .truncated)
+            let processedValue: Int? = try? container.decodeIfPresent(Int.self, forKey: .processed)
+            self.truncated = truncatedValue
+            self.processed = processedValue
+        }
+    }
+
+    /// Sends the chunks one after the other. `salvagePartial == false` reproduces the
+    /// single-request contract (every failure is thrown); `true` keeps what was
+    /// received and reports the stop instead.
+    private func runChunks(
+        alg: String,
+        hashes: [String],
+        chunkSize: Int,
+        salvagePartial: Bool
+    ) async throws -> DiscoverOutcome {
+        let size: Int = max(chunkSize, 1)
+        var entries: [DiscoveredEntry] = []
+        var processedTotal: Int = 0
+        var requestCount: Int = 0
+        var answeredChunks: Int = 0
+        var sawTruncation: Bool = false
+        var stop: DiscoverStopReason?
+        var start: Int = 0
+
+        while start < hashes.count {
+            let end: Int = min(start + size, hashes.count)
+            let chunk: [String] = Array(hashes[start..<end])
+            start = end
+
+            let answer: ChunkResponse
+            do {
+                answer = try await postDiscoverChunk(alg: alg, hashes: chunk)
+            } catch {
+                if !salvagePartial || answeredChunks == 0 || Task.isCancelled {
+                    throw error
+                }
+                stop = .failed(message: error.localizedDescription)
+                break
+            }
+            requestCount += 1
+
+            switch answer {
+            case .rateLimited(retryAfterSeconds: let wait):
+                if !salvagePartial {
+                    throw Error.httpError(429)
+                }
+                stop = .rateLimited(retryAfterSeconds: wait)
+            case .answered(let result):
+                answeredChunks += 1
+                entries.append(contentsOf: result.entries)
+                processedTotal += BCryptoContactsDiscoverV2Client.processedCount(
+                    reported: result.processed,
+                    truncated: result.truncated,
+                    sent: chunk.count
+                )
+                if result.truncated == true {
+                    sawTruncation = true
+                }
+            }
+            if stop != nil {
+                break
+            }
+        }
+
+        return DiscoverOutcome(
+            entries: entries,
+            totalHashes: hashes.count,
+            processedHashes: processedTotal,
+            requestCount: requestCount,
+            serverTruncated: sawTruncation,
+            stopReason: stop
+        )
+    }
+
+    /// Hashes of one chunk to count as looked up: what the server reported, clamped
+    /// to what was sent. An older server reports nothing and the whole chunk counts.
+    /// An answer that says the batch was cut without saying by how much confirms
+    /// nothing, so none of that chunk counts.
+    private static func processedCount(reported: Int?, truncated: Bool?, sent: Int) -> Int {
+        guard let value = reported else {
+            if truncated == true { return 0 }
+            return sent
+        }
+        return min(max(value, 0), sent)
+    }
+
+    /// One `discover-v2` request. The wire format is the one this client has always
+    /// used; only a 429 is told apart (it is returned, with its `Retry-After`).
+    private func postDiscoverChunk(alg: String, hashes: [String]) async throws -> ChunkResponse {
         var req = URLRequest(url: baseUrl.appendingPathComponent("api/v1/contacts/discover-v2"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -140,18 +367,28 @@ public final class BCryptoContactsDiscoverV2Client {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, resp) = try await session.data(for: req)
-        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw Error.httpError(http.statusCode)
+        if let http = resp as? HTTPURLResponse {
+            if http.statusCode == 429 {
+                let rawWait: String? = http.value(forHTTPHeaderField: "Retry-After")
+                let wait: TimeInterval? = LiveLogBackoff.parseRetryAfter(rawWait, now: Date())
+                return .rateLimited(retryAfterSeconds: wait)
+            }
+            if !(200..<300).contains(http.statusCode) {
+                throw Error.httpError(http.statusCode)
+            }
         }
-        // Real server shape (handleDiscoverContactsV2): {"contacts": [...]}.
-        struct DiscoverResponse: Decodable {
-            let contacts: [DiscoveredEntry]
-        }
+        let decoded: DiscoverResponseBody
         do {
-            return try JSONDecoder().decode(DiscoverResponse.self, from: data).contacts
+            decoded = try JSONDecoder().decode(DiscoverResponseBody.self, from: data)
         } catch {
             throw Error.decodingFailed(String(describing: error))
         }
+        let result = ChunkResult(
+            entries: decoded.contacts,
+            truncated: decoded.truncated,
+            processed: decoded.processed
+        )
+        return .answered(result)
     }
 
     /// Legacy overload for callers that haven't been updated to thread
