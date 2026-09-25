@@ -147,6 +147,19 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertFalse(ledger.beginReport(uuid), "second report while the first is in flight")
     }
 
+    /// `CallKitProvider.reportIncomingCall` releases the claim only when IT took
+    /// it: the losers of `beginReport` never call `finishReport`, so any number of
+    /// duplicates leaves the claimer's claim in place until the claimer finishes.
+    func test_beginReport_duplicatesLeaveTheClaimInPlace_untilTheClaimerFinishes() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.beginReport(uuid), "a third report is still a duplicate")
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid), "only the claimer's release reopens it")
+    }
+
     /// The claim is not a native report: CallKit has not answered yet.
     func test_beginReport_doesNotMarkReportedOrOutstanding() {
         let ledger = CallKitCallLedger()
