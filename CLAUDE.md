@@ -181,6 +181,62 @@ handles. Limits: builds up to 1.0.1181 still print; the callback still receives 
 separate WebRTC copy with its own debug level, untouched here; rebuilding WebRTC without the two prints is the
 complete fix, and `KeyMaterialScrubber` stays as defence in depth.
 
+**After v1.0.1181 (W-VPIOOBS / W-VPIOWD / W-BYPASSDUCK, branch `fix/vpio-observability-suppressor`) -- VP-IO
+tap latency, watchdog generation, bypass echo ducker.** Why: on the test iPhone Apple's
+Voice-Processing I/O never delivers a tap buffer inside the W-AEC-FIX window (71/71 built-in-mic calls in bypass,
+~1% elsewhere), and the app could not say why or how late. Numeric log lines (tag `call`, accurate timestamp; numeric
+on purpose, for the shipper's redactor, but see the end of this block for what was verified):
+`audioVp ev=arm gen=N since_start_ms=0 eng_ms=..` (watchdog armed; `eng_ms` =
+`engine.start()` -> end of `start()`), `ev=ff gen=N ms=.. eng_ms=..` (first tap buffer, ms from the end of `start()`
+/ from `engine.start()`; `ms` is the tap's own timestamp, the line's timestamp is that of the check: the +1.2 s
+watchdog, or earlier the next `start()` / `stop()` / the diag read when the engine is replaced or the call ends
+first), `ev=fire gen=N since_start_ms=.. stale=0 er=0|1` (watchdog restarted the engine without
+VP-IO; `er` = `AVAudioEngine.isRunning`, 0 = the engine had been stopped, e.g. by a configuration change),
+`ev=stale gen=N cur=M ff=0|1 since_start_ms=..` (a timer of a replaced engine expired and was IGNORED),
+`ev=noop gen=N since_start_ms=..` (an `.override` route change with an unchanged route was ignored), `ev=cfg gen=N
+eng_ms=..` (an `AVAudioEngineConfigurationChange` on the live engine; the observer is registered BEFORE
+`engine.start()`, a change posted during the start is counted once `start()` returns), `ev=duck gen=N on= en= vpio=
+spk=` (per engine start: ducker eligible / remote switch / VP-IO active / loudspeaker). `call.audio.diag` (same
+consent gate as every field there; a key is omitted when it was not measured): `vpio_watchdog_gen` (+1 per start and
+per stop), `vpio_starts`, `vpio_first_frame_ms` / `vpio_first_frame_eng_ms` (FIRST VP-IO start; absent = it delivered
+nothing before the 1.2 s window closed, the engine was replaced or the call ended), `vpio_last_frame_ms`,
+`vpio_starve_fired`, `vpio_starve_stale`, `vpio_starve_gen`, `vpio_starve_ms`, `engine_cfg_changes_2s`, and once per call `hw_machine` (sysctl), `os_build`, `mic_mode`
+(0 standard, 1 wide spectrum, 2 voice isolation), `input_ports`, `preferred_input` (AVAudioSession port types;
+`ContinuityMicrophone` ships as `ContinuityMic`, the on-device redactor masks a 20+ character run), `tap_fmt_before` /
+`tap_fmt_after` (`<Hz>/<channels>` of the input node before / after enabling voice processing). `engine_running_at_end`
+is now real (it was false on every record: `stop()` latched it after the stats were consumed). Reading: no
+`vpio_first_frame_ms` + `vpio_starve_fired>=1` = the tap stayed silent for the whole 1.2 s window (the window is
+NOT widened, so "late" vs "never" past 1.2 s is still unknown); `tap_fmt_before` != `tap_fmt_after` = the format
+moves when VP-IO is enabled; `er=0` / `engine_cfg_changes_2s>0` = the engine was stopped under the tap.
+`vpio_starve_stale>0` used to mean a false starve (an older engine's timer judging a newer one); it is ignored now.
+Watchdog fix: the timer only judges the engine generation it was armed for (`VpioWatchdogDecisions.starveVerdict`),
+and an `.override` within 1.5 s of a start whose effective route (input/output port type + uid, speaker flag) equals
+the one the engine was built for does not rebuild the engine (`isOverrideNoOp`); a real speaker toggle still does.
+The shared throttle / suppress window is deliberately NOT armed at the end of `start()`: `AppState` re-asserts
+`setSpeaker(true)` right after `start()` on the CallKit `didActivate` path and that window would drop the rebuild.
+Ducker (`BypassEchoDuck`): only with VP-IO NOT active on the engine AND the built-in loudspeaker as output; while the
+far end is audible (RX frame RMS >= 1% within 200 ms) and the mic is not clearly local speech the TX gain goes to
+0.25 (-12 dB) in 100 ms, is held 120 ms, released in 300 ms (100 ms when local speech dominates). "Local speech" =
+mic >= 1.4 x (leave: 1.0 x) the PEAK-HELD RX level (`heldPlayedRms`, 500 ms decay: the mic hears a frame 0.3-0.4 s
+after it was stamped on arrival, so the last frame's level would read the echo of a strong syllable as local speech).
+Folded into the make-up AGC as its last multiplier (the AGC is not limited; a duck before the AGC would be undone by
+it). Kill switch: `flags.json` key `ios_bypass_echo_duck` (default ON; publishing it `false` for the first calls is
+the A/B without a new build). Telemetry: `echo_duck_enabled`, `echo_duck_frames`, `echo_duck_active_pct`,
+`echo_duck_gain_min`, `echo_duck_near_pct` (0 = the near-end test never fired). Uncalibrated on iOS (no ERLE
+measured): the raw iPhone mic is quiet, so in practice it is a -12 dB gate on the TX while the far end talks. With the
+ducker active, tx `rms_pct` / `peak_pct` / `clip_samples` in `call.audio.diag` are measured AFTER the duck (about 12 dB
+lower while the far end talks) and do not compare with the earlier series when `echo_duck_active_pct > 0`; `agc_gain`
+is the AGC law alone (the duck is not in it). The server's `TELEMETRY_ATTRIBUTE_CONTRACT.md` (bcrypto-server/docs)
+does not list the new keys yet (they are additive, so nothing breaks; add them to that document alongside this
+change). Log pipeline: replaying the seven `audioVp` line forms (synthetic values) through the redactor of `main` as
+of #111 (`scripts/ship-ios-logs.py`) gave 2 of 7 verbatim (`ff`, `noop`); `arm` came back with `since_start_ms`
+masked; `fire`, `stale`, `cfg` and `duck` were dropped. Which redactor version runs on the log pipeline is not
+verified, and real phone logs were not tested; the `call.audio.diag` fields use a different path and are not
+affected. If that stricter redactor is, or becomes, the one running there, its vocabulary needs `gen`, `cur`, `ff`,
+`er`, `stale`, `since_start_ms`, `eng_ms`, `ms`, `on`, `en`, `vpio`, `spk` and the `ev` words: that is a separate
+shipper-vocabulary change, not part of this branch.
+Tests: `VpioObservabilityTests`, `VpioWatchdogDecisionsTests`, `BypassEchoDuckTests` (engine).
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`
