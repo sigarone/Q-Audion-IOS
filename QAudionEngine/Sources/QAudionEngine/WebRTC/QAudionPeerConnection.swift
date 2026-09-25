@@ -487,7 +487,7 @@ public final class QAudionPeerConnection: NSObject {
     /// W-DCWEDGE (2026-09-25) — but the drops are NOT always transient. In call
     /// 7727f262 the queue stayed over the threshold for 21 s (ICE flapped and came
     /// back, the per-frame ICE gate reopened the channel at once) and in 277cff7c
-    /// for 6.3 s with ICE never changing state: every frame was shed, none reached
+    /// for 7.4 s with ICE never changing state: every frame was shed, none reached
     /// the relay, and the caller counted them all as sent. Every frame now feeds
     /// `DcWedgeDetector`; while it says wedged the answer is `.useRelay` — a
     /// DIVERSION, not a duplication (each frame goes on exactly one leg, see

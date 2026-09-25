@@ -482,7 +482,7 @@ final class DcWedgeDetectorTests: XCTestCase {
             iceGateClosed: { _ in false },
             buffered: { t in
                 if t < firstBackpressure { return 100 }
-                if t <= lastBackpressure { return 1802 }     // fixed at 1802 B for 6.3 s
+                if t <= lastBackpressure { return 1802 }     // fixed at 1802 B for 7.4 s
                 if t < 61_500 { return 900 }
                 return 200                                    // "DC free about 01.5-02.0"
             },

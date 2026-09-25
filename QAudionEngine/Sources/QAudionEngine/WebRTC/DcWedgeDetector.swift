@@ -14,7 +14,7 @@ import Foundation
 ///    dc=5984 ws=16`: the 5984 includes every shed frame, see below.
 ///  - call 277cff7c (2026-09-24): backpressure 18:05:53.952-18:06:01.378 with the
 ///    queue fixed at 1802 B, and the iPhone never saw ICE change state (0 lines in
-///    18 minutes), so nothing moved the audio to the relay (`ws=0` all call): 7.5 s
+///    18 minutes), so nothing moved the audio to the relay (`ws=0` all call): 7.4 s
 ///    of silence iPhone -> Android.
 /// `sendAudioFrameData` used to return `true` for a shed frame ("a transient,
 /// self-recovering condition"), so `CallService` counted it as sent on the
@@ -23,8 +23,10 @@ import Foundation
 ///
 /// Rules, thresholds and sample semantics are those of the Android twin
 /// (`DcWedgeDetector.kt`, W-DCWEDGE), which is the specification (CLAUDE.md,
-/// audio-path rule 3); only the `why=` strings differ (see `Reason`) and
-/// `shouldProbe` is iOS-only (a deliberate deviation from rule 3: Android has no
+/// audio-path rule 3); only the `why=` strings differ (see `Reason`), the place where
+/// the caller takes the sample differs (iOS: after the controller's ICE gate, see
+/// `QAudionWebRtcCallController.sendAudioFrameData`; Android: before its ICE check)
+/// and `shouldProbe` is iOS-only (a deliberate deviation from rule 3: Android has no
 /// probe, and it has not been proven on a device yet; the kill switch turns it off,
 /// as does `probeIntervalMs = 0`). Pure on purpose (no clock, no WebRTC types): the
 /// caller feeds one sample per outbound frame with the time of its choice, so the

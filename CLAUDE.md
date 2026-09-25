@@ -182,12 +182,14 @@ separate WebRTC copy with its own debug level, untouched here; rebuilding WebRTC
 complete fix, and `KeyMaterialScrubber` stays as defence in depth.
 
 **Since the build after v1.0.1181 (W-DCWEDGE) -- a wedged DataChannel goes to the WS relay.** Calls
-7727f262 (queue over 1500 B for 21 s, ICE back at +1 s) and 277cff7c (6.3 s, ICE never changed
+7727f262 (queue over 1500 B for 21 s, ICE back at +1 s) and 277cff7c (7.4 s, ICE never changed
 state): `sendAudioFrameData` answered `true` for a frame the back-pressure gate DROPPED, so
 `CallService` counted it as sent on the DataChannel (`dcmux tx dc=5984 ws=16`) and never looked at
 the relay, and the ICE gate reopened the channel the instant ICE was `connected`. Now the pure
-`DcWedgeDetector` (`QAudionEngine/.../WebRTC/DcWedgeDetector.swift`, same rules as Android's twin)
-watches the send queue on every outbound frame: wedged when `bufferedAmount` > 1500 B on every
+`DcWedgeDetector` (`QAudionEngine/.../WebRTC/DcWedgeDetector.swift`, same enter/exit rules and
+thresholds as Android's twin, plus an iOS-only probe; iOS samples it after the ICE gate, Android
+before its own ICE check) watches the send queue on every outbound frame: wedged when
+`bufferedAmount` > 1500 B on every
 sample for 1000 ms OR 15 shed frames in a row; released only after < 500 B for 3000 ms AND a frame
 received on the DataChannel in the last 500 ms (ICE is not an input). While wedged the frame goes on
 the WS relay INSTEAD of the DataChannel (a diversion, never a duplication: the receiver's M-15
@@ -199,8 +201,9 @@ while wedged AND drained (< 500 B) one frame per 400 ms still goes on the channe
 because a hole hits both directions, both phones wedge, and without it nobody would ever write on
 the channel that the other side needs to see to release. `AudioDcSendOutcome` (`queued` / `shed` /
 `useRelay`) replaces the Bool: a shed frame is counted in `txDcDrop`, NOT in `txFramesDc`, and is no
-longer added to the FLUSSO bytes. What to look for in the shipped log (tag `call`, numeric only,
-every token < 12 characters): `dcmux wedge=1 why=<buf|drops> buf=.. over=.. drops=..` (entry),
+longer added to the FLUSSO bytes. What to look for in the shipped log (tag `call`; the `wedge=` and
+`wedgesw=` lines: numbers only apart from `why=`, every token < 12 characters; `dcmux txfall` keeps
+its `st= callId= n=` fields): `dcmux wedge=1 why=<buf|drops> buf=.. over=.. drops=..` (entry),
 `dcmux wedge=0 why=drained buf=.. low=.. rxago=.. wsec=..` (exit), `dcmux txfall why=wedge` (the
 per-frame fallback line, ICE carrying and the channel `.open`), `dcmux wedgesw=<0|1>` (kill switch
 read at the call's first TX frame), `drop=<n>` at the END of the `dcmux tx` line. Heartbeat:
@@ -209,8 +212,11 @@ native SRTP path). Kill switch: remote flag `ios_dc_wedge_fallback` (default ON,
 pre-W-DCWEDGE routing from the next call, audio and control frames alike; the detector still runs
 and logs) via `DcWedgeKillSwitch` / `CallService.refreshDcWedgeFlag`. Tests: `DcWedgeDetectorTests`
 (thresholds on both sides, hysteresis, the two real stalls, the probe and the symmetric deadlock,
-the log-line token limit, the routing rule), `HeartbeatDeltaTrackerTests`. NOT built or run on a
-device: no macOS on the machine that wrote it. The probe is a deliberate deviation from audio-path
+the log-line token limit, the routing rule), `HeartbeatDeltaTrackerTests`. Verification: only the
+pure-logic files (`DcWedgeDetector`, `HeartbeatDeltaTracker`) were compiled and run, in a Linux
+container; the Apple-framework files (`QAudionPeerConnection`, `QAudionWebRtcCallController`,
+`CallService`, `AppState`) were never compiled by anyone when this was written (no macOS on the
+machine that wrote it) and nothing ran on a device. The probe is a deliberate deviation from audio-path
 rule 3 (Android's twin has none, so Android<->Android stays exposed to the symmetric deadlock it
 breaks) and has never run on a device: prove it with network shaping, or set `probeIntervalMs = 0`
 to drop it (the kill switch turns it off too).
