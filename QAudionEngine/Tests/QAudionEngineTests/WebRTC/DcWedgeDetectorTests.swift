@@ -552,6 +552,29 @@ final class DcWedgeDetectorTests: XCTestCase {
         XCTAssertEqual(exit.logLine, "dcmux wedge=0 why=drained buf=9999999 low=9999999 rxago=99999 wsec=999999")
     }
 
+    /// ...and for absurdly NEGATIVE ones: the minus sign takes one of the characters the digits have, so
+    /// the floor is a tenth of the cap. The real "unknown" marker (-1) is untouched.
+    func testTheLogLinesStayUnderTheLimitForAbsurdlyNegativeValuesToo() {
+        let enter = DcWedgeDetector.Transition(wedged: true, reason: .drops, bufferedBytes: Int64.min,
+                                               holdMs: Int64.min, consecutiveDrops: Int.min,
+                                               rxAgoMs: -1, wedgedForMs: 0)
+        let exit = DcWedgeDetector.Transition(wedged: false, reason: .drained, bufferedBytes: Int64.min,
+                                              holdMs: Int64.min, consecutiveDrops: 0,
+                                              rxAgoMs: Int64.min, wedgedForMs: Int64.min)
+        for line in [enter.logLine, exit.logLine] {
+            for token in line.split(separator: " ") {
+                XCTAssertLessThan(token.count, 12, "token \(token) of \(line)")
+            }
+        }
+        XCTAssertEqual(enter.logLine, "dcmux wedge=1 why=drops buf=-999999 over=-99999 drops=-9999")
+        XCTAssertEqual(exit.logLine, "dcmux wedge=0 why=drained buf=-999999 low=-999999 rxago=-9999 wsec=-99999")
+
+        let unknown = DcWedgeDetector.Transition(wedged: true, reason: .drops, bufferedBytes: -1,
+                                                 holdMs: 0, consecutiveDrops: 15,
+                                                 rxAgoMs: -1, wedgedForMs: 0)
+        XCTAssertEqual(unknown.logLine, "dcmux wedge=1 why=drops buf=-1 over=0 drops=15")
+    }
+
     // MARK: - The routing rule
 
     func testAHealthyFrameIsSentAndAFrameOverTheThresholdIsShed() {

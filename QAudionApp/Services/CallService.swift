@@ -1003,8 +1003,9 @@ final class CallService: @unchecked Sendable {
     /// and they are different bugs: the capability tag is irrelevant for
     /// `-3`/`-2`/`-4`, ICE is the suspect for `-1`/`0`, and `2`/`3` mean a
     /// channel that was alive and died — the case the Android WS-receive
-    /// companion change exists for. `1` (OPEN) must be unreachable here and
-    /// prints as `openbug` if it ever is.
+    /// companion change exists for. `1` (OPEN) is reachable only when
+    /// `dc.sendData` refused the frame (W-DCWEDGE); it prints as `openbug`
+    /// and is a bug when it repeats.
     public var audioDataChannelDiag: (() -> Int)?
     /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — live-getter for the
     /// active call's key-confirmation telemetry snapshot, same pattern as
@@ -4131,9 +4132,12 @@ final class CallService: @unchecked Sendable {
                         case 0:  why = "conn"
                         case 2:  why = "closing"
                         case 3:  why = "closed"
-                        // `1` is OPEN and must be unreachable here: an open
-                        // channel returns true from sendAudioFrameData, including
-                        // for a backpressure drop. If this ever prints, the
+                        // `1` is OPEN. An open channel answers `.queued` or
+                        // `.shed` from sendAudioFrameData (W-DCWEDGE), and
+                        // `.useRelay` only when the channel is wedged (-7) or
+                        // `dc.sendData` REFUSED this frame, so it reaches this
+                        // line only for a refused send (or a wedge that changed
+                        // between the send and this read). If it repeats, the
                         // send-side predicate and the diagnostic disagree and
                         // THAT is the bug, so it gets its own word rather than
                         // being folded into a plausible-looking one.

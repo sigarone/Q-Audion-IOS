@@ -24,7 +24,9 @@ import Foundation
 /// Rules, thresholds and sample semantics are those of the Android twin
 /// (`DcWedgeDetector.kt`, W-DCWEDGE), which is the specification (CLAUDE.md,
 /// audio-path rule 3); only the `why=` strings differ (see `Reason`) and
-/// `shouldProbe` is iOS-only. Pure on purpose (no clock, no WebRTC types): the
+/// `shouldProbe` is iOS-only (a deliberate deviation from rule 3: Android has no
+/// probe, and it has not been proven on a device yet; the kill switch turns it off,
+/// as does `probeIntervalMs = 0`). Pure on purpose (no clock, no WebRTC types): the
 /// caller feeds one sample per outbound frame with the time of its choice, so the
 /// whole state machine runs on the CI simulator lane without the WebRTC binary
 /// (`DcWedgeDetectorTests`).
@@ -96,23 +98,26 @@ public struct DcWedgeDetector: Equatable, Sendable {
         /// stays under 12 characters (`key=value` counts as one token), otherwise the
         /// shipper's redactor deletes the whole line -- pinned by
         /// `DcWedgeDetectorTests`. `wsec` is seconds, and each value is clamped to the
-        /// digits its key leaves (11 characters per token), so the limit holds for ANY
-        /// input, not just for the values a real call produces.
+        /// digits its key leaves (11 characters per token) on BOTH sides, a minus sign
+        /// included, so the limit holds for ANY input, not just for the values a real
+        /// call produces.
         public var logLine: String {
             let cap5: Int64 = 99_999
             let cap6: Int64 = 999_999
             let cap7: Int64 = 9_999_999
-            let buf: Int64 = min(bufferedBytes, cap7)
+            // Above `cap`, and below `-(cap / 10)`: the minus sign takes one of the digits.
+            func clamp(_ v: Int64, _ cap: Int64) -> Int64 { max(min(v, cap), -(cap / 10)) }
+            let buf: Int64 = clamp(bufferedBytes, cap7)
             let parts: [String]
             if wedged {
-                let over: Int64 = min(holdMs, cap6)
-                let drops: Int64 = min(Int64(consecutiveDrops), cap5)
+                let over: Int64 = clamp(holdMs, cap6)
+                let drops: Int64 = clamp(Int64(consecutiveDrops), cap5)
                 parts = ["dcmux", "wedge=1", "why=\(reason.rawValue)", "buf=\(buf)",
                          "over=\(over)", "drops=\(drops)"]
             } else {
-                let low: Int64 = min(holdMs, cap7)
-                let rxAgo: Int64 = min(rxAgoMs, cap5)
-                let wsec: Int64 = min(wedgedForMs / 1_000, cap6)
+                let low: Int64 = clamp(holdMs, cap7)
+                let rxAgo: Int64 = clamp(rxAgoMs, cap5)
+                let wsec: Int64 = clamp(wedgedForMs / 1_000, cap6)
                 parts = ["dcmux", "wedge=0", "why=\(reason.rawValue)", "buf=\(buf)",
                          "low=\(low)", "rxago=\(rxAgo)", "wsec=\(wsec)"]
             }
