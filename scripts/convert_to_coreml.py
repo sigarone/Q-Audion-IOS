@@ -6,7 +6,7 @@ Usage:
     python convert_to_coreml.py <input.onnx> <output.mlpackage>
 
 Example:
-    python convert_to_coreml.py aasist_small_int8.onnx deepfake_aasist.mlpackage
+    python convert_to_coreml.py QAudionEngine/Sources/QAudionEngine/Resources/aasist_raw_small_distill_int8.onnx deepfake_aasist.mlpackage
 
 Requirements:
     pip install coremltools onnx
