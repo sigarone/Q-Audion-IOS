@@ -104,6 +104,10 @@ public final class AudioCapture {
     /// `.override` route-change notification is compared against (`VpioWatchdogDecisions.isOverrideNoOp`).
     private var builtRoute: VpioWatchdogDecisions.RouteSignature?
     private var vpioLedger = VpioObservability.Ledger()
+    /// W-VPIOOBS — true from an armed start until its first tap buffer has been recorded or the engine has
+    /// been replaced: lets the next `start()` / the diag read record a first frame the watchdog never got to
+    /// judge (the engine was rebuilt, or the call ended, before the 1.2 s timer). Main queue only.
+    private var vpioFirstFramePending = false
     private var vpioEnvironment: VpioObservability.Environment?
     private var engineConfigObserver: NSObjectProtocol?
     /// W-VPIOOBS — receives the numeric VP-IO diagnostic lines (`audioVp ev=...`). `CallService` points
@@ -1013,6 +1017,7 @@ public final class AudioCapture {
         // accumulator so a stale partial frame from a prior call or a
         // pre-interruption session can't desync the frame boundaries.
         pcmAccumulator = Data()
+        flushVpioFirstFrame()       // W-VPIOOBS — the engine being replaced may have delivered before its watchdog looked
         firstFrameReceived = false  // W-AEC-FIX — re-arm the VP-IO starve watchdog
         firstFrameAtMs = 0          // W-VPIOOBS — first-buffer stamp belongs to THIS engine
         vpioWatchdogGen += 1        // W-VPIOOBS — a new engine generation
@@ -1267,6 +1272,7 @@ public final class AudioCapture {
         //    it", false since that commit.)
         if audioPipeline.voiceProcessingIsActive {
             vpioLedger.noteArmed()
+            vpioFirstFramePending = true
             let armEngMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: startEndedAtMs)
             emitDiagLine(VpioObservability.armLine(gen: vpioWatchdogGen, engMs: armEngMs))
             scheduleVpioStarveWatchdog()
@@ -1315,11 +1321,21 @@ public final class AudioCapture {
 
     /// W-VPIOOBS — the tap delivered inside the watchdog window: record how long it took.
     private func noteVpioFirstFrame(gen: Int) {
-        guard firstFrameAtMs > 0 else { return }
+        guard vpioFirstFramePending, firstFrameAtMs > 0 else { return }
+        vpioFirstFramePending = false
         let ms = VpioObservability.elapsedMs(from: startEndedAtMs, to: firstFrameAtMs)
         let engMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: firstFrameAtMs)
         vpioLedger.noteFirstFrame(ms: ms, engMs: engMs)
         emitDiagLine(VpioObservability.firstFrameLine(gen: gen, ms: ms, engMs: engMs))
+    }
+
+    /// W-VPIOOBS — record the first tap buffer of the current armed engine if it has one that no watchdog
+    /// judged (a new `start()` is replacing the engine, or the call's diag is being read), and stop waiting
+    /// for it either way, so a later engine's first buffer is never booked to this one. Must run before
+    /// `start()` resets `firstFrameAtMs` / bumps the generation. Main queue only.
+    private func flushVpioFirstFrame() {
+        noteVpioFirstFrame(gen: vpioWatchdogGen)
+        vpioFirstFramePending = false
     }
 
     /// W-VPIOOBS — the watchdog is about to restart the engine without VP-IO.
@@ -1382,6 +1398,7 @@ public final class AudioCapture {
     /// reset at call teardown next to `consumeLevelStats()`. See `VpioObservability.diagAttrs` and
     /// `BypassEchoDuck.diagAttrs`.
     public func consumeVpioDiagAttrs() -> [String: Any] {
+        flushVpioFirstFrame()  // a call that ended before the 1.2 s watchdog looked still reports its first frame
         var attrs = VpioObservability.diagAttrs(ledger: vpioLedger, gen: vpioWatchdogGen, env: vpioEnvironment)
         let duckAttrs = BypassEchoDuck.diagAttrs(totals: echoDuckTotals, enabled: bypassEchoDuckEnabled)
         for (key, value) in duckAttrs {
@@ -2712,6 +2729,7 @@ public final class AudioCapture {
         // (W-VPIOOBS: CallService now latches it earlier, via `noteRunningAtEndNow()`, because the
         // diag stats are consumed before this runs.)
         noteRunningAtEndNow()
+        flushVpioFirstFrame()  // W-VPIOOBS — a first buffer nobody judged is booked to THIS generation, before it is bumped
         vpioWatchdogGen += 1  // W-VPIOOBS — a watchdog timer armed for this engine must not judge a later one
         // W-SPKFIX — cancel any pending debounced route restart so it cannot
         // fire after the call has torn down the engine.

@@ -308,6 +308,18 @@ final class VpioObservabilityWiringTests: XCTestCase {
         XCTAssertFalse(pipeline.consumeAudioDiagStats().engineRunningAtEnd)
     }
 
+    /// The diag read flushes a first tap buffer that no watchdog judged (a call that ended, or an engine
+    /// that was rebuilt, before the 1.2 s timer). A capture that never started has none and must not
+    /// invent one.
+    func testTheDiagReadInventsNoFirstFrame() {
+        let capture = AudioCapture(audioPipeline: AudioProcessingPipeline())
+        let attrs = capture.consumeVpioDiagAttrs()
+        XCTAssertNil(attrs["vpio_first_frame_ms"])
+        XCTAssertNil(attrs["vpio_first_frame_eng_ms"])
+        XCTAssertNil(attrs["vpio_last_frame_ms"])
+        XCTAssertEqual(attrs["vpio_starts"] as? Int, 0)
+    }
+
     /// Every `stop()` is a new generation: a watchdog timer armed for an engine that was torn down
     /// must not be mistaken for the current one.
     func testStopAdvancesTheWatchdogGeneration() {
