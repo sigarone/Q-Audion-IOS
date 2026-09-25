@@ -5134,9 +5134,12 @@ final class AppState: ObservableObject {
         // the WS relay. Resolves the live controller dynamically so it tracks
         // lazy per-call controller creation (the property is the gated `Any?`).
         #if canImport(WebRTC)
+        // W-DCWEDGE (2026-09-25) — the closure answers an `AudioDcSendOutcome` instead of
+        // a Bool: `.queued` / `.shed` (dropped by the back-pressure gate, not sent) /
+        // `.useRelay`. Every early exit below is the old `false`, i.e. `.useRelay`.
         callService.sendAudioOverDataChannel = { [weak self] data in
             guard let self = self, !self.audioPinnedToWsRelay,
-                  let controller = self.webRtcController as? QAudionWebRtcCallController else { return false }
+                  let controller = self.webRtcController as? QAudionWebRtcCallController else { return .useRelay }
             return controller.sendAudioFrameData(data)
         }
         // W-DCMUX (2026-08-11) — WHY the closure above returned false. It tests
@@ -5171,12 +5174,17 @@ final class AppState: ObservableObject {
         //               something else. -2 now means nil specifically; -6
         //               means "non-nil, wrong type" so the NEXT occurrence
         //               tells us which without another log-diving session.
+        //   -7 wedge    (W-DCWEDGE, 2026-09-25) ICE is carrying and the channel
+        //               reads `.open`, but `DcWedgeDetector` says SCTP is not
+        //               draining, so the frames go to the WS relay. Without this
+        //               code that state would fall through to `1` = `openbug`.
         callService.audioDataChannelDiag = { [weak self] in
             guard let self = self else { return -2 }
             if self.audioPinnedToWsRelay { return -3 }
             guard let raw = self.webRtcController else { return -2 }
             guard let controller = raw as? QAudionWebRtcCallController else { return -6 }
             if controller.audioTxIceGateClosed { return -5 }
+            if controller.audioTxWedgeDiverting { return -7 }
             return controller.audioDataChannelStateRaw
         }
         #endif
@@ -16970,9 +16978,10 @@ final class AppState: ObservableObject {
     ///
     /// The WS-relay fallback this grace buys time for exists on iOS
     /// per-frame: `sendAudioOverDataChannel` (wired to
-    /// `QAudionWebRtcCallController.sendAudioFrameData`) returns `false`
-    /// when the sealed DataChannel cannot deliver, and `CallService` then
-    /// routes that frame over the WS relay.
+    /// `QAudionWebRtcCallController.sendAudioFrameData`) answers `.useRelay`
+    /// (`AudioDcSendOutcome`, W-DCWEDGE) when the sealed DataChannel cannot
+    /// deliver, and `CallService` then routes that frame over the WS relay;
+    /// `.shed` (a frame the back-pressure gate dropped) is not relayed.
     ///
     /// CORRECTION (2026-08-30, W-DCTXICEGATE): the paragraph above used to
     /// say "whenever the sealed DataChannel isn't open" and claim nothing

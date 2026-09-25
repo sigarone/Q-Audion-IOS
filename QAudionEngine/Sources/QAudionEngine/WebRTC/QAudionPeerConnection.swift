@@ -298,6 +298,21 @@ public final class QAudionPeerConnection: NSObject {
     /// unlike Android's sibling implementation.
     private static let audioDcBufferedAmountDropThreshold: UInt64 = 1500
     private var lastAudioDcBackpressureLogAtMs: Int64 = 0
+    /// W-DCWEDGE (2026-09-25) — SCTP health, independent of ICE. The send queue
+    /// (`bufferedAmount`) is sampled on every outbound frame, the receive callback
+    /// leaves a flag; both meet in `DcWedgeDetector` under this lock (the send path
+    /// runs on the tx queue, the receive callback on the WebRTC signalling thread).
+    /// While the detector says wedged, `sendAudioFrameData` answers `.useRelay` and
+    /// `CallService` puts the frame on the WS relay — see the evidence and the rules
+    /// on `DcWedgeDetector`. Per PeerConnection, so a new call starts healthy.
+    private let dcWedgeLock = NSLock()
+    private var dcWedge = DcWedgeDetector()
+    private var dcRxSinceSample = false
+    /// W-DCWEDGE — the state-change line (`DcWedgeDetector.Transition.logLine`),
+    /// for the app layer to ship: this engine cannot reach `RTLog`. Forwarded by the
+    /// controller to its `log` hook at every PeerConnection construction site.
+    /// Fires on the tx queue (or whichever thread sampled), outside the lock.
+    public var onAudioDcWedgeChange: ((String) -> Void)?
     /// Invoked on the WebRTC signalling thread for each inbound sealed audio
     /// frame received over the DataChannel. The `Data` is the raw
     /// `WireRelayFrameCodec` envelope — identical to what the WS "audio_frame"
@@ -450,36 +465,96 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     /// W-DCAUDIO — send one sealed audio frame over the DataChannel if it is open.
-    /// Returns `true` if queued on the DC (or silently dropped for backpressure,
-    /// see below — the DC itself is still healthy); `false` if the DC is not
-    /// open (the caller must then fall back to the WS relay). `data` is the raw
-    /// `WireRelayFrameCodec` envelope (the exact bytes the WS path base64-wraps).
+    /// `.queued` if handed to SCTP; `.shed` if dropped for backpressure (see below —
+    /// a transient, the DC itself is still considered healthy: NOT sent, must not be
+    /// counted as sent); `.useRelay` if the DC cannot carry the frame — not open,
+    /// send refused, or wedged (W-DCWEDGE, below) — and the caller must then fall back
+    /// to the WS relay. `data` is the raw `WireRelayFrameCodec` envelope (the exact
+    /// bytes the WS path base64-wraps).
     ///
     /// W-DCBACKPRESSURE — mirrors Android's Wave 2C-15 hotfix: when
     /// `dc.bufferedAmount` exceeds `audioDcBufferedAmountDropThreshold`, drop
     /// this frame instead of enqueuing it, same as Android's
-    /// `PeerConnectionHolder.sendOnDataChannel`. Returns `true` (not `false`)
-    /// for a backpressure drop — this is a transient, self-recovering
-    /// condition on an otherwise-healthy DC, NOT a reason to force the caller
-    /// into a full WS-relay fallback (which `false` triggers); the receiver's
-    /// PLC/FEC/comfort-noise masks the occasional dropped frame, same as on
-    /// Android. Letting the queue grow unbounded instead produces a
+    /// `PeerConnectionHolder.sendOnDataChannel`. A single such drop answers
+    /// `.shed` (not `.useRelay`) — a transient, self-recovering condition on an
+    /// otherwise-healthy DC, NOT a reason to force the caller into a WS-relay
+    /// fallback; the receiver's PLC/FEC/comfort-noise masks the occasional dropped
+    /// frame, same as on Android. Letting the queue grow unbounded instead produces a
     /// permanent, non-recovering "voice arriving late" — or, worse, the
     /// underlying SCTP association can itself become unhealthy under a
     /// large enough backlog.
+    ///
+    /// W-DCWEDGE (2026-09-25) — but the drops are NOT always transient. In call
+    /// 7727f262 the queue stayed over the threshold for 21 s (ICE flapped and came
+    /// back, the per-frame ICE gate reopened the channel at once) and in 277cff7c
+    /// for 7.4 s with ICE never changing state: every frame was shed, none reached
+    /// the relay, and the caller counted them all as sent. Every frame now feeds
+    /// `DcWedgeDetector`; while it says wedged the answer is `.useRelay` — a
+    /// DIVERSION, not a duplication (each frame goes on exactly one leg, see
+    /// `CallService`) — except one probe frame per `DcWedgeDetector.probeIntervalMs`
+    /// that still goes on the channel so the peer can see it recover.
+    /// `DcWedgeKillSwitch` off = the exact pre-W-DCWEDGE routing.
     @discardableResult
-    public func sendAudioFrameData(_ data: Data) -> Bool {
-        guard let dc = audioDataChannel, dc.readyState == .open else { return false }
+    public func sendAudioFrameData(_ data: Data) -> AudioDcSendOutcome {
+        guard let dc = audioDataChannel, dc.readyState == .open else { return .useRelay }
         let backlog = dc.bufferedAmount
-        if AudioDcBackpressureGate.shouldDrop(bufferedAmount: backlog, threshold: Self.audioDcBufferedAmountDropThreshold) {
-            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-            if nowMs - lastAudioDcBackpressureLogAtMs > 1_000 {
-                print("[WebRTC] DC backpressure: dropping outbound audio frame (bufferedAmount=\(backlog) > \(Self.audioDcBufferedAmountDropThreshold))")
-                lastAudioDcBackpressureLogAtMs = nowMs
+        let shed: Bool = AudioDcBackpressureGate.shouldDrop(bufferedAmount: backlog, threshold: Self.audioDcBufferedAmountDropThreshold)
+        let sample = sampleAudioDcWedge(bufferedAmount: backlog, shed: shed)
+        if let verdict = AudioDcSendOutcome.preSend(shedByBackpressure: shed,
+                                                    wedged: sample.wedged,
+                                                    probe: sample.probe,
+                                                    divertEnabled: DcWedgeKillSwitch.shared.divertEnabled) {
+            if verdict == .shed {
+                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                if nowMs - lastAudioDcBackpressureLogAtMs > 1_000 {
+                    print("[WebRTC] DC backpressure: dropping outbound audio frame (bufferedAmount=\(backlog) > \(Self.audioDcBufferedAmountDropThreshold))")
+                    lastAudioDcBackpressureLogAtMs = nowMs
+                }
             }
-            return true
+            return verdict
         }
-        return dc.sendData(RTCDataBuffer(data: data, isBinary: true))
+        return dc.sendData(RTCDataBuffer(data: data, isBinary: true)) ? .queued : .useRelay
+    }
+
+    /// W-DCWEDGE — feed `DcWedgeDetector` one sample (called on every outbound frame,
+    /// also for the control / NACK frames that share the channel) and answer whether
+    /// the channel is wedged AFTER it, and whether this frame is the probe. The state
+    /// change, if any, is logged here, outside the lock.
+    private func sampleAudioDcWedge(bufferedAmount: UInt64, shed: Bool) -> (wedged: Bool, probe: Bool) {
+        let up: UInt64 = DispatchTime.now().uptimeNanoseconds
+        let nowMs: Int64 = Int64(up / 1_000_000)
+        let buffered: Int64 = Int64(clamping: bufferedAmount)
+        dcWedgeLock.lock()
+        let rx: Bool = dcRxSinceSample
+        dcRxSinceSample = false
+        let transition = dcWedge.onSample(nowMs: nowMs, bufferedAmountBytes: buffered, dropped: shed, rxOnDcSeen: rx)
+        let wedged: Bool = dcWedge.wedged
+        let probe: Bool = dcWedge.shouldProbe(nowMs: nowMs)
+        dcWedgeLock.unlock()
+        if let t = transition {
+            let line: String = t.logLine
+            let printed: String = "[WebRTC] " + line
+            print(printed)
+            onAudioDcWedgeChange?(line)
+        }
+        return (wedged, probe)
+    }
+
+    /// W-DCWEDGE — a frame ARRIVED on the sealed-audio DataChannel, whatever becomes
+    /// of it afterwards: the "the peer still reaches us on the DataChannel" half of
+    /// the wedge exit rule. Called from `didReceiveMessageWith` on the WebRTC
+    /// signalling thread.
+    private func noteAudioDcRx() {
+        dcWedgeLock.lock()
+        dcRxSinceSample = true
+        dcWedgeLock.unlock()
+    }
+
+    /// W-DCWEDGE — `true` while `DcWedgeDetector` says the DataChannel is wedged
+    /// (the controller adds the kill switch for "frames are actually diverted").
+    public var isAudioDcWedged: Bool {
+        dcWedgeLock.lock(); defer { dcWedgeLock.unlock() }
+        return dcWedge.wedged
     }
 
     /// W-DCAUDIO — true when the sealed-audio DataChannel is open (P2P voice is
@@ -495,7 +570,7 @@ public final class QAudionPeerConnection: NSObject {
     /// Read-only diagnostic. ``isAudioDataChannelOpen()`` collapses "no channel
     /// was ever created" and "a channel exists but is connecting / closing /
     /// closed" into the same `false`, and those are three different bugs with
-    /// three different fixes. `sendAudioFrameData` returns `false` for all of
+    /// three different fixes. `sendAudioFrameData` answers `.useRelay` for all of
     /// them alike, so without this the Phase 0 log line cannot say which one
     /// happened.
     public func audioDataChannelStateRaw() -> Int {
@@ -1872,6 +1947,8 @@ extension QAudionPeerConnection: RTCDataChannelDelegate {
     }
     public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         guard dataChannel === audioDataChannel else { return }
+        // W-DCWEDGE — the wedge detector's "still reaches us on the DataChannel" flag.
+        noteAudioDcRx()
         let cb = onAudioDataChannelFrame
         cb?(buffer.data)
     }

@@ -423,10 +423,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onAudioDataChannelStateChange: ((Int) -> Void)?
 
     /// W-DCAUDIO — send a sealed audio frame over the DataChannel if it is open.
-    /// Returns `true` if queued on the DC; `false` if the DC is not open, in which
-    /// case the caller (CallService) falls back to the WS relay.
+    /// `.queued` if handed to the DC; `.shed` if the back-pressure gate dropped it
+    /// (not sent anywhere — W-DCWEDGE, see `QAudionPeerConnection.sendAudioFrameData`);
+    /// `.useRelay` if the DC is not open or is wedged, in which case the caller
+    /// (CallService) falls back to the WS relay.
     ///
-    /// W-DCTXICEGATE (2026-08-30) — ALSO returns `false` while ICE is not
+    /// W-DCTXICEGATE (2026-08-30) — ALSO answers `.useRelay` while ICE is not
     /// actually carrying, because "the DataChannel is open" stops meaning
     /// "the DataChannel can deliver" the moment ICE goes down mid-call.
     /// This controller repairs a handoff with `restartIce` on the SAME
@@ -441,11 +443,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// CallTransportFactory.shouldDivertToRelayLeg): route THIS frame to
     /// the leg that can deliver it, without touching the recovery machine.
     /// The instant ICE reports `.connected`/`.completed` again, the very
-    /// next frame goes back to the DataChannel — no mode, no debounce.
+    /// next frame goes back to the DataChannel — no mode, no debounce — UNLESS
+    /// the DataChannel is wedged (W-DCWEDGE, 2026-09-25): ICE `connected` says
+    /// nothing about whether SCTP is draining (call 7727f262: ICE back at
+    /// 17:10:12, queue stuck until 17:10:27), so `DcWedgeDetector` keeps the
+    /// frames on the relay until the queue has drained AND the peer's frames
+    /// arrive on the channel again. ICE is not an input of that detector.
+    /// That holds once the detector has DECLARED the wedge: it is sampled only
+    /// by the frames that get past this gate, so a stall that starts DURING an
+    /// ICE outage is not seen while the gate is closed, and after it reopens the
+    /// detector needs ~1 s / 15 shed frames to declare it. Android's transport
+    /// samples before its own ICE check, so it sees the queue during the outage
+    /// too: a known gap of this port, not closed here.
     @discardableResult
-    public func sendAudioFrameData(_ data: Data) -> Bool {
-        guard Self.iceIsCarrying(lastIceConnectionState) else { return false }
-        return peerConnection?.sendAudioFrameData(data) ?? false
+    public func sendAudioFrameData(_ data: Data) -> AudioDcSendOutcome {
+        guard Self.iceIsCarrying(lastIceConnectionState) else { return .useRelay }
+        return peerConnection?.sendAudioFrameData(data) ?? .useRelay
     }
 
     /// W-DCTXICEGATE — the single definition of "ICE is actually carrying
@@ -465,6 +478,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         !Self.iceIsCarrying(lastIceConnectionState)
     }
 
+    /// W-DCWEDGE — second diagnostic twin: `true` when the wedge detector (and
+    /// nothing else) is what is diverting audio to the WS relay right now — ICE is
+    /// carrying and the channel reads `.open`, yet frames go to the relay because
+    /// SCTP is not draining. The app's W-DCMUX fallback-reason closure reports it as
+    /// `why=wedge`; without it that state would read as `openbug`.
+    ///
+    /// The channel must really read `.open` here: the detector's `wedged` flag is
+    /// only changed by a sample (taken by frames that get past the `.open` guard in
+    /// `sendAudioFrameData`) and the detector is never reset in production, so it
+    /// stays `true` after the channel closes. Without this check a channel that
+    /// closed while wedged (ICE still up) would keep reporting `why=wedge` instead
+    /// of the raw `closing`/`closed` state. Diagnostic only: routing already sends
+    /// those frames to the relay through the `.open` guard.
+    public var audioTxWedgeDiverting: Bool {
+        (peerConnection?.isAudioDataChannelOpen() ?? false) &&
+            (peerConnection?.isAudioDcWedged ?? false) && DcWedgeKillSwitch.shared.divertEnabled
+    }
+
     /// W-DCMUX (2026-08-11) — the DataChannel's raw `RTCDataChannelState`, or
     /// `-1` when this controller has a PeerConnection but no channel object, or
     /// `-4` when it has no PeerConnection at all.
@@ -473,7 +504,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `-2` for "no controller", and "no controller" and "a controller whose PC
     /// is gone" are different failures — the first means this call never built a
     /// WebRTC leg, the second means it built one and lost it.
-    /// ``sendAudioFrameData`` returns the same `false` for both.
+    /// ``sendAudioFrameData`` answers the same `.useRelay` for both.
     public var audioDataChannelStateRaw: Int {
         guard let pc = peerConnection else { return -4 }
         return pc.audioDataChannelStateRaw()
@@ -585,10 +616,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// "is RTT meaningful" and "where does audio actually go" can never
     /// disagree. (Before W-DCTXICEGATE this was DC-open only, which during
     /// an ICE outage reported a meaningful RTT for a leg delivering
-    /// nothing.)
+    /// nothing.) W-DCWEDGE adds the third half: while the wedge detector diverts
+    /// the frames to the relay the ICE pair carries no voice either.
     public var isAudioDataChannelOpen: Bool {
         Self.iceIsCarrying(lastIceConnectionState) &&
-            (peerConnection?.isAudioDataChannelOpen() ?? false)
+            (peerConnection?.isAudioDataChannelOpen() ?? false) &&
+            !audioTxWedgeDiverting
     }
 
     private func setMediaRttMs(_ value: Double?) {
@@ -1361,6 +1394,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // creation event, which is the one that proves the caller even got as
         // far as putting an m=application section in the offer.
         pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
+        // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
+        // as every other numeric-only diagnostic of this controller.
+        pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -1527,6 +1563,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCMUX — on this side the hook's first firing IS the `didOpen`
         // receipt: it is how the callee proves the channel arrived at all.
         pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
+        // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
+        // as every other numeric-only diagnostic of this controller.
+        pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -1639,6 +1678,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // hook is expected to stay quiet; that silence is itself the evidence
         // that distinguishes Phase 0 outcome (c) from (a).
         pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
+        // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
+        // as every other numeric-only diagnostic of this controller.
+        pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {
