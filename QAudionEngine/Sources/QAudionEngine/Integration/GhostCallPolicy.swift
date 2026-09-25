@@ -160,4 +160,29 @@ public enum GhostCallPolicy {
         if callStateIsRinging { return true }
         return hasActiveCallKitId && !callWasAnswered && incomingRingVisible
     }
+
+    /// Whether the `call_cancelled` VoIP push must record the call as missed
+    /// ITSELF, evaluated just before it clears the ring flag.
+    ///
+    /// `wasRingingAtRemoteHangup` needs the ring flag, and the push handler
+    /// clears that flag to hide the stale ring UI. When the push beats the
+    /// caller's WS hangup, the later `handleRemoteCallHangup` therefore sees no
+    /// ring and records nothing, and if that hangup never arrives (app
+    /// suspended, WS dead) the missed call is lost for good. Recording it here,
+    /// while the flag is still up, closes that gap; the hangup that may follow
+    /// finds no record id left and is a no-op for the call history.
+    ///
+    /// `cancelCallId` must be the call the app is holding (`activeCallKitId`): a
+    /// cancel for some OTHER call must never mark the ringing one missed. An
+    /// answered call has its ring flag cleared already; `callWasAnswered` is the
+    /// belt and braces.
+    public static func shouldRecordMissedOnCancelPush(
+        cancelCallId: UUID,
+        activeCallKitId: UUID?,
+        callWasAnswered: Bool,
+        incomingRingVisible: Bool
+    ) -> Bool {
+        guard activeCallKitId == cancelCallId else { return false }
+        return !callWasAnswered && incomingRingVisible
+    }
 }
