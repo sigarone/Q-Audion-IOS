@@ -8245,6 +8245,10 @@ final class AppState: ObservableObject {
         switch reasonString {
         case "busy":      reason = .declined
         case "timeout":   reason = .unanswered
+        // W-GHOSTCALL — the reason an Android caller sends when its own ring
+        // timeout expires (CallController.hangup("timeout_no_answer")): the same
+        // "nobody answered" as `timeout`, it used to fall to `.remoteEnded`.
+        case "timeout_no_answer": reason = .unanswered
         case "error":     reason = .failed("error")
         // W-ENDREASONS (2026-08-25, parity plan A5/B8) — the two server-emitted
         // reasons get a sensible mapping instead of the generic default, and
@@ -8269,7 +8273,17 @@ final class AppState: ObservableObject {
         }
         // If the call was still ringing when the hangup arrived the
         // callee never answered — mark the record as missed.
-        let wasRinging = self.callState == .ringing
+        // W-GHOSTCALL — `callState` alone misses the call CallKit is ringing (it
+        // stays .idle until the user answers), so a caller's own ring timeout was
+        // never recorded as missed (e3acecd7). See
+        // `GhostCallPolicy.wasRingingAtRemoteHangup` for why the ring flag is
+        // part of the rule (outgoing calls hold `activeCallKitId` too).
+        let wasRinging: Bool = GhostCallPolicy.wasRingingAtRemoteHangup(
+            callStateIsRinging: self.callState == .ringing,
+            hasActiveCallKitId: self.activeCallKitId != nil,
+            callWasAnswered: self.callWasAnswered,
+            incomingRingVisible: self.incomingCallRingVisible
+        )
         let missedRecordId = self.activeOutgoingRecordId
         if wasRinging && missedRecordId == nil {
             RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")

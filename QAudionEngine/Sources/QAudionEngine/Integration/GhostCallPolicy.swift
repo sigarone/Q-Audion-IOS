@@ -130,4 +130,34 @@ public enum GhostCallPolicy {
         guard let peer = callContactId else { return true }
         return peer.isEmpty
     }
+
+    // MARK: - Missed call under CallKit
+
+    /// Whether a remote hangup / cancel / timeout arrived while an INCOMING call
+    /// was still ringing, i.e. whether it must be recorded as a missed call.
+    ///
+    /// `callState == .ringing` is only half the answer. When CallKit owns the ring
+    /// (PushKit-woken, or a background WS call) `callState` deliberately stays
+    /// `.idle` until the user answers (see the `call_incoming` handler and
+    /// `noCallInFlight`), so a caller that gave up on its own timeout was never
+    /// recorded as missed (e3acecd7, F-08: `endCall ... state=idle`, no
+    /// `hangup-while-ringing` line). What identifies that ring instead is: a
+    /// CallKit id is held, it was never answered, and the incoming ring flag is
+    /// still up.
+    ///
+    /// `incomingRingVisible` is NOT optional. `activeCallKitId` is also held for
+    /// the whole life of an OUTGOING call, and `callWasAnswered` (which is only
+    /// ever set by the callee's accept path) is false there too: without the ring
+    /// flag, every remote hangup of an answered outgoing call would be recorded as
+    /// missed. The flag is set only for incoming calls and cleared on answer and
+    /// on every teardown.
+    public static func wasRingingAtRemoteHangup(
+        callStateIsRinging: Bool,
+        hasActiveCallKitId: Bool,
+        callWasAnswered: Bool,
+        incomingRingVisible: Bool
+    ) -> Bool {
+        if callStateIsRinging { return true }
+        return hasActiveCallKitId && !callWasAnswered && incomingRingVisible
+    }
 }
