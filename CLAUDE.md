@@ -184,8 +184,9 @@ complete fix, and `KeyMaterialScrubber` stays as defence in depth.
 **After v1.0.1181 (W-VPIOOBS / W-VPIOWD / W-BYPASSDUCK, branch `fix/vpio-observability-suppressor`) -- VP-IO
 tap latency, watchdog generation, bypass echo ducker.** Why: on the test iPhone Apple's
 Voice-Processing I/O never delivers a tap buffer inside the W-AEC-FIX window (71/71 built-in-mic calls in bypass,
-~1% elsewhere), and the app could not say why or how late. Numeric log lines (tag `call`, accurate timestamp, they
-survive the shipper's redactor): `audioVp ev=arm gen=N since_start_ms=0 eng_ms=..` (watchdog armed; `eng_ms` =
+~1% elsewhere), and the app could not say why or how late. Numeric log lines (tag `call`, accurate timestamp; numeric
+on purpose, for the shipper's redactor, but see the end of this block for what was verified):
+`audioVp ev=arm gen=N since_start_ms=0 eng_ms=..` (watchdog armed; `eng_ms` =
 `engine.start()` -> end of `start()`), `ev=ff gen=N ms=.. eng_ms=..` (first tap buffer, ms from the end of `start()`
 / from `engine.start()`; `ms` is the tap's own timestamp, the line's timestamp is that of the check: the +1.2 s
 watchdog, or earlier the next `start()` / `stop()` / the diag read when the engine is replaced or the call ends
@@ -226,12 +227,14 @@ measured): the raw iPhone mic is quiet, so in practice it is a -12 dB gate on th
 ducker active, tx `rms_pct` / `peak_pct` / `clip_samples` in `call.audio.diag` are measured AFTER the duck (about 12 dB
 lower while the far end talks) and do not compare with the earlier series when `echo_duck_active_pct > 0`; `agc_gain`
 is the AGC law alone (the duck is not in it). The server's `TELEMETRY_ATTRIBUTE_CONTRACT.md` (bcrypto-server/docs)
-does not list the new keys yet (no server cap on attributes, nothing breaks). The `audioVp` lines above are proven to
-pass the log shipper's redactor only in the version deployed on the log VPS on 2026-09-25 (sha256 `03789081b68b...`);
-a stricter `key=value` grammar (the W-KVPRECISION-2 redactor hardening, not part of this branch) masks
-`since_start_ms` on `arm` and drops `fire` / `stale` / `cfg` / `duck`: replay all seven `ev=` forms through it (and
-add `gen`, `cur`, `ff`, `er`, `stale`, `since_start_ms`, `eng_ms`, `ms`, `on`, `en`, `vpio`, `spk` and the `ev` words
-to its vocabulary) BEFORE deploying it.
+does not list the new keys yet (they are additive, so nothing breaks; add them to that document alongside this
+change). Log pipeline: replaying the seven `audioVp` line forms (synthetic values) through the redactor of `main` as
+of #111 (`scripts/ship-ios-logs.py`) gave 2 of 7 verbatim (`ff`, `noop`); `arm` came back with `since_start_ms`
+masked; `fire`, `stale`, `cfg` and `duck` were dropped. Which redactor version runs on the log pipeline is not
+verified, and real phone logs were not tested; the `call.audio.diag` fields use a different path and are not
+affected. If that stricter redactor is, or becomes, the one running there, its vocabulary needs `gen`, `cur`, `ff`,
+`er`, `stale`, `since_start_ms`, `eng_ms`, `ms`, `on`, `en`, `vpio`, `spk` and the `ev` words: that is a separate
+shipper-vocabulary change, not part of this branch.
 Tests: `VpioObservabilityTests`, `VpioWatchdogDecisionsTests`, `BypassEchoDuckTests` (engine).
 
 ## Project snapshot

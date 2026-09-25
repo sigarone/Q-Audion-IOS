@@ -6,7 +6,9 @@ import Foundation
 ///
 /// WHY. On the test iPhone VP-IO never delivers a tap buffer, so 71 of 71
 /// built-in-mic calls run on the raw mic. Nothing cancels the echo any more: no VP-IO, and WebRTC's
-/// AEC3 is not in this audio path (`audioSrtpSendEnabled = false`). On call 7727f262 (speakerphone,
+/// AEC3 is not in this audio path either: the app captures with its own `AVAudioEngine` and sends its own
+/// sealed Opus frames, and no WebRTC audio track carries the call audio (that would be the optional native
+/// RTP audio mode, which is off). This says nothing about encryption. On call 7727f262 (speakerphone,
 /// volume 100, six minutes in bypass) the far end heard a very loud echo, made louder by the make-up
 /// AGC (mean gain 4.81 against 1.9-2.6 on the Bluetooth calls). Everything below already applies to a
 /// state that is degraded by definition -- the earpiece, headsets, and any call whose VP-IO works are

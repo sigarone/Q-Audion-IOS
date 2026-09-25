@@ -13,8 +13,10 @@ import Foundation
 /// of them is pinned by `VpioObservabilityTests` without a live audio session.
 ///
 /// LOG LINES are numeric and compact on purpose: the log shipper's redactor drops any body with
-/// free multi-word text (that is why `W-AEC-FIX ... starved` never reached Loki), but keeps
-/// `key=number` tokens and `ev=<word>` under the enum-like key `ev`. Same family as the
+/// free multi-word text (that is why `W-AEC-FIX ... starved` never reached Loki), and is meant to keep
+/// `key=number` tokens and `ev=<word>` under the enum-like key `ev`. Whether a given redactor version
+/// keeps every form is not pinned here (a replay through the redactor of `main` as of #111 kept only two of
+/// the seven forms; see the CLAUDE.md block on W-VPIOOBS). Same family as the
 /// `audioVp vpio=1 want=1 byp=0 ...` line CallService already prints. No id, no key, no UUID.
 public enum VpioObservability {
 
