@@ -40,7 +40,7 @@ public final class GroupReceiptOutbox {
     /// metadata and used to sit in the UserDefaults plist in the clear). A
     /// legacy plaintext `Data` blob written by earlier builds is still read
     /// (it is re-persisted sealed by the next mutation, i.e. the next
-    /// `enqueue` or the drain's `remove`). The setter fails closed: if the
+    /// `enqueue` or the drain's `remove`). The writer fails closed: if the
     /// Keychain key is unreachable nothing is written and the previous value
     /// stays.
     ///
@@ -53,24 +53,38 @@ public final class GroupReceiptOutbox {
     /// / `remove(contentsOf:)` instead of looping the single-entry ones.
     /// There is no lock: the only callers are on `AppState` (`@MainActor`), so
     /// a read-modify-write here is never interleaved with another one.
-    private var entries: [Entry] {
-        get {
-            if let sealed = UserDefaults.standard.string(forKey: defaultsKey),
-               let json = LocalStoreCipher.open(sealed),
-               let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) {
-                return decoded
+    ///
+    /// A stored value that cannot be read back (the sealed blob does not open
+    /// or does not decode, or a legacy blob does not decode) is a FAILED read,
+    /// not an empty outbox: `loadEntries()` returns nil, the failure is
+    /// logged, and every mutator leaves the stored bytes untouched instead of
+    /// overwriting them with a list built from nothing. `drainable` reports
+    /// nothing to send while the value is unreadable.
+    private func loadEntries() -> [Entry]? {
+        if let sealed = UserDefaults.standard.string(forKey: defaultsKey) {
+            guard let json = LocalStoreCipher.open(sealed),
+                  let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) else {
+                RTLog.error("group", "grp_receipt outbox unseal fail retained=1")
+                return nil
             }
-            guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-                  let decoded = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
             return decoded
         }
-        set {
-            guard let data = try? JSONEncoder().encode(newValue),
-                  let json = String(data: data, encoding: .utf8) else { return }
-            let attempt: String?? = try? LocalStoreCipher.seal(json)
-            guard let unwrapped = attempt, let sealed = unwrapped else { return }
-            UserDefaults.standard.set(sealed, forKey: defaultsKey)
+        if let data = UserDefaults.standard.data(forKey: defaultsKey) {
+            guard let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
+                RTLog.error("group", "grp_receipt outbox decode fail retained=1")
+                return nil
+            }
+            return decoded
         }
+        return []
+    }
+
+    private func storeEntries(_ newValue: [Entry]) {
+        guard let data = try? JSONEncoder().encode(newValue),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let attempt: String?? = try? LocalStoreCipher.seal(json)
+        guard let unwrapped = attempt, let sealed = unwrapped else { return }
+        UserDefaults.standard.set(sealed, forKey: defaultsKey)
     }
 
     /// Dedup identity of a queued receipt: the same receipt (kind + group +
@@ -110,10 +124,12 @@ public final class GroupReceiptOutbox {
     /// given order, with ONE read and ONE write of the sealed blob. Same
     /// dedup as the old per-entry loop: an entry equal (kind + groupId +
     /// serverMessageId) to one already stored, or to an earlier entry of the
-    /// same batch, is skipped; nothing is written when nothing was appended.
+    /// same batch, is skipped; nothing is written when nothing was appended,
+    /// nor when the stored value is unreadable (the batch is dropped rather
+    /// than replacing the unreadable bytes — see `loadEntries()`).
     public func enqueue(contentsOf newEntries: [Entry]) {
         guard !newEntries.isEmpty else { return }
-        var current: [Entry] = entries
+        guard var current = loadEntries() else { return }
         var known = Set<EntryKey>()
         for existing in current {
             known.insert(EntryKey(existing))
@@ -127,15 +143,16 @@ public final class GroupReceiptOutbox {
             }
         }
         guard appended else { return }
-        entries = current
+        storeEntries(current)
     }
 
     /// Pending entries, oldest first, with anything past `maxAgeMs` already
     /// excluded (a receipt is a courtesy signal — resending a day-old one is
     /// pointless, not worth a separate prune pass).
     public func drainable(nowMs: Int64) -> [Entry] {
-        entries.filter { nowMs - $0.createdAtMs < maxAgeMs }
-               .sorted { $0.createdAtMs < $1.createdAtMs }
+        guard let current = loadEntries() else { return [] }
+        return current.filter { nowMs - $0.createdAtMs < maxAgeMs }
+                      .sorted { $0.createdAtMs < $1.createdAtMs }
     }
 
     public func remove(_ entry: Entry) {
@@ -146,12 +163,13 @@ public final class GroupReceiptOutbox {
     /// ONE write of the sealed blob (the drain used to call `remove(_:)` per
     /// entry: one Keychain read + AES-GCM open/seal + whole-list JSON
     /// decode/encode each, on the main actor). Matching is full `Entry`
-    /// equality, exactly like the single-entry form.
+    /// equality, exactly like the single-entry form. Nothing is written when
+    /// the stored value is unreadable (see `loadEntries()`).
     public func remove(contentsOf doomed: [Entry]) {
         guard !doomed.isEmpty else { return }
         let doomedSet: Set<Entry> = Set(doomed)
-        let current: [Entry] = entries
+        guard let current = loadEntries() else { return }
         let remaining: [Entry] = current.filter { !doomedSet.contains($0) }
-        entries = remaining
+        storeEntries(remaining)
     }
 }
