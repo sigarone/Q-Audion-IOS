@@ -209,12 +209,16 @@ struct ImageBubbleContent: View {
 
     private func loadIfNeeded(path: String) {
         // Off-main load to avoid jank when the row scrolls into view.
+        // The disk read + JPEG decode run in a detached task (same shape as
+        // `QAudionAvatar.localFileAvatar`); only the @State writes below
+        // happen back on the main actor. The image cap is 10 MB.
         Task { @MainActor in
             let url = URL(fileURLWithPath: path)
-            // Read the bytes (small enough at 2048px max + JPEG q=0.85)
-            // synchronously — the image cap is 10 MB.
-            if let data = try? Data(contentsOf: url),
-               let img = UIImage(data: data) {
+            let decoded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return UIImage(data: data)
+            }.value
+            if let img = decoded {
                 self.loadedImage = img
                 self.loadFailed = false
             } else {
@@ -429,7 +433,13 @@ private struct GalleryPage: View {
         guard !path.isEmpty else { loadFailed = true; return }
         Task { @MainActor in
             let url = URL(fileURLWithPath: path)
-            if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
+            // Disk read + decode off the main actor (see
+            // `ImageBubbleContent.loadIfNeeded`); state writes stay here.
+            let decoded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return UIImage(data: data)
+            }.value
+            if let img = decoded {
                 self.image = img
                 self.onLoaded(img)
             } else {

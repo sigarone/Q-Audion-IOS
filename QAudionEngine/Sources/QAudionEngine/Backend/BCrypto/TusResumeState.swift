@@ -214,14 +214,19 @@ public enum TusResumeStateStore {
         guard status == errSecSuccess, let data = item as? Data else {
             return [:]
         }
-        #else
-        guard let data = UserDefaults.standard.data(forKey: legacyUserDefaultsKey) else { return [:] }
-        #endif
 
         guard let decoded = try? JSONDecoder().decode([String: TusResumeState].self, from: data) else {
             return [:]
         }
         return decoded
+        #else
+        // Fail closed: no plaintext UserDefaults fallback (the map holds
+        // `recipientUserId` and `pskFingerprintHex`). `Security` exists on
+        // every Apple platform this package builds for, so this branch is
+        // never compiled into the app; it only says what a Security-less
+        // platform must do — remember nothing.
+        return [:]
+        #endif
     }
 
     /// Look up the resume state for a specific outbound message, if any.
@@ -250,9 +255,9 @@ public enum TusResumeStateStore {
     }
 
     private static func write(_ all: [String: TusResumeState]) {
+        #if canImport(Security)
         guard let data = try? JSONEncoder().encode(all) else { return }
 
-        #if canImport(Security)
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -285,7 +290,10 @@ public enum TusResumeStateStore {
             print("[TusResumeStateStore] SecItemAdd (after reset) failed: \(addStatus)")
         }
         #else
-        UserDefaults.standard.set(data, forKey: legacyUserDefaultsKey)
+        // Fail closed: never persist this map in plaintext UserDefaults.
+        // Best-effort bookkeeping, so dropping the write only costs a
+        // fresh upload (tier 3) instead of a resume.
+        _ = all
         #endif
     }
 

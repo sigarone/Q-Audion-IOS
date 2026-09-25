@@ -9556,8 +9556,12 @@ final class AppState: ObservableObject {
             default:
                 break
             }
-            GroupReceiptOutbox.shared.remove(entry)
         }
+        // ONE sealed read-modify-write for the whole batch (a per-entry
+        // `remove` was O(n) Keychain reads + O(n^2) AES/JSON on the main
+        // actor). A crash before this line only means a duplicate ack on
+        // the next drain, which the server treats as idempotent.
+        GroupReceiptOutbox.shared.remove(contentsOf: pending)
         RTLog.info("group", "grp_receipt drained=\(pending.count)")
     }
 
@@ -9586,11 +9590,11 @@ final class AppState: ObservableObject {
         guard liveProvider?.persistentConnection.state == .authenticated,
               let ws = liveProvider?.getWebSocketClient() else {
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-            for serverMsgId in inboundServerIds {
-                GroupReceiptOutbox.shared.enqueue(
-                    kind: GroupReceiptOutbox.Entry.kindRead, groupId: groupId,
-                    serverMessageId: serverMsgId, nowMs: nowMs)
-            }
+            // One batched call: a group with hundreds of unread messages
+            // opened offline used to seal + write the whole blob per id.
+            GroupReceiptOutbox.shared.enqueue(
+                kind: GroupReceiptOutbox.Entry.kindRead, groupId: groupId,
+                serverMessageIds: inboundServerIds, nowMs: nowMs)
             RTLog.info("group", "grp_receipt queued=\(inboundServerIds.count) kind=read")
             return
         }
