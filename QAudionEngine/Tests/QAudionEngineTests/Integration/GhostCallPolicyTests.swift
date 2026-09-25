@@ -203,4 +203,59 @@ final class GhostCallPolicyTests: XCTestCase {
     func test_watchdog_laterCallAnswered_isSilent() {
         XCTAssertFalse(Policy.isAnsweredWithoutCall(answeredCallKitId: UUID(), expectedUuid: UUID(), callContactId: nil))
     }
+
+    // MARK: - wasRingingAtRemoteHangup (missed call under CallKit)
+
+    private func ringing(
+        state: Bool = false, active: Bool = false, answered: Bool = false, ringVisible: Bool = false
+    ) -> Bool {
+        Policy.wasRingingAtRemoteHangup(
+            callStateIsRinging: state,
+            hasActiveCallKitId: active,
+            callWasAnswered: answered,
+            incomingRingVisible: ringVisible)
+    }
+
+    /// The in-app ring (no CallKit): `callState == .ringing`, as before.
+    func test_ringing_inAppRingingState_isRinging() {
+        XCTAssertTrue(ringing(state: true))
+        XCTAssertTrue(ringing(state: true, active: true, answered: true))
+    }
+
+    /// e3acecd7: CallKit owns the ring, `callState` stays `.idle`, the caller's own
+    /// timeout ends it. This is the case that used to be lost.
+    func test_ringing_callKitRingUnanswered_isRinging() {
+        XCTAssertTrue(ringing(state: false, active: true, answered: false, ringVisible: true))
+    }
+
+    /// The guard the naive rule (`activeCallKitId != nil && !answered`) would
+    /// get wrong: an OUTGOING call holds `activeCallKitId` and is never
+    /// "answered" on this side, but its ring flag is never up. A remote hangup of
+    /// a connected outgoing call must NOT be recorded as missed.
+    func test_ringing_outgoingCallInProgress_isNotRinging() {
+        XCTAssertFalse(ringing(state: false, active: true, answered: false, ringVisible: false))
+    }
+
+    func test_ringing_answeredIncomingCall_isNotRinging() {
+        XCTAssertFalse(ringing(state: false, active: true, answered: true, ringVisible: false))
+        XCTAssertFalse(ringing(state: false, active: true, answered: true, ringVisible: true))
+    }
+
+    func test_ringing_noCallAtAll_isNotRinging() {
+        XCTAssertFalse(ringing())
+        XCTAssertFalse(ringing(ringVisible: true), "a stray ring flag with no CallKit id is not a ringing call")
+    }
+
+    /// Every combination of the four inputs, against the rule written out longhand.
+    func test_ringing_exhaustiveTruthTable() {
+        for bits in 0..<16 {
+            let state = bits & 1 != 0
+            let active = bits & 2 != 0
+            let answered = bits & 4 != 0
+            let ringVisible = bits & 8 != 0
+            let expected: Bool = state || (active && !answered && ringVisible)
+            let actual: Bool = ringing(state: state, active: active, answered: answered, ringVisible: ringVisible)
+            XCTAssertEqual(actual, expected, "truth-table row \(bits)")
+        }
+    }
 }
