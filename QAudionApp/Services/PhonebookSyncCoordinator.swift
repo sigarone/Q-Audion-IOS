@@ -45,6 +45,12 @@ final class PhonebookSyncCoordinator {
         let processedContacts: Int
         let validE164Count: Int
         let resolvedUserCount: Int
+        /// Hashes that were not looked up in this pass (for example after a rate
+        /// limit). 0 means the whole address book was checked. Defaulted so the
+        /// snapshots that predate the discovery step stay valid as written.
+        var pendingHashCount: Int = 0
+        /// The wait the server asked for (`Retry-After`), in seconds, when it did.
+        var retryAfterSeconds: Int?
     }
 
     struct ResolvedMatch {
@@ -119,6 +125,9 @@ final class PhonebookSyncCoordinator {
     ///     UserDefaults (key `com.qaudion.profile.myPhones`). Pass [] to skip
     ///     registration explicitly.
     /// - Returns: Array of ResolvedMatch (one per Q-Audion user found in phonebook).
+    ///   When the server stopped the pass part-way, the matches found so far are still
+    ///   persisted and returned, and the final ScanProgress reports how many hashes are
+    ///   still unchecked (`pendingHashCount`) and any `retryAfterSeconds`.
     func scanAndDiscover(
         onProgress: @escaping (ScanProgress) -> Void = { _ in },
         ownE164Phones: [String]? = nil
@@ -225,13 +234,28 @@ final class PhonebookSyncCoordinator {
             }
         }
 
-        // Step 5 — discover-v2.
-        let discovered: [BCryptoContactsDiscoverV2Client.DiscoveredEntry]
+        // Step 5 — discover-v2, sent in chunks. A pass that the server
+        // stopped part-way (rate limit) keeps what the earlier chunks found: those
+        // contacts are persisted below and the rest is reported through the final
+        // ScanProgress (pendingHashCount / retryAfterSeconds) instead of being
+        // dropped. Nothing is scheduled from here: the next user-triggered
+        // refresh or import runs the whole pass again.
+        let outcome: BCryptoContactsDiscoverV2Client.DiscoverOutcome
         do {
-            discovered = try await client.discover(alg: pepper.alg, hashes: allHashes)
+            outcome = try await client.discoverChunked(alg: pepper.alg, hashes: allHashes)
         } catch {
             throw Error.fetchFailed("Discover-v2 failed: \(error.localizedDescription)")
         }
+        let retryAfter: Int? = Self.wholeSeconds(outcome.retryAfterSeconds)
+        if outcome.wasRateLimited && outcome.processedHashes == 0 {
+            // Not a single hash was looked up: report it like any failed discovery,
+            // with the wait the server asked for when it named one.
+            let waitText: String = Self.waitDescription(seconds: retryAfter)
+            let message: String = "Discover-v2 rate limited\(waitText)"
+            throw Error.fetchFailed(message)
+        }
+        let discovered: [BCryptoContactsDiscoverV2Client.DiscoveredEntry] = outcome.entries
+        let pendingHashes: Int = outcome.pendingHashes
 
         // Step 6 — persist resolved contacts and build results list.
         //
@@ -282,13 +306,29 @@ final class PhonebookSyncCoordinator {
             totalContacts: allContacts.count,
             processedContacts: allContacts.count,
             validE164Count: normalized.count,
-            resolvedUserCount: results.count
+            resolvedUserCount: results.count,
+            pendingHashCount: pendingHashes,
+            retryAfterSeconds: retryAfter
         ))
 
         return results
     }
 
     // MARK: - Helpers
+
+    /// `Retry-After` as whole seconds (rounded up), or nil when the server sent none.
+    private static func wholeSeconds(_ value: TimeInterval?) -> Int? {
+        guard let seconds = value, seconds.isFinite, seconds >= 0 else { return nil }
+        let capped: Double = min(seconds, 86_400)
+        return Int(capped.rounded(.up))
+    }
+
+    /// " (retry in N s)" for the error text, empty when there is no wait to name.
+    private static func waitDescription(seconds: Int?) -> String {
+        guard let wait = seconds else { return "" }
+        let text: String = " (retry in \(wait) s)"
+        return text
+    }
 
     /// Build a human-readable display name from a CNContact.
     /// Prefers "GivenName FamilyName", falls back to OrganizationName,

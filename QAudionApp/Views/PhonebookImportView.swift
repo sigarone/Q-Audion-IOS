@@ -64,6 +64,9 @@ struct PhonebookImportView: View {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 64)).foregroundStyle(.green)
             Text("\(matched.count) utenti Q-Audion trovati").font(.title2.bold())
             Text("\(unmatched) dei tuoi contatti non sono ancora su Q-Audion.").font(.body).foregroundStyle(.secondary)
+            if let notice = container.incompleteNotice {
+                Text(notice).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
+            }
             List(matched, id: \.userId) { m in
                 VStack(alignment: .leading) {
                     Text(m.localName).font(.body)

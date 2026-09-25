@@ -69,7 +69,7 @@ final class PhonebookImportContainer: ObservableObject {
                 }
                 let unmatchedCount: Int
                 if let p = progress {
-                    unmatchedCount = max(0, p.validE164Count - matches.count)
+                    unmatchedCount = unmatchedNumbers(p, matchCount: matches.count)
                 } else {
                     unmatchedCount = 0
                 }
@@ -82,6 +82,29 @@ final class PhonebookImportContainer: ObservableObject {
                 viewModel.transition(to: .error(message: error.localizedDescription))
             }
         }
+    }
+
+    /// Numbers that were looked up and are not on Q-Audion. Numbers the server never
+    /// looked up (rate limit) are not "not on Q-Audion", so they are left out of this
+    /// count; the results screen reports them through `incompleteNotice` instead.
+    private func unmatchedNumbers(_ p: PhonebookSyncCoordinator.ScanProgress, matchCount: Int) -> Int {
+        let lookedUp: Int = p.validE164Count - p.pendingHashCount
+        let unmatched: Int = lookedUp - matchCount
+        return max(0, unmatched)
+    }
+
+    /// Shown on the results screen when the discovery pass was stopped part-way
+    /// (server rate limit), so the user knows the list may be missing people and
+    /// that running the import again continues the search. Nil for a full pass.
+    var incompleteNotice: String? {
+        guard let p = progress, p.pendingHashCount > 0 else { return nil }
+        let pending: Int = p.pendingHashCount
+        guard let wait = p.retryAfterSeconds else {
+            let plain: String = "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova più tardi."
+            return plain
+        }
+        let timed: String = "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova tra circa \(wait) secondi."
+        return timed
     }
 
     /// Allow the View to restart from the terminal `.error` or `.results` state.
