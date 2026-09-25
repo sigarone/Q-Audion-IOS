@@ -197,7 +197,8 @@ public final class AudioCapture {
     private var echoBucketThisCall = EchoBucketTotals()
     // W-BYPASSDUCK (2026-09-25) — TX echo ducker for the degraded state VP-IO bypassed + built-in
     // loudspeaker (see `BypassEchoDuck`). All of it is tap-thread state except `lastLoudPlayoutRms`
-    // (the RMS of the last audible RX frame, written next to `lastLoudPlayoutAtMs` on the playback
+    // (the near-end test's played-level reference: the RMS of the audible RX frames, peak-held by
+    // `BypassEchoDuck.heldPlayedRms`, written next to `lastLoudPlayoutAtMs` on the playback
     // path: a Float store, same benign single-writer race) and `bypassEchoDuckEnabled` (set once by
     // CallService from the remote flag before `start()`; false = no ducking, the default for every
     // capture that is not a 1:1 call). `echoLastFrameRms` / `echoLastFarEndActive` hand the values
@@ -1489,8 +1490,13 @@ public final class AudioCapture {
                 return Float((sumSq / Double(n)).squareRoot())
             }
             if Self.isLoudPlayout(rms: frameRms) {
-                lastLoudPlayoutAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-                lastLoudPlayoutRms = frameRms  // W-BYPASSDUCK — reference level for the near-end test
+                let loudNowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                // W-BYPASSDUCK — reference level for the near-end test: a peak-hold over the playout delay, decayed
+                // by the time since the PREVIOUS audible frame (so it is computed before the stamp is overwritten).
+                lastLoudPlayoutRms = BypassEchoDuck.heldPlayedRms(previous: lastLoudPlayoutRms,
+                                                                  frameRms: frameRms,
+                                                                  elapsedMs: loudNowMs - lastLoudPlayoutAtMs)
+                lastLoudPlayoutAtMs = loudNowMs
             }
         }
         // W-IOSJITTER wiring (2026-07-26) — from here the frame goes into the

@@ -178,6 +178,85 @@ final class BypassEchoDuckTests: XCTestCase {
         XCTAssertTrue(Duck.nextNearSpeechDominant(micRms: 0.0, playedRms: 0.0, wasDominant: false))
     }
 
+    // MARK: - Held played level
+
+    func testTheHoldOutlastsThePlayoutDelay() {
+        XCTAssertEqual(Duck.playedHoldMs, 500)
+    }
+
+    /// A louder frame replaces the reference at once; so does the first frame of a call (nothing held,
+    /// no previous stamp: the elapsed time is the whole clock).
+    func testALouderFrameReplacesTheHeldLevelAtOnce() {
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.05, frameRms: 0.10, elapsedMs: 20), 0.10, accuracy: 0.0001)
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0, frameRms: 0.03, elapsedMs: 1_700_000_000_000), 0.03, accuracy: 0.0001)
+    }
+
+    /// A weaker frame does not lower the reference at once: it decays with the elapsed time (exp(-t / 500 ms)
+    /// x 0.10 = 0.0961 after 20 ms, 0.0368 after 500 ms, 0.0018 after 2 s) and the frame takes over below that.
+    func testAWeakerFrameLetsTheHeldLevelDecayWithTime() {
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.10, frameRms: 0.02, elapsedMs: 20), 0.0961, accuracy: 0.0005)
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.10, frameRms: 0.02, elapsedMs: 500), 0.0368, accuracy: 0.0005)
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.10, frameRms: 0.02, elapsedMs: 2_000), 0.02, accuracy: 0.0001)
+    }
+
+    /// A clock that steps backwards holds the previous level (no decay, no blow-up); one that jumps years
+    /// ahead decays it fully, to the frame's own level.
+    func testAClockStepIsClamped() {
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.10, frameRms: 0.02, elapsedMs: -5), 0.10, accuracy: 0.0001)
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.10, frameRms: 0.02, elapsedMs: Int64.min), 0.10, accuracy: 0.0001)
+        XCTAssertEqual(Duck.heldPlayedRms(previous: 0.10, frameRms: 0.02, elapsedMs: Int64.max), 0.02, accuracy: 0.0001)
+    }
+
+    /// Whatever the inputs, the reference is never below the frame just played and never above the
+    /// louder of the frame and the previous reference.
+    func testTheHeldLevelStaysBetweenTheFrameAndTheLouderOfTheTwo() {
+        var seed: UInt32 = 987_654
+        func next() -> UInt32 {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            return seed >> 8
+        }
+        for _ in 0..<2_000 {
+            let previous = Float(next() % 1_000) / 1_000
+            let frame = 0.01 + Float(next() % 990) / 1_000
+            let elapsed = Int64(next() % 5_000)
+            let held = Duck.heldPlayedRms(previous: previous, frameRms: frame, elapsedMs: elapsed)
+            XCTAssertGreaterThanOrEqual(held, frame)
+            XCTAssertLessThanOrEqual(held, max(previous, frame))
+        }
+    }
+
+    /// The reason for the hold. The mic hears each RX frame ~300 ms after it was stamped at arrival. Far
+    /// end: syllables of 0.12 RMS (3 frames) and 0.02 (3 frames); the mic hears them at the same level.
+    /// Against the level of the frame that just ARRIVED the echo of a strong syllable reads as local speech
+    /// whenever a weak frame is the latest one and the gain is let go; against the held level it never does
+    /// and the gain sits at the floor. Local speech well above the held level still wins.
+    func testEchoAsLoudAsTheFarEndStaysDuckedAgainstTheHeldLevel() {
+        let delayFrames = 15
+        let pattern: [Float] = [0.12, 0.12, 0.12, 0.02, 0.02, 0.02]
+        var instant = Duck.State()
+        var held = Duck.State()
+        var heldRef: Float = 0
+        var instantNearFrames = 0
+        var heldNearFrames = 0
+        for i in 0..<120 {
+            let played = pattern[i % pattern.count]
+            let mic: Float = i >= delayFrames ? pattern[(i - delayFrames) % pattern.count] : 0
+            heldRef = Duck.heldPlayedRms(previous: heldRef, frameRms: played, elapsedMs: 20)
+            instant = Duck.step(state: instant, farEndActive: true, micRms: mic, playedRms: played, bufferMs: 20)
+            held = Duck.step(state: held, farEndActive: true, micRms: mic, playedRms: heldRef, bufferMs: 20)
+            if instant.nearLatched { instantNearFrames += 1 }
+            if held.nearLatched { heldNearFrames += 1 }
+            if i >= 30 {
+                XCTAssertEqual(held.gain, Duck.floorGain, accuracy: 0.001, "frame \(i): echo let through against the held level")
+            }
+        }
+        XCTAssertGreaterThan(instantNearFrames, 0, "the instantaneous level reads the echo of a strong syllable as local speech")
+        XCTAssertEqual(heldNearFrames, 0)
+
+        // A talker at 0.20 against a held level of ~0.11 is still local speech (0.20 >= 1.4 x 0.11).
+        XCTAssertTrue(Duck.nextNearSpeechDominant(micRms: 0.20, playedRms: heldRef, wasDominant: false))
+    }
+
     // MARK: - step()
 
     /// A mic below the silence floor carries no echo worth ducking: no attack, no pumping of the noise floor.
