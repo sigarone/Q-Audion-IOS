@@ -54,4 +54,80 @@ public enum GhostCallPolicy {
         }
         return CancelReportPlan(reportUuid: placeholder, isPlaceholder: true)
     }
+
+    // MARK: - Answer guard
+
+    /// Outcome of asking "may this CallKit answer start a call?".
+    public enum AnswerVerdict: Equatable, Sendable {
+        /// The uuid is the call this app is running/ringing and has not ended.
+        case accept
+        /// The uuid is a placeholder the cancel-push handler invented: there is
+        /// nothing behind it, ever.
+        case refuseGhostPlaceholder
+        /// The uuid ended here a moment ago (the fading ring of a call that is
+        /// already over).
+        case refuseRecentlyEnded
+        /// The uuid is not the call this app currently holds: no call at all
+        /// (`activeCallKitId == nil`) or a DIFFERENT call is active — accepting
+        /// would overwrite the live call's id.
+        case refuseNotActive
+
+        /// Stable numeric code for the remote log line (`answerguard refuse=1
+        /// why=<code>`); numbers survive the log redactor, prose does not.
+        public var logCode: Int {
+            switch self {
+            case .accept: return 0
+            case .refuseGhostPlaceholder: return 1
+            case .refuseRecentlyEnded: return 2
+            case .refuseNotActive: return 3
+            }
+        }
+    }
+
+    /// The single rule every accept path funnels through (CallKit answer,
+    /// in-app banner, notification, CallKit-free): a call may be accepted only if
+    /// `uuid == activeCallKitId`, it is not in the recently-ended ledger and it is
+    /// not a ghost placeholder. Anything else is refused — before this rule
+    /// `performAcceptIncoming` accepted whatever uuid it was handed, which is how
+    /// a tap on the ring of a dead call became an in-call state with no call id.
+    ///
+    /// Inert for a normal call: every incoming path sets `activeCallKitId` before
+    /// it reports the ring to CallKit, and nothing puts a live call's uuid in
+    /// either ledger. The refusals are checked most-specific first so the log
+    /// names the real cause.
+    public static func answerVerdict(
+        uuid: UUID,
+        activeCallKitId: UUID?,
+        isRecentlyEnded: Bool,
+        isGhostPlaceholder: Bool
+    ) -> AnswerVerdict {
+        if isGhostPlaceholder { return .refuseGhostPlaceholder }
+        if isRecentlyEnded { return .refuseRecentlyEnded }
+        guard activeCallKitId == uuid else { return .refuseNotActive }
+        return .accept
+    }
+
+    // MARK: - Answered without a call
+
+    /// How long an accepted answer may sit with no call behind it before the
+    /// watchdog ends it. 3 s: an incoming call has its peer set within
+    /// milliseconds of the ring (PushKit sets it before the ring is reported, the
+    /// WS path right after the report, in the same task), so this only has to
+    /// outlast scheduling noise. Incident e3acecd7 stayed in that state 6.6 s.
+    public static let answeredWithoutCallGraceSeconds: TimeInterval = 3
+
+    /// True when the call identified by `expectedUuid` was answered
+    /// (`answeredCallKitId` still names it — `endCall` clears it) but the app
+    /// still has no peer for it (`callContactId` nil or empty): an "in call" with
+    /// nobody on the line. The uuid comparison keeps a timer armed for an old
+    /// answer from ending a LATER call.
+    public static func isAnsweredWithoutCall(
+        answeredCallKitId: UUID?,
+        expectedUuid: UUID,
+        callContactId: String?
+    ) -> Bool {
+        guard answeredCallKitId == expectedUuid else { return false }
+        guard let peer = callContactId else { return true }
+        return peer.isEmpty
+    }
 }

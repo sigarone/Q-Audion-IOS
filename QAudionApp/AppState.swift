@@ -3797,9 +3797,15 @@ final class AppState: ObservableObject {
 
         #if canImport(CallKit) && os(iOS)
         if let provider = callKit as? CallKitProvider {
+            // W-GHOSTCALL (2026-09-25) — the closure now answers "was the answer
+            // accepted?": `false` only when `performAcceptIncoming` refused it
+            // (a dead / placeholder call, incident e3acecd7), so the provider
+            // does not activate the audio session for a call that does not
+            // exist. Every other path returns `true`, i.e. exactly what the
+            // provider always did after this callback.
             provider.onAnswerCall = { [weak self] uuid in
-                guard let self = self else { return }
-                await MainActor.run {
+                guard let self = self else { return true }
+                let accepted: Bool = await MainActor.run {
                     // W-GRPRING — a GROUP call reported to CallKit (push-woken /
                     // background invite) must NOT enter the 1:1 accept path:
                     // that would build a responder integration for a peer that
@@ -3807,14 +3813,15 @@ final class AppState: ObservableObject {
                     if self.groupCallKitId == uuid {
                         RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncomingGroupCall (group)")
                         self.performAcceptIncomingGroupCall()
-                        return
+                        return true
                     }
                     RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncoming (1:1)")
                     // CallKit answered → run the shared accept path + dismiss the
                     // native CallKit UI. The same accept body is reused by the
                     // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
-                    self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
+                    return self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
                 }
+                return accepted
             }
             provider.onEndCall = { [weak self] uuid in
                 guard let self = self else { return }
@@ -17437,9 +17444,20 @@ extension AppState {
     /// (`answerIncomingCall` when `CallsGate.callKitFreeMode`,
     /// `dismissNativeUI=false`). Idempotent via the Bug A guard. The crypto +
     /// signalling are unchanged — only WHO triggers the accept differs.
+    ///
+    /// W-GHOSTCALL (2026-09-25) — returns `false` only when the answer was REFUSED
+    /// (the uuid is not the live call: it ended, or it is a ghost placeholder, or
+    /// another call is active); `true` for every accepted or duplicate answer, so
+    /// callers that ignore the result behave exactly as before. `onAnswerCall`
+    /// hands the result to `CallKitProvider`, which then skips activating the
+    /// audio session for a call that does not exist.
     @MainActor
-    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) {
+    @discardableResult
+    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) -> Bool {
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) dismissNativeUI=\(dismissNativeUI) alreadyAnswered=\(self.answeredCallKitId == uuid)")
+        // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
+        // ring into an in-call state (incident e3acecd7).
+        if self.refuseStaleAnswer(uuid: uuid) { return false }
         // Bug A — idempotent answer (CallKit/in-app/notification may all target
         // the same call). A repeat would re-enter activateIncomingCallAudio
         // mid-start → uncatchable NSException.
@@ -17448,9 +17466,12 @@ extension AppState {
             // established identifier convention (.prefix(8)) instead of
             // printing it in full.
             print("[AppState] performAcceptIncoming: duplicate answer for \(uuid.uuidString.prefix(8))… ignored (Bug A guard)")
-            return
+            return true
         }
         self.answeredCallKitId = uuid
+        // W-GHOSTCALL — backstop behind the guard above: an answered call must
+        // have a peer within 3 s, or it is ended.
+        self.armAnsweredWithoutCallWatchdog(uuid: uuid)
         self.isInCall = true
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming — isInCall=true set for uuid=\(uuid)")
         // W-1TO1RING — the ring screen has done its job, tear it down. All
@@ -17634,6 +17655,65 @@ extension AppState {
         // Bug B fallback (configureForVoIP best-effort setActive + 0.7s
         // self-activate), reached via consumeDeferredAnswerIfReady →
         // startIncomingCallAudioOnAnswer.
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — the answer guard. Asks `GhostCallPolicy` whether
+    /// `uuid` is the live call and, when it is not, refuses it: logs, and ends the
+    /// uuid at CallKit so no ghost ring lingers. Returns `true` when the answer was
+    /// REFUSED (nothing else may run for it).
+    ///
+    /// The CallKit end is skipped while a DIFFERENT call is active:
+    /// `CallKitProvider.reportCallEnded` also drains the shared audio session
+    /// (its self-activation flag is per session, not per uuid), so reporting a
+    /// stale uuid as ended during a live call could cut that call's audio. In
+    /// every case the ledgers know about, the stale uuid is already ended at
+    /// CallKit anyway.
+    @MainActor
+    private func refuseStaleAnswer(uuid: UUID) -> Bool {
+        let verdict: GhostCallPolicy.AnswerVerdict = GhostCallPolicy.answerVerdict(
+            uuid: uuid,
+            activeCallKitId: self.activeCallKitId,
+            isRecentlyEnded: self.recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: self.ghostPlaceholderCallIds.wasRecentlyEnded(uuid)
+        )
+        guard verdict != .accept else { return false }
+        let refusedId8: String = String(uuid.uuidString.prefix(8))
+        let refusedWhy: String = String(describing: verdict.logCode)
+        let refusedLine: String = "answerguard refuse=1 why=" + refusedWhy + " id=" + refusedId8
+        RTLog.warn("call", refusedLine)
+        let otherCallActive: Bool = self.activeCallKitId != nil && self.activeCallKitId != uuid
+        if !otherCallActive && !CallsGate.callKitFreeMode {
+            Task { [weak self] in
+                await self?.callKit?.reportCallEnded(uuid: uuid, reason: .remoteEnded)
+            }
+        }
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — backstop behind `refuseStaleAnswer`: if, 3 s
+    /// after an answer was accepted, that call is still the answered one but the
+    /// app has no peer for it (`callContactId` nil — the "risposto senza chiamata"
+    /// state of e3acecd7, `callId=none` for 6.6 s), end it. Inert for a normal
+    /// call: its peer is set within milliseconds of the ring, and `endCall`
+    /// clears `answeredCallKitId`, so a call that ended (or was replaced) in the
+    /// meantime is left alone.
+    @MainActor
+    private func armAnsweredWithoutCallWatchdog(uuid: UUID) {
+        let graceSeconds: TimeInterval = GhostCallPolicy.answeredWithoutCallGraceSeconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + graceSeconds) { [weak self] in
+            guard let self else { return }
+            let orphaned: Bool = GhostCallPolicy.isAnsweredWithoutCall(
+                answeredCallKitId: self.answeredCallKitId,
+                expectedUuid: uuid,
+                callContactId: self.callContactId
+            )
+            guard orphaned else { return }
+            let orphanId8: String = String(uuid.uuidString.prefix(8))
+            let orphanLine: String = "answerguard nocall=1 id=" + orphanId8
+            RTLog.warn("call", orphanLine)
+            self.endCall(notifyPeerInBand: false)
+        }
     }
 
     #if os(iOS)
@@ -17693,7 +17773,7 @@ extension AppState {
                     let direct = CallSignalingFailurePolicy.directAcceptOnCallKitAnswerFailure
                     RTLog.warn("call", "answer fail kind=cx_answer_call uuid=\(uuid.uuidString.prefix(8)) direct=\(direct ? 1 : 0) err=\(error)")
                     guard direct else { return }
-                    await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
+                    _ = await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
                 }
             }
         }

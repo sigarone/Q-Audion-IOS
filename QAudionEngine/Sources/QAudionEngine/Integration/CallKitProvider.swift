@@ -31,7 +31,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// should not — know about the app's logging stack. Same primitive-only
     /// boundary the mesh runtime keeps.
     public var log: ((String) -> Void)?
-    public var onAnswerCall: ((UUID) async -> Void)?
+    /// Fired when the user answers. Returns whether the app ACCEPTED the answer:
+    /// `false` = it refused a dead / placeholder call (W-GHOSTCALL, incident
+    /// e3acecd7), in which case the provider skips the audio-session activation
+    /// that normally follows, because there is no call to activate it for. A nil
+    /// handler counts as accepted (the pre-existing behaviour).
+    public var onAnswerCall: ((UUID) async -> Bool)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
     /// W-CKHOLD (2026-09-02) — fired from `provider(_:perform:
@@ -375,7 +380,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             //
             // The previous order (activate THEN answer) started the audio engine
             // before callIntegration existed → mic/speaker silent, level bars frozen.
-            await onAnswerCall?(uuid)
+            let accepted: Bool = (await onAnswerCall?(uuid)) ?? true
+            // W-GHOSTCALL — refused (dead / placeholder call): nothing to activate.
+            guard accepted else {
+                log?("callkit answer refused=1 path=manual")
+                return
+            }
             // W556-fix — deterministic self-activation with retry. The old
             // single `try? setActive(true)` could fail silently (swallowed) and
             // then onAudioSessionActivated() started the engine on an INACTIVE
@@ -620,9 +630,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // I8 FIX — truncated uuid, see above.
         print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID.uuidString.prefix(8))…")
         Task {
-            await onAnswerCall?(action.callUUID)
+            let accepted: Bool = (await onAnswerCall?(action.callUUID)) ?? true
             action.fulfill()
             print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
+            // W-GHOSTCALL — the app refused this answer (dead / placeholder call,
+            // e3acecd7): no call exists, so do not activate the audio session for it.
+            guard accepted else {
+                log?("callkit answer refused=1 path=native")
+                return
+            }
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,
