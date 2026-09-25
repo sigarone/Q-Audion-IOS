@@ -116,6 +116,7 @@ final class BCryptoContactsDiscoverV2ChunkingTests: XCTestCase {
         XCTAssertEqual(outcome.totalHashes, 1200)
         XCTAssertEqual(outcome.processedHashes, 1200)
         XCTAssertEqual(outcome.pendingHashes, 0)
+        XCTAssertTrue(outcome.unprocessedHashes.isEmpty)
         XCTAssertTrue(outcome.isComplete)
     }
 
@@ -211,6 +212,10 @@ final class BCryptoContactsDiscoverV2ChunkingTests: XCTestCase {
         XCTAssertEqual(userIds(outcome), ["u-h0"])
         XCTAssertEqual(outcome.processedHashes, 500)
         XCTAssertEqual(outcome.pendingHashes, 700)
+        // The rate-limited chunk and the chunk that was never sent, in request order.
+        XCTAssertEqual(outcome.unprocessedHashes.count, 700)
+        XCTAssertEqual(outcome.unprocessedHashes.first, "h500")
+        XCTAssertEqual(outcome.unprocessedHashes.last, "h1199")
         XCTAssertFalse(outcome.isComplete)
         XCTAssertTrue(outcome.wasRateLimited)
         let expected: Client.DiscoverStopReason? = .rateLimited(retryAfterSeconds: 7)
@@ -348,6 +353,10 @@ final class BCryptoContactsDiscoverV2ChunkingTests: XCTestCase {
         XCTAssertEqual(outcome.entries.count, 1)
         XCTAssertEqual(outcome.processedHashes, 100)
         XCTAssertEqual(outcome.pendingHashes, 200)
+        // The server processed the first 100 hashes of the chunk.
+        XCTAssertEqual(outcome.unprocessedHashes.count, 200)
+        XCTAssertEqual(outcome.unprocessedHashes.first, "h100")
+        XCTAssertEqual(outcome.unprocessedHashes.last, "h299")
         XCTAssertTrue(outcome.serverTruncated)
         XCTAssertFalse(outcome.isComplete)
         XCTAssertNil(outcome.stopReason)

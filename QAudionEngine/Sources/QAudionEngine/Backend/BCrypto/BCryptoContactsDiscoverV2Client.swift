@@ -153,6 +153,13 @@ public final class BCryptoContactsDiscoverV2Client {
         /// not send it, and then the whole chunk counts as looked up, unless the answer
         /// says `truncated` without saying by how much (then none of it counts).
         public let processedHashes: Int
+        /// The hashes that were not looked up, in request order: never sent (the pass
+        /// stopped early), part of a chunk that failed or was rate limited, or beyond
+        /// the `processed` count the server reported for an answered chunk (the server
+        /// is taken to process a chunk from its start). Its count is `pendingHashes`.
+        /// Lets a caller that keeps a hash-to-numbers mapping tell how many numbers,
+        /// not only how many unique hashes, are still unchecked.
+        public let unprocessedHashes: [String]
         /// HTTP responses received (a 429 counts, a transport failure does not).
         public let requestCount: Int
         /// True when at least one answer carried `"truncated": true`.
@@ -293,6 +300,7 @@ public final class BCryptoContactsDiscoverV2Client {
         var sawTruncation: Bool = false
         var stop: DiscoverStopReason?
         var start: Int = 0
+        var unprocessed: [String] = []
 
         while start < hashes.count {
             let end: Int = min(start + size, hashes.count)
@@ -307,6 +315,7 @@ public final class BCryptoContactsDiscoverV2Client {
                     throw error
                 }
                 stop = .failed(message: error.localizedDescription)
+                unprocessed.append(contentsOf: chunk)
                 break
             }
             requestCount += 1
@@ -317,14 +326,19 @@ public final class BCryptoContactsDiscoverV2Client {
                     throw Error.httpError(429)
                 }
                 stop = .rateLimited(retryAfterSeconds: wait)
+                unprocessed.append(contentsOf: chunk)
             case .answered(let result):
                 answeredChunks += 1
                 entries.append(contentsOf: result.entries)
-                processedTotal += BCryptoContactsDiscoverV2Client.processedCount(
+                let done: Int = BCryptoContactsDiscoverV2Client.processedCount(
                     reported: result.processed,
                     truncated: result.truncated,
                     sent: chunk.count
                 )
+                processedTotal += done
+                if done < chunk.count {
+                    unprocessed.append(contentsOf: chunk[done...])
+                }
                 if result.truncated == true {
                     sawTruncation = true
                 }
@@ -333,11 +347,16 @@ public final class BCryptoContactsDiscoverV2Client {
                 break
             }
         }
+        // Hashes never sent because the pass stopped early.
+        if start < hashes.count {
+            unprocessed.append(contentsOf: hashes[start...])
+        }
 
         return DiscoverOutcome(
             entries: entries,
             totalHashes: hashes.count,
             processedHashes: processedTotal,
+            unprocessedHashes: unprocessed,
             requestCount: requestCount,
             serverTruncated: sawTruncation,
             stopReason: stop
