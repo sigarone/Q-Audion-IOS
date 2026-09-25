@@ -548,6 +548,7 @@ MAX_IDLIKE_TOKENS = 2     # per body: hex id prefixes (4-8 hex) + numbers of 6+ 
 MAX_NUM_RUN = 3           # consecutive bare number tokens
 
 APP_VOCAB = frozenset("""
+    answerguard arm cancelpush cfg drained drops endguard er ev ff ghost ignore missed nocall over refuse rxago since stale wedge wedgesw wsec
     abs accept accepted activated activation active add aead aec aes agc age
     allocation already android annullato answer answered apns appeared
     appstate aprof apt armed arrival as atomic audio audiobeacon audioio

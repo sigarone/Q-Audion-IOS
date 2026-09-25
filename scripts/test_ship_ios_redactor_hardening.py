@@ -289,6 +289,61 @@ check("peerSessionIdMs=1234567" not in red("peerSessionIdMs=1234567 state=active
 check("peerReadyAgeMs=-1" in red("peerReadyAgeMs=-1 state=active"), "F4: legit peerReadyAgeMs lost")
 
 # ---------------------------------------------------------------------------
+# Follow-up 2026-09-25: the vocabulary of the NEW RTLog lines. The lines below are
+# the ones the app builds in W-VPIOOBS (audioVp ev=arm/ff/fire/cfg), W-DCWEDGE
+# (dcmux wedge= / wedgesw=) and W-GHOSTCALL (cancelpush ghost= / missed=,
+# answerguard refuse= / nocall=, endguard ignore=), each written like its real
+# format string with SYNTHETIC numbers and a made-up 8-hex call id prefix, sent
+# with the tag "call" (RTLog.info("call", ...)). All of them must ship VERBATIM: a
+# line the redactor deletes or blobs is a call-diagnosis line that never reaches
+# the log store. The second pass sets the per-body unknown-word allowance to 0:
+# with the default of 2 a single dropped vocabulary word hides behind that slack,
+# so a later vocabulary cleanup could lose it without any line changing.
+# ---------------------------------------------------------------------------
+RTLOG_NEW = (
+    "audioVp ev=arm gen=3 since_start_ms=0 eng_ms=12",
+    "audioVp ev=ff gen=3 ms=210 eng_ms=15",
+    "audioVp ev=fire gen=3 since_start_ms=1204 stale=0 er=1",
+    "audioVp ev=cfg gen=2 eng_ms=150",
+    "dcmux wedge=1 why=buf buf=1600 over=1000 drops=0",
+    "dcmux wedge=0 why=drained buf=300 low=3000 rxago=0 wsec=3",
+    "dcmux wedgesw=1",
+    "dcmux wedgesw=0",
+    "cancelpush ghost=1 id=1A2B3C4D",
+    "cancelpush missed=1 id=1A2B3C4D",
+    "answerguard refuse=1 why=3 id=1A2B3C4D",
+    "answerguard nocall=1 id=1A2B3C4D",
+    "endguard ignore=1 id=1A2B3C4D",
+)
+
+
+def drop_caches():
+    # the redactor memoises its word / kv verdicts (functools.lru_cache): drop them
+    # around the change of MAX_UNKNOWN_WORDS so no verdict is answered from an
+    # entry computed under the other allowance.
+    for f in list(vars(m).values()):
+        if hasattr(f, "cache_clear"):
+            f.cache_clear()
+
+
+def rtlog_misses():
+    drop_caches()
+    return [l for l in RTLOG_NEW if red(l, "call") != l]
+
+
+bad = rtlog_misses()
+check(not bad, "RTLOG: new call-diagnosis lines not shipped verbatim: %r" % (bad,))
+slack = m.MAX_UNKNOWN_WORDS
+m.MAX_UNKNOWN_WORDS = 0
+try:
+    bad = rtlog_misses()
+finally:
+    m.MAX_UNKNOWN_WORDS = slack
+    drop_caches()
+check(not bad, "RTLOG: with no unknown-word allowance a vocabulary word of the "
+      "new call-diagnosis lines is missing: %r" % (bad,))
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)
