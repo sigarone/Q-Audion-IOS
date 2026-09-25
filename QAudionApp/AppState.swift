@@ -2362,6 +2362,20 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// W-GHOSTCALL (2026-09-25) — call UUIDs this app has already ended (filled
+    /// in `endCall` and `handleRemoteCallHangup`, before the CallKit report and
+    /// before `activeCallKitId` is cleared). Read by the cancel-push handler and
+    /// the answer path so a late signal cannot revive a dead call — incident
+    /// e3acecd7: the caller hung up over the WS, the server's `call_cancelled`
+    /// push then re-reported the same uuid to CallKit as a fresh ring, and the
+    /// user's answer started an in-call state with no call. Pure value type
+    /// (`RecentlyEndedCallLedger`), main-actor only, 120 s TTL.
+    private var recentlyEndedCallIds = RecentlyEndedCallLedger()
+    /// W-GHOSTCALL — the throwaway uuids the cancel-push handler reports (and ends
+    /// at once) to satisfy the PushKit mandate when the real uuid is already dead.
+    /// Never answerable: `performAcceptIncoming` refuses them.
+    private var ghostPlaceholderCallIds = RecentlyEndedCallLedger()
+
     /// call_accepted two-flag latch (WIRE_SPEC §3.5) — set once THIS
     /// device's local handshake-completion logic (the call_answer
     /// state-advance) has run for a given callId. Whichever of {this,
@@ -3783,9 +3797,15 @@ final class AppState: ObservableObject {
 
         #if canImport(CallKit) && os(iOS)
         if let provider = callKit as? CallKitProvider {
+            // W-GHOSTCALL (2026-09-25) — the closure now answers "was the answer
+            // accepted?": `false` only when `performAcceptIncoming` refused it
+            // (a dead / placeholder call, incident e3acecd7), so the provider
+            // does not activate the audio session for a call that does not
+            // exist. Every other path returns `true`, i.e. exactly what the
+            // provider always did after this callback.
             provider.onAnswerCall = { [weak self] uuid in
-                guard let self = self else { return }
-                await MainActor.run {
+                guard let self = self else { return true }
+                let accepted: Bool = await MainActor.run {
                     // W-GRPRING — a GROUP call reported to CallKit (push-woken /
                     // background invite) must NOT enter the 1:1 accept path:
                     // that would build a responder integration for a peer that
@@ -3793,14 +3813,15 @@ final class AppState: ObservableObject {
                     if self.groupCallKitId == uuid {
                         RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncomingGroupCall (group)")
                         self.performAcceptIncomingGroupCall()
-                        return
+                        return true
                     }
                     RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncoming (1:1)")
                     // CallKit answered → run the shared accept path + dismiss the
                     // native CallKit UI. The same accept body is reused by the
                     // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
-                    self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
+                    return self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
                 }
+                return accepted
             }
             provider.onEndCall = { [weak self] uuid in
                 guard let self = self else { return }
@@ -3809,6 +3830,16 @@ final class AppState: ObservableObject {
                     // call is a reject (still ringing) or a leave (joined).
                     if self.groupCallKitId == uuid {
                         self.endGroupCallFromSystemUI()
+                        return
+                    }
+                    // W-GHOSTCALL (2026-09-25) — `endCall()` below ends whatever
+                    // call the app holds, whichever uuid CallKit named. For the
+                    // leftover ring of an already-dead call while ANOTHER call is
+                    // live (`refuseStaleAnswer` leaves it in place), that would
+                    // hang up the live call: ignore it. The provider still
+                    // fulfils this END action (only an ANSWER the app refuses is
+                    // failed), which dismisses the stale ring.
+                    if self.ignoreEndForStaleUuid(uuid: uuid) {
                         return
                     }
                     self.endCall()
@@ -4221,6 +4252,21 @@ final class AppState: ObservableObject {
                 // `reconcileOpaqueCallWakeup`'s kdoc for why that has to
                 // stay nil until the REAL server call_id is known over the
                 // WS.
+                //
+                // W-GHOSTCALL (2026-09-25) — KNOWN LIMIT, latent. Because the
+                // placeholder is not in `activeCallKitId`, `refuseStaleAnswer`
+                // (via `performAcceptIncoming`) refuses an Answer tapped on it
+                // BEFORE the real `call_incoming` arrives (log `answerguard
+                // refuse=1 why=3`): the CXAnswerCallAction fails, the placeholder
+                // is ended, and the user answers the real ring that follows. Before
+                // the guard that tap set `activeCallKitId` to the placeholder, the
+                // real `call_incoming` was then dropped as `differentCallActive`
+                // and the call sat "answered with no call" (the e3acecd7 state), so
+                // this is not a regression; and it is unreachable today because
+                // bcrypto-server's `internal/push/apns.go` has no `opaque_wakeup`
+                // sender. BEFORE the server enables TRUST-6 on iOS: register these
+                // placeholder uuids in a third ledger and DEFER the answer (latch,
+                // replayed on the real call) instead of refusing it.
                 let placeholderUuid = UUID()
                 let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
                 let shash8: String = String(payload.senderHash.prefix(8))
@@ -4272,8 +4318,31 @@ final class AppState: ObservableObject {
                 // has never seen.
                 let diag: String = "[AppState] W-CANCELPUSH PushKit→cancel uuid=\(payload.callId.uuidString.prefix(8))…"
                 print(diag)
-                await self.callKit?.reportIncomingCall(uuid: payload.callId, callerName: "Q-Audion", hasVideo: false)
-                await self.callKit?.reportCallEnded(uuid: payload.callId, reason: .remoteEnded)
+                // W-GHOSTCALL (2026-09-25) — the "idempotent by construction"
+                // claim above only holds while CallKit still knows the uuid. It
+                // does NOT when this device already ended the call itself (the
+                // caller's hangup usually wins the race over the WS): CallKit
+                // dropped the uuid, so reporting it again is not a no-op, it is
+                // a NEW ring for a dead call, answerable by the user (incident
+                // e3acecd7, 2026-09-23: report ok=1 dup=0, Answer +1.9 s later).
+                // The PushKit mandate still requires SOME report, so when the uuid
+                // is already in `recentlyEndedCallIds` a fresh placeholder uuid is
+                // reported instead, ended at once and marked unanswerable.
+                let cancelPlan: GhostCallPolicy.CancelReportPlan = await MainActor.run {
+                    self.planIncomingCancelReport(callId: payload.callId)
+                }
+                await self.callKit?.reportIncomingCall(uuid: cancelPlan.reportUuid, callerName: "Q-Audion", hasVideo: false)
+                await self.callKit?.reportCallEnded(uuid: cancelPlan.reportUuid, reason: .remoteEnded)
+                // The call already ended here, so its own teardown (stop ring
+                // UI/sound, clear the ring flag) has already run; repeating it now
+                // could hide the ring of a DIFFERENT call that arrived since.
+                guard !cancelPlan.isPlaceholder else { return }
+                // W-GHOSTCALL — the push can also win the race the other way
+                // round: it clears the ring flag below, and without it the later
+                // WS hangup no longer sees a ringing call, so the missed call is
+                // never recorded (and never, if that hangup does not arrive).
+                // Record it now, while the flag is still up.
+                self.recordMissedOnCancelPush(callId: payload.callId)
                 // Same local teardown a WS-delivered call_cancel/call_hangup
                 // would have driven for this call, in case the push wins
                 // the race against a delayed WS message for the SAME call:
@@ -8207,6 +8276,10 @@ final class AppState: ObservableObject {
         switch reasonString {
         case "busy":      reason = .declined
         case "timeout":   reason = .unanswered
+        // W-GHOSTCALL — the reason an Android caller sends when its own ring
+        // timeout expires (CallController.hangup("timeout_no_answer")): the same
+        // "nobody answered" as `timeout`, it used to fall to `.remoteEnded`.
+        case "timeout_no_answer": reason = .unanswered
         case "error":     reason = .failed("error")
         // W-ENDREASONS (2026-08-25, parity plan A5/B8) — the two server-emitted
         // reasons get a sensible mapping instead of the generic default, and
@@ -8231,12 +8304,28 @@ final class AppState: ObservableObject {
         }
         // If the call was still ringing when the hangup arrived the
         // callee never answered — mark the record as missed.
-        let wasRinging = self.callState == .ringing
+        // W-GHOSTCALL — `callState` alone misses the call CallKit is ringing (it
+        // stays .idle until the user answers), so a caller's own ring timeout was
+        // never recorded as missed (e3acecd7). See
+        // `GhostCallPolicy.wasRingingAtRemoteHangup` for why the ring flag is
+        // part of the rule (outgoing calls hold `activeCallKitId` too).
+        let wasRinging: Bool = GhostCallPolicy.wasRingingAtRemoteHangup(
+            callStateIsRinging: self.callState == .ringing,
+            hasActiveCallKitId: self.activeCallKitId != nil,
+            callWasAnswered: self.callWasAnswered,
+            incomingRingVisible: self.incomingCallRingVisible
+        )
         let missedRecordId = self.activeOutgoingRecordId
         if wasRinging && missedRecordId == nil {
             RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
         }
         let uuid = self.activeCallKitId
+        // W-GHOSTCALL — recorded NOW, synchronously, not inside the Task below:
+        // the CallKit report awaited there takes 0.3-1.5 s and the server's
+        // `call_cancelled` push can land inside that window (e3acecd7: 0.6 s).
+        if let endedUuid = uuid {
+            self.recentlyEndedCallIds.recordEnded(endedUuid)
+        }
         Task {
             // W-NOCALLKIT review H1: in callKitFreeMode the call was NEVER
             // reported to CallKit (no reportIncomingCall), so reporting its end
@@ -14666,6 +14755,49 @@ final class AppState: ObservableObject {
         return display
     }
 
+    /// W-GHOSTCALL (2026-09-25) — decide which uuid the `call_cancelled` push
+    /// handler reports to CallKit (see `GhostCallPolicy.cancelReportPlan`), and,
+    /// for a placeholder, record it as unanswerable BEFORE the report reaches
+    /// CallKit so an Answer that lands on its fading ring is already known to be a
+    /// ghost. Extracted from the `onIncomingCancel` closure so that closure stays
+    /// a single main-actor call (CLAUDE.md §13/§14).
+    @MainActor
+    private func planIncomingCancelReport(callId: UUID) -> GhostCallPolicy.CancelReportPlan {
+        let plan: GhostCallPolicy.CancelReportPlan = GhostCallPolicy.cancelReportPlan(
+            callId: callId,
+            isRecentlyEnded: recentlyEndedCallIds.wasRecentlyEnded(callId),
+            placeholder: UUID()
+        )
+        if plan.isPlaceholder {
+            ghostPlaceholderCallIds.recordEnded(plan.reportUuid)
+            let ghostId8: String = String(callId.uuidString.prefix(8))
+            let ghostLine: String = "cancelpush ghost=1 id=" + ghostId8
+            RTLog.info("call", ghostLine)
+        }
+        return plan
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — records the call the `call_cancelled` push is
+    /// cancelling as missed, when it is the ringing, unanswered incoming call (see
+    /// `GhostCallPolicy.shouldRecordMissedOnCancelPush`). Must run BEFORE the push
+    /// handler clears `incomingCallRingVisible`. Takes the record id so the WS
+    /// hangup that may follow finds none and does not record it a second time.
+    @MainActor
+    private func recordMissedOnCancelPush(callId: UUID) {
+        let shouldRecord: Bool = GhostCallPolicy.shouldRecordMissedOnCancelPush(
+            cancelCallId: callId,
+            activeCallKitId: self.activeCallKitId,
+            callWasAnswered: self.callWasAnswered,
+            incomingRingVisible: self.incomingCallRingVisible
+        )
+        guard shouldRecord, let recordId = self.activeOutgoingRecordId else { return }
+        PersistentCallRecordStore.shared.markMissed(id: recordId)
+        self.activeOutgoingRecordId = nil
+        let missedId8: String = String(callId.uuidString.prefix(8))
+        let missedLine: String = "cancelpush missed=1 id=" + missedId8
+        RTLog.info("call", missedLine)
+    }
+
     /// TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit backlog
     /// item 9) — reconciles the generic placeholder CallKit call reported
     /// for an opaque call-wakeup push with the REAL incoming call once its
@@ -17378,9 +17510,20 @@ extension AppState {
     /// (`answerIncomingCall` when `CallsGate.callKitFreeMode`,
     /// `dismissNativeUI=false`). Idempotent via the Bug A guard. The crypto +
     /// signalling are unchanged — only WHO triggers the accept differs.
+    ///
+    /// W-GHOSTCALL (2026-09-25) — returns `false` only when the answer was REFUSED
+    /// (the uuid is not the live call: it ended, or it is a ghost placeholder, or
+    /// another call is active); `true` for every accepted or duplicate answer, so
+    /// callers that ignore the result behave exactly as before. `onAnswerCall`
+    /// hands the result to `CallKitProvider`, which then skips activating the
+    /// audio session for a call that does not exist.
     @MainActor
-    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) {
+    @discardableResult
+    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) -> Bool {
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) dismissNativeUI=\(dismissNativeUI) alreadyAnswered=\(self.answeredCallKitId == uuid)")
+        // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
+        // ring into an in-call state (incident e3acecd7).
+        if self.refuseStaleAnswer(uuid: uuid) { return false }
         // Bug A — idempotent answer (CallKit/in-app/notification may all target
         // the same call). A repeat would re-enter activateIncomingCallAudio
         // mid-start → uncatchable NSException.
@@ -17389,9 +17532,12 @@ extension AppState {
             // established identifier convention (.prefix(8)) instead of
             // printing it in full.
             print("[AppState] performAcceptIncoming: duplicate answer for \(uuid.uuidString.prefix(8))… ignored (Bug A guard)")
-            return
+            return true
         }
         self.answeredCallKitId = uuid
+        // W-GHOSTCALL — backstop behind the guard above: an answered call must
+        // have a peer within 3 s, or it is ended.
+        self.armAnsweredWithoutCallWatchdog(uuid: uuid)
         self.isInCall = true
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming — isInCall=true set for uuid=\(uuid)")
         // W-1TO1RING — the ring screen has done its job, tear it down. All
@@ -17575,6 +17721,87 @@ extension AppState {
         // Bug B fallback (configureForVoIP best-effort setActive + 0.7s
         // self-activate), reached via consumeDeferredAnswerIfReady →
         // startIncomingCallAudioOnAnswer.
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — the answer guard. Asks `GhostCallPolicy` whether
+    /// `uuid` is the live call and, when it is not, refuses it: logs, and ends the
+    /// uuid at CallKit so no ghost ring lingers. Returns `true` when the answer was
+    /// REFUSED (nothing else may run for it).
+    ///
+    /// The CallKit end is skipped while a DIFFERENT call is active:
+    /// `CallKitProvider.reportCallEnded` also drains the shared audio session
+    /// (its self-activation flag is per session, not per uuid), so reporting a
+    /// stale uuid as ended during a live call could cut that call's audio. In
+    /// every case the ledgers know about, the stale uuid is already ended at
+    /// CallKit anyway.
+    @MainActor
+    private func refuseStaleAnswer(uuid: UUID) -> Bool {
+        let verdict: GhostCallPolicy.AnswerVerdict = GhostCallPolicy.answerVerdict(
+            uuid: uuid,
+            activeCallKitId: self.activeCallKitId,
+            isRecentlyEnded: self.recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: self.ghostPlaceholderCallIds.wasRecentlyEnded(uuid)
+        )
+        guard verdict != .accept else { return false }
+        let refusedId8: String = String(uuid.uuidString.prefix(8))
+        let refusedWhy: String = String(describing: verdict.logCode)
+        let refusedLine: String = "answerguard refuse=1 why=" + refusedWhy + " id=" + refusedId8
+        RTLog.warn("call", refusedLine)
+        let otherCallActive: Bool = self.activeCallKitId != nil && self.activeCallKitId != uuid
+        if !otherCallActive && !CallsGate.callKitFreeMode {
+            Task { [weak self] in
+                await self?.callKit?.reportCallEnded(uuid: uuid, reason: .remoteEnded)
+            }
+        }
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — the end-action twin of `refuseStaleAnswer`: when
+    /// that guard skips the CallKit end because another call is live, the stale
+    /// ring can stay on screen, and Reject on it must not hang up the LIVE call
+    /// (`onEndCall` ends whatever call the app holds). Asks `GhostCallPolicy`
+    /// (deliberately narrow: only a ledger-known dead uuid, only while a
+    /// different call is active) and logs; returns `true` when the end must be
+    /// ignored.
+    @MainActor
+    private func ignoreEndForStaleUuid(uuid: UUID) -> Bool {
+        let ignore: Bool = GhostCallPolicy.shouldIgnoreEndForStaleUuid(
+            uuid: uuid,
+            activeCallKitId: self.activeCallKitId,
+            isRecentlyEnded: self.recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: self.ghostPlaceholderCallIds.wasRecentlyEnded(uuid)
+        )
+        guard ignore else { return false }
+        let staleId8: String = String(uuid.uuidString.prefix(8))
+        let staleLine: String = "endguard ignore=1 id=" + staleId8
+        RTLog.warn("call", staleLine)
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — backstop behind `refuseStaleAnswer`: if, 3 s
+    /// after an answer was accepted, that call is still the answered one but the
+    /// app has no peer for it (`callContactId` nil — the "risposto senza chiamata"
+    /// state of e3acecd7, `callId=none` for 6.6 s), end it. Inert for a normal
+    /// call: its peer is set within milliseconds of the ring, and `endCall`
+    /// clears `answeredCallKitId`, so a call that ended (or was replaced) in the
+    /// meantime is left alone.
+    @MainActor
+    private func armAnsweredWithoutCallWatchdog(uuid: UUID) {
+        let graceSeconds: TimeInterval = GhostCallPolicy.answeredWithoutCallGraceSeconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + graceSeconds) { [weak self] in
+            guard let self else { return }
+            let orphaned: Bool = GhostCallPolicy.isAnsweredWithoutCall(
+                answeredCallKitId: self.answeredCallKitId,
+                expectedUuid: uuid,
+                callContactId: self.callContactId
+            )
+            guard orphaned else { return }
+            let orphanId8: String = String(uuid.uuidString.prefix(8))
+            let orphanLine: String = "answerguard nocall=1 id=" + orphanId8
+            RTLog.warn("call", orphanLine)
+            self.endCall(notifyPeerInBand: false)
+        }
     }
 
     #if os(iOS)
@@ -17634,7 +17861,7 @@ extension AppState {
                     let direct = CallSignalingFailurePolicy.directAcceptOnCallKitAnswerFailure
                     RTLog.warn("call", "answer fail kind=cx_answer_call uuid=\(uuid.uuidString.prefix(8)) direct=\(direct ? 1 : 0) err=\(error)")
                     guard direct else { return }
-                    await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
+                    _ = await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
                 }
             }
         }
@@ -18177,6 +18404,13 @@ extension AppState {
                     RTLog.error("call", "sigsend fail kind=call_hangup site=endcall cid=\(hangupCallId.prefix(8)) err=\(error)")
                 }
             }
+        }
+
+        // W-GHOSTCALL — remember this uuid as ended BEFORE the CallKit report
+        // below and before `activeCallKitId` is cleared further down, so a late
+        // `call_cancelled` push or a tap on the fading ring cannot revive it.
+        if let endedUuid = activeCallKitId {
+            recentlyEndedCallIds.recordEnded(endedUuid)
         }
 
         // W-NOCALLKIT review H1: skip CallKit teardown in callKitFreeMode — the
