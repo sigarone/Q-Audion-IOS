@@ -1205,6 +1205,12 @@ public final class AudioCapture {
         }
 
         // 5. Start the engine, then the player node (single engine drives both).
+        // W-VPIOOBS — registered BEFORE `engine.start()`, so a configuration change raised while VP-IO comes
+        // up (the case `engine_cfg_changes_2s` exists to reveal) is not missed. The observer's queue is main
+        // and start() normally runs there (inline dispatch), so the block runs once start() has returned and
+        // `self.engine` is this engine; a run that beats that assignment is dropped by the `posted === current`
+        // filter like any stale notification.
+        registerEngineConfigObserver()
         engine.prepare()
         engineStartCalledAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the *_eng_ms measurements
         try engine.start()
@@ -1243,7 +1249,6 @@ public final class AudioCapture {
         // 6. M-12 — observe AVAudioSession interruptions so we can
         //    pause on .began and resume on .ended (.shouldResume).
         registerInterruptionObserver()
-        registerEngineConfigObserver()  // W-VPIOOBS — count config changes in the first 2 s
         // W-AUDIOBEACON — periodic engine-state line while a voice-call
         // capture is alive (no-op for .passive owners; no-op if already armed
         // by a previous start() of this same call).
