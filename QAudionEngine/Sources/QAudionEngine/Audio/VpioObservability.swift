@@ -174,11 +174,24 @@ public enum VpioObservability {
         return "\(hz)/\(ch)"
     }
 
+    /// Longest single port-type token that ships whole: `LogRedactor.redactStructured` (applied on the
+    /// device to every telemetry string) masks a run of 20 or more `[A-Za-z0-9+/=_-]` characters, and a
+    /// comma ends a run. `ContinuityMicrophone` (iOS 17+) is exactly 20.
+    public static let maxPortTokenLen: Int = 19
+
+    /// One `AVAudioSession` port type as it ships in `input_ports` / `preferred_input`: the known type
+    /// that would be masked whole is shortened to `ContinuityMic`, anything else is bounded to
+    /// `maxPortTokenLen`. nil when nothing is left.
+    public static func portToken(_ raw: String) -> String? {
+        let name: String = (raw == "ContinuityMicrophone") ? "ContinuityMic" : raw
+        return sanitizedToken(name, maxLen: maxPortTokenLen)
+    }
+
     /// Comma-joined port types, in the order given, at most `maxPorts` of them; nil when empty.
     public static func portsList(_ portTypes: [String], maxPorts: Int = 8) -> String? {
         var cleaned: [String] = []
         for raw in portTypes {
-            if let token = sanitizedToken(raw, maxLen: 24) {
+            if let token = portToken(raw) {
                 cleaned.append(token)
                 if cleaned.count >= maxPorts { break }
             }

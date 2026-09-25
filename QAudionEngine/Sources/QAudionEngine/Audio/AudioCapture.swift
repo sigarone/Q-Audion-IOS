@@ -1419,7 +1419,7 @@ public final class AudioCapture {
         let session = AVAudioSession.sharedInstance()
         let inputTypes: [String] = (session.availableInputs ?? []).map { $0.portType.rawValue }
         env.inputPorts = VpioObservability.portsList(inputTypes)
-        env.preferredInput = VpioObservability.sanitizedToken(session.preferredInput?.portType.rawValue ?? "none", maxLen: 24)
+        env.preferredInput = VpioObservability.portToken(session.preferredInput?.portType.rawValue ?? "none")
         return env
     }
 
