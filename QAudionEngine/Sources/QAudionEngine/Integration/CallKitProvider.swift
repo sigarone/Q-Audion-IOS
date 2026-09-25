@@ -128,8 +128,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // "not reported yet", so the second one's Code=2 refusal was taken for a
         // genuine rejection. The second report still goes to CallKit (one report
         // per push is the PushKit mandate); it is only labelled a duplicate.
-        let alreadyUp: Bool = !ledger.beginReport(uuid)
-        defer { ledger.finishReport(uuid) }
+        let claimed: Bool = ledger.beginReport(uuid)
+        let alreadyUp: Bool = !claimed
+        // Only the report that took the claim releases it: a duplicate that comes
+        // back from CallKit first must not reopen the "first report" window while
+        // the claimer is still in flight.
+        defer { if claimed { ledger.finishReport(uuid) } }
         // I8 FIX — truncate the call UUID (same convention as AppState's
         // W-CALLDIAG lines for this same call) instead of printing it whole.
         print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
