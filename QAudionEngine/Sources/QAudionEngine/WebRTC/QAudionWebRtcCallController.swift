@@ -483,8 +483,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// carrying and the channel reads `.open`, yet frames go to the relay because
     /// SCTP is not draining. The app's W-DCMUX fallback-reason closure reports it as
     /// `why=wedge`; without it that state would read as `openbug`.
+    ///
+    /// The channel must really read `.open` here: the detector's `wedged` flag is
+    /// only changed by a sample (taken by frames that get past the `.open` guard in
+    /// `sendAudioFrameData`) and the detector is never reset in production, so it
+    /// stays `true` after the channel closes. Without this check a channel that
+    /// closed while wedged (ICE still up) would keep reporting `why=wedge` instead
+    /// of the raw `closing`/`closed` state. Diagnostic only: routing already sends
+    /// those frames to the relay through the `.open` guard.
     public var audioTxWedgeDiverting: Bool {
-        (peerConnection?.isAudioDcWedged ?? false) && DcWedgeKillSwitch.shared.divertEnabled
+        (peerConnection?.isAudioDataChannelOpen() ?? false) &&
+            (peerConnection?.isAudioDcWedged ?? false) && DcWedgeKillSwitch.shared.divertEnabled
     }
 
     /// W-DCMUX (2026-08-11) — the DataChannel's raw `RTCDataChannelState`, or
