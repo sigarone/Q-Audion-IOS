@@ -83,12 +83,12 @@ final class CallKitCallLedger: @unchecked Sendable {
     private var audioSelfActivated = false
 
     /// W-GHOSTCALL (2026-09-25) — uuids whose `reportNewIncomingCall` has been
-    /// asked of CallKit and has not answered yet. Exists only to make "am I the
-    /// first report of this uuid?" one atomic test-and-set taken BEFORE the await
-    /// (see `beginReport`): the old check read `nativelyReportedUUIDs`, which is
-    /// only filled AFTER CallKit answers, so two reports of the same uuid issued
-    /// within the same millisecond (a doubled PushKit push, e3acecd7: 03.221 and
-    /// 03.222) both saw "not reported yet".
+    /// asked of CallKit and CallKit has not replied yet. Exists only to make
+    /// "am I the first report of this uuid?" one atomic test-and-set taken BEFORE
+    /// the await (see `beginReport`): the old check read `nativelyReportedUUIDs`,
+    /// which is only filled AFTER CallKit's reply to the report comes back, so two
+    /// reports of the same uuid issued within the same millisecond (a doubled
+    /// PushKit push, e3acecd7: 03.221 and 03.222) both saw "not reported yet".
     private var reportsInFlight: Set<UUID> = []
 
     init() {}
@@ -136,7 +136,7 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// gets `false` and must treat its report as a duplicate (it still reports to
     /// CallKit — the PushKit mandate is one report per push — but must not arm the
     /// manual-answer fallback if CallKit refuses it). The claimer calls
-    /// `finishReport` when CallKit has answered, success or failure.
+    /// `finishReport` when CallKit has replied to the report, success or failure.
     func beginReport(_ uuid: UUID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -267,7 +267,7 @@ final class CallKitCallLedger: @unchecked Sendable {
 /// - this report is a duplicate of one already in flight or already up
 ///   (`alreadyReported`, from `CallKitCallLedger.beginReport`): the first report's
 ///   own outcome decides;
-/// - CallKit's own answer is Code=2 `callUUIDAlreadyExists`: CallKit already HAS
+/// - CallKit's own reply is Code=2 `callUUIDAlreadyExists`: CallKit already HAS
 ///   this call, its native UI is live and answerable. Arming the fallback over it
 ///   is what e3acecd7 did at 15:04:03.222 (`callkit report ok=0 code=2 dup=0`,
 ///   then "arming in-app manual answer path" with the native UI alive), and a

@@ -14,7 +14,8 @@ import Foundation
 /// that the uuid was dead: `activeCallKitId` had already been cleared by
 /// `endCall`, and CallKit is a poor witness because a ring UI can outlive
 /// `reportCall(with:endedAt:)` (the Answer in e3acecd7 arrived 1.3 s after the
-/// uuid was reported again).
+/// uuid was reported again). `e3acecd7` is the first 8 hex digits of that call's
+/// id, as the device logs print them; it is not a commit hash. Times are UTC.
 ///
 /// This type is that memory. It is deliberately dumb: a bounded uuid -> end time
 /// map with a TTL. `AppState` fills it at the two places a call ends (`endCall`,

@@ -4,6 +4,10 @@ import Foundation
 /// (incident e3acecd7, 2026-09-23 15:04:43-15:04:52): a call that had already
 /// ended came back to life as a ringing, answerable CallKit call.
 ///
+/// `e3acecd7` here and in the files that share this fix is the first 8 hex
+/// digits of that call's id, as the device logs print them (`id=<8 hex>`); it is
+/// not a commit hash. Times are UTC.
+///
 /// Timeline of the incident, from the device log (15:04): the caller hangs up
 /// over the WS at 43.794 (`opaquehang rx`, `reportCallEnded` + `endCall` at
 /// 43.795), the server still sends its `call_cancelled` VoIP push, the push
@@ -85,7 +89,13 @@ public enum GhostCallPolicy {
         case refuseNotActive
 
         /// Stable numeric code for the remote log line (`answerguard refuse=1
-        /// why=<code>`); numbers survive the log redactor, prose does not.
+        /// why=<code>`). The format is designed to carry fixed words and
+        /// numeric tails only, with no free prose and no identifier beyond 8 hex
+        /// digits. Whether such a line reaches the log pipeline is decided by
+        /// the phone-log redactor's word allow-list (a separate shipper
+        /// vocabulary change): the words of the new lines must be on that list,
+        /// and the numeric tail alone does not make a line pass. Do not assume
+        /// the line is shipped until that change is released.
         public var logCode: Int {
             switch self {
             case .accept: return 0
@@ -136,8 +146,9 @@ public enum GhostCallPolicy {
     /// and a ledger KNOWS this uuid is dead (recently ended, or a ghost
     /// placeholder). Every other end (the live call's own uuid, no call held, a
     /// uuid no ledger knows) keeps ending as before, so an id mismatch can never
-    /// swallow a legitimate end. The action is still fulfilled by the provider,
-    /// which is what dismisses the stale ring.
+    /// swallow a legitimate end. The provider still fulfils this END action (only
+    /// an ANSWER the app refuses is failed, see `AnswerVerdict`), which is what
+    /// dismisses the stale ring.
     public static func shouldIgnoreEndForStaleUuid(
         uuid: UUID,
         activeCallKitId: UUID?,

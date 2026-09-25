@@ -3837,7 +3837,8 @@ final class AppState: ObservableObject {
                     // leftover ring of an already-dead call while ANOTHER call is
                     // live (`refuseStaleAnswer` leaves it in place), that would
                     // hang up the live call: ignore it. The provider still
-                    // fulfils the action, which dismisses the stale ring.
+                    // fulfils this END action (only an ANSWER the app refuses is
+                    // failed), which dismisses the stale ring.
                     if self.ignoreEndForStaleUuid(uuid: uuid) {
                         return
                     }
