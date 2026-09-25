@@ -438,9 +438,7 @@ public final class BCryptoRestClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = config.accessToken { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         for (key, value) in headers { req.setValue(value, forHTTPHeaderField: key) }
-        // Device attestation for register/login was evaluated and is not
-        // adopted; reopen only if registration abuse from iOS becomes a
-        // problem.
+        // Device attestation is not used for register/login.
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw BCryptoError.httpError(0) }
         return (data, http.statusCode)
