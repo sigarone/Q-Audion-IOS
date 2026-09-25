@@ -129,6 +129,14 @@ final class BCryptoContactsDiscoverV2ChunkingTests: XCTestCase {
         XCTAssertEqual(chunkSizes(), [1, 1, 1])
     }
 
+    /// A caller-supplied size above the server's per-request limit is clamped to it,
+    /// so no request ever carries more than `maxHashesPerRequest` hashes.
+    func test_oversizedChunkSize_isClampedToTheRequestLimit() async throws {
+        let client = try makeClient()
+        _ = try await client.discoverChunked(alg: "sha256", hashes: makeHashes(1200), chunkSize: 100_000)
+        XCTAssertEqual(chunkSizes(), [500, 500, 200])
+    }
+
     // MARK: - Wire format
 
     func test_wireFormat_isUnchanged() async throws {

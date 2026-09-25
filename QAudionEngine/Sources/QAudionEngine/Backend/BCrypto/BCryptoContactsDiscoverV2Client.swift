@@ -220,6 +220,8 @@ public final class BCryptoContactsDiscoverV2Client {
     ///    read when present and ignored when absent, mistyped or accompanied by
     ///    unknown fields, so old and new servers both decode.
     ///  - An empty list sends nothing.
+    ///  - `chunkSize` is clamped to `1...maxHashesPerRequest`: a smaller value sends
+    ///    smaller requests, a larger one never sends an oversized request.
     public func discoverChunked(
         alg: String,
         hashes: [String],
@@ -279,7 +281,11 @@ public final class BCryptoContactsDiscoverV2Client {
         chunkSize: Int,
         salvagePartial: Bool
     ) async throws -> DiscoverOutcome {
-        let size: Int = max(chunkSize, 1)
+        // At least 1 (a zero or negative size would never advance) and at most
+        // the server's per-request limit (a larger caller value would send an
+        // oversized request).
+        let atLeastOne: Int = max(chunkSize, 1)
+        let size: Int = min(atLeastOne, BCryptoContactsDiscoverV2Client.maxHashesPerRequest)
         var entries: [DiscoveredEntry] = []
         var processedTotal: Int = 0
         var requestCount: Int = 0
