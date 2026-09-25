@@ -33,9 +33,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     public var log: ((String) -> Void)?
     /// Fired when the user answers. Returns whether the app ACCEPTED the answer:
     /// `false` = it refused a dead / placeholder call (W-GHOSTCALL, incident
-    /// e3acecd7), in which case the provider skips the audio-session activation
-    /// that normally follows, because there is no call to activate it for. A nil
-    /// handler counts as accepted (the pre-existing behaviour).
+    /// e3acecd7), in which case the provider fails the native answer action and
+    /// skips the audio-session activation that normally follows, because there is
+    /// no call to activate it for. A nil handler counts as accepted (the
+    /// pre-existing behaviour).
     public var onAnswerCall: ((UUID) async -> Bool)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
@@ -665,14 +666,18 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID.uuidString.prefix(8))…")
         Task {
             let accepted: Bool = (await onAnswerCall?(action.callUUID)) ?? true
-            action.fulfill()
-            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
             // W-GHOSTCALL — the app refused this answer (dead / placeholder call,
-            // e3acecd7): no call exists, so do not activate the audio session for it.
+            // e3acecd7): no call exists, so the action FAILS instead of being
+            // fulfilled (a fulfilled answer leaves CallKit believing the stale
+            // call is answered and active, and able to put a live call on hold),
+            // and the audio session is not activated for it.
             guard accepted else {
+                action.fail()
                 log?("callkit answer refused=1 path=native")
                 return
             }
+            action.fulfill()
+            print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,
