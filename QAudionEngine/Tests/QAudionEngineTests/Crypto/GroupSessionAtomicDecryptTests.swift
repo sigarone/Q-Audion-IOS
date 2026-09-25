@@ -16,6 +16,23 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
     private let groupId = Data([0xDE, 0xAD, 0xBE, 0xEF])
     private let nowMs: Int64 = 1_700_000_000_000
 
+    /// Shape of the catalogue's base scenario (see `makeAttempt`): Bob has
+    /// received idx 0 and idx 4, so the next expected index is 5 and idx 1, 2
+    /// and 3 sit in the skipped-key cache. The indices of the skip-ahead cases
+    /// are derived from this shape and from the real limits in
+    /// `GroupSenderKey`, and each one is checked by `assertSkipIdx`, so a
+    /// change of a limit cannot quietly turn a case into a duplicate of
+    /// another one.
+    private let baseExpectedIdx: UInt64 = 5
+    private let baseCachedCount: Int = 3
+
+    /// Start of the error message of a frame that reached the AEAD check.
+    private let aeadFailurePrefix: String = "AEAD decrypt failed"
+    /// Start of the error message of a frame rejected at the nonce check.
+    private let nonceFailurePrefix: String = "derived-nonce vs wire-nonce mismatch"
+    /// Start of the error message of a frame rejected by the skip window.
+    private let windowFailurePrefix: String = "skip-ahead"
+
     // MARK: - Fixtures
 
     /// Alice sends, Bob receives. Bob holds Alice's chain installed at idx 0.
@@ -32,6 +49,10 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
         let wire: Data
         let senderId: String
         let nowMs: Int64
+        /// When set, the failure must be a `SessionError.ratchet` whose
+        /// message starts with this text (used for the forged frames, to prove
+        /// they were rejected at the intended stage and not earlier).
+        var reasonPrefix: String? = nil
     }
 
     private enum FailureKind: CaseIterable {
@@ -167,16 +188,79 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
     }
 
     /// A frame for Alice's chain at `chainIdx` whose ciphertext and tag are
-    /// filler bytes (never a valid AEAD output).
-    private func forgedWire(chainIdx: UInt64, nonce: Data) throws -> Data {
+    /// filler bytes (never a valid AEAD output). It carries the fixture's own
+    /// group epoch, so it passes the group, epoch and sender checks and is
+    /// only rejected further down (skip window, nonce check or AEAD tag).
+    private func forgedWire(_ pair: Pair, chainIdx: UInt64, nonce: Data) throws -> Data {
         let junk = Data(repeating: 0xEE, count: 32)
+        let epoch: UInt32 = pair.bobState.groupEpoch
         return try GroupSenderKey.packGroupWire(
             groupIdBytes: groupId,
-            groupEpoch: 1,
+            groupEpoch: epoch,
             senderId: "alice",
             chainIdx: chainIdx,
             nonce: nonce,
             ciphertextWithTag: junk)
+    }
+
+    /// The message of the `SessionError.ratchet` thrown when Bob decrypts
+    /// `wire` (from Alice), or a marker text when the call does not throw
+    /// that error.
+    private func ratchetFailure(_ pair: Pair, _ wire: Data) -> String {
+        do {
+            _ = try deliver(pair, wire)
+            return "accepted"
+        } catch GroupSession.SessionError.ratchet(let message) {
+            return message
+        } catch {
+            return "other error"
+        }
+    }
+
+    /// A forged frame must be rejected, must be rejected for `reasonPrefix`
+    /// (so it really got as far as the intended check), and must leave the
+    /// receive state byte-identical to `before`.
+    private func assertForgedRejected(
+        _ pair: Pair, wire: Data, reasonPrefix: String, before: Data, label: String
+    ) {
+        let out: Data? = pair.bob.decryptFromGroup(
+            state: pair.bobState, senderId: "alice", wire: wire, nowMs: nowMs)
+        XCTAssertNil(out, label)
+        XCTAssertEqual(snapshot(pair.bobState), before, label)
+
+        let reason: String = ratchetFailure(pair, wire)
+        let reasonLabel: String = "\(label): rejected with '\(reason)'"
+        XCTAssertTrue(reason.hasPrefix(reasonPrefix), reasonLabel)
+        XCTAssertEqual(snapshot(pair.bobState), before, label)
+    }
+
+    /// Smallest chain index for which a skip-ahead from the base scenario
+    /// leaves more than `skippedKeysCacheMax` keys in the cache, i.e. the
+    /// first index where the eviction step has something to drop.
+    private func firstCacheOverflowIdx() -> UInt64 {
+        let cap: UInt64 = UInt64(GroupSenderKey.skippedKeysCacheMax)
+        let cached: UInt64 = UInt64(baseCachedCount)
+        return baseExpectedIdx + cap - cached + 1
+    }
+
+    /// Precondition of a skip-ahead case: `idx` must be reachable from the
+    /// base scenario inside the skip window and, depending on
+    /// `overflowsCache`, must (or must not) push the skipped-key cache past
+    /// its cap. Fails loudly when a limit change breaks that.
+    private func assertSkipIdx(_ idx: UInt64, overflowsCache: Bool, _ label: String) {
+        guard idx >= baseExpectedIdx else {
+            let message: String = "index \(idx) is below the next expected index: \(label)"
+            XCTFail(message)
+            return
+        }
+        let skipCount: UInt64 = idx - baseExpectedIdx
+        XCTAssertLessThanOrEqual(skipCount, GroupSenderKey.maxSkipAhead, label)
+        let firstOverflow: UInt64 = firstCacheOverflowIdx()
+        if overflowsCache {
+            XCTAssertGreaterThanOrEqual(idx, firstOverflow, label)
+        } else {
+            XCTAssertLessThan(idx, firstOverflow, label)
+        }
     }
 
     // MARK: - Failure catalogue
@@ -199,22 +283,31 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
             let w = try flipCiphertext(wires[7])
             return Attempt(wire: w, senderId: "alice", nowMs: nowMs)
         case .junkTagHighIndex:
-            let nonce: Data = nonceAt(ck0: pair.ck0, index: 60)
-            let w = try forgedWire(chainIdx: 60, nonce: nonce)
-            return Attempt(wire: w, senderId: "alice", nowMs: nowMs)
+            // Inside the skip window and below the cache overflow point.
+            let highIdx: UInt64 = 60
+            assertSkipIdx(highIdx, overflowsCache: false, "junkTagHighIndex")
+            let nonce: Data = nonceAt(ck0: pair.ck0, index: Int(highIdx))
+            let w = try forgedWire(pair, chainIdx: highIdx, nonce: nonce)
+            return Attempt(wire: w, senderId: "alice", nowMs: nowMs, reasonPrefix: aeadFailurePrefix)
         case .junkNonceHighIndex:
-            let w = try forgedWire(chainIdx: 60, nonce: wrongNonce)
-            return Attempt(wire: w, senderId: "alice", nowMs: nowMs)
+            let highIdx: UInt64 = 60
+            assertSkipIdx(highIdx, overflowsCache: false, "junkNonceHighIndex")
+            let w = try forgedWire(pair, chainIdx: highIdx, nonce: wrongNonce)
+            return Attempt(wire: w, senderId: "alice", nowMs: nowMs, reasonPrefix: nonceFailurePrefix)
         case .jumpBeyondWindow:
-            let far: UInt64 = GroupSenderKey.maxSkipAhead + 6
-            let w = try forgedWire(chainIdx: far, nonce: wrongNonce)
-            return Attempt(wire: w, senderId: "alice", nowMs: nowMs)
+            // One past the last index the skip window still allows.
+            let far: UInt64 = baseExpectedIdx + GroupSenderKey.maxSkipAhead + 1
+            let w = try forgedWire(pair, chainIdx: far, nonce: wrongNonce)
+            return Attempt(wire: w, senderId: "alice", nowMs: nowMs, reasonPrefix: windowFailurePrefix)
         case .jumpBeyondCacheCap:
-            // Inside the skip window but far past the cache cap, so the
-            // eviction step would have to run on the scratch copy.
-            let nonce: Data = nonceAt(ck0: pair.ck0, index: 400)
-            let w = try forgedWire(chainIdx: 400, nonce: nonce)
-            return Attempt(wire: w, senderId: "alice", nowMs: nowMs)
+            // Inside the skip window but well past the point where the
+            // skipped-key cache overflows, so the eviction step would have to
+            // run on the scratch copy.
+            let overflowIdx: UInt64 = firstCacheOverflowIdx() + 100
+            assertSkipIdx(overflowIdx, overflowsCache: true, "jumpBeyondCacheCap")
+            let nonce: Data = nonceAt(ck0: pair.ck0, index: Int(overflowIdx))
+            let w = try forgedWire(pair, chainIdx: overflowIdx, nonce: nonce)
+            return Attempt(wire: w, senderId: "alice", nowMs: nowMs, reasonPrefix: aeadFailurePrefix)
         case .badTagAfterEntriesExpired:
             // By this time the cached entries 1, 2, 3 are past their TTL.
             let later: Int64 = nowMs + ttl + 1
@@ -261,21 +354,29 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
         let wires = try encryptFrames(pair, count: 4)
         let before = snapshot(pair.bobState)
 
-        // Correct derived nonce for idx 50, filler ciphertext + tag: gets as
-        // far as the AEAD check.
-        let goodNonce: Data = nonceAt(ck0: pair.ck0, index: 50)
-        let forgedAead = try forgedWire(chainIdx: 50, nonce: goodNonce)
-        let out1: Data? = pair.bob.decryptFromGroup(
-            state: pair.bobState, senderId: "alice", wire: forgedAead, nowMs: nowMs)
-        XCTAssertNil(out1)
-        XCTAssertEqual(snapshot(pair.bobState), before)
+        // This index has to stay inside the skip window and below the cache
+        // cap (nothing has been received yet, so the skip starts at idx 0),
+        // otherwise the case would exercise the window or the eviction
+        // instead of a plain skip-ahead.
+        let highIdx: UInt64 = 50
+        XCTAssertLessThanOrEqual(highIdx, GroupSenderKey.maxSkipAhead, "high index vs skip window")
+        let cap: UInt64 = UInt64(GroupSenderKey.skippedKeysCacheMax)
+        XCTAssertLessThan(highIdx, cap, "high index vs cache cap")
+
+        // Correct derived nonce for the index, filler ciphertext + tag: gets
+        // as far as the AEAD check.
+        let goodNonce: Data = nonceAt(ck0: pair.ck0, index: Int(highIdx))
+        let forgedAead = try forgedWire(pair, chainIdx: highIdx, nonce: goodNonce)
+        assertForgedRejected(
+            pair, wire: forgedAead, reasonPrefix: aeadFailurePrefix,
+            before: before, label: "forged tag, high index")
 
         // Same index with a wrong nonce: rejected at the nonce check.
-        let forgedNonce = try forgedWire(chainIdx: 50, nonce: Data(repeating: 0x42, count: 12))
-        let out2: Data? = pair.bob.decryptFromGroup(
-            state: pair.bobState, senderId: "alice", wire: forgedNonce, nowMs: nowMs)
-        XCTAssertNil(out2)
-        XCTAssertEqual(snapshot(pair.bobState), before)
+        let wrongNonce = Data(repeating: 0x42, count: 12)
+        let forgedNonce = try forgedWire(pair, chainIdx: highIdx, nonce: wrongNonce)
+        assertForgedRejected(
+            pair, wire: forgedNonce, reasonPrefix: nonceFailurePrefix,
+            before: before, label: "forged nonce, high index")
 
         // The genuine frames were not affected.
         var i: Int = 0
@@ -302,7 +403,8 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
 
             let base = try XCTUnwrap(pair.bobState.recvChain(for: "alice"))
             XCTAssertEqual(base.lastSeenIdx, 4)
-            XCTAssertEqual(base.skipped.count, 3)
+            XCTAssertEqual(base.nextIdx, baseExpectedIdx)
+            XCTAssertEqual(base.skipped.count, baseCachedCount)
             let before = snapshot(pair.bobState)
 
             let attempt = try makeAttempt(kind, pair: pair, wires: wires)
@@ -314,6 +416,13 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
             let label: String = String(describing: kind)
             XCTAssertNil(out, label)
             XCTAssertEqual(snapshot(pair.bobState), before, label)
+
+            if let prefix = attempt.reasonPrefix {
+                let reason: String = ratchetFailure(pair, attempt.wire)
+                let reasonLabel: String = "\(label): rejected with '\(reason)'"
+                XCTAssertTrue(reason.hasPrefix(prefix), reasonLabel)
+                XCTAssertEqual(snapshot(pair.bobState), before, label)
+            }
 
             try assertGenuineFramesStillDecrypt(pair, wires: wires)
         }
@@ -328,20 +437,45 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
         try deliver(pair, wires[4])
         let before = snapshot(pair.bobState)
 
-        let indices: [Int] = [5, 6, 7, 8, 40, 255, 256, 257, 300, 1000]
+        // The indices come from the base scenario and the real limits: the
+        // next expected index and a few short skip-aheads, a mid-range one,
+        // both sides of the point where the skipped-key cache starts to
+        // overflow, and two well past it (still inside the skip window).
+        // `assertSkipIdx` checks every one of them against the limits.
+        let cap: Int = GroupSenderKey.skippedKeysCacheMax
+        let expected: Int = Int(baseExpectedIdx)
+        let overflow: Int = Int(firstCacheOverflowIdx())
+        let midIdx: Int = 40
+        let justBelowOverflow: Int = overflow - 1
+        let justPastOverflow: Int = overflow + 1
+        let pastOverflow: Int = overflow + 41
+        let farPastOverflow: Int = overflow + 3 * cap
+        let expectedPlus1: Int = expected + 1
+        let expectedPlus2: Int = expected + 2
+        let expectedPlus3: Int = expected + 3
+        let indices: [Int] = [
+            expected, expectedPlus1, expectedPlus2, expectedPlus3,
+            midIdx,
+            justBelowOverflow, overflow, justPastOverflow,
+            pastOverflow, farPastOverflow
+        ]
+        let wrongNonce = Data(repeating: 0x42, count: 12)
         for index in indices {
-            let goodNonce: Data = nonceAt(ck0: pair.ck0, index: index)
-            let withGoodNonce = try forgedWire(chainIdx: UInt64(index), nonce: goodNonce)
-            let out1: Data? = pair.bob.decryptFromGroup(
-                state: pair.bobState, senderId: "alice", wire: withGoodNonce, nowMs: nowMs)
-            XCTAssertNil(out1, "junk tag, index \(index)")
-            XCTAssertEqual(snapshot(pair.bobState), before, "junk tag, index \(index)")
+            let idx: UInt64 = UInt64(index)
+            let overflows: Bool = index >= overflow
+            let idxLabel: String = "junk index \(index)"
+            assertSkipIdx(idx, overflowsCache: overflows, idxLabel)
 
-            let withBadNonce = try forgedWire(chainIdx: UInt64(index), nonce: Data(repeating: 0x42, count: 12))
-            let out2: Data? = pair.bob.decryptFromGroup(
-                state: pair.bobState, senderId: "alice", wire: withBadNonce, nowMs: nowMs)
-            XCTAssertNil(out2, "junk nonce, index \(index)")
-            XCTAssertEqual(snapshot(pair.bobState), before, "junk nonce, index \(index)")
+            let goodNonce: Data = nonceAt(ck0: pair.ck0, index: index)
+            let withGoodNonce = try forgedWire(pair, chainIdx: idx, nonce: goodNonce)
+            assertForgedRejected(
+                pair, wire: withGoodNonce, reasonPrefix: aeadFailurePrefix,
+                before: before, label: "junk tag, index \(index)")
+
+            let withBadNonce = try forgedWire(pair, chainIdx: idx, nonce: wrongNonce)
+            assertForgedRejected(
+                pair, wire: withBadNonce, reasonPrefix: nonceFailurePrefix,
+                before: before, label: "junk nonce, index \(index)")
         }
 
         try assertGenuineFramesStillDecrypt(pair, wires: wires)
@@ -398,25 +532,43 @@ final class GroupSessionAtomicDecryptTests: XCTestCase {
     /// `skippedKeysCacheMax` entries and drops the oldest ones.
     func testValidSkipAheadBeyondCacheCapEvictsOldestEntries() throws {
         let pair = try makePair()
-        let wires = try encryptFrames(pair, count: 301)
 
-        let pt = try deliver(pair, wires[300])
-        XCTAssertEqual(pt, payload(300))
+        // Nothing has been received yet, so jumping to idx `target` skips
+        // idx 0..<target: exactly `evictedCount` more keys than the cache
+        // holds, and the oldest `evictedCount` of them are dropped. The jump
+        // has to fit the skip window, or it would be rejected instead.
+        let cap: Int = GroupSenderKey.skippedKeysCacheMax
+        let evictedCount: Int = 44
+        let target: Int = cap + evictedCount
+        XCTAssertGreaterThan(evictedCount, 0)
+        XCTAssertLessThanOrEqual(UInt64(target), GroupSenderKey.maxSkipAhead, "jump vs skip window")
+        let wires = try encryptFrames(pair, count: target + 1)
 
+        let pt = try deliver(pair, wires[target])
+        XCTAssertEqual(pt, payload(target))
+
+        let expectedLast: UInt64? = UInt64(target)
+        let expectedNext: UInt64 = UInt64(target + 1)
+        let expectedOldest: UInt64? = UInt64(evictedCount)
+        let expectedNewest: UInt64? = UInt64(target - 1)
         let recv = try XCTUnwrap(pair.bobState.recvChain(for: "alice"))
-        XCTAssertEqual(recv.lastSeenIdx, 300)
-        XCTAssertEqual(recv.nextIdx, 301)
-        XCTAssertEqual(recv.skipped.count, GroupSenderKey.skippedKeysCacheMax)
+        XCTAssertEqual(recv.lastSeenIdx, expectedLast)
+        XCTAssertEqual(recv.nextIdx, expectedNext)
+        XCTAssertEqual(recv.skipped.count, cap)
         let firstIdx: UInt64? = recv.skipped.first?.0
         let lastIdx: UInt64? = recv.skipped.last?.0
-        XCTAssertEqual(firstIdx, 44)
-        XCTAssertEqual(lastIdx, 299)
-        XCTAssertEqual(recv.ck, chainKey(pair.ck0, at: 301))
+        XCTAssertEqual(firstIdx, expectedOldest)
+        XCTAssertEqual(lastIdx, expectedNewest)
+        XCTAssertEqual(recv.ck, chainKey(pair.ck0, at: target + 1))
 
-        // An entry that survived eviction is still deliverable late.
-        let late = try deliver(pair, wires[100])
-        XCTAssertEqual(late, payload(100))
-        XCTAssertEqual(recv.skipped.count, GroupSenderKey.skippedKeysCacheMax - 1)
+        // The newest evicted entry is gone for good ...
+        XCTAssertThrowsError(try deliver(pair, wires[evictedCount - 1]))
+        XCTAssertEqual(recv.skipped.count, cap)
+
+        // ... and the oldest surviving entry is still deliverable late.
+        let late = try deliver(pair, wires[evictedCount])
+        XCTAssertEqual(late, payload(evictedCount))
+        XCTAssertEqual(recv.skipped.count, cap - 1)
     }
 
     /// A committed skip-ahead still expires stale cache entries, as it did
