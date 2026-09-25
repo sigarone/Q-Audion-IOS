@@ -179,8 +179,8 @@ struct CrossPlatformBetaScreen: View {
                 .foregroundStyle(scheme.onSurface)
             diagRow(label: "v3 outbound (force)", value: ratchetV3Enabled ? "ON" : "OFF")
             diagRow(label: "attach_announce VN", value: attachAnnounceEnabled ? "ON" : "OFF")
-            diagRow(label: "Biometric vault", value: BiometricKeyVaultGate.shared.isBiometryAvailable ? "available" : "n/a")
-            diagRow(label: "Biometry type", value: BiometricKeyVaultGate.shared.biometryType)
+            diagRow(label: "Keychain auth", value: KeychainProtectionPolicy.shared.isAuthenticationAvailable ? "available" : "n/a")
+            diagRow(label: "Biometry type", value: KeychainProtectionPolicy.shared.biometryType)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
