@@ -78,6 +78,18 @@ jobs:
       # (setup-go@v5, upload-artifact@v7 ...) ship native Node 24 builds,
       # this env var can be removed.
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      # WebRTC key-material logging gate (scripts/ci/assert-no-key-logging.sh, step
+      # "Assert no WebRTC key-material logging in the IPA" below).
+      #   '1' = ENFORCE (current): the step fails the job, BEFORE the TestFlight upload, if
+      #         any Mach-O in the app still contains the upstream WebRTC key-dump log strings,
+      #         or if nothing could be scanned. Flipped on in the same PR that pinned the
+      #         rebuilt WebRTC.xcframework / LiveKitWebRTC.xcframework
+      #         (sigarone/webrtc-aes256-build, no-key-log.patch) in QAudionEngine/Package.swift
+      #         + QAudionApp/project.yml.
+      #   '0' = REPORT-ONLY: same scan, prints what it found, never fails the step or the
+      #         release. Use it (one-line change) only to roll back to binaries that still
+      #         carry the strings.
+      WEBRTC_KEYLOG_GATE: '1'
 
     steps:
       # ----------------------------------------------------------
@@ -910,6 +922,43 @@ jobs:
           rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
           zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload
           ls -lh "$GITHUB_WORKSPACE/$IPA_PATH"
+
+      # ----------------------------------------------------------
+      # 8b) WebRTC key-material logging gate on the SHIPPED IPA.
+      #     Upstream webrtc-sdk/webrtc prints the frame-cryptor secret / salt and
+      #     the DERIVED AES key at RTC_LOG(LS_INFO) (derived_key / "slat << " /
+      #     raw_key); with RTCSetMinDebugLogLevel(.info) those lines reach stderr
+      #     and the uploaded live-log blobs. sigarone/webrtc-aes256-build's
+      #     no-key-log.patch removes them at the source; this step proves it on
+      #     the artifact that is about to be uploaded (the IPA re-zipped by the
+      #     previous step): every Mach-O in the app bundle is scanned (app
+      #     binary, Frameworks/*, PlugIns/*), counts and file names are printed.
+      #     Mode: env WEBRTC_KEYLOG_GATE at the top of this job. Report-only ('0')
+      #     by default, so it can never fail a release; '1' enforces.
+      # ----------------------------------------------------------
+      - name: Assert no WebRTC key-material logging in the IPA
+        # Report-only mode must not be able to break the release even through an
+        # unrelated failure (unzip, mktemp, a missing script in an old tag), so the
+        # step is also continue-on-error unless the gate is enforcing.
+        continue-on-error: ${{ env.WEBRTC_KEYLOG_GATE != '1' }}
+        run: |
+          set -e
+          echo "WEBRTC_KEYLOG_GATE=${WEBRTC_KEYLOG_GATE:-0} (1 = enforce, anything else = report-only)"
+          if [ ! -f scripts/ci/assert-no-key-logging.sh ]; then
+            echo "::warning::scripts/ci/assert-no-key-logging.sh is not in this checkout (old tag?) - key-logging gate skipped"
+            if [ "${WEBRTC_KEYLOG_GATE:-0}" = "1" ]; then exit 1; fi
+            exit 0
+          fi
+          IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "::warning::key-logging gate: no IPA found under QAudionApp/build/ios/ipa - nothing scanned"
+            if [ "${WEBRTC_KEYLOG_GATE:-0}" = "1" ]; then exit 1; fi
+            exit 0
+          fi
+          SCAN=$(mktemp -d)
+          unzip -q "$GITHUB_WORKSPACE/$IPA_PATH" -d "$SCAN"
+          sh scripts/ci/assert-no-key-logging.sh "$SCAN/Payload/QAudionApp.app"
+          rm -rf "$SCAN"
 
       # ----------------------------------------------------------
       # 9) Upload to TestFlight Internal group "Q-Audion testers".

@@ -221,7 +221,19 @@ let package = Package(
         // is the broken tag above, left as-is/unused rather than reused).
         // Group-call native-PLI parity now shipped: this pin closes the gap
         // the direct-call WebRTC binaryTarget below already had.
-        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw6"),
+        // 2026-09-25 (raw6 -> raw7): SECURITY rebuild, no source change. Upstream WebRTC
+        // (api/crypto/frame_crypto_transformer.cc) prints the frame-cryptor secret, salt and
+        // DERIVED AES key at RTC_LOG(LS_INFO); sigarone/webrtc-aes256-build's
+        // no-key-log.patch removes both statements. raw7 = raw6 with the
+        // webrtc-xcframework pin moved to 144.7559.10-aes256-livekit-native-pli-3 (both
+        // Package.swift and Package@swift-6.2.swift), whose LiveKitWebRTC.xcframework is the
+        // no-key-log rebuild (release webrtc-ios-aes256-livekit-m144-native-pli-nokeylog,
+        // sha256 c03e62141d7c7989a250317e26d4c3339eb62c34429b808b77383915a76a3dfc, same WebRTC
+        // commit f47af7bc9658 and same patches as -native-pli-2). Chain (lockstep, in this
+        // order): webrtc-aes256-build release -> sigarone/webrtc-xcframework
+        // 144.7559.10-aes256-livekit-native-pli-3 -> sigarone/client-sdk-swift 2.16.0-aes256-raw7 ->
+        // here + QAudionApp/project.yml exactVersion. Rollback: raw6 (untouched tag).
+        .package(url: "https://github.com/sigarone/client-sdk-swift.git", exact: "2.16.0-aes256-raw7"),
         // W610 (REMOVED 2026-09-14): embedded Tor support for iOS has been
         // removed entirely, on every platform, not just deprioritized here.
         // Product decision: this app's censorship-bypass need is bypassing
@@ -336,10 +348,21 @@ let package = Package(
         // Checksum = SHA256(WebRTC.xcframework.zip), independently verified
         // against the GitHub release asset digest before this edit, not
         // just copied from the build log.
+        //
+        // 2026-09-25: SECURITY rebuild (release ...-native-pli-nokeylog, built by
+        // sigarone/webrtc-aes256-build d22f11c, run 36064578582). Same WebRTC source
+        // commit (webrtc-sdk/webrtc df1011beabae = m144_release tip when the previous
+        // binary was built), same aes256 + native-pli patches, same Xcode 16.4.0 /
+        // macos-15-arm64 image, plus no-key-log.patch: the upstream RTC_LOG(LS_INFO)
+        // statements that printed the frame-cryptor secret / salt / DERIVED AES key are
+        // gone (the build and scripts/ci/assert-no-key-logging.sh both scan every
+        // Mach-O slice for derived_key / "slat << " / raw_key: 0 hits). Rollback: the
+        // previous release webrtc-ios-aes256-m144-native-pli (sha256 dbaefe2aff6eabff...
+        // 95701b9) is untouched.
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144-native-pli/WebRTC.xcframework.zip",
-            checksum: "dbaefe2aff6eabff29320bea00c1f85b6cab774457721bc8c509e896f95701b9"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144-native-pli-nokeylog/WebRTC.xcframework.zip",
+            checksum: "7af8d47f34781d5104720faf8588162a13fe1bfabf01335fa619711c694a68cb"
         ),
         .target(
             name: "QAudionEngine",
