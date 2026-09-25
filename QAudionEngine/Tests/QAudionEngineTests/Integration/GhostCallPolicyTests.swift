@@ -301,4 +301,69 @@ final class GhostCallPolicyTests: XCTestCase {
         XCTAssertFalse(recordsMissed(cancel: callId, active: callId, answered: true, ringVisible: true))
         XCTAssertFalse(recordsMissed(cancel: callId, active: callId, answered: true, ringVisible: false))
     }
+
+    // MARK: - shouldIgnoreEndForStaleUuid (Reject on a stale ring during a live call)
+
+    private func ignoresEnd(
+        uuid: UUID, active: UUID?, recentlyEnded: Bool = false, placeholder: Bool = false
+    ) -> Bool {
+        Policy.shouldIgnoreEndForStaleUuid(
+            uuid: uuid,
+            activeCallKitId: active,
+            isRecentlyEnded: recentlyEnded,
+            isGhostPlaceholder: placeholder)
+    }
+
+    /// The finding: live call B, stale ring of the ended call A, Reject on A must
+    /// NOT hang up B.
+    func test_endStale_recentlyEndedUuid_whileOtherCallLive_isIgnored() {
+        XCTAssertTrue(ignoresEnd(uuid: UUID(), active: UUID(), recentlyEnded: true))
+    }
+
+    func test_endStale_ghostPlaceholder_whileOtherCallLive_isIgnored() {
+        XCTAssertTrue(ignoresEnd(uuid: UUID(), active: UUID(), placeholder: true))
+    }
+
+    /// The normal end: the uuid CallKit names IS the live call. Never ignored,
+    /// even if a ledger also (wrongly) knows it — a legitimate end must not be
+    /// swallowed by this rule.
+    func test_endStale_liveCallsOwnUuid_isNeverIgnored() {
+        let callId = UUID()
+        XCTAssertFalse(ignoresEnd(uuid: callId, active: callId))
+        XCTAssertFalse(ignoresEnd(uuid: callId, active: callId, recentlyEnded: true))
+        XCTAssertFalse(ignoresEnd(uuid: callId, active: callId, placeholder: true))
+    }
+
+    /// No call held: nothing live to protect, the end runs as it always did.
+    func test_endStale_noActiveCall_isNeverIgnored() {
+        XCTAssertFalse(ignoresEnd(uuid: UUID(), active: nil))
+        XCTAssertFalse(ignoresEnd(uuid: UUID(), active: nil, recentlyEnded: true))
+        XCTAssertFalse(ignoresEnd(uuid: UUID(), active: nil, placeholder: true))
+    }
+
+    /// Pins the narrowness: an uuid NO ledger knows is not ignored even while
+    /// another call is live (the rule only trusts what the ledgers know is dead).
+    func test_endStale_unknownUuid_whileOtherCallLive_isNotIgnored() {
+        XCTAssertFalse(ignoresEnd(uuid: UUID(), active: UUID()))
+    }
+
+    /// The whole input space: ignored iff a DIFFERENT call is active AND a ledger
+    /// knows the uuid is dead.
+    func test_endStale_exhaustiveTruthTable() {
+        let mine = UUID()
+        let other = UUID()
+        for bits in 0..<8 {
+            let hasActive = bits & 1 != 0
+            let activeIsOther = bits & 2 != 0
+            let ledgerHit = bits & 4 != 0
+            let active: UUID? = hasActive ? (activeIsOther ? other : mine) : nil
+            let expected: Bool = hasActive && activeIsOther && ledgerHit
+            XCTAssertEqual(
+                ignoresEnd(uuid: mine, active: active, recentlyEnded: ledgerHit),
+                expected, "recentlyEnded truth-table row \(bits)")
+            XCTAssertEqual(
+                ignoresEnd(uuid: mine, active: active, placeholder: ledgerHit),
+                expected, "placeholder truth-table row \(bits)")
+        }
+    }
 }
