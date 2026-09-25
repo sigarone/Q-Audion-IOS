@@ -369,6 +369,10 @@ public final class GroupSession {
     /// Decrypt a wire blob from `senderId`. Returns nil on any auth
     /// failure / replay / unknown sender / wire malformation. Production
     /// callers should prefer this over `decryptFromGroupOrThrow`.
+    ///
+    /// A failed decrypt leaves the receive chain exactly as it was (chain
+    /// key, last-seen / next index, skipped-key cache); the chain is only
+    /// updated once the frame's AEAD tag has verified.
     public func decryptFromGroup(state: GroupState, senderId: String, wire: Data, nowMs: Int64? = nil) -> Data? {
         do { return try decryptFromGroupOrThrow(state: state, senderId: senderId, wire: wire, nowMs: nowMs) } catch { return nil }
     }
@@ -394,50 +398,61 @@ public final class GroupSession {
         let lastSeen = recv.lastSeenIdx
         let now = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
 
-        // Late delivery → skipped-cache lookup.
+        // Late delivery → skipped-cache lookup. The cache entry is removed
+        // only after its AEAD tag verifies, so a failure leaves the cache
+        // (contents and order) untouched.
         if let ls = lastSeen, incoming <= ls {
             guard let pos = recv.skipped.firstIndex(where: { $0.0 == incoming }) else {
                 throw SessionError.ratchet("replay or unknown message at idx=\(incoming) (last_seen=\(ls))")
             }
-            let entry = recv.skipped.remove(at: pos).1
+            let entry: GroupSkippedKey = recv.skipped[pos].1
             guard entry.nonce == parsed.nonce else {
-                recv.skipped.append((incoming, entry))
                 throw SessionError.ratchet("skipped-cache nonce mismatch at idx=\(incoming)")
             }
             do {
                 let pt = try GroupSenderKey.aesGcmDecrypt(
                     key: entry.key, nonce: entry.nonce, ciphertextWithTag: ctWithTag, aad: aad)
+                _ = recv.skipped.remove(at: pos)
                 persist(state)
                 return pt
             } catch {
-                recv.skipped.append((incoming, entry))
                 throw SessionError.ratchet("skipped-cache AEAD failed at idx=\(incoming)")
             }
         }
 
         // Skip-ahead → derive + cache the missing keys.
+        //
+        // All chain stepping below happens on a scratch copy (`work`); `recv`
+        // is only updated in the commit block at the end, after the AEAD tag
+        // has verified. Any failure before that leaves the live receive
+        // chain exactly as it was.
+        let work = GroupSenderChain(
+            ck: recv.ck,
+            nextIdx: recv.nextIdx,
+            lastSeenIdx: recv.lastSeenIdx,
+            skipped: recv.skipped)
         let expected: UInt64 = lastSeen.map { $0 &+ 1 } ?? 0
         if incoming > expected {
             let skipCount = incoming - expected
             guard skipCount <= GroupSenderKey.maxSkipAhead else {
                 throw SessionError.ratchet("skip-ahead \(skipCount) exceeds MAX_SKIP_AHEAD=\(GroupSenderKey.maxSkipAhead)")
             }
-            var cursor = recv.ck
+            var cursor = work.ck
             let expiresAt = now + GroupSenderKey.skippedKeysTtlMs
             var j = expected
             while j < incoming {
                 let (mk, nc) = GroupSenderKey.deriveMsgKeys(ck: cursor)
-                recv.skipped.append((j, GroupSkippedKey(key: mk, nonce: nc, expiresAtMs: expiresAt)))
+                work.skipped.append((j, GroupSkippedKey(key: mk, nonce: nc, expiresAtMs: expiresAt)))
                 cursor = GroupSenderKey.stepChain(ck: cursor)
                 j &+= 1
             }
-            recv.ck = cursor
-            evictExpired(recv: recv, nowMs: now)
-            evictLruOverflow(recv: recv)
+            work.ck = cursor
+            evictExpired(recv: work, nowMs: now)
+            evictLruOverflow(recv: work)
         }
 
         // In-order or just-caught-up.
-        let (msgKey, derivedNonce) = GroupSenderKey.deriveMsgKeys(ck: recv.ck)
+        let (msgKey, derivedNonce) = GroupSenderKey.deriveMsgKeys(ck: work.ck)
         guard derivedNonce == parsed.nonce else {
             throw SessionError.ratchet("derived-nonce vs wire-nonce mismatch at idx=\(incoming)")
         }
@@ -448,7 +463,10 @@ public final class GroupSession {
         } catch {
             throw SessionError.ratchet("AEAD decrypt failed at idx=\(incoming)")
         }
-        recv.ck = GroupSenderKey.stepChain(ck: recv.ck)
+
+        // Commit — reached only with a verified tag.
+        recv.skipped = work.skipped
+        recv.ck = GroupSenderKey.stepChain(ck: work.ck)
         recv.lastSeenIdx = incoming
         recv.nextIdx = incoming &+ 1
         persist(state)
