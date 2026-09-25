@@ -6,7 +6,7 @@ Usage:
     python convert_to_coreml.py <input.onnx> <output.mlpackage>
 
 Example:
-    python convert_to_coreml.py aasist_small_int8.onnx deepfake_lcnn.mlpackage
+    python convert_to_coreml.py aasist_small_int8.onnx deepfake_aasist.mlpackage
 
 Requirements:
     pip install coremltools onnx
@@ -39,7 +39,7 @@ def convert_onnx_to_coreml(onnx_path: str, output_path: str):
 
     # Add metadata
     mlmodel.author = "Q-Audion / BCrypto"
-    mlmodel.short_description = "LCNN deepfake voice detection model"
+    mlmodel.short_description = "Deepfake voice detection model"
     mlmodel.version = "1.0.0"
 
     print(f"Saving CoreML model: {output_path}")

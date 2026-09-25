@@ -1974,7 +1974,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
 
         case .audioData, .voiceAnalysis, .dcSdpOffer, .dcSdpAnswer, .dcIce, .callHangup:
-            // TODO(desktop-interop): route callHangup to hangup handler
+            // .callHangup (QUAD 0x08) is decoded on purpose and then dropped
+            // here: call teardown is carried by the WS `call_hangup` path, the
+            // id-gated opaque `HANGUP:` piggy-back and the in-band 0x03
+            // control frame, and no client sends 0x08. The parser stays
+            // because WIRE_SPEC requires the codec to keep decoding it.
+            // If it is ever wired to a teardown, it MUST first gate on
+            // sender == call peer and callId == the active call.
             break
         }
     }
