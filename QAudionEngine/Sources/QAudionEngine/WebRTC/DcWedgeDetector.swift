@@ -23,11 +23,11 @@ import Foundation
 ///
 /// Rules, thresholds and sample semantics are those of the Android twin
 /// (`DcWedgeDetector.kt`, W-DCWEDGE), which is the specification (CLAUDE.md,
-/// audio-path rule 3); only the `why=` strings differ (see `Reason`), the place where
-/// the caller takes the sample differs (iOS: after the controller's ICE gate, see
-/// `QAudionWebRtcCallController.sendAudioFrameData`; Android: before its ICE check)
-/// and `shouldProbe` is iOS-only (a deliberate deviation from rule 3: Android has no
-/// probe, and it has not been proven on a device yet; the kill switch turns it off,
+/// audio-path rule 3); only the `why=` strings differ (see `Reason`) and the place where
+/// the caller takes the sample (iOS: after the controller's ICE gate, see
+/// `QAudionWebRtcCallController.sendAudioFrameData`; Android: before its ICE check).
+/// The Android twin (New-Q-Audion-Android PR #62) mirrors the probe (`shouldProbe`);
+/// it has not been proven on a device yet (the kill switch turns it off,
 /// as does `probeIntervalMs = 0`). Pure on purpose (no clock, no WebRTC types): the
 /// caller feeds one sample per outbound frame with the time of its choice, so the
 /// whole state machine runs on the CI simulator lane without the WebRTC binary

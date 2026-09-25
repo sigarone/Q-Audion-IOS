@@ -243,7 +243,8 @@ state): `sendAudioFrameData` answered `true` for a frame the back-pressure gate 
 `CallService` counted it as sent on the DataChannel (`dcmux tx dc=5984 ws=16`) and never looked at
 the relay, and the ICE gate reopened the channel the instant ICE was `connected`. Now the pure
 `DcWedgeDetector` (`QAudionEngine/.../WebRTC/DcWedgeDetector.swift`, same enter/exit rules and
-thresholds as Android's twin, plus an iOS-only probe; iOS samples it after the ICE gate, Android
+thresholds as Android's twin, probe included (New-Q-Audion-Android PR #62 mirrors the probe); iOS
+samples it after the ICE gate, Android
 before its own ICE check) watches the send queue on every outbound frame: wedged when
 `bufferedAmount` > 1500 B on every
 sample for 1000 ms OR 15 shed frames in a row; released only after < 500 B for 3000 ms AND a frame
@@ -252,7 +253,7 @@ the WS relay INSTEAD of the DataChannel (a diversion, never a duplication: the r
 anti-replay window would eat a copy but book it as an open failure). The control frames (hangup,
 NACK request, NACK resend) ride the same routing, and for THEM anything that was not queued on the
 channel goes on the relay while the kill switch is on (a control frame the back-pressure gate shed
-used to be lost while `audionack tx=1` was logged: 117 of them in 7727f262). iOS-only addition:
+used to be lost while `audionack tx=1` was logged: 117 of them in 7727f262). Probe:
 while wedged AND drained (< 500 B) one frame per 400 ms still goes on the channel (`shouldProbe`),
 because a hole hits both directions, both phones wedge, and without it nobody would ever write on
 the channel that the other side needs to see to release. `AudioDcSendOutcome` (`queued` / `shed` /
@@ -272,10 +273,9 @@ the log-line token limit, the routing rule), `HeartbeatDeltaTrackerTests`. Verif
 pure-logic files (`DcWedgeDetector`, `HeartbeatDeltaTracker`) were compiled and run, in a Linux
 container; the Apple-framework files (`QAudionPeerConnection`, `QAudionWebRtcCallController`,
 `CallService`, `AppState`) were never compiled by anyone when this was written (no macOS on the
-machine that wrote it) and nothing ran on a device. The probe is a deliberate deviation from audio-path
-rule 3 (Android's twin has none, so Android<->Android stays exposed to the symmetric deadlock it
-breaks) and has never run on a device: prove it with network shaping, or set `probeIntervalMs = 0`
-to drop it (the kill switch turns it off too).
+machine that wrote it) and nothing ran on a device. The probe was added on the iOS side first; the
+Android twin (New-Q-Audion-Android PR #62) mirrors the probe. It has never run on a device: prove it
+with network shaping, or set `probeIntervalMs = 0` to drop it (the kill switch turns it off too).
 
 ## Project snapshot
 
