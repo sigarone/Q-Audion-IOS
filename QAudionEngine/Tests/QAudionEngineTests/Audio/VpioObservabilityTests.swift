@@ -253,6 +253,30 @@ final class VpioObservabilityTests: XCTestCase {
         XCTAssertEqual(Obs.portsList(many)?.split(separator: ",").count, 8)
     }
 
+    /// `LogRedactor.redactStructured` masks any run of 20+ `[A-Za-z0-9+/=_-]` in a telemetry string, and
+    /// `ContinuityMicrophone` (iOS 17+) is exactly 20: it must be shortened, alone or in a list.
+    func testContinuityMicrophoneIsShortenedBelowTheRedactorThreshold() {
+        XCTAssertEqual("ContinuityMicrophone".count, 20)
+        XCTAssertEqual(Obs.portToken("ContinuityMicrophone"), "ContinuityMic")
+        XCTAssertEqual(Obs.portsList(["MicrophoneBuiltIn", "ContinuityMicrophone"]), "MicrophoneBuiltIn,ContinuityMic")
+        XCTAssertEqual(Obs.portToken("MicrophoneBuiltIn"), "MicrophoneBuiltIn", "the other known types ship unchanged")
+        XCTAssertEqual(Obs.portToken("BluetoothHFP"), "BluetoothHFP")
+        XCTAssertNil(Obs.portToken(""))
+    }
+
+    /// Whatever the port type, no single token reaches the redactor's 20-character run.
+    func testNoPortTokenReachesTheRedactorThreshold() {
+        let known = ["MicrophoneBuiltIn", "MicrophoneWired", "BluetoothHFP", "BluetoothA2DP", "BluetoothLE",
+                     "HeadsetMic", "Headphones", "LineIn", "LineOut", "BuiltInSpeaker", "Receiver", "AirPlay",
+                     "HDMI", "USBAudio", "CarAudio", "ContinuityMicrophone", "Virtual", "PCI", "FireWire",
+                     "DisplayPort", "AVB", "Thunderbolt", "Unknown", String(repeating: "x", count: 40)]
+        XCTAssertLessThan(Obs.maxPortTokenLen, 20)
+        for raw in known {
+            XCTAssertLessThan(Obs.portToken(raw)?.count ?? 0, 20, raw)
+        }
+        XCTAssertEqual(Obs.portToken(String(repeating: "x", count: 40))?.count, Obs.maxPortTokenLen)
+    }
+
     func testSysctlStrings() {
         XCTAssertFalse((Obs.sysctlString("hw.machine") ?? "").isEmpty)
         XCTAssertFalse((Obs.sysctlString("kern.osversion") ?? "").isEmpty)
