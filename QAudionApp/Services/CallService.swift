@@ -243,6 +243,12 @@ final class CallService: @unchecked Sendable {
     public private(set) var txFramesWs: Int64 = 0
     public private(set) var rxFramesDc: Int64 = 0
     public private(set) var rxFramesWs: Int64 = 0
+    /// W-DCWEDGE (2026-09-25) — frames the DataChannel back-pressure gate DROPPED
+    /// (`AudioDcSendOutcome.shed`): produced, encrypted, never sent on any leg. They
+    /// used to be counted in `txFramesDc`. Shipped as `tx_gate_drop_d` on the 5 s
+    /// heartbeat and as `drop=` on the `dcmux tx` line. Same tx-queue-only threading
+    /// as `txFramesDc`.
+    public private(set) var txDcDrop: Int64 = 0
 
     /// W-DCMUX — which transport an inbound sealed frame arrived on.
     ///
@@ -298,7 +304,8 @@ final class CallService: @unchecked Sendable {
     // Void (BCryptoWebSocketClient.swift:1058) and exposes no per-send result,
     // so on the WS-relay path this counts frames HANDED to a bound socket, not
     // frames the socket accepted. The DataChannel path has no such gap —
-    // `sendAudioFrameData` returns Bool and is counted only when true. The
+    // `sendAudioFrameData` says whether the frame was queued and is counted only
+    // then (W-DCWEDGE: a frame the back-pressure gate shed is not counted). The
     // difference is visible only while the socket is dead, where Android would
     // read 0 and this reads the offered rate. Closing it needs a return value
     // from the WS client, which is not this change's file.
@@ -850,6 +857,7 @@ final class CallService: @unchecked Sendable {
         snapshot.rxFramesWs = rxFramesWs
         snapshot.txFramesDc = txFramesDc
         snapshot.txFramesWs = txFramesWs
+        snapshot.txGateDrop = txDcDrop
         if let integration = callIntegration {
             snapshot.rxGapLost = integration.rxLossSnapshot().lost
             snapshot.fecRecovered = integration.rxFecStats().recovered
@@ -904,10 +912,18 @@ final class CallService: @unchecked Sendable {
         CaptureLiveDecisions.gateOpen(audioSessionActive: audioSessionActive, peerAnswered: peerAnswered)
     }
     /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
-    /// open; returns true if queued there, false to fall back to the WS relay.
-    /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
-    /// payload is the raw WireRelayFrameCodec envelope (same bytes as the WS path).
-    public var sendAudioOverDataChannel: ((Data) -> Bool)?
+    /// open; `.useRelay` = fall back to the WS relay. Wired by AppState to
+    /// `QAudionWebRtcCallController.sendAudioFrameData`. The payload is the raw
+    /// WireRelayFrameCodec envelope (same bytes as the WS path).
+    ///
+    /// W-DCWEDGE (2026-09-25) — the answer is an `AudioDcSendOutcome`, not a Bool:
+    /// `.shed` is a frame the back-pressure gate DROPPED (it used to read as `true` =
+    /// "sent", which is how call 7727f262 showed `dcmux tx dc=5984` for 21 s of
+    /// silence). A shed AUDIO frame is counted in `txDcDrop`, never in `txFramesDc`, and
+    /// is not sent anywhere; a shed CONTROL frame (hangup, NACK) goes on the relay while
+    /// the kill switch is on (`controlFrameNeedsRelay`); `.useRelay` now also covers a
+    /// wedged DataChannel.
+    public var sendAudioOverDataChannel: ((Data) -> AudioDcSendOutcome)?
     /// W-DCHANGUP (2026-08-25) — an inbound 0x03/HANGUP control frame arrived
     /// on the sealed media leg (DataChannel or WS relay). Parameter is the
     /// UTF-8 reason body. The leg belongs to exactly ONE call by
@@ -978,9 +994,12 @@ final class CallService: @unchecked Sendable {
     ///   `-4` a controller exists but its `PeerConnection` is gone;
     ///   `-1` a PeerConnection exists but no DataChannel was ever created;
     ///   `0…3` the raw `RTCDataChannelState` (0 connecting, 1 open, 2 closing,
-    ///        3 closed) of a channel that exists but is not open.
+    ///        3 closed) of a channel that exists but is not open;
+    ///   `-5` ICE is not carrying (W-DCTXICEGATE), `-7` the channel is open and
+    ///        ICE is carrying but `DcWedgeDetector` says SCTP is not draining
+    ///        (W-DCWEDGE).
     ///
-    /// `sendAudioFrameData` collapses every one of these into the same `false`,
+    /// `sendAudioFrameData` collapses every one of these into the same `.useRelay`,
     /// and they are different bugs: the capability tag is irrelevant for
     /// `-3`/`-2`/`-4`, ICE is the suspect for `-1`/`0`, and `2`/`3` mean a
     /// channel that was alive and died — the case the Android WS-receive
@@ -2468,7 +2487,12 @@ final class CallService: @unchecked Sendable {
         } else {
             sealed = frame
         }
-        let sentOnDc: Bool = sendAudioOverDataChannel?(sealed) ?? false
+        // W-DCWEDGE — a control frame is not audio: one the back-pressure gate SHED went
+        // on no leg at all (it used to be counted as sent, and lost), so it goes on the
+        // relay like one the channel refused (kill switch on; off = dropped as before).
+        let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealed) ?? .useRelay
+        let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
+        let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
         if !sentOnDc {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
@@ -2512,7 +2536,13 @@ final class CallService: @unchecked Sendable {
         } else {
             sealed = frame
         }
-        let sentOnDc: Bool = sendAudioOverDataChannel?(sealed) ?? false
+        // W-DCWEDGE — a request on a wedged (or merely back-pressured) channel used to be
+        // shed and still log `tx=1` (7727f262: 117 requests logged, none delivered). With
+        // the kill switch on, anything that was not queued on the channel goes on the
+        // relay, so `tx=1` is true again (off = dropped as before).
+        let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealed) ?? .useRelay
+        let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
+        let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
         if !sentOnDc {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
@@ -2538,7 +2568,10 @@ final class CallService: @unchecked Sendable {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard nackRateLimiter.tryAcquire(nowMs: nowMs) else { return }
         let cid = getCallId?()
-        let sentOnDc: Bool = sendAudioOverDataChannel?(envelope) ?? false
+        // W-DCWEDGE — same rule as the request: not queued on the channel = on the relay.
+        let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(envelope) ?? .useRelay
+        let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
+        let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
         if !sentOnDc {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
@@ -2618,6 +2651,22 @@ final class CallService: @unchecked Sendable {
         // Verified redactor-safe: short8 caller ids, single-word `why=`
         // tokens, decimal counters — no run of 12+ base64-alphabet
         // characters for RE_RESIDUAL_B64 to catch.
+        RTLog.info("call", line)
+    }
+
+    /// W-DCWEDGE (2026-09-25) — sample the remote kill switch of the wedge diversion.
+    /// `FeatureFlags` is main-actor and the send path is not, so the value lives in the
+    /// engine's lock-guarded `DcWedgeKillSwitch` and is refreshed here once per call
+    /// (from the first encrypted TX frame, see `processAndSendEncryptedFrame`).
+    /// Compiled default ON: an absent key, a flags fetch that never succeeded or a
+    /// non-Bool value all read ON. `ios_dc_wedge_fallback: false` in flags.json restores
+    /// the pre-W-DCWEDGE audio routing from the NEXT call (the detector still runs and logs).
+    @MainActor
+    static func refreshDcWedgeFlag() {
+        let on: Bool = FeatureFlags.bool("ios_dc_wedge_fallback", true)
+        DcWedgeKillSwitch.shared.divertEnabled = on
+        let flag: String = on ? "1" : "0"
+        let line: String = "dcmux wedgesw=" + flag
         RTLog.info("call", line)
     }
 
@@ -3347,6 +3396,7 @@ final class CallService: @unchecked Sendable {
         if resetDcCounters {
             txFramesDc = 0
             txFramesWs = 0
+            txDcDrop = 0
             rxFramesDc = 0
             rxFramesWs = 0
             loggedFirstTxOnDc = false
@@ -3911,6 +3961,8 @@ final class CallService: @unchecked Sendable {
                 let bytes: String = encrypted.count.description
                 let line: String = "[CallService] TX: first frame ENCRYPTED ok (" + bytes + " bytes) — Opus+AEAD pipeline live"
                 print(line)
+                // W-DCWEDGE — once per call: sample the remote kill switch (main actor).
+                Task { @MainActor in CallService.refreshDcWedgeFlag() }
             }
             let txSamples = updateWaveformSamples(from: frameToProcess)
             let cipherSamples = updateCipherSamples(from: encrypted)
@@ -4010,7 +4062,13 @@ final class CallService: @unchecked Sendable {
                 // decodes both the same way. The DataChannel is lower-latency and
                 // keeps media off the server; the WS relay guarantees delivery when
                 // ICE/DTLS cannot form a P2P link.
-                let sentOnDc: Bool = sendAudioOverDataChannel?(sealedFrame) ?? false
+                // W-DCWEDGE — `dcOutcome` says what became of the frame on the channel:
+                // `.queued` (sent), `.shed` (dropped by the back-pressure gate: sent
+                // NOWHERE, and no longer counted as sent) or `.useRelay` (channel not
+                // open / ICE not carrying / wedged: the WS relay carries this frame).
+                // Each frame goes on exactly ONE leg — never both.
+                let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealedFrame) ?? .useRelay
+                let sentOnDc: Bool = !dcOutcome.needsRelay
                 if !sentOnDc {
                     ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
                 }
@@ -4023,7 +4081,12 @@ final class CallService: @unchecked Sendable {
                 // this runs 50 times a second on the audio encode queue and a
                 // trim+lowercase+prefix on every frame is pure allocation
                 // churn on a real-time path for a string almost nobody reads.
-                if sentOnDc {
+                if dcOutcome == .shed {
+                    // W-DCWEDGE — shed, not sent: a drop counter of its own
+                    // (`tx_gate_drop_d`), NOT `txFramesDc` (7727f262: `tx dc=5984`
+                    // counted 21 s of dropped frames as sent on the DataChannel).
+                    txDcDrop &+= 1
+                } else if dcOutcome == .queued {
                     txFramesDc &+= 1
                     if !loggedFirstTxOnDc {
                         loggedFirstTxOnDc = true
@@ -4062,6 +4125,9 @@ final class CallService: @unchecked Sendable {
                         // scratch by reading QAudionWebRtcCallController instead of
                         // reading the log line.
                         case -5: why = "icegate"
+                        // W-DCWEDGE (2026-09-25) — ICE carrying, channel `.open`, but
+                        // `DcWedgeDetector` says SCTP is not draining (AppState -7).
+                        case -7: why = "wedge"
                         case 0:  why = "conn"
                         case 2:  why = "closing"
                         case 3:  why = "closed"
@@ -4098,7 +4164,10 @@ final class CallService: @unchecked Sendable {
                 // this matches Android's "only when ok"; on the WS relay
                 // `sendAudioFrame` returns Void and no such result exists —
                 // see the counter's declaration for that divergence.
-                wireTxBytes &+= Int64(sealedFrame.count)
+                // W-DCWEDGE — a frame the back-pressure gate shed left nothing on the wire.
+                if dcOutcome != .shed {
+                    wireTxBytes &+= Int64(sealedFrame.count)
+                }
                 if !loggedFirstTxWire {
                     loggedFirstTxWire = true
                     let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"
@@ -4126,12 +4195,16 @@ final class CallService: @unchecked Sendable {
                     // `ws` stays flat, and vice versa. Deliberately beside the
                     // existing heartbeat rather than on its own timer, so the
                     // two can never disagree about which frame count they mean.
-                    let dcmuxLine: String = "dcmux tx dc=" + txFramesDc.description
+                    let dcmuxBase: String = "dcmux tx dc=" + txFramesDc.description
                           + " ws=" + txFramesWs.description
                           + " rx dc=" + rxFramesDc.description
                           + " ws=" + rxFramesWs.description
                           + " callId=" + Self.short8(cid)
                           + " n=" + n
+                    // W-DCWEDGE — frames the back-pressure gate dropped (not in `tx dc`).
+                    // Appended at the END so a reader of the older field order is unaffected;
+                    // a second statement so the chain above does not grow.
+                    let dcmuxLine: String = dcmuxBase + " drop=" + txDcDrop.description
                     print("[CallService] " + dcmuxLine)
                     // The one line that actually answers "what carried this
                     // call's audio, on iOS's own side" — every ~5s for the
