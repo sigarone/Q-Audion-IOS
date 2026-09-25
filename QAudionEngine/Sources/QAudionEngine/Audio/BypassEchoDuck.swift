@@ -42,6 +42,16 @@ import Foundation
 /// mic is quiet (~1% RMS on normal speech), often below the far-end level, so the near-end test will
 /// rarely call local speech dominant during far-end audio: in practice this is a -12 dB gate on the TX
 /// while the far end talks. `echo_duck_near_pct` in `call.audio.diag` says how often it did.
+///
+/// The near-end test's reference is the PEAK-HELD level of the audible RX frames (`heldPlayedRms`), not the
+/// last frame: that level is taken when a frame ARRIVES, ahead of the jitter buffer and the player queue,
+/// while the mic hears it about 0.3-0.4 s later. Against the instantaneous level, wherever the echo is about
+/// as loud as the played level (coupling >= ~1) or a weak frame follows a strong one, the echo itself reads
+/// as local speech and is ducked LESS (simulation of these coefficients, synthetic syllables, 350 ms playout
+/// delay: 16 / 47 / 67 % of echo buffers left unducked at coupling 1.0 / 1.5 / 2.5, against 0 / 0.4 / 4.6 %
+/// with the 500 ms hold). Still unproven on a device: no ERLE is measured, and the far-end proxy itself is
+/// still stamped at arrival (200 ms window + `hangoverHoldMs`), so the tail of a burst can outlast it when the
+/// playout delay is longer than ~0.3 s.
 public enum BypassEchoDuck {
 
     // MARK: - Remote kill switch
@@ -68,6 +78,10 @@ public enum BypassEchoDuck {
     public static let nearEnterRatio: Float = 1.4
     /// ... and stays "local speech" until it falls below this multiple (hysteresis).
     public static let nearExitRatio: Float = 1.0
+    /// Time constant (ms) of the decay of the held played level (`heldPlayedRms`): it has to outlast the
+    /// playout delay (jitter target 240-360 ms + player queue ~80 ms) between a frame's arrival stamp and
+    /// the moment the mic hears it.
+    public static let playedHoldMs: Float = 500
     /// Mic RMS (0...1) below which nothing is worth ducking: there is no echo to hear, and gating a
     /// silent mic would only make the noise floor pump (Android: DEFAULT_MIC_NOISE_FLOOR).
     public static let micSilenceRms: Float = 0.002
@@ -103,8 +117,18 @@ public enum BypassEchoDuck {
         }
     }
 
+    /// The played-level reference of the near-end test after one more audible RX frame (`frameRms`,
+    /// 0...1): the frame's own RMS, or `previous` decayed exponentially (time constant `playedHoldMs`) by
+    /// `elapsedMs`, the time since the previous audible frame, if that is higher -- a peak-hold. Negative
+    /// or huge `elapsedMs` (a clock step, the first frame of a call) is clamped to 0 ... 60 s.
+    public static func heldPlayedRms(previous: Float, frameRms: Float, elapsedMs: Int64) -> Float {
+        let elapsed: Float = Float(min(max(elapsedMs, 0), 60_000))
+        let decayed: Float = previous * exp(-elapsed / playedHoldMs)
+        return decayed > frameRms ? decayed : frameRms
+    }
+
     /// Whether the local side dominates the mic (`micRms` and `playedRms` are 0...1 RMS of the raw mic
-    /// buffer and of the last audible far-end frame). Hysteresis: it takes `nearEnterRatio` x the played
+    /// buffer and of the played reference, see `heldPlayedRms`). Hysteresis: it takes `nearEnterRatio` x the played
     /// level to become dominant and dropping below `nearExitRatio` x to stop being so, so the decision
     /// does not chatter on a syllable that hovers around one threshold.
     public static func nextNearSpeechDominant(micRms: Float, playedRms: Float, wasDominant: Bool) -> Bool {
