@@ -210,7 +210,10 @@ pre-W-DCWEDGE routing from the next call, audio and control frames alike; the de
 and logs) via `DcWedgeKillSwitch` / `CallService.refreshDcWedgeFlag`. Tests: `DcWedgeDetectorTests`
 (thresholds on both sides, hysteresis, the two real stalls, the probe and the symmetric deadlock,
 the log-line token limit, the routing rule), `HeartbeatDeltaTrackerTests`. NOT built or run on a
-device: no macOS on the machine that wrote it.
+device: no macOS on the machine that wrote it. The probe is a deliberate deviation from audio-path
+rule 3 (Android's twin has none, so Android<->Android stays exposed to the symmetric deadlock it
+breaks) and has never run on a device: prove it with network shaping, or set `probeIntervalMs = 0`
+to drop it (the kill switch turns it off too).
 
 ## Project snapshot
 

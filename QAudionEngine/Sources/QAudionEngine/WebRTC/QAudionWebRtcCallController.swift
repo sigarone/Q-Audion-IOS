@@ -428,7 +428,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `.useRelay` if the DC is not open or is wedged, in which case the caller
     /// (CallService) falls back to the WS relay.
     ///
-    /// W-DCTXICEGATE (2026-08-30) — ALSO returns `false` while ICE is not
+    /// W-DCTXICEGATE (2026-08-30) — ALSO answers `.useRelay` while ICE is not
     /// actually carrying, because "the DataChannel is open" stops meaning
     /// "the DataChannel can deliver" the moment ICE goes down mid-call.
     /// This controller repairs a handoff with `restartIce` on the SAME
@@ -449,6 +449,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// 17:10:12, queue stuck until 17:10:27), so `DcWedgeDetector` keeps the
     /// frames on the relay until the queue has drained AND the peer's frames
     /// arrive on the channel again. ICE is not an input of that detector.
+    /// That holds once the detector has DECLARED the wedge: it is sampled only
+    /// by the frames that get past this gate, so a stall that starts DURING an
+    /// ICE outage is not seen while the gate is closed, and after it reopens the
+    /// detector needs ~1 s / 15 shed frames to declare it. Android's transport
+    /// samples before its own ICE check, so it sees the queue during the outage
+    /// too: a known gap of this port, not closed here.
     @discardableResult
     public func sendAudioFrameData(_ data: Data) -> AudioDcSendOutcome {
         guard Self.iceIsCarrying(lastIceConnectionState) else { return .useRelay }
@@ -489,7 +495,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `-2` for "no controller", and "no controller" and "a controller whose PC
     /// is gone" are different failures — the first means this call never built a
     /// WebRTC leg, the second means it built one and lost it.
-    /// ``sendAudioFrameData`` returns the same `false` for both.
+    /// ``sendAudioFrameData`` answers the same `.useRelay` for both.
     public var audioDataChannelStateRaw: Int {
         guard let pc = peerConnection else { return -4 }
         return pc.audioDataChannelStateRaw()

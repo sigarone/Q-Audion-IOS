@@ -16846,9 +16846,10 @@ final class AppState: ObservableObject {
     ///
     /// The WS-relay fallback this grace buys time for exists on iOS
     /// per-frame: `sendAudioOverDataChannel` (wired to
-    /// `QAudionWebRtcCallController.sendAudioFrameData`) returns `false`
-    /// when the sealed DataChannel cannot deliver, and `CallService` then
-    /// routes that frame over the WS relay.
+    /// `QAudionWebRtcCallController.sendAudioFrameData`) answers `.useRelay`
+    /// (`AudioDcSendOutcome`, W-DCWEDGE) when the sealed DataChannel cannot
+    /// deliver, and `CallService` then routes that frame over the WS relay;
+    /// `.shed` (a frame the back-pressure gate dropped) is not relayed.
     ///
     /// CORRECTION (2026-08-30, W-DCTXICEGATE): the paragraph above used to
     /// say "whenever the sealed DataChannel isn't open" and claim nothing
