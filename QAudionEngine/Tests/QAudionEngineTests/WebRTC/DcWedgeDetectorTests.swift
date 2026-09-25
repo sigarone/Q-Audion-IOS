@@ -277,7 +277,7 @@ final class DcWedgeDetectorTests: XCTestCase {
         XCTAssertNotNil(sample(6000, 1600))
     }
 
-    // MARK: - The probe (iOS only)
+    // MARK: - The probe
 
     func testNoProbeWhileHealthy() {
         XCTAssertNil(sample(0, 100))
