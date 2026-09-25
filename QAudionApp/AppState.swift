@@ -9637,29 +9637,48 @@ final class AppState: ObservableObject {
     /// guard) is sufficient — the next `.authenticated` transition retries
     /// anything still stuck, and a duplicate ack is harmless (the server-side
     /// receipt handlers are already idempotent, same as the live path).
+    ///
+    /// Only the entries whose frame the socket accepted (`trySend` true) are
+    /// removed, and the pass stops at the first frame that is not accepted
+    /// (socket gone or stale mid-loop): the unsent suffix stays queued for the
+    /// next `.authenticated` transition.
     private func drainGroupReceiptOutbox() {
         guard let ws = liveProvider?.getWebSocketClient() else { return }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let pending = GroupReceiptOutbox.shared.drainable(nowMs: nowMs)
         guard !pending.isEmpty else { return }
+        var handled: [GroupReceiptOutbox.Entry] = []
+        handled.reserveCapacity(pending.count)
         for entry in pending {
+            let frameType: String
             switch entry.kind {
             case GroupReceiptOutbox.Entry.kindDelivered:
-                ws.send(type: "group_msg_delivered",
-                        data: ["group_id": entry.groupId, "server_message_id": entry.serverMessageId])
+                frameType = "group_msg_delivered"
             case GroupReceiptOutbox.Entry.kindRead:
-                ws.send(type: "group_msg_read",
-                        data: ["group_id": entry.groupId, "server_message_id": entry.serverMessageId])
+                frameType = "group_msg_read"
             default:
-                break
+                // Unknown kind: nothing to send, dropped from the queue as before.
+                handled.append(entry)
+                continue
             }
+            let payload: [String: Any] = ["group_id": entry.groupId,
+                                          "server_message_id": entry.serverMessageId]
+            guard ws.trySend(type: frameType, data: payload) else { break }
+            handled.append(entry)
         }
         // ONE sealed read-modify-write for the whole batch (a per-entry
         // `remove` was O(n) Keychain reads + O(n^2) AES/JSON on the main
         // actor). A crash before this line only means a duplicate ack on
         // the next drain, which the server treats as idempotent.
-        GroupReceiptOutbox.shared.remove(contentsOf: pending)
-        RTLog.info("group", "grp_receipt drained=\(pending.count)")
+        if !handled.isEmpty {
+            GroupReceiptOutbox.shared.remove(contentsOf: handled)
+        }
+        let drainedCount: Int = handled.count
+        RTLog.info("group", "grp_receipt drained=\(drainedCount)")
+        let retainedCount: Int = pending.count - handled.count
+        if retainedCount > 0 {
+            RTLog.info("group", "grp_receipt retained=\(retainedCount)")
+        }
     }
 
     /// Fase 2 — emit `group_msg_read` for every inbound message in this
