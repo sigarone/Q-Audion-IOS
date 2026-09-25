@@ -120,7 +120,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
         // vs WS) is logged at the call sites in AppState.
-        let alreadyUp: Bool = ledger.isNativelyReported(uuid)
+        // W-GHOSTCALL (2026-09-25) — the "am I the first report?" question is now
+        // one atomic claim taken BEFORE the await (`beginReport`). It used to be a
+        // plain read of the natively-reported set, which is only filled once
+        // CallKit has answered: two reports of the same uuid issued in the same
+        // millisecond (a doubled PushKit push, e3acecd7 03.221/03.222) both read
+        // "not reported yet", so the second one's Code=2 refusal was taken for a
+        // genuine rejection. The second report still goes to CallKit (one report
+        // per push is the PushKit mandate); it is only labelled a duplicate.
+        let alreadyUp: Bool = !ledger.beginReport(uuid)
+        defer { ledger.finishReport(uuid) }
         // I8 FIX — truncate the call UUID (same convention as AppState's
         // W-CALLDIAG lines for this same call) instead of printing it whole.
         print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
@@ -147,13 +156,19 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // call CallKit actually knows about was reported by the other
             // branch, never latched to this banner's answer path.
             let nsErr = error as NSError
+            // W-GHOSTCALL — Code=2 (callUUIDAlreadyExists) is not a rejection
+            // either: CallKit already HAS this call and its native UI is live, so
+            // the manual-answer fallback must not be armed over it, whichever
+            // report of the uuid got the refusal. See CallKitReportFailurePolicy.
+            let armFallback: Bool = CallKitReportFailurePolicy.shouldArmManualAnswer(
+                alreadyReported: alreadyUp, errorCode: nsErr.code)
             // I8 FIX — truncated uuid, see above.
-            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid.uuidString.prefix(8))…")
+            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(armFallback ? "arming in-app manual answer path" : "native UI already live, NOT arming fallback") for \(uuid.uuidString.prefix(8))…")
             // Numeric tail so this survives the remote-log redactor: without it
             // the whole CallKit path is invisible off-device, and a rejection
             // that costs the user an incoming call looks exactly like silence.
             log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
-            if !alreadyUp {
+            if armFallback {
                 ledger.recordRejected(uuid)
             }
         }
@@ -523,6 +538,17 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             print("[CallKitProvider] setCategory fail site=\(logSite) code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
         for attempt in 0..<4 {
+            // W-GHOSTCALL (2026-09-25) — take the configuration lock again for
+            // every retry. It is held on entry to attempt 0 (taken above: category
+            // and first setActive stay ONE critical section) and is RELEASED before
+            // the wait below, because it must never be held across an `await`: the
+            // lock is thread-affine and the task may resume on another thread. The
+            // evidence: in e3acecd7 attempt 0 failed and attempts 1-3, run after
+            // the old 120 ms sleep with the lock still nominally held, all failed
+            // with code=-1 "Must call ... lockForConfiguration".
+            if attempt > 0 {
+                rtcSession.lockForConfiguration()
+            }
             do {
                 try rtcSession.setActive(true)
                 print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt)) activationCount=\(rtcSession.activationCount)")
@@ -552,6 +578,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // activationCount/isActive at the moment of failure are not.
                 let nsErr = error as NSError
                 print("[CallKitProvider] setActive retry \(attempt) site=\(logSite) code=\(nsErr.code) activationCount=\(rtcSession.activationCount) isActive=\(rtcSession.isActive ? 1 : 0): \(error.localizedDescription)")
+                // W-GHOSTCALL — release BEFORE the await (see the top of the
+                // loop): the lock must never be held across a suspension point.
+                rtcSession.unlockForConfiguration()
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
             }
         }
@@ -565,7 +594,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // and eventually a call-quality banner. This is the lesser evil vs.
         // a silent dead call.
         print("[CallKitProvider] setActive never confirmed after 4 attempts site=\(logSite) — forcing engine start (session may be marginal)")
-        rtcSession.unlockForConfiguration()
+        // W-GHOSTCALL — no unlock here any more: every failed attempt above has
+        // already released the configuration lock before its wait.
         onAudioSessionActivated?()
     }
 
