@@ -91,6 +91,29 @@ public final class AudioCapture {
     // W-AEC-FIX — set true by the tap callback on its first delivered buffer.
     // The starve watchdog checks it to detect the VP-IO "tap never fires" case.
     private var firstFrameReceived = false
+    // W-VPIOOBS (2026-09-25) — VP-IO tap-latency / watchdog observability, telemetry only (see
+    // `VpioObservability`). `firstFrameAtMs` is written by the tap thread on the first buffer of an
+    // engine (one plain store, like `lastMicFrameAtMs`); everything else is main-queue only.
+    // `vpioWatchdogGen` is bumped by every real `start()` and by `stop()`: it names which engine a
+    // watchdog timer was armed for.
+    private var firstFrameAtMs: Int64 = 0
+    private var engineStartCalledAtMs: Int64 = 0
+    private var startEndedAtMs: Int64 = 0
+    private var vpioWatchdogGen = 0
+    /// W-VPIOWD — the effective route (ports + speaker flag) when the latest `start()` finished; what an
+    /// `.override` route-change notification is compared against (`VpioWatchdogDecisions.isOverrideNoOp`).
+    private var builtRoute: VpioWatchdogDecisions.RouteSignature?
+    private var vpioLedger = VpioObservability.Ledger()
+    /// W-VPIOOBS — true from an armed start until its first tap buffer has been recorded or the engine has
+    /// been replaced: lets the next `start()` / the diag read record a first frame the watchdog never got to
+    /// judge (the engine was rebuilt, or the call ended, before the 1.2 s timer). Main queue only.
+    private var vpioFirstFramePending = false
+    private var vpioEnvironment: VpioObservability.Environment?
+    private var engineConfigObserver: NSObjectProtocol?
+    /// W-VPIOOBS — receives the numeric VP-IO diagnostic lines (`audioVp ev=...`). `CallService` points
+    /// it at `RTLog`, which the engine package cannot see; the lines are emitted from the main
+    /// queue only, never from the tap thread. nil = the lines are simply not emitted.
+    public var onDiagLine: ((String) -> Void)?
     private let audioPipeline: AudioProcessingPipeline
     // W475 — re-chunking accumulator. `installTap` delivers buffers of
     // an arbitrary size; the Opus encoder needs EXACTLY bytesPerFrame.
@@ -172,6 +195,22 @@ public final class AudioCapture {
     // per field, per-call diagnostic counters, not correctness-critical).
     private var lastLoudPlayoutAtMs: Int64 = 0
     private var echoBucketThisCall = EchoBucketTotals()
+    // W-BYPASSDUCK (2026-09-25) — TX echo ducker for the degraded state VP-IO bypassed + built-in
+    // loudspeaker (see `BypassEchoDuck`). All of it is tap-thread state except `lastLoudPlayoutRms`
+    // (the near-end test's played-level reference: the RMS of the audible RX frames, peak-held by
+    // `BypassEchoDuck.heldPlayedRms`, written next to `lastLoudPlayoutAtMs` on the playback
+    // path: a Float store, same benign single-writer race) and `bypassEchoDuckEnabled` (set once by
+    // CallService from the remote flag before `start()`; false = no ducking, the default for every
+    // capture that is not a 1:1 call). `echoLastFrameRms` / `echoLastFarEndActive` hand the values
+    // `updateEchoBucket` already computed on the same buffer to the ducker: no second scan.
+    // `echoDuckTotals` is written only by the tap thread and read+reset once, on the main thread, by
+    // `consumeVpioDiagAttrs()` (see there for the accepted race).
+    public var bypassEchoDuckEnabled = false
+    private var lastLoudPlayoutRms: Float = 0
+    private var echoLastFrameRms: Float = 0
+    private var echoLastFarEndActive = false
+    private var echoDuckState = BypassEchoDuck.State()
+    private var echoDuckTotals = BypassEchoDuck.Totals()
     // W-DEZIPPER (2026-07-12) — the gain actually applied to the LAST sample of
     // the previous frame. The make-up gain is ramped per-sample from this to the
     // current frame's target so the gain is continuous across the 20 ms frame
@@ -718,10 +757,13 @@ public final class AudioCapture {
     ///    200 ms hold window is deliberately generous for exactly this
     ///    reason (matching Android's own hold, which has the same slack).
     ///  - Unlike Android's `SpeakerEchoSuppressor`, iOS runs no software
-    ///    residual-echo suppression, so there is no `echo_gain_min`
-    ///    equivalent to ship — Apple's VP-IO is the only canceler in the
-    ///    chain and it is opaque past `setVoiceProcessingEnabled`. This
-    ///    struct is purely a MEASUREMENT; it does not attenuate anything.
+    ///    residual-echo suppression while VP-IO works — Apple's VP-IO is the
+    ///    only canceler in the chain and it is opaque past
+    ///    `setVoiceProcessingEnabled`. This struct is purely a MEASUREMENT;
+    ///    it does not attenuate anything. (The one exception, added by
+    ///    W-BYPASSDUCK, is `BypassEchoDuck`: a TX duck only in the degraded
+    ///    state VP-IO bypassed + loudspeaker, graded on the same raw buffer;
+    ///    its telemetry is `echo_duck_*`.)
     struct EchoBucketTotals: Equatable {
         var activeSumSq: Double = 0
         var activeFrames: Int64 = 0
@@ -978,7 +1020,10 @@ public final class AudioCapture {
         // accumulator so a stale partial frame from a prior call or a
         // pre-interruption session can't desync the frame boundaries.
         pcmAccumulator = Data()
+        flushVpioFirstFrame()       // W-VPIOOBS — the engine being replaced may have delivered before its watchdog looked
         firstFrameReceived = false  // W-AEC-FIX — re-arm the VP-IO starve watchdog
+        firstFrameAtMs = 0          // W-VPIOOBS — first-buffer stamp belongs to THIS engine
+        vpioWatchdogGen += 1        // W-VPIOOBS — a new engine generation
         micAgcGain = 1.0            // W-MICAGC — start each call at unity gain
         micAgcMaxGainThisCall = 1.0
         micAgcRampFrom = 1.0        // W-DEZIPPER — reset the per-sample gain-ramp state
@@ -1023,6 +1068,17 @@ public final class AudioCapture {
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
+        // W-VPIOOBS — once per call (this AudioCapture's first start that gets as far as reading
+        // the tap format): what the phone looks like and what the input node's format is BEFORE
+        // Voice Processing is enabled (the format after is read below, where the tap format is).
+        // Read-only queries, no engine state touched.
+        let firstStartOfCall = vpioEnvironment?.tapFmtAfter == nil
+        if firstStartOfCall {
+            var env = Self.captureEnvironment()
+            env.tapFmtBefore = Self.tapFormatDescription(engine.inputNode.outputFormat(forBus: 0))
+            vpioEnvironment = env
+        }
+
         // 3. Enable Voice Processing I/O on the input node BEFORE installing the tap.
         //    This activates Apple's full VoIP DSP chain:
         //    - Echo cancellation (AEC)
@@ -1035,6 +1091,20 @@ public final class AudioCapture {
         // the "who owns AGC" decision (double-AGC risk) for buffers already in
         // flight on the old engine (each rebuild captures its own fresh value).
         let vpioActiveThisEngine = audioPipeline.voiceProcessingIsActive
+        // W-BYPASSDUCK — per-engine latch, like the VP-IO one above: the ducker runs only when the remote
+        // switch is on AND this engine has no VP-IO AND the output is the built-in loudspeaker. A route
+        // flip rebuilds the engine (W-SPKFIX), which re-evaluates it. Fresh gain state per engine.
+        let onSpeakerAtBuild = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
+        let duckEligible = BypassEchoDuck.isEligible(flagEnabled: bypassEchoDuckEnabled,
+                                                     vpioActive: vpioActiveThisEngine,
+                                                     onSpeaker: onSpeakerAtBuild)
+        echoDuckState = BypassEchoDuck.State()
+        if bypassEchoDuckEnabled {
+            emitDiagLine(BypassEchoDuck.startLine(gen: vpioWatchdogGen,
+                                                  flagEnabled: bypassEchoDuckEnabled,
+                                                  vpioActive: vpioActiveThisEngine,
+                                                  onSpeaker: onSpeakerAtBuild))
+        }
 
         // 4. Install the input tap to capture PCM frames
         let inputNode = engine.inputNode
@@ -1051,6 +1121,9 @@ public final class AudioCapture {
         // safe; fall back to our canonical format only if the node reports an
         // invalid (0-channel / 0-Hz) format before the engine is prepared.
         let nodeFormat = inputNode.outputFormat(forBus: 0)
+        if firstStartOfCall {
+            vpioEnvironment?.tapFmtAfter = Self.tapFormatDescription(nodeFormat)  // W-VPIOOBS
+        }
         let tapFormat: AVAudioFormat = (nodeFormat.channelCount > 0 && nodeFormat.sampleRate > 0)
             ? nodeFormat
             : format
@@ -1120,12 +1193,17 @@ public final class AudioCapture {
         // I/O duration and ignores this value entirely.)
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            let tapNowMs = Self.monotonicNowMs()
+            if !self.firstFrameReceived { self.firstFrameAtMs = tapNowMs }  // W-VPIOOBS — first buffer of this engine: one store
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
-            self.lastMicFrameAtMs = Self.monotonicNowMs()  // W-AUDIOBEACON — one store, no other work on this thread
+            self.lastMicFrameAtMs = tapNowMs  // W-AUDIOBEACON — one store, no other work on this thread
             guard var raw = self.convertTapBufferToInt16(buffer, rateConverter: rateConverter, canonicalFormat: format) else { return }
             self.updateEchoBucket(rawPcm: raw)
+            // W-BYPASSDUCK — the gain is decided from the RAW buffer (above) and folded into the AGC
+            // stage as its last multiplier; see `BypassEchoDuck` for why it must not sit before it.
+            let duckGain: Float = (duckEligible && Self.micAgcEnabled) ? self.nextEchoDuckGain(bufferBytes: raw.count) : 1
             if Self.micAgcEnabled {
-                self.applyMicMakeUpAgc(rawPcm: &raw, vpioActiveThisEngine: vpioActiveThisEngine)
+                self.applyMicMakeUpAgc(rawPcm: &raw, vpioActiveThisEngine: vpioActiveThisEngine, echoDuckGain: duckGain)
             }
             self.recordLevelDiagnostics(rawPcm: raw)
             if !vpioActiveThisEngine {
@@ -1135,7 +1213,14 @@ public final class AudioCapture {
         }
 
         // 5. Start the engine, then the player node (single engine drives both).
+        // W-VPIOOBS — registered BEFORE `engine.start()`, so a configuration change raised while VP-IO comes
+        // up (the case `engine_cfg_changes_2s` exists to reveal) is not missed. The observer's queue is main
+        // and start() normally runs there (inline dispatch), so the block runs once start() has returned and
+        // `self.engine` is this engine; a run that beats that assignment is dropped by the `posted === current`
+        // filter like any stale notification.
+        registerEngineConfigObserver()
         engine.prepare()
+        engineStartCalledAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the *_eng_ms measurements
         try engine.start()
         // W-PLAYERSTATEGUARD (2026-09-07) — live crash, this exact build:
         // `com.apple.coreaudio.avfaudio` / "player started when in a
@@ -1176,13 +1261,23 @@ public final class AudioCapture {
         // capture is alive (no-op for .passive owners; no-op if already armed
         // by a previous start() of this same call).
         armStateBeaconIfNeeded()
+        startEndedAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the watchdog window
+        builtRoute = Self.currentRouteSignature()  // W-VPIOWD — what an `.override` echo of this start is compared to
 
         // 7. W-AEC-FIX — if VP-IO is active, arm the starve watchdog. If the
         //    input tap never delivers a buffer within the window (the iPad
         //    VP-IO + builtInSpeaker starve, W574f), restart WITHOUT VP-IO so the
         //    mic transmits. Worst case = the pre-fix behaviour (echo, working
-        //    TX); never a dead mic. iPhone / no-VP-IO never arms it.
+        //    TX); never a dead mic. Armed by EVERY start with VP-IO active — the
+        //    iPhone too, since W-CANONICAL (a5427273, 2026-07-12) made VP-IO the
+        //    default on every route; only a start WITHOUT VP-IO (bypass, user
+        //    toggles off) never arms it. (This used to claim "iPhone never arms
+        //    it", false since that commit.)
         if audioPipeline.voiceProcessingIsActive {
+            vpioLedger.noteArmed()
+            vpioFirstFramePending = true
+            let armEngMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: startEndedAtMs)
+            emitDiagLine(VpioObservability.armLine(gen: vpioWatchdogGen, engMs: armEngMs))
             scheduleVpioStarveWatchdog()
         }
     }
@@ -1193,14 +1288,185 @@ public final class AudioCapture {
     /// no-VP-IO restart so the call still has a live mic (echo returns, but a
     /// working call beats a dead one). One-shot per start(); a delivering tap
     /// (firstFrameReceived) cancels it.
+    ///
+    /// W-VPIOWD (2026-09-25) — the timer remembers the engine generation it was armed for and does
+    /// NOTHING if a later `start()` (route restart, interruption resume) or `stop()` has replaced that
+    /// engine since: judging the new engine against the old engine's window was a false "starved"
+    /// whenever the new engine was younger than 1.2 s (call 7727f262: second start 0.69 s after the
+    /// first, "starved" 0.8 s later). The new engine's own start armed its own timer.
+    /// `VpioWatchdogDecisions.starveVerdict` holds the decision.
     private func scheduleVpioStarveWatchdog() {
+        let armedGen = vpioWatchdogGen
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self, self.isRunning else { return }
-            if self.firstFrameReceived { return }  // VP-IO tap is delivering — keep AEC
+            guard let self else { return }
+            let verdict = VpioWatchdogDecisions.starveVerdict(armedGen: armedGen,
+                                                              currentGen: self.vpioWatchdogGen,
+                                                              isRunning: self.isRunning,
+                                                              firstFrameReceived: self.firstFrameReceived)
+            switch verdict {
+            case .stale:
+                self.noteVpioStaleExpiry(armedGen: armedGen)
+                return
+            case .notRunning:
+                return
+            case .delivering:
+                self.noteVpioFirstFrame(gen: armedGen)
+                return  // VP-IO tap is delivering — keep AEC
+            case .starved:
+                break
+            }
+            self.noteVpioStarve(gen: armedGen)
             print("[AudioCapture] W-AEC-FIX: VP-IO input tap starved (no frame in 1.2s) — restarting without VP-IO so the mic transmits")
             self.audioPipeline.forceDisableVoiceProcessing = true
             self.restartEngineForRoute()
         }
+    }
+
+    /// W-VPIOOBS — the tap delivered inside the watchdog window: record how long it took.
+    private func noteVpioFirstFrame(gen: Int) {
+        guard vpioFirstFramePending, firstFrameAtMs > 0 else { return }
+        vpioFirstFramePending = false
+        let ms = VpioObservability.elapsedMs(from: startEndedAtMs, to: firstFrameAtMs)
+        let engMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: firstFrameAtMs)
+        vpioLedger.noteFirstFrame(ms: ms, engMs: engMs)
+        emitDiagLine(VpioObservability.firstFrameLine(gen: gen, ms: ms, engMs: engMs))
+    }
+
+    /// W-VPIOOBS — record the first tap buffer of the current armed engine if it has one that no watchdog
+    /// judged (a new `start()` is replacing the engine, or the call's diag is being read), and stop waiting
+    /// for it either way, so a later engine's first buffer is never booked to this one. Must run before
+    /// `start()` resets `firstFrameAtMs` / bumps the generation. Main queue only.
+    private func flushVpioFirstFrame() {
+        noteVpioFirstFrame(gen: vpioWatchdogGen)
+        vpioFirstFramePending = false
+    }
+
+    /// W-VPIOOBS — the watchdog is about to restart the engine without VP-IO.
+    private func noteVpioStarve(gen: Int) {
+        let sinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
+        let running = engine?.isRunning ?? false
+        vpioLedger.noteStarve(gen: gen, sinceStartMs: sinceStartMs, stale: false)
+        emitDiagLine(VpioObservability.fireLine(gen: gen, sinceStartMs: sinceStartMs,
+                                                stale: false, engineRunning: running))
+    }
+
+    /// W-VPIOWD — a timer of a superseded engine generation expired and was ignored.
+    private func noteVpioStaleExpiry(armedGen: Int) {
+        let sinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
+        vpioLedger.noteStaleExpiry()
+        emitDiagLine(VpioWatchdogDecisions.staleLine(gen: armedGen, cur: vpioWatchdogGen,
+                                                     firstFrame: firstFrameReceived, sinceStartMs: sinceStartMs))
+    }
+
+    /// W-VPIOOBS — main-queue only (see `onDiagLine`).
+    private func emitDiagLine(_ line: String) {
+        onDiagLine?(line)
+    }
+
+    /// W-VPIOOBS — count `AVAudioEngineConfigurationChange` on the live engine within the first 2 s
+    /// after `engine.start()`: a configuration change stops the engine, which reads as a silent tap.
+    /// Observation only; nothing is restarted here. One observer per capture, removed by stop()/deinit.
+    private func registerEngineConfigObserver() {
+        guard engineConfigObserver == nil else { return }
+        engineConfigObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.noteEngineConfigurationChange(note)
+        }
+    }
+
+    private func noteEngineConfigurationChange(_ note: Notification) {
+        guard let posted = note.object as? AVAudioEngine, let current = engine, posted === current else { return }
+        let sinceEngineMs = VpioObservability.elapsedMs(from: engineStartCalledAtMs, to: Self.monotonicNowMs())
+        vpioLedger.noteConfigChange(sinceEngineMs: sinceEngineMs)
+        emitDiagLine(VpioObservability.configChangeLine(gen: vpioWatchdogGen, sinceEngineMs: sinceEngineMs))
+    }
+
+    /// W-BYPASSDUCK — one tap buffer of the ducker (tap thread; plain arithmetic on a small struct, no
+    /// allocation, no lock, no log). Reads what `updateEchoBucket` just computed for the same buffer.
+    private func nextEchoDuckGain(bufferBytes: Int) -> Float {
+        let next = BypassEchoDuck.step(state: echoDuckState,
+                                       farEndActive: echoLastFarEndActive,
+                                       micRms: echoLastFrameRms,
+                                       playedRms: lastLoudPlayoutRms,
+                                       bufferMs: BypassEchoDuck.bufferMs(byteCount: bufferBytes))
+        echoDuckState = next
+        echoDuckTotals.note(gain: next.gain, farEndActive: echoLastFarEndActive, nearDominant: next.nearLatched)
+        return next.gain
+    }
+
+    /// W-VPIOOBS / W-BYPASSDUCK — the `call.audio.diag` attributes for this capture (one call), read and
+    /// reset at call teardown next to `consumeLevelStats()`. See `VpioObservability.diagAttrs` and
+    /// `BypassEchoDuck.diagAttrs`.
+    public func consumeVpioDiagAttrs() -> [String: Any] {
+        flushVpioFirstFrame()  // a call that ended before the 1.2 s watchdog looked still reports its first frame
+        // W-BYPASSDUCK -- the CallService read happens BEFORE `stop()`, so the tap thread can still be adding
+        // to `echoDuckTotals` here. Take ONE copy and reset in the same breath: every `echo_duck_*` value
+        // below then derives from a single snapshot, and the read-to-reset window is two statements. The
+        // copy stays unsynchronised on purpose (no lock on the real-time tap): the same accepted
+        // single-writer race as `consumeLevelStats()`, worst case one buffer off in a diagnostic counter.
+        let duckTotals = echoDuckTotals
+        echoDuckTotals = BypassEchoDuck.Totals()
+        var attrs = VpioObservability.diagAttrs(ledger: vpioLedger, gen: vpioWatchdogGen, env: vpioEnvironment)
+        let duckAttrs = BypassEchoDuck.diagAttrs(totals: duckTotals, enabled: bypassEchoDuckEnabled)
+        for (key, value) in duckAttrs {
+            attrs[key] = value
+        }
+        vpioLedger = VpioObservability.Ledger()
+        vpioEnvironment = nil
+        return attrs
+    }
+
+    /// W-VPIOOBS — engine_running_at_end fix. `stop()` latches whether the engine was alive at
+    /// teardown, but `CallService` reads `consumeAudioDiagStats()` BEFORE calling `stop()` and drops
+    /// the pipeline right after, so the latch was always read as false (92 of 92 iOS records since
+    /// 14/9). CallService calls this first, while the engine is still up; idempotent.
+    public func noteRunningAtEndNow() {
+        audioPipeline.noteEngineRunningAtEnd(isRunning && (engine?.isRunning ?? false))
+    }
+
+    /// W-VPIOOBS — one-time environment read (no engine access): hardware model, OS build, the
+    /// system microphone mode, the session's input ports. Values that cannot be read are left nil.
+    private static func captureEnvironment() -> VpioObservability.Environment {
+        var env = VpioObservability.Environment()
+        if let machine = VpioObservability.sysctlString("hw.machine") {
+            env.hwMachine = VpioObservability.sanitizedToken(machine, maxLen: 24)
+        }
+        if let build = VpioObservability.sysctlString("kern.osversion") {
+            env.osBuild = VpioObservability.sanitizedToken(build, maxLen: 16)
+        }
+        #if os(iOS)
+        if #available(iOS 15.0, *) {
+            env.micMode = AVCaptureDevice.activeMicrophoneMode.rawValue
+        }
+        #endif
+        let session = AVAudioSession.sharedInstance()
+        let inputTypes: [String] = (session.availableInputs ?? []).map { $0.portType.rawValue }
+        env.inputPorts = VpioObservability.portsList(inputTypes)
+        env.preferredInput = VpioObservability.portToken(session.preferredInput?.portType.rawValue ?? "none")
+        return env
+    }
+
+    /// W-VPIOWD — the live session route as a comparable value (ports + uids + speaker flag).
+    private static func currentRouteSignature() -> VpioWatchdogDecisions.RouteSignature {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        var inputs: [VpioWatchdogDecisions.RoutePort] = []
+        for port in route.inputs {
+            inputs.append(VpioWatchdogDecisions.RoutePort(type: port.portType.rawValue, uid: port.uid))
+        }
+        var outputs: [VpioWatchdogDecisions.RoutePort] = []
+        var speaker = false
+        for port in route.outputs {
+            outputs.append(VpioWatchdogDecisions.RoutePort(type: port.portType.rawValue, uid: port.uid))
+            if port.portType == .builtInSpeaker { speaker = true }
+        }
+        return VpioWatchdogDecisions.RouteSignature(inputs: inputs, outputs: outputs, speaker: speaker)
+    }
+
+    private static func tapFormatDescription(_ format: AVAudioFormat) -> String {
+        return VpioObservability.tapFormatString(sampleRate: format.sampleRate, channels: Int(format.channelCount))
     }
 
     /// SINGLE-ENGINE FIX — schedule a decoded PCM frame for playback on the
@@ -1232,7 +1498,13 @@ public final class AudioCapture {
                 return Float((sumSq / Double(n)).squareRoot())
             }
             if Self.isLoudPlayout(rms: frameRms) {
-                lastLoudPlayoutAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+                let loudNowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                // W-BYPASSDUCK — reference level for the near-end test: a peak-hold over the playout delay, decayed
+                // by the time since the PREVIOUS audible frame (so it is computed before the stamp is overwritten).
+                lastLoudPlayoutRms = BypassEchoDuck.heldPlayedRms(previous: lastLoudPlayoutRms,
+                                                                  frameRms: frameRms,
+                                                                  elapsedMs: loudNowMs - lastLoudPlayoutAtMs)
+                lastLoudPlayoutAtMs = loudNowMs
             }
         }
         // W-IOSJITTER wiring (2026-07-26) — from here the frame goes into the
@@ -1375,6 +1647,8 @@ public final class AudioCapture {
             self.echoBucketThisCall = Self.accumulatingEchoBucket(self.echoBucketThisCall,
                                                                    frameRms: frameRms,
                                                                    farEndActive: farEndActive)
+            self.echoLastFrameRms = frameRms          // W-BYPASSDUCK — same raw buffer, same far-end proxy
+            self.echoLastFarEndActive = farEndActive
         }
     }
 
@@ -1407,7 +1681,13 @@ public final class AudioCapture {
     /// the original inline code did — kept at the call site rather than
     /// inside here so the "AGC disabled entirely" case is visible at the
     /// tap-callback level, not buried inside this method.
-    private func applyMicMakeUpAgc(rawPcm raw: inout Data, vpioActiveThisEngine: Bool) {
+    ///
+    /// W-BYPASSDUCK (2026-09-25) — `echoDuckGain` (1 = none) is the TX echo ducker's multiplier and is
+    /// folded in HERE as the LAST factor of the per-sample ramp (Android's `MicMakeUpAgc.process`
+    /// does the same with `echoGain`): the AGC law above keeps measuring the raw buffer, so it can
+    /// neither compensate the duck nor be limited by it, and the ramp / de-zipper state records the
+    /// gain actually applied.
+    private func applyMicMakeUpAgc(rawPcm raw: inout Data, vpioActiveThisEngine: Bool, echoDuckGain: Float = 1) {
         let configuredMaxGain = Self.selectMakeUpAgcMaxGain(vpioActive: vpioActiveThisEngine)
         raw.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
             guard let samples = rawBuf.bindMemory(to: Int16.self).baseAddress else { return }
@@ -1470,7 +1750,7 @@ public final class AudioCapture {
             // and should essentially never fire. `limiter_pct` telemetry
             // measures whether that is actually true in the field.
             let gStart = self.micAgcRampFrom
-            let gTarget = self.micAgcGain
+            let gTarget = self.micAgcGain * echoDuckGain
             // W-TXHEADROOM-DEAD (2026-07-21) — this guard used to read
             // `gTarget > 1.001 || gStart > 1.001`, i.e. "only do work
             // when we are BOOSTING". That silently made the entire
@@ -2024,6 +2304,24 @@ public final class AudioCapture {
             // W574o fixed for the other two cases, just not this one. Apply the same
             // throttle/suppress guard: the first tap still restarts immediately
             // (nothing to skip yet), only the self-provoked echoes are now dropped.
+            //
+            // W-VPIOWD (2026-09-25) — an `.override` that arrives just after a start() and leaves the
+            // effective route exactly as the engine was built for (same input/output ports and uids,
+            // same speaker flag) is the echo of the start itself — enabling voice processing changes
+            // the mic data source, which posts it — not a toggle: rebuilding on it restarted VP-IO
+            // 0.69 s after the first start on call 7727f262. A REAL toggle changes the outputs or the
+            // speaker flag, is never a no-op, and keeps restarting the engine below. (The shared
+            // throttle / suppress window is deliberately NOT armed at the end of start(): a real
+            // setSpeaker(true) lands right after start() on the CallKit didActivate path — AppState's
+            // W-CALLSPKR re-assert — and such a window would drop exactly that rebuild.)
+            let overrideSinceStartMs = VpioObservability.elapsedMs(from: startEndedAtMs, to: Self.monotonicNowMs())
+            if VpioWatchdogDecisions.isOverrideNoOp(msSinceStartEnded: overrideSinceStartMs,
+                                                    built: builtRoute,
+                                                    current: Self.currentRouteSignature()) {
+                emitDiagLine(VpioWatchdogDecisions.overrideNoOpLine(gen: vpioWatchdogGen,
+                                                                    sinceStartMs: overrideSinceStartMs))
+                return
+            }
             if shouldSkipRouteRestart() { return }
             print("[AudioCapture] route change: output override (speaker toggle) — restarting engine to re-evaluate VP-IO")
             restartEngineForRoute(routeDriven: true)
@@ -2442,7 +2740,11 @@ public final class AudioCapture {
         // reported healthy rx_dec counts is the fingerprint of a dead-playout call
         // (see `restartEngineWithRecovery`); it is the one fact the live incident
         // could not establish from any log or telemetry record we shipped.
-        audioPipeline.noteEngineRunningAtEnd(isRunning && (engine?.isRunning ?? false))
+        // (W-VPIOOBS: CallService now latches it earlier, via `noteRunningAtEndNow()`, because the
+        // diag stats are consumed before this runs.)
+        noteRunningAtEndNow()
+        flushVpioFirstFrame()  // W-VPIOOBS — a first buffer nobody judged is booked to THIS generation, before it is bumped
+        vpioWatchdogGen += 1  // W-VPIOOBS — a watchdog timer armed for this engine must not judge a later one
         // W-SPKFIX — cancel any pending debounced route restart so it cannot
         // fire after the call has torn down the engine.
         pendingRouteRestart?.cancel()
@@ -2462,6 +2764,10 @@ public final class AudioCapture {
         if let obs = routeChangeObserver {
             NotificationCenter.default.removeObserver(obs)
             routeChangeObserver = nil
+        }
+        if let obs = engineConfigObserver {  // W-VPIOOBS
+            NotificationCenter.default.removeObserver(obs)
+            engineConfigObserver = nil
         }
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
@@ -2503,6 +2809,9 @@ public final class AudioCapture {
             NotificationCenter.default.removeObserver(obs)
         }
         if let obs = mediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        if let obs = engineConfigObserver {  // W-VPIOOBS
             NotificationCenter.default.removeObserver(obs)
         }
         stateBeaconTimer?.cancel()
