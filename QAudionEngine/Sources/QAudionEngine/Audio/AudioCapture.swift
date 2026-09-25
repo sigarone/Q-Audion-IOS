@@ -203,6 +203,8 @@ public final class AudioCapture {
     // CallService from the remote flag before `start()`; false = no ducking, the default for every
     // capture that is not a 1:1 call). `echoLastFrameRms` / `echoLastFarEndActive` hand the values
     // `updateEchoBucket` already computed on the same buffer to the ducker: no second scan.
+    // `echoDuckTotals` is written only by the tap thread and read+reset once, on the main thread, by
+    // `consumeVpioDiagAttrs()` (see there for the accepted race).
     public var bypassEchoDuckEnabled = false
     private var lastLoudPlayoutRms: Float = 0
     private var echoLastFrameRms: Float = 0
@@ -1400,14 +1402,20 @@ public final class AudioCapture {
     /// `BypassEchoDuck.diagAttrs`.
     public func consumeVpioDiagAttrs() -> [String: Any] {
         flushVpioFirstFrame()  // a call that ended before the 1.2 s watchdog looked still reports its first frame
+        // W-BYPASSDUCK -- the CallService read happens BEFORE `stop()`, so the tap thread can still be adding
+        // to `echoDuckTotals` here. Take ONE copy and reset in the same breath: every `echo_duck_*` value
+        // below then derives from a single snapshot, and the read-to-reset window is two statements. The
+        // copy stays unsynchronised on purpose (no lock on the real-time tap): the same accepted
+        // single-writer race as `consumeLevelStats()`, worst case one buffer off in a diagnostic counter.
+        let duckTotals = echoDuckTotals
+        echoDuckTotals = BypassEchoDuck.Totals()
         var attrs = VpioObservability.diagAttrs(ledger: vpioLedger, gen: vpioWatchdogGen, env: vpioEnvironment)
-        let duckAttrs = BypassEchoDuck.diagAttrs(totals: echoDuckTotals, enabled: bypassEchoDuckEnabled)
+        let duckAttrs = BypassEchoDuck.diagAttrs(totals: duckTotals, enabled: bypassEchoDuckEnabled)
         for (key, value) in duckAttrs {
             attrs[key] = value
         }
         vpioLedger = VpioObservability.Ledger()
         vpioEnvironment = nil
-        echoDuckTotals = BypassEchoDuck.Totals()
         return attrs
     }
 
