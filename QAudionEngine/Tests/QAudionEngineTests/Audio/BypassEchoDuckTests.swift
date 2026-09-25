@@ -341,8 +341,12 @@ final class BypassEchoDuckOrderingTests: XCTestCase {
         let preAgc = settledAgcGain(bufferRms: rawEchoRms * duck, maxGain: maxGain)
         let preOut = rawEchoRms * duck * preAgc
 
-        XCTAssertEqual(foldedOut / (rawEchoRms * foldedAgc), duck, accuracy: 0.0001,
-                       "the duck no longer survives as the last multiplier")
+        // Fixed values, worked by hand from the real law (agcTargetRms 0.12, ceiling 6.0, peak headroom 0.70):
+        // raw rms 0.05 -> gain 0.12 / 0.05 = 2.4 (peak 0.15 x 2.4 is far under the headroom), and the duck is
+        // the last factor: 0.05 x 2.4 x 0.25 = 0.03. Computing the expectation from `foldedOut` itself would
+        // be an identity that no production change could break.
+        XCTAssertEqual(foldedAgc, 2.4, accuracy: 0.01, "the AGC law no longer measures the raw buffer")
+        XCTAssertEqual(foldedOut, 0.03, accuracy: 0.001, "the duck no longer survives as the last multiplier")
         XCTAssertGreaterThan(preAgc, foldedAgc, "the AGC is expected to compensate a pre-AGC duck")
         XCTAssertGreaterThan(preOut, foldedOut * 2,
                              "ducking before the AGC undoes over half of the attenuation — the reason it is folded in after")
