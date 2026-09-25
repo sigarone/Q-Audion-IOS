@@ -258,4 +258,47 @@ final class GhostCallPolicyTests: XCTestCase {
             XCTAssertEqual(actual, expected, "truth-table row \(bits)")
         }
     }
+
+    // MARK: - shouldRecordMissedOnCancelPush (push beats the WS hangup)
+
+    private func recordsMissed(
+        cancel: UUID, active: UUID?, answered: Bool = false, ringVisible: Bool = true
+    ) -> Bool {
+        Policy.shouldRecordMissedOnCancelPush(
+            cancelCallId: cancel,
+            activeCallKitId: active,
+            callWasAnswered: answered,
+            incomingRingVisible: ringVisible)
+    }
+
+    /// The gap this closes: the push lands first, the ring is still up for THIS
+    /// call and nobody answered, so the push records the missed call itself.
+    func test_cancelPushMissed_ringingUnansweredCall_isRecorded() {
+        let callId = UUID()
+        XCTAssertTrue(recordsMissed(cancel: callId, active: callId))
+    }
+
+    /// A cancel for a DIFFERENT call must never mark the ringing one missed.
+    func test_cancelPushMissed_cancelForAnotherCall_isNotRecorded() {
+        XCTAssertFalse(recordsMissed(cancel: UUID(), active: UUID()))
+    }
+
+    /// No call held at all (the WS hangup already tore it down): nothing to record.
+    func test_cancelPushMissed_noActiveCall_isNotRecorded() {
+        XCTAssertFalse(recordsMissed(cancel: UUID(), active: nil))
+    }
+
+    /// The ring flag is what says "still ringing": without it (already cleared, or
+    /// an outgoing call) the push records nothing.
+    func test_cancelPushMissed_ringFlagDown_isNotRecorded() {
+        let callId = UUID()
+        XCTAssertFalse(recordsMissed(cancel: callId, active: callId, ringVisible: false))
+    }
+
+    /// An answered call is never "missed", whatever the flags say.
+    func test_cancelPushMissed_answeredCall_isNotRecorded() {
+        let callId = UUID()
+        XCTAssertFalse(recordsMissed(cancel: callId, active: callId, answered: true, ringVisible: true))
+        XCTAssertFalse(recordsMissed(cancel: callId, active: callId, answered: true, ringVisible: false))
+    }
 }

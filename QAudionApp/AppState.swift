@@ -4312,6 +4312,12 @@ final class AppState: ObservableObject {
                 // UI/sound, clear the ring flag) has already run; repeating it now
                 // could hide the ring of a DIFFERENT call that arrived since.
                 guard !cancelPlan.isPlaceholder else { return }
+                // W-GHOSTCALL — the push can also win the race the other way
+                // round: it clears the ring flag below, and without it the later
+                // WS hangup no longer sees a ringing call, so the missed call is
+                // never recorded (and never, if that hangup does not arrive).
+                // Record it now, while the flag is still up.
+                self.recordMissedOnCancelPush(callId: payload.callId)
                 // Same local teardown a WS-delivered call_cancel/call_hangup
                 // would have driven for this call, in case the push wins
                 // the race against a delayed WS message for the SAME call:
@@ -14744,6 +14750,27 @@ final class AppState: ObservableObject {
             RTLog.info("call", ghostLine)
         }
         return plan
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — records the call the `call_cancelled` push is
+    /// cancelling as missed, when it is the ringing, unanswered incoming call (see
+    /// `GhostCallPolicy.shouldRecordMissedOnCancelPush`). Must run BEFORE the push
+    /// handler clears `incomingCallRingVisible`. Takes the record id so the WS
+    /// hangup that may follow finds none and does not record it a second time.
+    @MainActor
+    private func recordMissedOnCancelPush(callId: UUID) {
+        let shouldRecord: Bool = GhostCallPolicy.shouldRecordMissedOnCancelPush(
+            cancelCallId: callId,
+            activeCallKitId: self.activeCallKitId,
+            callWasAnswered: self.callWasAnswered,
+            incomingRingVisible: self.incomingCallRingVisible
+        )
+        guard shouldRecord, let recordId = self.activeOutgoingRecordId else { return }
+        PersistentCallRecordStore.shared.markMissed(id: recordId)
+        self.activeOutgoingRecordId = nil
+        let missedId8: String = String(callId.uuidString.prefix(8))
+        let missedLine: String = "cancelpush missed=1 id=" + missedId8
+        RTLog.info("call", missedLine)
     }
 
     /// TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit backlog
