@@ -17,6 +17,11 @@ import Foundation
 public enum HeartbeatAttribute {
     public static let rxFramesD = "rx_frames_d"
     public static let txFramesD = "tx_frames_d"
+    /// W-DCWEDGE (2026-09-25) — frames the DataChannel back-pressure gate DROPPED in the
+    /// window (encrypted, sent on no leg). Same name as Android's `tx_gate_drop_d`, whose
+    /// total also counts mute / evict / key / closed sheds; on iOS it is the DataChannel
+    /// sheds only (no other tx gate counts).
+    public static let txGateDropD = "tx_gate_drop_d"
     public static let rxGapD = "rx_gap_d"
     public static let jbUnderrunD = "jb_underrun_d"
     public static let jbOverrunD = "jb_overrun_d"
@@ -44,6 +49,10 @@ public struct HeartbeatSnapshot: Equatable, Sendable {
     public var rxFramesWs: Int64 = 0
     public var txFramesDc: Int64 = 0
     public var txFramesWs: Int64 = 0
+
+    /// Cumulative frames the DataChannel back-pressure gate dropped (W-DCWEDGE): NOT in
+    /// `txFramesDc`. Nil = the caller has no such counter (the attribute is left out).
+    public var txGateDrop: Int64?
 
     /// Cumulative frames missing by sequence gap (`rxLossSnapshot().lost`). Not
     /// monotonic: a late frame that fills a gap lowers it.
@@ -145,6 +154,10 @@ public struct HeartbeatDeltaTracker: Equatable, Sendable {
             if current.nativeSrtpActive != true {
                 numbers[HeartbeatAttribute.rxFramesD] = rxDc + rxWs
                 numbers[HeartbeatAttribute.txFramesD] = txDc + txWs
+                // Same reasoning: the drop counter belongs to the sealed DataChannel path.
+                if let drop = HeartbeatDeltaTracker.optionalMonotonicDelta(current.txGateDrop, prev.txGateDrop) {
+                    numbers[HeartbeatAttribute.txGateDropD] = drop
+                }
             }
             transport = HeartbeatDeltaTracker.transportLabel(dcFrames: rxDc + txDc,
                                                              wsFrames: rxWs + txWs,
