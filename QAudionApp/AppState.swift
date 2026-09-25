@@ -3832,6 +3832,15 @@ final class AppState: ObservableObject {
                         self.endGroupCallFromSystemUI()
                         return
                     }
+                    // W-GHOSTCALL (2026-09-25) — `endCall()` below ends whatever
+                    // call the app holds, whichever uuid CallKit named. For the
+                    // leftover ring of an already-dead call while ANOTHER call is
+                    // live (`refuseStaleAnswer` leaves it in place), that would
+                    // hang up the live call: ignore it. The provider still
+                    // fulfils the action, which dismisses the stale ring.
+                    if self.ignoreEndForStaleUuid(uuid: uuid) {
+                        return
+                    }
                     self.endCall()
                 }
             }
@@ -4242,6 +4251,21 @@ final class AppState: ObservableObject {
                 // `reconcileOpaqueCallWakeup`'s kdoc for why that has to
                 // stay nil until the REAL server call_id is known over the
                 // WS.
+                //
+                // W-GHOSTCALL (2026-09-25) — KNOWN LIMIT, latent. Because the
+                // placeholder is not in `activeCallKitId`, `refuseStaleAnswer`
+                // (via `performAcceptIncoming`) refuses an Answer tapped on it
+                // BEFORE the real `call_incoming` arrives (log `answerguard
+                // refuse=1 why=3`): the CXAnswerCallAction fails, the placeholder
+                // is ended, and the user answers the real ring that follows. Before
+                // the guard that tap set `activeCallKitId` to the placeholder, the
+                // real `call_incoming` was then dropped as `differentCallActive`
+                // and the call sat "answered with no call" (the e3acecd7 state), so
+                // this is not a regression; and it is unreachable today because
+                // bcrypto-server's `internal/push/apns.go` has no `opaque_wakeup`
+                // sender. BEFORE the server enables TRUST-6 on iOS: register these
+                // placeholder uuids in a third ledger and DEFER the answer (latch,
+                // replayed on the real call) instead of refusing it.
                 let placeholderUuid = UUID()
                 let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
                 let shash8: String = String(payload.senderHash.prefix(8))
@@ -17729,6 +17753,28 @@ extension AppState {
                 await self?.callKit?.reportCallEnded(uuid: uuid, reason: .remoteEnded)
             }
         }
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — the end-action twin of `refuseStaleAnswer`: when
+    /// that guard skips the CallKit end because another call is live, the stale
+    /// ring can stay on screen, and Reject on it must not hang up the LIVE call
+    /// (`onEndCall` ends whatever call the app holds). Asks `GhostCallPolicy`
+    /// (deliberately narrow: only a ledger-known dead uuid, only while a
+    /// different call is active) and logs; returns `true` when the end must be
+    /// ignored.
+    @MainActor
+    private func ignoreEndForStaleUuid(uuid: UUID) -> Bool {
+        let ignore: Bool = GhostCallPolicy.shouldIgnoreEndForStaleUuid(
+            uuid: uuid,
+            activeCallKitId: self.activeCallKitId,
+            isRecentlyEnded: self.recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: self.ghostPlaceholderCallIds.wasRecentlyEnded(uuid)
+        )
+        guard ignore else { return false }
+        let staleId8: String = String(uuid.uuidString.prefix(8))
+        let staleLine: String = "endguard ignore=1 id=" + staleId8
+        RTLog.warn("call", staleLine)
         return true
     }
 

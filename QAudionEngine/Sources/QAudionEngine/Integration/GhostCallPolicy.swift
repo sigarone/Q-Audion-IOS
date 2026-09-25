@@ -44,6 +44,13 @@ public enum GhostCallPolicy {
     ///
     /// `placeholder` is supplied by the caller (`UUID()`), so this stays a pure,
     /// deterministic function.
+    ///
+    /// Known residual (design, not a bug): the decision follows the ledger, so a
+    /// cancel push that lands after the ledger entry expired (over the TTL) or in a
+    /// fresh process (empty ledger) still reports the call's own uuid, i.e. a
+    /// ring that is briefly visible until the handler's `reportCallEnded` follows.
+    /// The strong protection is `answerVerdict`, not this plan: for a dead call a
+    /// tap on that ring finds `activeCallKitId != uuid` and is refused.
     public static func cancelReportPlan(
         callId: UUID,
         isRecentlyEnded: Bool,
@@ -70,6 +77,11 @@ public enum GhostCallPolicy {
         /// The uuid is not the call this app currently holds: no call at all
         /// (`activeCallKitId == nil`) or a DIFFERENT call is active — accepting
         /// would overwrite the live call's id.
+        ///
+        /// Latent limit: the TRUST-6 opaque-wakeup placeholder is deliberately NOT
+        /// in `activeCallKitId` until the real `call_incoming` arrives, so an
+        /// Answer tapped on it before then lands here too (see the note at
+        /// `onIncomingOpaqueCallWakeup` in AppState).
         case refuseNotActive
 
         /// Stable numeric code for the remote log line (`answerguard refuse=1
@@ -105,6 +117,35 @@ public enum GhostCallPolicy {
         if isRecentlyEnded { return .refuseRecentlyEnded }
         guard activeCallKitId == uuid else { return .refuseNotActive }
         return .accept
+    }
+
+    // MARK: - End action for a stale uuid
+
+    /// Whether a CallKit "end call" (`CXEndCallAction`, handled by `onEndCall`)
+    /// must be IGNORED because it names a call that is already over while a
+    /// DIFFERENT call is live.
+    ///
+    /// `onEndCall` does not look at the uuid: it ends whatever call the app
+    /// holds. That is right for the live call's own uuid and wrong for the
+    /// leftover ring of a dead call, which `refuseStaleAnswer` leaves in place
+    /// while another call is active (ending it at CallKit would drain the live
+    /// call's shared audio session): a tap on Reject there would hang up the live
+    /// call.
+    ///
+    /// Deliberately narrow — inert unless BOTH hold: a different call is active,
+    /// and a ledger KNOWS this uuid is dead (recently ended, or a ghost
+    /// placeholder). Every other end (the live call's own uuid, no call held, a
+    /// uuid no ledger knows) keeps ending as before, so an id mismatch can never
+    /// swallow a legitimate end. The action is still fulfilled by the provider,
+    /// which is what dismisses the stale ring.
+    public static func shouldIgnoreEndForStaleUuid(
+        uuid: UUID,
+        activeCallKitId: UUID?,
+        isRecentlyEnded: Bool,
+        isGhostPlaceholder: Bool
+    ) -> Bool {
+        guard let active = activeCallKitId, active != uuid else { return false }
+        return isRecentlyEnded || isGhostPlaceholder
     }
 
     // MARK: - Answered without a call
