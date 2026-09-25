@@ -300,6 +300,89 @@ final class HeartbeatDeltaTrackerTests: XCTestCase {
         XCTAssertEqual(names, expected)
     }
 
+    // MARK: - W-DCWEDGE (2026-09-25) — tx_gate_drop_d, the frames the DataChannel gate dropped
+
+    func test_theDataChannelDropCounterIsReportedAsATxGateDropDelta() {
+        var start = base()
+        start.txGateDrop = 10
+        var tracker = primedTracker(baseline: start)
+        var next = base()
+        next.txGateDrop = 95         // +85: 7727f262 shed 83-108 frames per 5 s window
+        let window = tracker.advance(to: next)
+        XCTAssertEqual(window.numbers["tx_gate_drop_d"], 85)
+        XCTAssertEqual(window.numbers[HeartbeatAttribute.txGateDropD], 85)
+    }
+
+    /// The whole point of the counter: a dropped frame is NOT a sent frame. The snapshot
+    /// carries the two cumulative counters separately (`txFramesDc` no longer includes the
+    /// shed frames), so the window keeps them apart and `tx_frames_d` stays the real rate.
+    func test_aDroppedFrameIsNotPartOfTheSentFramesOfTheWindow() {
+        var start = base()
+        start.txFramesDc = 90
+        start.txGateDrop = 0
+        var tracker = primedTracker(baseline: start)
+        var next = base()
+        next.txFramesDc = 110        // +20 really queued
+        next.txGateDrop = 63         // +63 dropped by the gate
+        let window = tracker.advance(to: next)
+        XCTAssertEqual(window.numbers["tx_frames_d"], 20)
+        XCTAssertEqual(window.numbers["tx_gate_drop_d"], 63)
+        XCTAssertEqual(window.transport, "dc")
+    }
+
+    func test_anIdleDropCounterReportsZeroNotNothing() {
+        var start = base()
+        start.txGateDrop = 7
+        var tracker = primedTracker(baseline: start)
+        var next = base()
+        next.txGateDrop = 7
+        XCTAssertEqual(tracker.advance(to: next).numbers["tx_gate_drop_d"], 0)
+    }
+
+    func test_noDropCounterProducesNoAttribute() {
+        var tracker = primedTracker(baseline: base())
+        var next = base()
+        next.rxFramesDc = 200
+        XCTAssertNil(tracker.advance(to: next).numbers["tx_gate_drop_d"])
+    }
+
+    func test_aDropCounterThatRestartsReportsTheCountSinceTheRestart() {
+        var start = base()
+        start.txGateDrop = 40
+        var tracker = primedTracker(baseline: start)
+        var next = base()
+        next.txGateDrop = 5          // a new call / counter reset: never a negative
+        XCTAssertEqual(tracker.advance(to: next).numbers["tx_gate_drop_d"], 5)
+    }
+
+    func test_aNativeSrtpCallOmitsTheDropCounterToo() {
+        var start = srtpSnapshot()
+        start.txGateDrop = 0
+        var tracker = primedTracker(baseline: start)
+        var next = srtpSnapshot()
+        next.txGateDrop = 0
+        XCTAssertNil(tracker.advance(to: next).numbers["tx_gate_drop_d"],
+                     "the counter belongs to the sealed DataChannel path")
+    }
+
+    func test_theDropCounterAddsExactlyOneAttributeToAFullWindow() {
+        var start = base()
+        start.txGateDrop = 0
+        var tracker = primedTracker(baseline: start)
+        var next = base()
+        next.rxFramesDc = 200
+        next.txGateDrop = 3
+        next.mainStallMsMax = 0
+        let names = Set(tracker.advance(to: next).attributes().keys)
+        let expected: Set<String> = [
+            "rx_frames_d", "tx_frames_d", "tx_gate_drop_d", "rx_gap_d",
+            "jb_underrun_d", "jb_overrun_d", "jb_hard_drop_d", "jb_silence_drop_d",
+            "jb_concealed_d", "jb_stretch_d", "jb_depth_now", "jb_target_now",
+            "iat_max_ms", "fec_rec_d", "main_stall_ms_max", "transport"
+        ]
+        XCTAssertEqual(names, expected)
+    }
+
     // MARK: - Timer drift (main_stall_ms_max)
 
     func test_timerDriftIsTheOvershootOfTheNominalIntervalInMs() {
