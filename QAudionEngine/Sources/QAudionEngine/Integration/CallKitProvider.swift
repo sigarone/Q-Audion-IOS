@@ -275,8 +275,18 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // flag armed by whichever PeerConnection armed last: this report runs
         // in an unawaited Task, so a NEXT native call could arm before it and
         // have its flag consumed here. Consumed once per uuid.
-        let nativeManualCall = ledger.consumeNativeBalance(uuid)
-        if ledger.consumeAudioSelfActivation() {
+        // W-SELFACTID (2026-09-27) — the self-activation mark of a native call
+        // is keyed by the same uuid and consumed in the same critical section:
+        // the OLD call's late report used to take the NEXT call's mark (one
+        // process-wide flag) and leave the next call's own activation
+        // unbalanced. Calls with native SRTP off keep the process-wide flag.
+        let endBalance = ledger.consumeEndBalance(uuid)
+        let nativeManualCall = endBalance.nativeManualCall
+        if !endBalance.selfActivated, nativeManualCall || endBalance.duplicateNative {
+            let dupFlag = endBalance.duplicateNative ? 1 : 0
+            log?("admgate W-SELFACTID endbal=0 dup=\(dupFlag)")
+        }
+        if endBalance.selfActivated {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
             // `activationCount` is imported as Int32 (ObjC `int`) — the CI
@@ -408,8 +418,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// its hold (we dismissed the system UI but the call is still live in-app).
     /// Reuses the proven answer-time activation (retry + fire
     /// onAudioSessionActivated → CallService restarts the engines if needed).
-    public func reactivateAudioSessionForSelfManagedCall() async {
-        await activateAudioSession(logSite: "answer", source: .selfManaged)
+    ///
+    /// W-SELFACTID (2026-09-27) — `uuid`: the CallKit uuid of the self-managed
+    /// call, so a native-SRTP call's re-activation is marked under its own
+    /// uuid (see `CallKitCallLedger.markAudioSelfActivated`). `nil` keeps the
+    /// process-wide mark, as before.
+    public func reactivateAudioSessionForSelfManagedCall(uuid: UUID? = nil) async {
+        await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid)
     }
 
     /// W478 — answer an incoming call via the CallKit CXCallController.
@@ -450,7 +465,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // session → capture.start() failed → silent call. See
             // activateAudioSession(logSite:).
             // W-ADMGATE — CallKit never registered this call: no didActivate.
-            await activateAudioSession(logSite: "answer", source: .selfManaged)
+            await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid)
             return
         }
         let action = CXAnswerCallAction(call: uuid)
@@ -536,7 +551,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// assumed) before writing this. `useManualAudio` is still never touched
     /// — this is the automatic-mode-compatible half of the fix, not the
     /// 1053/1056/1066 manual-mode regression class.
-    private func activateAudioSession(logSite: String, source: AudioSessionActivationSource) async {
+    ///
+    /// W-SELFACTID (2026-09-27) — `uuid`: the CallKit uuid this activation is
+    /// made for; the self-activation mark of a native-SRTP call is keyed by it
+    /// (see `CallKitCallLedger.markAudioSelfActivated`).
+    private func activateAudioSession(logSite: String, source: AudioSessionActivationSource, uuid: UUID?) async {
         let rtcSession = RTCAudioSession.sharedInstance()
         // W-NOMIXOPTION (2026-09-10) — best-practices audit: `.interruptSpoken
         // AudioAndMixWithOthers` is Apple's documented option for apps whose
@@ -620,7 +639,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // (it deliberately doesn't for a foreground/W520 answer —
                 // see the ledger's own kdoc for why that distinction is the
                 // whole point of this flag).
-                ledger.markAudioSelfActivated()
+                // W-SELFACTID — keyed by this call's uuid on a native call.
+                ledger.markAudioSelfActivated(uuid)
                 onAudioSessionActivated?(source)
                 return
             } catch {
@@ -716,9 +736,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // this side never got it. Same asymmetry-is-the-bug reasoning
         // applies unchanged: fulfill() has already closed the start
         // transaction, so setActive(true) no longer races it.
+        let startedUUID: UUID = action.callUUID
         Task {
             // W-ADMGATE — CallKit's own didActivate is still expected.
-            await activateAudioSession(logSite: "start", source: .selfExpectingCallKit)
+            await activateAudioSession(logSite: "start", source: .selfExpectingCallKit, uuid: startedUUID)
         }
     }
 
@@ -748,7 +769,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // so setActive(true) no longer hits the "session activation failed"
             // race. Idempotent with didActivate if it does arrive.
             // W-ADMGATE — CallKit's own didActivate is still expected.
-            await activateAudioSession(logSite: "answer", source: .selfExpectingCallKit)
+            await activateAudioSession(logSite: "answer", source: .selfExpectingCallKit, uuid: action.callUUID)
         }
     }
 

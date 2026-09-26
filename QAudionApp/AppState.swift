@@ -4058,8 +4058,10 @@ final class AppState: ObservableObject {
                         // after we dismissed the system UI, but the call is still
                         // live in-app. Re-assert the session so mic + speaker keep
                         // working (do NOT pause as the normal teardown would).
+                        // W-SELFACTID — the call's own CallKit uuid keys the
+                        // self-activation mark of a native-SRTP call.
                         await (self.callKit as? CallKitProvider)?
-                            .reactivateAudioSessionForSelfManagedCall()
+                            .reactivateAudioSessionForSelfManagedCall(uuid: self.activeCallKitId)
                         return
                     }
                     self.callService.handleAudioSessionDeactivated()
@@ -14808,7 +14810,7 @@ final class AppState: ObservableObject {
             guard provider.releaseFromSystemUI(uuid) else { return }
             self.selfManagedAudioSession = true
             RTLog.info("call", "CallKit-wake-only: native UI dismissed, app owns the call")
-            Task { await provider.reactivateAudioSessionForSelfManagedCall() }
+            Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: uuid) }
         }
     }
 
