@@ -1955,10 +1955,18 @@ final class CallService: @unchecked Sendable {
         // own startCall() teardown. Save the sealers, run the teardown, then
         // restore them iff they still belong to the call being answered.
         // W-SLOTLOCK — snapshot the sealers atomically before teardown nils them.
-        let (_savedSealerSend, _savedSealerRecv, _savedSealerCallId, _savedSealerKeyFp):
-            (PqcRtpFrameSealer?, PqcRtpFrameSealer?, String?, String?) =
+        // W-STALESEALER (2026-09-26, fix-3) — ALSO snapshot the call generation in
+        // the SAME locked read, so the restore below can tell whether `endCall()`
+        // bumped it since. This whole method has no `await` (it isn't `async`), so
+        // only a genuinely concurrent `endCall()` on ANOTHER thread can race it —
+        // exactly why `CallService` is `@unchecked Sendable` and guards this state
+        // with `relaySlotLock` in the first place: `endCall()`'s `.error`
+        // handshake-outcome case fires off-main, from `QAudionCallIntegration
+        // .onStateChanged`'s own dispatch queue.
+        let (_savedSealerSend, _savedSealerRecv, _savedSealerCallId, _savedSealerKeyFp, _savedGeneration):
+            (PqcRtpFrameSealer?, PqcRtpFrameSealer?, String?, String?, Int) =
             relaySlotLock.withLock {
-                (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp)
+                (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp, _callGeneration)
             }
         // Defensive cleanup: stop any leftover capture from a previous call.
         // W-SRTPFBRESET — keep the fallback latch: this runs at ANSWER time
@@ -1970,15 +1978,30 @@ final class CallService: @unchecked Sendable {
             // active id is unknown (the sealer was installed by W574h only for
             // the active call, so it cannot belong to a superseded one here).
             if active.isEmpty || active == cid {
-                relaySlotLock.withLock {
+                // W-STALESEALER — restore ATOMICALLY with a re-check of the
+                // generation, same locked check-then-write shape as
+                // `installRelaySealers`'s publish block: if `endCall()` bumped
+                // the generation since the snapshot above (this call ended,
+                // possibly concurrently on another thread, while this method
+                // was mid-teardown), this must NOT resurrect a sealer for it.
+                let restored: Bool = relaySlotLock.withLock {
+                    guard RelaySealerInstallGuard.shouldInstall(
+                        capturedGeneration: _savedGeneration,
+                        currentGeneration: _callGeneration
+                    ) else { return false }
                     relaySealerSend = _savedSealerSend
                     relaySealerRecv = _savedSealerRecv
                     relaySealerCallId = cid
                     relaySealerKeyFp = _savedSealerKeyFp
+                    return true
                 }
                 let p: String = String(cid.prefix(8))
-                let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
-                print(line)
+                if restored {
+                    let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
+                    print(line)
+                } else {
+                    RTLog.warn("call", "relay sealer restore dropped (call ended) cid=" + p)
+                }
             }
         }
 

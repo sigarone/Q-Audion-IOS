@@ -5,18 +5,22 @@ import Foundation
 ///
 /// `CallService` keeps a monotonic "call generation" counter (`currentCallGeneration()`) that
 /// its `endCall()` bumps unconditionally, exactly once per invocation — the single choke point
-/// every terminal path in the app reaches, directly or through `AppState.endCall()`. Both the
-/// caller and the responder `onRelaySessionReady` wiring in `AppState` read that counter
-/// SYNCHRONOUSLY at FIRING time (not once at wiring time — the responder side caches and
-/// reuses its `QAudionCallIntegration` across calls, so a value captured at wiring time could
-/// already belong to a previous, ended call by the time a reused closure fires) and pass it
-/// into `CallService.installRelaySealers(expectedGeneration:)`, which calls this function twice:
+/// every terminal path in the app reaches, directly or through `AppState.endCall()`.
+/// `QAudionCallIntegration` reads that counter (via its injected `provideCallGeneration`
+/// closure) ONCE, at the START of processing each inbound handshake message — BEFORE any
+/// `await` that message's handling may do (a network send, an earbud GATT round-trip) that
+/// could let `endCall()` run in between — and threads it through to `onRelaySessionReady`'s
+/// `generation` parameter. AppState passes that value straight into `CallService
+/// .installRelaySealers(expectedGeneration:)` (never re-reading the counter itself, which
+/// would be too late relative to those awaits), and that method calls this function twice:
 /// once as a cheap early rejection, and once more atomically with publishing the sealer
 /// references, under the same lock `endCall()` bumps under (closing the check-then-act race a
-/// single check could not). A re-key round of the SAME call fires the closure again with no
-/// intervening `endCall()`, so the generation is unchanged and the install proceeds normally; a
-/// call that ended between the closure firing (on the engine's callback thread) and the actual
-/// install (hopped to `@MainActor`, and sometimes further deferred behind the
+/// single check could not). The same snapshot-generation + atomic-restore pattern protects
+/// `CallService.activateIncomingCallAudio`'s answer-time sealer snapshot/restore, the other
+/// place that writes the sealer slots outside `installRelaySealers`. A re-key round of the SAME
+/// call re-enters handshake processing with no intervening `endCall()`, so the generation is
+/// unchanged and the install proceeds normally; a call that ended between the entry-time
+/// capture and the actual install (an awaited send, a hop to `@MainActor`, or a wait behind the
 /// identity-confirmation SAS gate in `pendingIdentityGatedMedia`) bumped the generation in
 /// between, so the install is dropped instead of arming a sealer for a call that no longer
 /// exists.

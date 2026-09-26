@@ -430,6 +430,32 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// above keeps `negotiatedInnerAudioAadV1` false regardless.
     public var resolveSelfUserId: (() -> String)?
 
+    /// W-STALESEALER (2026-09-26, fix-3) — resolves `CallService`'s monotonic
+    /// call-generation counter (`currentCallGeneration()`), same wiring pattern
+    /// as `resolveSelfUserId` above: AppState sets this once, at integration
+    /// construction time, on BOTH the responder and the caller integration.
+    ///
+    /// Read exactly once per inbound handshake message, at the very TOP of
+    /// `onAndroidBundleReceived` / `onCapabilityMessageReceived` /
+    /// `completeEarbudCounterparty` — before any `await` in the async ones —
+    /// and threaded from there through `fireRelaySessionReady`/
+    /// `onRelaySessionReady`'s new `generation` parameter. This is NOT the same
+    /// thing as reading it when `onRelaySessionReady` actually fires: some
+    /// paths (`onAndroidBundleReceived`'s `.offer` case) `await` a network send
+    /// BEFORE firing, so a call could end DURING that await — reading the
+    /// generation only when the closure finally runs would then sample the
+    /// POST-teardown value, which happens to still "match" whatever
+    /// `installRelaySealers` compares it against later, silently resurrecting
+    /// a sealer for a call that ended before this handshake message even
+    /// finished being processed. Reading it here, at the moment processing of
+    /// this specific message STARTS (before any await gives `endCall()` a
+    /// chance to run), is what actually names a live call.
+    ///
+    /// `nil`/unset resolves to `-1`, a value no real generation (which starts
+    /// at 0 and only increases) can ever equal — so an unwired closure fails
+    /// CLOSED (every install for that call is dropped) rather than open.
+    public var provideCallGeneration: (() -> Int)?
+
     /// Phase 18 — whether THIS build advertises the v4 PQ ratchet (`ratchetV4`)
     /// capability. Mirrors Android `selfCapabilities().ratchetV4 =
     /// MessageRatchet.V4_NATIVE_RATCHET_ENABLED && RatchetNative.available`
@@ -682,7 +708,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// ca28b4af, caller sets callContactId synchronously). This callback
     /// carries the callId from the handshake itself (race-free) and fires
     /// unconditionally, so caller and callee install identically.
-    public var onRelaySessionReady: ((Data, String) -> Void)?
+    /// W-STALESEALER (2026-09-26, fix-3) — third parameter is the call
+    /// generation `provideCallGeneration?()` returned at the START of
+    /// processing the handshake message that produced this session key (see
+    /// that property's doc). AppState passes it straight through to
+    /// `CallService.installRelaySealers(expectedGeneration:)` instead of
+    /// re-reading the generation itself when this closure runs.
+    public var onRelaySessionReady: ((Data, String, Int) -> Void)?
 
     /// W-M15SEALERONCE (2026-09-20) — true ONLY while ``onRelaySessionReady`` is
     /// being invoked for a RE-KEY round (mid-call session-key rotation), false
@@ -702,10 +734,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private var _relaySessionReadyIsReKey: Bool = false
 
     /// Fires ``onRelaySessionReady`` with ``relaySessionReadyIsReKey`` set for
-    /// the duration of the call.
-    func fireRelaySessionReady(_ sessionKey: Data, callId: String, isReKey: Bool) {
+    /// the duration of the call. `generation` is passed straight through to
+    /// the callback — see ``provideCallGeneration``'s doc for why the CALLER
+    /// of this function must have captured it at the start of processing the
+    /// current handshake message, not read it fresh here.
+    func fireRelaySessionReady(_ sessionKey: Data, callId: String, isReKey: Bool, generation: Int) {
         lock.withLock { _relaySessionReadyIsReKey = isReKey }
-        onRelaySessionReady?(sessionKey, callId)
+        onRelaySessionReady?(sessionKey, callId, generation)
         lock.withLock { _relaySessionReadyIsReKey = false }
     }
 
@@ -1821,6 +1856,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     public func onCapabilityMessageReceived(data: Data, fromSenderId: String = "", sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
+        // W-STALESEALER — this function is not `async` (no `await` is possible
+        // anywhere below), so reading the generation here is equivalent to
+        // reading it at the exact instant `onRelaySessionReady` fires further
+        // down — see `provideCallGeneration`'s doc for why that distinction
+        // matters on the `async` paths (`onAndroidBundleReceived`).
+        let entryGeneration = provideCallGeneration?() ?? -1
 
         switch message {
         case .offer(let remotePublicKey, _, _):
@@ -1882,7 +1923,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let result = try pqc.encapsulate(remotePublicKey: remotePublicKey)
             try engine.initialize()
             try engine.initSession(sharedSecret: result.sharedSecret)
-            onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "")
+            onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "", entryGeneration)
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
             lock.withLock { lastSentLegacyAcceptWire = accept }
             Task {
@@ -1945,7 +1986,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             let sharedSecret = try pqc.decapsulate(ciphertext: ciphertext, privateKey: kp.privateKey)
             try engine.initSession(sharedSecret: sharedSecret)
-            onRelaySessionReady?(sharedSecret, (lock.withLock { pendingOutgoingCallId }) ?? "")
+            onRelaySessionReady?(sharedSecret, (lock.withLock { pendingOutgoingCallId }) ?? "", entryGeneration)
             lock.lock(); state = .active; lock.unlock()
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()
@@ -2046,6 +2087,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // change) so the NEXT occurrence is diagnosable with certainty instead
         // of inferred from its absence.
         print("[PQC_DIAG_V4] onAndroidBundleReceived ENTRY kind=\(bundle.kind) callId=\(callId.prefix(8))… callerId=\(callerId.isEmpty ? "?" : String(callerId.prefix(8)))")
+        // W-STALESEALER (2026-09-26, fix-3) — capture the call generation HERE,
+        // at the very start of processing this inbound bundle, before the
+        // `await sendOpaqueRaw(...)` further down in the `.offer`/`.accept`
+        // cases can let `endCall()` run and bump it. See
+        // `provideCallGeneration`'s doc for the full reasoning: reading the
+        // generation only when `fireRelaySessionReady` actually fires (after
+        // that await) would sample the POST-teardown value, which then
+        // spuriously "matches" the current generation and lets a stale sealer
+        // install through.
+        let entryGeneration = provideCallGeneration?() ?? -1
         // W574x — capture the peer's directional-PQC-RTP-key advertisement so
         // the relay sealer can be built directional when both sides support it.
         // This runs before onRelaySessionReady fires for this bundle.
@@ -2829,7 +2880,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                                    innerAudioAadV1: innerAadNegotiated, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
             // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
-            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound)
+            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound, generation: entryGeneration)
             lock.withLock { state = .active }
             // W529: handshake reached active — kill the retry loop.
             offerRetryTask?.cancel()
@@ -3455,7 +3506,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 logTiming("hs-derive-complete", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
             }
             // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
-            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyAccept)
+            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyAccept, generation: entryGeneration)
             lock.withLock {
                 state = .active
                 // 7. Zero the stashed privs immediately — the session key is
@@ -5387,6 +5438,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Idempotent per callId via `sessionInitializedByCall` (same dedup
     /// the OFFER paths use).
     public func completeEarbudCounterparty(callId: String, sessionKey: Data) throws {
+        // W-STALESEALER — this function is not `async` (no `await` is possible
+        // anywhere below), so reading the generation here is equivalent to
+        // reading it at the exact instant `onRelaySessionReady` fires below.
+        let entryGeneration = provideCallGeneration?() ?? -1
         let normalized = callId.lowercased()
         let alreadyInit = lock.withLock { () -> Bool in
             let r = sessionInitializedByCall.contains(normalized)
@@ -5399,7 +5454,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         try engine.initialize()
         try engine.initSession(sharedSecret: sessionKey, adaptivePadding: true)
-        onRelaySessionReady?(sessionKey, callId)
+        onRelaySessionReady?(sessionKey, callId, entryGeneration)
         lock.withLock { state = .active }
         offerRetryTask?.cancel()
         offerRetryTask = nil
