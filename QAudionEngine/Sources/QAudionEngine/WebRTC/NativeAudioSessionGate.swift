@@ -265,16 +265,21 @@ public enum NativeAudioSessionGate {
     /// or `+setWebRTCConfiguration:` is used anywhere else in this repo, so
     /// they are reached through KVC and the Objective-C runtime, each guarded
     /// by `responds(to:)` / `class_getClassMethod`: a missing member is a
-    /// logged no-op, never a build failure or a KVC exception. Only
-    /// `webRTC()` is called directly (the reference implementations call it
-    /// from Swift against the same upstream header).
+    /// logged no-op, never a build failure or a KVC exception.
+    ///
+    /// A FRESH configuration object (NSObject `init`, which the upstream header
+    /// documents as "initializes configuration to defaults" — the same way
+    /// WebRTC builds its own global one) is filled and then swapped in by the
+    /// setter, rather than mutating the shared global in place: WebRTC reads
+    /// that object on its own audio thread whenever it (re)configures the
+    /// session, and the swap is done under its own `@synchronized`.
     ///
     /// Only reached from `armManualMode()`, i.e. only on a native-SRTP call;
     /// the global it writes is read only by WebRTC's own audio module, which
     /// never runs on a call with native SRTP off (no m=audio), and the custom
     /// path configures `AVAudioSession` directly without ever reading it.
     private static func applyWebRtcSessionConfiguration() -> Int {
-        let cfg = RTCAudioSessionConfiguration.webRTC()
+        let cfg = RTCAudioSessionConfiguration()
         var options = baseCategoryOptions
         lock.lock(); let speakerOn = webRtcDefaultToSpeaker; lock.unlock()
         if speakerOn { options.insert(.defaultToSpeaker) }
