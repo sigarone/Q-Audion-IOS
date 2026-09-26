@@ -54,7 +54,7 @@ m = load(TARGET)
 def red(line, tag="stdout"):
     """Shipped body ('' when the line is dropped)."""
     scope, safe = m.resolve_scope(tag)
-    kept, body = m.redact_body(line, safe, m.extract_attributes(line))
+    kept, body = m.redact_body(line, safe, m.extract_attributes(line), tag)
     return body if kept else ""
 
 
@@ -342,6 +342,40 @@ finally:
     drop_caches()
 check(not bad, "RTLOG: with no unknown-word allowance a vocabulary word of the "
       "new call-diagnosis lines is missing: %r" % (bad,))
+
+# ---------------------------------------------------------------------------
+# Copilot follow-up to #120 (2026-09-26): the 22 words #120 added for the
+# dcmux / audioVp / cancelpush / answerguard / endguard "call"-tagged
+# diagnosis lines used to live in the GLOBAL APP_VOCAB, so ANY tag / ANY
+# message shape could spend one of the two unknown-word budget slots on a
+# word like "wedge" for free. They are now scoped to only the specific line
+# shapes they belong to (CALL_FORMAT_VOCAB / _is_call_format_body). The
+# original Copilot review reproduction: "wedge" opportunistically used in a
+# non-call-format body must NOT gain an extra unknown-word slot from it.
+# ---------------------------------------------------------------------------
+drop_caches()
+COPILOT_REPRO = "state=active zork=1 blarg=2 wedge=1"
+check(red(COPILOT_REPRO, "call") != COPILOT_REPRO,
+      "SCOPE-120: 'state=active zork=1 blarg=2 wedge=1' shipped verbatim -- "
+      "'wedge' bought a 3rd unknown-word slot outside its intended format")
+check("wedge=1" not in red(COPILOT_REPRO, "call"),
+      "SCOPE-120: 'wedge' survived into the fallback body too: %r"
+      % (red(COPILOT_REPRO, "call"),))
+# without the opportunistic 'wedge=1' the same 2 unknown words (zork, blarg)
+# already fit the default budget and ship verbatim -- confirms 'wedge' was
+# the one consuming the 3rd slot, not some other change in body shape.
+check(red("state=active zork=1 blarg=2", "call") == "state=active zork=1 blarg=2",
+      "SCOPE-120: sanity baseline changed -- test fixture needs updating")
+# the SAME word, in its real dcmux format string under the SAME tag, must
+# still ship verbatim (the scoping must not be so narrow it re-breaks #120).
+check(red("dcmux wedge=1 why=buf buf=1600 over=1000 drops=0", "call")
+      == "dcmux wedge=1 why=buf buf=1600 over=1000 drops=0",
+      "SCOPE-120: dcmux wedge= line regressed after scoping APP_VOCAB")
+# the recognized line SHAPE with the WRONG tag must not get the extra vocab
+# either -- scoping is tag AND shape, not shape alone.
+check(red("dcmux wedge=1 why=buf buf=1600 over=1000 drops=0", "net") == "",
+      "SCOPE-120: dcmux-shaped body shipped under a non-'call' tag")
+drop_caches()
 
 # ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))

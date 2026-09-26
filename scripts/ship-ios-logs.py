@@ -548,7 +548,6 @@ MAX_IDLIKE_TOKENS = 2     # per body: hex id prefixes (4-8 hex) + numbers of 6+ 
 MAX_NUM_RUN = 3           # consecutive bare number tokens
 
 APP_VOCAB = frozenset("""
-    answerguard arm cancelpush cfg drained drops endguard er ev ff ghost ignore missed nocall over refuse rxago since stale wedge wedgesw wsec
     abs accept accepted activated activation active add aead aec aes agc age
     allocation already android annullato answer answered apns appeared
     appstate aprof apt armed arrival as atomic audio audiobeacon audioio
@@ -593,6 +592,73 @@ APP_VOCAB = frozenset("""
     vpio vpn vpostneg vspostneg w-callawake wait watchdog wdstart wdstop
     webrtc why wifi wire writable ws wss wsunavailable x xw yet
 """.split())
+
+# ---------------------------------------------------------------------------
+# Copilot follow-up to #120: the 22 words below (added by 1af88afd for the
+# W-VPIOOBS / W-DCWEDGE / W-GHOSTCALL RTLog lines) used to live in the GLOBAL
+# APP_VOCAB above, so _word_known() accepted them for ANY tag and ANY message
+# shape -- not just the specific "call"-tagged diagnostic lines they were
+# added for. That silently widened the fail-closed unknown-word budget
+# (MAX_UNKNOWN_WORDS) for every other line in the corpus: a non-call-format
+# body could spend one of its two unknown-word slots on e.g. "wedge" for
+# free, exposing one extra arbitrary key/value token.
+#
+# These tokens are now scoped: only consulted when the record's tag is "call"
+# (or a "call"-prefixed variant, matching TAG_SCOPE_PREFIXES' own startswith
+# rule) AND the body matches one of the known RTLog line shapes it was added
+# for (_CALL_FORMAT_PREFIXES below). Everywhere else the global vocabulary
+# (TELEMETRY_VOCAB / APP_VOCAB) is unchanged and these 22 words are unknown,
+# exactly as if the #120 addition had never widened APP_VOCAB.
+# ---------------------------------------------------------------------------
+CALL_FORMAT_VOCAB = frozenset("""
+    answerguard arm cancelpush cfg drained drops endguard er ev ff ghost
+    ignore missed nocall over refuse rxago since stale wedge wedgesw wsec
+""".split())
+
+# Prefixes (case-sensitive, matching the app's real format strings) of the
+# RTLog "call"-tagged lines that CALL_FORMAT_VOCAB's words belong to:
+#   audioVp ev=arm|ff|fire|cfg ...            (W-VPIOOBS)
+#   dcmux wedge=|wedgesw= ...                 (W-DCWEDGE)
+#   cancelpush ghost=|missed= ...             (W-GHOSTCALL)
+#   answerguard refuse=|nocall= ...           (W-GHOSTCALL)
+#   endguard ignore= ...                      (W-GHOSTCALL)
+_CALL_FORMAT_PREFIXES = (
+    "audioVp ", "dcmux ", "cancelpush ", "answerguard ", "endguard ",
+)
+
+# Mutable, module-level: the extra vocabulary active for the body currently
+# being judged by _word_known() (single-threaded, line-at-a-time processing).
+# Set by redact_body() around the scrub/gate steps for a body that matches
+# _CALL_FORMAT_PREFIXES under a "call" tag; empty otherwise.
+_active_extra_vocab = frozenset()
+
+
+def _is_call_format_body(tag, norm_body):
+    """True if `tag` is the (or a "call"-prefixed) RTLog scope AND `norm_body`
+    matches one of the known call-diagnosis line shapes CALL_FORMAT_VOCAB's
+    words were added for. Deliberately NARROW (exact prefixes, not a tag-only
+    check) -- widening this to "any call-tagged line" would recreate the same
+    global-budget problem this scoping exists to close."""
+    if not tag or not str(tag).lower().startswith("call"):
+        return False
+    return norm_body.startswith(_CALL_FORMAT_PREFIXES)
+
+
+def _set_active_extra_vocab(vocab):
+    """Swap the extra vocabulary _word_known() consults. _word_ok / _ident_ok /
+    _kv_classify all memoise their verdicts by token text alone
+    (functools.lru_cache) and all transitively depend on _word_known(), so a
+    verdict cached while CALL_FORMAT_VOCAB was active would otherwise leak
+    into a later call where it is not (or vice versa) -- clear all three
+    caches whenever the active vocabulary actually changes, mirroring how the
+    test suite drops these caches around a MAX_UNKNOWN_WORDS change."""
+    global _active_extra_vocab
+    if vocab != _active_extra_vocab:
+        _active_extra_vocab = vocab
+        _word_ok.cache_clear()
+        _ident_ok.cache_clear()
+        _kv_classify.cache_clear()
+
 
 # Second letters that (almost) never follow the first in English / app
 # identifiers (fewer than 6 of ~13k distinct words): a random letter block hits
@@ -646,7 +712,8 @@ _NUM_UNITS = frozenset(
 
 
 def _word_known(low):
-    return low in TELEMETRY_VOCAB or low in APP_VOCAB
+    return (low in TELEMETRY_VOCAB or low in APP_VOCAB
+            or low in _active_extra_vocab)
 
 
 def _case_shape_ok(w):
@@ -1347,7 +1414,7 @@ def _attribute_summary(attrs):
     return "[summary] " + " ".join(parts) if parts else ""
 
 
-def redact_body(orig_body, tag_is_safe, attrs):
+def redact_body(orig_body, tag_is_safe, attrs, tag=None):
     """FAIL-CLOSED body redaction. Returns (kept: bool, body: str).
 
     A body ships ONLY if it is provably safe. Steps:
@@ -1356,12 +1423,21 @@ def redact_body(orig_body, tag_is_safe, attrs):
       2. SAS / plaintext DROP-list (pre-scrub) -> DROP.
       3. SDP / ICE / DTLS (any line) -> DROP.
       4. tag not in allow-list -> DROP body.
+      4b. if `tag` is "call" (or a "call"-prefixed variant) AND the body
+          matches one of the known RTLog call-diagnosis line shapes, widen
+          _word_known() with CALL_FORMAT_VOCAB for steps 5-7 ONLY (Copilot
+          follow-up to #120 -- see CALL_FORMAT_VOCAB's comment above).
       5. scrub secrets (deny patterns -> bounded placeholders).
       6. residual high-entropy tripwire -> fall back to attribute summary.
       7. POSITIVE structured-shape gate: if the scrubbed body is NOT
          recognizably structured telemetry, replace it with the attribute
          summary (or DROP if no safe attributes).
       8. hard length cap; empty -> DROP.
+
+    `tag` is the raw device tag (e.g. "call"), optional and used ONLY for the
+    4b scoping above; omitting it (existing callers, tests) simply means the
+    call-format vocabulary never widens -- strictly narrower, never wider,
+    than passing it.
     """
     if orig_body is None:
         return False, ""
@@ -1386,22 +1462,31 @@ def redact_body(orig_body, tag_is_safe, attrs):
     if not tag_is_safe:
         return False, ""
 
-    # 5 -- scrub (benign key=value tokens are held out as sentinels).
-    scrubbed, protected = _scrub_body_ex(norm)
+    # 4b -- scope CALL_FORMAT_VOCAB to the specific call-diagnosis line shapes
+    # it was added for (Copilot follow-up to #120): active for steps 5-7 ONLY.
+    _use_call_vocab = _is_call_format_body(tag, norm)
+    if _use_call_vocab:
+        _set_active_extra_vocab(CALL_FORMAT_VOCAB)
+    try:
+        # 5 -- scrub (benign key=value tokens are held out as sentinels).
+        scrubbed, protected = _scrub_body_ex(norm)
 
-    # 6 -- residual high-entropy tripwire -> attribute summary fallback.
-    if _has_residual_secret(scrubbed):
-        scrubbed = _attribute_summary(attrs)
+        # 6 -- residual high-entropy tripwire -> attribute summary fallback.
+        if _has_residual_secret(scrubbed):
+            scrubbed = _attribute_summary(attrs)
 
-    # 7 -- positive structured-shape gate.
-    elif not _passes_structured_gate(scrubbed, getattr(protected, "unknown", 0),
-                                     getattr(protected, "idlike", 0)):
-        scrubbed = _attribute_summary(attrs)
+        # 7 -- positive structured-shape gate.
+        elif not _passes_structured_gate(scrubbed, getattr(protected, "unknown", 0),
+                                         getattr(protected, "idlike", 0)):
+            scrubbed = _attribute_summary(attrs)
 
-    # 7b -- put the protected benign key=value tokens back (only reached when
-    # the scrubbed body itself passed the tripwire and the gate).
-    else:
-        scrubbed = _restore_kv(scrubbed, protected)
+        # 7b -- put the protected benign key=value tokens back (only reached
+        # when the scrubbed body itself passed the tripwire and the gate).
+        else:
+            scrubbed = _restore_kv(scrubbed, protected)
+    finally:
+        if _use_call_vocab:
+            _set_active_extra_vocab(frozenset())
 
     # 8 -- cap + empty drop.
     if len(scrubbed) > BODY_CAP:
@@ -1717,7 +1802,7 @@ def build_log_record(rec):
 
     orig_msg = rec.get("msg", "") or ""
     attrs = extract_attributes(orig_msg)
-    kept, body = redact_body(orig_msg, tag_safe, attrs)
+    kept, body = redact_body(orig_msg, tag_safe, attrs, rec.get("tag"))
     if not kept:
         return None
 
