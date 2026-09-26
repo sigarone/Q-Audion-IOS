@@ -60,23 +60,61 @@ public final class GroupReceiptOutbox {
     /// logged, and every mutator leaves the stored bytes untouched instead of
     /// overwriting them with a list built from nothing. `drainable` reports
     /// nothing to send while the value is unreadable.
+    ///
+    /// Safety valve (`UnreadableStoredValueValve`): a value that stays
+    /// unreadable would block the outbox forever and every new receipt would be
+    /// dropped instead of queued. The first failed read records its instant in
+    /// a companion UserDefaults key; any successful read (including "nothing
+    /// stored") clears it. A value that has been unreadable without a single
+    /// success for longer than `maxAgeMs` is moved under a companion quarantine
+    /// key (only the latest one is kept, never deleted) and the outbox starts
+    /// empty. Nothing deliverable is lost by that: the bytes cannot change
+    /// while unreadable, so by then every receipt in them is past `maxAgeMs`
+    /// and `drainable` would skip it anyway. Shorter failures (a key that is
+    /// briefly unavailable) never get near the window.
     private func loadEntries() -> [Entry]? {
         if let sealed = UserDefaults.standard.string(forKey: defaultsKey) {
             guard let json = LocalStoreCipher.open(sealed),
                   let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) else {
                 RTLog.error("group", "grp_receipt outbox unseal fail retained=1")
-                return nil
+                return recoverUnreadable()
             }
+            valve.noteReadable()
             return decoded
         }
         if let data = UserDefaults.standard.data(forKey: defaultsKey) {
             guard let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
                 RTLog.error("group", "grp_receipt outbox decode fail retained=1")
-                return nil
+                return recoverUnreadable()
             }
+            valve.noteReadable()
             return decoded
         }
+        valve.noteReadable()
         return []
+    }
+
+    private var valve: UnreadableStoredValueValve {
+        UnreadableStoredValueValve(valueKey: defaultsKey, maxAgeMs: maxAgeMs)
+    }
+
+    /// Applies the safety valve to a value that was just observed unreadable.
+    /// nil = still blocked, the stored bytes were not touched; an empty list =
+    /// the bytes were quarantined and the outbox starts empty.
+    private func recoverUnreadable() -> [Entry]? {
+        let nowSeconds: Double = Date().timeIntervalSince1970
+        let nowMs: Int64 = Int64(nowSeconds * 1000)
+        let outcome: UnreadableStoredValueValve.Outcome = valve.noteUnreadable(nowMs: nowMs)
+        switch outcome {
+        case .blocked:
+            return nil
+        case .quarantined:
+            RTLog.warn("group", "grp_receipt reset=stale retained=1")
+            return []
+        case .quarantineFailed:
+            RTLog.error("group", "grp_receipt reset=fail retained=1")
+            return nil
+        }
     }
 
     private func storeEntries(_ newValue: [Entry]) {
