@@ -70,6 +70,17 @@ struct CallsSettingsScreen: View {
     // UserDefaults-backed via CallsGate (not Keychain); read once on appear.
     @State private var callKitFreeMode: Bool = false
 
+    /// W-AUDIOSRTPDEBUGTOGGLE / W-CODECMENUSRTP — mirrors
+    /// `CallCapabilities.audioSrtpDebugOverride` (a plain static var, not
+    /// itself observable) into local SwiftUI state, exactly the pattern
+    /// `SettingsScreen` used before this control moved here. Seeded from
+    /// whatever override is already in force (falling back to the compiled
+    /// default) so re-entering this screen mid-session shows the real
+    /// current state, not a stale default. Runtime-only — never persisted,
+    /// resets to the compiled default on process restart.
+    @State private var audioSrtpToggle: Bool =
+        CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
@@ -83,6 +94,26 @@ struct CallsSettingsScreen: View {
                     kvRow(label: "Audio Codec",
                           value: container.viewModel.codecPreference.rawValue.capitalized,
                           mono: false)
+
+                    // W-CODECMENUSRTP — moved out of the internal-only
+                    // Settings surface so the transport choice is reachable
+                    // in every build, right under the codec it sits
+                    // alongside. Same binding the internal toggle used:
+                    // `CallCapabilities.audioSrtpDebugOverride ??
+                    // audioSrtpSendEnabled`, in-memory only, per-call
+                    // snapshot means a mid-call flip cannot affect the call
+                    // already in progress.
+                    SettingsToggleRow(
+                        title: "Audio SRTP standard (WebRTC)",
+                        subtitle: "Se attivato su entrambi i dispositivi, l'audio della chiamata passa dal protocollo Q-Audion al trasporto WebRTC DTLS-SRTP standard, con cifratura end-to-end dei frame. Disattivato per impostazione predefinita; non viene salvato e torna disattivato al riavvio dell'app. Ha effetto dalla prossima chiamata.",
+                        isOn: Binding(
+                            get: { audioSrtpToggle },
+                            set: { newValue in
+                                audioSrtpToggle = newValue
+                                CallCapabilities.audioSrtpDebugOverride = newValue
+                            }
+                        )
+                    )
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
                     kvRow(label: "Preset audio",
