@@ -202,6 +202,12 @@ public final class QAudionPeerConnection: NSObject {
     /// has attached a track. `nil` until then (and always `nil` on a call
     /// that never negotiates ``CallCapabilities/audioSrtpV1``).
     public private(set) var nativeAudioSender: RTCRtpSender?
+    /// W-NATIVESRTPDIAG (this task) — read-only access to the pre-created
+    /// native-SRTP audio transceiver, for the one-shot activation
+    /// diagnostics line (`QAudionWebRtcCallController`). `nil` whenever
+    /// ``CallCapabilities/isNativeSrtpEnabledLocally`` was off at `init`
+    /// (the transceiver is never created then).
+    public var nativeAudioTransceiverForDiagnostics: RTCRtpTransceiver? { audioTransceiver }
     private var localAudioSrtpTrack: RTCAudioTrack?
     /// Native libwebrtc FrameCryptor for the 1:1 AUDIO sender+receiver.
     /// Sibling of ``nativeVideoCryptor`` — see ``NativeAudioFrameCryptor``.

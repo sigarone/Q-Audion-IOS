@@ -407,6 +407,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// same contract as `onDecryptFailureDetected`.
     public var onAudioDecryptFailureDetected: (() -> Void)?
 
+    /// W-NATIVESRTPDIAG (this task) — true once this call has logged its
+    /// one-shot "native SRTP enabled locally / announced by peer /
+    /// negotiated" summary line (see ``acceptPeerCapabilities(_:)``). This
+    /// controller is one-per-call, so a plain instance flag is enough to
+    /// guarantee exactly one such line even though `acceptPeerCapabilities`
+    /// is itself idempotent and may run more than once per call (duplicate
+    /// envelope, W418-style).
+    private var didLogNativeSrtpCallStartSummary = false
+
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
     /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
@@ -3188,6 +3197,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// ```
     public func acceptPeerCapabilities(_ peer: [String]?) {
         peerConnection?.acceptPeerCapabilities(peer)
+        // W-NATIVESRTPDIAG (this task) — one-shot, remote-visible summary of
+        // the three distinct "is native SRTP a thing on this call" questions,
+        // for EVERY call (not gated on any of them being true): whether THIS
+        // build/device would use it at all (``isNativeSrtpEnabledLocally``,
+        // the compiled switch or the debug override), whether the PEER's raw
+        // advertised list says it can too (before intersection), and whether
+        // the two sides actually agreed (the intersection). Distinguishing
+        // "enabled locally but peer doesn't have it" from "peer has it but we
+        // don't" from "both do but something else emptied the intersection"
+        // (e.g. an earbud call) is exactly the split a silent-call
+        // archaeology session on this feature would otherwise have to
+        // reconstruct from absence of evidence.
+        if !didLogNativeSrtpCallStartSummary, let negotiated = peerNegotiated() {
+            didLogNativeSrtpCallStartSummary = true
+            let enabledLocally = CallCapabilities.isNativeSrtpEnabledLocally
+            let announcedByPeer = negotiated.peerRawTags.contains(CallCapabilities.audioSrtpV1)
+            let negotiatedSrtp = negotiated.useAudioSrtp
+            log?("audiosrtp summary local=\(enabledLocally ? 1 : 0) peer=\(announcedByPeer ? 1 : 0) negotiated=\(negotiatedSrtp ? 1 : 0)")
+        }
         // WIRE_SPEC §8.7 / .legacy-latch fix — UPWARD re-evaluation only.
         // The AES-256 fail-close path (ensureVideoSealer) latches
         // `videoSealer = .legacy` when the caps known AT THAT MOMENT don't
@@ -3414,6 +3442,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // live sender, `armRekeySwitch` above already confirms that
                 // switch on its own terms.
                 armNativeAudioCaptureLiveCheck()
+                // W-NATIVESRTPDIAG (this task) — one-shot diagnostics, ONLY
+                // on this call's FIRST activation (epoch 0 — a rekey is not
+                // "activation").
+                logNativeSrtpActivationDiagnostics()
+                logNativeSrtpAudioSdpSummary()
             }
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
@@ -3423,6 +3456,80 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         } else {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach exhausted retries — mic stays muted this call")
         }
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — one-shot, remote-visible snapshot of
+    /// everything relevant to "did the native audio path actually come up
+    /// cleanly": the selected transceiver's negotiated state, whether the
+    /// sender track is enabled, whether the FrameCryptor key was installed
+    /// by the time this line is emitted (this call site runs synchronously
+    /// AFTER `activateNativeAudioSrtp` already installed it — see that
+    /// method's own doc — so `keyb4frame=0` here would itself be a bug), and
+    /// the full `RTCAudioSession`/route state WebRTC's native audio unit is
+    /// about to start against.
+    ///
+    /// `RTCRtpTransceiver.currentDirection` — VERIFICATION GAP (no local
+    /// `WebRTC.xcframework` header on this box, see this task's own report):
+    /// asserted from the public webrtc-sdk ObjC SDK as the same
+    /// `RTCRtpTransceiverDirection` enum `.direction` already uses
+    /// (proven to compile elsewhere in this file, e.g. `activateNativeAudioSrtp`'s
+    /// own `transceiver.direction.rawValue`); `currentDirection` itself is
+    /// NOT otherwise used anywhere in this codebase today.
+    private func logNativeSrtpActivationDiagnostics() {
+        var parts: [String] = []
+        if let transceiver = peerConnection?.nativeAudioTransceiverForDiagnostics {
+            parts.append("mid=\(transceiver.mid.isEmpty ? "none" : transceiver.mid)")
+            parts.append("dir=\(transceiver.direction.rawValue)")
+            parts.append("curdir=\(transceiver.currentDirection.rawValue)")
+        }
+        let senderTrackEnabled = peerConnection?.nativeAudioSender?.track?.isEnabled ?? false
+        parts.append("senden=\(senderTrackEnabled ? 1 : 0)")
+        // See this method's own doc — always expected to read 1 here; a 0
+        // would mean `activateNativeAudioSrtp`'s own install-then-attach
+        // ordering broke.
+        let keyInstalled = peerConnection?.nativeAudioCryptor?.keyIsSet ?? false
+        parts.append("keyb4frame=\(keyInstalled ? 1 : 0)")
+
+        // RTCAudioSession's own wrapper state — the fields WebRTC's native
+        // audio unit itself is about to start against, distinct from the
+        // app's manual AVAudioEngine session bookkeeping this task
+        // deliberately does not touch (see this task's own scope note).
+        let rtcSession = RTCAudioSession.sharedInstance()
+        parts.append("cat=\(rtcSession.category)")
+        parts.append("mode=\(rtcSession.mode)")
+        parts.append("opts=\(rtcSession.categoryOptions.rawValue)")
+        parts.append("active=\(rtcSession.isActive ? 1 : 0)")
+        parts.append("manual=\(rtcSession.useManualAudio ? 1 : 0)")
+        parts.append("audioen=\(rtcSession.isAudioEnabled ? 1 : 0)")
+
+        // Route/hardware fields read off the plain AVAudioSession (same
+        // proven-correct API `CallService.sampleWireThroughput`'s own
+        // `audiosrtp hb=` line already uses for output ports/volume), rather
+        // than guessing whether `RTCAudioSession` re-exposes each of these
+        // under the identical name.
+        let avSession = AVAudioSession.sharedInstance()
+        let inPorts = avSession.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: "+")
+        let outPorts = avSession.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
+        parts.append("inp=\(inPorts.isEmpty ? "none" : inPorts)")
+        parts.append("outp=\(outPorts.isEmpty ? "none" : outPorts)")
+        parts.append("inavail=\(avSession.isInputAvailable ? 1 : 0)")
+        parts.append("sr=\(Int(avSession.sampleRate))")
+        parts.append("iobufms=\(Int(avSession.ioBufferDuration * 1000))")
+
+        log?("audiosrtp activation " + parts.joined(separator: " "))
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — one-shot, sanitized summary of the
+    /// negotiated audio m=section (see ``AudioSdpSummary`` for exactly what
+    /// it reads and why nothing sensitive can appear in it). Reads the
+    /// CURRENT local description: by the time this runs (this call's first
+    /// native-SRTP activation), a full offer/answer round has already
+    /// completed on both roles, so `localDescription` reflects the final
+    /// negotiated state either way.
+    private func logNativeSrtpAudioSdpSummary() {
+        guard let sdp = peerConnection?.peerConnection?.localDescription?.sdp,
+              let summary = AudioSdpSummary.summarize(sdp) else { return }
+        log?("audiosrtp sdp " + summary)
     }
 
     /// Read the current peer-negotiated capability set. Returns `nil`
