@@ -89,6 +89,21 @@ on:
         type: boolean
         default: false
 
+# Serialize the whole job across EVERY trigger (tag push AND workflow_dispatch,
+# dev_tools or not) -- a single static group, not per-ref/per-tag. Reason: the
+# "Bump version" step reads "latest TestFlight build number" from App Store
+# Connect and writes latest+1; two runs in flight at once (e.g. a tag push
+# landing while someone dispatches a dev_tools build) could read the SAME
+# latest value and produce two builds claiming the same build number, which
+# altool then either rejects as a redundant/duplicate binary or -- worse --
+# silently races on who uploads first. `cancel-in-progress: false` is
+# mandatory here: this queues a second run behind the first (never cancels
+# it), so a tag build already uploading to TestFlight is never killed by a
+# later dispatch (or another tag push) landing on top of it.
+concurrency:
+  group: ios-testflight-upload
+  cancel-in-progress: false
+
 jobs:
   build:
     # Apple requires Xcode 26 / iOS 26 SDK for App Store submissions
@@ -405,9 +420,23 @@ jobs:
           set -e
           BUILD_SOURCE="asc"
           if [ "$rc" -ne 0 ] || [ -z "$LATEST" ]; then
-            echo "WARN: ASC fetch failed/timed out (rc=$rc), falling back to commit count"
+            # Fail CLOSED for a dev_tools dispatch instead of falling back to
+            # the commit-count heuristic: that count is only guaranteed to be
+            # HIGHER than every prior build number when every prior build was
+            # also built from a strictly later commit on a linear main-branch
+            # history. A dev dispatch breaks that assumption on purpose (e.g.
+            # dispatching an OLDER tag for a quick internal build while newer
+            # commits already exist on main), so `git rev-list --count HEAD`
+            # here could be LOWER than a build number already on TestFlight --
+            # exactly the collision this workflow exists to prevent. Refuse
+            # rather than guess; a normal tag build keeps today's fallback.
+            if [ "${DEV_TOOLS_INPUT:-false}" = "true" ]; then
+              echo "::error::ASC get-latest-testflight-build-number failed/timed out (rc=$rc) on a dev_tools dispatch — refusing to fall back to the commit-count heuristic, which is not guaranteed to be higher than an already-uploaded build number for a non-HEAD tag. Re-run once App Store Connect is reachable." >&2
+              exit 1
+            fi
             LATEST=$(git rev-list --count HEAD)
             BUILD_SOURCE="commit-count"
+            echo "::warning::ASC get-latest-testflight-build-number failed/timed out (rc=$rc) — falling back to commit count ($LATEST). Safe for the normal linear tag-on-main history this pipeline assumes; if history was rewritten/rebased, verify the upload step below doesn't report a redundant/duplicate binary."
           fi
           NEW_BUILD=$((LATEST + 1))
           echo "Build number = $NEW_BUILD (source: $BUILD_SOURCE)"
