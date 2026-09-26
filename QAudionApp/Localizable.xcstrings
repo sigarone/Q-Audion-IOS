@@ -31451,13 +31451,13 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} sta trasmettendo video. Vuoi attivare la tua fotocamera?"
+            "value": "%@ sta trasmettendo video. Vuoi attivare la tua fotocamera?"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} is sending video. Turn on your camera?"
+            "value": "%@ is sending video. Turn on your camera?"
           }
         }
       }

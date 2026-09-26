@@ -6855,7 +6855,9 @@ final class AppState: ObservableObject {
             localized: "call.video_pause_request.toast",
             defaultValue: "L'altro utente ha chiesto di disattivare il tuo video",
             comment: "Snackbar — one-shot toast shown when the peer asks us to turn off our own camera by tapping \"No, audio only\" on their own video-request banner")
-        RTLog.info("call", "vidpause rx match=1 was_sending=\(wasSendingFlag)")
+        // CLAUDE.md §13 — pre-bind before the interpolated RTLog call.
+        let line: String = "vidpause rx match=1 was_sending=\(wasSendingFlag)"
+        RTLog.info("call", line)
     }
 
     /// media-consent v1 — responder side of a mid-call renegotiation.
@@ -17999,19 +18001,26 @@ extension AppState {
         }
         promotingReceiveOnlyToCamera = true
         defer { promotingReceiveOnlyToCamera = false }
-        // startVideoPipeline always tears down/replaces any existing
-        // pipeline first (see its own doc), so this safely swaps the
-        // `.external` placeholder for a real `.camera` one.
-        await startVideoPipeline(for: peerId, startPaused: true)
-        guard videoPipeline != nil else {
-            RTLog.warn("call", "vidcap promote ok=0 reason=pipeline_nil")
+        // startVideoPipeline calls `videoPipeline?.stop()` on whatever is
+        // already there, but only ASSIGNS `self.videoPipeline` to the NEW
+        // pipeline on success — its early `guard let ws ... else { return }`
+        // and its catch branches leave `videoPipeline` pointing at the OLD
+        // (now-stopped) `.external` pipeline instance. So `videoPipeline !=
+        // nil` alone cannot tell success from failure here; capture the old
+        // instance first and require the property to have actually changed
+        // (`VideoCallPipeline` is an `NSObject` subclass, so `!==` identity
+        // compare is valid and cheap).
+        let previousPipeline = videoPipeline
+        await startVideoPipeline(for: peerId, sourceMode: .camera, startPaused: true)
+        guard let newPipeline = videoPipeline, newPipeline !== previousPipeline else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=pipeline_start_failed")
             // Roll back to receive-only exactly as it was before the attempt.
             await startVideoPipeline(for: peerId, sourceMode: .external)
             localVideoPaused = true
             announceVideoState(force: false)
             return
         }
-        videoPipeline?.setVideoPaused(false)
+        newPipeline.setVideoPaused(false)
         #if os(iOS)
         wirePixelBufferCapturerWithRetry(retriesRemaining: 5)
         #endif
