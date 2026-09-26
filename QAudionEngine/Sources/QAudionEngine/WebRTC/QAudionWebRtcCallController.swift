@@ -3569,19 +3569,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// the full `RTCAudioSession`/route state WebRTC's native audio unit is
     /// about to start against.
     ///
-    /// `RTCRtpTransceiver.currentDirection` — VERIFICATION GAP (no local
-    /// `WebRTC.xcframework` header on this box, see this task's own report):
-    /// asserted from the public webrtc-sdk ObjC SDK as the same
-    /// `RTCRtpTransceiverDirection` enum `.direction` already uses
-    /// (proven to compile elsewhere in this file, e.g. `activateNativeAudioSrtp`'s
-    /// own `transceiver.direction.rawValue`); `currentDirection` itself is
-    /// NOT otherwise used anywhere in this codebase today.
+    /// `RTCRtpTransceiver.currentDirection:` — an out-param METHOD on this
+    /// pinned SDK (the property form failed the CI simulator build); see the
+    /// call site below.
     private func logNativeSrtpActivationDiagnostics() {
         var parts: [String] = []
         if let transceiver = peerConnection?.nativeAudioTransceiverForDiagnostics {
             parts.append("mid=\(transceiver.mid.isEmpty ? "none" : transceiver.mid)")
             parts.append("dir=\(transceiver.direction.rawValue)")
-            parts.append("curdir=\(transceiver.currentDirection.rawValue)")
+            // W-NATIVESRTPBUILDFIX (2026-09-26) — on this pinned SDK
+            // `currentDirection` is the ObjC out-param METHOD
+            // `-currentDirection:(RTCRtpTransceiverDirection *)`, not a
+            // property (the CI simulator build rejected the property form).
+            // It returns NO before the transceiver has a negotiated
+            // direction; logged as -1 then.
+            var currentDir = RTCRtpTransceiverDirection.inactive
+            let hasCurrentDir = transceiver.currentDirection(&currentDir)
+            let currentDirRaw: Int = hasCurrentDir ? Int(currentDir.rawValue) : -1
+            parts.append("curdir=\(currentDirRaw)")
         }
         let senderTrackEnabled = peerConnection?.nativeAudioSender?.track?.isEnabled ?? false
         parts.append("senden=\(senderTrackEnabled ? 1 : 0)")

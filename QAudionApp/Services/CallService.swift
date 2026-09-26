@@ -470,8 +470,15 @@ final class CallService: @unchecked Sendable {
                 line += " rct=\(stats.remoteCandidateType ?? "none")"
                 line += " rproto=\(stats.remoteCandidateProtocol ?? "none")"
                 line += " mime=\(stats.codecMimeType ?? "none")"
-                line += " clk=\(stats.codecClockRate.map(String.init) ?? "-1")"
-                line += " ch=\(stats.codecChannels.map(String.init) ?? "-1")"
+                // W-NATIVESRTPBUILDFIX — plain Int locals instead of
+                // `Optional.map(String.init)` inside the interpolation: the
+                // app target has not been through the compiler with this
+                // block yet, and CLAUDE.md §13 documents `String(_:)`'s
+                // overload set as a type-checker trap.
+                let clockRate: Int = stats.codecClockRate ?? -1
+                let channels: Int = stats.codecChannels ?? -1
+                line += " clk=\(clockRate)"
+                line += " ch=\(channels)"
                 if let fmtp = stats.codecSdpFmtpLine { line += " fmtp=\(fmtp)" }
             }
             RTLog.info("call", line)

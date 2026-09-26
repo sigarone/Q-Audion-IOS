@@ -74,7 +74,6 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
         XCTAssertEqual(cfg.tcpCandidatePolicy, .disabled)
         XCTAssertEqual(cfg.audioJitterBufferMaxPackets, 50)
         XCTAssertFalse(cfg.audioJitterBufferFastAccelerate)
-        XCTAssertEqual(cfg.audioJitterBufferMinDelayMs, 60)
     }
 
     func testIceServerConversionFromRelayServers() {

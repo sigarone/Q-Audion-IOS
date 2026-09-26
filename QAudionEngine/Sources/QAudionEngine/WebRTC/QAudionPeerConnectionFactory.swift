@@ -434,12 +434,9 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///     faster catch-up for fewer audible artifacts, matching this app's
     ///     existing preference for correctness/quality over latency on the
     ///     legacy sealed-DataChannel path's own NetEQ-equivalent tuning.
-    ///   - `audioJitterBufferMinDelayMs` — set to ``AudioSdpPolicy/ptimeMs``
-    ///     (60) when the SDK exposes it, so NetEQ never runs below one
-    ///     packet's worth of buffering at this path's packetization time.
-    ///     There is no public "max target delay" counterpart on
-    ///     `RTCConfiguration` to set alongside it (verified against the
-    ///     public header — only the min exists).
+    ///   - `audioJitterBufferMinDelayMs` is deliberately NOT set.
+    ///     W-NATIVESRTPBUILDFIX (2026-09-26): the CI simulator build proved
+    ///     this pinned SDK's `RTCConfiguration` has no such member.
     public static func defaultConfiguration(iceServers: [RTCIceServer],
                                             nativeSrtpEnabledLocally: Bool = false) -> RTCConfiguration {
         let config = RTCConfiguration()
@@ -459,16 +456,6 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
             config.tcpCandidatePolicy = .disabled
             config.audioJitterBufferMaxPackets = 50
             config.audioJitterBufferFastAccelerate = false
-            // W-NATIVESRTPDIAG — a bare integer LITERAL (not
-            // `AudioSdpPolicy.ptimeMs`, a typed `Int` constant): this
-            // property's exact ObjC type (`int`/`Int32` vs `NSInteger`/`Int`)
-            // could not be grep-verified against the bundled
-            // `WebRTC.xcframework` header on this box (see this method's own
-            // doc). A literal lets Swift infer whatever integer type the
-            // setter actually declares; a typed-constant argument would risk
-            // a compile-time type mismatch instead. Keep in sync with
-            // `AudioSdpPolicy.ptimeMs` (60) by hand if that ever changes.
-            config.audioJitterBufferMinDelayMs = 60
         }
         return config
     }

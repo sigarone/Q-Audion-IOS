@@ -306,14 +306,15 @@ extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
     /// `WebRTC.xcframework` header on this box): `.decryptionFailed`,
     /// `.missingKey`, `.internalError` are already proven to compile in this
     /// exact file (pre-existing `switch` above). `.new`, `.ok`,
-    /// `.encryptionFailed`, `.keyRingRequestFailed` are NOT previously used
-    /// anywhere in this codebase — asserted from the public webrtc-sdk
-    /// ObjC SDK's `RTCFrameCryptorState` (mirrors the C++
-    /// `FrameCryptorTransformer::FrameCryptionState` enum
-    /// `kNew/kOk/kEncryptionFailed/kDecryptionFailed/kMissingKey/
-    /// kKeyRingRequestFailed/kInternalError` this pinned build is patched
-    /// from), not grep-verified against the actual header. A wrong case name
-    /// here fails LOUDLY (a compile error), not silently.
+    /// `.encryptionFailed` are NOT previously used anywhere in this codebase
+    /// — asserted from the public webrtc-sdk ObjC SDK's
+    /// `RTCFrameCryptorState`, not grep-verified against the actual header.
+    /// W-NATIVESRTPBUILDFIX (2026-09-26) — `.keyRingRequestFailed` was listed
+    /// here too and the CI simulator build proved it does NOT exist on this
+    /// pinned SDK (`type 'RTCFrameCryptorState' has no member
+    /// 'keyRingRequestFailed'`); removed, so that state (if the native side
+    /// has it at all) now lands in the `@unknown default` branch as
+    /// `unk<raw>`.
     /// Short, all-lowercase codes rather than the full CamelCase enum-case
     /// names: this string reaches `RTLog`/the remote log shipper
     /// (`scripts/ship-ios-logs.py`), whose vocabulary gate caps how many
@@ -327,7 +328,6 @@ extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
         case .encryptionFailed: return "encfail"
         case .decryptionFailed: return "decfail"
         case .missingKey: return "misskey"
-        case .keyRingRequestFailed: return "ringfail"
         case .internalError: return "interr"
         @unknown default: return "unk\(state.rawValue)"
         }
