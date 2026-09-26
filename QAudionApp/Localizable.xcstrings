@@ -344,7 +344,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{count} non letti"
+            "value": "%lld non letti"
           }
         }
       }
@@ -1616,7 +1616,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} ti ha silenziato"
+            "value": "%@ ti ha silenziato"
           }
         }
       }
@@ -2132,7 +2132,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aggiornamento a {version} avviato."
+            "value": "Aggiornamento a %@ avviato."
           }
         }
       }
@@ -2186,7 +2186,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Versione copiata: {summary}"
+            "value": "Versione copiata: %@"
           }
         }
       }
@@ -2366,7 +2366,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{count} membri aggiunti."
+            "value": "%lld membri aggiunti."
           }
         }
       }
@@ -2462,7 +2462,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} non è più admin."
+            "value": "%@ non è più admin."
           }
         }
       }
@@ -2474,7 +2474,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} è ora admin."
+            "value": "%@ è ora admin."
           }
         }
       }
@@ -2696,7 +2696,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} rimosso dalla rubrica."
+            "value": "%@ rimosso dalla rubrica."
           }
         }
       }
@@ -2708,7 +2708,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} verificato via {method}."
+            "value": "%1$@ verificato via %2$@."
           }
         }
       }
@@ -2804,7 +2804,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identità di {name} marcata verificata via {method}."
+            "value": "Identità di %1$@ marcata verificata via %2$@."
           }
         }
       }
@@ -2858,7 +2858,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} bloccato."
+            "value": "%@ bloccato."
           }
         }
       }
@@ -2870,7 +2870,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} sbloccato."
+            "value": "%@ sbloccato."
           }
         }
       }
@@ -2882,7 +2882,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apri la chat con {peer} dalla scheda Chat."
+            "value": "Apri la chat con %@ dalla scheda Chat."
           }
         }
       }
@@ -2978,7 +2978,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Interno {ext} non assegnato — verifica il numero."
+            "value": "Interno %lld non assegnato — verifica il numero."
           }
         }
       }
@@ -2990,7 +2990,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Contatto {name} salvato in rubrica."
+            "value": "Contatto %@ salvato in rubrica."
           }
         }
       }
@@ -3002,7 +3002,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Salvataggio fallito: {error}"
+            "value": "Salvataggio fallito: %@"
           }
         }
       }
@@ -3014,7 +3014,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Contatto {name} importato in rubrica."
+            "value": "Contatto %@ importato in rubrica."
           }
         }
       }
@@ -3068,7 +3068,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{failed} foto su {total} non leggibili."
+            "value": "%1$lld foto su %2$lld non leggibili."
           }
         }
       }
@@ -3122,7 +3122,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Allegato non inviato — {error}"
+            "value": "Allegato non inviato — %@"
           }
         }
       }
@@ -3134,7 +3134,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "ID gruppo copiato ({prefix}…)"
+            "value": "ID gruppo copiato (%@…)"
           }
         }
       }
@@ -3230,7 +3230,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Segnate {n} conversazioni come lette."
+            "value": "Segnate %lld conversazioni come lette."
           }
         }
       }
@@ -3452,7 +3452,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gruppo \"{name}\" creato. Invio inviti…"
+            "value": "Gruppo \"%@\" creato. Invio inviti…"
           }
         }
       }
@@ -3464,7 +3464,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Messaggio non inviato — {reason}"
+            "value": "Messaggio non inviato — %@"
           }
         }
       }
@@ -3896,7 +3896,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{failed} foto su {total} non leggibili."
+            "value": "%1$lld foto su %2$lld non leggibili."
           }
         }
       }
@@ -3950,7 +3950,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{failed} foto su {total} non inviate: formato non valido o file troppo grandi."
+            "value": "%1$lld foto su %2$lld non inviate: formato non valido o file troppo grandi."
           }
         }
       }
@@ -4130,7 +4130,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "\"{name}\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
+            "value": "\"%@\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
           }
         }
       }
@@ -4226,7 +4226,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{count} membri · epoch {epoch}"
+            "value": "%1$lld membri · epoch %2$lld"
           }
         }
       }
@@ -4238,7 +4238,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{visible} di {total}"
+            "value": "%1$lld di %2$lld"
           }
         }
       }
@@ -5132,7 +5132,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Numero non valido: {error}"
+            "value": "Numero non valido: %@"
           }
         }
       }
@@ -5228,7 +5228,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Richiesta codice fallita: {error}"
+            "value": "Richiesta codice fallita: %@"
           }
         }
       }
@@ -5324,7 +5324,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Codice non valido o scaduto: {error}"
+            "value": "Codice non valido o scaduto: %@"
           }
         }
       }
@@ -5504,7 +5504,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Push numeri al server fallito: {error}"
+            "value": "Push numeri al server fallito: %@"
           }
         }
       }
@@ -5558,7 +5558,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verifica fallita: {msg}"
+            "value": "Verifica fallita: %@"
           }
         }
       }
@@ -5906,7 +5906,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Errore imprevisto ({status})."
+            "value": "Errore imprevisto (%lld)."
           }
         }
       }
