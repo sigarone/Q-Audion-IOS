@@ -130,6 +130,12 @@ public enum NativeAudioSessionGate {
     /// Set when a native call arms; consumed by `CallKitProvider.reportCallEnded`
     /// to pick the balanced single deactivation (W-ADMBALANCE).
     private static var nativeCallAwaitingBalance = false
+    /// W-NATIVESPKR — whether WebRTC's own session configuration must carry
+    /// `.defaultToSpeaker` (the user's loudspeaker preference on a native
+    /// call). WebRTC re-applies its configuration's category options every
+    /// time it (re)configures the session for its unit (enable, interruption
+    /// end), which silently dropped the option the loudspeaker rides on.
+    private static var webRtcDefaultToSpeaker = false
 
     /// `true` while a native-SRTP call armed manual mode.
     public static var isArmed: Bool {
@@ -142,6 +148,7 @@ public enum NativeAudioSessionGate {
     /// Returns the token `disarm(token:)` needs.
     @discardableResult
     public static func armManualMode() -> Int {
+        lock.lock(); webRtcDefaultToSpeaker = false; lock.unlock()
         let cfgFields = applyWebRtcSessionConfiguration()
         let session = RTCAudioSession.sharedInstance()
         let prevManual = session.useManualAudio
@@ -268,11 +275,9 @@ public enum NativeAudioSessionGate {
     /// path configures `AVAudioSession` directly without ever reading it.
     private static func applyWebRtcSessionConfiguration() -> Int {
         let cfg = RTCAudioSessionConfiguration.webRTC()
-        #if targetEnvironment(simulator)
-        let options: AVAudioSession.CategoryOptions = []
-        #else
-        let options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
-        #endif
+        var options = baseCategoryOptions
+        lock.lock(); let speakerOn = webRtcDefaultToSpeaker; lock.unlock()
+        if speakerOn { options.insert(.defaultToSpeaker) }
         var fields = 0
         fields += kvcSet(cfg, key: "category", setter: "setCategory:",
                          value: AVAudioSession.Category.playAndRecord.rawValue as NSString)
@@ -293,6 +298,72 @@ public enum NativeAudioSessionGate {
         let fn = unsafeBitCast(method_getImplementation(method), to: SetConfigurationFn.self)
         fn(RTCAudioSessionConfiguration.self as AnyObject, setter, cfg)
         return fields
+    }
+
+    /// The category options every session mutation of a native call uses
+    /// (same as `CallKitProvider` / `configureForVoIP`).
+    static var baseCategoryOptions: AVAudioSession.CategoryOptions {
+        #if targetEnvironment(simulator)
+        return []
+        #else
+        return [.allowBluetoothHFP]
+        #endif
+    }
+
+    // MARK: - W-NATIVESPKR (2026-09-26): speaker route on a native call
+
+    /// The in-call speaker toggle on a native-SRTP call: category + output
+    /// override under `RTCAudioSession`'s configuration lock (the raw
+    /// `AVAudioSession` path mutated the session outside WebRTC's lock while
+    /// its unit runs), WITHOUT `.interruptSpokenAudioAndMixWithOthers` (the
+    /// W-NOMIXOPTION audit removed it everywhere else; a mixable session is
+    /// at odds with an echo-cancelling unit), and with WebRTC's own
+    /// configuration updated so its next reconfiguration keeps the choice.
+    /// `hardOverride`: iPad (no receiver route) pins `.speaker`; iPhone keeps
+    /// the soft W-SOFTSPKR model (`.defaultToSpeaker` + override `.none`).
+    /// The override goes through `AVAudioSession` (already used for it
+    /// app-wide) inside the lock: `RTCAudioSession`'s own override wrapper
+    /// is not used anywhere in this repo and no header is available here.
+    @discardableResult
+    public static func applySpeakerRoute(speakerOn: Bool, hardOverride: Bool) -> Bool {
+        lock.lock(); webRtcDefaultToSpeaker = speakerOn; lock.unlock()
+        _ = applyWebRtcSessionConfiguration()
+        var options = baseCategoryOptions
+        if speakerOn { options.insert(.defaultToSpeaker) }
+        let port: AVAudioSession.PortOverride = (hardOverride && speakerOn) ? .speaker : .none
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.lockForConfiguration()
+        var ok = 1
+        do {
+            try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(port)
+        } catch {
+            ok = 0
+        }
+        rtcSession.unlockForConfiguration()
+        let speakerFlag = speakerOn ? 1 : 0
+        let hardFlag = hardOverride ? 1 : 0
+        emit("admgate spk=\(speakerFlag) hard=\(hardFlag) ok=\(ok)")
+        return ok == 1
+    }
+
+    /// Reference-implementation parity: at call configuration (CallKit start
+    /// / answer action) a native call starts from output override `.none`,
+    /// so a loudspeaker override leaked from a previous call cannot pin the
+    /// new one. Under `RTCAudioSession`'s lock, through `AVAudioSession`.
+    /// Only for a call whose native-SRTP snapshot is on.
+    public static func resetOutputOverrideForNativeCall(site: Int) {
+        guard CallCapabilities.nativeSrtpCallSnapshot == true else { return }
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.lockForConfiguration()
+        var ok = 1
+        do {
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+        } catch {
+            ok = 0
+        }
+        rtcSession.unlockForConfiguration()
+        emit("admgate route=0 site=\(site) ok=\(ok)")
     }
 
     private static func kvcSet(_ object: NSObject, key: String, setter: String, value: AnyObject) -> Int {

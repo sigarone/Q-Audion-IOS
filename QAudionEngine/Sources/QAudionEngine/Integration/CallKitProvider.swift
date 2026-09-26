@@ -679,6 +679,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             print("[CallKitProvider] setCategory fail site=start code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
         rtcSession.unlockForConfiguration()
+        // W-NATIVESPKR (2026-09-26) — native-SRTP calls only: start from
+        // output override `.none` (reference-implementation parity).
+        NativeAudioSessionGate.resetOutputOverrideForNativeCall(site: 1)
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
         // W-CKSTARTACTIVATE (2026-09-09) — the answer side has had this
@@ -710,6 +713,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             }
             action.fulfill()
             print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
+            // W-NATIVESPKR (2026-09-26) — native-SRTP calls only.
+            NativeAudioSessionGate.resetOutputOverrideForNativeCall(site: 2)
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,

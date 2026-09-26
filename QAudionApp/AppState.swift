@@ -19138,6 +19138,19 @@ extension AppState {
         // route-specific is needed here. The audio engine rebuilds itself on
         // the real speaker<->receiver flip (AudioCapture's debounced route
         // handler), same cost as a manual toggle today.
+        //
+        // W-NATIVESPKR (2026-09-26) — native-SRTP call (manual audio mode
+        // armed): same soft/iPad model, but through RTCAudioSession's
+        // configuration lock, without `.interruptSpokenAudioAndMixWithOthers`,
+        // and with WebRTC's own session configuration updated so its next
+        // reconfiguration of the session keeps `.defaultToSpeaker`. Every
+        // other call takes the unchanged path below.
+        if NativeAudioSessionGate.isArmed {
+            let hardOverride: Bool = UIDevice.current.userInterfaceIdiom == .pad
+            NativeAudioSessionGate.applySpeakerRoute(speakerOn: enabled, hardOverride: hardOverride)
+            updateProximityMonitoring()
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         do {
             #if !targetEnvironment(simulator)
