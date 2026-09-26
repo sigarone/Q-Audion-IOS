@@ -121,6 +121,22 @@ public enum NativeAudioSessionGate {
     static let webRtcIoBufferDuration: TimeInterval = 0.005
     static let webRtcSampleRate: Double = 48_000
 
+    /// Guards the statics below (arm token, speaker preference).
+    ///
+    /// LOCK ORDER (W-ADMATOMIC, 2026-09-26): `RTCAudioSession`'s configuration
+    /// lock (`lockForConfiguration()`) FIRST, then this one — never the other
+    /// way round. This lock is only held for a read or write of these statics:
+    /// never across an `RTCAudioSession`/`AVAudioSession` call, a log emit or
+    /// a callback. Every change this type makes to `isAudioEnabled` /
+    /// `useManualAudio` runs inside the configuration lock TOGETHER with the
+    /// ownership check it depends on (the token, or "armed"), so no arm,
+    /// enable or disarm can interleave between the check and the mutation: a
+    /// stale owner can never switch a successor's unit off. The configuration
+    /// lock is thread-affine, so these critical sections never await; they
+    /// never call back into app code either — the two setters only notify
+    /// WebRTC's own audio device module, which applies the change
+    /// asynchronously on its own thread. `CallKitProvider` takes the same
+    /// configuration lock and never calls into this type while holding it.
     private static let lock = NSLock()
     /// Non-zero while a native-SRTP call owns manual mode. A token, not a
     /// Bool, so a replaced PeerConnection of the same call (glare, duplicate
@@ -165,6 +181,9 @@ public enum NativeAudioSessionGate {
         lock.lock(); webRtcDefaultToSpeaker = false; lock.unlock()
         let cfgFields = applyWebRtcSessionConfiguration()
         let session = RTCAudioSession.sharedInstance()
+        // W-ADMATOMIC — the session switch and the token take-over are one
+        // critical section (lock order: see `lock`).
+        session.lockForConfiguration()
         let prevManual = session.useManualAudio
         let prevEnabled = session.isAudioEnabled
         // Disable first, then manual on: `canPlayOrRecord` (= !manual || enabled)
@@ -177,6 +196,7 @@ public enum NativeAudioSessionGate {
         armedToken = lastToken
         let token = armedToken
         lock.unlock()
+        session.unlockForConfiguration()
         let prevManualFlag = prevManual ? 1 : 0
         let prevEnabledFlag = prevEnabled ? 1 : 0
         emit("admgate arm=1 prevman=\(prevManualFlag) preven=\(prevEnabledFlag) cfg=\(cfgFields) tok=\(token)")
@@ -190,23 +210,67 @@ public enum NativeAudioSessionGate {
     /// Returns `true` when the state actually changed.
     @discardableResult
     public static func setNativeAudioActive(_ active: Bool, reason: Int) -> Bool {
+        // Fast path, unchanged: never armed (every call with native SRTP off)
+        // → the session is not touched and no lock is taken.
         guard isArmed else { return false }
+        return switchUnit(active, reason: reason, requiredToken: nil)
+    }
+
+    /// W-ADMATOMIC (2026-09-26) — `QAudionPeerConnection.close()`'s backstop:
+    /// switch the unit off only if `token` is STILL the arm in force, with the
+    /// check and the switch in one critical section. It used to be
+    /// `isCurrent(token:)` followed by `setNativeAudioActive(false)`: a
+    /// replacement PeerConnection could arm and have its unit enabled in
+    /// between, and the stale close then switched the successor's unit off.
+    /// Returns `true` when the state actually changed.
+    @discardableResult
+    public static func setNativeAudioInactive(ifCurrent token: Int, reason: Int) -> Bool {
+        guard token != 0 else { return false }
+        return switchUnit(false, reason: reason, requiredToken: token)
+    }
+
+    /// The one place this type flips `isAudioEnabled` for a running call.
+    /// Ownership (`requiredToken` is the arm in force, or — `nil` — any arm)
+    /// is checked and the unit switched inside ONE configuration-lock
+    /// critical section (see `lock`); the log line is emitted after it.
+    private static func switchUnit(_ active: Bool, reason: Int, requiredToken: Int?) -> Bool {
         let session = RTCAudioSession.sharedInstance()
         let activeFlag = active ? 1 : 0
+        session.lockForConfiguration()
+        lock.lock()
+        let owned: Bool
+        if let required = requiredToken {
+            owned = required != 0 && armedToken == required
+        } else {
+            owned = armedToken != 0
+        }
+        lock.unlock()
+        guard owned else {
+            session.unlockForConfiguration()
+            return false
+        }
         guard session.useManualAudio else {
+            session.unlockForConfiguration()
             emit("admgate en=\(activeFlag) why=\(reason) skip=1")
             return false
         }
-        guard session.isAudioEnabled != active else { return false }
+        guard session.isAudioEnabled != active else {
+            session.unlockForConfiguration()
+            return false
+        }
         session.isAudioEnabled = active
         let count = session.activationCount
         let sessionActive = session.isActive ? 1 : 0
+        session.unlockForConfiguration()
         emit("admgate en=\(activeFlag) why=\(reason) cnt=\(count) act=\(sessionActive)")
         return true
     }
 
     /// Whether `token` is the arm currently in force (a replaced
-    /// PeerConnection of the same call holds a stale one).
+    /// PeerConnection of the same call holds a stale one). A snapshot only:
+    /// to act on the answer, use a call that checks it under the
+    /// configuration lock (`setNativeAudioInactive(ifCurrent:reason:)`,
+    /// `disarm(token:)`).
     public static func isCurrent(token: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return token != 0 && armedToken == token
@@ -220,19 +284,33 @@ public enum NativeAudioSessionGate {
 
     /// Release manual-mode ownership after the PeerConnection that armed it
     /// closed. Ignored for a stale token (a replaced PeerConnection).
+    ///
+    /// W-ADMATOMIC (2026-09-26) — the token check, the release and the unit
+    /// switch-off are ONE configuration-lock critical section. The check used
+    /// to be released before `isAudioEnabled = false`: a replacement could arm
+    /// and enable its unit in that window, and this (by then stale) disarm
+    /// muted the successor's call.
     public static func disarm(token: Int) {
-        lock.lock()
-        guard token != 0, armedToken == token else {
-            let current = armedToken
-            lock.unlock()
+        guard token != 0 else {
+            lock.lock(); let current = armedToken; lock.unlock()
             emit("admgate disarm=0 tok=\(token) cur=\(current)")
             return
         }
-        armedToken = 0
-        lock.unlock()
         let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        lock.lock()
+        let current = armedToken
+        let owned = current == token
+        if owned { armedToken = 0 }
+        lock.unlock()
+        guard owned else {
+            session.unlockForConfiguration()
+            emit("admgate disarm=0 tok=\(token) cur=\(current)")
+            return
+        }
         if session.isAudioEnabled { session.isAudioEnabled = false }
         let manualFlag = session.useManualAudio ? 1 : 0
+        session.unlockForConfiguration()
         emit("admgate disarm=1 tok=\(token) man=\(manualFlag)")
     }
 
@@ -252,8 +330,19 @@ public enum NativeAudioSessionGate {
             if wasArmed { emit("admgate audit=1 stalearm=1") }
         }
         let session = RTCAudioSession.sharedInstance()
+        // Lock-free pre-check, unchanged: in a process where manual mode was
+        // never armed (every session with the toggle off) this returns here,
+        // without taking the configuration lock.
         guard session.useManualAudio, session.isAudioEnabled else { return }
+        // W-ADMATOMIC — re-checked and switched off in one configuration-lock
+        // critical section (see `lock`).
+        session.lockForConfiguration()
+        guard session.useManualAudio, session.isAudioEnabled else {
+            session.unlockForConfiguration()
+            return
+        }
         session.isAudioEnabled = false
+        session.unlockForConfiguration()
         let nativeFlag = nativeCall ? 1 : 0
         emit("admgate audit=1 forced=1 native=\(nativeFlag)")
     }

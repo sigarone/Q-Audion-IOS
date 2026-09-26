@@ -1784,10 +1784,14 @@ public final class QAudionPeerConnection: NSObject {
         // the stop runs through the same disable path as a normal call end.
         // No-op unless THIS PeerConnection armed manual mode and the unit is
         // still enabled.
+        // W-ADMATOMIC — ownership check and switch-off are one critical
+        // section inside the gate: a replacement PeerConnection that armed
+        // and enabled its unit meanwhile is never switched off from here.
         let armedToken = manualAudioToken
-        if armedToken != 0, NativeAudioSessionGate.isCurrent(token: armedToken) {
-            NativeAudioSessionGate.setNativeAudioActive(
-                false, reason: NativeAudioUnitGateDecisions.ChangeReason.peerConnectionClose.rawValue)
+        if armedToken != 0 {
+            NativeAudioSessionGate.setNativeAudioInactive(
+                ifCurrent: armedToken,
+                reason: NativeAudioUnitGateDecisions.ChangeReason.peerConnectionClose.rawValue)
         }
         peerConnection?.close()
         peerConnection = nil
