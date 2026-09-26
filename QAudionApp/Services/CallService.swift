@@ -479,7 +479,12 @@ final class CallService: @unchecked Sendable {
                 let channels: Int = stats.codecChannels ?? -1
                 line += " clk=\(clockRate)"
                 line += " ch=\(channels)"
-                if let fmtp = stats.codecSdpFmtpLine { line += " fmtp=\(fmtp)" }
+                // W-NATIVESRTPFMTP — never the raw fmtp line (text the peer's
+                // SDP controls): only allowlisted numeric params, one flat
+                // `fmtp_<key>=<digits>` token each (FmtpLogTokens).
+                for fmtpToken in FmtpLogTokens.tokens(stats.codecSdpFmtpLine) {
+                    line += " \(fmtpToken)"
+                }
             }
             RTLog.info("call", line)
         }
