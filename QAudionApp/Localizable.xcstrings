@@ -31425,6 +31425,114 @@
           }
         }
       }
+    },
+    "call.video_invite.title": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — title shown while the peer is sending video and we are not",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiesta video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video request"
+          }
+        }
+      }
+    },
+    "call.video_invite.body": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — body text; %@ is the peer's display name",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ sta trasmettendo video. Vuoi attivare la tua fotocamera?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is sending video. Turn on your camera?"
+          }
+        }
+      }
+    },
+    "call.video_invite.close_a11y": {
+      "extractionState": "manual",
+      "comment": "Accessibility label — close button on the peer-video-invite banner",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        }
+      }
+    },
+    "call.video_invite.decline_button": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — plain-text button that dismisses the banner and asks the peer to turn their camera off too",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No, solo audio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No, audio only"
+          }
+        }
+      }
+    },
+    "call.video_invite.accept_button": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — filled button that turns on the local camera",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on video"
+          }
+        }
+      }
+    },
+    "call.video_pause_request.toast": {
+      "extractionState": "manual",
+      "comment": "Snackbar — one-shot toast shown when the peer asks us to turn off our own camera by tapping \"No, audio only\" on their own video-request banner",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'altro utente ha chiesto di disattivare il tuo video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person asked you to turn off your video"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

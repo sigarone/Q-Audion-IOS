@@ -14,6 +14,18 @@ import WebRTC
 /// transparent mesh background replaced by real video, info minimized.
 struct VideoCallView: View {
     @EnvironmentObject var appState: AppState
+    /// Entitlements Task 5 parity — same environment object
+    /// `LiveInCallScreen` reads for its own upgrade-to-video gating.
+    /// `capabilityGate` is injected on `ContentView()` (QAudionApp.swift),
+    /// and `VideoCallView` is a plain descendant of it via
+    /// `ContentView.inCallStack` (not a `.sheet`/`.fullScreenCover`
+    /// presented above that injection point), so it's available here too.
+    @EnvironmentObject private var capabilityGate: CapabilityGate
+    /// W-VIDPARITY — drives `.sheet(item:)` for `UpgradeSheet` when the
+    /// user taps "Attiva video" on `PeerVideoInviteBanner` without the
+    /// `feat.calls.video` entitlement. Mirrors `LiveInCallScreen`'s
+    /// `upgradeSheetCapability`.
+    @State private var upgradeSheetCapability: Capability? = nil
 
     /// W-MUTEBTNSRC (2026-07-24) — read LIVE from the published mirror. This was
     /// an `@State` seeded once in `onAppear`, so a mute arriving from CallKit
@@ -127,11 +139,33 @@ struct VideoCallView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        // W-VIDPARITY — "Richiesta video" banner: the peer is sending
+        // video and we're not (RemoteOnly lane). Mutually exclusive with
+        // both badges above by construction (`shouldShowPeerVideoInviteBanner`
+        // requires `peerCameraSending`, i.e. NOT `remoteVideoPaused`, and
+        // NOT `peerScreenShareActive`), so no stacking offset is needed —
+        // pinned at the same top position as the other top overlays.
+        .overlay(alignment: .top) {
+            if appState.showPeerVideoInviteBanner {
+                PeerVideoInviteBanner(
+                    peerName: resolvedPeerDisplayName,
+                    onAccept: { appState.acceptPeerVideoInvite() },
+                    onDecline: { appState.declinePeerVideoInvite() },
+                    onDismiss: { appState.dismissPeerVideoInvite() },
+                    acceptLocked: !capabilityGate.isUnlocked(.callsVideo),
+                    onAcceptLocked: { upgradeSheetCapability = .callsVideo }
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 56)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         .animation(.easeInOut(duration: 0.25), value: appState.peerScreenShareActive)
         .animation(.easeInOut(duration: 0.25), value: appState.remoteVideoPaused)
+        .animation(.easeInOut(duration: 0.25), value: appState.showPeerVideoInviteBanner)
         .statusBarHidden(!showControls)
         .onAppear {
             ScreenshotLockService.lock()
@@ -162,6 +196,12 @@ struct VideoCallView: View {
         // `NameResolutionService` lands the real name mid-call.
         .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
             resolveDisplayName()
+        }
+        // Entitlements Task 5 parity — same UpgradeSheet presentation
+        // LiveInCallScreen uses for its own locked in-call controls.
+        .sheet(item: $upgradeSheetCapability) { capability in
+            UpgradeSheet(capability: capability)
+                .environmentObject(appState)
         }
     }
 
@@ -273,12 +313,19 @@ struct VideoCallView: View {
         .accessibilityLabel(Text("Il peer ha messo in pausa la videocamera"))
     }
 
+    /// W-VIDPARITY — same resolved-name-with-fallback the topBar title
+    /// already computed inline; factored out so `PeerVideoInviteBanner`
+    /// can reuse it instead of duplicating the fallback chain.
+    private var resolvedPeerDisplayName: String {
+        peerDisplayName.isEmpty ? (appState.callContactId ?? "Videochiamata") : peerDisplayName
+    }
+
     // MARK: - Top bar
 
     private var topBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(peerDisplayName.isEmpty ? (appState.callContactId ?? "Videochiamata") : peerDisplayName)
+                Text(resolvedPeerDisplayName)
                     .font(.headline)
                     .foregroundColor(.white)
 
@@ -514,7 +561,19 @@ struct VideoCallView: View {
                 label: isCameraOn ? "Video attivo" : "Video spento",
                 isActive: !isCameraOn
             ) {
-                appState.videoSetCameraEnabled(!isCameraOn)
+                // Entitlements Task 5 parity — Android gates this manual
+                // toggle too, not just the banner's "Attiva video". Same
+                // shape as the banner's `onAcceptLocked` above: turning OFF
+                // is never gated.
+                if !isCameraOn, !capabilityGate.isUnlocked(.callsVideo) {
+                    upgradeSheetCapability = .callsVideo
+                    return
+                }
+                // W-VIDPARITY / BUG (C) — was `videoSetCameraEnabled`,
+                // which is a silent no-op on a `.receiveOnly` pipeline
+                // (`.external` source, no AVCaptureSession). This routes
+                // to the right mechanism for however the call got here.
+                appState.setLocalCameraEnabled(!isCameraOn)
             }
             videoButton(icon: "camera.rotate.fill", label: "Inverti") {
                 appState.videoFlipCamera()
@@ -756,6 +815,11 @@ struct VideoCallView_Previews: PreviewProvider {
     static var previews: some View {
         VideoCallView()
             .environmentObject(previewAppState())
+            // W-VIDPARITY round 2 — VideoCallView now reads
+            // `@EnvironmentObject private var capabilityGate: CapabilityGate`
+            // (entitlement gating for the camera button / invite banner);
+            // same fixture every other preview in this app injects.
+            .environmentObject(CapabilityGate.previewInstance())
     }
 
     static func previewAppState() -> AppState {

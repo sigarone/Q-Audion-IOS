@@ -750,6 +750,21 @@ final class AppState: ObservableObject {
     /// re-derive it either.
     var peerCameraSending: Bool { isVideoCall && !remoteVideoPaused }
 
+    /// W-VIDPARITY — drives `PeerVideoInviteBanner` in `VideoCallView`.
+    /// Thin `@MainActor` wrapper around `PeerVideoInviteDecisions
+    /// .shouldShowPeerVideoInviteBanner`, fed from the same lane signals
+    /// `videoLaneName` above already derives from (Android InCallScreen's
+    /// `videoState == RemoteOnly && !dismissed && incomingUpgrade == null`).
+    var showPeerVideoInviteBanner: Bool {
+        PeerVideoInviteDecisions.shouldShowPeerVideoInviteBanner(
+            isVideoCall: isVideoCall,
+            peerCameraSending: peerCameraSending,
+            localCameraSending: localCameraSending,
+            peerScreenShareActive: peerScreenShareActive,
+            dismissedThisCall: peerVideoInviteDismissed,
+            pendingIncomingUpgrade: pendingIncomingUpgrade != nil)
+    }
+
     private var videoLaneName: String {
         guard isVideoCall else { return "Off" }
         if localCameraSending && peerCameraSending { return "Both" }
@@ -1590,6 +1605,29 @@ final class AppState: ObservableObject {
         var isIntentOnly: Bool = false
     }
     @Published var pendingIncomingUpgrade: PendingIncomingUpgrade?
+
+    /// W-VIDPARITY — banner-dismiss latch for THIS call: once the user
+    /// closes the "Richiesta video" banner (X or "No, solo audio"), it
+    /// must never reappear even if the RemoteOnly lane flaps (peer's
+    /// camera pausing/resuming again). Mirrors Android InCallScreen's
+    /// `dismissed` flag. Per-call — reset alongside the other per-call
+    /// video flags at both call-start and call-end (see
+    /// `remoteVideoPaused`'s reset sites).
+    @Published var peerVideoInviteDismissed: Bool = false
+
+    /// W-VIDPARITY — one-shot resolved toast text for a just-honored
+    /// `call_video_pause_request` from the peer. This is a plain
+    /// `ObservableObject`, not a View, so it has no reach into the
+    /// environment-provided `QAudionSnackbarHostState` — same shape as
+    /// `GroupCallViewModel.muteRequestToastText`: `ContentView` observes
+    /// this via `.onChange` and pushes it through that same snackbar,
+    /// then clears it back to nil.
+    @Published var peerVideoPauseToastText: String? = nil
+
+    /// W-VIDPARITY — re-entrancy guard for `promoteReceiveOnlyToCamera`: a
+    /// fast double tap on "Attiva video" must not start two competing
+    /// video pipelines.
+    private var promotingReceiveOnlyToCamera: Bool = false
 
     /// True once camera video has been consented to in THIS call (either
     /// direction). Later camera renegotiations auto-accept instead of
@@ -6184,6 +6222,9 @@ final class AppState: ObservableObject {
             // "peer paused their camera" state from a previous call.
             self.remoteVideoPaused = false
             self.localVideoPaused = false
+            // W-VIDPARITY: a fresh incoming call must not inherit a stale
+            // banner-dismiss latch from a previous call.
+            self.peerVideoInviteDismissed = false
             // #2 (server-fetch trust source): warm the caller's server identity
             // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
             // resolveServerPeerKey can cross-check the OFFER's signer key. Race
@@ -6803,6 +6844,46 @@ final class AppState: ObservableObject {
                 self.remoteVideoPaused = paused
             }
         }
+
+        // W-VIDPARITY — peer asked US to turn our camera off (the "No,
+        // solo audio" half of THEIR RemoteOnly banner). No consent dialog:
+        // auto-comply, mirroring Android CallController.kt's pause-request
+        // listener. Named method (not inline here) per CLAUDE.md §13 —
+        // the logic below has several interpolated RTLog lines, which
+        // times out the type-checker if built inline inside this closure.
+        ws.onCallVideoPauseRequest = { [weak self] callId in
+            DispatchQueue.main.async {
+                self?.handleIncomingVideoPauseRequest(callId: callId)
+            }
+        }
+    }
+
+    /// W-VIDPARITY — honor side of `call_video_pause_request`: the peer
+    /// asked us to turn OUR camera off (they tapped "No, solo audio" on
+    /// their own RemoteOnly banner). No consent dialog — auto-comply via
+    /// the normal complete camera-off op (pipeline + flag + beacon), same
+    /// as any other camera-off control, and surface a one-shot toast so
+    /// the local user understands why their video stopped. Mirrors
+    /// Android `CallController.kt`'s pause-request listener exactly.
+    @MainActor
+    private func handleIncomingVideoPauseRequest(callId: String) {
+        let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl
+        let activeCallId = impl?.getActiveCallId()
+        guard PeerVideoInviteDecisions.shouldHonorVideoPauseRequest(
+            activeCallId: activeCallId, requestCallId: callId)
+        else {
+            RTLog.info("call", "vidpause rx match=0")
+            return
+        }
+        let wasSendingFlag = localCameraSending ? 1 : 0
+        videoSetCameraEnabled(false)
+        peerVideoPauseToastText = String(
+            localized: "call.video_pause_request.toast",
+            defaultValue: "L'altro utente ha chiesto di disattivare il tuo video",
+            comment: "Snackbar — one-shot toast shown when the peer asks us to turn off our own camera by tapping \"No, audio only\" on their own video-request banner")
+        // CLAUDE.md §13 — pre-bind before the interpolated RTLog call.
+        let line: String = "vidpause rx match=1 was_sending=\(wasSendingFlag)"
+        RTLog.info("call", line)
     }
 
     /// media-consent v1 — responder side of a mid-call renegotiation.
@@ -15840,6 +15921,9 @@ final class AppState: ObservableObject {
         // paused their camera" state from a previous call.
         remoteVideoPaused = false
         localVideoPaused = false
+        // W-VIDPARITY: a fresh outgoing call must not inherit a stale
+        // banner-dismiss latch from a previous call.
+        peerVideoInviteDismissed = false
         // #2 (server-fetch trust source): warm the peer's server identity key
         // so the handshake verify of the callee's ACCEPT has the §5c server key.
         prefetchServerPeerKey(contactId)
@@ -17953,6 +18037,124 @@ extension AppState {
     }
     #endif
 
+    /// W-VIDPARITY / BUG (C) — turn the local camera ON after answering a
+    /// video call WITHOUT video (W-VIDPRIVACY `.receiveOnly`). No SDP
+    /// renegotiation: the callee already negotiated `m=video` with an
+    /// inert `WebRTCPixelBufferCapturer` placeholder at answer time
+    /// (`handleIncomingWebRtcOffer` sets `controller.useExternalVideoSource
+    /// = true` and accepts with `audioOnly: !hasVideo`), so promoting to a
+    /// real camera only needs to replace the `.external` pipeline with a
+    /// `.camera` one and re-wire the SAME placeholder capturer — exactly
+    /// what `performAcceptIncoming`'s `.cameraConsented` branch already
+    /// does for a call answered WITH video (see that branch, above, for
+    /// the pixel-buffer wiring race this mirrors). `upgradeToVideo()` is
+    /// the WRONG tool here: `m=video` already exists (nothing to
+    /// renegotiate) and its own `guard isInCall, !isVideoCall` makes it a
+    /// silent no-op on an already-video call anyway — see
+    /// `PeerVideoInviteDecisions.localCameraEnableRoute`'s kdoc for the
+    /// 3-way routing `setLocalCameraEnabled` uses to reach this method.
+    @MainActor
+    func promoteReceiveOnlyToCamera() async {
+        guard !promotingReceiveOnlyToCamera else { return }
+        guard let peerId = callContactId, !peerId.isEmpty else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=no_peer")
+            return
+        }
+        // Same camera-permission pre-check as performWebRtcVideoUpgrade's
+        // own gate, same user-facing text — leaves receive-only intact.
+        let camAuth = AVCaptureDevice.authorizationStatus(for: .video)
+        if camAuth == .denied || camAuth == .restricted {
+            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            RTLog.warn("call", "vidcap promote ok=0 reason=permission_denied")
+            return
+        }
+        // W-VIDPARITY round 2 — pin the call this promotion is FOR before
+        // the long-running awaits below (camera permission prompt / AV
+        // session start can take a long time). A hangup or a new call
+        // arriving while suspended must not let the resumed task install a
+        // camera pipeline or announce video for a call that is no longer
+        // this one.
+        guard let callIdBefore = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+              !callIdBefore.isEmpty else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=no_call")
+            return
+        }
+        promotingReceiveOnlyToCamera = true
+        defer { promotingReceiveOnlyToCamera = false }
+        // startVideoPipeline calls `videoPipeline?.stop()` on whatever is
+        // already there, but only ASSIGNS `self.videoPipeline` to the NEW
+        // pipeline on success — its early `guard let ws ... else { return }`
+        // and its catch branches leave `videoPipeline` pointing at the OLD
+        // (now-stopped) `.external` pipeline instance. So `videoPipeline !=
+        // nil` alone cannot tell success from failure here; capture the old
+        // instance first and require the property to have actually changed
+        // (`VideoCallPipeline` is an `NSObject` subclass, so `!==` identity
+        // compare is valid and cheap).
+        let previousPipeline = videoPipeline
+        await startVideoPipeline(for: peerId, sourceMode: .camera, startPaused: true)
+        guard isStillTheActiveCall(callIdBefore) else {
+            tearDownStalePromotion(previousPipeline: previousPipeline)
+            RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+            return
+        }
+        guard let newPipeline = videoPipeline, newPipeline !== previousPipeline else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=pipeline_start_failed")
+            guard isStillTheActiveCall(callIdBefore) else {
+                tearDownStalePromotion(previousPipeline: previousPipeline)
+                RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+                return
+            }
+            // Roll back to receive-only exactly as it was before the attempt.
+            await startVideoPipeline(for: peerId, sourceMode: .external)
+            guard isStillTheActiveCall(callIdBefore) else {
+                tearDownStalePromotion(previousPipeline: previousPipeline)
+                RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+                return
+            }
+            localVideoPaused = true
+            announceVideoState(force: false)
+            return
+        }
+        newPipeline.setVideoPaused(false)
+        #if os(iOS)
+        wirePixelBufferCapturerWithRetry(retriesRemaining: 5)
+        #endif
+        localVideoPaused = false
+        videoTransitionCause = "local-camera-start"
+        announceVideoState(force: false)
+        VideoKeyframeController.shared.requestKeyFrame()
+        RTLog.info("call", "vidcap promote ok=1 reason=receive_only_upgrade")
+    }
+
+    /// W-VIDPARITY round 2 — true iff `callIdBefore` is still the call
+    /// `getActiveCallId()` believes is live, i.e. neither ended nor
+    /// replaced by a new call while `promoteReceiveOnlyToCamera` was
+    /// suspended on an await. Same case-insensitive compare
+    /// `shouldHonorVideoPauseRequest` already applies to call ids
+    /// (iOS/Android can echo the same id in different case).
+    @MainActor
+    private func isStillTheActiveCall(_ callIdBefore: String) -> Bool {
+        guard isInCall else { return false }
+        let callIdNow = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        return PeerVideoInviteDecisions.shouldHonorVideoPauseRequest(
+            activeCallId: callIdNow, requestCallId: callIdBefore)
+    }
+
+    /// W-VIDPARITY round 2 — undo a camera pipeline `promoteReceiveOnlyToCamera`
+    /// installed, discovered stale because the call ended/changed while an
+    /// await was in flight. Only touches `videoPipeline` when it is STILL
+    /// the pipeline this attempt itself installed (`!== previousPipeline`)
+    /// — never a later call's own pipeline. Stop/nil order mirrors
+    /// `endCall()`'s teardown (abrController before videoPipeline).
+    @MainActor
+    private func tearDownStalePromotion(previousPipeline: VideoCallPipeline?) {
+        guard let installed = videoPipeline, installed !== previousPipeline else { return }
+        abrController?.stop()
+        abrController = nil
+        installed.stop()
+        videoPipeline = nil
+    }
+
     func answerIncomingCall(audioOnly: Bool = false) {
         stopInAppRingtone()
         guard let uuid = activeCallKitId else { return }
@@ -18759,6 +18961,9 @@ extension AppState {
         // above: this is UI-only signalling state, not renegotiated per call).
         remoteVideoPaused = false
         localVideoPaused = false
+        // W-VIDPARITY — drop the banner-dismiss latch so it doesn't leak
+        // into the next call (same reasoning as remoteVideoPaused above).
+        peerVideoInviteDismissed = false
         // media-consent v1 — per-call consent + pending dialogs/watchdogs
         // die with the call.
         videoConsentGranted = false
@@ -23408,6 +23613,80 @@ extension AppState {
         // WIRE_SPEC §8.9 — on-change trigger; the heartbeat re-states it so a
         // lost frame is not permanent.
         announceVideoState(force: false)
+    }
+
+    /// W-VIDPARITY — X button on `PeerVideoInviteBanner`: dismiss for this
+    /// call only, no wire signal. Mirrors Android InCallScreen's "Chiudi".
+    @MainActor
+    func dismissPeerVideoInvite() {
+        peerVideoInviteDismissed = true
+        RTLog.info("call", "vidinvite action=dismiss")
+    }
+
+    /// W-VIDPARITY — "No, solo audio" on `PeerVideoInviteBanner`: dismiss
+    /// AND ask the peer to turn their own camera off too, so both sides
+    /// end up voice-only.
+    @MainActor
+    func declinePeerVideoInvite() {
+        peerVideoInviteDismissed = true
+        requestPeerVideoPause()
+        RTLog.info("call", "vidinvite action=decline")
+    }
+
+    /// W-VIDPARITY — send `call_video_pause_request` for the active call.
+    /// Best-effort, one-shot: unlike the §8.9 beacon this is a single user
+    /// action, not something a heartbeat will retry.
+    @MainActor
+    func requestPeerVideoPause() {
+        guard let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else {
+            RTLog.warn("call", "vidpause tx ok=0")
+            return
+        }
+        Task {
+            do {
+                try await impl.sendCallVideoPauseRequest(callId: callId)
+                RTLog.info("call", "vidpause tx ok=1")
+            } catch {
+                RTLog.warn("call", "vidpause tx ok=0")
+            }
+        }
+    }
+
+    /// W-VIDPARITY — "Attiva video" on `PeerVideoInviteBanner`: dismiss the
+    /// banner (an accept is also a dismiss — it must not reappear once the
+    /// user has already acted on it) and turn our own camera on.
+    @MainActor
+    func acceptPeerVideoInvite() {
+        peerVideoInviteDismissed = true
+        setLocalCameraEnabled(true)
+        RTLog.info("call", "vidinvite action=accept")
+    }
+
+    /// W-VIDPARITY — single entry point for "turn my camera on/off" that
+    /// every in-call control (bottom camera button, banner's "Attiva
+    /// video") should call, replacing direct `videoSetCameraEnabled`/
+    /// `upgradeToVideo` calls. Turning OFF is always the same complete
+    /// op; turning ON routes through `PeerVideoInviteDecisions
+    /// .localCameraEnableRoute` because "on" means three different things
+    /// depending on how the call got here — see that type's kdoc.
+    @MainActor
+    func setLocalCameraEnabled(_ enabled: Bool) {
+        guard enabled else {
+            videoSetCameraEnabled(false)
+            return
+        }
+        let pipelineIsExternalSource = videoPipeline?.sourceMode == .external || videoPipeline == nil
+        switch PeerVideoInviteDecisions.localCameraEnableRoute(
+            isVideoCall: isVideoCall, pipelineIsExternalSource: pipelineIsExternalSource
+        ) {
+        case .upgradeFromAudio:
+            upgradeToVideo()
+        case .promoteReceiveOnly:
+            Task { @MainActor in await self.promoteReceiveOnlyToCamera() }
+        case .resumeCapture:
+            videoSetCameraEnabled(true)
+        }
     }
 }
 

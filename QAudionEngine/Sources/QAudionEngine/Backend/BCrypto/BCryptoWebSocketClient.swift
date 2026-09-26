@@ -120,6 +120,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// (see ``VideoStateBeacon``).
     public var onCallVideoState: ((_ callId: String, _ paused: Bool, _ seq: Int?) -> Void)?
 
+    /// W-VIDPARITY — `call_video_pause_request` (either direction,
+    /// transparent relay, same envelope class as `call_video_state`
+    /// above). The peer is asking US to turn OUR camera off — the "No,
+    /// solo audio" half of Android's RemoteOnly banner. No SDP/consent:
+    /// the honor side auto-complies (mirrors Android `CallController.kt`'s
+    /// pause-request listener). Wire shape carries only `call_id` — no
+    /// `recipient_id`, the server resolves the peer from the call.
+    public var onCallVideoPauseRequest: ((_ callId: String) -> Void)?
+
     /// W-ACTIVECALLASSERT (2026-08-25) — live view of the call id this
     /// process currently believes is live, or `nil` when it holds no call
     /// state. Consulted on EVERY `authenticate` frame so a mid-call
@@ -975,6 +984,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // WIRE_SPEC §8.9 — nil when the peer predates the beacon.
             let seq = data["seq"] as? Int
             self.onCallVideoState?(callId, paused, seq)
+        }
+
+        // W-VIDPARITY — call_video_pause_request (peer→us). Same envelope
+        // class as call_video_state; no recipient_id on the wire (server
+        // resolves the peer). Missing/empty call_id is silently ignored —
+        // there is nothing to honor without a call id, same guard shape
+        // every other handler in this method uses.
+        registerHandler(type: "call_video_pause_request") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String,
+                  !callId.isEmpty
+            else { return }
+            self.onCallVideoPauseRequest?(callId)
         }
     }
 
