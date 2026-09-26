@@ -168,12 +168,36 @@ public final class QAudionPeerConnection: NSObject {
 
     /// Pre-created at `init` (both caller AND callee, unlike video which is
     /// asymmetric — mirrors Android's `open()` placement) ONLY when
-    /// `CallCapabilities.audioSrtpSendEnabled` is `true`, so the FIRST SDP
-    /// this build produces or receives already carries an m=audio SEND_RECV
-    /// section with no track attached. `nil` on every build with the kill
-    /// switch off — `init` never calls `addTransceiver` for audio in that
-    /// case, so the SDP is byte-for-byte what it was before this feature.
+    /// `CallCapabilities.isNativeSrtpEnabledLocally` is `true`, so the FIRST
+    /// SDP this build produces or receives already carries an m=audio
+    /// SEND_RECV section with no track attached. `nil` on every build/call
+    /// with native SRTP off (compiled switch off AND no debug override) —
+    /// `init` never calls `addTransceiver`/`pc.add` for audio in that case,
+    /// so the SDP is byte-for-byte what it was before this feature.
+    ///
+    /// W-NATIVESRTPGATE bug fix (this task) — this used to read
+    /// `CallCapabilities.audioSrtpSendEnabled` directly, the COMPILE-TIME
+    /// switch alone. That made the runtime debug override
+    /// (`audioSrtpDebugOverride`, the Settings "SVILUPPATORE" toggle) a lie:
+    /// flipping it on made `localCaps` advertise `audio-srtp-v1` on the wire
+    /// (``CallCapabilities/applyAdvertisementGates`` already read the
+    /// override), but `init` never built the transceiver to carry it — the
+    /// peer would negotiate a capability this build could not actually put
+    /// an RTP track on. Every other media-path read of
+    /// `audioSrtpSendEnabled` in this file already went through
+    /// `activateNativeAudioSrtp`, which is only ever CALLED once
+    /// `Negotiated.useAudioSrtp` is true (itself derived from the
+    /// intersection, not from this switch again), so this `init` gate was
+    /// the only site with the bug.
     private var audioTransceiver: RTCRtpTransceiver?
+    /// W-NATIVESRTPDIAG (this task) — true once THIS instance has raised the
+    /// process-wide WebRTC debug log level for its own native-SRTP session
+    /// (see `init`'s gated block). `close()` reads this to decide whether it
+    /// owes a restore — never restores unconditionally, so a call that never
+    /// raised the level (native SRTP off) cannot clobber another call's
+    /// raise/restore pairing (only one 1:1 call runs at a time today, but the
+    /// guard costs nothing and keeps the pairing self-contained per instance).
+    private var didRaiseDebugLogLevelForSession = false
     /// The real mic-sourced RTP sender, once ``activateNativeAudioSrtp(key:participantId:rxSink:txSink:)``
     /// has attached a track. `nil` until then (and always `nil` on a call
     /// that never negotiates ``CallCapabilities/audioSrtpV1``).
@@ -346,7 +370,15 @@ public final class QAudionPeerConnection: NSObject {
         self.delegate = delegate
         super.init()
 
-        let config = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: iceServers)
+        // W-NATIVESRTPDIAG — snapshot ONCE at construction, same value the
+        // pre-creation gate just below reads: a debug-override flip mid-call
+        // must not retroactively change an already-negotiated
+        // RTCConfiguration, exactly like the transceiver pre-creation itself
+        // (which also only ever runs at `init`).
+        let nativeSrtpEnabledLocally = CallCapabilities.isNativeSrtpEnabledLocally
+        let config = QAudionPeerConnectionFactory.defaultConfiguration(
+            iceServers: iceServers,
+            nativeSrtpEnabledLocally: nativeSrtpEnabledLocally)
         // W411: honor the user's TransportMode preference. When the
         // app sets `.relay`, host/srflx candidates are filtered out
         // and all media flows through TURN — needed for restricted
@@ -374,7 +406,7 @@ public final class QAudionPeerConnection: NSObject {
         // compile-time kill switch: off (the default), this block never
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
-        if CallCapabilities.audioSrtpSendEnabled {
+        if nativeSrtpEnabledLocally {
             // W-ADMNOMANUAL (2026-08-31) — nothing to arm: WebRTC manages its
             // own audio unit. See NativeAudioSessionGate for what was tried
             // and what each attempt measured.
@@ -409,6 +441,13 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
             audioTransceiver = pc.transceivers.first { $0.mediaType == .audio }
             print("[WebRTC] W-PREATTACHMIC: pre-attached muted mic track (kill switch on) senderResolved=\(nativeAudioSender != nil)")
+            // W-NATIVESRTPDIAG (this task) — raise the WebRTC stderr debug
+            // severity for this call's whole lifetime (restored in `close()`
+            // below). Gated on the SAME condition as the transceiver
+            // pre-creation above, so a normal call (native SRTP off) never
+            // touches the global log level at all.
+            QAudionPeerConnectionFactory.shared.raiseDebugLogLevelForNativeSrtpSession()
+            didRaiseDebugLogLevelForSession = true
         }
     }
 
@@ -865,7 +904,7 @@ public final class QAudionPeerConnection: NSObject {
     /// Idempotent: if the track already exists (e.g. a rekey re-calling this
     /// with a fresh key), this only re-applies the key. No-op (returns
     /// `false`) if ``audioTransceiver`` was never pre-created — i.e.
-    /// ``CallCapabilities/audioSrtpSendEnabled`` is off for this build.
+    /// ``CallCapabilities/isNativeSrtpEnabledLocally`` is off for this call.
     ///
     /// - Parameters:
     ///   - key: 32-byte raw PQC session key (same key the sealed-DataChannel
@@ -1511,11 +1550,15 @@ public final class QAudionPeerConnection: NSObject {
                 completion(.failure(WebRTCError.sdpFailed("offer returned nil"))); return
             }
             // IOS-C4b / W-SRTPPTIME — apply the fixed Opus/audio-srtp profile
-            // to every SDP this client produces. Safe on every call, even one
-            // that never negotiates audioSrtpV1 (see AudioSdpPolicy's own
-            // doc): a no-op transform on an m=audio section carrying no RTP
-            // audio.
-            let mungedText = AudioSdpPolicy.apply(sdp.sdp)
+            // to every SDP this client produces, gated on native SRTP being
+            // enabled locally (W-NATIVESRTPGATE, this task): AudioSdpPolicy
+            // is safe to run unconditionally (a no-op transform on an
+            // m=audio section carrying no RTP audio when the switch is
+            // off), but the point of this task is that a build/call with
+            // native SRTP off produces byte-for-byte the same SDP as before
+            // this feature existed — including the Opus fmtp text, which a
+            // peer's own diagnostics may compare across releases.
+            let mungedText = CallCapabilities.isNativeSrtpEnabledLocally ? AudioSdpPolicy.apply(sdp.sdp) : sdp.sdp
             let munged = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(munged.sdp, tag: iceRestart ? "LOCAL_OFFER_ICE_RESTART" : "LOCAL_OFFER")
             self?.peerConnection?.setLocalDescription(munged, completionHandler: { setErr in
@@ -1563,7 +1606,8 @@ public final class QAudionPeerConnection: NSObject {
             // AFTER the DTLS-role pin (pure string transforms on disjoint
             // attribute sets — order between them does not matter, but
             // matching Android/createOffer's own "policy last" placement).
-            let mungedText = AudioSdpPolicy.apply(pinnedSdpText)
+            // W-NATIVESRTPGATE — same gate as createOffer above.
+            let mungedText = CallCapabilities.isNativeSrtpEnabledLocally ? AudioSdpPolicy.apply(pinnedSdpText) : pinnedSdpText
             let pinnedSdp = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
@@ -1596,7 +1640,8 @@ public final class QAudionPeerConnection: NSObject {
         // encoder even against a peer that sends unmunged defaults (Android
         // applies the same policy bidirectionally — see AudioSdpPolicy's own
         // doc for why this is unilateral-safe).
-        let munged = AudioSdpPolicy.apply(sdp)
+        // W-NATIVESRTPGATE — same gate as the two local-SDP call sites above.
+        let munged = CallCapabilities.isNativeSrtpEnabledLocally ? AudioSdpPolicy.apply(sdp) : sdp
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
         pc.setRemoteDescription(desc, completionHandler: completion)
@@ -1654,6 +1699,16 @@ public final class QAudionPeerConnection: NSObject {
         nativeAudioSender = nil
         localAudioSrtpTrack = nil
         usingNativeAudioSrtp = false
+        // W-NATIVESRTPDIAG — restore the process-wide WebRTC debug log level
+        // this instance raised at `init`, if it did. Runs BEFORE
+        // `peerConnection?.close()` below only because every other teardown
+        // line in this function does too — the two are independent (the log
+        // level is a global WebRTC setting, not tied to this specific
+        // RTCPeerConnection's own lifetime).
+        if didRaiseDebugLogLevelForSession {
+            QAudionPeerConnectionFactory.shared.restoreDefaultDebugLogLevel()
+            didRaiseDebugLogLevelForSession = false
+        }
         peerConnection?.close()
         peerConnection = nil
         // W-PERSISTENTFACTORY (2026-09-09) — closing this RTCPeerConnection

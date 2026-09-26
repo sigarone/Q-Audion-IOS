@@ -49,6 +49,16 @@ import Foundation
 /// libwebrtc's own SDP parser round-trips. Mirrors Android's own reasoning
 /// (`AudioSdpPolicy.kt` "Today this lands on the m=audio section of LIVE
 /// calls... safe by construction").
+///
+/// W-NATIVESRTPGATE (this task) — "safe to apply unconditionally" is a
+/// statement about correctness, not about scope: every call SITE in
+/// `QAudionPeerConnection` (createOffer/createAnswer/applyRemoteSdp) now
+/// gates the call to `apply()` on
+/// ``CallCapabilities/isNativeSrtpEnabledLocally``, so a build/call with
+/// native SRTP off produces byte-for-byte the same SDP text as before this
+/// feature existed — this file's own idempotent, order-independent
+/// transform is what makes that gating safe to add or remove without ever
+/// touching this function.
 enum AudioSdpPolicy {
 
     static let maxAverageBitrateBps: Int = 32_000
