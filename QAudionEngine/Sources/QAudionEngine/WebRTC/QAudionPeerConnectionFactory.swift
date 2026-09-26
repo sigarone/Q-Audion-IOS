@@ -220,6 +220,48 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// Pinned by `QAudionPeerConnectionFactoryTests`; do not lower it.
     static let stderrDebugLogLevel: RTCLoggingSeverity = .warning
 
+    /// W-NATIVESRTPDIAG (this task) — raises the WebRTC stderr DEBUG severity
+    /// (``stderrDebugLogLevel``, normally `.warning`) to `.info` for the
+    /// duration of a call that has native SRTP enabled locally
+    /// (``CallCapabilities/isNativeSrtpEnabledLocally``), so the extra
+    /// libwebrtc INFO lines W-KEYLOGGATE silenced (`channel.cc` state
+    /// changes, `thread.cc` dispatch timing, `connection.cc` candidate
+    /// updates, ...) are available again while this feature is being
+    /// exercised/diagnosed — see ``restoreDefaultDebugLogLevel()`` for the
+    /// counterpart and for why this is safe.
+    ///
+    /// Deliberately a GLOBAL severity change (`RTCSetMinDebugLogLevel` sets
+    /// process-wide state, per its own header — there is no per-PeerConnection
+    /// scope), same as `installNativeAudioUnitLogBridge()`'s own call to it.
+    /// A 1:1 call is the only caller of the native SRTP audio path today, so
+    /// there is no concurrent-call scenario where raise/restore from two
+    /// different calls could race; if that ever changes, this needs a
+    /// reference count instead of a bare set/restore pair.
+    ///
+    /// SAFE despite raising the callback logger's own already-`.info`
+    /// severity's reach to stderr too: the two lines W-KEYLOGGATE exists for
+    /// (`api/crypto/frame_crypto_transformer.cc`'s `RTC_LOG(LS_INFO)` key
+    /// prints) are gone from the bundled `WebRTC.xcframework` at the SOURCE —
+    /// `Package.swift`'s binaryTarget comment pins it to the
+    /// `webrtc-ios-aes256-m144-native-pli-nokeylog` release, built from the
+    /// commit that removed both prints, and `scripts/ci/assert-no-key-logging.sh`
+    /// gates every build of that release on `RTC_LOG(LS_INFO)` no longer
+    /// appearing in `frame_crypto_transformer.cc`. `KeyMaterialScrubber`
+    /// (`Diagnostics/KeyMaterialScrubber.swift`) and `LogRedactor` still
+    /// sanitize every ring/egress point as defence in depth regardless.
+    public func raiseDebugLogLevelForNativeSrtpSession() {
+        RTCSetMinDebugLogLevel(.info)
+    }
+
+    /// Counterpart to ``raiseDebugLogLevelForNativeSrtpSession()`` — restores
+    /// the compiled default (``stderrDebugLogLevel``, `.warning`). Called
+    /// whenever a call that raised the level ends, so a call that never
+    /// touches native SRTP is never affected and the raised level never
+    /// outlives the session it was raised for.
+    public func restoreDefaultDebugLogLevel() {
+        RTCSetMinDebugLogLevel(Self.stderrDebugLogLevel)
+    }
+
     /// W-AUNITTRACE (2026-09-10) — the persistent-factory fix (this file's
     /// own W-PERSISTENTFACTORY, shipped and live-tested v1.0.1129) did NOT
     /// resolve the dead-TX-at-call-2 defect: the same symptom reproduced
@@ -351,7 +393,55 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// Build the default `RTCConfiguration` used by all 1:1 calls.
     /// Caller passes `iceServers` (typically built from
     /// `RelayCredentialsProvider.RelayBundle.servers`).
-    public static func defaultConfiguration(iceServers: [RTCIceServer]) -> RTCConfiguration {
+    ///
+    /// - Parameter nativeSrtpEnabledLocally: W-NATIVESRTPDIAG (this task) —
+    ///   ``CallCapabilities/isNativeSrtpEnabledLocally`` for the call this
+    ///   configuration is being built for. Defaults to `false` so every
+    ///   existing call site (and the `QAudionPeerConnectionFactoryTests`
+    ///   call with no third argument) keeps building today's exact
+    ///   `RTCConfiguration` — the extra fields below are added ONLY when
+    ///   `true`, which is itself only possible on a call that already pre-
+    ///   creates the native audio transceiver (see `QAudionPeerConnection
+    ///   .init`'s own gate), so a normal call's ICE/SRTP negotiation is
+    ///   untouched.
+    ///
+    ///   Best-practice parameters for the native-SRTP audio path, applied
+    ///   only then (property names verified against the public
+    ///   `webrtc-sdk/webrtc` Objective-C SDK headers — see this task's own
+    ///   report for which ones could not be grep-verified against the
+    ///   bundled `WebRTC.xcframework` on this box, which has no local
+    ///   toolchain to unzip/inspect it):
+    ///   - `cryptoOptions` — GCM cipher suites on (AES-GCM, matching the
+    ///     native `RTCFrameCryptor`'s own `.aesGcm` algorithm one layer up),
+    ///     the legacy 32-byte-tag AES_128_CM_HMAC_SHA1_32 cipher OFF (no
+    ///     legacy peer to interop with on this brand-new path), encrypted
+    ///     RTP header extensions ON (header extensions otherwise travel in
+    ///     the clear even on an SRTP-GCM call), SFrame frame-encryption
+    ///     requirement OFF (this app's own native `RTCFrameCryptor` is the
+    ///     frame-encryption layer, not WebRTC's built-in SFrame transform —
+    ///     requiring the latter would be a second, unused encryption gate).
+    ///   - `tcpCandidatePolicy = .disabled` — TCP candidates add head-of-line
+    ///     blocking on top of an already-encrypted, already-lossy-tolerant
+    ///     RTP stream; UDP (host/srflx/relay) is sufficient and this app's
+    ///     TURN servers all offer UDP relay.
+    ///   - `audioJitterBufferMaxPackets = 50` — bounds NetEQ's jitter buffer
+    ///     depth so a bad network cannot grow unbounded latency; 50 packets
+    ///     at this path's 60 ms packetization (``AudioSdpPolicy/ptimeMs``) is
+    ///     3 s of buffering headroom, generous for voice without letting a
+    ///     stalled network turn into a multi-minute delay.
+    ///   - `audioJitterBufferFastAccelerate = false` — fast-accelerate trims
+    ///     buffered audio aggressively to catch up after a burst; OFF trades
+    ///     faster catch-up for fewer audible artifacts, matching this app's
+    ///     existing preference for correctness/quality over latency on the
+    ///     legacy sealed-DataChannel path's own NetEQ-equivalent tuning.
+    ///   - `audioJitterBufferMinDelayMs` — set to ``AudioSdpPolicy/ptimeMs``
+    ///     (60) when the SDK exposes it, so NetEQ never runs below one
+    ///     packet's worth of buffering at this path's packetization time.
+    ///     There is no public "max target delay" counterpart on
+    ///     `RTCConfiguration` to set alongside it (verified against the
+    ///     public header — only the min exists).
+    public static func defaultConfiguration(iceServers: [RTCIceServer],
+                                            nativeSrtpEnabledLocally: Bool = false) -> RTCConfiguration {
         let config = RTCConfiguration()
         config.iceServers = iceServers
         config.sdpSemantics = .unifiedPlan
@@ -360,6 +450,26 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         config.rtcpMuxPolicy = .require
         // Trickle ICE: candidates flow as they're discovered, no pre-gather wait.
         config.iceTransportPolicy = .all
+        if nativeSrtpEnabledLocally {
+            config.cryptoOptions = RTCCryptoOptions(
+                srtpEnableGcmCryptoSuites: true,
+                srtpEnableAes128Sha1_32CryptoCipher: false,
+                srtpEnableEncryptedRtpHeaderExtensions: true,
+                sframeRequireFrameEncryption: false)
+            config.tcpCandidatePolicy = .disabled
+            config.audioJitterBufferMaxPackets = 50
+            config.audioJitterBufferFastAccelerate = false
+            // W-NATIVESRTPDIAG — a bare integer LITERAL (not
+            // `AudioSdpPolicy.ptimeMs`, a typed `Int` constant): this
+            // property's exact ObjC type (`int`/`Int32` vs `NSInteger`/`Int`)
+            // could not be grep-verified against the bundled
+            // `WebRTC.xcframework` header on this box (see this method's own
+            // doc). A literal lets Swift infer whatever integer type the
+            // setter actually declares; a typed-constant argument would risk
+            // a compile-time type mismatch instead. Keep in sync with
+            // `AudioSdpPolicy.ptimeMs` (60) by hand if that ever changes.
+            config.audioJitterBufferMinDelayMs = 60
+        }
         return config
     }
 

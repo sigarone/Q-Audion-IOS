@@ -53,6 +53,30 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
         XCTAssertEqual(cfg.continualGatheringPolicy, .gatherContinually)
     }
 
+    /// W-NATIVESRTPGATE (this task) — with no `nativeSrtpEnabledLocally`
+    /// argument (every existing call site before this task), the extra
+    /// native-SRTP-only fields must NOT be touched: a normal call's
+    /// RTCConfiguration stays byte-for-byte what it was before this task.
+    /// `cryptoOptions` defaults to `nil` and `tcpCandidatePolicy` defaults to
+    /// `.enabled` on a fresh `RTCConfiguration()` per the WebRTC SDK's own
+    /// documented defaults.
+    func testDefaultConfigurationWithNativeSrtpDisabled_leavesTheNativeSrtpFieldsAtSdkDefaults() {
+        let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: false)
+        XCTAssertNil(cfg.cryptoOptions)
+        XCTAssertEqual(cfg.tcpCandidatePolicy, .enabled)
+    }
+
+    /// W-NATIVESRTPGATE — with the flag true, every best-practice parameter
+    /// this task adds must actually be set.
+    func testDefaultConfigurationWithNativeSrtpEnabled_appliesTheBestPracticeParameters() {
+        let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: true)
+        XCTAssertNotNil(cfg.cryptoOptions)
+        XCTAssertEqual(cfg.tcpCandidatePolicy, .disabled)
+        XCTAssertEqual(cfg.audioJitterBufferMaxPackets, 50)
+        XCTAssertFalse(cfg.audioJitterBufferFastAccelerate)
+        XCTAssertEqual(cfg.audioJitterBufferMinDelayMs, 60)
+    }
+
     func testIceServerConversionFromRelayServers() {
         let relays: [RelayServer] = [
             RelayServer(urls: ["turn:turn.example:3478"], username: "u", credential: "c", ttl: 1800),
