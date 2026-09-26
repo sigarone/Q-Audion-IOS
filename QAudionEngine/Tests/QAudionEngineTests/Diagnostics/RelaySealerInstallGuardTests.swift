@@ -8,7 +8,7 @@ import XCTest
 final class RelaySealerInstallGuardTests: XCTestCase {
 
     func testInstallsWhenGenerationUnchanged() {
-        // No endCall() happened since the closure was wired — same call, including a
+        // No endCall() happened since the generation was read — same call, including a
         // re-key round mid-call (which fires the closure again with no bump in between).
         XCTAssertTrue(RelaySealerInstallGuard.shouldInstall(capturedGeneration: 0, currentGeneration: 0))
         XCTAssertTrue(RelaySealerInstallGuard.shouldInstall(capturedGeneration: 5, currentGeneration: 5))

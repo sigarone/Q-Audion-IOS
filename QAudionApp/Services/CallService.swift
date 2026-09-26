@@ -1092,22 +1092,30 @@ final class CallService: @unchecked Sendable {
     /// Sendable precisely so it can own this synchronisation. Contract: hold the
     /// lock ONLY to copy the reference in/out — never across seal/open/network or
     /// any call that might re-enter (NSLock is non-recursive).
-    private let relaySlotLock = NSLock()
-
-    /// W-STALESEALER (2026-09-26) — monotonic counter bumped exactly once, inside
-    /// `endCall()`, at EVERY real call teardown. `endCall()` is the single choke
-    /// point: every terminal path in this app calls either it directly (this
-    /// file's own `.error` handshake-outcome case) or `AppState`'s several
-    /// direct `callService.endCall()` sites (CallKit provider reset, WS
-    /// `call_peer_offline`/`call_busy`/`call_cancel`, `onIncomingCallCancelled`,
-    /// both `beginAndroidOutgoing` failure branches) or `AppState.endCall()`
-    /// itself (the canonical hangup/decline/error funnel, which also calls this
-    /// method). AppState's caller/responder `onRelaySessionReady` wiring reads
-    /// `currentCallGeneration()` once, when that call's integration is wired,
-    /// and compares it against a later read of the same accessor — via
-    /// `RelaySealerInstallGuard.shouldInstall` — right before arming a relay
-    /// sealer, including a run reached later through `pendingIdentityGatedMedia`.
-    /// A mismatch means `endCall()` ran in between, so the install is dropped.
+    ///
+    /// W-STALESEALER (2026-09-26) — ALSO the lock for `_callGeneration` (below),
+    /// deliberately the SAME lock and not a second one. `_callGeneration` is a
+    /// monotonic counter, bumped unconditionally inside `endCall()`, at EVERY real
+    /// call teardown — `endCall()` is the single choke point every terminal path
+    /// reaches, either directly (this file's own `.error` handshake-outcome case,
+    /// several `AppState` sites: CallKit provider reset, WS `call_peer_offline`/
+    /// `call_busy`/`call_cancel`, `onIncomingCallCancelled`, both
+    /// `beginAndroidOutgoing` failure branches) or through `AppState.endCall()`
+    /// (which also calls it). `installRelaySealers` validates a caller-supplied
+    /// `expectedGeneration` against `_callGeneration` and PUBLISHES the sealer
+    /// references in the SAME locked block — closing the race a two-lock (or
+    /// check-then-act) design would leave open: without that, `endCall()`'s bump +
+    /// slot-clear and `installRelaySealers`'s check + slot-write could interleave
+    /// as check(match) → endCall bump+clear → write(stale sealer resurrected).
+    /// With one lock serialising both, only two orderings exist and both are
+    /// correct: either the install's locked block runs first (publishes, and the
+    /// following `endCall()` immediately clears it again — the call simply ended a
+    /// moment later, harmless) or `endCall()`'s bump runs first (the install's
+    /// locked block then sees a mismatched generation and never writes). See
+    /// `installRelaySealers`'s own doc for the two-phase (cheap early check,
+    /// unlocked crypto, locked re-validate-and-publish) shape that keeps the
+    /// locked regions themselves trivial (pure reference copies / an Int compare
+    /// and assignment — never crypto, I/O, or a call back into this class).
     ///
     /// Deliberately NOT bumped by `teardownAudioStack()` itself: that lower-level
     /// helper also runs as a defensive, SAME-call reset — `startCall(engine:
@@ -1119,19 +1127,16 @@ final class CallService: @unchecked Sendable {
     /// generation. Only the full `endCall()` (which itself calls
     /// `teardownAudioStack()`, but is never called BY it) means "this call is
     /// over".
-    ///
-    /// Locked (not a plain `Int`) because `endCall()` can run off the main
-    /// thread: the `.error` handshake-outcome case above fires from
-    /// `QAudionCallIntegration.onStateChanged`, which is invoked from the
-    /// integration's own dispatch queue, not necessarily the main queue.
-    private let callGenerationLock = NSLock()
+    private let relaySlotLock = NSLock()
     private var _callGeneration: Int = 0
 
-    /// Thread-safe read of the current call generation — see `callGenerationLock`
-    /// doc above. Call once to capture (at wiring time) and again to compare (at
-    /// install time); never cache the comparison across an `await`/`Task` hop.
+    /// Thread-safe read of the current call generation — see `relaySlotLock`'s
+    /// doc above. AppState's caller/responder `onRelaySessionReady` wiring reads
+    /// this SYNCHRONOUSLY at firing time (never at wiring time — a cached,
+    /// reused integration would otherwise carry a stale value) and passes the
+    /// result into `installRelaySealers(expectedGeneration:)`.
     func currentCallGeneration() -> Int {
-        callGenerationLock.withLock { _callGeneration }
+        relaySlotLock.withLock { _callGeneration }
     }
 
     /// W-LONGAUDIO (2026-08-10) — resolve and latch this call's audio profile.
@@ -1278,10 +1283,44 @@ final class CallService: @unchecked Sendable {
     ///   • RE-KEYS when the active call's id genuinely changes.
     /// Pure iOS-side logic — no wire-format / HKDF change, so Android, the
     /// firmware earbud counterparty, Desktop and the server are unaffected.
+    ///
+    /// W-STALESEALER (2026-09-26) — `expectedGeneration` is the call generation
+    /// (`currentCallGeneration()`) AppState's caller/responder `onRelaySessionReady`
+    /// closure read SYNCHRONOUSLY at the moment it fired, before hopping to
+    /// `@MainActor` (and, when the identity-confirmation SAS gate is engaged,
+    /// possibly running much later out of `pendingIdentityGatedMedia`). Two checks
+    /// against `_callGeneration`, both done here rather than by the caller:
+    ///   1. an early, cheap rejection right below — skips the reKey/stale-callId/
+    ///      srtpDirKeyV1 branches and the crypto derivation entirely for a call
+    ///      `endCall()` has already bumped past; NOT sufficient alone for
+    ///      correctness (`endCall()` could still run during the crypto work below);
+    ///   2. a re-validation ATOMIC with the sealer-slot publish, in the same
+    ///      `relaySlotLock`-held block that writes `relaySealerSend`/`Recv`/
+    ///      `CallId`/`KeyFp` — see `relaySlotLock`'s doc for why this specific
+    ///      block being locked together with `endCall()`'s bump is what actually
+    ///      closes the race (check(1) alone leaves a window between the check and
+    ///      the write for `endCall()` to bump + clear the very slots this then
+    ///      overwrites, resurrecting sealers for a call that just ended).
+    /// Both checks reuse `RelaySealerInstallGuard.shouldInstall`, so the pure
+    /// match/mismatch decision has exactly one implementation and one test suite.
     public func installRelaySealers(sessionKey: Data, callId: String,
                                     srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false,
-                                    isReKeyRound: Bool = false) {
+                                    isReKeyRound: Bool = false,
+                                    expectedGeneration: Int) {
         let cid = callId.lowercased()
+        // W-STALESEALER — early rejection (see doc above, check 1/2). One
+        // consistent warn for every reason a stale call's install never reaches
+        // the crypto/publish below (superseding the reKey/stale-callId/
+        // srtpDirKeyV1-specific print()s further down, which a dead call would
+        // otherwise still emit for no purpose).
+        guard RelaySealerInstallGuard.shouldInstall(
+            capturedGeneration: expectedGeneration,
+            currentGeneration: relaySlotLock.withLock({ _callGeneration })
+        ) else {
+            let p: String = String(cid.prefix(8))
+            RTLog.warn("call", "relay sealer install dropped (call ended) cid=" + p)
+            return
+        }
         // W-M15SEALERONCE (2026-09-20) — the M-15 outer pair belongs to the call's
         // FIRST handshake and lives for the whole call, exactly like Android's
         // `CallController.outerSealersInstalledOnce`: a re-key rotates the inner
@@ -1349,11 +1388,27 @@ final class CallService: @unchecked Sendable {
                 pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA)
             let send = pair.send
             let recv = pair.recv
-            relaySlotLock.withLock {
+            // W-STALESEALER — re-validate the generation ATOMICALLY with the
+            // publish: this is the ONE locked region that actually closes the
+            // race (see this method's doc + `relaySlotLock`'s doc). Trivial work
+            // only (an Int compare, then 4 reference assignments) — no crypto, no
+            // I/O, nothing that can re-enter this lock, exactly like every other
+            // `relaySlotLock.withLock` block in this file.
+            let published: Bool = relaySlotLock.withLock {
+                guard RelaySealerInstallGuard.shouldInstall(
+                    capturedGeneration: expectedGeneration,
+                    currentGeneration: _callGeneration
+                ) else { return false }
                 relaySealerSend = send
                 relaySealerRecv = recv
                 relaySealerCallId = cid
                 relaySealerKeyFp = kfp
+                return true
+            }
+            guard published else {
+                let p: String = String(cid.prefix(8))
+                RTLog.warn("call", "relay sealer install dropped (call ended) cid=" + p)
+                return
             }
             let verb: String = hadSealer ? "re-keyed" : "installed"
             let p: String = String(cid.prefix(8))
@@ -2217,10 +2272,12 @@ final class CallService: @unchecked Sendable {
 
     func endCall() {
         // W-STALESEALER — bump FIRST, unconditionally, before any other teardown
-        // work: see `callGenerationLock`'s doc comment for why this is the single
-        // choke point every terminal path (this app-wide) funnels through, and
-        // why `teardownAudioStack()` itself must never do this.
-        callGenerationLock.withLock { _callGeneration &+= 1 }
+        // work, under the SAME lock `installRelaySealers` validates+publishes
+        // under: see `relaySlotLock`'s doc comment for why this is both the single
+        // choke point every terminal path (this app-wide) funnels through AND why
+        // the shared lock closes the check-then-act race, and for why
+        // `teardownAudioStack()` itself must never do this.
+        relaySlotLock.withLock { _callGeneration &+= 1 }
         onDeepfakeAlert?(false)
         stopDurationTimer()
         stopPlpReportTimer()

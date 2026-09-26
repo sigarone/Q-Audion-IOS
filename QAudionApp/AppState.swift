@@ -940,18 +940,25 @@ final class AppState: ObservableObject {
     /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
     /// their media-install work immediately or stash it above.
     private var identityUnverifiedCallIds: Set<String> = []
-    // W-STALESEALER (2026-09-26) — the monotonic call-generation counter behind
-    // the caller/responder `onRelaySessionReady` guard now lives on
-    // `CallService` (`currentCallGeneration()`), not here: several terminal
-    // paths call `callService.endCall()` directly (CallKit provider reset, WS
+    // W-STALESEALER (2026-09-26) — the monotonic call-generation counter AND the
+    // stale-install guard behind the caller/responder `onRelaySessionReady` wiring
+    // both live on `CallService` now, not here: several terminal paths call
+    // `callService.endCall()` directly (CallKit provider reset, WS
     // `call_peer_offline`/`call_busy`/`call_cancel`, `onIncomingCallCancelled`,
     // both `beginAndroidOutgoing` failure branches, and `CallService`'s own
     // `.error` handshake-outcome case) without going through `AppState
     // .endCall()`, so a counter that only `AppState.endCall()` bumped missed
     // every one of them. `CallService.endCall()` is the one choke point ALL of
-    // those — and `AppState.endCall()` itself — already call. See
-    // `CallService.callGenerationLock`'s doc comment for the full picture,
-    // including why `teardownAudioStack()` must never bump it.
+    // those — and `AppState.endCall()` itself — already call. The generation is
+    // now read at `onRelaySessionReady` FIRING time (not wiring time — the
+    // responder's `ensureResponderIntegration` caches and reuses its integration
+    // across calls, so a value captured once at wiring time could be stale by the
+    // time a REUSED closure fires for a later call) and the accept/reject decision
+    // itself moved into `CallService.installRelaySealers`, which validates it
+    // atomically with publishing the sealer references — see `CallService
+    // .relaySlotLock`'s doc comment for the full picture, including the
+    // atomicity argument and why `teardownAudioStack()` must never bump the
+    // counter.
 
     /// 2026-09-19 — the user is confirming the SAS of the ACTIVE call. If that call's verified handshake
     /// presented a ROTATED identity key (one the server publishes for the peer) that
@@ -13928,18 +13935,32 @@ final class AppState: ObservableObject {
         // session-init regardless of whether AppState.callContactId has
         // been set yet (the old onPqcSessionKeyEstablished install raced
         // it and skipped the callee → Android→iOS 100% AEAD fail).
-        // W-STALESEALER — captured ONCE, when this call's integration is wired
-        // (i.e. now), not on each firing: see `CallService.callGenerationLock`'s
-        // doc comment. Safe to capture here even though `activateIncomingCallAudio`
-        // (answer time) later runs `teardownAudioStack()` for this SAME call —
-        // that helper deliberately does not bump the generation.
-        let sealerGeneration = callService.currentCallGeneration()
         integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
             // W-M15SEALERONCE — read SYNCHRONOUSLY (the integration clears the flag
             // as soon as this closure returns, before the Task below runs).
             let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
+            // W-STALESEALER (fix-2) — read the call generation SYNCHRONOUSLY, right
+            // now at FIRING time, NOT once at wiring time. `onRelaySessionReady`
+            // only ever fires from inside live handshake processing — the OFFER/
+            // ACCEPT paths and `completeEarbudCounterparty` in
+            // `QAudionCallIntegration` all call `engine.initSession(...)`
+            // immediately before this callback, for the callId they are processing
+            // RIGHT NOW, never as a replay of old state — so this read always names
+            // a call that is live at this instant. Capturing once at WIRING time
+            // (the previous version of this fix) was wrong: `ensureResponderIntegration`
+            // CACHES and REUSES `responderCallIntegration` across calls, and several
+            // teardown paths (CallKit provider reset, WS call_peer_offline/call_busy/
+            // call_cancel, CallService's own `.error` handshake-outcome case) call
+            // `callService.endCall()` directly without going through `AppState
+            // .endCall()` — so they bump the generation but never reset
+            // `responderCallIntegration` to nil. The next inbound call then reused
+            // this SAME closure, still holding the generation captured for the
+            // FIRST (now-dead) call, and every install for the new, live call was
+            // dropped as "stale" — a real mute. Reading here instead means the value
+            // is always this call's own, whether the closure is fresh or reused.
+            let firedGeneration = self?.callService.currentCallGeneration()
             Task { @MainActor [weak self, weak integration] in
-                guard let self = self, !cid.isEmpty else { return }
+                guard let self = self, !cid.isEmpty, let firedGeneration = firedGeneration else { return }
                 // W574x — directional relay-sealer keys when both peers
                 // negotiated srtpDirKeyV1. Role A = the lexicographically-smaller
                 // userId (same rule as Android/Desktop). peerId = the CALLER.
@@ -13955,21 +13976,17 @@ final class AppState: ObservableObject {
                 let cidLower = cid.lowercased()
                 let installAudioMedia: () -> Void = { [weak self] in
                     guard let self = self else { return }
-                    // W-STALESEALER — never arm a relay sealer for a call that has
-                    // since ended (`CallService.endCall()` bumped the generation),
-                    // whether this runs right now or later out of
-                    // `pendingIdentityGatedMedia`.
-                    guard RelaySealerInstallGuard.shouldInstall(
-                        capturedGeneration: sealerGeneration,
-                        currentGeneration: self.callService.currentCallGeneration()
-                    ) else {
-                        RTLog.warn("call", "relay sealer install dropped (call ended) cid=\(cid.prefix(8))")
-                        return
-                    }
+                    // W-STALESEALER — `firedGeneration` (captured above, at firing
+                    // time) travels into `installRelaySealers`, which validates it
+                    // against the CURRENT generation and publishes the sealer
+                    // references atomically under its own lock (closing the window
+                    // between this check and the write — see that method's doc) and
+                    // logs the W-STALESEALER warn itself when it drops the install.
                     self.callService.installRelaySealers(
                         sessionKey: sessionKey, callId: cid,
                         srtpDirKeyV1: useDir, selfIsRoleA: roleA,
-                        isReKeyRound: isReKeyRound)
+                        isReKeyRound: isReKeyRound,
+                        expectedGeneration: firedGeneration)
                 }
                 if self.identityUnverifiedCallIds.contains(cidLower) {
                     self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
@@ -16253,21 +16270,22 @@ final class AppState: ObservableObject {
                 // callService → integration → closure. The peerId is
                 // captured by-value from `contactId`.
                 // W574g — race-free M-15 relay sealer install (caller side).
-                // W-STALESEALER — captured ONCE, when this call's integration is
-                // wired (i.e. now), not on each firing: see the responder leg /
-                // `CallService.callGenerationLock` doc comment. Wired AFTER
-                // `callService.startCall(engine:contactId:)` above (whose own
-                // defensive `teardownAudioStack()` never bumps the generation
-                // anyway) and BEFORE the `beginAndroidOutgoing` call further
-                // down, so a failure there (which DOES call `callService
-                // .endCall()`) is correctly seen as a generation mismatch by
-                // this same call's own closure.
-                let sealerGeneration = callService.currentCallGeneration()
                 integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
                     // W-M15SEALERONCE — read SYNCHRONOUSLY (see the responder wiring).
                     let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
+                    // W-STALESEALER (fix-2) — read the generation SYNCHRONOUSLY, at
+                    // firing time: see the responder leg's identical read for the
+                    // full reasoning (`onRelaySessionReady` only ever fires from live
+                    // handshake processing for the call it names). This leg's own
+                    // `integration` is a fresh `QAudionCallIntegration()` built inside
+                    // `CallService.startCall(engine:contactId:)` for every call — no
+                    // per-call caching like the responder's `responderCallIntegration`
+                    // — but the firing-time read is used here too, for symmetry and
+                    // because it is strictly more correct: it needs no assumption
+                    // about what ran between wiring and firing.
+                    let firedGeneration = self?.callService.currentCallGeneration()
                     Task { @MainActor [weak self, weak integration] in
-                        guard let self = self, !cid.isEmpty else { return }
+                        guard let self = self, !cid.isEmpty, let firedGeneration = firedGeneration else { return }
                         // W574x — directional relay-sealer keys when both peers
                         // negotiated srtpDirKeyV1. Role A = the lexicographically-
                         // smaller userId (same rule as Android/Desktop). peerId =
@@ -16291,18 +16309,14 @@ final class AppState: ObservableObject {
                         let cidLower = cid.lowercased()
                         let installAudioMedia: () -> Void = { [weak self] in
                             guard let self = self else { return }
-                            // W-STALESEALER — see the responder leg's identical guard.
-                            guard RelaySealerInstallGuard.shouldInstall(
-                                capturedGeneration: sealerGeneration,
-                                currentGeneration: self.callService.currentCallGeneration()
-                            ) else {
-                                RTLog.warn("call", "relay sealer install dropped (call ended) cid=\(cid.prefix(8))")
-                                return
-                            }
+                            // W-STALESEALER — see the responder leg's identical comment:
+                            // `installRelaySealers` itself validates `firedGeneration`
+                            // atomically with the sealer-slot publish and logs the warn.
                             self.callService.installRelaySealers(
                                 sessionKey: sessionKey, callId: cid,
                                 srtpDirKeyV1: useDir, selfIsRoleA: roleA,
-                                isReKeyRound: isReKeyRound)
+                                isReKeyRound: isReKeyRound,
+                                expectedGeneration: firedGeneration)
                         }
                         if self.identityUnverifiedCallIds.contains(cidLower) {
                             self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
@@ -18470,7 +18484,7 @@ extension AppState {
         // stays correct regardless of that latch's own 0.3 s reset window. A
         // redundant extra bump from an overlapping teardown is harmless (the
         // guard only needs the two generations to differ, never a specific
-        // delta). See `CallService.callGenerationLock`'s doc comment.
+        // delta). See `CallService.relaySlotLock`'s doc comment.
         // 2026-09-19 — a rotated identity key awaiting this call's SAS confirmation does not outlive the call.
         pendingIdentityRotation = nil
         callIdentityRotationAwaitingSas = false
