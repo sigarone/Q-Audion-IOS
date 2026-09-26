@@ -259,7 +259,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("audiosrtp caplive=8")
             return
         }
+        // W-NUDGEOWN — set when the manual-mode branch below ran: the relay
+        // fallback escalation at the end then also requires the arm to still
+        // be this check's.
+        var manualModeNudge = false
         if peerConnection?.nativeSrtpEnabledForThisCall == true, NativeAudioSessionGate.isArmed {
+            manualModeNudge = true
             // W-ADMNUDGE (2026-09-26) — manual audio mode: the nudge restarts
             // WebRTC's own audio unit (isAudioEnabled false, then the
             // CallService gate re-decides) — WebRTC's supported unit restart:
@@ -307,6 +312,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard isCurrentCaptureLiveCheck(generation), peerConnection != nil,
               !srtpFallbackEngaged, !isIceStateBad(lastIceConnectionState) else {
             log?("audiosrtp caplive=8")
+            return
+        }
+        // W-NUDGEOWN — a manual-mode check whose PeerConnection no longer owns
+        // the unit (replaced meanwhile) does not escalate on the successor's
+        // behalf.
+        if manualModeNudge, !NativeAudioSessionGate.isCurrent(token: armToken) {
+            log?("audiosrtp W-NUDGEOWN stale=3 tok=\(armToken)")
             return
         }
         log?("audiosrtp caplive=0 after=0 fb=1")
