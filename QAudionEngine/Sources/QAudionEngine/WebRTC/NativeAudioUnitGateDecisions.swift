@@ -161,6 +161,43 @@ public enum NativeAudioUnitGateDecisions {
         return .notActivated
     }
 
+    /// W-DEACTOWN (2026-09-27) — which call a CallKit `didDeactivate` belongs
+    /// to. Raw values are the numeric `own=` codes of the log lines.
+    public enum DeactivationOwner: Int, Sendable, Equatable {
+        /// Paired with a CallKit `didActivate` handled during the current call.
+        case currentCall = 0
+        /// Paired with the `didActivate` of a call that has since ended: a late
+        /// notification for the previous call of a back-to-back pair.
+        case endedCall = 1
+        /// No CallKit activation to pair it with (none seen, or already
+        /// consumed by an earlier deactivation): taken as the current call's,
+        /// the behaviour before this decision existed.
+        case unattributed = 2
+    }
+
+    /// W-DEACTOWN (2026-09-27) — `didDeactivate` carries no call identity, so
+    /// it is attributed through its pairing: CallKit delivers `didActivate`
+    /// and `didDeactivate` strictly alternating on the provider's queue, so a
+    /// deactivation belongs to the call during which the last CallKit
+    /// `didActivate` was handled. `pairedActivationGeneration` is the call
+    /// generation (CallService's W-STALESEALER counter, bumped at every call
+    /// end) recorded at that `didActivate`, `nil` if there is none;
+    /// `currentGeneration` is the generation now.
+    ///
+    /// Known limit: when CallKit skips `didActivate` for a call because the
+    /// previous call left the session active (W-CKSTARTACTIVATE), a genuine
+    /// deactivation of that call is paired with the previous call and read as
+    /// `.endedCall`. On a native call the caller then keeps the unit enabled
+    /// (never mutes a live call); WebRTC still receives the deactivation
+    /// itself (`CallKitProvider` forwards it before this decision runs).
+    public static func callKitDeactivationOwner(
+        pairedActivationGeneration: Int?,
+        currentGeneration: Int
+    ) -> DeactivationOwner {
+        guard let paired = pairedActivationGeneration else { return .unattributed }
+        return paired == currentGeneration ? .currentCall : .endedCall
+    }
+
     /// W-ADMBALANCE (2026-09-26) — the iteration cap for the locked
     /// `RTCAudioSession.setActive(false)` loop in
     /// `CallKitProvider.reportCallEnded` (the loop itself also stops when the

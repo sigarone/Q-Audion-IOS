@@ -4121,6 +4121,22 @@ final class CallService: @unchecked Sendable {
     private var nativeUnitCallKitWaitItem: DispatchWorkItem?
     /// Last verdict logged, so the `admgate verdict=` line is emitted on change only.
     private var lastLoggedNativeUnitVerdict: Int = -1
+    /// W-DEACTOWN (2026-09-27) — the arm token this call's own enable switched
+    /// the unit on under (`NativeAudioSessionGate.enableNativeAudio`), 0 when
+    /// this call has not enabled it. A CallKit deactivation of THIS call stops
+    /// exactly that arm, owner-checked inside the gate's critical section.
+    /// Main thread; cleared with the rest of the per-call gate state.
+    private var nativeUnitOwnerToken: Int = 0
+    /// W-DEACTOWN (2026-09-27) — the call generation (`_callGeneration`) in
+    /// which CallKit's own `didActivate` was last handled, `nil` once a
+    /// `didDeactivate` consumed it. CallKit alternates the two strictly, so
+    /// this attributes the next identity-less `didDeactivate` to its call
+    /// (`NativeAudioUnitGateDecisions.callKitDeactivationOwner`). NOT part of
+    /// the per-call reset: it must outlive the call's teardown, to recognise a
+    /// late deactivation that arrives after the next call started. Recorded on
+    /// every call (bookkeeping only); read only on a native-SRTP call. Main
+    /// thread.
+    private var callKitActivationGeneration: Int?
 
     private func resetNativeAudioUnitGateState() {
         audioActivationSource = .notActivated
@@ -4128,6 +4144,7 @@ final class CallService: @unchecked Sendable {
         nativeUnitCallKitWaitItem?.cancel()
         nativeUnitCallKitWaitItem = nil
         lastLoggedNativeUnitVerdict = -1
+        nativeUnitOwnerToken = 0
     }
 
     /// Items 4/6 — the ONLY place `isAudioEnabled` becomes `true`. No-op on
@@ -4171,7 +4188,10 @@ final class CallService: @unchecked Sendable {
                 audioEnginesStarted = false
                 RTLog.info("call", "admgate capstop=1")
             }
-            NativeAudioSessionGate.setNativeAudioActive(true, reason: reason.rawValue)
+            // W-DEACTOWN — same switch as `setNativeAudioActive(true, ...)`,
+            // plus the arm it was made for: this call's deactivation stops
+            // that arm only.
+            nativeUnitOwnerToken = NativeAudioSessionGate.enableNativeAudio(reason: reason.rawValue)
         case .awaitingCallKit:
             scheduleNativeUnitCallKitWait()
         default:
@@ -4289,6 +4309,12 @@ final class CallService: @unchecked Sendable {
     /// W469 self-activation) meaning what it meant; `CallKitProvider` passes
     /// the real source. Only a manual-mode (native-SRTP) call reads it.
     public func handleAudioSessionActivated(source: AudioSessionActivationSource = .selfManaged) {
+        // W-DEACTOWN (2026-09-27) — pair CallKit's own activation with the call
+        // it was handled in, for the identity-less `didDeactivate` that follows
+        // it (see `handleAudioSessionDeactivated`). Bookkeeping only.
+        if source == .callKit {
+            callKitActivationGeneration = currentCallGeneration()
+        }
         audioSessionActive = true
         let merged = NativeAudioUnitGateDecisions.mergedSource(current: audioActivationSource, incoming: source)
         audioActivationSource = merged
@@ -4337,9 +4363,45 @@ final class CallService: @unchecked Sendable {
         // pulled so far. One line, so the next back-to-back test either
         // shows the clash or rules it out.
         RTLog.info("call", "audioSessionDeactivated callId=" + Self.short8(getCallId?()))
+        // W-DEACTOWN (2026-09-27) — didDeactivate carries no call identity; its
+        // CallKit pairing says whose it is. Consumed here whatever the call.
+        let pairedGeneration: Int? = callKitActivationGeneration
+        callKitActivationGeneration = nil
+        if CallCapabilities.nativeSrtpCallSnapshot == true {
+            // Native-SRTP call only. A late deactivation of the PREVIOUS call
+            // of a back-to-back pair used to switch off whichever arm was in
+            // force — the successor's unit, after its own activation, for the
+            // rest of the call — and reset this call's session state. It is
+            // now a logged no-op. The generation check runs on the main
+            // thread, where every generation bump (`endCall`) and every enable
+            // run, so no other call can take the unit in between.
+            let currentGeneration: Int = currentCallGeneration()
+            let owner = NativeAudioUnitGateDecisions.callKitDeactivationOwner(
+                pairedActivationGeneration: pairedGeneration,
+                currentGeneration: currentGeneration)
+            if owner == .endedCall {
+                let pairedCode: Int = pairedGeneration ?? -1
+                RTLog.info("call", "admgate W-DEACTOWN stale=1 own=\(pairedCode) cur=\(currentGeneration)")
+                return
+            }
+            // This call's own deactivation: its unit off with the session
+            // (the reference implementations do exactly this), owner-checked
+            // against the arm this call's enable switched on — atomically with
+            // the switch, inside the gate.
+            let ownerToken: Int = nativeUnitOwnerToken
+            let ownerCode: Int = owner.rawValue
+            RTLog.info("call", "admgate deact=1 own=\(ownerCode) tok=\(ownerToken)")
+            NativeAudioSessionGate.setNativeAudioInactive(
+                ifCurrent: ownerToken,
+                reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
+            audioSessionActive = false
+            resetNativeAudioUnitGateState()
+            return
+        }
         // W-ADMGATE (2026-09-26) — FIRST: WebRTC's unit off with the session
         // (the reference implementations do exactly this at didDeactivate).
-        // No-op unless a native-SRTP call armed manual mode.
+        // No-op unless a native-SRTP call armed manual mode. (Calls with native
+        // SRTP off: this path, unchanged.)
         NativeAudioSessionGate.setNativeAudioActive(
             false, reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
         audioSessionActive = false

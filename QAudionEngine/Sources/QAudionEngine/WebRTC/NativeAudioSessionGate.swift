@@ -137,6 +137,23 @@ public enum NativeAudioSessionGate {
     /// WebRTC's own audio device module, which applies the change
     /// asynchronously on its own thread. `CallKitProvider` takes the same
     /// configuration lock and never calls into this type while holding it.
+    ///
+    /// OWNERS (W-GATEOWNER, 2026-09-27) — who may switch a running unit, and
+    /// where that authority is checked:
+    /// * an ARM TOKEN (``armManualMode()``): the PeerConnection that armed
+    ///   (its `close()`), and CallService for the arm its own enable switched
+    ///   on (``enableNativeAudio(reason:)`` returns it). Checked inside the
+    ///   critical section above, together with the switch.
+    /// * the CALL GENERATION (CallService's W-STALESEALER counter): which call
+    ///   an identity-less CallKit event belongs to. Checked on the main thread,
+    ///   which is where every generation bump (`CallService.endCall`) and every
+    ///   enable run; the switch that follows is then owner-checked by token.
+    /// * the CALLKIT UUID: the self-activation debt `CallKitProvider` balances
+    ///   (`CallKitCallLedger`, under the ledger's own lock).
+    /// A stale owner's request is a logged no-op, never a switch of a
+    /// successor's unit. The ledger lock and CallService's `relaySlotLock` are
+    /// leaf locks: each is released before this type is called, so the only
+    /// nesting anywhere is configuration lock → this lock.
     private static let lock = NSLock()
     /// Non-zero while a native-SRTP call owns manual mode. A token, not a
     /// Bool, so a replaced PeerConnection of the same call (glare, duplicate
@@ -213,7 +230,19 @@ public enum NativeAudioSessionGate {
         // Fast path, unchanged: never armed (every call with native SRTP off)
         // → the session is not touched and no lock is taken.
         guard isArmed else { return false }
-        return switchUnit(active, reason: reason, requiredToken: nil)
+        return switchUnit(active, reason: reason, requiredToken: nil).changed
+    }
+
+    /// W-DEACTOWN (2026-09-27) — `setNativeAudioActive(true, reason:)` that
+    /// also returns the OWNER of the enable: the arm token in force, read in
+    /// the SAME configuration-lock critical section as the switch. The caller
+    /// keeps it and later stops exactly that arm with
+    /// ``setNativeAudioInactive(ifCurrent:reason:)``, never a successor's.
+    /// 0 when nothing is armed (no-op, same fast path as before).
+    @discardableResult
+    public static func enableNativeAudio(reason: Int) -> Int {
+        guard isArmed else { return 0 }
+        return switchUnit(true, reason: reason, requiredToken: nil).owner
     }
 
     /// W-ADMATOMIC (2026-09-26) — `QAudionPeerConnection.close()`'s backstop:
@@ -226,44 +255,60 @@ public enum NativeAudioSessionGate {
     @discardableResult
     public static func setNativeAudioInactive(ifCurrent token: Int, reason: Int) -> Bool {
         guard token != 0 else { return false }
-        return switchUnit(false, reason: reason, requiredToken: token)
+        return switchUnit(false, reason: reason, requiredToken: token).changed
+    }
+
+    /// What one `switchUnit` did: whether `isAudioEnabled` changed, and the
+    /// arm token the caller was found to own (0 = not owned).
+    private struct SwitchOutcome {
+        let changed: Bool
+        let owner: Int
     }
 
     /// The one place this type flips `isAudioEnabled` for a running call.
     /// Ownership (`requiredToken` is the arm in force, or — `nil` — any arm)
     /// is checked and the unit switched inside ONE configuration-lock
     /// critical section (see `lock`); the log line is emitted after it.
-    private static func switchUnit(_ active: Bool, reason: Int, requiredToken: Int?) -> Bool {
+    ///
+    /// W-GATEOWNER (2026-09-27) — an owner-checked request (`requiredToken`
+    /// given) whose token is no longer the arm in force is a stale owner (a
+    /// replaced PeerConnection, an ended call's event): it stays a no-op and
+    /// now leaves one numeric line, `admgate W-GATEOWNER en= why= tok= cur=`.
+    private static func switchUnit(_ active: Bool, reason: Int, requiredToken: Int?) -> SwitchOutcome {
         let session = RTCAudioSession.sharedInstance()
         let activeFlag = active ? 1 : 0
         session.lockForConfiguration()
         lock.lock()
+        let current = armedToken
         let owned: Bool
         if let required = requiredToken {
-            owned = required != 0 && armedToken == required
+            owned = required != 0 && current == required
         } else {
-            owned = armedToken != 0
+            owned = current != 0
         }
         lock.unlock()
         guard owned else {
             session.unlockForConfiguration()
-            return false
+            if let required = requiredToken {
+                emit("admgate W-GATEOWNER en=\(activeFlag) why=\(reason) tok=\(required) cur=\(current)")
+            }
+            return SwitchOutcome(changed: false, owner: 0)
         }
         guard session.useManualAudio else {
             session.unlockForConfiguration()
             emit("admgate en=\(activeFlag) why=\(reason) skip=1")
-            return false
+            return SwitchOutcome(changed: false, owner: current)
         }
         guard session.isAudioEnabled != active else {
             session.unlockForConfiguration()
-            return false
+            return SwitchOutcome(changed: false, owner: current)
         }
         session.isAudioEnabled = active
         let count = session.activationCount
         let sessionActive = session.isActive ? 1 : 0
         session.unlockForConfiguration()
         emit("admgate en=\(activeFlag) why=\(reason) cnt=\(count) act=\(sessionActive)")
-        return true
+        return SwitchOutcome(changed: true, owner: current)
     }
 
     /// Whether `token` is the arm currently in force (a replaced
