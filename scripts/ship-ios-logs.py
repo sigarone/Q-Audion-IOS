@@ -619,33 +619,56 @@ CALL_FORMAT_VOCAB = frozenset("""
     ignore missed nocall over refuse rxago since stale wedge wedgesw wsec
 """.split())
 
-# Prefixes (case-sensitive, matching the app's real format strings) of the
-# RTLog "call"-tagged lines that CALL_FORMAT_VOCAB's words belong to:
-#   audioVp ev=arm|ff|fire|cfg ...            (W-VPIOOBS)
-#   dcmux wedge=|wedgesw= ...                 (W-DCWEDGE)
-#   cancelpush ghost=|missed= ...             (W-GHOSTCALL)
-#   answerguard refuse=|nocall= ...           (W-GHOSTCALL)
-#   endguard ignore= ...                      (W-GHOSTCALL)
-_CALL_FORMAT_PREFIXES = (
-    "audioVp ", "dcmux ", "cancelpush ", "answerguard ", "endguard ",
+# Real RTLog "call"-tagged line shapes CALL_FORMAT_VOCAB's words belong to,
+# and the exact FIRST key=value token (or bare token, for the ones with no
+# "=") each real generator writes right after its prefix -- not just the
+# prefix itself. See the source line for each:
+#   "audioVp ev=" (arm|ff|fire|cfg|stale|noop|duck), "audioVp vpio="
+#                                                        (VpioObservability.swift, BypassEchoDuck.swift,
+#                                                         VpioWatchdogDecisions.swift, CallService.swift)
+#   "dcmux wedge=", "dcmux wedgesw=", "dcmux st=",
+#   "dcmux first=", "dcmux txfall ", "dcmux tx "        (DcWedgeDetector.swift, CallService.swift)
+#   "cancelpush ghost=", "cancelpush missed="           (AppState.swift)
+#   "answerguard refuse=", "answerguard nocall="        (AppState.swift)
+#   "endguard ignore="                                  (AppState.swift)
+#
+# Copilot follow-up to #127: a first version of this check only matched the
+# PREFIX ("dcmux ", "audioVp ", ...), so a "call"-tagged body like
+# "dcmux state=active zork=1 blarg=2 wedge=1" -- garbage after a genuine
+# prefix -- still widened the vocabulary for its "wedge" token, letting the
+# unrelated unknown tokens ride the same budget. Requiring the token
+# immediately after the prefix to be one of the real generators' own first
+# tokens closes that: "dcmux state=..." no longer matches "dcmux " at all,
+# because "state=" isn't one of the tokens any real dcmux line starts with.
+_CALL_FORMAT_FIRST_TOKENS = (
+    ("audioVp ", ("ev=", "vpio=")),
+    ("dcmux ", ("wedge=", "wedgesw=", "st=", "first=", "txfall", "tx")),
+    ("cancelpush ", ("ghost=", "missed=")),
+    ("answerguard ", ("refuse=", "nocall=")),
+    ("endguard ", ("ignore=",)),
 )
 
 # Mutable, module-level: the extra vocabulary active for the body currently
 # being judged by _word_known() (single-threaded, line-at-a-time processing).
 # Set by redact_body() around the scrub/gate steps for a body that matches
-# _CALL_FORMAT_PREFIXES under a "call" tag; empty otherwise.
+# _CALL_FORMAT_FIRST_TOKENS under a "call" tag; empty otherwise.
 _active_extra_vocab = frozenset()
 
 
 def _is_call_format_body(tag, norm_body):
     """True if `tag` is the (or a "call"-prefixed) RTLog scope AND `norm_body`
     matches one of the known call-diagnosis line shapes CALL_FORMAT_VOCAB's
-    words were added for. Deliberately NARROW (exact prefixes, not a tag-only
-    check) -- widening this to "any call-tagged line" would recreate the same
-    global-budget problem this scoping exists to close."""
+    words were added for -- checked by the token immediately after the
+    prefix, not the prefix alone. Deliberately NARROW: widening this to "any
+    call-tagged line", or to "any line with this prefix regardless of what
+    follows", would recreate the same global-budget problem this scoping
+    exists to close."""
     if not tag or not str(tag).lower().startswith("call"):
         return False
-    return norm_body.startswith(_CALL_FORMAT_PREFIXES)
+    for prefix, first_tokens in _CALL_FORMAT_FIRST_TOKENS:
+        if norm_body.startswith(prefix):
+            return norm_body[len(prefix):].startswith(first_tokens)
+    return False
 
 
 def _set_active_extra_vocab(vocab):

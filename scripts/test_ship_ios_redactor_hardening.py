@@ -378,6 +378,23 @@ check(red("dcmux wedge=1 why=buf buf=1600 over=1000 drops=0", "net") == "",
 drop_caches()
 
 # ---------------------------------------------------------------------------
+# Copilot follow-up to #127 (2026-09-26): the FIX ABOVE still matched by
+# PREFIX alone ("dcmux ", "audioVp ", ...), so a "call"-tagged body with a
+# genuine prefix but garbage after it -- unlike COPILOT_REPRO above, which
+# has no prefix at all -- still widened the vocabulary. "wedge" is the
+# real prefix's own vocabulary word; "zork"/"blarg" are not.
+# ---------------------------------------------------------------------------
+COPILOT_REPRO_127 = "dcmux state=active zork=1 blarg=2 wedge=1"
+check(red(COPILOT_REPRO_127, "call") != COPILOT_REPRO_127,
+      "SCOPE-127: 'dcmux state=active zork=1 blarg=2 wedge=1' shipped verbatim "
+      "-- a genuine 'dcmux ' prefix followed by garbage still bought 'wedge' "
+      "an unknown-word exemption outside any real dcmux line shape")
+check("wedge=1" not in red(COPILOT_REPRO_127, "call"),
+      "SCOPE-127: 'wedge' survived into the fallback body too: %r"
+      % (red(COPILOT_REPRO_127, "call"),))
+drop_caches()
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)
