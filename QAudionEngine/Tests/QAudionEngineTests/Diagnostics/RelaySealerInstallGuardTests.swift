@@ -32,4 +32,16 @@ final class RelaySealerInstallGuardTests: XCTestCase {
                 capturedGeneration: generation, currentGeneration: generation))
         }
     }
+
+    func testSkipsTheGuardWhenCapturedGenerationIsUnknown() {
+        // W-STALESEALER (fix-4) — a negative capturedGeneration means the caller (a
+        // `provideCallGeneration`/`currentCallGeneration()` `?? -1` fallback) could not
+        // prove the call was live, e.g. a future integration point that forgot to wire
+        // `provideCallGeneration`. Muting a live call is worse than the rare stale-install
+        // race this guard closes, so "unknown" must install regardless of the current
+        // generation — never mistaken for "stale".
+        XCTAssertTrue(RelaySealerInstallGuard.shouldInstall(capturedGeneration: -1, currentGeneration: 0))
+        XCTAssertTrue(RelaySealerInstallGuard.shouldInstall(capturedGeneration: -1, currentGeneration: 42))
+        XCTAssertTrue(RelaySealerInstallGuard.shouldInstall(capturedGeneration: -100, currentGeneration: 7))
+    }
 }

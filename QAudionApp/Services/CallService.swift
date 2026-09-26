@@ -1308,6 +1308,17 @@ final class CallService: @unchecked Sendable {
                                     isReKeyRound: Bool = false,
                                     expectedGeneration: Int) {
         let cid = callId.lowercased()
+        // W-STALESEALER (fix-4) — an unknown captured generation (< 0: a
+        // `provideCallGeneration`/`currentCallGeneration()` `?? -1` fallback, meaning
+        // the caller could not prove the call was live) must NOT be treated as stale —
+        // see `RelaySealerInstallGuard`'s doc. Muting a live call is worse than the
+        // rare stale-install race this guard closes, so this logs once and falls
+        // through to install normally; `shouldInstall` below already skips the guard
+        // for this case on its own, this is purely the one-line diagnostic.
+        if expectedGeneration < 0 {
+            let p: String = String(cid.prefix(8))
+            RTLog.warn("call", "W-STALESEALER generation unknown — guard skipped cid=" + p)
+        }
         // W-STALESEALER — early rejection (see doc above, check 1/2). One
         // consistent warn for every reason a stale call's install never reaches
         // the crypto/publish below (superseding the reKey/stale-callId/
@@ -1978,6 +1989,16 @@ final class CallService: @unchecked Sendable {
             // active id is unknown (the sealer was installed by W574h only for
             // the active call, so it cannot belong to a superseded one here).
             if active.isEmpty || active == cid {
+                // W-STALESEALER (fix-4) — `_savedGeneration` is read directly from
+                // `_callGeneration` above (never through a `?? -1` fallback), so it
+                // cannot actually be negative today; this mirrors
+                // `installRelaySealers`'s same defensive check anyway, since
+                // `RelaySealerInstallGuard.shouldInstall` treats it identically
+                // wherever it is called from.
+                if _savedGeneration < 0 {
+                    let p: String = String(cid.prefix(8))
+                    RTLog.warn("call", "W-STALESEALER generation unknown — guard skipped cid=" + p)
+                }
                 // W-STALESEALER — restore ATOMICALLY with a re-check of the
                 // generation, same locked check-then-write shape as
                 // `installRelaySealers`'s publish block: if `endCall()` bumped

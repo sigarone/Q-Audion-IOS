@@ -26,8 +26,24 @@ import Foundation
 /// exists.
 public enum RelaySealerInstallGuard {
     /// `true` when no `endCall()` teardown has happened since the closure that wants to
-    /// install now was wired (i.e. the two generations still match).
+    /// install now was wired (i.e. the two generations still match) — OR when
+    /// `capturedGeneration` is negative.
+    ///
+    /// W-STALESEALER (2026-09-26, fix-4) — a negative `capturedGeneration` means the
+    /// caller could not prove the call was live when it captured the value (the `?? -1`
+    /// fallback on `provideCallGeneration`/`currentCallGeneration()` at every call site
+    /// lands here — e.g. a future integration point that forgets to wire
+    /// `provideCallGeneration`). `currentCallGeneration()` itself always returns >= 0
+    /// (the counter starts at 0 and only increases), so a real, correctly-wired capture
+    /// can never be negative — this branch only ever fires for an unknown/unwired one.
+    /// Treating "unknown" as "stale" would silently DROP every relay-sealer install for
+    /// that call, muting it outright; that is strictly worse than this guard's own
+    /// purpose (closing a rare stale-install race), so an unknown generation SKIPS the
+    /// guard entirely instead of failing closed. Callers log a one-line warning when
+    /// they hit this branch (see `CallService.installRelaySealers` /
+    /// `activateIncomingCallAudio`), since it should never happen in correctly-wired code.
     public static func shouldInstall(capturedGeneration: Int, currentGeneration: Int) -> Bool {
+        if capturedGeneration < 0 { return true }
         return capturedGeneration == currentGeneration
     }
 }
