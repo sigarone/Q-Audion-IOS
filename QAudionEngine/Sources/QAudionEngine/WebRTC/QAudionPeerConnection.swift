@@ -360,6 +360,15 @@ public final class QAudionPeerConnection: NSObject {
     /// Phase 0 has to answer before the capability tag may be flipped.
     public var onAudioDataChannelStateChange: ((Int) -> Void)?
 
+    /// W-NATIVESRTPDIAG (this task) — forwards
+    /// ``NativeAudioFrameCryptor/onFrameCryptorStateChange`` from whichever
+    /// instance is currently ``nativeAudioCryptor``. The engine has no call
+    /// id and cannot reach `RTLog` — same reason ``onAudioDcWedgeChange``
+    /// exists. Wired once, at creation, by ``resolvedNativeAudioCryptor(participantId:)``
+    /// — every call site that creates the cryptor goes through it, so this
+    /// fires regardless of which one creates it first.
+    public var onNativeAudioFrameCryptorStateChange: ((String) -> Void)?
+
     public init(factory: RTCPeerConnectionFactory,
                 audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
                 iceServers: [RTCIceServer],
@@ -1012,11 +1021,7 @@ public final class QAudionPeerConnection: NSObject {
             return false
         }
 
-        let cryptor = nativeAudioCryptor ?? {
-            let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
-            nativeAudioCryptor = c
-            return c
-        }()
+        let cryptor = resolvedNativeAudioCryptor(participantId: participantId)
         // WIRE_SPEC §8.7 v1.2 (Task 4, completing Task 3's split) — this
         // call site handles BOTH initial activation and later rekeys of
         // native audio-srtp (see `installAudioSrtpIfPossible`'s own doc —
@@ -1135,8 +1140,22 @@ public final class QAudionPeerConnection: NSObject {
     /// unchanged, same as video's.
     @discardableResult
     public func ensureNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
-        if let c = nativeAudioCryptor { return c }
+        resolvedNativeAudioCryptor(participantId: participantId)
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — single creation point for
+    /// ``nativeAudioCryptor``, so ``onNativeAudioFrameCryptorStateChange`` is
+    /// wired exactly once regardless of which of the three call sites
+    /// (``activateNativeAudioSrtp``, ``ensureNativeAudioCryptor``,
+    /// ``attachAudioReceiverCryptor``) creates it first. Idempotent —
+    /// returns the existing instance if one is already there, same as the
+    /// three inline `nativeAudioCryptor ?? { ... }()` blocks this replaces.
+    private func resolvedNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
+        if let existing = nativeAudioCryptor { return existing }
         let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
+        c.onFrameCryptorStateChange = { [weak self] line in
+            self?.onNativeAudioFrameCryptorStateChange?(line)
+        }
         nativeAudioCryptor = c
         return c
     }
@@ -1151,11 +1170,7 @@ public final class QAudionPeerConnection: NSObject {
     public func attachAudioReceiverCryptor(_ receiver: RTCRtpReceiver,
                                            participantId: String,
                                            rxSink: @escaping (Data) -> Void) -> Bool {
-        let cryptor = nativeAudioCryptor ?? {
-            let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
-            nativeAudioCryptor = c
-            return c
-        }()
+        let cryptor = resolvedNativeAudioCryptor(participantId: participantId)
         let attached = cryptor.attachReceiver(receiver)
         if let track = receiver.track as? RTCAudioTrack, audioRxTap == nil {
             let tap = NativeAudioPcmTap(sink: rxSink)

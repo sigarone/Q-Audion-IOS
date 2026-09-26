@@ -1397,6 +1397,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
         // as every other numeric-only diagnostic of this controller.
         pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -1566,6 +1569,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
         // as every other numeric-only diagnostic of this controller.
         pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -1681,6 +1687,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
         // as every other numeric-only diagnostic of this controller.
         pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {
