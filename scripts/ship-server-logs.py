@@ -2920,11 +2920,15 @@ def main():
 
         if args.dry_run:
             # Show the heartbeat that WOULD ship alongside the call batch.
-            hb_req = build_heartbeat_request(
-                node_id, args.env_name, lines_total, kept, dropped,
-                dropped_redact, cursor_advanced=False,
-                ops_shipped=ops_shipped, dropped_irrelevant=dropped_irrelevant)
-            print_dry_run(hb_req)
+            # --ops-only (history backfill) never emits a heartbeat on the
+            # real POST path (see the `if not args.ops_only:` guard below),
+            # so mirror that here: don't preview one either.
+            if not args.ops_only:
+                hb_req = build_heartbeat_request(
+                    node_id, args.env_name, lines_total, kept, dropped,
+                    dropped_redact, cursor_advanced=False,
+                    ops_shipped=ops_shipped, dropped_irrelevant=dropped_irrelevant)
+                print_dry_run(hb_req)
             print_dry_run(request)
             legend = ops_msgid_legend(records)
             if legend:
