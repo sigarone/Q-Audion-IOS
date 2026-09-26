@@ -16237,10 +16237,29 @@ final class AppState: ObservableObject {
                         let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
                         let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
                         let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
-                        self.callService.installRelaySealers(
-                            sessionKey: sessionKey, callId: cid,
-                            srtpDirKeyV1: useDir, selfIsRoleA: roleA,
-                            isReKeyRound: isReKeyRound)
+                        // P0-3 — hold the audio media install if this call's handshake
+                        // identity verdict was `.abort`; run it immediately otherwise.
+                        // Mirrors the responder leg's identical gate above verbatim —
+                        // this leg previously called installRelaySealers unconditionally,
+                        // so a caller whose ACCEPT-verify failed still got live audio
+                        // before the user confirmed the SAS, defeating the media hold on
+                        // this leg (confirmed live: sealers installed ~124ms after the
+                        // abort verdict, audio flowing ~18s before SAS confirmation,
+                        // while the UI still showed the awaiting-confirmation state).
+                        // persistMessagePsk below is NOT media and stays unaffected by
+                        // the gate, exactly like the responder leg.
+                        let cidLower = cid.lowercased()
+                        let installAudioMedia: () -> Void = { [weak self] in
+                            self?.callService.installRelaySealers(
+                                sessionKey: sessionKey, callId: cid,
+                                srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                                isReKeyRound: isReKeyRound)
+                        }
+                        if self.identityUnverifiedCallIds.contains(cidLower) {
+                            self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
+                        } else {
+                            installAudioMedia()
+                        }
                         // W-GRPDIAG-4 — see persistMessagePsk doc above.
                         self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                     }
@@ -18513,6 +18532,20 @@ extension AppState {
         // not on the `CallingApi` protocol.
         let wireCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
         let endCallId = (wireCallId ?? (callLogId == "none" ? nil : callLogId))?.lowercased()
+
+        // P0-3 — a call that ends (hangup, decline, or error) while its
+        // identity-unverified media gate was never released (user never
+        // confirmed the SAS) must not leave its entry behind: the pending
+        // media-install closures in `pendingIdentityGatedMedia` are dropped
+        // (no leaked references, and no sealer can ever install itself for
+        // a call that no longer exists) and its `identityUnverifiedCallIds`
+        // membership is cleared, keyed the same way the gate itself is
+        // (lowercased wire call id). No-op when the gate was never engaged
+        // for this call.
+        if let gatedCallId = wireCallId?.lowercased() {
+            identityUnverifiedCallIds.remove(gatedCallId)
+            pendingIdentityGatedMedia.removeValue(forKey: gatedCallId)
+        }
 
         // W541-3: telemetry event for call end. callState carries the
         // terminal state which the maintainer correlates with peer's
