@@ -34,6 +34,11 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     private let participantId: String
     private var senderCryptor: RTCFrameCryptor?
     private var receiverCryptor: RTCFrameCryptor?
+    /// W-AUDIORXREBIND (2026-09-26) — `receiverId` of the receiver the
+    /// current `receiverCryptor` is bound to, and whether this call already
+    /// did its post-negotiation rebind. Guarded by `lock`.
+    private var boundReceiverId: String?
+    private var didPostNegotiationRebind = false
     private var hasKey = false
     private let lock = NSLock()
 
@@ -196,6 +201,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
         c.enabled = true
         c.delegate = self
         receiverCryptor = c
+        boundReceiverId = receiver.receiverId  // W-AUDIORXREBIND
         print("[NativeAudioFrameCryptor] receiver cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
         return true
     }
@@ -231,11 +237,31 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     /// of bug (`PeerConnectionHolder.kt`, `enableAudioFrameCryptorOnSender`/
     /// receiver defer-and-flush pattern).
     @discardableResult
-    public func rebindReceiver(_ receiver: RTCRtpReceiver) -> Bool {
+    public func rebindReceiver(_ receiver: RTCRtpReceiver, negotiationComplete: Bool = false) -> Bool {
+        // W-AUDIORXREBIND (2026-09-26) — see NativeAudioReceiverRebindDecision:
+        // rebinds keep running as before until one has run with the
+        // negotiation COMPLETE (signaling stable, transceiver has a mid — the
+        // W-AUDIORXPOSTNEG fix); after that, later ones (every rekey, every
+        // repeated install trigger) only when JSEP replaced the receiver.
+        // They used to dispose and re-create the live transformer each time.
+        let liveReceiverId = receiver.receiverId
         lock.lock()
+        let rebind = NativeAudioReceiverRebindDecision.shouldRebind(
+            boundReceiverId: receiverCryptor == nil ? nil : boundReceiverId,
+            liveReceiverId: liveReceiverId,
+            alreadyReboundPostNegotiation: didPostNegotiationRebind)
+        guard rebind else {
+            lock.unlock()
+            return true
+        }
+        let changedFlag = (boundReceiverId != nil && boundReceiverId != liveReceiverId) ? 1 : 0
+        let firstFlag = didPostNegotiationRebind ? 0 : 1
+        let completeFlag = negotiationComplete ? 1 : 0
         receiverCryptor?.enabled = false
         receiverCryptor = nil
+        if negotiationComplete { didPostNegotiationRebind = true }
         lock.unlock()
+        onFrameCryptorStateChange?("audiosrtp rxrebind=1 first=\(firstFlag) changed=\(changedFlag) neg=\(completeFlag)")
         return attachReceiver(receiver)
     }
 

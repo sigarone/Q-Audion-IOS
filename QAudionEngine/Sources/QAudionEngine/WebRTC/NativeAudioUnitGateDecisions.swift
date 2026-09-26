@@ -160,9 +160,21 @@ public enum NativeAudioUnitGateDecisions {
 /// although its caller documented it as a no-op when the receiver had not
 /// changed. Re-creating the transformer on a live receiver opens a window in
 /// which inbound frames are dropped. Pure so it can be pinned by a test.
+///
+/// Conservative on purpose: until one rebind has run on a COMPLETED
+/// negotiation (signaling stable, transceiver has a mid), every rebind runs as
+/// before, even on the same receiver id, because W-AUDIORXPOSTNEG (and the
+/// video OFFERER-UPGRADE DECODE FIX it mirrors) found a transformer attached
+/// before the negotiation completed can stay bound to the pre-negotiation
+/// state on the SAME receiver object. Only the later, repeated rebinds on an
+/// unchanged receiver are skipped.
 public enum NativeAudioReceiverRebindDecision {
-    /// Rebind only when there is no bound receiver yet, or JSEP replaced it.
-    public static func shouldRebind(boundReceiverId: String?, liveReceiverId: String) -> Bool {
+    public static func shouldRebind(
+        boundReceiverId: String?,
+        liveReceiverId: String,
+        alreadyReboundPostNegotiation: Bool
+    ) -> Bool {
+        guard alreadyReboundPostNegotiation else { return true }
         guard let bound = boundReceiverId, !bound.isEmpty else { return true }
         return bound != liveReceiverId
     }

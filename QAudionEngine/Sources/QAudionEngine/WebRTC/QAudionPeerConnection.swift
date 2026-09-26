@@ -1255,7 +1255,11 @@ public final class QAudionPeerConnection: NSObject {
             return false
         }
         audioTransceiver = transceiver
-        let ok = cryptor.rebindReceiver(transceiver.receiver)
+        // W-AUDIORXREBIND (2026-09-26) — tell the cryptor whether this rebind
+        // runs on a COMPLETED negotiation; only such a rebind ends the
+        // "always rebind" phase (see NativeAudioReceiverRebindDecision).
+        let negotiationComplete = pc.signalingState == .stable && !transceiver.mid.isEmpty
+        let ok = cryptor.rebindReceiver(transceiver.receiver, negotiationComplete: negotiationComplete)
         // W-AUDIORXTAPCARRYOVER (2026-08-29) — the rebind above moves the
         // CRYPTOR to the live receiver, but the PCM tap is a renderer
         // registered on a TRACK, and it was added to whichever track the

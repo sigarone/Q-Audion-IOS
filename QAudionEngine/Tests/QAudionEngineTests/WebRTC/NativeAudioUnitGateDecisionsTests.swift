@@ -135,10 +135,24 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
 
     // MARK: - NativeAudioReceiverRebindDecision
 
-    func test_rebind_onlyWhenReceiverChangedOrUnbound() {
-        XCTAssertTrue(NativeAudioReceiverRebindDecision.shouldRebind(boundReceiverId: nil, liveReceiverId: "r1"))
-        XCTAssertTrue(NativeAudioReceiverRebindDecision.shouldRebind(boundReceiverId: "", liveReceiverId: "r1"))
-        XCTAssertTrue(NativeAudioReceiverRebindDecision.shouldRebind(boundReceiverId: "r0", liveReceiverId: "r1"))
-        XCTAssertFalse(NativeAudioReceiverRebindDecision.shouldRebind(boundReceiverId: "r1", liveReceiverId: "r1"))
+    private func rebind(_ bound: String?, _ live: String, done: Bool) -> Bool {
+        NativeAudioReceiverRebindDecision.shouldRebind(
+            boundReceiverId: bound, liveReceiverId: live, alreadyReboundPostNegotiation: done)
+    }
+
+    /// The first post-negotiation rebind always happens (W-AUDIORXPOSTNEG),
+    /// even on the same receiver id.
+    func test_firstPostNegotiationRebind_alwaysHappens() {
+        XCTAssertTrue(rebind("r1", "r1", done: false))
+        XCTAssertTrue(rebind(nil, "r1", done: false))
+    }
+
+    /// After it: only a changed or missing receiver rebinds (rekeys and
+    /// repeated triggers no longer re-create a live transformer).
+    func test_laterRebinds_onlyWhenReceiverChangedOrUnbound() {
+        XCTAssertFalse(rebind("r1", "r1", done: true))
+        XCTAssertTrue(rebind("r0", "r1", done: true))
+        XCTAssertTrue(rebind(nil, "r1", done: true))
+        XCTAssertTrue(rebind("", "r1", done: true))
     }
 }
