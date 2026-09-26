@@ -209,6 +209,31 @@ final class CallService: @unchecked Sendable {
         nackRxTracker.reset()
     }
 
+    /// W-NACKEPOCH (Copilot follow-up to #106) — session-key epoch for the RX NACK tracker.
+    /// Bumped SYNCHRONOUSLY on the handshake's own thread, right after `engine.initSession`
+    /// (via `noteSessionKeyInstalled`, called first thing in AppState's `onRelaySessionReady`
+    /// closures); read on the main thread by the RX path. Guarded by its own lock because the
+    /// writer is not the main thread.
+    private let nackKeyEpochLock = NSLock()
+    private var nackKeyEpoch: UInt64 = 0
+
+    /// W-NACKEPOCH — a new session key was just installed in the engine (initial handshake or
+    /// re-key). Only local duplicate/gap bookkeeping is affected; no key material is touched.
+    /// Safe from any thread.
+    func noteSessionKeyInstalled() {
+        nackKeyEpochLock.withLock { nackKeyEpoch &+= 1 }
+    }
+
+    /// W-NACKEPOCH — main thread only (the RX `DispatchQueue.main.async` block). Resets the
+    /// RX tracker the first time a frame is admitted under a new key epoch, BEFORE its
+    /// `wouldAccept` check, so the peer's restarted counter is never judged against the old
+    /// epoch's `highestSeq` — whether or not the main-actor `resetNackState()` Task scheduled
+    /// by `onPqcSessionKeyEstablished` has run yet. That Task still clears the TX ring.
+    private func syncNackTrackerToKeyEpoch() {
+        let epoch: UInt64 = nackKeyEpochLock.withLock { nackKeyEpoch }
+        nackRxTracker.adoptKeyEpoch(epoch)
+    }
+
     /// W-VIDTRANS (2026-07-24) — live read of the same three counters that
     /// `call.audio.counts` ships at teardown, so `call.video.transition` can
     /// carry audio liveness AT the moment of a lane flip. Teardown-only
@@ -3020,6 +3045,8 @@ final class CallService: @unchecked Sendable {
             // decrypted: silence both ways until the end of the call (S26 <-> iOS, 2026-09-20).
             // Now the pre-decrypt step is a READ-ONLY duplicate check and the tracker is updated
             // only after the frame really opened.
+            // W-NACKEPOCH — first align the tracker with the key epoch the engine now holds.
+            self.syncNackTrackerToKeyEpoch()
             if let seq = nackSeq, !self.nackRxTracker.wouldAccept(seq) { return }
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
