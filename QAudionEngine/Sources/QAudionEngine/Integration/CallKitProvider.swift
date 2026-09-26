@@ -268,9 +268,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // CallKit was about to (Apple's CallKit guidance: the app must not),
         // and — with a next call already activated — deactivate that one.
         // Legacy calls keep the drain above byte-for-byte
-        // (`NativeAudioUnitGateDecisions.deactivationCalls`). The flag is
-        // consumed on every call end so it cannot leak into the next one.
-        let nativeManualCall = NativeAudioSessionGate.consumeNativeCallBalanceFlag()
+        // (`NativeAudioUnitGateDecisions.deactivationCalls`).
+        // W-ADMBALANCE-UUID (2026-09-26) — "native call" is looked up by THIS
+        // report's uuid (recorded at that call's own CallKit start/answer,
+        // `recordNativeBalanceIfNativeCall`), not read from a process-wide
+        // flag armed by whichever PeerConnection armed last: this report runs
+        // in an unawaited Task, so a NEXT native call could arm before it and
+        // have its flag consumed here. Consumed once per uuid.
+        let nativeManualCall = ledger.consumeNativeBalance(uuid)
         if ledger.consumeAudioSelfActivation() {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
@@ -438,6 +443,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 log?("callkit answer refused=1 path=manual")
                 return
             }
+            recordNativeBalanceIfNativeCall(uuid)
             // W556-fix — deterministic self-activation with retry. The old
             // single `try? setActive(true)` could fail silently (swallowed) and
             // then onAudioSessionActivated() started the engine on an INACTIVE
@@ -449,6 +455,23 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
         let action = CXAnswerCallAction(call: uuid)
         try await controller.request(CXTransaction(action: action))
+    }
+
+    /// W-ADMBALANCE-UUID (2026-09-26) — record `uuid` for `reportCallEnded`'s
+    /// single balancing deactivation when THIS call runs native SRTP (manual
+    /// audio mode). Called at the call's own CallKit start / answer (CallKit
+    /// or manual path), where the native-SRTP decision read is this call's:
+    /// an outgoing `startCall` takes its keyed snapshot before it requests
+    /// the CXStartCallAction, and an incoming call latches its snapshot at
+    /// `call_incoming`, before it can normally be answered. An answer that
+    /// lands before `call_incoming` (push-woken call) finds no snapshot yet
+    /// and reads the live value `call_incoming` is about to latch — that is
+    /// what `isNativeSrtpEnabledLocally` (snapshot ?? live) returns. With the
+    /// toggle off it is `false` on every path: nothing is recorded and every
+    /// call end keeps the legacy drain.
+    private func recordNativeBalanceIfNativeCall(_ uuid: UUID) {
+        guard CallCapabilities.isNativeSrtpEnabledLocally else { return }
+        ledger.recordNativeBalance(uuid)
     }
 
     /// W556-fix — deterministically bring the AVAudioSession to ACTIVE after the
@@ -684,6 +707,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // W-NATIVESPKR (2026-09-26) — native-SRTP calls only: start from
         // output override `.none` (reference-implementation parity).
         NativeAudioSessionGate.resetOutputOverrideForNativeCall(site: 1)
+        recordNativeBalanceIfNativeCall(action.callUUID)
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
         // W-CKSTARTACTIVATE (2026-09-09) — the answer side has had this
@@ -717,6 +741,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
             // W-NATIVESPKR (2026-09-26) — native-SRTP calls only.
             NativeAudioSessionGate.resetOutputOverrideForNativeCall(site: 2)
+            recordNativeBalanceIfNativeCall(action.callUUID)
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,

@@ -127,9 +127,10 @@ public enum NativeAudioSessionGate {
     /// OFFER) closing late cannot disarm the one that replaced it.
     private static var armedToken: Int = 0
     private static var lastToken: Int = 0
-    /// Set when a native call arms; consumed by `CallKitProvider.reportCallEnded`
-    /// to pick the balanced single deactivation (W-ADMBALANCE).
-    private static var nativeCallAwaitingBalance = false
+    // W-ADMBALANCE-UUID (2026-09-26) — the process-wide "native call awaiting
+    // balance" flag that lived here is gone: `CallKitProvider` now records the
+    // native call by its CallKit uuid (`CallKitCallLedger.recordNativeBalance`)
+    // and `reportCallEnded` consumes that uuid's record only.
     /// W-NATIVESPKR — whether WebRTC's own session configuration must carry
     /// `.defaultToSpeaker` (the user's loudspeaker preference on a native
     /// call). WebRTC re-applies its configuration's category options every
@@ -174,7 +175,6 @@ public enum NativeAudioSessionGate {
         lastToken &+= 1
         if lastToken <= 0 { lastToken = 1 }
         armedToken = lastToken
-        nativeCallAwaitingBalance = true
         let token = armedToken
         lock.unlock()
         let prevManualFlag = prevManual ? 1 : 0
@@ -240,14 +240,14 @@ public enum NativeAudioSessionGate {
     /// native call arms: a unit left enabled by a previous call must not be
     /// inherited. Minimal: touches `isAudioEnabled` only when manual mode is
     /// on AND it is still enabled (a leak); on a call with native SRTP off it
-    /// also drops a stale arm/balance latch, so that call's lifecycle
-    /// (including reportCallEnded's drain) is exactly the legacy one.
+    /// also drops a stale arm, so that call's lifecycle is exactly the legacy
+    /// one (its reportCallEnded drain never depended on this type: such a
+    /// call's uuid is never recorded as native, see W-ADMBALANCE-UUID).
     public static func auditAtCallStart(nativeCall: Bool) {
         if !nativeCall {
             lock.lock()
             let wasArmed = armedToken != 0
             armedToken = 0
-            nativeCallAwaitingBalance = false
             lock.unlock()
             if wasArmed { emit("admgate audit=1 stalearm=1") }
         }
@@ -256,14 +256,6 @@ public enum NativeAudioSessionGate {
         session.isAudioEnabled = false
         let nativeFlag = nativeCall ? 1 : 0
         emit("admgate audit=1 forced=1 native=\(nativeFlag)")
-    }
-
-    /// W-ADMBALANCE — `true` once per native call end (read and cleared).
-    public static func consumeNativeCallBalanceFlag() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        let value = nativeCallAwaitingBalance
-        nativeCallAwaitingBalance = false
-        return value
     }
 
     // MARK: - Item 2: WebRTC's session configuration

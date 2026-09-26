@@ -136,6 +136,53 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertEqual(ledger.outstandingCount, 1)
     }
 
+    // MARK: - reportCallEnded native balance (W-ADMBALANCE-UUID)
+
+    func test_nativeBalance_consumedOnceForItsOwnUuid() {
+        let ledger = CallKitCallLedger()
+        let call = UUID()
+        ledger.recordNativeBalance(call)
+        ledger.recordNativeBalance(call)
+        XCTAssertTrue(ledger.consumeNativeBalance(call))
+        XCTAssertFalse(ledger.consumeNativeBalance(call), "a duplicate reportCallEnded must not balance twice")
+    }
+
+    /// THE race: the OLD call's report runs after the NEXT native call was
+    /// recorded. It must not take the next call's record, and the next call's
+    /// own report must still find it.
+    func test_nativeBalance_lateReportOfOldCall_doesNotConsumeNextCallsRecord() {
+        let ledger = CallKitCallLedger()
+        let old = UUID()
+        let next = UUID()
+        ledger.recordNativeBalance(old)
+        ledger.recordNativeBalance(next)
+        XCTAssertTrue(ledger.consumeNativeBalance(old))
+        XCTAssertTrue(ledger.consumeNativeBalance(next))
+    }
+
+    /// A legacy (native SRTP off) call is never recorded: its report keeps the
+    /// drain even while a native call's record is pending.
+    func test_nativeBalance_legacyCallNeverConsumesANativeRecord() {
+        let ledger = CallKitCallLedger()
+        let legacy = UUID()
+        let native = UUID()
+        ledger.recordNativeBalance(native)
+        XCTAssertFalse(ledger.consumeNativeBalance(legacy))
+        XCTAssertTrue(ledger.consumeNativeBalance(native))
+    }
+
+    /// A record must survive until its own report: neither the reaper nor a
+    /// provider reset drops it.
+    func test_nativeBalance_survivesDrainOutstandingAndClearRejected() {
+        let ledger = CallKitCallLedger()
+        let call = UUID()
+        ledger.recordOutstanding(call)
+        ledger.recordNativeBalance(call)
+        _ = ledger.drainOutstanding()
+        ledger.clearRejected()
+        XCTAssertTrue(ledger.consumeNativeBalance(call))
+    }
+
     // MARK: - beginReport / finishReport (W-GHOSTCALL single-flight)
 
     /// Incident e3acecd7 03.221/03.222: two reports of the same uuid inside the
