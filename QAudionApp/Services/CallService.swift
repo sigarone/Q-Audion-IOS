@@ -195,8 +195,8 @@ final class CallService: @unchecked Sendable {
     private let nackRxTracker = NackRxTracker()
     private let nackRateLimiter = NackResendRateLimiter()
 
-    /// W-AUDIONACK — clear the retransmit ring and gap tracker. Call on
-    /// every session-key install (initial handshake AND every re-key —
+    /// W-AUDIONACK — clear the TX retransmit ring. Call on every session-key
+    /// install (initial handshake AND every re-key —
     /// `QAudionCallIntegration.onPqcSessionKeyEstablished` fires for both,
     /// see its call sites next to every `engine.initSession(...)`). A frame
     /// cached in the ring was sealed under the key that just rotated away;
@@ -204,9 +204,21 @@ final class CallService: @unchecked Sendable {
     /// security-load-bearing, not just tidiness. Also called from
     /// `teardownAudioStack()` so a new call never starts holding the
     /// previous call's frames.
+    ///
+    /// W-NACKEPOCH (Copilot follow-up to #127) — this used to also call
+    /// `nackRxTracker.reset()` unconditionally. That is now `nackRxTracker`'s
+    /// own job, gated by `adoptKeyEpoch` (see `syncNackTrackerToKeyEpoch`):
+    /// the RX path clears its dedup window itself, synchronously, on the
+    /// first frame it processes under a new epoch — which can run BEFORE
+    /// this method's caller (the async `onPqcSessionKeyEstablished` Task).
+    /// If this method still reset the RX tracker too, that late, unguarded
+    /// `reset()` could run AFTER the RX path had already accepted one or
+    /// more new-epoch frames: it wipes `seenWindow` without bumping
+    /// `keyEpoch`, so a legitimate retransmission of an already-played
+    /// sequence would then pass `wouldAccept` a second time and be
+    /// decoded/played again — the exact bug this rewrite removes.
     func resetNackState() {
         nackRing.clear()
-        nackRxTracker.reset()
     }
 
     /// W-NACKEPOCH (Copilot follow-up to #106) — session-key epoch for the RX NACK tracker.
