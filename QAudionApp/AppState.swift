@@ -13948,7 +13948,16 @@ final class AppState: ObservableObject {
         // session-init regardless of whether AppState.callContactId has
         // been set yet (the old onPqcSessionKeyEstablished install raced
         // it and skipped the callee → Android→iOS 100% AEAD fail).
-        integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid, generation in
+        // W-NACKEPOCH — captured here, on the main actor, so the closure below can bump the
+        // RX NACK tracker's key epoch synchronously on the handshake thread (weak: no
+        // callService -> integration -> closure retain cycle).
+        let nackEpochCallService: CallService = self.callService
+        integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
+            // W-NACKEPOCH (Copilot follow-up to #106) — FIRST, synchronously: the engine has
+            // just installed this key, and new-key frames may already be queued on main. The
+            // RX path resets its NACK tracker on the next frame it admits instead of waiting
+            // for the main-actor resetNackState() Task in onPqcSessionKeyEstablished.
+            nackEpochCallService?.noteSessionKeyInstalled()
             // W-M15SEALERONCE — read SYNCHRONOUSLY (the integration clears the flag
             // as soon as this closure returns, before the Task below runs).
             let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
@@ -16280,7 +16289,11 @@ final class AppState: ObservableObject {
                 // callService → integration → closure. The peerId is
                 // captured by-value from `contactId`.
                 // W574g — race-free M-15 relay sealer install (caller side).
-                integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid, generation in
+                // W-NACKEPOCH — see the responder wiring's identical capture.
+                let nackEpochCallService: CallService = self.callService
+                integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
+                    // W-NACKEPOCH — FIRST, synchronously (see the responder wiring).
+                    nackEpochCallService?.noteSessionKeyInstalled()
                     // W-M15SEALERONCE — read SYNCHRONOUSLY (see the responder wiring).
                     let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
                     // W-STALESEALER (fix-3) — `generation` is the integration's own

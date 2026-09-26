@@ -98,6 +98,39 @@ final class NackRetransmitTests: XCTestCase {
         XCTAssertFalse(tracker.wouldAccept(200))
     }
 
+    // MARK: - W-NACKEPOCH (the reset must not depend on Task vs main-queue ordering)
+
+    func test_newEpochSeqZero_isAccepted_beforeAnyExplicitReset() {
+        let tracker = NackRxTracker()
+        XCTAssertFalse(tracker.adoptKeyEpoch(0), "epoch 0 is the initial state")
+        for seq in 0...5000 { _ = tracker.accept(Int64(seq), nowMs: 0) }
+        // The race: the new key is live, the explicit reset() has NOT run yet.
+        XCTAssertFalse(tracker.wouldAccept(0), "without the epoch, seq 0 is judged against the old highestSeq")
+        // Key install bumped the epoch synchronously; the RX path adopts it before its check.
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        XCTAssertTrue(tracker.wouldAccept(0))
+        XCTAssertTrue(tracker.accept(0, nowMs: 1))
+        XCTAssertFalse(tracker.wouldAccept(0), "duplicates inside the new epoch are still dropped")
+    }
+
+    func test_adoptKeyEpoch_sameEpoch_keepsState() {
+        let tracker = NackRxTracker()
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        XCTAssertTrue(tracker.accept(7, nowMs: 0))
+        XCTAssertFalse(tracker.adoptKeyEpoch(1))
+        XCTAssertFalse(tracker.wouldAccept(7), "an unchanged epoch must not wipe duplicate memory")
+    }
+
+    func test_lateExplicitReset_afterEpochAdopted_neverRejectsNewEpochFrames() {
+        let tracker = NackRxTracker()
+        for seq in 0...5000 { _ = tracker.accept(Int64(seq), nowMs: 0) }
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        for seq in 0...10 { XCTAssertTrue(tracker.accept(Int64(seq), nowMs: Int64(seq) * 20)) }
+        tracker.reset() // the main-actor resetNackState() Task landing late
+        XCTAssertFalse(tracker.adoptKeyEpoch(1), "reset() keeps the epoch: no second reset")
+        for seq in 11...40 { XCTAssertTrue(tracker.wouldAccept(Int64(seq)), "seq \(seq)") }
+    }
+
     func test_gap_notNackEligible_beforeAgingPastThreshold() {
         let tracker = NackRxTracker(nackAgeThresholdMs: 120)
         _ = tracker.accept(0, nowMs: 0)

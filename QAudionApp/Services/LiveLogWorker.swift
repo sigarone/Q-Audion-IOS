@@ -123,6 +123,17 @@ actor LiveLogWorker {
     private var chunkSeq: Int = 0
     private var inflight: Bool = false
     private var lastUploadStartedAt: TimeInterval = -Double.infinity
+    /// The `performUpload` task currently attempting `chunkSeq`. Cancelled (not just
+    /// forgotten) by `uploadTimedOut` so a hung TUS request is actually torn down instead of
+    /// running on in the background while a replacement upload starts over the same backlog.
+    private var uploadTask: Task<Void, Never>?
+    /// Set by `uploadTimedOut` to the seq it just gave up on. `uploadFailed` checks this (in
+    /// addition to the `chunkSeq == seq` generation check already used everywhere else in this
+    /// file) so the cancellation unwinding through the SAME attempt's own catch block cannot
+    /// double-count a failure or re-run the 401 refresh cascade for it. `uploadSucceeded`
+    /// deliberately does NOT check it: a confirmation that still arrives is a fact about the
+    /// server and is applied regardless (see that function's own comment).
+    private var timedOutSeq: Int?
 
     private var cachedAuth: AuthSnapshot?
     private var cachedAuthAt: TimeInterval = -Double.infinity
@@ -173,6 +184,9 @@ actor LiveLogWorker {
         pathMonitor?.cancel()
         pathMonitor = nil
         inflight = false
+        uploadTask?.cancel()
+        uploadTask = nil
+        timedOutSeq = nil
         backlog.removeAll()
         collectedSeq = ackSeq
         cachedAuth = nil
@@ -338,13 +352,21 @@ actor LiveLogWorker {
         let chunkBytes: Int = data.count
         let lastSeq: Int64 = batch.lastSeq
 
-        // W-LIVELOGHANG watchdog, unchanged in spirit: a hung upload releases `inflight` after
-        // `uploadTimeoutSeconds`; the upload itself is not cancelled and may still confirm.
+        // W-LIVELOGHANG watchdog: a hung upload releases `inflight` after `uploadTimeoutSeconds`.
+        // W-LIVELOGSINGLEFLIGHT (below) additionally cancels the actual `uploadTask`, so a stuck
+        // TUS request no longer keeps running (and potentially confirming) after the watchdog
+        // gives up -- see `uploadTimedOut`. Cancellation of `URLSession.data(for:)` (used by
+        // `TusUploadClient`) is cooperative but real: the async overload cancels its underlying
+        // `URLSessionTask` when the wrapping `Task` is cancelled, so the in-flight HTTP request is
+        // actually aborted, not just abandoned -- it does not wait for a server response first.
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: LiveLogWorker.uploadTimeoutSeconds * 1_000_000_000)
             await self?.uploadTimedOut(seq: mySeq, runEpoch: expected)
         }
-        Task { [weak self] in
+        // W-LIVELOGSINGLEFLIGHT -- keep the handle so a watchdog timeout can actually cancel
+        // this attempt (see `uploadTimedOut`) instead of only clearing the `inflight` flag
+        // while the TUS request keeps running in the background.
+        uploadTask = Task { [weak self] in
             await self?.performUpload(serverUrl: serverUrl,
                                       token: token,
                                       filename: filename,
@@ -360,6 +382,12 @@ actor LiveLogWorker {
     private func uploadTimedOut(seq: Int, runEpoch expected: Int) async {
         guard inflight, chunkSeq == seq, runEpoch == expected else { return }
         inflight = false
+        // Mark this seq as timed out BEFORE cancelling: the cancellation unwinds into
+        // `performUpload`'s catch block on this same actor, and by the time it runs
+        // `timedOutSeq` must already say "this one is accounted for, ignore it".
+        timedOutSeq = seq
+        uploadTask?.cancel()
+        uploadTask = nil
         failedUploads += 1
         let seqStr: String = String(describing: seq)
         let line: String = "livelog upload timeout seq=" + seqStr
@@ -454,6 +482,12 @@ actor LiveLogWorker {
         // Only the failure of the upload the pump is still waiting on counts: a late failure
         // after the watchdog already gave up on it must not be double-counted.
         guard chunkSeq == seq, runEpoch == expected else { return }
+        // W-LIVELOGSINGLEFLIGHT -- `uploadTimedOut` already cancelled this exact attempt's task,
+        // cleared `inflight` and counted the failure. The `CancellationError`/`URLError.cancelled`
+        // that cancellation produces unwinds right back into this catch block on the same actor;
+        // without this check it would count a SECOND failure and, if the cancellation raced a 401,
+        // could even kick off the refresh-and-retry cascade below for an attempt that is already dead.
+        guard timedOutSeq != seq else { return }
         guard let cfg = config else { return }
         let status: Int? = LiveLogWorker.httpStatus(of: error)
 

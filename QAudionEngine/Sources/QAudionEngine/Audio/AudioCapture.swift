@@ -1191,8 +1191,17 @@ public final class AudioCapture {
         //
         // (It is a hint either way — VP-IO ties the real buffer to the hardware
         // I/O duration and ignores this value entirely.)
+        // W-VPIOGEN (Copilot follow-up to #117) — this tap outlives `removeTap`: a callback already
+        // in flight on the audio thread can still land after the next start() has reset
+        // firstFrameReceived/firstFrameAtMs for a NEW engine. Pin the generation this tap was
+        // installed for (vpioWatchdogGen is already bumped above, before installTap is called) and
+        // compare it fresh on every callback — same plain-Int cross-thread read idiom as
+        // `armedGen`/`vpioWatchdogGen` in the watchdog timer below. A callback from a superseded
+        // engine returns before touching any first-frame/beacon state.
+        let tapGeneration = vpioWatchdogGen
         inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(AudioConstants.samplesPerFrame), format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            guard self.vpioWatchdogGen == tapGeneration else { return }  // W-VPIOGEN — stale engine's callback, discard
             let tapNowMs = Self.monotonicNowMs()
             if !self.firstFrameReceived { self.firstFrameAtMs = tapNowMs }  // W-VPIOOBS — first buffer of this engine: one store
             self.firstFrameReceived = true  // W-AEC-FIX — VP-IO tap is delivering
