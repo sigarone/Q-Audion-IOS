@@ -1094,6 +1094,46 @@ final class CallService: @unchecked Sendable {
     /// any call that might re-enter (NSLock is non-recursive).
     private let relaySlotLock = NSLock()
 
+    /// W-STALESEALER (2026-09-26) — monotonic counter bumped exactly once, inside
+    /// `endCall()`, at EVERY real call teardown. `endCall()` is the single choke
+    /// point: every terminal path in this app calls either it directly (this
+    /// file's own `.error` handshake-outcome case) or `AppState`'s several
+    /// direct `callService.endCall()` sites (CallKit provider reset, WS
+    /// `call_peer_offline`/`call_busy`/`call_cancel`, `onIncomingCallCancelled`,
+    /// both `beginAndroidOutgoing` failure branches) or `AppState.endCall()`
+    /// itself (the canonical hangup/decline/error funnel, which also calls this
+    /// method). AppState's caller/responder `onRelaySessionReady` wiring reads
+    /// `currentCallGeneration()` once, when that call's integration is wired,
+    /// and compares it against a later read of the same accessor — via
+    /// `RelaySealerInstallGuard.shouldInstall` — right before arming a relay
+    /// sealer, including a run reached later through `pendingIdentityGatedMedia`.
+    /// A mismatch means `endCall()` ran in between, so the install is dropped.
+    ///
+    /// Deliberately NOT bumped by `teardownAudioStack()` itself: that lower-level
+    /// helper also runs as a defensive, SAME-call reset — `startCall(engine:
+    /// contactId:)`'s "cleanup a leftover call" call at its own top, and
+    /// `activateIncomingCallAudio`'s callee-side reset at ANSWER time (which, per
+    /// that method's own doc, can run AFTER `onRelaySessionReady` already
+    /// installed this exact call's sealers) — neither of which is a call ending.
+    /// Bumping there would mute the very call whose closures just captured the
+    /// generation. Only the full `endCall()` (which itself calls
+    /// `teardownAudioStack()`, but is never called BY it) means "this call is
+    /// over".
+    ///
+    /// Locked (not a plain `Int`) because `endCall()` can run off the main
+    /// thread: the `.error` handshake-outcome case above fires from
+    /// `QAudionCallIntegration.onStateChanged`, which is invoked from the
+    /// integration's own dispatch queue, not necessarily the main queue.
+    private let callGenerationLock = NSLock()
+    private var _callGeneration: Int = 0
+
+    /// Thread-safe read of the current call generation — see `callGenerationLock`
+    /// doc above. Call once to capture (at wiring time) and again to compare (at
+    /// install time); never cache the comparison across an `await`/`Task` hop.
+    func currentCallGeneration() -> Int {
+        callGenerationLock.withLock { _callGeneration }
+    }
+
     /// W-LONGAUDIO (2026-08-10) — resolve and latch this call's audio profile.
     ///
     /// Called exactly once, from the `.active` handshake transition. Everything
@@ -2176,6 +2216,11 @@ final class CallService: @unchecked Sendable {
     }
 
     func endCall() {
+        // W-STALESEALER — bump FIRST, unconditionally, before any other teardown
+        // work: see `callGenerationLock`'s doc comment for why this is the single
+        // choke point every terminal path (this app-wide) funnels through, and
+        // why `teardownAudioStack()` itself must never do this.
+        callGenerationLock.withLock { _callGeneration &+= 1 }
         onDeepfakeAlert?(false)
         stopDurationTimer()
         stopPlpReportTimer()
