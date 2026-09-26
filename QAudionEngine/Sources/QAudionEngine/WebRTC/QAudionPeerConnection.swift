@@ -1571,15 +1571,17 @@ public final class QAudionPeerConnection: NSObject {
                 completion(.failure(WebRTCError.sdpFailed("offer returned nil"))); return
             }
             // IOS-C4b / W-SRTPPTIME — apply the fixed Opus/audio-srtp profile
-            // to every SDP this client produces, gated on native SRTP being
-            // enabled locally (W-NATIVESRTPGATE, this task): AudioSdpPolicy
-            // is safe to run unconditionally (a no-op transform on an
-            // m=audio section carrying no RTP audio when the switch is
-            // off), but the point of this task is that a build/call with
-            // native SRTP off produces byte-for-byte the same SDP as before
-            // this feature existed — including the Opus fmtp text, which a
-            // peer's own diagnostics may compare across releases.
-            let mungedText = CallCapabilities.isNativeSrtpEnabledLocally ? AudioSdpPolicy.apply(sdp.sdp) : sdp.sdp
+            // to every SDP this client produces. Safe on every call, even one
+            // that never negotiates audioSrtpV1 (see AudioSdpPolicy's own
+            // doc): a no-op transform on an m=audio section carrying no RTP
+            // audio. UNCONDITIONAL on purpose (2026-09-26 correction,
+            // W-NATIVESRTPGATE-2) — mirrors Android's own AudioSdpPolicy,
+            // which polices every SDP the same way regardless of any native-
+            // SRTP switch; gating this on isNativeSrtpEnabledLocally would
+            // make iOS's SDP diverge from Android's on every ordinary call,
+            // the opposite of the cross-platform parity this policy exists
+            // for.
+            let mungedText = AudioSdpPolicy.apply(sdp.sdp)
             let munged = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(munged.sdp, tag: iceRestart ? "LOCAL_OFFER_ICE_RESTART" : "LOCAL_OFFER")
             self?.peerConnection?.setLocalDescription(munged, completionHandler: { setErr in
@@ -1627,8 +1629,8 @@ public final class QAudionPeerConnection: NSObject {
             // AFTER the DTLS-role pin (pure string transforms on disjoint
             // attribute sets — order between them does not matter, but
             // matching Android/createOffer's own "policy last" placement).
-            // W-NATIVESRTPGATE — same gate as createOffer above.
-            let mungedText = CallCapabilities.isNativeSrtpEnabledLocally ? AudioSdpPolicy.apply(pinnedSdpText) : pinnedSdpText
+            // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
+            let mungedText = AudioSdpPolicy.apply(pinnedSdpText)
             let pinnedSdp = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
@@ -1661,8 +1663,8 @@ public final class QAudionPeerConnection: NSObject {
         // encoder even against a peer that sends unmunged defaults (Android
         // applies the same policy bidirectionally — see AudioSdpPolicy's own
         // doc for why this is unilateral-safe).
-        // W-NATIVESRTPGATE — same gate as the two local-SDP call sites above.
-        let munged = CallCapabilities.isNativeSrtpEnabledLocally ? AudioSdpPolicy.apply(sdp) : sdp
+        // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
+        let munged = AudioSdpPolicy.apply(sdp)
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
         pc.setRemoteDescription(desc, completionHandler: completion)
