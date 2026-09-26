@@ -244,18 +244,42 @@ def is_hex_pair_token(b, p, limit):
 
 def match_hex_run(b, i, limit):
     """>= 8 two-digit hex bytes separated by one space or colon, starting at i (the caller checked
-    that i starts a token). Returns the end (exclusive), -1 if there are fewer."""
+    that i starts a token). Returns the end (exclusive) of a full match. Also returns the scan
+    boundary `limit` (Copilot follow-up to #109) when the run was cut by the cap with fewer than
+    MIN_HEX_RUN pairs visible: more hex bytes past `limit` can never be ruled out, so the visible
+    prefix is treated as sensitive too and merges with the 'overlong' span that starts at `limit`.
+    -1 when neither (a genuine, well-inside-the-window end of a run shorter than MIN_HEX_RUN, OR
+    `limit` is simply the real end of the text/line -- len(b) == limit -- with nothing past it to
+    fail closed about)."""
+    # Only a REAL cap cut (more bytes exist past `limit`) can leave more key bytes unseen. When
+    # `limit` is just the end of the whole buffer (the common case for any text/line shorter than
+    # the 256 KiB cap), reaching it is a genuine, unambiguous end.
+    truncated = len(b) > limit
     count = 0
     p = i
     last_end = -1
+    cut_by_cap = False
     while is_hex_pair_token(b, p, limit):
         count += 1
         last_end = p + 2
-        if p + 2 < limit and is_hex_separator(b[p + 2]):
-            p += 3
+        if last_end < limit and is_hex_separator(b[last_end]):
+            p = last_end + 1
         else:
+            # The pair itself reached the boundary: no room left to see whether a separator and
+            # more pairs follow, so this is a cap cut, not a genuine end -- but only when the
+            # buffer truly continues past `limit`.
+            if truncated and last_end >= limit:
+                cut_by_cap = True
             break
-    return last_end if count >= MIN_HEX_RUN else -1
+    if not cut_by_cap and truncated and p + 1 >= limit:
+        # The while-condition check failed for lack of room (not content): the cap cut before the
+        # next candidate pair could even be looked at.
+        cut_by_cap = True
+    if count >= MIN_HEX_RUN:
+        return last_end
+    if cut_by_cap and count >= 1:
+        return limit
+    return -1
 
 
 # --- the scanner -------------------------------------------------------------------------------

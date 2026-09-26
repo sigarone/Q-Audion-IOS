@@ -239,6 +239,26 @@ final class KeyMaterialScrubberTests: XCTestCase {
         XCTAssertEqual(kinds("aa bb cc dd ee ff 00 11"), [.hexRun])
     }
 
+    /// Copilot follow-up to #109: the 256 KiB scan cap can fall inside a hex key with fewer than
+    /// `minHexBytes` pairs visible before it (here 7 of 8). `matchHexRun` used to see only those 7
+    /// pairs, return -1 (not sensitive), and leave them in the output while only the separate
+    /// `.overlong` span (`limit..<n`) got redacted -- so 7 of the 8 key bytes survived. Fail closed
+    /// instead: the visible prefix now merges into one marker with the overlong tail.
+    func test_hexRunCutAtTheCapBoundaryWithFewerThanEightVisiblePairsIsStillRedacted() {
+        let cap: Int = KeyMaterialScrubber.maxScanBytes
+        let hexRun: String = "aa bb cc dd ee ff 00 11"   // 8 pairs; the cut below leaves 7 visible
+        let eighthPairOffset: Int = 21                    // index of "11" (the 8th pair) in hexRun
+        // A non-hex separator (space) right before the run, so the hex-run scan actually starts
+        // at "aa" (a token boundary) instead of being swallowed into the "x" padding as one run.
+        let padding: String = String(repeating: "x", count: cap - eighthPairOffset - 1) + " "
+        let text: String = padding + hexRun
+        XCTAssertGreaterThan(text.utf8.count, cap)
+        let result: String = scrub(text)
+        XCTAssertEqual(result, padding + marker)
+        XCTAssertFalse(result.contains("aa"))
+        XCTAssertFalse(result.contains("11"))
+    }
+
     func test_hexLookAlikesAreLeftAlone() {
         XCTAssertEqual(scrub("aa bb cc dd ee ff 00"), "aa bb cc dd ee ff 00")
         XCTAssertEqual(scrub("02:42:ac:11:00:02"), "02:42:ac:11:00:02")
