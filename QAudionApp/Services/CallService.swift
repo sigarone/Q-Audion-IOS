@@ -4091,11 +4091,20 @@ final class CallService: @unchecked Sendable {
     /// the custom path stays exactly as it was. Main thread.
     private func applyNativeAudioUnitGate(reason: NativeAudioUnitGateDecisions.ChangeReason) {
         guard NativeAudioSessionGate.isArmed else { return }
+        // W-ADMCONFIRM (2026-09-26) — `audioSessionActive` alone is also true
+        // after CallKitProvider's W571 last resort (every setActive(true)
+        // attempt failed); for a self-activation that expects CallKit the
+        // SDK's real state must agree before the unit may start.
+        let rtcSessionActive: Bool = NativeAudioSessionGate.isSessionActive
+        let unitSessionActive: Bool = NativeAudioUnitGateDecisions.sessionActiveForUnit(
+            appSessionActive: audioSessionActive,
+            source: audioActivationSource,
+            rtcSessionActive: rtcSessionActive)
         let verdict = NativeAudioUnitGateDecisions.verdict(
             nativeSnapshot: true,
             negotiated: getUsesNativeAudioSrtp?() == true,
             fallbackActive: audioSrtpFallbackActive,
-            sessionActive: audioSessionActive,
+            sessionActive: unitSessionActive,
             answered: peerAnswered,
             source: audioActivationSource,
             callKitWaitExpired: nativeUnitCallKitWaitExpired)
@@ -4104,7 +4113,8 @@ final class CallService: @unchecked Sendable {
             let verdictCode: Int = verdict.rawValue
             let sourceCode: Int = audioActivationSource.rawValue
             let waitedFlag: Int = nativeUnitCallKitWaitExpired ? 1 : 0
-            RTLog.info("call", "admgate verdict=\(verdictCode) src=\(sourceCode) ckwait=\(waitedFlag)")
+            let rtcActiveFlag: Int = rtcSessionActive ? 1 : 0
+            RTLog.info("call", "admgate verdict=\(verdictCode) src=\(sourceCode) ckwait=\(waitedFlag) act=\(rtcActiveFlag)")
         }
         switch verdict {
         case .enable:

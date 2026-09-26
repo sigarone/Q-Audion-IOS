@@ -39,7 +39,8 @@ public enum AudioSessionActivationSource: Int, Sendable, Equatable {
 /// 2. the peer negotiated `audio-srtp-v1`;
 /// 3. the relay fallback is not engaged (then the custom `AudioCapture` owns
 ///    the mic and two VoiceProcessingIO units must never run together);
-/// 4. the session is active;
+/// 4. the session is active (for an activation that still expects CallKit,
+///    confirmed by `RTCAudioSession` itself: ``sessionActiveForUnit``);
 /// 5. the call is answered — incoming: the local accept, outgoing: the remote
 ///    answer (the reference implementations enable at `didActivate` for an
 ///    incoming call and at the remote answer for an outgoing one; with the
@@ -117,6 +118,33 @@ public enum NativeAudioUnitGateDecisions {
         guard answered else { return .notAnswered }
         if source == .selfExpectingCallKit, !callKitWaitExpired { return .awaitingCallKit }
         return .enable
+    }
+
+    /// W-ADMCONFIRM (2026-09-26) — the `sessionActive` input of ``verdict``.
+    ///
+    /// `appSessionActive` is `CallService`'s own bookkeeping, set by every
+    /// `handleAudioSessionActivated` — including `CallKitProvider`'s W571 last
+    /// resort, which fires it after ALL of its `setActive(true)` attempts
+    /// FAILED. For a `.selfExpectingCallKit` activation the SDK's real state
+    /// must agree: that source only comes from
+    /// `CallKitProvider.activateAudioSession`, which activates exclusively
+    /// through `RTCAudioSession`'s own locked `setActive`, so `isActive` is
+    /// authoritative for it, and enabling the unit on a session nobody
+    /// activated is the dead-TX shape this gate exists to prevent (the unit
+    /// waits instead for CallKit's own `didActivate`). `.callKit` is CallKit's
+    /// activation itself. `.selfManaged` also covers paths that activate
+    /// `AVAudioSession` directly, outside the SDK's bookkeeping (CallKit-free
+    /// mode, the CallKit failure fallbacks, W469), where `isActive` can read
+    /// `false` on a genuinely active session: those keep the bookkeeping
+    /// value, as before.
+    public static func sessionActiveForUnit(
+        appSessionActive: Bool,
+        source: AudioSessionActivationSource,
+        rtcSessionActive: Bool
+    ) -> Bool {
+        guard appSessionActive else { return false }
+        guard source == .selfExpectingCallKit else { return true }
+        return rtcSessionActive
     }
 
     /// Combine the source already recorded for this call with a new

@@ -97,6 +97,37 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
         XCTAssertEqual(D.ChangeReason.selfManagedReactivation.rawValue, 8)
     }
 
+    // MARK: - sessionActiveForUnit (W-ADMCONFIRM)
+
+    /// THE bug: CallKitProvider's W571 last resort reports an activation after
+    /// every setActive(true) attempt failed. For a self-activation expecting
+    /// CallKit the SDK's own state decides, so the unit is not started (even
+    /// after the CallKit wait) on a session nobody activated.
+    func test_unconfirmedSelfActivationExpectingCallKit_isNoSession() {
+        let active = D.sessionActiveForUnit(
+            appSessionActive: true, source: .selfExpectingCallKit, rtcSessionActive: false)
+        XCTAssertFalse(active)
+        XCTAssertEqual(verdict(session: active, source: .selfExpectingCallKit, waitExpired: true), .noSession)
+    }
+
+    func test_confirmedSelfActivationExpectingCallKit_isActive() {
+        XCTAssertTrue(D.sessionActiveForUnit(
+            appSessionActive: true, source: .selfExpectingCallKit, rtcSessionActive: true))
+    }
+
+    /// CallKit's own activation and self-managed ones (some of which activate
+    /// AVAudioSession outside the SDK's bookkeeping) keep the app's value.
+    func test_callKitAndSelfManaged_keepTheAppBookkeeping() {
+        XCTAssertTrue(D.sessionActiveForUnit(appSessionActive: true, source: .callKit, rtcSessionActive: false))
+        XCTAssertTrue(D.sessionActiveForUnit(appSessionActive: true, source: .selfManaged, rtcSessionActive: false))
+    }
+
+    func test_appSessionInactive_isNeverActive() {
+        for source in [AudioSessionActivationSource.notActivated, .callKit, .selfExpectingCallKit, .selfManaged] {
+            XCTAssertFalse(D.sessionActiveForUnit(appSessionActive: false, source: source, rtcSessionActive: true))
+        }
+    }
+
     // MARK: - mergedSource
 
     func test_callKitIsNeverDowngraded() {

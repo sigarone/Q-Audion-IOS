@@ -276,6 +276,14 @@ public enum NativeAudioSessionGate {
         return token != 0 && armedToken == token
     }
 
+    /// W-ADMCONFIRM (2026-09-26) — `RTCAudioSession`'s own view of whether the
+    /// shared session is active (its `isActive`, kept by its locked
+    /// `setActive` and by `audioSessionDidActivate`/`audioSessionDidDeactivate`).
+    /// Read-only; see `NativeAudioUnitGateDecisions.sessionActiveForUnit`.
+    public static var isSessionActive: Bool {
+        RTCAudioSession.sharedInstance().isActive
+    }
+
     /// Whether WebRTC's unit is currently allowed to run (armed AND enabled).
     public static var isNativeAudioEnabled: Bool {
         guard isArmed else { return false }
