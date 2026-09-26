@@ -103,17 +103,26 @@ struct CallsSettingsScreen: View {
                     // audioSrtpSendEnabled`, in-memory only, per-call
                     // snapshot means a mid-call flip cannot affect the call
                     // already in progress.
-                    SettingsToggleRow(
-                        title: "Audio SRTP standard (WebRTC)",
-                        subtitle: "Se attivato su entrambi i dispositivi, l'audio della chiamata passa dal protocollo Q-Audion al trasporto WebRTC DTLS-SRTP standard, con cifratura end-to-end dei frame. Disattivato per impostazione predefinita; non viene salvato e torna disattivato al riavvio dell'app. Ha effetto dalla prossima chiamata.",
-                        isOn: Binding(
-                            get: { audioSrtpToggle },
-                            set: { newValue in
-                                audioSrtpToggle = newValue
-                                CallCapabilities.audioSrtpDebugOverride = newValue
-                            }
+                    //
+                    // The row subtitle is kept short because
+                    // `SettingsToggleRow` caps it at `.lineLimit(2)`; the
+                    // full disclosure (and the experimental warning, same
+                    // pattern as "MODALITÀ CHIAMATA (SPERIMENTALE)" below)
+                    // lives in the uncapped `warningHint` underneath.
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Audio SRTP standard (WebRTC)",
+                            subtitle: "Sostituisce il protocollo Q-Audion con WebRTC DTLS-SRTP standard, se attivo su entrambi i dispositivi.",
+                            isOn: Binding(
+                                get: { audioSrtpToggle },
+                                set: { newValue in
+                                    audioSrtpToggle = newValue
+                                    CallCapabilities.audioSrtpDebugOverride = newValue
+                                }
+                            )
                         )
-                    )
+                        warningHint("Funzione sperimentale, non ancora verificata su chiamate reali: può causare audio assente o instabile durante la chiamata. Cifra i frame end-to-end; l'impostazione non è salvata (torna disattivata al riavvio dell'app) e ha effetto dalla prossima chiamata.")
+                    }
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
                     kvRow(label: "Preset audio",
