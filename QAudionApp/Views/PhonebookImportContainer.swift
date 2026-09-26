@@ -88,7 +88,10 @@ final class PhonebookImportContainer: ObservableObject {
     /// looked up (rate limit) are not "not on Q-Audion", so they are left out of this
     /// count; the results screen reports them through `incompleteNotice` instead.
     private func unmatchedNumbers(_ p: PhonebookSyncCoordinator.ScanProgress, matchCount: Int) -> Int {
-        let lookedUp: Int = p.validE164Count - p.pendingHashCount
+        // Both operands count numbers: `validE164Count` every normalized number,
+        // `pendingNumberCount` the numbers whose hash was not looked up (a hash
+        // count would undercount when several contacts share a number).
+        let lookedUp: Int = p.validE164Count - p.pendingNumberCount
         let unmatched: Int = lookedUp - matchCount
         return max(0, unmatched)
     }
@@ -97,8 +100,8 @@ final class PhonebookImportContainer: ObservableObject {
     /// (server rate limit), so the user knows the list may be missing people and
     /// that running the import again continues the search. Nil for a full pass.
     var incompleteNotice: String? {
-        guard let p = progress, p.pendingHashCount > 0 else { return nil }
-        let pending: Int = p.pendingHashCount
+        guard let p = progress, p.pendingNumberCount > 0 else { return nil }
+        let pending: Int = p.pendingNumberCount
         guard let wait = p.retryAfterSeconds else {
             let plain: String = "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova più tardi."
             return plain

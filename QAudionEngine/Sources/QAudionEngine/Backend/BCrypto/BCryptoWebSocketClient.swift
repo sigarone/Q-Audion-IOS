@@ -1348,13 +1348,31 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// (internal/signaling/messages.go). `id` is a UUID used for request/response
     /// correlation (e.g. pairing a server `pong` with the triggering `ping`).
     public func send(type: String, data: [String: Any]) {
+        _ = trySend(type: type, data: data)
+    }
+
+    /// Same wire behaviour as `send(type:data:)`, but reports whether the frame
+    /// was handed to a socket task. `false` means the frame was NOT accepted
+    /// and the caller still owns it: the envelope could not be encoded, there
+    /// is no task (the socket is not connected), the socket was found stale (a
+    /// reconnect is kicked and the frame is still attempted best-effort, but
+    /// it is not reported as accepted), or a media frame hit the outbound
+    /// backpressure cap. `true` means `URLSessionWebSocketTask.send` was
+    /// invoked for the frame: acceptance is synchronous. A transmission error
+    /// the OS reports later, through the send completion handler, is only
+    /// logged and is not observed by the caller, so a frame reported as
+    /// accepted can still be lost; `true` is not a delivery guarantee.
+    /// Callers that must not lose a frame (a durable outbox) remove it from
+    /// their queue only on `true`.
+    @discardableResult
+    public func trySend(type: String, data: [String: Any]) -> Bool {
         let message: [String: Any] = [
             "type": type,
             "data": data,
             "id": UUID().uuidString
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: message),
-              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return false }
         // W419 — log dispatch attempt + capture send errors. The previous
         // `{ _ in }` swallowed every transmission failure: if the WS was
         // suspended (app backgrounded) or already torn down, sends became
@@ -1385,13 +1403,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             if Self.shouldKickReconnect(forType: type) {
                 forceReconnect()
             }
-            return
+            return false
         }
+        var acceptedOnLiveSocket = true
         if stale && Self.shouldKickReconnect(forType: type) {
             print("[BCryptoWS] send(\(type)) STALE socket — kicking reconnect; attempting send anyway (best-effort)")
             forceReconnect()
             // Fall through and try the send — `task.send` will report the
             // error in its completion if the cancelled task rejects it.
+            // The attempt is best-effort only, so it is not reported as
+            // accepted (`trySend` doc).
+            acceptedOnLiveSocket = false
         }
         // IOS-E1 — media-only backpressure gate (see the kdoc block above
         // `outboundMediaFramesInFlight`). No-op for non-media types.
@@ -1403,7 +1425,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // DROPPED outbound media backlog…" (prose-heavy) is DROPPED
             // whole, both re-verified 2026-08-25.
             print("[BCryptoWS] media send drop kind=\(type.hasPrefix("audio") ? "audio" : "video") cap=\(Self.maxOutboundMediaFramesInFlight)")
-            return
+            return false
         }
         task?.send(.string(jsonString)) { [weak self] error in
             self?.completeOutboundMediaFrame(forType: type)
@@ -1411,6 +1433,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 print("[BCryptoWS] send(\(type)) FAILED: \(error.localizedDescription)")
             }
         }
+        return acceptedOnLiveSocket
     }
 
     /// Whitelist of message types that warrant a reconnect kick when the

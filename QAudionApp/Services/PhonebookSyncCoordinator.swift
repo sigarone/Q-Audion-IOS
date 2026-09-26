@@ -49,6 +49,10 @@ final class PhonebookSyncCoordinator {
         /// limit). 0 means the whole address book was checked. Defaulted so the
         /// snapshots that predate the discovery step stay valid as written.
         var pendingHashCount: Int = 0
+        /// The same shortfall counted in phone NUMBERS, the unit `validE164Count` uses:
+        /// several address-book entries can share one number (one hash), so this is
+        /// not `pendingHashCount`. Use it when subtracting from `validE164Count`.
+        var pendingNumberCount: Int = 0
         /// The wait the server asked for (`Retry-After`), in seconds, when it did.
         var retryAfterSeconds: Int?
     }
@@ -127,7 +131,8 @@ final class PhonebookSyncCoordinator {
     /// - Returns: Array of ResolvedMatch (one per Q-Audion user found in phonebook).
     ///   When the server stopped the pass part-way, the matches found so far are still
     ///   persisted and returned, and the final ScanProgress reports how many hashes are
-    ///   still unchecked (`pendingHashCount`) and any `retryAfterSeconds`.
+    ///   still unchecked (`pendingHashCount`; `pendingNumberCount` in numbers) and any
+    ///   `retryAfterSeconds`.
     func scanAndDiscover(
         onProgress: @escaping (ScanProgress) -> Void = { _ in },
         ownE164Phones: [String]? = nil
@@ -204,8 +209,12 @@ final class PhonebookSyncCoordinator {
         // Build hash → (phone, name) map; first occurrence wins for duplicate numbers.
         var hashToInfo: [String: (phone: String, name: String)] = [:]
         var allHashes: [String] = []
+        // How many normalized numbers each hash stands for (`normalized` keeps every
+        // occurrence, `allHashes` one hash per distinct number).
+        var numbersPerHash: [String: Int] = [:]
         for entry in normalized {
             if let hash = try? PepperedPhoneHash.hash(phone: entry.phone, pepperBytes: pepper.pepperBytes) {
+                numbersPerHash[hash, default: 0] += 1
                 if hashToInfo[hash] == nil {
                     hashToInfo[hash] = entry
                     allHashes.append(hash)
@@ -256,6 +265,11 @@ final class PhonebookSyncCoordinator {
         }
         let discovered: [BCryptoContactsDiscoverV2Client.DiscoveredEntry] = outcome.entries
         let pendingHashes: Int = outcome.pendingHashes
+        // The same shortfall in numbers, for the UI's numbers-based arithmetic.
+        var pendingNumbers: Int = 0
+        for hash in outcome.unprocessedHashes {
+            pendingNumbers += numbersPerHash[hash] ?? 0
+        }
 
         // Step 6 — persist resolved contacts and build results list.
         //
@@ -308,6 +322,7 @@ final class PhonebookSyncCoordinator {
             validE164Count: normalized.count,
             resolvedUserCount: results.count,
             pendingHashCount: pendingHashes,
+            pendingNumberCount: pendingNumbers,
             retryAfterSeconds: retryAfter
         ))
 

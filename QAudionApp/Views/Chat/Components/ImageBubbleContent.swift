@@ -73,6 +73,14 @@ struct ImageBubbleContent: View {
     /// W123: tracks whether the load failed so we can show a retry
     /// button instead of an indefinite shimmer.
     @State private var loadFailed: Bool = false
+    /// The path `loadedImage` / `loadFailed` were produced for (nil until a
+    /// load for the current path has finished). Lets the load task tell
+    /// "same path, the row simply re-appeared" (nothing to do) from "the path
+    /// changed" (drop the old image and decode the new file).
+    @State private var loadedPath: String? = nil
+    /// Bumped by the failed-box tap: `.task(id:)` only re-runs when its id
+    /// changes, and a retry must restart the load for an unchanged path.
+    @State private var retryAttempt: Int = 0
     /// W97: long-press save-to-Photos confirmation. iOS auto-prompts
     /// for photo-library write permission the first time
     /// `UIImageWriteToSavedPhotosAlbum` runs.
@@ -91,6 +99,17 @@ struct ImageBubbleContent: View {
         let activityItems: [Any]
     }
 
+    /// Identity of the image-load `.task(id:)`: changes when the media path
+    /// changes or when the user taps the failed box to retry.
+    private struct LoadKey: Equatable {
+        let path: String?
+        let attempt: Int
+    }
+
+    private var loadKey: LoadKey {
+        LoadKey(path: mediaLocalPath, attempt: retryAttempt)
+    }
+
     var body: some View {
         Group {
             if let path = mediaLocalPath, !path.isEmpty {
@@ -107,15 +126,22 @@ struct ImageBubbleContent: View {
                         .accessibilityLabel("Immagine allegata")
                         .accessibilityHint("Visualizza a schermo intero")
                 } else if loadFailed {
-                    failedBox(path: path)
+                    failedBox
                 } else {
                     placeholderBox
-                        .onAppear { loadIfNeeded(path: path) }
                 }
             } else {
                 downloadingBox
             }
         }
+        // Attached to the container, like `QAudionAvatar.localFileAvatar`, not
+        // to the placeholder: the placeholder is gone once `loadedImage` is
+        // set, so a task hung on it could never notice a later path change
+        // and the old image would stay on screen for the new path. Here the
+        // load is cancelled when the row scrolls off-screen and restarts on
+        // every path change, so a superseded load can no longer write its
+        // result.
+        .task(id: loadKey) { await loadIfNeeded() }
         .sheet(isPresented: $fullscreen) {
             // Fase 2 — `loadedImage` only gates presentation (confirms this
             // bubble's own image decoded); the gallery itself lazily
@@ -207,35 +233,60 @@ struct ImageBubbleContent: View {
         }
     }
 
-    private func loadIfNeeded(path: String) {
+    @MainActor
+    private func loadIfNeeded() async {
+        // Nothing to decode: the attachment is still downloading, or the path
+        // was removed. Drop whatever a previous path produced so it can't be
+        // shown (or saved / shared) for an attachment it doesn't belong to.
+        guard let path = mediaLocalPath, !path.isEmpty else {
+            loadedImage = nil
+            loadFailed = false
+            loadedPath = nil
+            return
+        }
+        // Already resolved for this very path (image decoded, or failure
+        // recorded): the task only restarted because the row re-appeared, so
+        // no extra load. A failed load is retried by the failed-box tap
+        // (it clears `loadedPath` and bumps `retryAttempt`), not here.
+        if loadedPath == path { return }
+        // The cached image belongs to a different path (or the previous load
+        // never finished): forget it before decoding the new file. `loadedPath`
+        // is cleared with it, so it never claims a result that is gone (e.g.
+        // path A -> B -> A before B's load finished must load A again).
+        loadedImage = nil
+        loadFailed = false
+        loadedPath = nil
         // Off-main load to avoid jank when the row scrolls into view.
         // The disk read + JPEG decode run in a detached task (same shape as
         // `QAudionAvatar.localFileAvatar`); only the @State writes below
         // happen back on the main actor. The image cap is 10 MB.
-        Task { @MainActor in
-            let url = URL(fileURLWithPath: path)
-            let decoded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                return UIImage(data: data)
-            }.value
-            if let img = decoded {
-                self.loadedImage = img
-                self.loadFailed = false
-            } else {
-                // I8: the full on-disk cache path is an identifier we don't
-                // need in the log — the messageId (truncated) is enough to
-                // correlate this failure with a specific bubble.
-                print("[ImageBubbleContent] failed to load cache for message \(self.messageId.uuidString.prefix(8))… — cache reclaimed?")
-                self.loadFailed = true
-            }
+        let url = URL(fileURLWithPath: path)
+        let decoded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return UIImage(data: data)
+        }.value
+        // The calling `.task(id:)` is cancelled when the row goes
+        // off-screen or the path changes: drop the result of a superseded
+        // load instead of applying it.
+        guard !Task.isCancelled else { return }
+        if let img = decoded {
+            loadedImage = img
+            loadFailed = false
+        } else {
+            // I8: the full on-disk cache path is an identifier we don't
+            // need in the log — the messageId (truncated) is enough to
+            // correlate this failure with a specific bubble.
+            print("[ImageBubbleContent] failed to load cache for message \(messageId.uuidString.prefix(8))… — cache reclaimed?")
+            loadFailed = true
         }
+        loadedPath = path
     }
 
     /// W123: error-state view shown when the cache file is missing or
     /// unreadable. Tap retries the load — useful when the user
     /// scrolled past + back, in case the cache repopulated.
     @ViewBuilder
-    private func failedBox(path: String) -> some View {
+    private var failedBox: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8)
                 .fill(scheme.surfaceVariant.opacity(0.6))
@@ -254,8 +305,12 @@ struct ImageBubbleContent: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            // Back to the placeholder and restart the load task for the same
+            // path: `loadedPath = nil` makes it decode again, the bumped
+            // `retryAttempt` changes the task id.
             loadFailed = false
-            loadIfNeeded(path: path)
+            loadedPath = nil
+            retryAttempt += 1
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -390,6 +445,11 @@ private struct GalleryPage: View {
 
     @State private var image: UIImage?
     @State private var loadFailed = false
+    /// The path `image` / `loadFailed` were produced for (nil until a load
+    /// for the current path has finished): tells a re-appearing page (same
+    /// path, nothing to do) from a page whose path changed (drop the old
+    /// image, decode the new file).
+    @State private var loadedPath: String?
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
@@ -424,28 +484,48 @@ private struct GalleryPage: View {
                 }
             }
         }
-        .onAppear(perform: load)
+        // Attached to the page container: cancelled when the page leaves the
+        // pager, restarted on every path change (`load()` then replaces the
+        // cached image), so a superseded load never writes its result.
+        .task(id: localPath) { await load() }
     }
 
-    private func load() {
-        guard image == nil, !loadFailed else { return }
+    @MainActor
+    private func load() async {
         let path = localPath
-        guard !path.isEmpty else { loadFailed = true; return }
-        Task { @MainActor in
-            let url = URL(fileURLWithPath: path)
-            // Disk read + decode off the main actor (see
-            // `ImageBubbleContent.loadIfNeeded`); state writes stay here.
-            let decoded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                return UIImage(data: data)
-            }.value
-            if let img = decoded {
-                self.image = img
-                self.onLoaded(img)
-            } else {
-                self.loadFailed = true
-            }
+        guard !path.isEmpty else {
+            // Nothing to decode: drop any image a previous path produced.
+            image = nil
+            loadedPath = nil
+            loadFailed = true
+            return
         }
+        // Already resolved for this very path (image decoded, or failure
+        // recorded): the task only restarted because the page re-appeared,
+        // so no extra load.
+        if loadedPath == path { return }
+        // The cached image belongs to a different path (or the previous load
+        // never finished): forget it before decoding the new file.
+        // `loadedPath` is cleared with it, so it never claims a result that
+        // is gone (path A -> B -> A before B's load finished loads A again).
+        image = nil
+        loadFailed = false
+        loadedPath = nil
+        let url = URL(fileURLWithPath: path)
+        // Disk read + decode off the main actor (see
+        // `ImageBubbleContent.loadIfNeeded`); state writes stay here.
+        let decoded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return UIImage(data: data)
+        }.value
+        guard !Task.isCancelled else { return }
+        if let img = decoded {
+            image = img
+            onLoaded(img)
+        } else {
+            loadFailed = true
+        }
+        loadedPath = path
     }
 
     private func resetZoom() {
