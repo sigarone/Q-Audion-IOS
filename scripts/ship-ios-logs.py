@@ -26,12 +26,16 @@ This ships logs from a post-quantum ENCRYPTED VOICE app into a QUERYABLE Loki
 backend. After shipping, anyone with Grafana/query access can full-text search
 every body. [Note, v1.0.1180: the redactors moved to LogRedactor.swift and the shipper is now
 LiveLogWorker.swift; the RuntimeLogSink line numbers below are those of the older layout.]
-The on-device redaction is INCOMPLETE: RuntimeLogSink.redact()
-(RuntimeLogSink.swift line 257) runs ONLY on the stdout-tee path (line 311);
-the PRIMARY structured path RTLog.info/warn/error -> record() (line 68) is
-NEVER redacted, and entriesSince() (line 159) JSON-escapes but does NOT redact.
-So the raw uploaded blobs on PROD MAY contain unredacted secrets on every
-non-"stdout"-tagged line. Therefore this shipper treats on-device redaction AND
+Current on-device path (since W-LIVELOGOFFMAIN / W-KEYSCRUB, v1.0.118x):
+`LiveLogWorker` (QAudionApp/Services/LiveLogWorker.swift) applies
+`LogRedactor.redactStructured` to every collected message before upload, and
+`RuntimeLogSink.record()` applies `KeyMaterialScrubber.scrubKeyMaterial` at
+ring-entry time (so the ring, on-screen viewer, export, bug-report tail, this
+shipper's own input and the OSLog mirror all see already-scrubbed text). This
+client-side redaction is defense-in-depth, not the authoritative gate: it is
+app code, on a device the operator does not control, and both scrubbers have
+documented gaps (see LiveLogWorker.swift / KeyMaterialScrubber.swift for their
+own known-limits notes). Therefore this shipper treats on-device redaction AND
 the header JSON as UNTRUSTED, and is FAIL-CLOSED:
 
   SHIP A BODY ONLY IF IT IS PROVABLY SAFE. NOT "ship unless a secret matches".
