@@ -394,6 +394,34 @@ check("wedge=1" not in red(COPILOT_REPRO_127, "call"),
       % (red(COPILOT_REPRO_127, "call"),))
 drop_caches()
 
+# "tx"/"txfall" have no "=" of their own, unlike every other first token
+# above -- a bare (no trailing-space) startswith would also match a longer,
+# bogus word beginning with the same letters (Gemini catch on this fix's
+# own first pass).
+check(red("dcmux txbogus=1 zork=1 blarg=2 tx=9", "call")
+      != "dcmux txbogus=1 zork=1 blarg=2 tx=9",
+      "SCOPE-127: 'dcmux txbogus=1 ...' matched the bare 'tx' token by prefix")
+check(red("dcmux txfallback=1 zork=1 blarg=2", "call")
+      != "dcmux txfallback=1 zork=1 blarg=2",
+      "SCOPE-127: 'dcmux txfallback=1 ...' matched the bare 'txfall' token by prefix")
+# the real "tx " shape, WITH its required trailing space, must still ship
+# (it carries two real kv tokens, so it also clears the unrelated freeword/
+# structural-balance gate -- see the next check for a case that doesn't).
+check(red("dcmux tx dc=1200 ws=800", "call") == "dcmux tx dc=1200 ws=800",
+      "SCOPE-127: real 'dcmux tx dc=...' line regressed after the delimiter fix")
+# "dcmux txfall why=<value>" is the real generator's ENTIRE line (CallService
+# .swift's `"dcmux txfall why=" + why`) -- only 2 free words ("dcmux",
+# "txfall") and 1 structural kv token, so it fails the UNRELATED freeword-
+# vs-structural balance in _passes_structured_gate regardless of the
+# CALL_FORMAT_VOCAB scoping fixed here (confirmed: it fails identically with
+# the vocabulary forced active, i.e. even under the pre-#127 behavior). Not
+# a regression from this fix; not fixed here either -- checking the token
+# match directly instead of the full pipeline, so this delimiter fix is
+# tested without being confounded by that separate, pre-existing gap.
+check(m._is_call_format_body("call", "dcmux txfall why=stale"),
+      "SCOPE-127: 'txfall ' with its required trailing space stopped matching")
+drop_caches()
+
 # ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:

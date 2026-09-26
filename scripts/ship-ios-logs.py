@@ -642,7 +642,10 @@ CALL_FORMAT_VOCAB = frozenset("""
 # because "state=" isn't one of the tokens any real dcmux line starts with.
 _CALL_FORMAT_FIRST_TOKENS = (
     ("audioVp ", ("ev=", "vpio=")),
-    ("dcmux ", ("wedge=", "wedgesw=", "st=", "first=", "txfall", "tx")),
+    # "tx"/"txfall" have no "=" to naturally delimit them (unlike the other
+    # tokens here); a trailing space is required so a bogus longer word like
+    # "txbogus=1" or "txfallback=1" doesn't match "tx"/"txfall" by prefix.
+    ("dcmux ", ("wedge=", "wedgesw=", "st=", "first=", "txfall ", "tx ")),
     ("cancelpush ", ("ghost=", "missed=")),
     ("answerguard ", ("refuse=", "nocall=")),
     ("endguard ", ("ignore=",)),
