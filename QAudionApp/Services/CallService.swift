@@ -2374,6 +2374,14 @@ final class CallService: @unchecked Sendable {
         // the shared lock closes the check-then-act race, and for why
         // `teardownAudioStack()` itself must never do this.
         relaySlotLock.withLock { _callGeneration &+= 1 }
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — the call's native-SRTP decision
+        // ends with the call (same single choke point as the generation bump
+        // above). The next call takes its own. Idempotent.
+        if let nativeSnapshot = CallCapabilities.nativeSrtpCallSnapshot {
+            CallCapabilities.endNativeSrtpCallSnapshot()
+            let nativeFlag: Int = nativeSnapshot ? 1 : 0
+            RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=1")
+        }
         onDeepfakeAlert?(false)
         stopDurationTimer()
         stopPlpReportTimer()

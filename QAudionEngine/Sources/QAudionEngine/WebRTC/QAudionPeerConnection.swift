@@ -198,6 +198,18 @@ public final class QAudionPeerConnection: NSObject {
     /// raise/restore pairing (only one 1:1 call runs at a time today, but the
     /// guard costs nothing and keeps the pairing self-contained per instance).
     private var didRaiseDebugLogLevelForSession = false
+    /// W-NATIVESRTPSNAPSHOT (2026-09-26) — this call's native-SRTP decision,
+    /// latched ONCE at `init` from `CallCapabilities.latchNativeSrtpCallSnapshot()`
+    /// (the same snapshot `localCaps`, `negotiationLocal()` and the audio-unit
+    /// lifecycle in `CallService` read). Drives the m=audio pre-attach, the
+    /// RTCConfiguration extras and manual audio mode for this PeerConnection's
+    /// whole life, whatever the Settings toggle does meanwhile.
+    public let nativeSrtpEnabledForThisCall: Bool
+    /// W-ADMMANUAL (2026-09-26) — the `NativeAudioSessionGate` token this
+    /// PeerConnection armed manual audio mode with (0 = it did not arm).
+    /// `close()` disables the unit and disarms with it, so a replaced
+    /// PeerConnection of the same call can never disarm its successor.
+    private var manualAudioToken: Int = 0
     /// The real mic-sourced RTP sender, once ``activateNativeAudioSrtp(key:participantId:rxSink:txSink:)``
     /// has attached a track. `nil` until then (and always `nil` on a call
     /// that never negotiates ``CallCapabilities/audioSrtpV1``).
@@ -383,6 +395,11 @@ public final class QAudionPeerConnection: NSObject {
         self.factory = factory
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
+        // W-NATIVESRTPSNAPSHOT — latch-if-absent: the call start already took
+        // the snapshot (AppState); a PeerConnection built for a call that has
+        // none (or rebuilt for the same call) keeps/creates it here.
+        let latched = CallCapabilities.latchNativeSrtpCallSnapshot()
+        self.nativeSrtpEnabledForThisCall = latched.value
         super.init()
 
         // W-NATIVESRTPDIAG — snapshot ONCE at construction, same value the
@@ -390,7 +407,15 @@ public final class QAudionPeerConnection: NSObject {
         // must not retroactively change an already-negotiated
         // RTCConfiguration, exactly like the transceiver pre-creation itself
         // (which also only ever runs at `init`).
-        let nativeSrtpEnabledLocally = CallCapabilities.isNativeSrtpEnabledLocally
+        let nativeSrtpEnabledLocally = latched.value
+        let freshFlag = latched.fresh ? 1 : 0
+        let nativeFlag = nativeSrtpEnabledLocally ? 1 : 0
+        NativeAudioSessionGate.log?("nsnap site=1 native=\(nativeFlag) fresh=\(freshFlag)")
+        // W-ADMAUDIT (2026-09-26, every call) — a WebRTC audio unit left
+        // enabled by a previous call must not be inherited; a call with
+        // native SRTP off also drops any stale manual-mode arm. See
+        // `NativeAudioSessionGate.auditAtCallStart`.
+        NativeAudioSessionGate.auditAtCallStart(nativeCall: nativeSrtpEnabledLocally)
         let config = QAudionPeerConnectionFactory.defaultConfiguration(
             iceServers: iceServers,
             nativeSrtpEnabledLocally: nativeSrtpEnabledLocally)
@@ -422,9 +447,16 @@ public final class QAudionPeerConnection: NSObject {
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
         if nativeSrtpEnabledLocally {
-            // W-ADMNOMANUAL (2026-08-31) — nothing to arm: WebRTC manages its
-            // own audio unit. See NativeAudioSessionGate for what was tried
-            // and what each attempt measured.
+            // W-ADMMANUAL (2026-09-26) — replaces W-ADMNOMANUAL's "nothing to
+            // arm". Manual audio mode BEFORE the mic track is added and before
+            // any SDP is applied: in automatic mode WebRTC's audio module
+            // activated the session and started its VoiceProcessingIO unit as
+            // soon as the first audio stream started (ring time, both roles),
+            // before CallKit's didActivate and regardless of whether the peer
+            // negotiated audio-srtp-v1. Now the unit waits for
+            // `isAudioEnabled`, which only CallService's gate sets. See
+            // NativeAudioSessionGate for the contract and the history.
+            manualAudioToken = NativeAudioSessionGate.armManualMode()
             // W-PREATTACHMIC (2026-08-30) — pre-attach the REAL (muted) mic
             // track here, instead of pre-creating a bare transceiver via
             // `addTransceiver`. Measured failure the bare transceiver caused
@@ -712,7 +744,13 @@ public final class QAudionPeerConnection: NSObject {
     /// no new field on any message: the list was already here and was simply
     /// being discarded after the intersection was taken.
     public func acceptPeerCapabilities(_ peer: [String]?) {
-        let n = CallCapabilities.negotiate(peer: peer)
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — the local side of the
+        // intersection now follows the call's native-SRTP snapshot instead of
+        // the compiled base list: with the debug override on and the compiled
+        // switch off, this side advertised audio-srtp-v1 but never agreed on
+        // it itself (the peer went native, this side did not). With native
+        // SRTP off `negotiationLocal()` IS `CallCapabilities.local`.
+        let n = CallCapabilities.negotiate(local: CallCapabilities.negotiationLocal(), peer: peer)
         peerCapsLock.lock(); peerCallCapabilities = n; peerCapsLock.unlock()
     }
 
@@ -1732,8 +1770,24 @@ public final class QAudionPeerConnection: NSObject {
             QAudionPeerConnectionFactory.shared.restoreDefaultDebugLogLevel()
             didRaiseDebugLogLevelForSession = false
         }
+        // W-ADMMANUAL (2026-09-26) — backstop for every teardown path that
+        // reaches close() without going through CallService first (provider
+        // reset, glare/duplicate-OFFER replacement, deinit): WebRTC's unit is
+        // switched off BEFORE the PeerConnection's streams are torn down, so
+        // the stop runs through the same disable path as a normal call end.
+        // No-op unless THIS PeerConnection armed manual mode and the unit is
+        // still enabled.
+        let armedToken = manualAudioToken
+        if armedToken != 0, NativeAudioSessionGate.isCurrent(token: armedToken) {
+            NativeAudioSessionGate.setNativeAudioActive(
+                false, reason: NativeAudioUnitGateDecisions.ChangeReason.peerConnectionClose.rawValue)
+        }
         peerConnection?.close()
         peerConnection = nil
+        if armedToken != 0 {
+            manualAudioToken = 0
+            NativeAudioSessionGate.disarm(token: armedToken)
+        }
         // W-PERSISTENTFACTORY (2026-09-09) — closing this RTCPeerConnection
         // no longer tears down the factory/ADM underneath it (see
         // QAudionPeerConnectionFactory's own kdoc); the shared factory

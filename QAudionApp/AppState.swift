@@ -4980,6 +4980,12 @@ final class AppState: ObservableObject {
         callService.resetAudioSrtpFactory = {
             QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()
         }
+        // W-ADMMANUAL (2026-09-26) — the manual-audio gate's decision lines
+        // (`admgate ...`, `nsnap ...`) into the same "call" stream. Numeric
+        // only, no key material.
+        NativeAudioSessionGate.log = { line in
+            RTLog.info("call", line)
+        }
         // W-AUNITTRACE (2026-09-10) — forwards WebRTC's own native
         // AudioDeviceIOS lifecycle events (short, numeric-tailed so the
         // redactor doesn't blob them, per reference_ios_log_pipeline_limits)
@@ -15874,6 +15880,11 @@ final class AppState: ObservableObject {
             return
         }
         callContactId = contactId
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — ONE native-SRTP decision for this
+        // outgoing call, taken before anything advertises capabilities (the
+        // PQC `call_offer` below can leave before the WebRTC PeerConnection
+        // exists). Fresh on purpose: a stale snapshot must not leak in.
+        logNativeSrtpSnapshot(value: CallCapabilities.beginNativeSrtpCallSnapshot(), site: 2, fresh: true)
         drainPendingOfferReplays(for: contactId)  // W-OFFERBUFFER (defensive; caller path)
         callState = .connecting
         isInCall = true
@@ -19031,6 +19042,17 @@ extension AppState {
         } catch {
             return []
         }
+    }
+
+    /// W-NATIVESRTPSNAPSHOT (2026-09-26) — one numeric line per snapshot
+    /// decision. `site`: 2 outgoing call start, 3 incoming OFFER (1 is the
+    /// PeerConnection's own latch, logged by the engine; 4 is the call end,
+    /// logged by CallService).
+    func logNativeSrtpSnapshot(value: Bool, site: Int, fresh: Bool) {
+        let nativeFlag: Int = value ? 1 : 0
+        let freshFlag: Int = fresh ? 1 : 0
+        let line: String = "nsnap site=\(site) native=\(nativeFlag) fresh=\(freshFlag)"
+        RTLog.info("call", line)
     }
 
     func setMuted(_ muted: Bool) {
@@ -24205,6 +24227,11 @@ extension AppState {
         hasVideo: Bool = false
     ) {
         print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: caller=\(callerId.prefix(8)) sdpLen=\(sdp.count) hasVideo=\(hasVideo) — building WebRTC controller")
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — responder side: latch-if-absent,
+        // because a rescued duplicate OFFER of the SAME call lands here again
+        // and must keep the snapshot the first one took.
+        let nativeLatch = CallCapabilities.latchNativeSrtpCallSnapshot()
+        logNativeSrtpSnapshot(value: nativeLatch.value, site: 3, fresh: nativeLatch.fresh)
         // W-CTRLBUILDDIAG (2026-08-30) — the prints in this function are
         // multi-word free-form English, which the remote-log redactor drops
         // whole (verified against redact_body, same story as W-AUDIOGATEDIAG).
