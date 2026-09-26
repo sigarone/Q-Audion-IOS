@@ -73,6 +73,14 @@ struct ImageBubbleContent: View {
     /// W123: tracks whether the load failed so we can show a retry
     /// button instead of an indefinite shimmer.
     @State private var loadFailed: Bool = false
+    /// The path `loadedImage` / `loadFailed` were produced for (nil until a
+    /// load for the current path has finished). Lets the load task tell
+    /// "same path, the row simply re-appeared" (nothing to do) from "the path
+    /// changed" (drop the old image and decode the new file).
+    @State private var loadedPath: String? = nil
+    /// Bumped by the failed-box tap: `.task(id:)` only re-runs when its id
+    /// changes, and a retry must restart the load for an unchanged path.
+    @State private var retryAttempt: Int = 0
     /// W97: long-press save-to-Photos confirmation. iOS auto-prompts
     /// for photo-library write permission the first time
     /// `UIImageWriteToSavedPhotosAlbum` runs.
@@ -89,6 +97,17 @@ struct ImageBubbleContent: View {
     private struct ImageShareTarget: Identifiable {
         let id = UUID()
         let activityItems: [Any]
+    }
+
+    /// Identity of the image-load `.task(id:)`: changes when the media path
+    /// changes or when the user taps the failed box to retry.
+    private struct LoadKey: Equatable {
+        let path: String?
+        let attempt: Int
+    }
+
+    private var loadKey: LoadKey {
+        LoadKey(path: mediaLocalPath, attempt: retryAttempt)
     }
 
     var body: some View {
@@ -109,17 +128,20 @@ struct ImageBubbleContent: View {
                 } else if loadFailed {
                     failedBox
                 } else {
-                    // `.task(id:)`, like `QAudionAvatar.localFileAvatar`: the
-                    // load is cancelled when the row scrolls off-screen and
-                    // restarts if the path changes, so a superseded load
-                    // can no longer write its result.
                     placeholderBox
-                        .task(id: path) { await loadIfNeeded(path: path) }
                 }
             } else {
                 downloadingBox
             }
         }
+        // Attached to the container, like `QAudionAvatar.localFileAvatar`, not
+        // to the placeholder: the placeholder is gone once `loadedImage` is
+        // set, so a task hung on it could never notice a later path change
+        // and the old image would stay on screen for the new path. Here the
+        // load is cancelled when the row scrolls off-screen and restarts on
+        // every path change, so a superseded load can no longer write its
+        // result.
+        .task(id: loadKey) { await loadIfNeeded() }
         .sheet(isPresented: $fullscreen) {
             // Fase 2 — `loadedImage` only gates presentation (confirms this
             // bubble's own image decoded); the gallery itself lazily
@@ -212,7 +234,28 @@ struct ImageBubbleContent: View {
     }
 
     @MainActor
-    private func loadIfNeeded(path: String) async {
+    private func loadIfNeeded() async {
+        // Nothing to decode: the attachment is still downloading, or the path
+        // was removed. Drop whatever a previous path produced so it can't be
+        // shown (or saved / shared) for an attachment it doesn't belong to.
+        guard let path = mediaLocalPath, !path.isEmpty else {
+            loadedImage = nil
+            loadFailed = false
+            loadedPath = nil
+            return
+        }
+        // Already resolved for this very path (image decoded, or failure
+        // recorded): the task only restarted because the row re-appeared, so
+        // no extra load. A failed load is retried by the failed-box tap
+        // (it clears `loadedPath` and bumps `retryAttempt`), not here.
+        if loadedPath == path { return }
+        // The cached image belongs to a different path (or the previous load
+        // never finished): forget it before decoding the new file. `loadedPath`
+        // is cleared with it, so it never claims a result that is gone (e.g.
+        // path A -> B -> A before B's load finished must load A again).
+        loadedImage = nil
+        loadFailed = false
+        loadedPath = nil
         // Off-main load to avoid jank when the row scrolls into view.
         // The disk read + JPEG decode run in a detached task (same shape as
         // `QAudionAvatar.localFileAvatar`); only the @State writes below
@@ -222,7 +265,7 @@ struct ImageBubbleContent: View {
             guard let data = try? Data(contentsOf: url) else { return nil }
             return UIImage(data: data)
         }.value
-        // The calling `.task(id: path)` is cancelled when the row goes
+        // The calling `.task(id:)` is cancelled when the row goes
         // off-screen or the path changes: drop the result of a superseded
         // load instead of applying it.
         guard !Task.isCancelled else { return }
@@ -236,6 +279,7 @@ struct ImageBubbleContent: View {
             print("[ImageBubbleContent] failed to load cache for message \(messageId.uuidString.prefix(8))… — cache reclaimed?")
             loadFailed = true
         }
+        loadedPath = path
     }
 
     /// W123: error-state view shown when the cache file is missing or
@@ -261,8 +305,12 @@ struct ImageBubbleContent: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            // Back to the placeholder: its `.task(id:)` starts a fresh load.
+            // Back to the placeholder and restart the load task for the same
+            // path: `loadedPath = nil` makes it decode again, the bumped
+            // `retryAttempt` changes the task id.
             loadFailed = false
+            loadedPath = nil
+            retryAttempt += 1
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -397,6 +445,11 @@ private struct GalleryPage: View {
 
     @State private var image: UIImage?
     @State private var loadFailed = false
+    /// The path `image` / `loadFailed` were produced for (nil until a load
+    /// for the current path has finished): tells a re-appearing page (same
+    /// path, nothing to do) from a page whose path changed (drop the old
+    /// image, decode the new file).
+    @State private var loadedPath: String?
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
@@ -431,16 +484,33 @@ private struct GalleryPage: View {
                 }
             }
         }
-        // Cancelled when the page leaves the pager, restarted if the path
-        // changes: a superseded load never writes its result.
+        // Attached to the page container: cancelled when the page leaves the
+        // pager, restarted on every path change (`load()` then replaces the
+        // cached image), so a superseded load never writes its result.
         .task(id: localPath) { await load() }
     }
 
     @MainActor
     private func load() async {
-        guard image == nil, !loadFailed else { return }
         let path = localPath
-        guard !path.isEmpty else { loadFailed = true; return }
+        guard !path.isEmpty else {
+            // Nothing to decode: drop any image a previous path produced.
+            image = nil
+            loadedPath = nil
+            loadFailed = true
+            return
+        }
+        // Already resolved for this very path (image decoded, or failure
+        // recorded): the task only restarted because the page re-appeared,
+        // so no extra load.
+        if loadedPath == path { return }
+        // The cached image belongs to a different path (or the previous load
+        // never finished): forget it before decoding the new file.
+        // `loadedPath` is cleared with it, so it never claims a result that
+        // is gone (path A -> B -> A before B's load finished loads A again).
+        image = nil
+        loadFailed = false
+        loadedPath = nil
         let url = URL(fileURLWithPath: path)
         // Disk read + decode off the main actor (see
         // `ImageBubbleContent.loadIfNeeded`); state writes stay here.
@@ -455,6 +525,7 @@ private struct GalleryPage: View {
         } else {
             loadFailed = true
         }
+        loadedPath = path
     }
 
     private func resetZoom() {
