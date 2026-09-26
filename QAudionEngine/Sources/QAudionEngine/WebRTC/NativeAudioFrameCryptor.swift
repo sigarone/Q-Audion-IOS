@@ -44,6 +44,23 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     /// diagnostics.
     public var onDecryptFailure: (() -> Void)?
 
+    /// W-NATIVESRTPDIAG (this task) — fired for EVERY native FrameCryptor
+    /// state transition on EITHER cryptor (sender AND receiver, unlike
+    /// ``onDecryptFailure`` above which only ever meant the receiver), rate-
+    /// limited (see ``recordStateChangeForLogging(role:state:)``). The
+    /// engine has no call id and cannot reach `RTLog` directly (same reason
+    /// ``QAudionPeerConnection/onAudioDcWedgeChange`` exists) — the app
+    /// layer owns the log line. Argument is a ready-to-ship, pre-formatted
+    /// string: `"audiosrtp cryptor role=<tx|rx> state=<name>"`.
+    public var onFrameCryptorStateChange: ((String) -> Void)?
+
+    /// W-NATIVESRTPDIAG — rate limiter backing ``onFrameCryptorStateChange``.
+    /// See ``FrameCryptorStateChangeLogGate``'s own doc for the pure logic;
+    /// guarded by ``lock`` here (the delegate callback's thread is
+    /// undocumented beyond "the thread WebRTC calls back on", same caveat
+    /// as every other cryptor callback in this file).
+    private var stateChangeLogGate = FrameCryptorStateChangeLogGate()
+
     public init(factory: RTCPeerConnectionFactory, participantId: String) {
         self.factory = factory
         self.participantId = participantId
@@ -151,6 +168,12 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
         }
         c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
         c.enabled = true
+        // W-NATIVESRTPDIAG (this task) — was never wired on the SENDER side
+        // before (only `attachReceiver` below set `c.delegate = self`), so
+        // an encrypt-side failure or state transition was invisible even to
+        // `print()`. Same delegate object handles both; the callback tells
+        // sender and receiver apart by identity (see the extension below).
+        c.delegate = self
         senderCryptor = c
         print("[NativeAudioFrameCryptor] sender cryptor attached (aesGcm, idx0, hasKey=\(hasKey))")
         return true
@@ -234,15 +257,73 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
 }
 
 extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
+    /// W-NATIVESRTPDIAG (this task) — now fires ``onFrameCryptorStateChange``
+    /// for EVERY transition on EITHER cryptor (rate-limited), in addition to
+    /// the pre-existing ``onDecryptFailure`` behavior, which is UNCHANGED:
+    /// still receiver-only, still only the three failure states. Role
+    /// ("tx"/"rx") is resolved by identity against ``senderCryptor``/
+    /// ``receiverCryptor`` under ``lock`` — cheap, and correct even though
+    /// both cryptors share this one delegate object.
     public func frameCryptor(_ frameCryptor: RTCFrameCryptor,
                              didStateChangeWithParticipantId participantId: String,
                              with state: RTCFrameCryptorState) {
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        lock.lock()
+        let role: String
+        if frameCryptor === senderCryptor {
+            role = "tx"
+        } else if frameCryptor === receiverCryptor {
+            role = "rx"
+        } else {
+            // Should not happen (a cryptor not tracked by this instance
+            // somehow has this instance as its delegate) — fail open with a
+            // label that still shows up distinctly in the shipped log
+            // rather than silently mislabeling it "tx" or "rx".
+            role = "unk"
+        }
+        let shouldLog = stateChangeLogGate.shouldLog(role: role, stateRawValue: state.rawValue, nowMs: nowMs)
+        lock.unlock()
+
+        if shouldLog {
+            onFrameCryptorStateChange?("audiosrtp cryptor role=\(role) state=\(Self.stateLabel(state))")
+        }
         switch state {
         case .decryptionFailed, .missingKey, .internalError:
-            print("[NativeAudioFrameCryptor] receiver cryptor state=\(state.rawValue) participantId=\(participantId)")
-            onDecryptFailure?()
+            print("[NativeAudioFrameCryptor] \(role) cryptor state=\(state.rawValue) participantId=\(participantId)")
+            // Unchanged semantics: only the RECEIVER side drives the
+            // pre-existing rekey-skew signal (audio has no keyframe request
+            // to make on a sender-side failure the way video does).
+            if role == "rx" {
+                onDecryptFailure?()
+            }
         default:
             break
+        }
+    }
+
+    /// Short, log-friendly names for `RTCFrameCryptorState`. VERIFICATION
+    /// GAP (same caveat as `NativeVideoFrameCryptor`'s own — no local
+    /// `WebRTC.xcframework` header on this box): `.decryptionFailed`,
+    /// `.missingKey`, `.internalError` are already proven to compile in this
+    /// exact file (pre-existing `switch` above). `.new`, `.ok`,
+    /// `.encryptionFailed`, `.keyRingRequestFailed` are NOT previously used
+    /// anywhere in this codebase — asserted from the public webrtc-sdk
+    /// ObjC SDK's `RTCFrameCryptorState` (mirrors the C++
+    /// `FrameCryptorTransformer::FrameCryptionState` enum
+    /// `kNew/kOk/kEncryptionFailed/kDecryptionFailed/kMissingKey/
+    /// kKeyRingRequestFailed/kInternalError` this pinned build is patched
+    /// from), not grep-verified against the actual header. A wrong case name
+    /// here fails LOUDLY (a compile error), not silently.
+    private static func stateLabel(_ state: RTCFrameCryptorState) -> String {
+        switch state {
+        case .new: return "new"
+        case .ok: return "ok"
+        case .encryptionFailed: return "encryptionFailed"
+        case .decryptionFailed: return "decryptionFailed"
+        case .missingKey: return "missingKey"
+        case .keyRingRequestFailed: return "keyRingRequestFailed"
+        case .internalError: return "internalError"
+        @unknown default: return "unknown\(state.rawValue)"
         }
     }
 }
