@@ -602,6 +602,11 @@ APP_VOCAB = frozenset("""
     record red recvonly repaired ringfail role rproto rsa rtx rxlvl
     sendonly sendrecv senden setup srtpc stream summary tlsv toffset
     tsr unk useinbandfec wide
+
+    act admgate after ans audit before capstop changed ckwait cnt cur
+    disarm en end endbal expired fbsettle fields first fresh hard iter
+    man merged mute nativemute native neg nsnap preven prevman replaced
+    rxrebind sess site src stalearm startfail tok verdict voipcfg
 """.split())
 
 # Second letters that (almost) never follow the first in English / app

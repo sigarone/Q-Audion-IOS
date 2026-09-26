@@ -4096,7 +4096,7 @@ final class CallService: @unchecked Sendable {
             let verdictCode: Int = verdict.rawValue
             let sourceCode: Int = audioActivationSource.rawValue
             let waitedFlag: Int = nativeUnitCallKitWaitExpired ? 1 : 0
-            RTLog.info("call", "admgate v=\(verdictCode) src=\(sourceCode) ckwait=\(waitedFlag)")
+            RTLog.info("call", "admgate verdict=\(verdictCode) src=\(sourceCode) ckwait=\(waitedFlag)")
         }
         switch verdict {
         case .enable:
