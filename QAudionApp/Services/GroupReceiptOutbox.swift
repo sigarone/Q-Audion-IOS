@@ -76,7 +76,7 @@ public final class GroupReceiptOutbox {
         if let sealed = UserDefaults.standard.string(forKey: defaultsKey) {
             guard let json = LocalStoreCipher.open(sealed),
                   let decoded = try? JSONDecoder().decode([Entry].self, from: Data(json.utf8)) else {
-                RTLog.error("group", "grp_receipt outbox unseal fail retained=1")
+                RTLog.error("group", "grp_receipt unseal fail retained=1")
                 return recoverUnreadable()
             }
             valve.noteReadable()
@@ -84,7 +84,7 @@ public final class GroupReceiptOutbox {
         }
         if let data = UserDefaults.standard.data(forKey: defaultsKey) {
             guard let decoded = try? JSONDecoder().decode([Entry].self, from: data) else {
-                RTLog.error("group", "grp_receipt outbox decode fail retained=1")
+                RTLog.error("group", "grp_receipt decode fail retained=1")
                 return recoverUnreadable()
             }
             valve.noteReadable()
