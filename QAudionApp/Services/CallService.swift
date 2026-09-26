@@ -438,7 +438,43 @@ final class CallService: @unchecked Sendable {
             let outSess = AVAudioSession.sharedInstance()
             let outPorts = outSess.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
             let outVol = Int(outSess.outputVolume * 100)
-            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)")
+            var line = "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)"
+            // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
+            // (no second timer) with the wider stats snapshot, ONLY on a
+            // call that actually negotiated native SRTP: every field below
+            // reads -1/"none" on the sealed-DataChannel/WS-relay path, and
+            // this heartbeat already fires for those calls too (the base
+            // line above stays useful there) — no point appending 20 more
+            // placeholder fields to a line that will never populate them.
+            if getUsesNativeAudioSrtp?() == true, let stats = getNativeAudioSrtpStats?() {
+                // Audio levels are 0.0...1.0 per the webrtc-stats spec —
+                // shipped as milli-units (x1000, rounded) to stay numeric
+                // rather than a decimal point, matching this line's own
+                // all-integer convention.
+                func milli(_ v: Double) -> Int { v < 0 ? -1 : Int((v * 1000).rounded()) }
+                line += " rtx=\(stats.outboundRetransmittedPacketsSent)"
+                line += " mslvl=\(milli(stats.mediaSourceAudioLevel))"
+                line += " mseng=\(milli(stats.mediaSourceTotalAudioEnergy))"
+                line += " tsr=\(stats.inboundTotalSamplesReceived)"
+                line += " rxlvl=\(milli(stats.inboundAudioLevel))"
+                line += " isd=\(stats.inboundInsertedSamplesForDeceleration)"
+                line += " rsa=\(stats.inboundRemovedSamplesForAcceleration)"
+                line += " dtls=\(stats.transportDtlsState ?? "none")"
+                line += " srtpc=\(stats.transportSrtpCipher ?? "none")"
+                line += " dtlsc=\(stats.transportDtlsCipher ?? "none")"
+                line += " tlsv=\(stats.transportTlsVersion ?? "none")"
+                line += " role=\(stats.transportDtlsRole ?? "none")"
+                line += " cps=\(stats.selectedCandidatePairState ?? "none")"
+                line += " lct=\(stats.localCandidateType ?? "none")"
+                line += " lproto=\(stats.localCandidateProtocol ?? "none")"
+                line += " rct=\(stats.remoteCandidateType ?? "none")"
+                line += " rproto=\(stats.remoteCandidateProtocol ?? "none")"
+                line += " mime=\(stats.codecMimeType ?? "none")"
+                line += " clk=\(stats.codecClockRate.map(String.init) ?? "-1")"
+                line += " ch=\(stats.codecChannels.map(String.init) ?? "-1")"
+                if let fmtp = stats.codecSdpFmtpLine { line += " fmtp=\(fmtp)" }
+            }
+            RTLog.info("call", line)
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
         // outbound-rtp row still does not exist after ~8 s of samples (was
@@ -759,6 +795,15 @@ final class CallService: @unchecked Sendable {
     /// reordering the jitter buffer already absorbed cleanly.
     public var getAudioRtpPacketsLost: (() -> Int64)?
     public var getAudioRtpJitterSec: (() -> Double)?
+    /// W-NATIVESRTPDIAG (this task) — the wider stats snapshot
+    /// (`QAudionWebRtcCallController.NativeAudioSrtpStatsSnapshot`) read off
+    /// the SAME `getStats` poll the getters above already read from. Wired
+    /// once at login, same live-getter pattern; `nil` before the first poll
+    /// or when there is no `webRtcController` for this call. Consumed only
+    /// by the `audiosrtp hb=` heartbeat below, and only when
+    /// `getUsesNativeAudioSrtp?() == true` — a call on the sealed
+    /// DataChannel/WS relay never reads it.
+    public var getNativeAudioSrtpStats: (() -> QAudionWebRtcCallController.NativeAudioSrtpStatsSnapshot?)?
     /// W-DEADTXRELEASE — mute/unmute the native audio-srtp sender track.
     /// Wired once at login by AppState to
     /// `webRtcController?.setNativeAudioSrtpMuted(_:)`, same live-setter

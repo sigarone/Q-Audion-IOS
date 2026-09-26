@@ -696,6 +696,46 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public private(set) var audioRtpConcealedSamples: Int64 = -1
     public private(set) var audioRtpConcealmentEvents: Int64 = -1
 
+    /// W-NATIVESRTPDIAG (this task) — every additional WebRTC stat this
+    /// task's diagnostics need, beyond the fields already read above by
+    /// earlier work, off the SAME `getStats` report ``pollMediaRttOnce()``
+    /// already fetches once per second — no extra round trip. `-1`/`nil`
+    /// (per field's own type) means "no such row in this report", same
+    /// convention as every other field on this file. `Sendable` so it can
+    /// cross the `getStats` callback's own thread boundary as a value type,
+    /// same as this file's other stat properties.
+    public struct NativeAudioSrtpStatsSnapshot: Sendable {
+        public var outboundRetransmittedPacketsSent: Int64 = -1
+        public var mediaSourceAudioLevel: Double = -1
+        public var mediaSourceTotalAudioEnergy: Double = -1
+        public var inboundTotalSamplesReceived: Int64 = -1
+        public var inboundAudioLevel: Double = -1
+        public var inboundInsertedSamplesForDeceleration: Int64 = -1
+        public var inboundRemovedSamplesForAcceleration: Int64 = -1
+        public var transportDtlsState: String?
+        public var transportSrtpCipher: String?
+        public var transportDtlsCipher: String?
+        public var transportTlsVersion: String?
+        public var transportDtlsRole: String?
+        public var selectedCandidatePairState: String?
+        public var localCandidateType: String?
+        public var localCandidateProtocol: String?
+        public var remoteCandidateType: String?
+        public var remoteCandidateProtocol: String?
+        public var codecMimeType: String?
+        public var codecClockRate: Int?
+        public var codecChannels: Int?
+        public var codecSdpFmtpLine: String?
+
+        public init() {}
+    }
+
+    /// Latest snapshot from ``pollMediaRttOnce()``, or every field at its
+    /// "absent" value before the first poll / on a call with no audio
+    /// `inbound`/`outbound-rtp` row (every call on the sealed
+    /// DataChannel/WS relay).
+    public private(set) var nativeAudioSrtpStats = NativeAudioSrtpStatsSnapshot()
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -746,6 +786,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var audioJitterSec: Double = -1
             var audioConcealedSamples: Int64 = -1
             var audioConcealmentEvents: Int64 = -1
+            // W-NATIVESRTPDIAG (this task) — see NativeAudioSrtpStatsSnapshot's
+            // own field docs for what each of these is.
+            var snapshot = NativeAudioSrtpStatsSnapshot()
+            var audioCodecId: String?
+            var preferredLocalCandidateId: String?
+            var preferredRemoteCandidateId: String?
+            var fallbackLocalCandidateId: String?
+            var fallbackRemoteCandidateId: String?
             for (_, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
@@ -756,23 +804,54 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     audioJitterSec = (s.values["jitter"] as? NSNumber)?.doubleValue ?? -1
                     audioConcealedSamples = (s.values["concealedSamples"] as? NSNumber)?.int64Value ?? -1
                     audioConcealmentEvents = (s.values["concealmentEvents"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundTotalSamplesReceived = (s.values["totalSamplesReceived"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.inboundInsertedSamplesForDeceleration =
+                        (s.values["insertedSamplesForDeceleration"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundRemovedSamplesForAcceleration =
+                        (s.values["removedSamplesForAcceleration"] as? NSNumber)?.int64Value ?? -1
+                    audioCodecId = s.values["codecId"] as? String
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                     audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.outboundRetransmittedPacketsSent =
+                        (s.values["retransmittedPacketsSent"] as? NSNumber)?.int64Value ?? -1
+                }
+                if s.type == "media-source", (s.values["kind"] as? String) == "audio" {
+                    snapshot.mediaSourceAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.mediaSourceTotalAudioEnergy = (s.values["totalAudioEnergy"] as? NSNumber)?.doubleValue ?? -1
+                }
+                if s.type == "transport", snapshot.transportDtlsState == nil {
+                    // W-NATIVESRTPDIAG — bundlePolicy is `.maxBundle`
+                    // (`defaultConfiguration`), so a 1:1 call has exactly one
+                    // transport row in practice; take the first one seen.
+                    snapshot.transportDtlsState = s.values["dtlsState"] as? String
+                    snapshot.transportSrtpCipher = s.values["srtpCipher"] as? String
+                    snapshot.transportDtlsCipher = s.values["dtlsCipher"] as? String
+                    snapshot.transportTlsVersion = s.values["tlsVersion"] as? String
+                    snapshot.transportDtlsRole = s.values["dtlsRole"] as? String
                 }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
                 let rttSec = (s.values["currentRoundTripTime"] as? NSNumber)?.doubleValue
+                let pairState = s.values["state"] as? String
+                let localId = s.values["localCandidateId"] as? String
+                let remoteId = s.values["remoteCandidateId"] as? String
                 if !haveFallback {
                     haveFallback = true
                     fallbackRttSec = rttSec
+                    fallbackLocalCandidateId = localId
+                    fallbackRemoteCandidateId = remoteId
                 }
                 let nominated = (s.values["nominated"] as? NSNumber)?.boolValue ?? false
                 let selected = (s.values["selected"] as? NSNumber)?.boolValue ?? false
                 if (nominated || selected), !havePreferred {
                     havePreferred = true
                     preferredRttSec = rttSec
+                    preferredLocalCandidateId = localId
+                    preferredRemoteCandidateId = remoteId
+                    snapshot.selectedCandidatePairState = pairState
                 }
             }
             // No succeeded pair ⇒ ICE never converged (or has failed) ⇒ there
@@ -792,6 +871,28 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self.audioRtpConcealedSamples = audioConcealedSamples
             self.audioRtpConcealmentEvents = audioConcealmentEvents
             self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
+
+            // W-NATIVESRTPDIAG — second, cheap dictionary lookup pass to
+            // resolve the foreign-key references collected above (codecId /
+            // local+remoteCandidateId) into their own stats rows — still the
+            // SAME `getStats` report, no extra round trip.
+            if let codecId = audioCodecId, let codecStats = report.statistics[codecId] {
+                snapshot.codecMimeType = codecStats.values["mimeType"] as? String
+                snapshot.codecClockRate = (codecStats.values["clockRate"] as? NSNumber)?.intValue
+                snapshot.codecChannels = (codecStats.values["channels"] as? NSNumber)?.intValue
+                snapshot.codecSdpFmtpLine = codecStats.values["sdpFmtpLine"] as? String
+            }
+            let localCandidateId = havePreferred ? preferredLocalCandidateId : fallbackLocalCandidateId
+            let remoteCandidateId = havePreferred ? preferredRemoteCandidateId : fallbackRemoteCandidateId
+            if let localCandidateId, let localStats = report.statistics[localCandidateId] {
+                snapshot.localCandidateType = localStats.values["candidateType"] as? String
+                snapshot.localCandidateProtocol = localStats.values["protocol"] as? String
+            }
+            if let remoteCandidateId, let remoteStats = report.statistics[remoteCandidateId] {
+                snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
+                snapshot.remoteCandidateProtocol = remoteStats.values["protocol"] as? String
+            }
+            self.nativeAudioSrtpStats = snapshot
         }
     }
 

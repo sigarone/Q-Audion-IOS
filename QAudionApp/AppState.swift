@@ -5062,6 +5062,12 @@ final class AppState: ObservableObject {
         callService.getAudioRtpJitterSec = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpJitterSec ?? -1
         }
+        // W-NATIVESRTPDIAG (this task) — same live-getter pattern as the
+        // pair above, for the wider stats snapshot the extended
+        // `audiosrtp hb=` heartbeat reads.
+        callService.getNativeAudioSrtpStats = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.nativeAudioSrtpStats
+        }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
         // stashed by the `call_incoming` handler (responder side) and by the
