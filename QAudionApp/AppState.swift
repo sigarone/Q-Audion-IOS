@@ -4989,6 +4989,13 @@ final class AppState: ObservableObject {
         NativeAudioSessionGate.log = { line in
             RTLog.info("call", line)
         }
+        // W-ADMNUDGE — the engine's capture-live nudge asks CallService's
+        // gate to re-decide (main thread) instead of re-enabling blindly.
+        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] reasonCode in
+            Task { @MainActor in
+                self?.callService.reapplyNativeAudioUnitGate(reasonCode: reasonCode)
+            }
+        }
         // W-AUNITTRACE (2026-09-10) — forwards WebRTC's own native
         // AudioDeviceIOS lifecycle events (short, numeric-tailed so the
         // redactor doesn't blob them, per reference_ios_log_pipeline_limits)

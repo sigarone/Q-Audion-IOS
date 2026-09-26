@@ -104,6 +104,17 @@ public enum NativeAudioSessionGate {
     /// material.
     public static var log: ((String) -> Void)?
 
+    /// Asks the app layer (CallService's gate, on the main thread) to
+    /// re-decide whether the unit may run — the engine cannot see the call
+    /// state the verdict needs. Wired once at login by AppState.
+    public static var onGateReapplyRequested: ((Int) -> Void)?
+
+    /// See ``onGateReapplyRequested``. No-op unless armed.
+    public static func requestGateReapply(reason: Int) {
+        guard isArmed else { return }
+        onGateReapplyRequested?(reason)
+    }
+
     /// WebRTC's session configuration while armed: identical to
     /// `AudioProcessingPipeline.configureForVoIP()` (5 ms, 48 kHz) and
     /// `CallKitProvider`'s category/mode/options.

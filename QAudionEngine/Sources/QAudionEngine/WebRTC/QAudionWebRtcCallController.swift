@@ -251,10 +251,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("audiosrtp caplive=8")
             return
         }
-        log?("audiosrtp caplive=0 nudge=1")
-        peerConnection?.setNativeAudioSrtpMuted(true)
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        peerConnection?.setNativeAudioSrtpMuted(false)
+        if peerConnection?.nativeSrtpEnabledForThisCall == true, NativeAudioSessionGate.isArmed {
+            // W-ADMNUDGE (2026-09-26) — manual audio mode: the nudge restarts
+            // WebRTC's own audio unit (isAudioEnabled false, then the
+            // CallService gate re-decides) — WebRTC's supported unit restart:
+            // reconfigure, re-initialize and start VoiceProcessingIO. The old
+            // track mute/unmute never touched the unit (the dead-TX shape is
+            // a unit that never delivers frames), and force-UNmuted a sender
+            // the user may have muted. Re-enabling goes through the gate, so
+            // a relay fallback or teardown during the 150 ms wins.
+            log?("audiosrtp caplive=0 nudge=2")
+            NativeAudioSessionGate.setNativeAudioActive(
+                false, reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if isCurrentCaptureLiveCheck(generation), peerConnection != nil {
+                NativeAudioSessionGate.requestGateReapply(
+                    reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+            }
+        } else {
+            log?("audiosrtp caplive=0 nudge=1")
+            peerConnection?.setNativeAudioSrtpMuted(true)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            peerConnection?.setNativeAudioSrtpMuted(false)
+        }
         if await waitForNativeCaptureLive(
             generation: generation, ptxAtArm: ptxAtArm,
             windowMs: CaptureLiveDecisions.afterNudgeWindowMs, via: 3, gateWaits: gateWaits

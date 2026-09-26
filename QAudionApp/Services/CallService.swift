@@ -4117,6 +4117,14 @@ final class CallService: @unchecked Sendable {
         }
     }
 
+    /// W-ADMNUDGE — re-run the gate on request (the engine's capture-live
+    /// nudge, after it switched the unit off). Main thread.
+    public func reapplyNativeAudioUnitGate(reasonCode: Int) {
+        let reason = NativeAudioUnitGateDecisions.ChangeReason(rawValue: reasonCode) ?? .gate
+        lastLoggedNativeUnitVerdict = -1  // log the verdict of this re-decision
+        applyNativeAudioUnitGate(reason: reason)
+    }
+
     /// Bounded wait for CallKit's own didActivate after a self-activation of a
     /// CallKit-managed call (see `NativeAudioUnitGateDecisions.callKitActivationWaitMs`).
     private func scheduleNativeUnitCallKitWait() {
