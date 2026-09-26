@@ -198,6 +198,30 @@ public enum NativeAudioUnitGateDecisions {
         return paired == currentGeneration ? .currentCall : .endedCall
     }
 
+    /// W-NUDGEOWN (2026-09-27) — what the capture-live nudge (manual audio
+    /// mode) may do after its owner-checked stop
+    /// (`NativeAudioSessionGate.setNativeAudioInactive(ifCurrent:reason:)`).
+    public enum NudgeOwnership: Int, Sendable, Equatable {
+        /// This PeerConnection still owns the unit: ask for the restart.
+        case restart = 0
+        /// It no longer does (closed, replaced, or a later call armed): the
+        /// check is stale and must stop here — no restart request and no
+        /// escalation to the relay fallback, both of which would act on the
+        /// successor's call.
+        case stale = 1
+    }
+
+    /// `ownerToken`: the arm token of the PeerConnection the check was armed
+    /// for (0 = it never armed). `stopped`: the owner-checked stop switched
+    /// the unit off. `ownerStillCurrent`: that token is still the arm in force
+    /// (read after a stop that did nothing — the unit may simply have been
+    /// off already, which still wants the restart).
+    public static func nudgeOwnership(ownerToken: Int, stopped: Bool, ownerStillCurrent: Bool) -> NudgeOwnership {
+        guard ownerToken != 0 else { return .stale }
+        if stopped { return .restart }
+        return ownerStillCurrent ? .restart : .stale
+    }
+
     /// W-ADMBALANCE (2026-09-26) — the iteration cap for the locked
     /// `RTCAudioSession.setActive(false)` loop in
     /// `CallKitProvider.reportCallEnded` (the loop itself also stops when the

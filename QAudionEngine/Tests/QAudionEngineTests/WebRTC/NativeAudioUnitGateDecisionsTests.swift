@@ -190,6 +190,30 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
         XCTAssertEqual(D.DeactivationOwner.unattributed.rawValue, 2)
     }
 
+    // MARK: - nudgeOwnership (W-NUDGEOWN)
+
+    /// The owner stopped its own unit: restart it through the gate.
+    func test_nudge_ownerStoppedItsUnit_restarts() {
+        XCTAssertEqual(D.nudgeOwnership(ownerToken: 3, stopped: true, ownerStillCurrent: true), .restart)
+    }
+
+    /// Still the owner but the unit was already off: the restart is still wanted.
+    func test_nudge_ownerWithUnitAlreadyOff_restarts() {
+        XCTAssertEqual(D.nudgeOwnership(ownerToken: 3, stopped: false, ownerStillCurrent: true), .restart)
+    }
+
+    /// THE race: a replacement (or the next call) armed meanwhile. Nothing may
+    /// be restarted or escalated on its behalf.
+    func test_nudge_replacedOwner_isStale() {
+        XCTAssertEqual(D.nudgeOwnership(ownerToken: 3, stopped: false, ownerStillCurrent: false), .stale)
+    }
+
+    /// A check armed for a PeerConnection that never armed owns nothing.
+    func test_nudge_noOwnerToken_isStale() {
+        XCTAssertEqual(D.nudgeOwnership(ownerToken: 0, stopped: false, ownerStillCurrent: false), .stale)
+        XCTAssertEqual(D.nudgeOwnership(ownerToken: 0, stopped: true, ownerStillCurrent: true), .stale)
+    }
+
     // MARK: - NativeAudioReceiverRebindDecision
 
     private func rebind(_ bound: String?, _ live: String, done: Bool) -> Bool {

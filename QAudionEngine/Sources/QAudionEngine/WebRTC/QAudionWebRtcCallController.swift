@@ -175,13 +175,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// check re-armed — invalidate an older in-flight check instead of two
     /// overlapping ones racing to nudge/escalate independently.
     private func armNativeAudioCaptureLiveCheck() {
+        // W-NUDGEOWN (2026-09-27) — the owner of this check: the manual-audio
+        // arm token of the PeerConnection it is armed for (0 = it did not arm).
+        // Read once, here; the manual-mode nudge presents it to the gate.
+        let armToken: Int = peerConnection?.nativeAudioArmToken ?? 0
         captureLiveLock.lock()
         hasConfirmedNativeAudioCaptureLive = false
         captureLiveCheckGeneration += 1
         let generation = captureLiveCheckGeneration
         captureLiveLock.unlock()
         Task { [weak self] in
-            await self?.verifyNativeAudioCaptureLiveOrRecover(generation: generation)
+            await self?.verifyNativeAudioCaptureLiveOrRecover(generation: generation, armToken: armToken)
         }
     }
 
@@ -206,7 +210,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// accept EITHER the tap OR packet growth as proof of life; (3) only then
     /// the mute/unmute nudge, one more window, and — still nothing — the same
     /// relay fallback ICE-loss uses. Every log token ≤ 11 chars (redactor).
-    private func verifyNativeAudioCaptureLiveOrRecover(generation: Int) async {
+    ///
+    /// W-NUDGEOWN (2026-09-27) — `armToken`: the arm token of the
+    /// PeerConnection this check was armed for (see
+    /// `armNativeAudioCaptureLiveCheck`); the manual-mode nudge acts only for it.
+    private func verifyNativeAudioCaptureLiveOrRecover(generation: Int, armToken: Int) async {
         var waitedMs: Int64 = 0
         var gateWaits = 0
         while !(isNativeCaptureExpectedLive?() ?? true) {
@@ -261,12 +269,30 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // the user may have muted. Re-enabling goes through the gate, so
             // a relay fallback or teardown during the 150 ms wins.
             log?("audiosrtp caplive=0 nudge=2")
-            NativeAudioSessionGate.setNativeAudioActive(
-                false, reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+            // W-NUDGEOWN (2026-09-27) — owner-checked against THIS check's
+            // PeerConnection arm, atomically with the switch (inside the
+            // gate). The unowned stop it replaces could pass the generation
+            // check above just before a duplicate-offer/replacement closed this
+            // controller and, once the replacement had armed and enabled its
+            // unit, switch the SUCCESSOR's unit off. A stale owner stops here:
+            // no restart request and no relay-fallback escalation below.
+            let nudgeReason: Int = NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue
+            let stopped: Bool = NativeAudioSessionGate.setNativeAudioInactive(
+                ifCurrent: armToken, reason: nudgeReason)
+            let ownership = NativeAudioUnitGateDecisions.nudgeOwnership(
+                ownerToken: armToken,
+                stopped: stopped,
+                ownerStillCurrent: NativeAudioSessionGate.isCurrent(token: armToken))
+            guard ownership == .restart else {
+                log?("audiosrtp W-NUDGEOWN stale=1 tok=\(armToken)")
+                return
+            }
             try? await Task.sleep(nanoseconds: 150_000_000)
             if isCurrentCaptureLiveCheck(generation), peerConnection != nil {
-                NativeAudioSessionGate.requestGateReapply(
-                    reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+                guard NativeAudioSessionGate.requestGateReapply(ifCurrent: armToken, reason: nudgeReason) else {
+                    log?("audiosrtp W-NUDGEOWN stale=2 tok=\(armToken)")
+                    return
+                }
             }
         } else {
             log?("audiosrtp caplive=0 nudge=1")

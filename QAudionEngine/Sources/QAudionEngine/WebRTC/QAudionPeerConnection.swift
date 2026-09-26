@@ -209,7 +209,23 @@ public final class QAudionPeerConnection: NSObject {
     /// PeerConnection armed manual audio mode with (0 = it did not arm).
     /// `close()` disables the unit and disarms with it, so a replaced
     /// PeerConnection of the same call can never disarm its successor.
-    private var manualAudioToken: Int = 0
+    ///
+    /// W-NUDGEOWN (2026-09-27) — also read from another thread by the
+    /// controller's capture-live check (``nativeAudioArmToken``), so the
+    /// storage is behind a leaf lock (never held across a gate call).
+    private var manualAudioToken: Int {
+        get { manualAudioTokenLock.lock(); defer { manualAudioTokenLock.unlock() }; return _manualAudioToken }
+        set { manualAudioTokenLock.lock(); _manualAudioToken = newValue; manualAudioTokenLock.unlock() }
+    }
+    private let manualAudioTokenLock = NSLock()
+    private var _manualAudioToken: Int = 0
+
+    /// W-NUDGEOWN (2026-09-27) — the manual-audio arm token this
+    /// PeerConnection holds (0 = it did not arm, or it closed). Whoever acts
+    /// on the audio unit for THIS PeerConnection presents it to
+    /// `NativeAudioSessionGate`'s owner-checked calls, so a stale actor can
+    /// never switch a successor's unit.
+    public var nativeAudioArmToken: Int { manualAudioToken }
     /// The real mic-sourced RTP sender, once ``activateNativeAudioSrtp(key:participantId:rxSink:txSink:)``
     /// has attached a track. `nil` until then (and always `nil` on a call
     /// that never negotiates ``CallCapabilities/audioSrtpV1``).

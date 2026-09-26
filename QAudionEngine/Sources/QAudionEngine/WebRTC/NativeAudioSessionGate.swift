@@ -115,6 +115,27 @@ public enum NativeAudioSessionGate {
         onGateReapplyRequested?(reason)
     }
 
+    /// W-NUDGEOWN (2026-09-27) — ``requestGateReapply(reason:)`` on behalf of
+    /// the arm `token` only: a no-op (logged, `admgate W-GATEOWNER reapply=0`)
+    /// when `token` is no longer the arm in force — a closed or replaced
+    /// PeerConnection has nothing left to restart. Not itself a switch: the
+    /// app layer re-decides on the main thread from the CURRENT call's state
+    /// and enables the arm in force through its own enable, so even a request
+    /// that passes this check just before a hand-over can only re-run the
+    /// successor's own verdict. Returns whether the request was forwarded.
+    @discardableResult
+    public static func requestGateReapply(ifCurrent token: Int, reason: Int) -> Bool {
+        lock.lock()
+        let current = armedToken
+        lock.unlock()
+        guard token != 0, current == token else {
+            emit("admgate W-GATEOWNER reapply=0 why=\(reason) tok=\(token) cur=\(current)")
+            return false
+        }
+        onGateReapplyRequested?(reason)
+        return true
+    }
+
     /// WebRTC's session configuration while armed: identical to
     /// `AudioProcessingPipeline.configureForVoIP()` (5 ms, 48 kHz) and
     /// `CallKitProvider`'s category/mode/options.
@@ -141,9 +162,10 @@ public enum NativeAudioSessionGate {
     /// OWNERS (W-GATEOWNER, 2026-09-27) — who may switch a running unit, and
     /// where that authority is checked:
     /// * an ARM TOKEN (``armManualMode()``): the PeerConnection that armed
-    ///   (its `close()`), and CallService for the arm its own enable switched
-    ///   on (``enableNativeAudio(reason:)`` returns it). Checked inside the
-    ///   critical section above, together with the switch.
+    ///   and whatever acts for it (its `close()`, its controller's
+    ///   capture-live nudge, W-NUDGEOWN), and CallService for the arm its own
+    ///   enable switched on (``enableNativeAudio(reason:)`` returns it).
+    ///   Checked inside the critical section above, together with the switch.
     /// * the CALL GENERATION (CallService's W-STALESEALER counter): which call
     ///   an identity-less CallKit event belongs to. Checked on the main thread,
     ///   which is where every generation bump (`CallService.endCall`) and every
@@ -151,9 +173,10 @@ public enum NativeAudioSessionGate {
     /// * the CALLKIT UUID: the self-activation debt `CallKitProvider` balances
     ///   (`CallKitCallLedger`, under the ledger's own lock).
     /// A stale owner's request is a logged no-op, never a switch of a
-    /// successor's unit. The ledger lock and CallService's `relaySlotLock` are
-    /// leaf locks: each is released before this type is called, so the only
-    /// nesting anywhere is configuration lock → this lock.
+    /// successor's unit. The ledger lock, CallService's `relaySlotLock`, the
+    /// PeerConnection's arm-token lock and the controller's capture-live lock
+    /// are leaf locks: each is released before this type is called, so the
+    /// only nesting anywhere is configuration lock → this lock.
     private static let lock = NSLock()
     /// Non-zero while a native-SRTP call owns manual mode. A token, not a
     /// Bool, so a replaced PeerConnection of the same call (glare, duplicate
