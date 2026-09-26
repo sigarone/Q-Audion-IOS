@@ -130,4 +130,25 @@ final class CallCapabilitiesAudioSrtpEarbudInvariantTests: XCTestCase {
         let caps = CallCapabilities.localCaps(earbudActive: false)
         XCTAssertEqual(CallCapabilities.audioSrtpSendEnabled, caps.contains(CallCapabilities.audioSrtpV1))
     }
+
+    // MARK: - W-NATIVESRTPGATE — isNativeSrtpEnabledLocally
+
+    /// The single predicate every native-SRTP media-path gate must read.
+    /// With no override, it must track the compiled kill switch exactly —
+    /// this is what makes a build with the switch off byte-for-byte
+    /// unaffected by any of this task's other changes.
+    func test_isNativeSrtpEnabledLocally_withNoOverride_tracksTheCompiledSwitch() {
+        CallCapabilities.audioSrtpDebugOverride = nil
+        XCTAssertEqual(CallCapabilities.isNativeSrtpEnabledLocally, CallCapabilities.audioSrtpSendEnabled)
+    }
+
+    func test_isNativeSrtpEnabledLocally_withOverrideTrue_isTrue_regardlessOfTheCompiledSwitch() {
+        CallCapabilities.audioSrtpDebugOverride = true
+        XCTAssertTrue(CallCapabilities.isNativeSrtpEnabledLocally)
+    }
+
+    func test_isNativeSrtpEnabledLocally_withOverrideFalse_isFalse_regardlessOfTheCompiledSwitch() {
+        CallCapabilities.audioSrtpDebugOverride = false
+        XCTAssertFalse(CallCapabilities.isNativeSrtpEnabledLocally)
+    }
 }

@@ -806,6 +806,23 @@ public enum CallCapabilities {
     /// the exact build this exists to test with.
     public static var audioSrtpDebugOverride: Bool?
 
+    /// W-NATIVESRTPGATE (this task) — "native SRTP enabled locally", the ONE
+    /// predicate every native-SRTP-audio gate on the media path must read
+    /// instead of ``audioSrtpSendEnabled`` directly. Before this existed,
+    /// `QAudionPeerConnection.init`'s pre-creation of the audio transceiver
+    /// (see its own IOS-C4b comment) read ``audioSrtpSendEnabled`` alone —
+    /// so flipping ``audioSrtpDebugOverride`` on at runtime (the Settings
+    /// "SVILUPPATORE" toggle) made ``localCaps`` advertise `audio-srtp-v1`
+    /// while `init` never built the transceiver to carry it, a mismatch
+    /// between what the wire announced and what the PeerConnection could
+    /// actually negotiate. `nil` override → follow the compiled kill switch,
+    /// exactly ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``'s
+    /// own override semantics (``audioSrtpDebugOverride ?? audioSrtpSendEnabled``,
+    /// same order, same fallback).
+    public static var isNativeSrtpEnabledLocally: Bool {
+        audioSrtpDebugOverride ?? audioSrtpSendEnabled
+    }
+
     /// #2a gate (Android parity): did the PEER advertise
     /// ``earbudRelayV1`` in its RAW call-setup capability list,
     /// regardless of local caps? Pre-intersection check — the agreed set
