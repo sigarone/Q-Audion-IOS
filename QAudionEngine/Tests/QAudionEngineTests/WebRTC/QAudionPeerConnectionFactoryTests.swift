@@ -57,13 +57,21 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
     /// argument (every existing call site before this task), the extra
     /// native-SRTP-only fields must NOT be touched: a normal call's
     /// RTCConfiguration stays byte-for-byte what it was before this task.
-    /// `cryptoOptions` defaults to `nil` and `tcpCandidatePolicy` defaults to
-    /// `.enabled` on a fresh `RTCConfiguration()` per the WebRTC SDK's own
-    /// documented defaults.
+    /// Compared against a fresh `RTCConfiguration()` rather than hard-coded
+    /// values: this SDK build returns a non-nil default `cryptoOptions`
+    /// (CI, 2026-09-26), so "untouched" means "same as the SDK default".
     func testDefaultConfigurationWithNativeSrtpDisabled_leavesTheNativeSrtpFieldsAtSdkDefaults() {
         let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: false)
-        XCTAssertNil(cfg.cryptoOptions)
-        XCTAssertEqual(cfg.tcpCandidatePolicy, .enabled)
+        let sdkDefault = RTCConfiguration()
+        XCTAssertEqual(cfg.cryptoOptions == nil, sdkDefault.cryptoOptions == nil)
+        if let got = cfg.cryptoOptions, let def = sdkDefault.cryptoOptions {
+            XCTAssertEqual(got.srtpEnableGcmCryptoSuites, def.srtpEnableGcmCryptoSuites)
+            XCTAssertEqual(got.srtpEnableAes128Sha1_32CryptoCipher, def.srtpEnableAes128Sha1_32CryptoCipher)
+            XCTAssertEqual(got.srtpEnableEncryptedRtpHeaderExtensions, def.srtpEnableEncryptedRtpHeaderExtensions)
+        }
+        XCTAssertEqual(cfg.tcpCandidatePolicy, sdkDefault.tcpCandidatePolicy)
+        XCTAssertEqual(cfg.audioJitterBufferMaxPackets, sdkDefault.audioJitterBufferMaxPackets)
+        XCTAssertEqual(cfg.audioJitterBufferFastAccelerate, sdkDefault.audioJitterBufferFastAccelerate)
     }
 
     /// W-NATIVESRTPGATE — with the flag true, every best-practice parameter
