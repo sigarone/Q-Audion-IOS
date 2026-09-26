@@ -2414,15 +2414,18 @@ final class CallService: @unchecked Sendable {
         // W-NATIVESRTPSNAPSHOT (2026-09-26) — the call's native-SRTP decision
         // ends with the call (same single choke point as the generation bump
         // above). The next call takes its own. Idempotent.
-        // W-NATIVESRTPSNAPSHOT-ID — keyed end first (logs whether the snapshot
-        // belonged to this call), then the unconditional clear as the safety
-        // net: this is the one choke point every normal terminal path shares.
-        if let nativeSnapshot = CallCapabilities.nativeSrtpCallSnapshot {
-            let matched: Bool = CallCapabilities.endNativeSrtpCallSnapshot(callId: getCallId?())
-            CallCapabilities.endNativeSrtpCallSnapshot()
+        // W-NATIVESRTPSNAPSHOT-ID — keyed end (logs whether the snapshot
+        // belonged to this call) plus the safety net: this is the one choke
+        // point every normal terminal path shares.
+        // W-NATIVESRTPSNAPSHOT-ENDOWNER — one atomic call: the safety net no
+        // longer drops a snapshot owned by ANOTHER known call id (a stale
+        // teardown deleted the newer call's snapshot). `end=0` = kept.
+        let snapshotEnd = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: getCallId?())
+        if let nativeSnapshot = snapshotEnd.value {
             let nativeFlag: Int = nativeSnapshot ? 1 : 0
-            let matchFlag: Int = matched ? 1 : 0
-            RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=1 match=\(matchFlag)")
+            let endFlag: Int = snapshotEnd.ended ? 1 : 0
+            let matchFlag: Int = snapshotEnd.matched ? 1 : 0
+            RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=\(endFlag) match=\(matchFlag)")
         }
         onDeepfakeAlert?(false)
         stopDurationTimer()

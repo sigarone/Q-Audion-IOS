@@ -157,7 +157,58 @@ final class CallCapabilitiesNativeSrtpSnapshotTests: XCTestCase {
         XCTAssertNil(CallCapabilities.nativeSrtpSnapshotCallId)
     }
 
-    /// The unconditional end (the endCall safety net) clears whatever is there.
+    // MARK: - W-NATIVESRTPSNAPSHOT-ENDOWNER (CallService.endCall)
+
+    func test_callEnd_ownCallId_endsAndMatches_caseInsensitive() {
+        CallCapabilities.audioSrtpDebugOverride = true
+        CallCapabilities.beginNativeSrtpCallSnapshot(callId: "Call-H")
+        let end = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: "call-h")
+        XCTAssertEqual(end, CallCapabilities.NativeSrtpSnapshotEnd(value: true, matched: true, ended: true))
+        XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
+        XCTAssertNil(CallCapabilities.nativeSrtpSnapshotCallId)
+    }
+
+    /// THE bug this closes: a stale teardown carrying the OLD call's id must
+    /// not delete the snapshot the NEWER call already took.
+    func test_callEnd_staleTeardownWithAnotherKnownId_keepsTheNewerCallsSnapshot() {
+        CallCapabilities.audioSrtpDebugOverride = true
+        CallCapabilities.latchNativeSrtpCallSnapshot(callId: "newer-call")
+        CallCapabilities.audioSrtpDebugOverride = false
+        let end = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: "older-call")
+        XCTAssertEqual(end, CallCapabilities.NativeSrtpSnapshotEnd(value: true, matched: false, ended: false))
+        XCTAssertEqual(CallCapabilities.nativeSrtpCallSnapshot, true)
+        XCTAssertEqual(CallCapabilities.nativeSrtpSnapshotCallId, "newer-call")
+        XCTAssertTrue(CallCapabilities.isNativeSrtpEnabledLocally)
+    }
+
+    /// Safety net kept: an unidentified snapshot (nobody else provably owns
+    /// it) is dropped even when the ending id does not match.
+    func test_callEnd_unidentifiedSnapshot_isDroppedBySafetyNet() {
+        CallCapabilities.audioSrtpDebugOverride = true
+        CallCapabilities.latchNativeSrtpCallSnapshot(callId: nil)
+        let end = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: "call-i")
+        XCTAssertEqual(end, CallCapabilities.NativeSrtpSnapshotEnd(value: true, matched: false, ended: true))
+        XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
+    }
+
+    /// Safety net kept: no ending id (unknown, or empty) drops whatever is there.
+    func test_callEnd_unknownEndingId_isDroppedBySafetyNet() {
+        CallCapabilities.audioSrtpDebugOverride = false
+        CallCapabilities.beginNativeSrtpCallSnapshot(callId: "call-j")
+        let end = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: nil)
+        XCTAssertEqual(end, CallCapabilities.NativeSrtpSnapshotEnd(value: false, matched: false, ended: true))
+        XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
+        CallCapabilities.beginNativeSrtpCallSnapshot(callId: "call-k")
+        XCTAssertTrue(CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: "").ended)
+        XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
+    }
+
+    func test_callEnd_noSnapshot_reportsNothing() {
+        let end = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: "call-l")
+        XCTAssertEqual(end, CallCapabilities.NativeSrtpSnapshotEnd(value: nil, matched: false, ended: false))
+    }
+
+    /// The unconditional end clears whatever is there.
     func test_unconditionalEnd_returnsToTheLiveValue() {
         CallCapabilities.audioSrtpDebugOverride = true
         CallCapabilities.beginNativeSrtpCallSnapshot(callId: "call-f")

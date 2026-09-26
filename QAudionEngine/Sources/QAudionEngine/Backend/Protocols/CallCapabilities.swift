@@ -942,8 +942,48 @@ public enum CallCapabilities {
         return true
     }
 
-    /// Drop the snapshot unconditionally (the `CallService.endCall()` safety
-    /// net, after the keyed end). Idempotent.
+    /// What ``endNativeSrtpCallSnapshotAtCallEnd(callId:)`` found and did.
+    public struct NativeSrtpSnapshotEnd: Equatable, Sendable {
+        /// The snapshot present at the call end (`nil`: there was none).
+        public let value: Bool?
+        /// It belonged to the ending call id.
+        public let matched: Bool
+        /// It was dropped: on a match, or as the safety net when its owner
+        /// cannot be told apart (unidentified snapshot, or no ending id).
+        public let ended: Bool
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ENDOWNER (2026-09-26) — the `CallService.endCall()`
+    /// end of the snapshot, keyed end and safety net in ONE critical section.
+    ///
+    /// * snapshot owned by `callId` (case-insensitive): dropped, `matched`.
+    /// * snapshot owned by a DIFFERENT, known call id while `callId` is known
+    ///   too: KEPT. It demonstrably belongs to another (newer) call, and a
+    ///   stale teardown must not delete it. The old unconditional clear that
+    ///   followed the keyed end did exactly that, defeating the keying.
+    /// * snapshot without an owner id, or no ending id: dropped (the safety
+    ///   net the unconditional clear always was; nothing proves it belongs to
+    ///   anyone else).
+    @discardableResult
+    public static func endNativeSrtpCallSnapshotAtCallEnd(callId: String?) -> NativeSrtpSnapshotEnd {
+        let id = normalizedCallId(callId)
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        guard let value = _nativeSrtpCallSnapshot else {
+            return NativeSrtpSnapshotEnd(value: nil, matched: false, ended: false)
+        }
+        let owner = _nativeSrtpSnapshotCallId
+        let matched = id != nil && owner == id
+        if !matched, id != nil, owner != nil {
+            return NativeSrtpSnapshotEnd(value: value, matched: false, ended: false)
+        }
+        _nativeSrtpCallSnapshot = nil
+        _nativeSrtpSnapshotCallId = nil
+        return NativeSrtpSnapshotEnd(value: value, matched: matched, ended: true)
+    }
+
+    /// Drop the snapshot unconditionally. Idempotent. (`CallService.endCall()`
+    /// uses ``endNativeSrtpCallSnapshotAtCallEnd(callId:)``, which never drops
+    /// a snapshot owned by another known call.)
     public static func endNativeSrtpCallSnapshot() {
         nativeSrtpSnapshotLock.lock()
         _nativeSrtpCallSnapshot = nil
