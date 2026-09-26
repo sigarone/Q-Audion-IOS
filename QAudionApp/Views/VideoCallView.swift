@@ -561,6 +561,14 @@ struct VideoCallView: View {
                 label: isCameraOn ? "Video attivo" : "Video spento",
                 isActive: !isCameraOn
             ) {
+                // Entitlements Task 5 parity — Android gates this manual
+                // toggle too, not just the banner's "Attiva video". Same
+                // shape as the banner's `onAcceptLocked` above: turning OFF
+                // is never gated.
+                if !isCameraOn, !capabilityGate.isUnlocked(.callsVideo) {
+                    upgradeSheetCapability = .callsVideo
+                    return
+                }
                 // W-VIDPARITY / BUG (C) — was `videoSetCameraEnabled`,
                 // which is a silent no-op on a `.receiveOnly` pipeline
                 // (`.external` source, no AVCaptureSession). This routes
@@ -807,6 +815,11 @@ struct VideoCallView_Previews: PreviewProvider {
     static var previews: some View {
         VideoCallView()
             .environmentObject(previewAppState())
+            // W-VIDPARITY round 2 — VideoCallView now reads
+            // `@EnvironmentObject private var capabilityGate: CapabilityGate`
+            // (entitlement gating for the camera button / invite banner);
+            // same fixture every other preview in this app injects.
+            .environmentObject(CapabilityGate.previewInstance())
     }
 
     static func previewAppState() -> AppState {

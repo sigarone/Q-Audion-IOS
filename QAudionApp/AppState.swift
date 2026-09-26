@@ -17999,6 +17999,17 @@ extension AppState {
             RTLog.warn("call", "vidcap promote ok=0 reason=permission_denied")
             return
         }
+        // W-VIDPARITY round 2 — pin the call this promotion is FOR before
+        // the long-running awaits below (camera permission prompt / AV
+        // session start can take a long time). A hangup or a new call
+        // arriving while suspended must not let the resumed task install a
+        // camera pipeline or announce video for a call that is no longer
+        // this one.
+        guard let callIdBefore = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+              !callIdBefore.isEmpty else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=no_call")
+            return
+        }
         promotingReceiveOnlyToCamera = true
         defer { promotingReceiveOnlyToCamera = false }
         // startVideoPipeline calls `videoPipeline?.stop()` on whatever is
@@ -18012,10 +18023,25 @@ extension AppState {
         // compare is valid and cheap).
         let previousPipeline = videoPipeline
         await startVideoPipeline(for: peerId, sourceMode: .camera, startPaused: true)
+        guard isStillTheActiveCall(callIdBefore) else {
+            tearDownStalePromotion(previousPipeline: previousPipeline)
+            RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+            return
+        }
         guard let newPipeline = videoPipeline, newPipeline !== previousPipeline else {
             RTLog.warn("call", "vidcap promote ok=0 reason=pipeline_start_failed")
+            guard isStillTheActiveCall(callIdBefore) else {
+                tearDownStalePromotion(previousPipeline: previousPipeline)
+                RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+                return
+            }
             // Roll back to receive-only exactly as it was before the attempt.
             await startVideoPipeline(for: peerId, sourceMode: .external)
+            guard isStillTheActiveCall(callIdBefore) else {
+                tearDownStalePromotion(previousPipeline: previousPipeline)
+                RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+                return
+            }
             localVideoPaused = true
             announceVideoState(force: false)
             return
@@ -18029,6 +18055,35 @@ extension AppState {
         announceVideoState(force: false)
         VideoKeyframeController.shared.requestKeyFrame()
         RTLog.info("call", "vidcap promote ok=1 reason=receive_only_upgrade")
+    }
+
+    /// W-VIDPARITY round 2 — true iff `callIdBefore` is still the call
+    /// `getActiveCallId()` believes is live, i.e. neither ended nor
+    /// replaced by a new call while `promoteReceiveOnlyToCamera` was
+    /// suspended on an await. Same case-insensitive compare
+    /// `shouldHonorVideoPauseRequest` already applies to call ids
+    /// (iOS/Android can echo the same id in different case).
+    @MainActor
+    private func isStillTheActiveCall(_ callIdBefore: String) -> Bool {
+        guard isInCall else { return false }
+        let callIdNow = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        return PeerVideoInviteDecisions.shouldHonorVideoPauseRequest(
+            activeCallId: callIdNow, requestCallId: callIdBefore)
+    }
+
+    /// W-VIDPARITY round 2 — undo a camera pipeline `promoteReceiveOnlyToCamera`
+    /// installed, discovered stale because the call ended/changed while an
+    /// await was in flight. Only touches `videoPipeline` when it is STILL
+    /// the pipeline this attempt itself installed (`!== previousPipeline`)
+    /// — never a later call's own pipeline. Stop/nil order mirrors
+    /// `endCall()`'s teardown (abrController before videoPipeline).
+    @MainActor
+    private func tearDownStalePromotion(previousPipeline: VideoCallPipeline?) {
+        guard let installed = videoPipeline, installed !== previousPipeline else { return }
+        abrController?.stop()
+        abrController = nil
+        installed.stop()
+        videoPipeline = nil
     }
 
     func answerIncomingCall(audioOnly: Bool = false) {

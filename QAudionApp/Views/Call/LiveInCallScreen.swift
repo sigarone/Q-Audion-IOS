@@ -444,6 +444,14 @@ struct LiveInCallScreen: View {
 
     private func handleToggleCamera() {
         let next = !cameraOn
+        // Entitlements Task 5 parity — Android gates this manual toggle too,
+        // not just the mid-call `onUpgradeToVideo` escalation button above.
+        // Same shape as `onUpgradeToVideoLocked` just above: turning OFF is
+        // never gated.
+        if next, !capabilityGate.isUnlocked(.callsVideo) {
+            upgradeSheetCapability = .callsVideo
+            return
+        }
         // W-CAMBTNSRC follow-up (2026-09-08) — a call answered without video
         // (W-VIDPRIVACY `.receiveOnly`) never opens a real `AVCaptureSession`
         // (`VideoCallPipeline.sourceMode == .external`); this button still
