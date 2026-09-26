@@ -115,9 +115,14 @@ public final class LogExportService {
                 out.append(" [")
                 out.append(e.category)
                 out.append("] ")
-                // W-KEYSCRUB: os_log lines from the engine never pass through
-                // RuntimeLogSink.record, so they get the key-material scrub here.
-                out.append(KeyMaterialScrubber.scrubLines(e.composedMessage))
+                // W-KEYSCRUB / Copilot follow-up to #109: os_log lines from the engine
+                // never pass through RuntimeLogSink.record, so route them through the
+                // same structured egress redactor as every other export path here
+                // (RuntimeLogSink.snapshot, ReportCrypto.buildDiagSummary). It already
+                // starts with the key-material scrub and fail-closed, so a bare key
+                // shape LogRedactor's own rules catch (e.g. an unlabelled base64 run)
+                // is no longer left in the clear just because it took the OSLog path.
+                out.append(LogRedactor.redactStructured(e.composedMessage))
                 out.append("\n")
             }
             if entries.isEmpty {
