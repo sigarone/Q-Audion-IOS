@@ -53,7 +53,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// + speaker playback). Starting the engine before this point throws
     /// "Session activation failed" and the call has no audio. AppState
     /// wires this to `CallService.handleAudioSessionActivated()`.
-    public var onAudioSessionActivated: (() -> Void)?
+    ///
+    /// W-ADMGATE (2026-09-26) — now carries WHO activated the session:
+    /// `.callKit` from `provider(_:didActivate:)`, `.selfExpectingCallKit`
+    /// from this app's own activation after a CXStart/CXAnswer action (CallKit's
+    /// didActivate still expected), `.selfManaged` from an activation CallKit
+    /// will never follow (suppressed/foreground answer, wake-only). Only a
+    /// native-SRTP call reads it (WebRTC's own audio unit must start on a
+    /// CallKit-activated session); every other consumer ignores it.
+    public var onAudioSessionActivated: ((AudioSessionActivationSource) -> Void)?
     /// W464 — fired when CallKit released the audio session (call ended
     /// or interrupted). AppState wires this to
     /// `CallService.handleAudioSessionDeactivated()`.
@@ -372,7 +380,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// Reuses the proven answer-time activation (retry + fire
     /// onAudioSessionActivated → CallService restarts the engines if needed).
     public func reactivateAudioSessionForSelfManagedCall() async {
-        await activateAudioSession(logSite: "answer")
+        await activateAudioSession(logSite: "answer", source: .selfManaged)
     }
 
     /// W478 — answer an incoming call via the CallKit CXCallController.
@@ -411,7 +419,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // then onAudioSessionActivated() started the engine on an INACTIVE
             // session → capture.start() failed → silent call. See
             // activateAudioSession(logSite:).
-            await activateAudioSession(logSite: "answer")
+            // W-ADMGATE — CallKit never registered this call: no didActivate.
+            await activateAudioSession(logSite: "answer", source: .selfManaged)
             return
         }
         let action = CXAnswerCallAction(call: uuid)
@@ -480,7 +489,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// assumed) before writing this. `useManualAudio` is still never touched
     /// — this is the automatic-mode-compatible half of the fix, not the
     /// 1053/1056/1066 manual-mode regression class.
-    private func activateAudioSession(logSite: String) async {
+    private func activateAudioSession(logSite: String, source: AudioSessionActivationSource) async {
         let rtcSession = RTCAudioSession.sharedInstance()
         // W-NOMIXOPTION (2026-09-10) — best-practices audit: `.interruptSpoken
         // AudioAndMixWithOthers` is Apple's documented option for apps whose
@@ -565,7 +574,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // see the ledger's own kdoc for why that distinction is the
                 // whole point of this flag).
                 ledger.markAudioSelfActivated()
-                onAudioSessionActivated?()
+                onAudioSessionActivated?(source)
                 return
             } catch {
                 // W-SETACTIVEFAIL (2026-09-10) — the live device trace that
@@ -601,7 +610,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         print("[CallKitProvider] setActive never confirmed after 4 attempts site=\(logSite) — forcing engine start (session may be marginal)")
         // W-GHOSTCALL — no unlock here any more: every failed attempt above has
         // already released the configuration lock before its wait.
-        onAudioSessionActivated?()
+        onAudioSessionActivated?(source)
     }
 
     // MARK: - CXProviderDelegate
@@ -657,7 +666,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // applies unchanged: fulfill() has already closed the start
         // transaction, so setActive(true) no longer races it.
         Task {
-            await activateAudioSession(logSite: "start")
+            // W-ADMGATE — CallKit's own didActivate is still expected.
+            await activateAudioSession(logSite: "start", source: .selfExpectingCallKit)
         }
     }
 
@@ -683,7 +693,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // to self-activate AFTER fulfill: the answer transaction is closed,
             // so setActive(true) no longer hits the "session activation failed"
             // race. Idempotent with didActivate if it does arrive.
-            await activateAudioSession(logSite: "answer")
+            // W-ADMGATE — CallKit's own didActivate is still expected.
+            await activateAudioSession(logSite: "answer", source: .selfExpectingCallKit)
         }
     }
 
@@ -748,7 +759,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
         // W464 — the session is now active: this is the moment
         // CallService may safely start its AVAudioEngine capture/playback.
-        onAudioSessionActivated?()
+        onAudioSessionActivated?(.callKit)
     }
 
     public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {

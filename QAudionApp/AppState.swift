@@ -3946,7 +3946,10 @@ final class AppState: ObservableObject {
             // audio in either direction. These two bridges hand the
             // activation signal to CallService, which then starts /
             // stops its AVAudioEngine capture/playback at the right time.
-            provider.onAudioSessionActivated = { [weak self] in
+            // W-ADMGATE (2026-09-26) — the callback now carries who activated
+            // the session (CallKit's didActivate vs this app's own
+            // activation); CallService only reads it on a native-SRTP call.
+            provider.onAudioSessionActivated = { [weak self] source in
                 Task { @MainActor in
                     guard let self = self else { return }
                     // W-GRPVPIO-CRASH (2026-07-17) — CXProvider's didActivate:
@@ -3980,7 +3983,7 @@ final class AppState: ObservableObject {
                         self.routeGroupCallAudioToSpeaker()
                         return
                     }
-                    self.callService.handleAudioSessionActivated()
+                    self.callService.handleAudioSessionActivated(source: source)
                     self.markOutgoingAudioSessionReady()
                     // W-CALLSPKR (2026-07-20) — same class of gap as
                     // W-GRPSPKR above, different code path: didActivate just

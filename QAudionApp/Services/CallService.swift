@@ -503,7 +503,11 @@ final class CallService: @unchecked Sendable {
         // root cause is diagnosed from the deadtx line it still emits.
         let ptxNow = getAudioRtpPacketsSent?() ?? -1
         let txDead = rtpTx < 0 || (ptxNow >= 0 && ptxNow == srtpLastPtxSample && ptxNow == 0)
-        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true,
+        // W-ADMGATE (2026-09-26) — on a manual-mode call the unit is started
+        // by the gate, possibly up to `callKitActivationWaitMs` after the
+        // answer: do not charge those beats as a dead sender.
+        let nativeUnitMayRun: Bool = !NativeAudioSessionGate.isArmed || NativeAudioSessionGate.isNativeAudioEnabled
+        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true, nativeUnitMayRun,
            peerAnswered, audioSessionActive, !audioSrtpFallbackActive, txDead {
             srtpDeadTxBeats &+= 1
             // W-DEADTXNET retune (2026-09-02) — live evidence tonight: 3
@@ -961,7 +965,12 @@ final class CallService: @unchecked Sendable {
     /// reads of two Bools on this `@unchecked Sendable` class, same class of
     /// access as every other live getter the controller already uses.
     public var isNativeCaptureExpectedLive: Bool {
-        CaptureLiveDecisions.gateOpen(audioSessionActive: audioSessionActive, peerAnswered: peerAnswered)
+        // W-ADMGATE (2026-09-26) — on a manual-mode (native-SRTP) call nothing
+        // can capture before the gate enabled WebRTC's unit, so the check
+        // waits for that too. Unchanged on every other call.
+        let unitMayRun: Bool = !NativeAudioSessionGate.isArmed || NativeAudioSessionGate.isNativeAudioEnabled
+        return unitMayRun
+            && CaptureLiveDecisions.gateOpen(audioSessionActive: audioSessionActive, peerAnswered: peerAnswered)
     }
     /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
     /// open; `.useRelay` = fall back to the WS relay. Wired by AppState to
@@ -2080,10 +2089,21 @@ final class CallService: @unchecked Sendable {
 
         let pipeline = AudioProcessingPipeline()
         pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
-        do {
-            try pipeline.configureForVoIP()
-        } catch {
-            print("[CallService] activateIncomingCallAudio: AVAudioSession config failed: \(error.localizedDescription)")
+        // W-ADMVOIPCFG (2026-09-26) — on a native-SRTP call (armed AND
+        // negotiated, both known at the callee's answer) the custom path's
+        // raw AVAudioSession configuration + best-effort setActive is skipped:
+        // the custom engine does not run on this call, and WebRTC applies the
+        // identical configuration itself when its unit is enabled. If the
+        // relay fallback later starts AudioCapture, `AudioCapture.start()`
+        // runs `configureForVoIP()` itself (the pipeline is not configured).
+        if NativeAudioSessionGate.isArmed, getUsesNativeAudioSrtp?() == true {
+            RTLog.info("call", "admgate voipcfg=0")
+        } else {
+            do {
+                try pipeline.configureForVoIP()
+            } catch {
+                print("[CallService] activateIncomingCallAudio: AVAudioSession config failed: \(error.localizedDescription)")
+            }
         }
         self.audioPipeline = pipeline
 
@@ -3248,6 +3268,12 @@ final class CallService: @unchecked Sendable {
     /// turn the later `recoverAudioSrtpFallback` into a no-op that never
     /// un-mutes it (adversarial review of the fix, 2026-09-08).
     private func teardownAudioStack(resetSrtpFallback: Bool = true, resetDcCounters: Bool = false) {
+        // W-ADMGATE (2026-09-26) — FIRST: WebRTC's own audio unit off before
+        // anything else is torn down (and, on the end-call path, before
+        // AppState closes the PeerConnection). No-op unless a native-SRTP call
+        // armed manual mode and the unit is enabled.
+        NativeAudioSessionGate.setNativeAudioActive(
+            false, reason: NativeAudioUnitGateDecisions.ChangeReason.teardown.rawValue)
         // Diagnostic: emit the REAL audio frame counters BEFORE they reset.
         // call.media.summary's `suspect_silent` is a timer-only heuristic and
         // says nothing about audio — these counters are the ground truth that
@@ -3653,6 +3679,7 @@ final class CallService: @unchecked Sendable {
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
+        resetNativeAudioUnitGateState()  // W-ADMGATE — per-call source/wait state
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
         capfailRetryArmed = false  // W-CAPFAILRETRY — one retry per call
         if resetSrtpFallback {
@@ -3803,6 +3830,10 @@ final class CallService: @unchecked Sendable {
                     + " rec=\(sess.isInputAvailable ? 1 : 0)"
                     + " buf=\(Int(sess.ioBufferDuration * 1000))"
             )
+            // W-ADMGATE (2026-09-26) — this branch is now also THE place
+            // WebRTC's own audio unit is switched on (manual audio mode,
+            // native-SRTP calls only; see NativeAudioSessionGate).
+            applyNativeAudioUnitGate(reason: .gate)
             return
         }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
@@ -4010,6 +4041,82 @@ final class CallService: @unchecked Sendable {
         }
     }
 
+    // MARK: - W-ADMGATE (2026-09-26) — WebRTC's own audio unit (manual mode)
+
+    /// Who activated the session for the call in progress (merged, see
+    /// `NativeAudioUnitGateDecisions.mergedSource`). Reset with the session.
+    private var audioActivationSource: AudioSessionActivationSource = .none
+    /// Set once `callKitActivationWaitMs` passed after a self-activation that
+    /// still expected CallKit's didActivate.
+    private var nativeUnitCallKitWaitExpired = false
+    private var nativeUnitCallKitWaitItem: DispatchWorkItem?
+    /// Last verdict logged, so the `admgate v=` line is emitted on change only.
+    private var lastLoggedNativeUnitVerdict: Int = -1
+
+    private func resetNativeAudioUnitGateState() {
+        audioActivationSource = .none
+        nativeUnitCallKitWaitExpired = false
+        nativeUnitCallKitWaitItem?.cancel()
+        nativeUnitCallKitWaitItem = nil
+        lastLoggedNativeUnitVerdict = -1
+    }
+
+    /// Items 4/6 — the ONLY place `isAudioEnabled` becomes `true`. No-op on
+    /// any call that did not arm manual mode (native SRTP off for the call):
+    /// the custom path stays exactly as it was. Main thread.
+    private func applyNativeAudioUnitGate(reason: NativeAudioUnitGateDecisions.ChangeReason) {
+        guard NativeAudioSessionGate.isArmed else { return }
+        let verdict = NativeAudioUnitGateDecisions.verdict(
+            nativeSnapshot: true,
+            negotiated: getUsesNativeAudioSrtp?() == true,
+            fallbackActive: audioSrtpFallbackActive,
+            sessionActive: audioSessionActive,
+            answered: peerAnswered,
+            source: audioActivationSource,
+            callKitWaitExpired: nativeUnitCallKitWaitExpired)
+        if verdict.rawValue != lastLoggedNativeUnitVerdict {
+            lastLoggedNativeUnitVerdict = verdict.rawValue
+            let verdictCode: Int = verdict.rawValue
+            let sourceCode: Int = audioActivationSource.rawValue
+            let waitedFlag: Int = nativeUnitCallKitWaitExpired ? 1 : 0
+            RTLog.info("call", "admgate v=\(verdictCode) src=\(sourceCode) ckwait=\(waitedFlag)")
+        }
+        switch verdict {
+        case .enable:
+            // Never two VoiceProcessingIO units: the custom engine must be
+            // fully stopped before WebRTC's starts. It normally never runs on
+            // a native call (this branch skips it); it can only be up if it
+            // started before the negotiation landed, or from a fallback.
+            if let capture = audioCapture, capture.isCapturing {
+                capture.stop(deactivateSession: false)
+                audioEnginesStarted = false
+                RTLog.info("call", "admgate capstop=1")
+            }
+            NativeAudioSessionGate.setNativeAudioActive(true, reason: reason.rawValue)
+        case .awaitingCallKit:
+            scheduleNativeUnitCallKitWait()
+        default:
+            break
+        }
+    }
+
+    /// Bounded wait for CallKit's own didActivate after a self-activation of a
+    /// CallKit-managed call (see `NativeAudioUnitGateDecisions.callKitActivationWaitMs`).
+    private func scheduleNativeUnitCallKitWait() {
+        guard nativeUnitCallKitWaitItem == nil, !nativeUnitCallKitWaitExpired else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.nativeUnitCallKitWaitItem = nil
+            guard NativeAudioSessionGate.isArmed else { return }
+            self.nativeUnitCallKitWaitExpired = true
+            RTLog.info("call", "admgate ckwait=1 expired=1")
+            self.startAudioIOIfReady()
+        }
+        nativeUnitCallKitWaitItem = item
+        let waitMs = Int(NativeAudioUnitGateDecisions.callKitActivationWaitMs)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(waitMs), execute: item)
+    }
+
     /// W-SRTPFALLBACK (2026-08-26) — re-engage the manual capture/decode
     /// path while a native-audio-srtp call's ICE has been down for the full
     /// debounce (`SrtpFallbackDecisions`, wired from
@@ -4037,6 +4144,25 @@ final class CallService: @unchecked Sendable {
         // genuinely is down (nothing to release) and the missing half of
         // the fix when it is not.
         muteNativeAudioSrtpSender?(true)
+        // W-ADMFALLBACK (2026-09-26) — muting the track never stopped
+        // WebRTC's VoiceProcessingIO unit, so the custom AudioCapture started
+        // below ran a SECOND VoiceProcessingIO next to it (the 'what' /
+        // `in=` empty capfail of W-SRTPFBRESET's evidence). On a manual-mode
+        // call the unit is switched off first. The stop is applied by WebRTC
+        // asynchronously on its own audio thread with no completion signal,
+        // so AudioCapture starts after a bounded settle instead of at once
+        // (conservative: the fork's stop latency is not determinable here).
+        let unitStopped = NativeAudioSessionGate.setNativeAudioActive(
+            false, reason: NativeAudioUnitGateDecisions.ChangeReason.fallbackEngage.rawValue)
+        if unitStopped {
+            let settleMs = Int(NativeAudioUnitGateDecisions.fallbackUnitStopSettleMs)
+            RTLog.info("call", "admgate fbsettle=\(settleMs)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(settleMs)) { [weak self] in
+                guard let self, self.audioSrtpFallbackActive else { return }
+                self.startAudioIOIfReady()
+            }
+            return
+        }
         startAudioIOIfReady()
     }
 
@@ -4051,24 +4177,55 @@ final class CallService: @unchecked Sendable {
         // only the manual fallback engine is stepping aside for native
         // audio-srtp to resume. Deactivating the shared session mid-call
         // would tear down its category/mode for no reason.
+        // `stop()` tears VoiceProcessingIO down synchronously
+        // (`CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled` is a
+        // compile-time `false`), so the custom unit is gone before WebRTC's is
+        // switched back on below.
         audioCapture?.stop(deactivateSession: false)
         audioEnginesStarted = false
         // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
         // sole TX/RX owner, same as this function's own doc already says.
-        muteNativeAudioSrtpSender?(false)
+        // W-NATIVEMUTE (2026-09-26) — honouring the user's own mute.
+        muteNativeAudioSrtpSender?(isMuted)
+        // W-ADMFALLBACK — native unit back on (same verdict as the call start).
+        applyNativeAudioUnitGate(reason: .fallbackRecover)
     }
 
     /// W464 — CallKit activated the shared `AVAudioSession`. This is the
     /// only safe moment to spin up the mic-capture / speaker-playback
     /// `AVAudioEngine`s. Wired from `AppState` to
     /// `CallKitProvider.onAudioSessionActivated`. Runs on the main thread.
-    public func handleAudioSessionActivated() {
+    ///
+    /// W-ADMGATE (2026-09-26) — `source` says who activated the session (see
+    /// `AudioSessionActivationSource`). The default `.selfManaged` keeps every
+    /// pre-existing caller (CallKit-free mode, CallKit failure fallbacks, the
+    /// W469 self-activation) meaning what it meant; `CallKitProvider` passes
+    /// the real source. Only a manual-mode (native-SRTP) call reads it.
+    public func handleAudioSessionActivated(source: AudioSessionActivationSource = .selfManaged) {
         audioSessionActive = true
+        let merged = NativeAudioUnitGateDecisions.mergedSource(current: audioActivationSource, incoming: source)
+        audioActivationSource = merged
+        if NativeAudioSessionGate.isArmed {
+            let incomingCode: Int = source.rawValue
+            let mergedCode: Int = merged.rawValue
+            RTLog.info("call", "admgate sess=1 src=\(incomingCode) merged=\(mergedCode)")
+            // A self-managed RE-activation while the unit runs is the wake-only
+            // path: CallKit released the session under the running unit
+            // (didDeactivate is not routed here for a self-managed call), so
+            // the unit is restarted on the re-activated session.
+            if source == .selfManaged, NativeAudioSessionGate.isNativeAudioEnabled {
+                NativeAudioSessionGate.setNativeAudioActive(
+                    false, reason: NativeAudioUnitGateDecisions.ChangeReason.selfManagedReactivation.rawValue)
+            }
+        }
         // W-ADMNOMANUAL (2026-08-31) — nothing is relayed to RTCAudioSession
         // here any more; the app's own session config plus WebRTC's automatic
         // audio-unit management is the arrangement that shipped with a healthy
         // session. NativeAudioSessionGate documents every variant that was
         // tried in between and what each one measured.
+        // W-ADMGATE (2026-09-26) — superseded for native-SRTP calls only: the
+        // unit's start/stop is decided in `startAudioIOIfReady`'s native
+        // branch (`applyNativeAudioUnitGate`).
         startAudioIOIfReady()
         // EARPIECE is the default route for an encrypted phone call (user
         // requirement: "gestire il volume della capsula telefonica; lo speaker
@@ -4093,7 +4250,13 @@ final class CallService: @unchecked Sendable {
         // pulled so far. One line, so the next back-to-back test either
         // shows the clash or rules it out.
         RTLog.info("call", "audioSessionDeactivated callId=" + Self.short8(getCallId?()))
+        // W-ADMGATE (2026-09-26) — FIRST: WebRTC's unit off with the session
+        // (the reference implementations do exactly this at didDeactivate).
+        // No-op unless a native-SRTP call armed manual mode.
+        NativeAudioSessionGate.setNativeAudioActive(
+            false, reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
         audioSessionActive = false
+        resetNativeAudioUnitGateState()
     }
 
     /// W574 — called by AppState when `call_answer` is received (callee has
