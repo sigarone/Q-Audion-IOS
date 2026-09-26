@@ -9663,6 +9663,10 @@ final class AppState: ObservableObject {
             }
             let payload: [String: Any] = ["group_id": entry.groupId,
                                           "server_message_id": entry.serverMessageId]
+            // `trySend` true means `URLSessionWebSocketTask.send` was invoked
+            // (acceptance is synchronous). A transport error reported later
+            // by the send completion is not observed here, so an entry
+            // removed on true can still be lost in flight.
             guard ws.trySend(type: frameType, data: payload) else { break }
             handled.append(entry)
         }

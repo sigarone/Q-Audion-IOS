@@ -1357,10 +1357,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// is no task (the socket is not connected), the socket was found stale (a
     /// reconnect is kicked and the frame is still attempted best-effort, but
     /// it is not reported as accepted), or a media frame hit the outbound
-    /// backpressure cap. `true` is a synchronous acceptance only: the OS
-    /// reports a transmission error later, through the completion handler, so
-    /// it is not a delivery guarantee. Callers that must not lose a frame (a
-    /// durable outbox) remove it from their queue only on `true`.
+    /// backpressure cap. `true` means `URLSessionWebSocketTask.send` was
+    /// invoked for the frame: acceptance is synchronous. A transmission error
+    /// the OS reports later, through the send completion handler, is only
+    /// logged and is not observed by the caller, so a frame reported as
+    /// accepted can still be lost; `true` is not a delivery guarantee.
+    /// Callers that must not lose a frame (a durable outbox) remove it from
+    /// their queue only on `true`.
     @discardableResult
     public func trySend(type: String, data: [String: Any]) -> Bool {
         let message: [String: Any] = [
