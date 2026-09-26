@@ -1509,6 +1509,22 @@ final class CallService: @unchecked Sendable {
     /// Set/cleared by the CallKit mute bridge. Must be called on the main thread.
     public func setMuted(_ muted: Bool) {
         self.isMuted = muted
+        // W-NATIVEMUTE (2026-09-26) — this used to gate ONLY the custom path's
+        // PCM (`processAndSendEncryptedFrame`): on a native-SRTP call the
+        // in-app mute button and CallKit's mute action left the RTP mic
+        // track sending. Forwarded to the native track now, native calls
+        // only (`isArmed`). Unmute is held back before the answer (the
+        // W-MICBEFOREACCEPT-NATIVE gate unmutes at accept, honouring
+        // `isMuted`) and while the relay fallback owns the mic.
+        guard NativeAudioSessionGate.isArmed else { return }
+        if muted {
+            muteNativeAudioSrtpSender?(true)
+        } else if peerAnswered, !audioSrtpFallbackActive {
+            muteNativeAudioSrtpSender?(false)
+        }
+        let mutedFlag: Int = muted ? 1 : 0
+        let answeredFlag: Int = peerAnswered ? 1 : 0
+        RTLog.info("call", "nativemute mute=\(mutedFlag) ans=\(answeredFlag)")
     }
 
     /// Feature B ("voce verificata") — start learning `contactId`'s voice
@@ -2174,7 +2190,8 @@ final class CallService: @unchecked Sendable {
         // audio-srtp track (activated at ring time, see
         // QAudionPeerConnection.pendingAudioSrtpMuted's kdoc) has its own,
         // separate mute latch and needs its own explicit unblock here.
-        muteNativeAudioSrtpSender?(false)
+        // W-NATIVEMUTE (2026-09-26) — honour a mute the user set while ringing.
+        muteNativeAudioSrtpSender?(isMuted)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
@@ -4271,7 +4288,8 @@ final class CallService: @unchecked Sendable {
         // the same native audio-srtp unmute, gated on the SAME genuine
         // accept as the legacy mic (this method's only call site is
         // `finalizeCallActive()`).
-        muteNativeAudioSrtpSender?(false)
+        // W-NATIVEMUTE (2026-09-26) — honour a mute the user set while ringing.
+        muteNativeAudioSrtpSender?(isMuted)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // W574b — post-answer W469 fallback. The 1.5s timer in startCall
