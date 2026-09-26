@@ -121,7 +121,7 @@ struct CallsSettingsScreen: View {
                                 }
                             )
                         )
-                        warningHint("Funzione sperimentale, non ancora verificata su chiamate reali: può causare audio assente o instabile durante la chiamata. Cifra i frame end-to-end; l'impostazione non è salvata (torna disattivata al riavvio dell'app) e ha effetto dalla prossima chiamata.")
+                        warningHint("Funzione sperimentale: se l'audio risulta assente o instabile, disattivala (ha effetto dalla prossima chiamata). Cifra i frame end-to-end; l'impostazione non è salvata e torna disattivata al riavvio dell'app.")
                     }
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
