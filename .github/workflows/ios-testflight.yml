@@ -33,6 +33,38 @@
 # For unlimited free macOS minutes, make the repo public (sensitive
 # Q-Audion code is encrypted-by-design, but server URLs and bundle
 # id would become discoverable).
+#
+# --- Opt-in "dev tools" TestFlight build (workflow_dispatch only) ---------
+# A normal tag push (`v*`) is UNCHANGED by this: QAUDION_DEV_TOOLS stays off,
+# the store-readiness gates all run exactly as before. To get a build with
+# the Settings "SVILUPPATORE" section (and every other TestFlight-facing
+# surface normally compiled out) for internal testing, dispatch manually
+# with the new `dev_tools` input set to true:
+#
+#   gh workflow run ios-testflight.yml -f tag=vX -f dev_tools=true
+#
+# `tag` must name an existing tag on main (same rule as any other manual
+# dispatch -- see the "Bump version" step). What changes when dev_tools=true:
+#   - QAUDION_DEV_TOOLS is injected into the QAudionApp target's
+#     SWIFT_ACTIVE_COMPILATION_CONDITIONS before `xcodegen generate` runs
+#     (see "Patch project.yml for dev tools build" step) -- app target only,
+#     $(inherited) and any other condition (e.g. QAUDION_CARPLAY) untouched.
+#   - The store-readiness gate that fails the build on TestFlight-only
+#     strings (itms-beta:// / testflight.apple.com) in the shipped binary is
+#     skipped -- that string IS expected to be present once dev tools are
+#     compiled in. Every other gate (privacy manifests, the WebRTC
+#     key-material logging gate) still runs and can still fail the build.
+#   - The build number still comes from the normal ASC-latest+1 (or
+#     commit-count fallback) logic, so it is always higher than, and never
+#     collides with, any prior upload for this app -- dev or store. The
+#     dSYM archive and the job step summary get a "-dev" marketing-version
+#     suffix (display only; the actual CFBundleShortVersionString/
+#     CFBundleVersion written to Info.plist are untouched, to avoid any
+#     App Store Connect version-string validation surprises) so the two
+#     kinds of build are never visually confused, and a loud `::warning::`
+#     plus a job-summary banner remind whoever is looking at the run that
+#     a dev_tools build must NEVER be submitted for App Store review.
+# ---------------------------------------------------------------------------
 
 name: TestFlight build
 
@@ -51,6 +83,26 @@ on:
         required: false
         type: boolean
         default: false
+      dev_tools:
+        description: 'DEV BUILD (internal testing only): compile in QAUDION_DEV_TOOLS (Settings "SVILUPPATORE" section + other TestFlight-facing surfaces) and skip the store-readiness TestFlight-strings gate. Never submit a build made with this on for App Store review. Ignored on a tag push -- workflow_dispatch only.'
+        required: false
+        type: boolean
+        default: false
+
+# Serialize the whole job across EVERY trigger (tag push AND workflow_dispatch,
+# dev_tools or not) -- a single static group, not per-ref/per-tag. Reason: the
+# "Bump version" step reads "latest TestFlight build number" from App Store
+# Connect and writes latest+1; two runs in flight at once (e.g. a tag push
+# landing while someone dispatches a dev_tools build) could read the SAME
+# latest value and produce two builds claiming the same build number, which
+# altool then either rejects as a redundant/duplicate binary or -- worse --
+# silently races on who uploads first. `cancel-in-progress: false` is
+# mandatory here: this queues a second run behind the first (never cancels
+# it), so a tag build already uploading to TestFlight is never killed by a
+# later dispatch (or another tag push) landing on top of it.
+concurrency:
+  group: ios-testflight-upload
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -232,6 +284,67 @@ jobs:
           cache: false
 
       # ----------------------------------------------------------
+      # 3c) DEV BUILD opt-in (workflow_dispatch `dev_tools=true` only --
+      #     never runs on a tag push, see the `if:` guard). Injects
+      #     QAUDION_DEV_TOOLS into the QAudionApp TARGET ONLY (never the
+      #     QAudionPacketTunnel / QAudionBroadcastExtension / QAudionIntents
+      #     extension targets, which don't declare the flag at all) before
+      #     `xcodegen generate` runs, so the generated .xcodeproj already has
+      #     it. The regex isolates the "  QAudionApp:" block up to the next
+      #     top-level target key and only edits the FIRST
+      #     SWIFT_ACTIVE_COMPILATION_CONDITIONS line inside it (the real
+      #     setting on line ~121; a later line matching the same text only
+      #     appears inside a comment, which never starts with the bare
+      #     keyword at column 0 of its stripped indentation, so it can't
+      #     match). $(inherited) and any other already-present condition
+      #     (e.g. QAUDION_CARPLAY on a branch that enables it) are preserved
+      #     -- the new token is appended, nothing is replaced.
+      # ----------------------------------------------------------
+      - name: Patch project.yml for dev tools build (opt-in)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dev_tools == 'true' }}
+        working-directory: QAudionApp
+        run: |
+          set -e
+          python3 - <<'PY'
+          import re
+          import sys
+
+          path = "project.yml"
+          with open(path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          m = re.search(r'(?m)^  QAudionApp:\n(.*?)(?=^  [A-Za-z])', text, re.S)
+          if not m:
+              print("::error::could not locate QAudionApp target block in project.yml")
+              sys.exit(1)
+          block = m.group(1)
+
+          line_re = re.compile(r'(?m)^(\s*SWIFT_ACTIVE_COMPILATION_CONDITIONS:\s*)(.*)$')
+          lm = line_re.search(block)
+          if not lm:
+              print("::error::could not locate SWIFT_ACTIVE_COMPILATION_CONDITIONS in the QAudionApp target settings")
+              sys.exit(1)
+
+          tokens = lm.group(2).strip().split()
+          if "QAUDION_DEV_TOOLS" in tokens:
+              print("QAUDION_DEV_TOOLS already present in SWIFT_ACTIVE_COMPILATION_CONDITIONS -- no change")
+          else:
+              tokens.append("QAUDION_DEV_TOOLS")
+              new_line = lm.group(1) + " ".join(tokens)
+              block = block[:lm.start()] + new_line + block[lm.end():]
+              text = text[:m.start(1)] + block + text[m.end(1):]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(text)
+              print("Injected QAUDION_DEV_TOOLS into the QAudionApp target's SWIFT_ACTIVE_COMPILATION_CONDITIONS")
+
+          print("=== Resulting QAudionApp compilation-condition line ===")
+          for l in block.splitlines():
+              if "SWIFT_ACTIVE_COMPILATION_CONDITIONS" in l and not l.strip().startswith("#"):
+                  print(l)
+          PY
+          echo "::warning::DEV TOOLS BUILD -- QAUDION_DEV_TOOLS is compiled in (Settings SVILUPPATORE section + TestFlight-facing surfaces enabled). This build must NEVER be submitted for App Store review."
+
+      # ----------------------------------------------------------
       # 4) Generate the Xcode project from project.yml.
       # ----------------------------------------------------------
       - name: Generate Xcode project
@@ -261,6 +374,8 @@ jobs:
           # Referencing $TAG_INPUT below is a normal shell variable read —
           # its value can never be reinterpreted as script syntax.
           TAG_INPUT: ${{ github.event.inputs.tag }}
+          # Same env-indirection rule for dev_tools (see SEC note above).
+          DEV_TOOLS_INPUT: ${{ github.event.inputs.dev_tools }}
         run: |
           set -e
           # Marketing version from tag (strip leading "v" + any "-suffix").
@@ -305,9 +420,23 @@ jobs:
           set -e
           BUILD_SOURCE="asc"
           if [ "$rc" -ne 0 ] || [ -z "$LATEST" ]; then
-            echo "WARN: ASC fetch failed/timed out (rc=$rc), falling back to commit count"
+            # Fail CLOSED for a dev_tools dispatch instead of falling back to
+            # the commit-count heuristic: that count is only guaranteed to be
+            # HIGHER than every prior build number when every prior build was
+            # also built from a strictly later commit on a linear main-branch
+            # history. A dev dispatch breaks that assumption on purpose (e.g.
+            # dispatching an OLDER tag for a quick internal build while newer
+            # commits already exist on main), so `git rev-list --count HEAD`
+            # here could be LOWER than a build number already on TestFlight --
+            # exactly the collision this workflow exists to prevent. Refuse
+            # rather than guess; a normal tag build keeps today's fallback.
+            if [ "${DEV_TOOLS_INPUT:-false}" = "true" ]; then
+              echo "::error::ASC get-latest-testflight-build-number failed/timed out (rc=$rc) on a dev_tools dispatch — refusing to fall back to the commit-count heuristic, which is not guaranteed to be higher than an already-uploaded build number for a non-HEAD tag. Re-run once App Store Connect is reachable." >&2
+              exit 1
+            fi
             LATEST=$(git rev-list --count HEAD)
             BUILD_SOURCE="commit-count"
+            echo "::warning::ASC get-latest-testflight-build-number failed/timed out (rc=$rc) — falling back to commit count ($LATEST). Safe for the normal linear tag-on-main history this pipeline assumes; if history was rewritten/rebased, verify the upload step below doesn't report a redundant/duplicate binary."
           fi
           NEW_BUILD=$((LATEST + 1))
           echo "Build number = $NEW_BUILD (source: $BUILD_SOURCE)"
@@ -349,6 +478,37 @@ jobs:
           # Additive only -- reads values already written to Info.plist above.
           echo "marketing_version=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
           echo "build_number=$NEW_BUILD"             >> "$GITHUB_OUTPUT"
+
+          # DEV BUILD identification. The build number above is already
+          # guaranteed unique and higher than any prior upload (ASC
+          # latest+1, or the monotonic commit count as fallback) regardless
+          # of dev_tools -- re-dispatching the SAME tag with dev_tools=true
+          # cannot collide with, or be mistaken for, an earlier upload of
+          # that tag purely on build number. What it CAN still be confused
+          # with is the MARKETING_VERSION, which would read identically
+          # ("$MARKETING_VERSION") for a store build and a dev build of the
+          # same tag. Info.plist itself is left untouched (CFBundleShortVersionString/
+          # CFBundleVersion stay pure numeric -- no "-dev" suffix there, to
+          # avoid any App Store Connect version-string validation surprise
+          # on an artifact that might later get re-tagged/reused); the
+          # "-dev" marker instead goes into a DISPLAY-only string used for
+          # the dSYM artifact name and this run's job summary.
+          MARKETING_VERSION_DISPLAY="$MARKETING_VERSION"
+          if [ "${DEV_TOOLS_INPUT:-false}" = "true" ]; then
+            MARKETING_VERSION_DISPLAY="${MARKETING_VERSION}-dev"
+            echo "::warning::DEV TOOLS BUILD -- version $MARKETING_VERSION_DISPLAY (build $NEW_BUILD). Compiled WITH QAUDION_DEV_TOOLS for internal testing. This build must NEVER be submitted for App Store review."
+            {
+              echo "### :warning: DEV TOOLS build"
+              echo ""
+              echo "- Marketing version: \`$MARKETING_VERSION\` (tag \`$GIT_TAG\`)"
+              echo "- Build number: \`$NEW_BUILD\` (source: \`$BUILD_SOURCE\`)"
+              echo "- QAUDION_DEV_TOOLS: **ON** -- Settings \"SVILUPPATORE\" section and other TestFlight-facing surfaces are compiled in."
+              echo "- Store-readiness TestFlight-strings gate: **skipped** (expected -- see the \"Patch onnxruntime + re-sign\" step)."
+              echo ""
+              echo "**Do not submit this build for App Store review.** It is for TestFlight internal testing only."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "marketing_version_display=$MARKETING_VERSION_DISPLAY" >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------
       # 6) Set up signing -- fetch or create Distribution cert + App
@@ -853,6 +1013,10 @@ jobs:
       #    Info.plist contains, so this step is version-agnostic.
       # ----------------------------------------------------------
       - name: Patch onnxruntime + re-sign
+        env:
+          # SEC (Aikido, 2026-08-21): env indirection, same rule as the
+          # "Bump version" step's TAG_INPUT/DEV_TOOLS_INPUT above.
+          DEV_TOOLS_INPUT: ${{ github.event.inputs.dev_tools }}
         run: |
           set -e
           IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
@@ -913,7 +1077,17 @@ jobs:
             fi
             plutil -lint "$MANIFEST"
           done
-          if strings "$APP/QAudionApp" | grep -qiE "itms-beta://|testflight\.apple\.com"; then
+          # TestFlight-strings gate: skipped ONLY for an explicit dev_tools
+          # dispatch (QAUDION_DEV_TOOLS was deliberately compiled in by the
+          # "Patch project.yml for dev tools build" step earlier in this
+          # job, so the itms-beta/testflight.apple.com strings ARE expected
+          # here). A tag push never sets DEV_TOOLS_INPUT=true, so this gate
+          # runs exactly as before for every store build. Every OTHER gate
+          # (privacy manifests above, the WebRTC key-material logging gate
+          # below) still runs unconditionally.
+          if [ "${DEV_TOOLS_INPUT:-false}" = "true" ]; then
+            echo "::warning::store-readiness TestFlight-strings gate SKIPPED (dev_tools build) — itms-beta/testflight.apple.com strings are expected in this binary. This build must NEVER be submitted for App Store review."
+          elif strings "$APP/QAudionApp" | grep -qiE "itms-beta://|testflight\.apple\.com"; then
             echo "::error::TestFlight-only surface compiled into the store binary (itms-beta / testflight.apple.com string found) — QAUDION_DEV_TOOLS must be OFF for a tag build"
             exit 1
           fi
@@ -1146,7 +1320,11 @@ jobs:
           # (e.g. the build failed before the Bump version step ran).
           # `||` returns the right operand when the left is the empty
           # string -- this IS the correct GitHub Actions fallback idiom.
-          name: dsyms-${{ steps.version.outputs.marketing_version || github.run_number }}
+          # marketing_version_display carries a "-dev" suffix on a dev_tools
+          # dispatch (see "Bump version" step) so a dev dSYM archive can
+          # never be confused with, or overwrite, the store archive for the
+          # same tag.
+          name: dsyms-${{ steps.version.outputs.marketing_version_display || steps.version.outputs.marketing_version || github.run_number }}
           # STATIC path glob -- never a cross-step env var. The collect
           # step always creates dsyms-out/, so this input is never empty.
           path: dsyms-out/*
