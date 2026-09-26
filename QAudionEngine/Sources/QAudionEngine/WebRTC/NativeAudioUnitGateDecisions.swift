@@ -1,0 +1,167 @@
+import Foundation
+
+/// W-ADMGATE (2026-09-26) — who activated the shared `AVAudioSession` for the
+/// call in progress. The native-SRTP audio unit (WebRTC's own VoiceProcessingIO,
+/// gated by `RTCAudioSession.isAudioEnabled` in manual audio mode) may only be
+/// started on a session CallKit itself has activated, or on one CallKit will
+/// never activate — never on the app's own early self-activation of a
+/// CallKit-managed call, which is the pre-priority session the reference
+/// implementations deliberately never start the unit on.
+///
+/// Raw values are the numeric `src=` field of the `admgate` log lines.
+public enum AudioSessionActivationSource: Int, Sendable, Equatable {
+    /// Nothing activated the session for this call yet (or it was deactivated).
+    case none = 0
+    /// `CXProviderDelegate.provider(_:didActivate:)` — CallKit's own,
+    /// priority-elevated activation.
+    case callKit = 1
+    /// This app's own locked `setActive(true)` right after a CXStartCallAction
+    /// or CXAnswerCallAction was fulfilled: CallKit's `didActivate` is still
+    /// expected to follow for the same call.
+    case selfExpectingCallKit = 2
+    /// This app's own activation of a call CallKit will never activate: the
+    /// suppressed/foreground-answer path, the wake-only self-managed session,
+    /// CallKit-free mode, or a CallKit failure fallback.
+    case selfManaged = 3
+}
+
+/// W-ADMGATE (2026-09-26) — pure decisions for the native-SRTP audio-unit
+/// lifecycle (manual audio mode). No WebRTC / AVFoundation / clock state, so
+/// every branch is pinned by `NativeAudioUnitGateDecisionsTests`.
+///
+/// ## The rule
+///
+/// WebRTC's own audio unit may run only when ALL of these hold:
+/// 1. the call's native-SRTP snapshot is on (otherwise manual mode was never
+///    armed and there is no m=audio: the custom path owns audio, untouched);
+/// 2. the peer negotiated `audio-srtp-v1`;
+/// 3. the relay fallback is not engaged (then the custom `AudioCapture` owns
+///    the mic and two VoiceProcessingIO units must never run together);
+/// 4. the session is active;
+/// 5. the call is answered — incoming: the local accept, outgoing: the remote
+///    answer (the reference implementations enable at `didActivate` for an
+///    incoming call and at the remote answer for an outgoing one; with the
+///    session-active condition above, "answered" covers both directions);
+/// 6. the activation came from CallKit, or from a self-managed session, or
+///    CallKit's own `didActivate` has been waited for long enough
+///    (``callKitActivationWaitMs``): CallKit is known to skip `didActivate`
+///    for a session a previous call left active (W-CKSTARTACTIVATE), and a
+///    call that never starts its unit is the one outcome worse than starting
+///    it on a self-activated session.
+public enum NativeAudioUnitGateDecisions {
+
+    /// Why the unit may (0) or may not start. Raw values are the numeric
+    /// `why=` field of the `admgate` log lines.
+    public enum Verdict: Int, Sendable, Equatable {
+        case enable = 0
+        case notNativeCall = 1
+        case notNegotiated = 2
+        case fallbackActive = 3
+        case noSession = 4
+        case notAnswered = 5
+        case awaitingCallKit = 6
+    }
+
+    /// Why the unit was switched on or off. Raw values are the numeric `why=`
+    /// field of the `admgate en=` lines (the verdict codes above are logged
+    /// under `v=`, so the two never share a field).
+    public enum ChangeReason: Int, Sendable, Equatable {
+        /// `CallService.startAudioIOIfReady`'s native branch, verdict `.enable`.
+        case gate = 1
+        /// CallKit `didDeactivate` (`CallService.handleAudioSessionDeactivated`).
+        case sessionDeactivated = 2
+        /// `CallService.teardownAudioStack` (call end, defensive teardowns).
+        case teardown = 3
+        /// Relay fallback engaged: the custom `AudioCapture` takes the mic.
+        case fallbackEngage = 4
+        /// Relay fallback recovered: the native unit takes the mic back.
+        case fallbackRecover = 5
+        /// W-CAPTURELIVE nudge (stop, then start the unit again).
+        case captureLiveNudge = 6
+        /// `QAudionPeerConnection.close()`, before `pc.close()` (backstop).
+        case peerConnectionClose = 7
+        /// A self-managed re-activation while the unit was enabled (the
+        /// wake-only path after CallKit released the session): restart it.
+        case selfManagedReactivation = 8
+    }
+
+    /// How long a `.selfExpectingCallKit` activation waits for CallKit's own
+    /// `didActivate` before the unit is started anyway. Heuristic (no
+    /// platform signal says "CallKit will not call didActivate"): the
+    /// existing W469 self-activation fallback waits 1 s after the answer for
+    /// the same event; this is that plus margin.
+    public static let callKitActivationWaitMs: Int64 = 1_500
+
+    /// Settle time between disabling the native unit and starting the custom
+    /// `AudioCapture` (relay fallback). `isAudioEnabled = false` is applied by
+    /// WebRTC asynchronously on its own audio thread and exposes no
+    /// completion signal, so the stop cannot be awaited; this is the
+    /// conservative bounded wait instead. Heuristic, not sourced.
+    public static let fallbackUnitStopSettleMs: Int64 = 300
+
+    public static func verdict(
+        nativeSnapshot: Bool,
+        negotiated: Bool,
+        fallbackActive: Bool,
+        sessionActive: Bool,
+        answered: Bool,
+        source: AudioSessionActivationSource,
+        callKitWaitExpired: Bool
+    ) -> Verdict {
+        guard nativeSnapshot else { return .notNativeCall }
+        guard negotiated else { return .notNegotiated }
+        guard !fallbackActive else { return .fallbackActive }
+        guard sessionActive, source != .none else { return .noSession }
+        guard answered else { return .notAnswered }
+        if source == .selfExpectingCallKit, !callKitWaitExpired { return .awaitingCallKit }
+        return .enable
+    }
+
+    /// Combine the source already recorded for this call with a new
+    /// activation. CallKit's own activation is never downgraded by a later
+    /// self-activation of the same call; a self-managed activation (CallKit
+    /// will not come) wins over one that still expects CallKit.
+    public static func mergedSource(
+        current: AudioSessionActivationSource,
+        incoming: AudioSessionActivationSource
+    ) -> AudioSessionActivationSource {
+        if current == .callKit || incoming == .callKit { return .callKit }
+        if current == .selfManaged || incoming == .selfManaged { return .selfManaged }
+        if incoming == .selfExpectingCallKit || current == .selfExpectingCallKit { return .selfExpectingCallKit }
+        return .none
+    }
+
+    /// W-ADMBALANCE (2026-09-26) — how many locked `RTCAudioSession
+    /// .setActive(false)` calls `CallKitProvider.reportCallEnded` may issue.
+    ///
+    /// Legacy calls keep the W-DRAINACTIVATION drain (up to `maxDrain`, until
+    /// the count reaches 0) byte-for-byte. A native-SRTP call issues ONE: it
+    /// balances the app's own self-activation and nothing else. In manual mode
+    /// WebRTC's own configure/unconfigure of the session are paired by the
+    /// unit's disable, and CallKit's `didDeactivate` balances its own
+    /// `didActivate`; draining those too made THIS app deactivate the real
+    /// session while CallKit was about to, and — when the next call's session
+    /// had already been activated — deactivate that one.
+    public static func deactivationCalls(
+        activationCount: Int,
+        nativeManualCall: Bool,
+        maxDrain: Int = 10
+    ) -> Int {
+        guard activationCount > 0 else { return 0 }
+        return nativeManualCall ? 1 : min(activationCount, maxDrain)
+    }
+}
+
+/// W-AUDIORXREBIND (2026-09-26) — `NativeAudioFrameCryptor.rebindReceiver`
+/// used to dispose and re-create the receiver FrameCryptor on EVERY call to
+/// `installAudioSrtpIfPossible` (three triggers per call plus every rekey),
+/// although its caller documented it as a no-op when the receiver had not
+/// changed. Re-creating the transformer on a live receiver opens a window in
+/// which inbound frames are dropped. Pure so it can be pinned by a test.
+public enum NativeAudioReceiverRebindDecision {
+    /// Rebind only when there is no bound receiver yet, or JSEP replaced it.
+    public static func shouldRebind(boundReceiverId: String?, liveReceiverId: String) -> Bool {
+        guard let bound = boundReceiverId, !bound.isEmpty else { return true }
+        return bound != liveReceiverId
+    }
+}
