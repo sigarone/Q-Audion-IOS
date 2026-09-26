@@ -7248,6 +7248,14 @@ final class AppState: ObservableObject {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
         }
+        // W-CTRLCLOSE (2026-09-26) — every reset of `webRtcController` goes
+        // through close(): same close-before-replace as the offer/outgoing
+        // sites (this one normally finds nil — a WS-relay call has no
+        // controller — so it only acts on a leak).
+        if let old = self.webRtcController as? QAudionWebRtcCallController, old !== controller {
+            old.closeSynchronously()
+            RTLog.warn("call", "callctrl replaced=1 site=upgrade")
+        }
         self.webRtcController = controller
         self.flushPendingIceCandidates(to: controller)
         // Keep the proven WS-relay audio leg untouched — this controller exists
@@ -16962,8 +16970,7 @@ final class AppState: ObservableObject {
                         RTLog.warn("call", "webrtc start_outgoing ok=0 err=\(error)")
                         print("[AppState] WebRTC startOutgoingCall failed: \(error)")
                         await MainActor.run {
-                            self?.webRtcController = nil
-                            self?.pendingRemoteIceCandidates.removeAll()
+                            self?.dropFailedOutgoingWebRtcController()
                         }
                     }
                 }
@@ -19052,6 +19059,21 @@ extension AppState {
         } catch {
             return []
         }
+    }
+
+    /// W-CTRLCLOSE (2026-09-26) — `startOutgoingCall` threw: the controller
+    /// used to be dropped WITHOUT close(), leaving its PeerConnection (and, on
+    /// a native-SRTP call, WebRTC's audio streams on the shared factory) to
+    /// deinit whenever the last reference went. Closed explicitly now, like
+    /// every other reset site. Extracted from the failure closure on purpose
+    /// (CLAUDE.md section 13: keep deep closure bodies trivial).
+    func dropFailedOutgoingWebRtcController() {
+        if let ctrl = webRtcController as? QAudionWebRtcCallController {
+            ctrl.closeSynchronously()
+            RTLog.warn("call", "callctrl closed=1 site=startfail")
+        }
+        webRtcController = nil
+        pendingRemoteIceCandidates.removeAll()
     }
 
     /// W-NATIVESRTPSNAPSHOT (2026-09-26) — one numeric line per snapshot
