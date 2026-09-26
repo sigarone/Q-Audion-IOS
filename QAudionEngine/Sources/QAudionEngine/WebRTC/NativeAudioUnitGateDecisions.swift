@@ -11,7 +11,9 @@ import Foundation
 /// Raw values are the numeric `src=` field of the `admgate` log lines.
 public enum AudioSessionActivationSource: Int, Sendable, Equatable {
     /// Nothing activated the session for this call yet (or it was deactivated).
-    case none = 0
+    /// Not named `none`: that would read as `Optional.none` wherever the
+    /// type is optional or generic (e.g. `XCTAssertEqual(x, .none)`).
+    case notActivated = 0
     /// `CXProviderDelegate.provider(_:didActivate:)` — CallKit's own,
     /// priority-elevated activation.
     case callKit = 1
@@ -111,7 +113,7 @@ public enum NativeAudioUnitGateDecisions {
         guard nativeSnapshot else { return .notNativeCall }
         guard negotiated else { return .notNegotiated }
         guard !fallbackActive else { return .fallbackActive }
-        guard sessionActive, source != .none else { return .noSession }
+        guard sessionActive, source != .notActivated else { return .noSession }
         guard answered else { return .notAnswered }
         if source == .selfExpectingCallKit, !callKitWaitExpired { return .awaitingCallKit }
         return .enable
@@ -128,7 +130,7 @@ public enum NativeAudioUnitGateDecisions {
         if current == .callKit || incoming == .callKit { return .callKit }
         if current == .selfManaged || incoming == .selfManaged { return .selfManaged }
         if incoming == .selfExpectingCallKit || current == .selfExpectingCallKit { return .selfExpectingCallKit }
-        return .none
+        return .notActivated
     }
 
     /// W-ADMBALANCE (2026-09-26) — the iteration cap for the locked

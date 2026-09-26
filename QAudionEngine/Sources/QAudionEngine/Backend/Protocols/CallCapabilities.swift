@@ -855,6 +855,19 @@ public enum CallCapabilities {
 
     private static let nativeSrtpSnapshotLock = NSLock()
     private static var _nativeSrtpCallSnapshot: Bool?
+    /// W-NATIVESRTPSNAPSHOT-ID (2026-09-26) — the call the snapshot belongs to
+    /// (lowercased; `nil` = taken by a site that did not know the call id).
+    private static var _nativeSrtpSnapshotCallId: String?
+
+    /// Outcome of a snapshot request. `fresh`: taken now from the live value.
+    /// `stale`: a snapshot of a DIFFERENT (or unidentified) call was still
+    /// there and has been replaced — the previous call ended on a path that
+    /// never reached `CallService.endCall()`.
+    public struct NativeSrtpSnapshotLatch: Equatable, Sendable {
+        public let value: Bool
+        public let fresh: Bool
+        public let stale: Bool
+    }
 
     /// The snapshot of the call in progress, or `nil` between calls.
     public static var nativeSrtpCallSnapshot: Bool? {
@@ -862,35 +875,79 @@ public enum CallCapabilities {
         return _nativeSrtpCallSnapshot
     }
 
-    /// Take a FRESH snapshot for a call that is starting now (outgoing call
-    /// start). Always overwrites: a stale snapshot left by a call whose end was
-    /// never reported must not leak into a new call. Returns the value.
-    @discardableResult
-    public static func beginNativeSrtpCallSnapshot() -> Bool {
-        let value = liveNativeSrtpEnabled
-        nativeSrtpSnapshotLock.lock()
-        _nativeSrtpCallSnapshot = value
-        nativeSrtpSnapshotLock.unlock()
-        return value
-    }
-
-    /// Latch-if-absent, for the sites that can run more than once for the
-    /// same call (a rescued duplicate OFFER, a replaced PeerConnection): keep
-    /// the snapshot this call already took, take one only if there is none.
-    /// `fresh` is `true` when this call created it.
-    @discardableResult
-    public static func latchNativeSrtpCallSnapshot() -> (value: Bool, fresh: Bool) {
+    /// The call id the current snapshot belongs to (lowercased), if known.
+    public static var nativeSrtpSnapshotCallId: String? {
         nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
-        if let existing = _nativeSrtpCallSnapshot { return (existing, false) }
-        let value = liveNativeSrtpEnabled
-        _nativeSrtpCallSnapshot = value
-        return (value, true)
+        return _nativeSrtpSnapshotCallId
     }
 
-    /// Drop the snapshot at call end. Idempotent.
+    private static func normalizedCallId(_ callId: String?) -> String? {
+        guard let id = callId?.lowercased(), !id.isEmpty else { return nil }
+        return id
+    }
+
+    /// Snapshot for a call that is STARTING (outgoing `startCall`, with the
+    /// call id the OFFER will carry). Same rule as
+    /// ``latchNativeSrtpCallSnapshot(callId:)`` with a known id: an existing
+    /// snapshot is kept only if it belongs to this very call id, otherwise a
+    /// fresh one replaces it (`stale` when one was there).
+    @discardableResult
+    public static func beginNativeSrtpCallSnapshot(callId: String?) -> NativeSrtpSnapshotLatch {
+        latchNativeSrtpCallSnapshot(callId: callId)
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ID (2026-09-26) — keyed latch.
+    ///
+    /// * `callId` given: the existing snapshot is returned ONLY if it belongs
+    ///   to the same call id (case-insensitive) — the duplicate rescue OFFER,
+    ///   the call_incoming → OFFER handoff of one incoming call. Any other
+    ///   existing snapshot (a different call id, or one taken without an id)
+    ///   is stale: it is replaced by a fresh one and `stale` is `true`. This
+    ///   is what stops a snapshot left by an aborted outgoing attempt (a path
+    ///   that never reached `CallService.endCall()`) from deciding the NEXT
+    ///   call, e.g. after the toggle was switched off in between.
+    /// * `callId` nil (a site that cannot know it, `QAudionPeerConnection.init`):
+    ///   the existing snapshot is returned whatever its id — every call-start
+    ///   path in the app takes the keyed snapshot BEFORE it builds the
+    ///   PeerConnection — and a fresh, unidentified one is taken only if there
+    ///   is none.
+    @discardableResult
+    public static func latchNativeSrtpCallSnapshot(callId: String?) -> NativeSrtpSnapshotLatch {
+        let id = normalizedCallId(callId)
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        if let existing = _nativeSrtpCallSnapshot {
+            if id == nil || id == _nativeSrtpSnapshotCallId {
+                return NativeSrtpSnapshotLatch(value: existing, fresh: false, stale: false)
+            }
+            let value = liveNativeSrtpEnabled
+            _nativeSrtpCallSnapshot = value
+            _nativeSrtpSnapshotCallId = id
+            return NativeSrtpSnapshotLatch(value: value, fresh: true, stale: true)
+        }
+        let value = liveNativeSrtpEnabled
+        _nativeSrtpCallSnapshot = value
+        _nativeSrtpSnapshotCallId = id
+        return NativeSrtpSnapshotLatch(value: value, fresh: true, stale: false)
+    }
+
+    /// Drop the snapshot only if it belongs to `callId` (case-insensitive).
+    /// Returns whether it did. A `nil`/empty id never matches.
+    @discardableResult
+    public static func endNativeSrtpCallSnapshot(callId: String?) -> Bool {
+        guard let id = normalizedCallId(callId) else { return false }
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        guard _nativeSrtpCallSnapshot != nil, _nativeSrtpSnapshotCallId == id else { return false }
+        _nativeSrtpCallSnapshot = nil
+        _nativeSrtpSnapshotCallId = nil
+        return true
+    }
+
+    /// Drop the snapshot unconditionally (the `CallService.endCall()` safety
+    /// net, after the keyed end). Idempotent.
     public static func endNativeSrtpCallSnapshot() {
         nativeSrtpSnapshotLock.lock()
         _nativeSrtpCallSnapshot = nil
+        _nativeSrtpSnapshotCallId = nil
         nativeSrtpSnapshotLock.unlock()
     }
 

@@ -146,6 +146,19 @@ public enum NativeAudioSessionGate {
     /// Item 1 — arm manual mode for a native-SRTP call. Must run before the
     /// PeerConnection's audio track is added and before any SDP is applied.
     /// Returns the token `disarm(token:)` needs.
+    ///
+    /// PROCESS-LIFETIME NOTE: once set here, `RTCAudioSession.useManualAudio`
+    /// intentionally stays `true` until the process exits — `disarm` only
+    /// switches `isAudioEnabled` off. This is inert for every call with native
+    /// SRTP off: such a call has no m=audio line (the mic track is only
+    /// pre-attached on a native call), so no audio stream ever starts on it
+    /// and WebRTC's audio device module never initializes, whatever the
+    /// manual flag says; the custom path configures `AVAudioSession` itself
+    /// and never reads it; group calls use LiveKit's own, separately prefixed
+    /// audio session. Switching it back to `false` is what would NOT be
+    /// inert: with a unit object still alive (PeerConnection teardown has no
+    /// completion signal) `canPlayOrRecord` would flip to `true` and restart
+    /// that unit on the spot.
     @discardableResult
     public static func armManualMode() -> Int {
         lock.lock(); webRtcDefaultToSpeaker = false; lock.unlock()

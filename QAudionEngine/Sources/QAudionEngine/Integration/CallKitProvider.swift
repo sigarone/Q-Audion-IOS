@@ -274,9 +274,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         if ledger.consumeAudioSelfActivation() {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
+            // `activationCount` is imported as Int32 (ObjC `int`) — the CI
+            // build rejected passing it where Int is expected.
             let countBefore = rtcSession.activationCount
             let plannedIterations = NativeAudioUnitGateDecisions.deactivationCalls(
-                activationCount: countBefore, nativeManualCall: nativeManualCall)
+                activationCount: Int(countBefore), nativeManualCall: nativeManualCall)
             var drainedCount = 0
             while rtcSession.activationCount > 0 && drainedCount < plannedIterations {
                 do {

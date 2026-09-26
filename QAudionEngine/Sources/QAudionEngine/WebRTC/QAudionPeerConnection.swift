@@ -395,10 +395,12 @@ public final class QAudionPeerConnection: NSObject {
         self.factory = factory
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
-        // W-NATIVESRTPSNAPSHOT — latch-if-absent: the call start already took
-        // the snapshot (AppState); a PeerConnection built for a call that has
-        // none (or rebuilt for the same call) keeps/creates it here.
-        let latched = CallCapabilities.latchNativeSrtpCallSnapshot()
+        // W-NATIVESRTPSNAPSHOT — the call start already took the KEYED
+        // snapshot (AppState: startCall with the OFFER's call id, call_incoming
+        // and the incoming OFFER with theirs) before any PeerConnection is
+        // built, so this site, which has no call id, keeps whatever the
+        // current call took, and takes an unidentified one only if none exists.
+        let latched = CallCapabilities.latchNativeSrtpCallSnapshot(callId: nil)
         self.nativeSrtpEnabledForThisCall = latched.value
         super.init()
 
@@ -409,8 +411,9 @@ public final class QAudionPeerConnection: NSObject {
         // (which also only ever runs at `init`).
         let nativeSrtpEnabledLocally = latched.value
         let freshFlag = latched.fresh ? 1 : 0
+        let staleFlag = latched.stale ? 1 : 0
         let nativeFlag = nativeSrtpEnabledLocally ? 1 : 0
-        NativeAudioSessionGate.log?("nsnap site=1 native=\(nativeFlag) fresh=\(freshFlag)")
+        NativeAudioSessionGate.log?("nsnap site=1 native=\(nativeFlag) fresh=\(freshFlag) stale=\(staleFlag)")
         // W-ADMAUDIT (2026-09-26, every call) — a WebRTC audio unit left
         // enabled by a previous call must not be inherited; a call with
         // native SRTP off also drops any stale manual-mode arm. See

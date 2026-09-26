@@ -2414,10 +2414,15 @@ final class CallService: @unchecked Sendable {
         // W-NATIVESRTPSNAPSHOT (2026-09-26) — the call's native-SRTP decision
         // ends with the call (same single choke point as the generation bump
         // above). The next call takes its own. Idempotent.
+        // W-NATIVESRTPSNAPSHOT-ID — keyed end first (logs whether the snapshot
+        // belonged to this call), then the unconditional clear as the safety
+        // net: this is the one choke point every normal terminal path shares.
         if let nativeSnapshot = CallCapabilities.nativeSrtpCallSnapshot {
+            let matched: Bool = CallCapabilities.endNativeSrtpCallSnapshot(callId: getCallId?())
             CallCapabilities.endNativeSrtpCallSnapshot()
             let nativeFlag: Int = nativeSnapshot ? 1 : 0
-            RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=1")
+            let matchFlag: Int = matched ? 1 : 0
+            RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=1 match=\(matchFlag)")
         }
         onDeepfakeAlert?(false)
         stopDurationTimer()
@@ -4062,7 +4067,7 @@ final class CallService: @unchecked Sendable {
 
     /// Who activated the session for the call in progress (merged, see
     /// `NativeAudioUnitGateDecisions.mergedSource`). Reset with the session.
-    private var audioActivationSource: AudioSessionActivationSource = .none
+    private var audioActivationSource: AudioSessionActivationSource = .notActivated
     /// Set once `callKitActivationWaitMs` passed after a self-activation that
     /// still expected CallKit's didActivate.
     private var nativeUnitCallKitWaitExpired = false
@@ -4071,7 +4076,7 @@ final class CallService: @unchecked Sendable {
     private var lastLoggedNativeUnitVerdict: Int = -1
 
     private func resetNativeAudioUnitGateState() {
-        audioActivationSource = .none
+        audioActivationSource = .notActivated
         nativeUnitCallKitWaitExpired = false
         nativeUnitCallKitWaitItem?.cancel()
         nativeUnitCallKitWaitItem = nil

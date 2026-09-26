@@ -48,7 +48,7 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
 
     func test_noSessionOrNoSource_doesNotEnable() {
         XCTAssertEqual(verdict(session: false), .noSession)
-        XCTAssertEqual(verdict(source: .none), .noSession)
+        XCTAssertEqual(verdict(source: .notActivated), .noSession)
     }
 
     /// Outgoing call: CallKit activates before the peer answers — wait for the
@@ -83,7 +83,7 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
         XCTAssertEqual(D.Verdict.noSession.rawValue, 4)
         XCTAssertEqual(D.Verdict.notAnswered.rawValue, 5)
         XCTAssertEqual(D.Verdict.awaitingCallKit.rawValue, 6)
-        XCTAssertEqual(AudioSessionActivationSource.none.rawValue, 0)
+        XCTAssertEqual(AudioSessionActivationSource.notActivated.rawValue, 0)
         XCTAssertEqual(AudioSessionActivationSource.callKit.rawValue, 1)
         XCTAssertEqual(AudioSessionActivationSource.selfExpectingCallKit.rawValue, 2)
         XCTAssertEqual(AudioSessionActivationSource.selfManaged.rawValue, 3)
@@ -111,8 +111,8 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
     }
 
     func test_firstActivationIsTakenAsIs() {
-        XCTAssertEqual(D.mergedSource(current: .none, incoming: .selfExpectingCallKit), .selfExpectingCallKit)
-        XCTAssertEqual(D.mergedSource(current: .none, incoming: .none), .none)
+        XCTAssertEqual(D.mergedSource(current: .notActivated, incoming: .selfExpectingCallKit), .selfExpectingCallKit)
+        XCTAssertEqual(D.mergedSource(current: .notActivated, incoming: .notActivated), .notActivated)
     }
 
     // MARK: - deactivationCalls

@@ -607,6 +607,7 @@ APP_VOCAB = frozenset("""
     disarm en end endbal expired fbsettle fields first fresh hard iter
     man merged mute nativemute native neg nsnap preven prevman replaced
     rxrebind sess site src stalearm startfail tok verdict voipcfg
+    match stale
 """.split())
 
 # Second letters that (almost) never follow the first in English / app
