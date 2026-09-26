@@ -117,9 +117,10 @@ final class NativeAudioUnitGateDecisionsTests: XCTestCase {
 
     // MARK: - deactivationCalls
 
-    /// Legacy calls keep the W-DRAINACTIVATION drain exactly.
+    /// Legacy calls keep the W-DRAINACTIVATION drain exactly: the cap stays
+    /// 10 and the loop's own `activationCount > 0` stops it at zero.
     func test_legacyCall_drainsToZeroBounded() {
-        XCTAssertEqual(D.deactivationCalls(activationCount: 3, nativeManualCall: false), 3)
+        XCTAssertEqual(D.deactivationCalls(activationCount: 3, nativeManualCall: false), 10)
         XCTAssertEqual(D.deactivationCalls(activationCount: 25, nativeManualCall: false), 10)
         XCTAssertEqual(D.deactivationCalls(activationCount: 0, nativeManualCall: false), 0)
         XCTAssertEqual(D.deactivationCalls(activationCount: -1, nativeManualCall: false), 0)

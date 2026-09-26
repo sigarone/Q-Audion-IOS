@@ -131,11 +131,13 @@ public enum NativeAudioUnitGateDecisions {
         return .none
     }
 
-    /// W-ADMBALANCE (2026-09-26) — how many locked `RTCAudioSession
-    /// .setActive(false)` calls `CallKitProvider.reportCallEnded` may issue.
+    /// W-ADMBALANCE (2026-09-26) — the iteration cap for the locked
+    /// `RTCAudioSession.setActive(false)` loop in
+    /// `CallKitProvider.reportCallEnded` (the loop itself also stops when the
+    /// activation count reaches 0).
     ///
-    /// Legacy calls keep the W-DRAINACTIVATION drain (up to `maxDrain`, until
-    /// the count reaches 0) byte-for-byte. A native-SRTP call issues ONE: it
+    /// Legacy calls keep the W-DRAINACTIVATION drain byte-for-byte: cap
+    /// `maxDrain`, i.e. until the count reaches 0. A native-SRTP call issues ONE: it
     /// balances the app's own self-activation and nothing else. In manual mode
     /// WebRTC's own configure/unconfigure of the session are paired by the
     /// unit's disable, and CallKit's `didDeactivate` balances its own
@@ -148,7 +150,7 @@ public enum NativeAudioUnitGateDecisions {
         maxDrain: Int = 10
     ) -> Int {
         guard activationCount > 0 else { return 0 }
-        return nativeManualCall ? 1 : min(activationCount, maxDrain)
+        return nativeManualCall ? 1 : maxDrain
     }
 }
 

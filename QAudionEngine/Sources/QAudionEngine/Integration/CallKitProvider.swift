@@ -257,12 +257,28 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // pair, serializing the drain against any concurrent activation
         // (including the next call's own) the same way every other mutation
         // of this shared session already is.
+        //
+        // W-ADMBALANCE (2026-09-26) — native-SRTP (manual audio mode) calls
+        // only: ONE locked setActive(false), balancing this app's own
+        // self-activation and nothing else. In manual mode WebRTC's own
+        // configure/unconfigure of the session are paired by the unit's
+        // disable (CallService switches it off before the PeerConnection
+        // closes) and CallKit's didDeactivate balances its own didActivate.
+        // Draining those too made THIS app deactivate the real session while
+        // CallKit was about to (Apple's CallKit guidance: the app must not),
+        // and — with a next call already activated — deactivate that one.
+        // Legacy calls keep the drain above byte-for-byte
+        // (`NativeAudioUnitGateDecisions.deactivationCalls`). The flag is
+        // consumed on every call end so it cannot leak into the next one.
+        let nativeManualCall = NativeAudioSessionGate.consumeNativeCallBalanceFlag()
         if ledger.consumeAudioSelfActivation() {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
-            let maxDrainIterations = 10
+            let countBefore = rtcSession.activationCount
+            let plannedIterations = NativeAudioUnitGateDecisions.deactivationCalls(
+                activationCount: countBefore, nativeManualCall: nativeManualCall)
             var drainedCount = 0
-            while rtcSession.activationCount > 0 && drainedCount < maxDrainIterations {
+            while rtcSession.activationCount > 0 && drainedCount < plannedIterations {
                 do {
                     try rtcSession.setActive(false)
                 } catch {
@@ -271,8 +287,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 }
                 drainedCount += 1
             }
-            print("[CallKitProvider] reportCallEnded audio session drained iterations=\(drainedCount) activationCount=\(rtcSession.activationCount)")
+            let countAfter = rtcSession.activationCount
+            let activeAfter = rtcSession.isActive ? 1 : 0
+            print("[CallKitProvider] reportCallEnded audio session drained iterations=\(drainedCount) activationCount=\(countAfter)")
             rtcSession.unlockForConfiguration()
+            if nativeManualCall {
+                let line = "admgate endbal=1 before=\(countBefore) iter=\(drainedCount) after=\(countAfter) act=\(activeAfter)"
+                log?(line)
+            }
         }
         ledger.forget(uuid)
         let cxReason: CXCallEndedReason
