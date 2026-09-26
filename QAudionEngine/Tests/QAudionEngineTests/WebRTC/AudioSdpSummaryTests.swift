@@ -37,11 +37,32 @@ final class AudioSdpSummaryTests: XCTestCase {
         XCTAssertNotNil(summary)
         let line = summary ?? ""
         XCTAssertTrue(line.hasPrefix("audio "), line)
-        XCTAssertTrue(line.contains("codecs=111:opus/48000/2;fmtp=cbr=1;useinbandfec=1;maxaveragebitrate=32000;minptime=60"), line)
-        XCTAssertTrue(line.contains("63:red/48000/2"), line)
-        XCTAssertTrue(line.contains("extmap=1:urn:ietf:params:rtp-hdrext:ssrc-audio-level"), line)
-        XCTAssertTrue(line.contains("3:urn:ietf:params:rtp-hdrext:sdes:mid"), line)
-        XCTAssertTrue(line.contains("setup=actpass"), line)
+        // W-NATIVESRTPDIAG — flat, indexed key=value tokens (see this file's
+        // own doc for why: every value here is a number or an
+        // enum/lowerCamel word under a "type"/"role"/"dir"-suffixed key,
+        // the only two shapes the remote log shipper's KV-precision
+        // protection trusts).
+        XCTAssertTrue(line.contains("c0_type=opus"), line)
+        XCTAssertTrue(line.contains("c0_clk=48000"), line)
+        XCTAssertTrue(line.contains("c0_ch=2"), line)
+        XCTAssertTrue(line.contains("c0_cbr=1"), line)
+        XCTAssertTrue(line.contains("c0_useinbandfec=1"), line)
+        XCTAssertTrue(line.contains("c0_maxaveragebitrate=32000"), line)
+        XCTAssertTrue(line.contains("c0_minptime=60"), line)
+        XCTAssertTrue(line.contains("c1_type=red"), line)
+        XCTAssertTrue(line.contains("c1_clk=48000"), line)
+        XCTAssertTrue(line.contains("c1_ch=2"), line)
+        // c1 (red)'s fmtp is "111/111" — not a key=value shape, so exactly
+        // the three structural fields above are emitted for it, no fmtp
+        // param field ("c1_111" or similar).
+        XCTAssertEqual(line.components(separatedBy: "c1_").count - 1, 3, line)
+        // The uri is shortened to its last ':'/'/'-separated segment, then
+        // lowerCamelized ("ssrc-audio-level" -> "ssrcAudioLevel") to match
+        // the shipper's lowerCamel value shape.
+        XCTAssertTrue(line.contains("e0_type=ssrcAudioLevel"), line)
+        XCTAssertTrue(line.contains("e1_type=mid"), line)
+        XCTAssertFalse(line.contains("urn:ietf"), line)
+        XCTAssertTrue(line.contains("role=actpass"), line)
         XCTAssertTrue(line.contains("dir=sendrecv"), line)
     }
 
@@ -78,7 +99,8 @@ final class AudioSdpSummaryTests: XCTestCase {
             "a=sendonly",
         ].joined(separator: "\r\n") + "\r\n"
         let line = AudioSdpSummary.summarize(twoAudio) ?? ""
-        XCTAssertTrue(line.contains("111:opus/48000/2"), line)
+        XCTAssertTrue(line.contains("c0_type=opus"), line)
+        XCTAssertTrue(line.contains("c0_clk=48000"), line)
         XCTAssertTrue(line.contains("dir=recvonly"), line)
         XCTAssertFalse(line.contains("PCMU"), line)
         XCTAssertFalse(line.contains("dir=sendonly"), line)
@@ -86,7 +108,20 @@ final class AudioSdpSummaryTests: XCTestCase {
 
     func test_lineHasExactlyOneOccurrenceOfEachField() {
         let line = AudioSdpSummary.summarize(typicalSdp) ?? ""
-        XCTAssertEqual(line.components(separatedBy: "setup=").count - 1, 1, line)
+        XCTAssertEqual(line.components(separatedBy: "role=").count - 1, 1, line)
         XCTAssertEqual(line.components(separatedBy: "dir=").count - 1, 1, line)
+    }
+
+    /// W-NATIVESRTPDIAG — a non-numeric fmtp value (an unusual/future param)
+    /// is dropped rather than emitted in a shape the remote log shipper
+    /// might not protect.
+    func test_nonNumericFmtpValue_isDropped() {
+        let withWordFmtp = typicalSdp.replacingOccurrences(
+            of: "a=fmtp:111 cbr=1;useinbandfec=1;maxaveragebitrate=32000;minptime=60",
+            with: "a=fmtp:111 cbr=1;stereo=freeform")
+        let line = AudioSdpSummary.summarize(withWordFmtp) ?? ""
+        XCTAssertTrue(line.contains("c0_cbr=1"), line)
+        XCTAssertFalse(line.contains("stereo"), line)
+        XCTAssertFalse(line.contains("freeform"), line)
     }
 }

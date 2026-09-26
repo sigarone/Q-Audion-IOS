@@ -314,16 +314,22 @@ extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
     /// kKeyRingRequestFailed/kInternalError` this pinned build is patched
     /// from), not grep-verified against the actual header. A wrong case name
     /// here fails LOUDLY (a compile error), not silently.
+    /// Short, all-lowercase codes rather than the full CamelCase enum-case
+    /// names: this string reaches `RTLog`/the remote log shipper
+    /// (`scripts/ship-ios-logs.py`), whose vocabulary gate caps how many
+    /// words per line it does not already recognize
+    /// (`MAX_UNKNOWN_WORDS`) — see this task's own report for the exact
+    /// tokens added to `APP_VOCAB` for these.
     private static func stateLabel(_ state: RTCFrameCryptorState) -> String {
         switch state {
         case .new: return "new"
         case .ok: return "ok"
-        case .encryptionFailed: return "encryptionFailed"
-        case .decryptionFailed: return "decryptionFailed"
-        case .missingKey: return "missingKey"
-        case .keyRingRequestFailed: return "keyRingRequestFailed"
-        case .internalError: return "internalError"
-        @unknown default: return "unknown\(state.rawValue)"
+        case .encryptionFailed: return "encfail"
+        case .decryptionFailed: return "decfail"
+        case .missingKey: return "misskey"
+        case .keyRingRequestFailed: return "ringfail"
+        case .internalError: return "interr"
+        @unknown default: return "unk\(state.rawValue)"
         }
     }
 }

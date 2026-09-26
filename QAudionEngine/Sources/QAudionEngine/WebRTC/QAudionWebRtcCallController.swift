@@ -3565,7 +3565,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// sender track is enabled, whether the FrameCryptor key was installed
     /// by the time this line is emitted (this call site runs synchronously
     /// AFTER `activateNativeAudioSrtp` already installed it — see that
-    /// method's own doc — so `keyb4frame=0` here would itself be a bug), and
+    /// method's own doc — so `keyok=0` here would itself be a bug), and
     /// the full `RTCAudioSession`/route state WebRTC's native audio unit is
     /// about to start against.
     ///
@@ -3589,7 +3589,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // would mean `activateNativeAudioSrtp`'s own install-then-attach
         // ordering broke.
         let keyInstalled = peerConnection?.nativeAudioCryptor?.keyIsSet ?? false
-        parts.append("keyb4frame=\(keyInstalled ? 1 : 0)")
+        parts.append("keyok=\(keyInstalled ? 1 : 0)")
 
         // RTCAudioSession's own wrapper state — the fields WebRTC's native
         // audio unit itself is about to start against, distinct from the
