@@ -503,6 +503,14 @@ actor LiveLogWorker {
             // stopped and started again) meanwhile, and the state below then belongs to the newer
             // run. Consent itself is re-read by `performUpload` before the retry is sent.
             guard chunkSeq == seq, runEpoch == expected else { return }
+            // W-LIVELOGSINGLEFLIGHT (Copilot follow-up to #127) -- the watchdog can fire WHILE
+            // `refresh()`/`currentAuth()` are suspended above: `inflight` is still true at that
+            // point (this call hasn't cleared it yet), so `uploadTimedOut` passes its own guard,
+            // marks `timedOutSeq = seq` and counts the failure. The `chunkSeq`/`runEpoch` guard
+            // just above does not see that -- both are unchanged -- so without re-checking
+            // `timedOutSeq` here, this already-timed-out attempt would retry (or fall through to
+            // count a SECOND failure below) after being marked and counted as dead.
+            guard timedOutSeq != seq else { return }
             if !fresh.token.isEmpty, fresh.token != token {
                 await performUpload(serverUrl: serverUrl,
                                     token: fresh.token,
