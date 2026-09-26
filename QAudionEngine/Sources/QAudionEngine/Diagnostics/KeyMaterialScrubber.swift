@@ -42,10 +42,12 @@ import Foundation
 ///       `18,19,...,32] len 32`. `RuntimeLogSink.attachStdoutTee` reads the pipe in 4096-byte
 ///       chunks and splits every chunk into lines on its own, so a long key line that straddles
 ///       a chunk boundary becomes two ring entries and the second one has no opening bracket
-///       and no keyword (4 such lines in the 14-day corpus). Only a closing `]` accepts a
-///       single integer; a closing `)` needs two or a leading separator, so `1) item` and the
-///       tail of a `(file.cc:118): ...` prefix (`118): ...`) are not touched (the price: the
-///       last number of a parenthesised list split right before it is not caught).
+///       and no keyword (4 such lines in the 14-day corpus). A closing `]` OR `)` accepts a
+///       single integer (Copilot follow-up to #109: `)` used to need two integers or a leading
+///       separator, so the last value of a parenthesised key list split right before it, e.g.
+///       `32) len 32`, was not caught). The price of treating `)` the same as `]`: a bare
+///       `1) item` enumeration marker or the tail of a `(file.cc:118): ...` prefix now also
+///       counts as a tail fragment -- accepted per this file's over-scrubbing policy.
 ///   (f) OVERLONG: only the first `maxScanBytes` (256 KiB) of a text are scanned, the rest is
 ///       replaced by the marker (fail closed): the work per text is bounded. The stdout tee
 ///       never produces a line longer than 4096 bytes, so this only ever applies to a very
@@ -398,7 +400,11 @@ public enum KeyMaterialScrubber {
         }
         let run: RunResult = intRun(b, p, limit)
         if run.state != .closed || run.count < 1 { return -1 }
-        if b[run.pos - 1] == 0x5D || run.count >= 2 || lead {
+        // Copilot follow-up to #109: `)` is accepted symmetrically with `]` here. A
+        // parenthesised key list ("secret (1,2,...,32) len 32") split by the stdout tee right
+        // before its last value leaves a tail fragment like "32) len 32" -- only one integer
+        // before the closing delimiter, same shape as the `]` case this already caught.
+        if b[run.pos - 1] == 0x5D || b[run.pos - 1] == 0x29 || run.count >= 2 || lead {
             return run.pos
         }
         return -1

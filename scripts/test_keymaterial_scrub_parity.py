@@ -24,7 +24,8 @@ Rules (all on the UTF-8 bytes of the text; every pattern is ASCII):
       allowed, one trailing separator allowed); a list cut by the end of the text counts with >= 1.
   (d) >= 8 two-digit hex bytes separated by one space or colon, each pair a whole token.
   (e) tail fragment: the text STARTS inside an integer list: [,;] int ([,;] int)* [,;] closer.
-      A closing ']' accepts one integer, a closing ')' needs two or a leading separator.
+      A closing ']' OR ')' accepts one integer (Copilot follow-up to #109: ')' used to need two
+      or a leading separator, missing the last value of a parenthesised list split right before it).
   (f) overlong: only the first 256 KiB are scanned, the rest is replaced (fail closed).
 Replacement: [REDACTED:keybytes]. Matches that touch are merged into one marker.
 """
@@ -185,7 +186,11 @@ def match_tail_fragment(b, limit):
     count, pos, state = int_run(b, p, limit)
     if state != CLOSED or count < 1:
         return -1
-    if b[pos - 1] == 0x5D or count >= 2 or lead:
+    # Copilot follow-up to #109: ')' is accepted symmetrically with ']' here (it used to need two
+    # integers or a leading separator), so the last value of a parenthesised key list split right
+    # before it, e.g. "32) len 32", is caught too. Price: a bare "1) item" or the tail of a
+    # "(file.cc:118): ..." prefix now also counts -- accepted per this port's over-scrubbing policy.
+    if b[pos - 1] == 0x5D or b[pos - 1] == 0x29 or count >= 2 or lead:
         return pos
     return -1
 

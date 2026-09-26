@@ -192,12 +192,23 @@ final class KeyMaterialScrubberTests: XCTestCase {
     }
 
     func test_textThatOnlyLooksLikeATailIsLeftAlone() {
-        XCTAssertEqual(scrub("1) first item"), "1) first item")
-        XCTAssertEqual(scrub("118): voice send channel options"), "118): voice send channel options")
         XCTAssertEqual(scrub("12,34,56 not closed"), "12,34,56 not closed")
         XCTAssertEqual(scrub("300,4] foo"), "300,4] foo")
         XCTAssertEqual(scrub("text 18,19,20] len 32"), "text 18,19,20] len 32")
         XCTAssertEqual(scrub("32 slat << [] len 0"), "32 slat << [] len 0")
+    }
+
+    /// Copilot follow-up to #109: `)` is now accepted symmetrically with `]` as a tail-fragment
+    /// closing delimiter, so a parenthesised key list split by the stdout tee right before its
+    /// last value (`32) len 32`, the shape reported against #109) is caught too. The accepted
+    /// price (this file's over-scrubbing policy) is that a bare numbered item or the tail of a
+    /// `(file.cc:118): ...` prefix -- both used to survive untouched -- are now treated the same
+    /// way as a real tail fragment.
+    func test_aParenthesisedTailFragmentIsNowScrubbedSymmetricallyWithBrackets() {
+        XCTAssertEqual(scrub("32) len 32"), "\(marker) len 32")
+        XCTAssertEqual(scrub("1) first item"), "\(marker) first item")
+        XCTAssertEqual(scrub("118): voice send channel options"), "\(marker): voice send channel options")
+        XCTAssertEqual(kinds("32) len 32"), [.tailFragment])
     }
 
     /// The real shapes cut at EVERY byte offset, the way a 4096-byte pipe read cuts them: no key
