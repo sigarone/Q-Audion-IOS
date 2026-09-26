@@ -5,8 +5,11 @@ Convert Q-Audion ONNX deepfake model to CoreML format.
 Usage:
     python convert_to_coreml.py <input.onnx> <output.mlpackage>
 
-Example:
-    python convert_to_coreml.py QAudionEngine/Sources/QAudionEngine/Resources/aasist_raw_small_distill_int8.onnx deepfake_aasist.mlpackage
+Example (run from the scripts/ directory, so the model path starts with ../):
+    python convert_to_coreml.py ../QAudionEngine/Sources/QAudionEngine/Resources/aasist_raw_small_distill_int8.onnx deepfake_aasist.mlpackage
+
+The same conversion from the repository root:
+    python scripts/convert_to_coreml.py QAudionEngine/Sources/QAudionEngine/Resources/aasist_raw_small_distill_int8.onnx deepfake_aasist.mlpackage
 
 Requirements:
     pip install coremltools onnx
