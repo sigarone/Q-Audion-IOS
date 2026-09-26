@@ -70,6 +70,17 @@ struct CallsSettingsScreen: View {
     // UserDefaults-backed via CallsGate (not Keychain); read once on appear.
     @State private var callKitFreeMode: Bool = false
 
+    /// W-AUDIOSRTPDEBUGTOGGLE / W-CODECMENUSRTP — mirrors
+    /// `CallCapabilities.audioSrtpDebugOverride` (a plain static var, not
+    /// itself observable) into local SwiftUI state, exactly the pattern
+    /// `SettingsScreen` used before this control moved here. Seeded from
+    /// whatever override is already in force (falling back to the compiled
+    /// default) so re-entering this screen mid-session shows the real
+    /// current state, not a stale default. Runtime-only — never persisted,
+    /// resets to the compiled default on process restart.
+    @State private var audioSrtpToggle: Bool =
+        CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
@@ -83,6 +94,35 @@ struct CallsSettingsScreen: View {
                     kvRow(label: "Audio Codec",
                           value: container.viewModel.codecPreference.rawValue.capitalized,
                           mono: false)
+
+                    // W-CODECMENUSRTP — moved out of the internal-only
+                    // Settings surface so the transport choice is reachable
+                    // in every build, right under the codec it sits
+                    // alongside. Same binding the internal toggle used:
+                    // `CallCapabilities.audioSrtpDebugOverride ??
+                    // audioSrtpSendEnabled`, in-memory only, per-call
+                    // snapshot means a mid-call flip cannot affect the call
+                    // already in progress.
+                    //
+                    // The row subtitle is kept short because
+                    // `SettingsToggleRow` caps it at `.lineLimit(2)`; the
+                    // full disclosure (and the experimental warning, same
+                    // pattern as "MODALITÀ CHIAMATA (SPERIMENTALE)" below)
+                    // lives in the uncapped `warningHint` underneath.
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Audio SRTP standard (WebRTC)",
+                            subtitle: "Sostituisce il protocollo Q-Audion con WebRTC DTLS-SRTP standard, se attivo su entrambi i dispositivi.",
+                            isOn: Binding(
+                                get: { audioSrtpToggle },
+                                set: { newValue in
+                                    audioSrtpToggle = newValue
+                                    CallCapabilities.audioSrtpDebugOverride = newValue
+                                }
+                            )
+                        )
+                        warningHint("Funzione sperimentale: se l'audio risulta assente o instabile, disattivala (ha effetto dalla prossima chiamata). Cifra i frame end-to-end; l'impostazione non è salvata e torna disattivata al riavvio dell'app.")
+                    }
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
                     kvRow(label: "Preset audio",

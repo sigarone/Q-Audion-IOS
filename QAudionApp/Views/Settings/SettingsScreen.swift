@@ -46,14 +46,6 @@ struct SettingsScreen: View {
     /// W102: cache-clear feedback alert state.
     @State private var cacheClearedAlertVisible: Bool = false
     @State private var cacheClearedMessage: String = ""
-    /// W-AUDIOSRTPDEBUGTOGGLE (2026-09-10) — mirrors
-    /// `CallCapabilities.audioSrtpDebugOverride` (a plain static var, not
-    /// itself observable) into local SwiftUI state. Seeded from whatever
-    /// override is already in force (falling back to the compiled default)
-    /// so re-entering this screen mid-session shows the real current state,
-    /// not a stale default.
-    @State private var audioSrtpDebugToggle: Bool =
-        CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
     /// W151: confirm dialog gate for sign-out. Logging out wipes the
     /// auth token + flips ContentView routing back to OnboardingRoot;
     /// trivial to do by accident from the bottom of Settings.
@@ -692,29 +684,12 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
-            // W-AUDIOSRTPDEBUGTOGGLE (2026-09-10) — A/B testing switch
-            // between audio-srtp-v1 (native RTP/DTLS-SRTP, NetEQ+NACK/RTX
-            // di WebRTC) e il protocollo custom (DataChannel/WS-relay,
-            // cifratura app-level, il nostro NACK/RTX + jitter buffer).
-            // Cambia SOLO cosa questo device annuncia — serve comunque che
-            // l'ALTRO lato lo annunci (intersezione simmetrica). Tutto il
-            // resto (quale pipeline gira davvero, ogni feature legata al
-            // protocollo) segue automaticamente dalla negoziazione, stessa
-            // garanzia della costante compile-time che sostituisce. Non
-            // sopravvive a un riavvio dell'app — vedi
-            // CallCapabilities.audioSrtpDebugOverride.
-            SettingsToggleRow(
-                title: "Usa SRTP nativo invece del protocollo custom",
-                subtitle: "Non sopravvive a un riavvio — resetta al default compilato " +
-                    "(oggi: \(CallCapabilities.audioSrtpSendEnabled ? "ON" : "OFF")).",
-                isOn: Binding(
-                    get: { audioSrtpDebugToggle },
-                    set: { newValue in
-                        audioSrtpDebugToggle = newValue
-                        CallCapabilities.audioSrtpDebugOverride = newValue
-                    }
-                )
-            )
+            // W-CODECMENUSRTP — this A/B switch between audio-srtp-v1 and
+            // the custom protocol moved to Settings > Chiamate > CODEC
+            // (CallsSettingsScreen) so it is reachable outside
+            // QAUDION_DEV_TOOLS builds (App Store guideline 2.1). See
+            // CallCapabilities.audioSrtpDebugOverride for the binding this
+            // single source of truth now lives behind.
 
             // W46: Reset dati locali (UserDefaults wipe non-credenziale).
             // Utile per QA TestFlight per ripartire pulito senza

@@ -3984,7 +3984,10 @@ final class AppState: ObservableObject {
             // audio in either direction. These two bridges hand the
             // activation signal to CallService, which then starts /
             // stops its AVAudioEngine capture/playback at the right time.
-            provider.onAudioSessionActivated = { [weak self] in
+            // W-ADMGATE (2026-09-26) — the callback now carries who activated
+            // the session (CallKit's didActivate vs this app's own
+            // activation); CallService only reads it on a native-SRTP call.
+            provider.onAudioSessionActivated = { [weak self] source in
                 Task { @MainActor in
                     guard let self = self else { return }
                     // W-GRPVPIO-CRASH (2026-07-17) — CXProvider's didActivate:
@@ -4018,7 +4021,7 @@ final class AppState: ObservableObject {
                         self.routeGroupCallAudioToSpeaker()
                         return
                     }
-                    self.callService.handleAudioSessionActivated()
+                    self.callService.handleAudioSessionActivated(source: source)
                     self.markOutgoingAudioSessionReady()
                     // W-CALLSPKR (2026-07-20) — same class of gap as
                     // W-GRPSPKR above, different code path: didActivate just
@@ -5018,6 +5021,19 @@ final class AppState: ObservableObject {
         callService.resetAudioSrtpFactory = {
             QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()
         }
+        // W-ADMMANUAL (2026-09-26) — the manual-audio gate's decision lines
+        // (`admgate ...`, `nsnap ...`) into the same "call" stream. Numeric
+        // only, no key material.
+        NativeAudioSessionGate.log = { line in
+            RTLog.info("call", line)
+        }
+        // W-ADMNUDGE — the engine's capture-live nudge asks CallService's
+        // gate to re-decide (main thread) instead of re-enabling blindly.
+        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] reasonCode in
+            Task { @MainActor in
+                self?.callService.reapplyNativeAudioUnitGate(reasonCode: reasonCode)
+            }
+        }
         // W-AUNITTRACE (2026-09-10) — forwards WebRTC's own native
         // AudioDeviceIOS lifecycle events (short, numeric-tailed so the
         // redactor doesn't blob them, per reference_ios_log_pipeline_limits)
@@ -5099,6 +5115,12 @@ final class AppState: ObservableObject {
         }
         callService.getAudioRtpJitterSec = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpJitterSec ?? -1
+        }
+        // W-NATIVESRTPDIAG (this task) — same live-getter pattern as the
+        // pair above, for the wider stats snapshot the extended
+        // `audiosrtp hb=` heartbeat reads.
+        callService.getNativeAudioSrtpStats = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.nativeAudioSrtpStats
         }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
@@ -6395,7 +6417,8 @@ final class AppState: ObservableObject {
                         callerId: senderId,
                         sdp: dupSdp,
                         peerCapabilities: dupCaps,
-                        hasVideo: dupHasVideo
+                        hasVideo: dupHasVideo,
+                        callId: callIdStr
                     )
                     // Same tail the normal provisioning path runs (:4693).
                     // Idempotent (`incomingAudioStarted`); needed because the
@@ -6408,6 +6431,10 @@ final class AppState: ObservableObject {
                     self.consumeDeferredAnswerIfReady("ws-dupoffer")
                     return
                 }
+                // W-NATIVESRTPSNAPSHOT-ID (2026-09-26) — a NEW incoming call
+                // (provisionNormally): its native-SRTP snapshot, keyed by its
+                // call_id, before anything advertises capabilities for it.
+                self.latchIncomingNativeSrtpSnapshot(callId: callIdStr)
                 // W-NOCALLKIT cold-start DECLINE: the user already tapped "Rifiuta"
                 // on the notification before this call_incoming landed. Reject the
                 // call NOW — send hangup, skip ALL provisioning (no integration, no
@@ -6630,7 +6657,8 @@ final class AppState: ObservableObject {
                                 callerId: senderId,
                                 sdp: sdp,
                                 peerCapabilities: caps,
-                                hasVideo: vid
+                                hasVideo: vid,
+                                callId: callIdStr
                             )
                         }
                         // Cold-start answer race — the responder integration +
@@ -7306,6 +7334,14 @@ final class AppState: ObservableObject {
         if let key = self.callPqcSessionKey {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
+        }
+        // W-CTRLCLOSE (2026-09-26) — every reset of `webRtcController` goes
+        // through close(): same close-before-replace as the offer/outgoing
+        // sites (this one normally finds nil — a WS-relay call has no
+        // controller — so it only acts on a leak).
+        if let old = self.webRtcController as? QAudionWebRtcCallController, old !== controller {
+            old.closeSynchronously()
+            RTLog.warn("call", "callctrl replaced=1 site=upgrade")
         }
         self.webRtcController = controller
         self.flushPendingIceCandidates(to: controller)
@@ -8763,12 +8799,16 @@ final class AppState: ObservableObject {
             // The other caller (drainPendingOfferReplays) already invokes this on
             // the main actor, so hopping here makes the method consistently
             // main-isolated.
+            // W-NATIVESRTPSNAPSHOT-ID — the envelope's own call id keys the
+            // native-SRTP snapshot (nil if absent: the bound active id is used).
+            let offerEnvelopeCallId: String? = data["call_id"] as? String
             DispatchQueue.main.async {
                 self.handleIncomingWebRtcOffer(
                     callerId: callerId,
                     sdp: sdp,
                     peerCapabilities: peerCaps,
-                    hasVideo: offerHasVideo
+                    hasVideo: offerHasVideo,
+                    callId: offerEnvelopeCallId
                 )
             }
         }
@@ -15952,6 +15992,18 @@ final class AppState: ObservableObject {
             return
         }
         callContactId = contactId
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — ONE native-SRTP decision for this
+        // outgoing call, taken before anything advertises capabilities (the
+        // PQC `call_offer` below can leave before the WebRTC PeerConnection
+        // exists).
+        // W-NATIVESRTPSNAPSHOT-ID — keyed by the call id the OFFER will carry:
+        // the canonical outgoing id used to be minted further down (right
+        // before `beginAndroidOutgoing`); it is minted HERE now and that site
+        // uses this same value, so the snapshot, the call_offer, the PQC
+        // bundle and the WebRTC rail share one id. A random UUID either way.
+        let nativeSrtpOutgoingCallId: String = UUID().uuidString.lowercased()
+        let outgoingSnapshot = CallCapabilities.beginNativeSrtpCallSnapshot(callId: nativeSrtpOutgoingCallId)
+        logNativeSrtpSnapshot(outgoingSnapshot, site: 2)
         drainPendingOfferReplays(for: contactId)  // W-OFFERBUFFER (defensive; caller path)
         callState = .connecting
         isInCall = true
@@ -16584,7 +16636,9 @@ final class AppState: ObservableObject {
                 // generated by the engine went to /dev/null and any
                 // iOS-originated call to Android sat for the full
                 // 35s PqcHandshake timeout.
-                let outgoingCallId = UUID().uuidString.lowercased()
+                // W-NATIVESRTPSNAPSHOT-ID — minted at the top of startCall (the
+                // native-SRTP snapshot is keyed by it); same random UUID as before.
+                let outgoingCallId = nativeSrtpOutgoingCallId
                 sharedOutgoingCallId = outgoingCallId  // expose to WebRTC Task below
                 // Caller-id substitution: ship the local public phone
                 // number (digits-only, see `LocalCallerIdSettings`) as
@@ -17019,8 +17073,7 @@ final class AppState: ObservableObject {
                         RTLog.warn("call", "webrtc start_outgoing ok=0 err=\(error)")
                         print("[AppState] WebRTC startOutgoingCall failed: \(error)")
                         await MainActor.run {
-                            self?.webRtcController = nil
-                            self?.pendingRemoteIceCandidates.removeAll()
+                            self?.dropFailedOutgoingWebRtcController()
                         }
                     }
                 }
@@ -17032,6 +17085,10 @@ final class AppState: ObservableObject {
                 if recentCalls.count > 20 { recentCalls = Array(recentCalls.prefix(20)) }
             }
         } catch {
+            // W-NATIVESRTPSNAPSHOT-ID — this abort never reaches
+            // `CallService.endCall()`: drop THIS attempt's snapshot here
+            // (keyed, so it can never clear another call's).
+            dropAbortedOutgoingNativeSrtpSnapshot(callId: nativeSrtpOutgoingCallId)
             let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
             CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "answer_failed:\(error.localizedDescription)")
             clearKeyConfirmationState(callId: cid)
@@ -19232,6 +19289,56 @@ extension AppState {
         }
     }
 
+    /// W-CTRLCLOSE (2026-09-26) — `startOutgoingCall` threw: the controller
+    /// used to be dropped WITHOUT close(), leaving its PeerConnection (and, on
+    /// a native-SRTP call, WebRTC's audio streams on the shared factory) to
+    /// deinit whenever the last reference went. Closed explicitly now, like
+    /// every other reset site. Extracted from the failure closure on purpose
+    /// (CLAUDE.md section 13: keep deep closure bodies trivial).
+    func dropFailedOutgoingWebRtcController() {
+        if let ctrl = webRtcController as? QAudionWebRtcCallController {
+            ctrl.closeSynchronously()
+            RTLog.warn("call", "callctrl closed=1 site=startfail")
+        }
+        webRtcController = nil
+        pendingRemoteIceCandidates.removeAll()
+    }
+
+    /// W-NATIVESRTPSNAPSHOT (2026-09-26) — one numeric line per snapshot
+    /// decision. `site`: 2 outgoing call start, 3 incoming OFFER (1 is the
+    /// PeerConnection's own latch, logged by the engine; 4 is the call end,
+    /// logged by CallService).
+    func logNativeSrtpSnapshot(_ latch: CallCapabilities.NativeSrtpSnapshotLatch, site: Int) {
+        let nativeFlag: Int = latch.value ? 1 : 0
+        let freshFlag: Int = latch.fresh ? 1 : 0
+        let staleFlag: Int = latch.stale ? 1 : 0
+        let line: String = "nsnap site=\(site) native=\(nativeFlag) fresh=\(freshFlag) stale=\(staleFlag)"
+        RTLog.info("call", line)
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ID — responder side, at `call_incoming`: the
+    /// incoming call's snapshot, keyed by its wire `call_id`. Runs only on the
+    /// `.provisionNormally` path (a different active call has already been
+    /// dropped there), so it can never replace a live call's snapshot. A
+    /// server that omitted the id gets a per-envelope key: a new call must
+    /// never inherit an unidentified snapshot.
+    func latchIncomingNativeSrtpSnapshot(callId: String) {
+        let generatedKey: String = "in-" + UUID().uuidString.lowercased()
+        let key: String = callId.isEmpty ? generatedKey : callId
+        let latch = CallCapabilities.latchNativeSrtpCallSnapshot(callId: key)
+        logNativeSrtpSnapshot(latch, site: 5)
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ID — an outgoing attempt aborted before
+    /// `CallService.endCall()`: drop its snapshot (keyed: a no-op if another
+    /// call's snapshot is current).
+    func dropAbortedOutgoingNativeSrtpSnapshot(callId: String) {
+        let dropped: Bool = CallCapabilities.endNativeSrtpCallSnapshot(callId: callId)
+        let droppedFlag: Int = dropped ? 1 : 0
+        let line: String = "nsnap site=6 end=1 match=\(droppedFlag)"
+        RTLog.info("call", line)
+    }
+
     func setMuted(_ muted: Bool) {
         // Forward to CallService which gates outgoing PCM before encryption.
         callService.setMuted(muted)
@@ -19283,6 +19390,19 @@ extension AppState {
         // route-specific is needed here. The audio engine rebuilds itself on
         // the real speaker<->receiver flip (AudioCapture's debounced route
         // handler), same cost as a manual toggle today.
+        //
+        // W-NATIVESPKR (2026-09-26) — native-SRTP call (manual audio mode
+        // armed): same soft/iPad model, but through RTCAudioSession's
+        // configuration lock, without `.interruptSpokenAudioAndMixWithOthers`,
+        // and with WebRTC's own session configuration updated so its next
+        // reconfiguration of the session keeps `.defaultToSpeaker`. Every
+        // other call takes the unchanged path below.
+        if NativeAudioSessionGate.isArmed {
+            let hardOverride: Bool = UIDevice.current.userInterfaceIdiom == .pad
+            NativeAudioSessionGate.applySpeakerRoute(speakerOn: enabled, hardOverride: hardOverride)
+            updateProximityMonitoring()
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         do {
             #if !targetEnvironment(simulator)
@@ -24475,9 +24595,18 @@ extension AppState {
         callerId: String,
         sdp: String,
         peerCapabilities: [String]? = nil,
-        hasVideo: Bool = false
+        hasVideo: Bool = false,
+        callId: String? = nil
     ) {
         print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: caller=\(callerId.prefix(8)) sdpLen=\(sdp.count) hasVideo=\(hasVideo) — building WebRTC controller")
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — responder side. Keyed by the
+        // OFFER's call id (the envelope's `call_id` where the caller passes it,
+        // else the bound active call id): a rescued duplicate OFFER of the SAME
+        // call keeps the snapshot `call_incoming` took; a snapshot left by a
+        // different call is replaced (stale=1).
+        let offerCallId: String? = callId ?? canonicalActiveCallId()
+        let nativeLatch = CallCapabilities.latchNativeSrtpCallSnapshot(callId: offerCallId)
+        logNativeSrtpSnapshot(nativeLatch, site: 3)
         // W-CTRLBUILDDIAG (2026-08-30) — the prints in this function are
         // multi-word free-form English, which the remote-log redactor drops
         // whole (verified against redact_body, same story as W-AUDIOGATEDIAG).
@@ -24913,7 +25042,8 @@ extension AppState {
         callerId: String,
         sdp: String,
         peerCapabilities: [String]? = nil,
-        hasVideo: Bool = false
+        hasVideo: Bool = false,
+        callId: String? = nil
     ) {
         print("[AppState] WebRTC: call_offer received but WebRTC framework not linked")
     }

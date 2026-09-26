@@ -251,10 +251,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("audiosrtp caplive=8")
             return
         }
-        log?("audiosrtp caplive=0 nudge=1")
-        peerConnection?.setNativeAudioSrtpMuted(true)
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        peerConnection?.setNativeAudioSrtpMuted(false)
+        if peerConnection?.nativeSrtpEnabledForThisCall == true, NativeAudioSessionGate.isArmed {
+            // W-ADMNUDGE (2026-09-26) — manual audio mode: the nudge restarts
+            // WebRTC's own audio unit (isAudioEnabled false, then the
+            // CallService gate re-decides) — WebRTC's supported unit restart:
+            // reconfigure, re-initialize and start VoiceProcessingIO. The old
+            // track mute/unmute never touched the unit (the dead-TX shape is
+            // a unit that never delivers frames), and force-UNmuted a sender
+            // the user may have muted. Re-enabling goes through the gate, so
+            // a relay fallback or teardown during the 150 ms wins.
+            log?("audiosrtp caplive=0 nudge=2")
+            NativeAudioSessionGate.setNativeAudioActive(
+                false, reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if isCurrentCaptureLiveCheck(generation), peerConnection != nil {
+                NativeAudioSessionGate.requestGateReapply(
+                    reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+            }
+        } else {
+            log?("audiosrtp caplive=0 nudge=1")
+            peerConnection?.setNativeAudioSrtpMuted(true)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            peerConnection?.setNativeAudioSrtpMuted(false)
+        }
         if await waitForNativeCaptureLive(
             generation: generation, ptxAtArm: ptxAtArm,
             windowMs: CaptureLiveDecisions.afterNudgeWindowMs, via: 3, gateWaits: gateWaits
@@ -406,6 +425,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// WebRTC signalling thread — consumers hop to @MainActor themselves,
     /// same contract as `onDecryptFailureDetected`.
     public var onAudioDecryptFailureDetected: (() -> Void)?
+
+    /// W-NATIVESRTPDIAG (this task) — true once this call has logged its
+    /// one-shot "native SRTP enabled locally / announced by peer /
+    /// negotiated" summary line (see ``acceptPeerCapabilities(_:)``). This
+    /// controller is one-per-call, so a plain instance flag is enough to
+    /// guarantee exactly one such line even though `acceptPeerCapabilities`
+    /// is itself idempotent and may run more than once per call (duplicate
+    /// envelope, W418-style).
+    private var didLogNativeSrtpCallStartSummary = false
 
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
@@ -687,6 +715,46 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public private(set) var audioRtpConcealedSamples: Int64 = -1
     public private(set) var audioRtpConcealmentEvents: Int64 = -1
 
+    /// W-NATIVESRTPDIAG (this task) — every additional WebRTC stat this
+    /// task's diagnostics need, beyond the fields already read above by
+    /// earlier work, off the SAME `getStats` report ``pollMediaRttOnce()``
+    /// already fetches once per second — no extra round trip. `-1`/`nil`
+    /// (per field's own type) means "no such row in this report", same
+    /// convention as every other field on this file. `Sendable` so it can
+    /// cross the `getStats` callback's own thread boundary as a value type,
+    /// same as this file's other stat properties.
+    public struct NativeAudioSrtpStatsSnapshot: Sendable {
+        public var outboundRetransmittedPacketsSent: Int64 = -1
+        public var mediaSourceAudioLevel: Double = -1
+        public var mediaSourceTotalAudioEnergy: Double = -1
+        public var inboundTotalSamplesReceived: Int64 = -1
+        public var inboundAudioLevel: Double = -1
+        public var inboundInsertedSamplesForDeceleration: Int64 = -1
+        public var inboundRemovedSamplesForAcceleration: Int64 = -1
+        public var transportDtlsState: String?
+        public var transportSrtpCipher: String?
+        public var transportDtlsCipher: String?
+        public var transportTlsVersion: String?
+        public var transportDtlsRole: String?
+        public var selectedCandidatePairState: String?
+        public var localCandidateType: String?
+        public var localCandidateProtocol: String?
+        public var remoteCandidateType: String?
+        public var remoteCandidateProtocol: String?
+        public var codecMimeType: String?
+        public var codecClockRate: Int?
+        public var codecChannels: Int?
+        public var codecSdpFmtpLine: String?
+
+        public init() {}
+    }
+
+    /// Latest snapshot from ``pollMediaRttOnce()``, or every field at its
+    /// "absent" value before the first poll / on a call with no audio
+    /// `inbound`/`outbound-rtp` row (every call on the sealed
+    /// DataChannel/WS relay).
+    public private(set) var nativeAudioSrtpStats = NativeAudioSrtpStatsSnapshot()
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -737,6 +805,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var audioJitterSec: Double = -1
             var audioConcealedSamples: Int64 = -1
             var audioConcealmentEvents: Int64 = -1
+            // W-NATIVESRTPDIAG (this task) — see NativeAudioSrtpStatsSnapshot's
+            // own field docs for what each of these is.
+            var snapshot = NativeAudioSrtpStatsSnapshot()
+            var audioCodecId: String?
+            var preferredLocalCandidateId: String?
+            var preferredRemoteCandidateId: String?
+            var fallbackLocalCandidateId: String?
+            var fallbackRemoteCandidateId: String?
             for (_, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
@@ -747,23 +823,54 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     audioJitterSec = (s.values["jitter"] as? NSNumber)?.doubleValue ?? -1
                     audioConcealedSamples = (s.values["concealedSamples"] as? NSNumber)?.int64Value ?? -1
                     audioConcealmentEvents = (s.values["concealmentEvents"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundTotalSamplesReceived = (s.values["totalSamplesReceived"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.inboundInsertedSamplesForDeceleration =
+                        (s.values["insertedSamplesForDeceleration"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundRemovedSamplesForAcceleration =
+                        (s.values["removedSamplesForAcceleration"] as? NSNumber)?.int64Value ?? -1
+                    audioCodecId = s.values["codecId"] as? String
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                     audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.outboundRetransmittedPacketsSent =
+                        (s.values["retransmittedPacketsSent"] as? NSNumber)?.int64Value ?? -1
+                }
+                if s.type == "media-source", (s.values["kind"] as? String) == "audio" {
+                    snapshot.mediaSourceAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.mediaSourceTotalAudioEnergy = (s.values["totalAudioEnergy"] as? NSNumber)?.doubleValue ?? -1
+                }
+                if s.type == "transport", snapshot.transportDtlsState == nil {
+                    // W-NATIVESRTPDIAG — bundlePolicy is `.maxBundle`
+                    // (`defaultConfiguration`), so a 1:1 call has exactly one
+                    // transport row in practice; take the first one seen.
+                    snapshot.transportDtlsState = s.values["dtlsState"] as? String
+                    snapshot.transportSrtpCipher = s.values["srtpCipher"] as? String
+                    snapshot.transportDtlsCipher = s.values["dtlsCipher"] as? String
+                    snapshot.transportTlsVersion = s.values["tlsVersion"] as? String
+                    snapshot.transportDtlsRole = s.values["dtlsRole"] as? String
                 }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
                 let rttSec = (s.values["currentRoundTripTime"] as? NSNumber)?.doubleValue
+                let pairState = s.values["state"] as? String
+                let localId = s.values["localCandidateId"] as? String
+                let remoteId = s.values["remoteCandidateId"] as? String
                 if !haveFallback {
                     haveFallback = true
                     fallbackRttSec = rttSec
+                    fallbackLocalCandidateId = localId
+                    fallbackRemoteCandidateId = remoteId
                 }
                 let nominated = (s.values["nominated"] as? NSNumber)?.boolValue ?? false
                 let selected = (s.values["selected"] as? NSNumber)?.boolValue ?? false
                 if (nominated || selected), !havePreferred {
                     havePreferred = true
                     preferredRttSec = rttSec
+                    preferredLocalCandidateId = localId
+                    preferredRemoteCandidateId = remoteId
+                    snapshot.selectedCandidatePairState = pairState
                 }
             }
             // No succeeded pair ⇒ ICE never converged (or has failed) ⇒ there
@@ -783,6 +890,28 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self.audioRtpConcealedSamples = audioConcealedSamples
             self.audioRtpConcealmentEvents = audioConcealmentEvents
             self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
+
+            // W-NATIVESRTPDIAG — second, cheap dictionary lookup pass to
+            // resolve the foreign-key references collected above (codecId /
+            // local+remoteCandidateId) into their own stats rows — still the
+            // SAME `getStats` report, no extra round trip.
+            if let codecId = audioCodecId, let codecStats = report.statistics[codecId] {
+                snapshot.codecMimeType = codecStats.values["mimeType"] as? String
+                snapshot.codecClockRate = (codecStats.values["clockRate"] as? NSNumber)?.intValue
+                snapshot.codecChannels = (codecStats.values["channels"] as? NSNumber)?.intValue
+                snapshot.codecSdpFmtpLine = codecStats.values["sdpFmtpLine"] as? String
+            }
+            let localCandidateId = havePreferred ? preferredLocalCandidateId : fallbackLocalCandidateId
+            let remoteCandidateId = havePreferred ? preferredRemoteCandidateId : fallbackRemoteCandidateId
+            if let localCandidateId, let localStats = report.statistics[localCandidateId] {
+                snapshot.localCandidateType = localStats.values["candidateType"] as? String
+                snapshot.localCandidateProtocol = localStats.values["protocol"] as? String
+            }
+            if let remoteCandidateId, let remoteStats = report.statistics[remoteCandidateId] {
+                snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
+                snapshot.remoteCandidateProtocol = remoteStats.values["protocol"] as? String
+            }
+            self.nativeAudioSrtpStats = snapshot
         }
     }
 
@@ -1397,6 +1526,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
         // as every other numeric-only diagnostic of this controller.
         pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -1566,6 +1698,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
         // as every other numeric-only diagnostic of this controller.
         pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -1681,6 +1816,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
         // as every other numeric-only diagnostic of this controller.
         pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {
@@ -3179,6 +3317,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// ```
     public func acceptPeerCapabilities(_ peer: [String]?) {
         peerConnection?.acceptPeerCapabilities(peer)
+        // W-NATIVESRTPDIAG (this task) — one-shot, remote-visible summary of
+        // the three distinct "is native SRTP a thing on this call" questions,
+        // for EVERY call (not gated on any of them being true): whether THIS
+        // build/device would use it at all (``isNativeSrtpEnabledLocally``,
+        // the compiled switch or the debug override), whether the PEER's raw
+        // advertised list says it can too (before intersection), and whether
+        // the two sides actually agreed (the intersection). Distinguishing
+        // "enabled locally but peer doesn't have it" from "peer has it but we
+        // don't" from "both do but something else emptied the intersection"
+        // (e.g. an earbud call) is exactly the split a silent-call
+        // archaeology session on this feature would otherwise have to
+        // reconstruct from absence of evidence.
+        if !didLogNativeSrtpCallStartSummary, let negotiated = peerNegotiated() {
+            didLogNativeSrtpCallStartSummary = true
+            let enabledLocally = CallCapabilities.isNativeSrtpEnabledLocally
+            let announcedByPeer = negotiated.peerRawTags.contains(CallCapabilities.audioSrtpV1)
+            let negotiatedSrtp = negotiated.useAudioSrtp
+            log?("audiosrtp summary local=\(enabledLocally ? 1 : 0) peer=\(announcedByPeer ? 1 : 0) negotiated=\(negotiatedSrtp ? 1 : 0)")
+        }
         // WIRE_SPEC §8.7 / .legacy-latch fix — UPWARD re-evaluation only.
         // The AES-256 fail-close path (ensureVideoSealer) latches
         // `videoSealer = .legacy` when the caps known AT THAT MOMENT don't
@@ -3405,6 +3562,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // live sender, `armRekeySwitch` above already confirms that
                 // switch on its own terms.
                 armNativeAudioCaptureLiveCheck()
+                // W-NATIVESRTPDIAG (this task) — one-shot diagnostics, ONLY
+                // on this call's FIRST activation (epoch 0 — a rekey is not
+                // "activation").
+                logNativeSrtpActivationDiagnostics()
+                logNativeSrtpAudioSdpSummary()
             }
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
@@ -3414,6 +3576,85 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         } else {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach exhausted retries — mic stays muted this call")
         }
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — one-shot, remote-visible snapshot of
+    /// everything relevant to "did the native audio path actually come up
+    /// cleanly": the selected transceiver's negotiated state, whether the
+    /// sender track is enabled, whether the FrameCryptor key was installed
+    /// by the time this line is emitted (this call site runs synchronously
+    /// AFTER `activateNativeAudioSrtp` already installed it — see that
+    /// method's own doc — so `keyok=0` here would itself be a bug), and
+    /// the full `RTCAudioSession`/route state WebRTC's native audio unit is
+    /// about to start against.
+    ///
+    /// `RTCRtpTransceiver.currentDirection:` — an out-param METHOD on this
+    /// pinned SDK (the property form failed the CI simulator build); see the
+    /// call site below.
+    private func logNativeSrtpActivationDiagnostics() {
+        var parts: [String] = []
+        if let transceiver = peerConnection?.nativeAudioTransceiverForDiagnostics {
+            parts.append("mid=\(transceiver.mid.isEmpty ? "none" : transceiver.mid)")
+            parts.append("dir=\(transceiver.direction.rawValue)")
+            // W-NATIVESRTPBUILDFIX (2026-09-26) — on this pinned SDK
+            // `currentDirection` is the ObjC out-param METHOD
+            // `-currentDirection:(RTCRtpTransceiverDirection *)`, not a
+            // property (the CI simulator build rejected the property form).
+            // It returns NO before the transceiver has a negotiated
+            // direction; logged as -1 then.
+            var currentDir = RTCRtpTransceiverDirection.inactive
+            let hasCurrentDir = transceiver.currentDirection(&currentDir)
+            let currentDirRaw: Int = hasCurrentDir ? Int(currentDir.rawValue) : -1
+            parts.append("curdir=\(currentDirRaw)")
+        }
+        let senderTrackEnabled = peerConnection?.nativeAudioSender?.track?.isEnabled ?? false
+        parts.append("senden=\(senderTrackEnabled ? 1 : 0)")
+        // See this method's own doc — always expected to read 1 here; a 0
+        // would mean `activateNativeAudioSrtp`'s own install-then-attach
+        // ordering broke.
+        let keyInstalled = peerConnection?.nativeAudioCryptor?.keyIsSet ?? false
+        parts.append("keyok=\(keyInstalled ? 1 : 0)")
+
+        // RTCAudioSession's own wrapper state — the fields WebRTC's native
+        // audio unit itself is about to start against, distinct from the
+        // app's manual AVAudioEngine session bookkeeping this task
+        // deliberately does not touch (see this task's own scope note).
+        let rtcSession = RTCAudioSession.sharedInstance()
+        parts.append("cat=\(rtcSession.category)")
+        parts.append("mode=\(rtcSession.mode)")
+        parts.append("opts=\(rtcSession.categoryOptions.rawValue)")
+        parts.append("active=\(rtcSession.isActive ? 1 : 0)")
+        parts.append("manual=\(rtcSession.useManualAudio ? 1 : 0)")
+        parts.append("audioen=\(rtcSession.isAudioEnabled ? 1 : 0)")
+
+        // Route/hardware fields read off the plain AVAudioSession (same
+        // proven-correct API `CallService.sampleWireThroughput`'s own
+        // `audiosrtp hb=` line already uses for output ports/volume), rather
+        // than guessing whether `RTCAudioSession` re-exposes each of these
+        // under the identical name.
+        let avSession = AVAudioSession.sharedInstance()
+        let inPorts = avSession.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: "+")
+        let outPorts = avSession.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
+        parts.append("inp=\(inPorts.isEmpty ? "none" : inPorts)")
+        parts.append("outp=\(outPorts.isEmpty ? "none" : outPorts)")
+        parts.append("inavail=\(avSession.isInputAvailable ? 1 : 0)")
+        parts.append("sr=\(Int(avSession.sampleRate))")
+        parts.append("iobufms=\(Int(avSession.ioBufferDuration * 1000))")
+
+        log?("audiosrtp activation " + parts.joined(separator: " "))
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — one-shot, sanitized summary of the
+    /// negotiated audio m=section (see ``AudioSdpSummary`` for exactly what
+    /// it reads and why nothing sensitive can appear in it). Reads the
+    /// CURRENT local description: by the time this runs (this call's first
+    /// native-SRTP activation), a full offer/answer round has already
+    /// completed on both roles, so `localDescription` reflects the final
+    /// negotiated state either way.
+    private func logNativeSrtpAudioSdpSummary() {
+        guard let sdp = peerConnection?.peerConnection?.localDescription?.sdp,
+              let summary = AudioSdpSummary.summarize(sdp) else { return }
+        log?("audiosrtp sdp " + summary)
     }
 
     /// Read the current peer-negotiated capability set. Returns `nil`

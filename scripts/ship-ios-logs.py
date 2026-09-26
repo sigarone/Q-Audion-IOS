@@ -592,6 +592,22 @@ APP_VOCAB = frozenset("""
     vbwcap vbwcaprx vcap verified version vidcap video voice voiced voip vol
     vpio vpn vpostneg vspostneg w-callawake wait watchdog wdstart wdstop
     webrtc why wifi wire writable ws wss wsunavailable x xw yet
+
+    actpass audioen band bitrate built c0 c1 c2 c3 cat cbr ch chacha
+    checking clk codecs completed connected cps cryptor curdir decfail
+    dir dtlsc e0 e1 e2 e3 e4 ecdhe ecdsa encfail extmap failed fmtp
+    inavail input interr iobufms isd keyok lct local lproto manual
+    maxaveragebitrate maxptime mime minptime misskey mode mseng mslvl
+    new none opts orientation passive peer play poly ptime rct receiver
+    record red recvonly repaired ringfail role rproto rsa rtx rxlvl
+    sendonly sendrecv senden setup srtpc stream summary tlsv toffset
+    tsr unk useinbandfec wide
+
+    act admgate after ans audit before capstop changed ckwait cnt cur
+    disarm en end endbal expired fbsettle fields first fresh hard iter
+    man merged mute nativemute native neg nsnap preven prevman replaced
+    rxrebind sess site src stalearm startfail tok verdict voipcfg
+    match stale
 """.split())
 
 # Second letters that (almost) never follow the first in English / app
@@ -928,6 +944,9 @@ KV_FIXED_VOCAB = frozenset([
     "P2pSrtp", "P2pDtls", "WsRelay", "Session", "Tempo", "TUS",
     "WIFI", "CELLULAR", "ETHERNET", "LOOPBACK", "OTHER", "NONE",
     "ws-relay", "media-lost", "half-open",
+    # W-NATIVESRTPDIAG (this task) -- RTCAudioSession.category, read back
+    # exactly as CallKitProvider.setCategory(.playAndRecord, ...) sets it.
+    "playAndRecord", "AVAudioSessionCategoryPlayAndRecord",
 ])
 
 

@@ -53,6 +53,37 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
         XCTAssertEqual(cfg.continualGatheringPolicy, .gatherContinually)
     }
 
+    /// W-NATIVESRTPGATE (this task) — with no `nativeSrtpEnabledLocally`
+    /// argument (every existing call site before this task), the extra
+    /// native-SRTP-only fields must NOT be touched: a normal call's
+    /// RTCConfiguration stays byte-for-byte what it was before this task.
+    /// Compared against a fresh `RTCConfiguration()` rather than hard-coded
+    /// values: this SDK build returns a non-nil default `cryptoOptions`
+    /// (CI, 2026-09-26), so "untouched" means "same as the SDK default".
+    func testDefaultConfigurationWithNativeSrtpDisabled_leavesTheNativeSrtpFieldsAtSdkDefaults() {
+        let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: false)
+        let sdkDefault = RTCConfiguration()
+        XCTAssertEqual(cfg.cryptoOptions == nil, sdkDefault.cryptoOptions == nil)
+        if let got = cfg.cryptoOptions, let def = sdkDefault.cryptoOptions {
+            XCTAssertEqual(got.srtpEnableGcmCryptoSuites, def.srtpEnableGcmCryptoSuites)
+            XCTAssertEqual(got.srtpEnableAes128Sha1_32CryptoCipher, def.srtpEnableAes128Sha1_32CryptoCipher)
+            XCTAssertEqual(got.srtpEnableEncryptedRtpHeaderExtensions, def.srtpEnableEncryptedRtpHeaderExtensions)
+        }
+        XCTAssertEqual(cfg.tcpCandidatePolicy, sdkDefault.tcpCandidatePolicy)
+        XCTAssertEqual(cfg.audioJitterBufferMaxPackets, sdkDefault.audioJitterBufferMaxPackets)
+        XCTAssertEqual(cfg.audioJitterBufferFastAccelerate, sdkDefault.audioJitterBufferFastAccelerate)
+    }
+
+    /// W-NATIVESRTPGATE — with the flag true, every best-practice parameter
+    /// this task adds must actually be set.
+    func testDefaultConfigurationWithNativeSrtpEnabled_appliesTheBestPracticeParameters() {
+        let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: true)
+        XCTAssertNotNil(cfg.cryptoOptions)
+        XCTAssertEqual(cfg.tcpCandidatePolicy, .disabled)
+        XCTAssertEqual(cfg.audioJitterBufferMaxPackets, 50)
+        XCTAssertFalse(cfg.audioJitterBufferFastAccelerate)
+    }
+
     func testIceServerConversionFromRelayServers() {
         let relays: [RelayServer] = [
             RelayServer(urls: ["turn:turn.example:3478"], username: "u", credential: "c", ttl: 1800),

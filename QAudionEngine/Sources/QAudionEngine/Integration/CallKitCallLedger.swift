@@ -91,7 +91,39 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// PushKit push, e3acecd7: 03.221 and 03.222) both saw "not reported yet".
     private var reportsInFlight: Set<UUID> = []
 
+    /// W-ADMBALANCE-UUID (2026-09-26) — CallKit uuids of native-SRTP (manual
+    /// audio mode) calls, recorded when the call's CallKit start/answer runs
+    /// and consumed by that SAME uuid's `reportCallEnded`, which then issues
+    /// the single balancing deactivation instead of the legacy drain. Keyed
+    /// by uuid, not a process-wide flag: `reportCallEnded` runs in an
+    /// unawaited Task, so a NEW native call could arm a shared flag before
+    /// the OLD call's report consumed it (the old report then took the new
+    /// call's flag and the new call fell back to the drain). A call with
+    /// native SRTP off is never recorded, so its end is the legacy drain.
+    /// Deliberately NOT cleared by `drainOutstanding`/`clearRejected`: a record
+    /// must survive until its own `reportCallEnded`, and a leftover one (a call
+    /// ended only through `endAllOutstanding`) is inert, since call uuids are
+    /// never reused - one UUID per native call that skipped its report.
+    private var nativeBalanceUUIDs: Set<UUID> = []
+
     init() {}
+
+    /// W-ADMBALANCE-UUID — `uuid` is a native-SRTP call (its end owes the
+    /// single balancing deactivation). Idempotent.
+    func recordNativeBalance(_ uuid: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        nativeBalanceUUIDs.insert(uuid)
+    }
+
+    /// W-ADMBALANCE-UUID — atomic test-and-remove: `true` exactly once, and
+    /// only for a uuid recorded by ``recordNativeBalance(_:)``. Another call's
+    /// record is never consumed.
+    func consumeNativeBalance(_ uuid: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return nativeBalanceUUIDs.remove(uuid) != nil
+    }
 
     /// Called the instant `activateAudioSession` successfully calls
     /// `RTCAudioSession`'s locked `setActive(true)`. Marks that a matching
