@@ -4067,7 +4067,7 @@ final class CallService: @unchecked Sendable {
     /// still expected CallKit's didActivate.
     private var nativeUnitCallKitWaitExpired = false
     private var nativeUnitCallKitWaitItem: DispatchWorkItem?
-    /// Last verdict logged, so the `admgate v=` line is emitted on change only.
+    /// Last verdict logged, so the `admgate verdict=` line is emitted on change only.
     private var lastLoggedNativeUnitVerdict: Int = -1
 
     private func resetNativeAudioUnitGateState() {

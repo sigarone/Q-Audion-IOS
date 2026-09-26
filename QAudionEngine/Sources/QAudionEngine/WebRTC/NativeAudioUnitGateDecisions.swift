@@ -51,7 +51,7 @@ public enum AudioSessionActivationSource: Int, Sendable, Equatable {
 public enum NativeAudioUnitGateDecisions {
 
     /// Why the unit may (0) or may not start. Raw values are the numeric
-    /// `why=` field of the `admgate` log lines.
+    /// `verdict=` field of the `admgate verdict=` lines.
     public enum Verdict: Int, Sendable, Equatable {
         case enable = 0
         case notNativeCall = 1
@@ -64,7 +64,7 @@ public enum NativeAudioUnitGateDecisions {
 
     /// Why the unit was switched on or off. Raw values are the numeric `why=`
     /// field of the `admgate en=` lines (the verdict codes above are logged
-    /// under `v=`, so the two never share a field).
+    /// under `verdict=`, so the two never share a field).
     public enum ChangeReason: Int, Sendable, Equatable {
         /// `CallService.startAudioIOIfReady`'s native branch, verdict `.enable`.
         case gate = 1
