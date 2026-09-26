@@ -444,31 +444,35 @@ struct LiveInCallScreen: View {
 
     private func handleToggleCamera() {
         let next = !cameraOn
+        // Entitlements Task 5 parity — Android gates this manual toggle too,
+        // not just the mid-call `onUpgradeToVideo` escalation button above.
+        // Same shape as `onUpgradeToVideoLocked` just above: turning OFF is
+        // never gated.
+        if next, !capabilityGate.isUnlocked(.callsVideo) {
+            upgradeSheetCapability = .callsVideo
+            return
+        }
         // W-CAMBTNSRC follow-up (2026-09-08) — a call answered without video
         // (W-VIDPRIVACY `.receiveOnly`) never opens a real `AVCaptureSession`
         // (`VideoCallPipeline.sourceMode == .external`); this button still
         // renders because `hasVideo` reflects the call TYPE, not whether the
-        // local camera was ever provisioned. Turning it "on" via
-        // `videoSetCameraEnabled` used to call `captureSession.startRunning()`
-        // on a session that was never configured with a camera input —
-        // silent no-op, live-reported as "pressing the video button does
-        // nothing." Local video was never actually negotiated in this call,
-        // so re-enabling it needs the same consent-gated renegotiation as the
-        // mid-call upgrade button (`handleUpgradeToVideo`), not a bare pause/
-        // resume flip. Once a real camera exists (`.camera` sourceMode), this
-        // stays a pure pause/resume via `videoSetCameraEnabled` as before.
-        if next, appState.videoPipeline?.sourceMode == .external {
-            appState.upgradeToVideo()
-            return
-        }
-        // W-CAMSILENT (2026-07-24) — was `appState.setCamera(...)`, which only
-        // flips the LOCAL pipeline: it neither updates `localVideoPaused` nor
-        // sends `call_video_state`. So turning the camera off on THIS surface
-        // left the peer believing we were still transmitting for the rest of the
-        // call, and left our own paused-state flag lying to every other reader.
-        // `videoSetCameraEnabled` is the complete operation (pipeline + flag +
-        // peer notification) and is what the other camera controls already use.
-        appState.videoSetCameraEnabled(next)
+        // local camera was ever provisioned. `videoSetCameraEnabled` alone
+        // is a silent no-op there, and (BUG (C), W-VIDPARITY) routing "on"
+        // through `upgradeToVideo()` was ALSO a no-op whenever `isVideoCall`
+        // was already true (e.g. this screen showing because both sides
+        // paused their camera on an otherwise-real video call) — its own
+        // `guard isInCall, !isVideoCall` silently returns.
+        // `setLocalCameraEnabled` picks the right mechanism for however the
+        // call actually got here (`PeerVideoInviteDecisions
+        // .localCameraEnableRoute`): a real SDP upgrade for an audio-only
+        // call, promoting the `.external` placeholder pipeline to a real
+        // camera for a video call answered receive-only, or a plain
+        // pause/resume once a real camera already exists.
+        // W-CAMSILENT (2026-07-24) — turning the camera OFF here still
+        // needs the complete operation (pipeline + flag + peer
+        // notification), never a bare local pipeline flip, so the peer's
+        // UI doesn't keep believing we're still transmitting.
+        appState.setLocalCameraEnabled(next)
     }
 
     private func handleUpgradeToVideo() {

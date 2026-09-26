@@ -856,6 +856,18 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ws.send(type: "call_video_state", data: payload)
     }
 
+    /// W-VIDPARITY — `call_video_pause_request` (either direction,
+    /// transparent relay, same envelope class as `call_video_state`
+    /// above): asks the PEER to turn their own camera off. No consent
+    /// dialog on the receiving end — mirrors Android `CallController.kt`'s
+    /// send side. No `recipient_id` — the server resolves the peer from
+    /// `call_id`, unlike `sendVideoState`/`sendCallMediaReady` above.
+    public func sendCallVideoPauseRequest(callId: String) async throws {
+        ws.send(type: "call_video_pause_request", data: [
+            "call_id": callId,
+        ])
+    }
+
     public func getRelays() async throws -> [RelayServer] {
         return try await getRelaysResponse().relays
     }
