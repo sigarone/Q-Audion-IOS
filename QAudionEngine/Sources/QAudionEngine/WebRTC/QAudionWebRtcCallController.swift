@@ -2073,24 +2073,49 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             videoUpgradeInProgress = false
-            // OFFERER-UPGRADE DECODE FIX (2026-07-05) — this is the ONLY
-            // flow where our video transceiver was created by a LOCAL
-            // addTrack on a second-round offer; the receiver cryptor
-            // attached at didAdd-time binds before the receiver's RTP
-            // channel is live and inbound video then reaches the decoder
-            // STILL ENCRYPTED (framesDecoded pinned at 0 forever — the
-            // black-screen bug). Re-create it now, against the receiver as
-            // it exists AFTER the answer associated the transceiver. See
-            // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
-            _ = pc.rebindVideoReceiverCryptorPostNegotiation()
-            // BUG2 fix (2026-07-11) — SENDER half of the exact same
-            // pre-negotiation-attach-timing bug. upgradeToVideo()'s
-            // attachVideoSenderCryptor() call ran right after
-            // addLocalVideoTrack(), before this answer ever came back —
-            // rebind it now against the sender as it exists post-
-            // negotiation, mirroring the receiver rebind above. See
-            // QAudionPeerConnection.rebindVideoSenderCryptorPostNegotiation.
-            _ = pc.rebindVideoSenderCryptorPostNegotiation()
+            // W-CRYPTORQUEUE (2026-09-27 follow-up) — this call runs on
+            // MainActor (see AppState's `Task { @MainActor ... } { try
+            // await controller.applyUpgradeAnswer(...) }`). Both rebinds
+            // below reconstruct a native RTCFrameCryptor via
+            // attachReceiver/attachSender (NativeVideoFrameCryptor.
+            // rebindReceiver/rebindSender), whose RTCFrameCryptor(...) init
+            // marshals onto the WebRTC signalling thread and blocks the
+            // CALLING thread on the same untimed Event::Wait documented on
+            // `cryptorAttachQueue` above — the queue that install/retry/
+            // rekey already moved off MainActor/the signalling thread for
+            // exactly this reason. Running these two synchronously here left
+            // MainActor exposed to that same marshal wait whenever the
+            // signalling thread is busy (concurrent SetRemoteDescription, an
+            // ICE-restart burst) — no lock-order inversion (attachSender/
+            // attachReceiver already release `lock` before the native init,
+            // see their own docs), so not the 0x8BADF00D deadlock, but the
+            // same class of MainActor stall. Hopping onto `cryptorAttachQueue`
+            // closes that gap the same way; `beginVideoTxHold()` below
+            // already mutes the local video track synchronously and only
+            // releases it on the peer's call_media_ready or a 2s timeout, so
+            // deferring these rebinds by one queue hop does not risk sending
+            // a frame through a not-yet-rebound cryptor.
+            cryptorAttachQueue.async { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                // OFFERER-UPGRADE DECODE FIX (2026-07-05) — this is the ONLY
+                // flow where our video transceiver was created by a LOCAL
+                // addTrack on a second-round offer; the receiver cryptor
+                // attached at didAdd-time binds before the receiver's RTP
+                // channel is live and inbound video then reaches the decoder
+                // STILL ENCRYPTED (framesDecoded pinned at 0 forever — the
+                // black-screen bug). Re-create it now, against the receiver as
+                // it exists AFTER the answer associated the transceiver. See
+                // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
+                _ = pc.rebindVideoReceiverCryptorPostNegotiation()
+                // BUG2 fix (2026-07-11) — SENDER half of the exact same
+                // pre-negotiation-attach-timing bug. upgradeToVideo()'s
+                // attachVideoSenderCryptor() call ran right after
+                // addLocalVideoTrack(), before this answer ever came back —
+                // rebind it now against the sender as it exists post-
+                // negotiation, mirroring the receiver rebind above. See
+                // QAudionPeerConnection.rebindVideoSenderCryptorPostNegotiation.
+                _ = pc.rebindVideoSenderCryptorPostNegotiation()
+            }
             // WIRE_SPEC §8.7 (SHOULD) — upgrader path: we start sending
             // video now that the answer is applied. Hold TX until the
             // peer's call_media_ready (or 2s), then enable + force IDR.
