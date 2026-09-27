@@ -190,7 +190,7 @@ public final class QAudionPeerConnection: NSObject {
     /// W-NATIVESRTPGATE bug fix (this task) — this used to read
     /// `CallCapabilities.audioSrtpSendEnabled` directly, the COMPILE-TIME
     /// switch alone. That made the runtime debug override
-    /// (`audioSrtpDebugOverride`, the Settings "SVILUPPATORE" toggle) a lie:
+    /// (`audioSrtpDebugOverride`, the Settings > Chiamate toggle) a lie:
     /// flipping it on made `localCaps` advertise `audio-srtp-v1` on the wire
     /// (``CallCapabilities/applyAdvertisementGates`` already read the
     /// override), but `init` never built the transceiver to carry it — the
@@ -944,6 +944,36 @@ public final class QAudionPeerConnection: NSObject {
         return true
     }
 
+    /// W-NATIVEAUDIOQUALITY (this task, spec section D) — pins the native-
+    /// SRTP audio sender's encoding to a hard 32 kbps floor AND ceiling, so
+    /// WebRTC's own bandwidth estimator cannot lower Opus below the
+    /// packetization/CBR profile `AudioSdpPolicy` already negotiated (an
+    /// estimator is otherwise free to ratchet ANY encoding down under
+    /// congestion, audio included). Same core pattern
+    /// `setVideoDegradationPreference` above already uses (`sender
+    /// .parameters` get/mutate/set-back) and `applyVideoSenderMaxBitrate`
+    /// (`QAudionWebRtcCallController.swift`) already verified for
+    /// `maxBitrateBps` on THIS pinned SDK. `minBitrateBps` is the one new
+    /// property here — a long-standing, ordinary member of
+    /// `RTCRtpEncodingParameters` in every WebRTC iOS SDK release this
+    /// author is aware of, but NOT itself grep-verified against this exact
+    /// vendored `WebRTC.xcframework` build (no local toolchain to unzip/
+    /// inspect it — see this task's own report). No-op if `sender` has no
+    /// encodings yet.
+    @discardableResult
+    public func applyNativeAudioSenderBitrateCap(on sender: RTCRtpSender) -> Bool {
+        let params = sender.parameters
+        guard !params.encodings.isEmpty else { return false }
+        let bps = NSNumber(value: AudioSdpPolicy.maxAverageBitrateBps)
+        for encoding in params.encodings {
+            encoding.minBitrateBps = bps
+            encoding.maxBitrateBps = bps
+        }
+        sender.parameters = params
+        print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender bitrate pinned min=max=\(AudioSdpPolicy.maxAverageBitrateBps)")
+        return true
+    }
+
     // MARK: - Native video FrameCryptor (insertable streams)
 
     /// Create the per-call native FrameCryptor holder (idempotent). Does NOT
@@ -1197,6 +1227,11 @@ public final class QAudionPeerConnection: NSObject {
         let attached = cryptor.attachSender(effectiveSender)
         if attached {
             localAudioSrtpTrack?.isEnabled = !pendingAudioSrtpMuted
+            // W-NATIVEAUDIOQUALITY (this task) — pin the encoding bitrate at
+            // the SAME point Android's spec calls for ("subito dopo addTrack
+            // ... e di nuovo all'attivazione"): activation is where this
+            // sender starts actually carrying native-SRTP audio.
+            applyNativeAudioSenderBitrateCap(on: effectiveSender)
         }
         diag?("audiosrtp act=1 n=\(diagN) sel=\(diagSel) dir=\(diagDir) br=\(diagBr) en=\(localAudioSrtpTrack?.isEnabled == true ? 1 : 0) att=\(attached ? 1 : 0)")
         if !attached {
@@ -1661,7 +1696,15 @@ public final class QAudionPeerConnection: NSObject {
             // make iOS's SDP diverge from Android's on every ordinary call,
             // the opposite of the cross-platform parity this policy exists
             // for.
-            let mungedText = AudioSdpPolicy.apply(sdp.sdp)
+            // W-NATIVEAUDIOQUALITY (this task) — additive, native-SRTP-only
+            // mono/fullband + NACK layer, applied AFTER the unconditional
+            // base policy above (never instead of it). Unlike
+            // `AudioSdpPolicy`, this ONE is deliberately gated on
+            // `isNativeSrtpEnabledLocally` — it exists ONLY for the native
+            // path (spec section D), so an ordinary call's SDP is untouched
+            // (see `NativeAudioSdpPolicy`'s own header).
+            let baseMungedText = AudioSdpPolicy.apply(sdp.sdp)
+            let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let munged = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(munged.sdp, tag: iceRestart ? "LOCAL_OFFER_ICE_RESTART" : "LOCAL_OFFER")
             self?.peerConnection?.setLocalDescription(munged, completionHandler: { setErr in
@@ -1710,7 +1753,10 @@ public final class QAudionPeerConnection: NSObject {
             // attribute sets — order between them does not matter, but
             // matching Android/createOffer's own "policy last" placement).
             // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
-            let mungedText = AudioSdpPolicy.apply(pinnedSdpText)
+            // W-NATIVEAUDIOQUALITY (this task) — see createOffer's own note;
+            // same additive, native-SRTP-only layer, applied last.
+            let baseMungedText = AudioSdpPolicy.apply(pinnedSdpText)
+            let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let pinnedSdp = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
@@ -1744,7 +1790,11 @@ public final class QAudionPeerConnection: NSObject {
         // applies the same policy bidirectionally — see AudioSdpPolicy's own
         // doc for why this is unilateral-safe).
         // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
-        let munged = AudioSdpPolicy.apply(sdp)
+        // W-NATIVEAUDIOQUALITY (this task) — see createOffer's own note;
+        // munging the INBOUND SDP the same way constrains our own decoder
+        // preferences even against a peer that sends unmunged defaults.
+        let baseMunged = AudioSdpPolicy.apply(sdp)
+        let munged = NativeAudioSdpPolicy.apply(baseMunged, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
         pc.setRemoteDescription(desc, completionHandler: completion)
