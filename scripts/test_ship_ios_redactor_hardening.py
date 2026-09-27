@@ -423,6 +423,42 @@ check(m._is_call_format_body("call", "dcmux txfall why=stale"),
 drop_caches()
 
 # ---------------------------------------------------------------------------
+# Copilot follow-up to #127 (round 2): a REAL first token ("wedge=1") still
+# let unrelated key=value pairs ride the widened budget alongside it --
+# "wedge" stopped spending one of the 2 unknown-word slots, leaving both
+# free for arbitrary garbage. The "dcmux wedge=" shape now gets full-line
+# validation (_RE_DCMUX_WEDGE_FULL) instead of a first-token check.
+# ---------------------------------------------------------------------------
+COPILOT_REPRO_127_ROUND2 = "dcmux wedge=1 zork=1 blarg=2"
+check(red(COPILOT_REPRO_127_ROUND2, "call") != COPILOT_REPRO_127_ROUND2,
+      "SCOPE-127R2: 'dcmux wedge=1 zork=1 blarg=2' shipped verbatim -- a real "
+      "first token still let 2 unrelated kv pairs ride the widened budget")
+# every real "dcmux wedge=" field combination the app actually emits
+# (DcWedgeDetector.swift's logLine, all 3 Reason.rawValue cases, both the
+# wedged and not-wedged field sets, including the negative-clamp case) must
+# still ship verbatim.
+for why in ("buf", "drops", "drained"):
+    wedged_line = "dcmux wedge=1 why=%s buf=1600 over=1000 drops=0" % why
+    check(red(wedged_line, "call") == wedged_line,
+          "SCOPE-127R2: real wedged line with why=%s regressed" % why)
+    not_wedged_line = "dcmux wedge=0 why=%s buf=200 low=50 rxago=30 wsec=5" % why
+    check(red(not_wedged_line, "call") == not_wedged_line,
+          "SCOPE-127R2: real not-wedged line with why=%s regressed" % why)
+neg_line = "dcmux wedge=0 why=drops buf=-1 low=99999 rxago=-5 wsec=999999"
+check(red(neg_line, "call") == neg_line,
+      "SCOPE-127R2: real not-wedged line with negative-clamped values regressed")
+# an EXTRA field tacked onto an otherwise-real line must still be rejected
+# (the whole point of full-line validation over a first-token check).
+extra_field_line = "dcmux wedge=1 why=buf buf=1600 over=1000 drops=0 zork=1"
+check(red(extra_field_line, "call") != extra_field_line,
+      "SCOPE-127R2: a real wedge= line with one extra trailing field still shipped verbatim")
+# a bogus `why=` value (not one of Reason's 3 raw values) must not pass either.
+check(red("dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0", "call")
+      != "dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0",
+      "SCOPE-127R2: a bogus why= value on an otherwise real-shaped line still shipped verbatim")
+drop_caches()
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)

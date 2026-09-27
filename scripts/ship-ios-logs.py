@@ -642,10 +642,13 @@ CALL_FORMAT_VOCAB = frozenset("""
 # because "state=" isn't one of the tokens any real dcmux line starts with.
 _CALL_FORMAT_FIRST_TOKENS = (
     ("audioVp ", ("ev=", "vpio=")),
+    # "wedge=" is NOT listed here: _is_call_format_body checks the full
+    # "dcmux wedge=..." line against _RE_DCMUX_WEDGE_FULL before ever
+    # reaching this table (see the round-2 Copilot follow-up above).
     # "tx"/"txfall" have no "=" to naturally delimit them (unlike the other
     # tokens here); a trailing space is required so a bogus longer word like
     # "txbogus=1" or "txfallback=1" doesn't match "tx"/"txfall" by prefix.
-    ("dcmux ", ("wedge=", "wedgesw=", "st=", "first=", "txfall ", "tx ")),
+    ("dcmux ", ("wedgesw=", "st=", "first=", "txfall ", "tx ")),
     ("cancelpush ", ("ghost=", "missed=")),
     ("answerguard ", ("refuse=", "nocall=")),
     ("endguard ", ("ignore=",)),
@@ -658,16 +661,38 @@ _CALL_FORMAT_FIRST_TOKENS = (
 _active_extra_vocab = frozenset()
 
 
+# Copilot follow-up to #127 (round 2): checking only the FIRST token still
+# left room for extra, unrelated key=value pairs to ride the widened budget
+# alongside it -- "dcmux wedge=1 zork=1 blarg=2" has a REAL first token
+# ("wedge=1") but ships verbatim because "wedge" no longer spends one of the
+# 2 unknown-word slots, leaving both free for "zork"/"blarg" (confirmed:
+# without the widening, or with a 3rd unrelated pair, the same line is
+# rejected). This is exactly the "dcmux wedge=" shape #120's vocabulary
+# (why/buf/over/drops/low/rxago/wsec) was added for, and the one Copilot has
+# now reproduced twice, so it gets FULL-LINE validation instead of a
+# first-token check: the exact field set DcWedgeDetector.swift's `logLine`
+# emits, nothing else. `Reason.rawValue` is one of exactly 3 strings (see
+# that enum); the numeric fields are `Int64`, clamped, so always an optional
+# '-' plus digits.
+_RE_DCMUX_WEDGE_FULL = re.compile(
+    r"^dcmux wedge=(?:1 why=(?:buf|drops|drained) buf=-?\d+ over=-?\d+ drops=-?\d+"
+    r"|0 why=(?:buf|drops|drained) buf=-?\d+ low=-?\d+ rxago=-?\d+ wsec=-?\d+)$"
+)
+
+
 def _is_call_format_body(tag, norm_body):
     """True if `tag` is the (or a "call"-prefixed) RTLog scope AND `norm_body`
     matches one of the known call-diagnosis line shapes CALL_FORMAT_VOCAB's
-    words were added for -- checked by the token immediately after the
-    prefix, not the prefix alone. Deliberately NARROW: widening this to "any
-    call-tagged line", or to "any line with this prefix regardless of what
-    follows", would recreate the same global-budget problem this scoping
-    exists to close."""
+    words were added for. The "dcmux wedge=" shape gets full-line validation
+    (see _RE_DCMUX_WEDGE_FULL); every other shape is checked by the token
+    immediately after its prefix, not the prefix alone. Deliberately NARROW:
+    widening this to "any call-tagged line", or to "any line with this
+    prefix regardless of what follows", would recreate the same
+    global-budget problem this scoping exists to close."""
     if not tag or not str(tag).lower().startswith("call"):
         return False
+    if norm_body.startswith("dcmux wedge="):
+        return bool(_RE_DCMUX_WEDGE_FULL.match(norm_body))
     for prefix, first_tokens in _CALL_FORMAT_FIRST_TOKENS:
         if norm_body.startswith(prefix):
             return norm_body[len(prefix):].startswith(first_tokens)
