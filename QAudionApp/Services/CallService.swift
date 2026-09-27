@@ -4312,7 +4312,20 @@ final class CallService: @unchecked Sendable {
         // W-DEACTOWN (2026-09-27) — pair CallKit's own activation with the call
         // it was handled in, for the identity-less `didDeactivate` that follows
         // it (see `handleAudioSessionDeactivated`). Bookkeeping only.
-        if source == .callKit {
+        //
+        // `.selfExpectingCallKit` is recorded too: that source still expects a
+        // real CallKit `didActivate` for THIS call, but CallKit skips it
+        // outright when the shared session was already active
+        // (W-CKSTARTACTIVATE) — the gate can still enable the unit for such a
+        // call once the wait times out (`callKitActivationWaitMs`), so it must
+        // be pairable like a real one. Leaving it unrecorded meant a call that
+        // only ever self-activated had `callKitActivationGeneration == nil`
+        // for its whole lifetime; a late `didDeactivate` for THAT call then
+        // read as `.unattributed` instead of `.endedCall` once the next call
+        // had started, and `handleAudioSessionDeactivated` took the
+        // unattributed case as the successor's own deactivation — stopping or
+        // resetting the live unit of the call that never actually deactivated.
+        if source == .callKit || source == .selfExpectingCallKit {
             callKitActivationGeneration = currentCallGeneration()
         }
         audioSessionActive = true
