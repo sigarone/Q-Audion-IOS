@@ -514,6 +514,49 @@ for line in CRYATTACH_LINES:
 drop_caches()
 
 # ---------------------------------------------------------------------------
+# W-KVPRECISION-3 (id.review 2026-09-27): `CrashBreadcrumbs.setCallContext`
+# persists "in_call=<0|1> native=<0|1> [role=..] [call8=<8hex>] phase=<phase>"
+# to UserDefaults; CrashReporter.persist()/flushPendingReport() print it as
+# "[CrashReporter] context: <that line>" on the W417 stdout-tee path, shipped
+# through THIS script with tag "stdout" (not "call"), exactly as reproduced
+# below. Before this fix, `call8=<8hex>` (14 chars) tripped RE_BASE64_BLOB's
+# 12-char sweep and was replaced whole by [REDACTED:blob] -- silently losing
+# the one field whose entire purpose is telling a maintainer which call was
+# in progress when the app died -- while the neighboring in_call=/native=/
+# phase= fields (short enough to dodge that sweep) survived untouched. Locking
+# in the exact context line so a future change to the blob-sweep thresholds
+# or the KV-precision allow-list cannot silently reopen this gap.
+# ---------------------------------------------------------------------------
+CRASH_CONTEXT_LINE = ("[CrashReporter] context: in_call=1 native=1 call8=abcd1234 "
+                       "phase=snapshot")
+_shipped = red(CRASH_CONTEXT_LINE, "stdout")
+# The "[CrashReporter]" tag prefix itself is separately swept by the generic
+# 12+-char blob sweep ("CrashReporter" alone is 13 letters) -- pre-existing,
+# unrelated to this finding (see the finding's own reproduction, which shows
+# the identical artifact). Only the fields after "context:" are this fix's
+# concern; the id.review finding's own repro leaves the prefix out of scope.
+check("in_call=1 native=1 call8=abcd1234 phase=snapshot" in _shipped,
+      "W-KVPRECISION-3: crash-context call8= lost (got %r)" % _shipped)
+check("call8=91fe5cf7" in red("context: in_call=1 native=0 role=caller call8=91fe5cf7 phase=ended", "stdout"),
+      "W-KVPRECISION-3: crash-context call8= lost with role= present")
+# regression guard: the allow-list is scoped to a genuine 4-8 hex-char value --
+# a non-hex value under the same key must still be masked, not waved through
+# just because the key is now on the list.
+check("call8=notHexAtAll" not in red("context: in_call=1 call8=notHexAtAll phase=snapshot", "stdout"),
+      "W-KVPRECISION-3: call8= with a non-hex value was over-trusted")
+# regression guard: a full (untruncated) id under call8= (> 8 hex chars) must
+# still be masked -- the allow-list is bounded to the 4-8 char id-prefix
+# shape, never a full id.
+check("call8=abcd1234abcd1234abcd1234abcd1234" not in
+      red("context: call8=abcd1234abcd1234abcd1234abcd1234 phase=snapshot", "stdout"),
+      "W-KVPRECISION-3: call8= with a full (untruncated) id was over-trusted")
+# regression guard: this must not have widened the keyed callid=/call_id= deny
+# rule -- a raw call id under THAT key is still fully denied.
+check("callid=" not in red("context: callid=abcd1234-1111-2222-3333-444455556666", "stdout"),
+      "W-KVPRECISION-3: unrelated callid= deny rule was weakened")
+drop_caches()
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)

@@ -1064,6 +1064,17 @@ _KV_VTAG_KEYS = frozenset(["epoch", "wire"])
 _KV_VERSION_KEYS = frozenset(["version", "ver", "appversion", "osversion",
                               "sdkversion"])
 _KV_EPOCH_KEYS = frozenset(["version", "ver", "selfver", "peerver", "cached"])
+# Keys that carry a short truncated-id prefix -- never a full id, never
+# reversible key material -- matching this codebase's `qa.call.h8` /
+# `qa.call.short8` / `CallService.short8` convention (id.review finding,
+# W-KVPRECISION-3 2026-09-27): `h8=`/`id=` already survived the blob sweeps
+# below by the coincidence of staying under RE_BASE64_BLOB's 12-char total
+# token length; `call8=<8hex>` (14 chars) does not, so
+# `CrashBreadcrumbs.setCallContext`'s call-context line silently lost its
+# call id under this same-shaped value. Allow-listing the key explicitly
+# (rather than relying on that length coincidence) fixes it for any length
+# and documents the intent.
+_KV_HEXID_KEYS = frozenset(["h8", "id", "call8"])
 # per-body budgets for the protected key=value tokens (corpus maxima: 3 open
 # tokens; see _protect_benign_kv).
 KV_MAX_OPEN = 6
@@ -1184,7 +1195,15 @@ def _kv_classify(key, val):
     low = val.lower()
     kind = None
     n_val = 0
-    if low in _KV_BOOLS and val in (low, val.capitalize(), val.upper()):
+    # W-KVPRECISION-3 (id.review 2026-09-27): a short truncated-id prefix under
+    # one of the known id-prefix keys (h8, id, call8) is a bounded, non-
+    # reversible-looking hex value -- provably benign. Checked before the
+    # open-vocabulary enum branch below, which would otherwise claim a
+    # lower-case hex string like "abcd1234" and then reject it (none of these
+    # keys read as an enum key), never falling through to this check.
+    if klow in _KV_HEXID_KEYS and _RE_HEX_PREFIX.match(val):
+        kind = "hexid"
+    elif low in _KV_BOOLS and val in (low, val.capitalize(), val.upper()):
         kind = "bool"
     elif RE_KV_INT.match(val) or RE_KV_DEC.match(val) or RE_KV_UNITNUM.match(val):
         kind = "num"
@@ -1272,7 +1291,7 @@ def _protect_benign_kv(s):
         if kind is None:
             return m.group(0)
         is_open = 1 if kind in _KV_OPEN_KINDS else 0
-        is_big = 1 if kind == "num" and _is_bignum(m.group(2)) else 0
+        is_big = 1 if (kind == "num" and _is_bignum(m.group(2))) or kind == "hexid" else 0
         if (budget["open"] + is_open > KV_MAX_OPEN
                 or budget["unknown"] + n_unk > MAX_UNKNOWN_WORDS
                 or budget["idlike"] + is_big > MAX_IDLIKE_TOKENS):
