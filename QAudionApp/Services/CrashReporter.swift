@@ -46,6 +46,44 @@ enum CrashReporter {
     /// persisting when an exception report is already in flight.
     private static var exceptionInFlight = false
 
+    /// W-CRASHTELEMETRY (this task) — the CRASHED build's version, computed
+    /// ONCE up front (same "force the lazy path computation up-front" style
+    /// as `reportPath` above) so the signal handler never has to touch
+    /// `Bundle.main.infoDictionary` from an async-signal context.
+    private static let capturedAppVersion: String = {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+    }()
+
+    /// W-CRASHTELEMETRY (this task) — three small scalars captured at crash
+    /// time for the `app.crash` telemetry event this task adds, kept in
+    /// UserDefaults (like `crashCount` below) rather than in the persisted
+    /// TEXT report: the text file's exact shape is locked in by
+    /// `flushPendingReport()`'s stdout-tee consumers (symbolicate.py, the
+    /// log shipper's fixtures) and this task adds no new required line to
+    /// it. `pendingCrashTsKey`/`pendingAppVerKey` capture the CRASHED
+    /// build's version and wall-clock time (may differ from the CURRENT
+    /// build/time once the app relaunches, possibly after an update);
+    /// `pendingThreadKey` records whether the crash happened on the main
+    /// thread (`Thread.isMainThread` is a cheap, async-signal-safe read —
+    /// no different in risk from the UserDefaults writes this function
+    /// already does for `crashCount`).
+    private static let pendingAppVerKey = "qaudion.crash.pending_app_ver"
+    private static let pendingCrashTsKey = "qaudion.crash.pending_ts_ms"
+    private static let pendingThreadKey = "qaudion.crash.pending_thread"
+
+    /// W-CRASHTELEMETRY (this task) — the size-capped `app.crash` attrs
+    /// built (by `buildTelemetryAttrs(fromReportText:)`) from the PREVIOUS
+    /// launch's crash report, held here from `flushPendingReport()` (which
+    /// parses the report text BEFORE deleting the file — its only copy)
+    /// until `AppState.initialize()` consumes it via
+    /// `consumePendingCrashTelemetry()`. That consumer call sits right after
+    /// `TelemetryService.shared.start(...)` deliberately: `TelemetryService
+    /// .emit()` silently drops an event until `started` flips true, and
+    /// `.onAppear` calls `flushPendingReport()` BEFORE `appState.initialize()`
+    /// runs — emitting straight from here would race that ordering and lose
+    /// the event on every launch that actually has one.
+    private static var pendingCrashTelemetryAttrs: [String: Any]?
+
     /// Install the handlers. Call as early as possible (App.init) —
     /// before any code that might crash. Does NOT flush; the flush has
     /// to wait until the stdout tee is attached (see `flushPendingReport`).
@@ -101,6 +139,13 @@ enum CrashReporter {
         guard let data = FileManager.default.contents(atPath: reportPath),
               let text = String(data: data, encoding: .utf8),
               !text.isEmpty else { return }
+        // W-CRASHTELEMETRY (this task) — parse+format BEFORE printing/deleting:
+        // the text file below is the only copy of this report, and this is
+        // the last point that has it. Best-effort: a report this parser
+        // doesn't recognize (a future format change) still gets fully
+        // flushed to the stdout tee below unaffected; it just yields no
+        // `app.crash` telemetry event (`pendingCrashTelemetryAttrs` stays nil).
+        pendingCrashTelemetryAttrs = buildTelemetryAttrs(fromReportText: text)
         print("[CrashReporter] ==== CRASH REPORT FROM PREVIOUS LAUNCH ====")
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             // CLAUDE.md §13 — build the String before the print call.
@@ -111,7 +156,49 @@ enum CrashReporter {
         try? FileManager.default.removeItem(atPath: reportPath)
     }
 
+    /// W-CRASHTELEMETRY (this task) — one-shot consume of the `app.crash`
+    /// attrs `flushPendingReport()` built (nil when there was no pending
+    /// report, or it could not be parsed). Clears the stash so a second call
+    /// in the same process — there is only ever one caller, `AppState
+    /// .initialize()`, but SwiftUI's `.onAppear` can in principle re-fire —
+    /// never double-emits the same crash.
+    static func consumePendingCrashTelemetry() -> [String: Any]? {
+        defer { pendingCrashTelemetryAttrs = nil }
+        return pendingCrashTelemetryAttrs
+    }
+
     // MARK: - Internals
+
+    /// W-CRASHTELEMETRY (this task) — parses `text` (the just-read, not-yet-
+    /// deleted report file) via `CrashReportTextParser`, combines it with the
+    /// three scalars `persist()` captured in UserDefaults, and formats the
+    /// result through `CrashTelemetryFormatter`. nil when `text` doesn't
+    /// match the expected report shape (see that parser's own doc) — the
+    /// stdout-tee flush around this call is unaffected either way.
+    private static func buildTelemetryAttrs(fromReportText text: String) -> [String: Any]? {
+        guard let parsed = CrashReportTextParser.parse(text) else { return nil }
+        let appVer = UserDefaults.standard.string(forKey: pendingAppVerKey) ?? capturedAppVersion
+        let crashTsMs = Int64(UserDefaults.standard.integer(forKey: pendingCrashTsKey))
+        let thread = UserDefaults.standard.string(forKey: pendingThreadKey) ?? "unknown"
+        // Consumed — a stale value must not leak into a LATER, unrelated
+        // report (mirrors `CrashBreadcrumbs.clearCallContext()`'s own
+        // "consumed whether or not it triggered anything" rationale).
+        UserDefaults.standard.removeObject(forKey: pendingAppVerKey)
+        UserDefaults.standard.removeObject(forKey: pendingCrashTsKey)
+        UserDefaults.standard.removeObject(forKey: pendingThreadKey)
+        let report = CrashTelemetryFormatter.Report(
+            crashKind: parsed.crashKind,
+            name: parsed.name,
+            reason: parsed.reason,
+            thread: thread,
+            stackLines: parsed.stackLines,
+            callContext: parsed.callContext,
+            breadcrumbLines: parsed.breadcrumbLines,
+            appVer: appVer,
+            crashTsMs: crashTsMs
+        )
+        return CrashTelemetryFormatter.attributes(for: report)
+    }
 
     private static func persistSignalReport(_ sig: Int32) {
         // CLAUDE.md §13 — incremental `+=` instead of one long `+` chain.
@@ -193,6 +280,14 @@ enum CrashReporter {
         let crashKey = "qaudion.crash_count"
         let count = UserDefaults.standard.integer(forKey: crashKey) + 1
         UserDefaults.standard.set(count, forKey: crashKey)
+        // W-CRASHTELEMETRY (this task) — three scalars the `app.crash`
+        // telemetry event needs that the text file above deliberately does
+        // NOT carry (see `pendingAppVerKey`'s own doc). Same risk level as
+        // the `UserDefaults.set` two lines above; `Thread.isMainThread` and
+        // `Date()` are both cheap, allocation-free reads.
+        UserDefaults.standard.set(capturedAppVersion, forKey: pendingAppVerKey)
+        UserDefaults.standard.set(Int(Date().timeIntervalSince1970 * 1000), forKey: pendingCrashTsKey)
+        UserDefaults.standard.set(Thread.isMainThread ? "main" : "background", forKey: pendingThreadKey)
     }
 
     static var crashCount: Int { UserDefaults.standard.integer(forKey: "qaudion.crash_count") }

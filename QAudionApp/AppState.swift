@@ -3298,6 +3298,18 @@ final class AppState: ObservableObject {
             ]
         )
 
+        // W-CRASHTELEMETRY (this task) — ONE `app.crash` event for the crash
+        // report (if any) `CrashReporter.flushPendingReport()` parsed BEFORE
+        // deleting its file, back in `.onAppear`'s EARLIER call to it. MUST
+        // run AFTER `TelemetryService.shared.start(...)` immediately above:
+        // `emit()` silently drops an event until `started` flips true (see
+        // that method's own doc), and this is the report's ONLY chance —
+        // the text file backing it is already gone by now.
+        if let crashAttrs = CrashReporter.consumePendingCrashTelemetry() {
+            TelemetryService.shared.emit(kind: "app.crash", attrs: crashAttrs)
+            RTLog.info("call", "crash event=telemetry_sent")
+        }
+
         // W545 — per-device synthetic self-tests. Schedules a first
         // run ~3 s after launch in background, emits selftest.*
         // telemetry events with timing percentiles for regression

@@ -275,10 +275,6 @@ struct QAudionApp: App {
                 // MUST be after attachStdoutTee() so the prints are
                 // captured by the W417 telemetry and shipped to the server.
                 CrashReporter.flushPendingReport()
-                // W-MK — register the MetricKit subscriber. MUST be after
-                // attachStdoutTee() so the per-payload prints are captured
-                // by the W417 telemetry, same rationale as the crash flush.
-                MetricKitDiagnostics.start()
                 // W-FLAGS — start the remote feature-flag poll. Primitive-only
                 // signature (CLAUDE.md §16): a compile-time flags URL String,
                 // NO AppState. Plain URLSession (public, un-authed, NOT the
@@ -288,6 +284,23 @@ struct QAudionApp: App {
                 // never blocks launch, fails safe to the compiled defaults.
                 FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
                 appState.initialize()
+                // W-MK — register the MetricKit subscriber. MUST be after
+                // attachStdoutTee() so the per-payload prints are captured
+                // by the W417 telemetry, same rationale as the crash flush
+                // above. W-MKCRASHTELEMETRY (this task) moved this AFTER
+                // appState.initialize() (was between the crash flush and
+                // FeatureFlags.start above): initialize() is what calls
+                // TelemetryService.shared.start(...), and MetricKitDiagnostics
+                // now also calls TelemetryService.shared.emit(kind: "app.crash",
+                // ...) for a crash/hang diagnostic. `emit()` silently drops an
+                // event until TelemetryService.started flips true, so
+                // registering the MetricKit subscriber (whose didReceive could
+                // in principle fire immediately) before that flip would risk
+                // losing exactly the event this task adds. Registering a few
+                // synchronous statements later, still in the same runloop
+                // turn, costs nothing — MetricKit queues payloads until a
+                // subscriber exists.
+                MetricKitDiagnostics.start()
                 // W441: sweep expired messages immediately + every 60s.
                 EphemeralMessageJanitor.shared.start()
                 // W441: listen for OS screenshot events and warn in the log.
