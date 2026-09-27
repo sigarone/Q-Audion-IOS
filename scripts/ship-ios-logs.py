@@ -614,7 +614,17 @@ APP_VOCAB = frozenset("""
     man merged mute nativemute native neg nsnap preven prevman replaced
     rxrebind sess site src stalearm startfail tok verdict voipcfg
     match stale own reapply
+
+    autoreset crash kill killswitch persisted phase snapshot streak switch
 """.split())
+# W-NATIVESRTPPERSIST / W-CRASHCRUMBS / W-NATIVEAUDIOQUALITY (this task) --
+# the 8 words on the line right above this comment were added for the new
+# "call"-tagged RTLog lines this task's spec sections B/C introduce:
+#   audiosrtp event=override value=<0|1> persisted=1
+#   audiosrtp event=override_autoreset reason=crash_streak n=2
+#   audiosrtp event=kill_switch site=<2|3|5>
+# ("override", "reset", "reason", "site", "n", "value" and "event" were
+# already vocabulary; only the words above are new.)
 
 # ---------------------------------------------------------------------------
 # Copilot follow-up to #120: the 22 words below (added by 1af88afd for the

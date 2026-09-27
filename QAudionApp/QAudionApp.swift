@@ -98,6 +98,35 @@ struct QAudionApp: App {
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
 
+        // W-NATIVESRTPPERSIST (this task) — load the persisted native-SRTP
+        // override BEFORE anything else that could start a call (same
+        // ordering rationale as `CrashReporter.installHandlers()` above,
+        // and the Android counterpart's `QAudionApplication.onCreate`
+        // ordering — spec section B). `nil` (fresh install / explicit
+        // reset) leaves `audioSrtpDebugOverride` at its own default (`nil`
+        // -> compiled OFF), so a fresh install's behavior is unchanged.
+        CallCapabilities.audioSrtpDebugOverride = CallCapabilities.loadPersistedAudioSrtpOverride()
+
+        // W-NATIVESRTPCRASHGUARD (this task) — a crash (or an OS kill) while
+        // a native-SRTP call was in progress leaves its breadcrumb
+        // call-context in place (`CallService.endCall()` never ran to clear
+        // it). Two such crashes IN A ROW force the toggle back OFF —
+        // persisted AND live — so a broken native path cannot keep
+        // crashing every call the user makes. Must run before any call
+        // path AND before the context is cleared below, and does not need
+        // the stdout tee (`RTLog` records into the ring directly).
+        if CrashReporter.hasPendingCrashReport(),
+           let ctx = CrashBreadcrumbs.lastCallContext(),
+           ctx.contains("in_call=1"), ctx.contains("native=1") {
+            if CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset() {
+                RTLog.warn("call", "audiosrtp event=override_autoreset reason=crash_streak n=2")
+            }
+        }
+        // Consumed (whether or not it triggered the guard above) — a stale
+        // "in_call=1" must not survive to be misread by a LATER, unrelated
+        // crash (e.g. one on the home screen).
+        CrashBreadcrumbs.clearCallContext()
+
         // In-app language override — must install its Bundle swizzle before
         // WindowGroup's first `body` evaluation (right after this init()
         // returns), so every LocalizedStringKey lookup in the very first

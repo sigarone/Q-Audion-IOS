@@ -19337,6 +19337,29 @@ extension AppState {
         let staleFlag: Int = latch.stale ? 1 : 0
         let line: String = "nsnap site=\(site) native=\(nativeFlag) fresh=\(freshFlag) stale=\(staleFlag)"
         RTLog.info("call", line)
+
+        // W-NATIVESRTPKILL (this task) — remote safety net (spec section 0,
+        // owner-recommended): `calls.native_srtp_kill` forces THIS call's
+        // snapshot off, without touching the saved preference, so a bad
+        // native-SRTP rollout can be killed fleet-wide without a build.
+        // Checked at every snapshot site (2/3/5), same as Android's own
+        // "force OFF at the snapshot of call start" placement.
+        var effectiveNative = latch.value
+        if latch.value, FeatureFlags.bool("calls.native_srtp_kill", false) {
+            let callId = CallCapabilities.nativeSrtpSnapshotCallId
+            if CallCapabilities.forceNativeSrtpCallSnapshotOff(callId: callId) {
+                effectiveNative = false
+                RTLog.warn("call", "audiosrtp event=kill_switch site=\(site)")
+            }
+        }
+
+        // W-CRASHCRUMBS (this task) — persist the call context so a crash
+        // (or OS kill) before `CallService.endCall()` runs is attributable
+        // to a native-SRTP call on the NEXT launch. Cleared by
+        // `CallService.endCall()` on a clean end.
+        let call8 = CallCapabilities.nativeSrtpSnapshotCallId
+        CrashBreadcrumbs.setCallContext(inCall: true, native: effectiveNative, role: nil,
+                                         callId: call8, phase: "snapshot")
     }
 
     /// W-NATIVESRTPSNAPSHOT-ID — responder side, at `call_incoming`: the
