@@ -156,6 +156,18 @@ public final class QAudionPeerConnection: NSObject {
     /// published later via `setKey`, and the sender/receiver cryptors are
     /// attached when their tracks exist. Replaces the codec-layer seal.
     public private(set) var nativeVideoCryptor: NativeVideoFrameCryptor?
+    /// W-CRYPTORQUEUE (2026-09-27) — guards the check-then-set in
+    /// `ensureNativeVideoCryptor`/`resolvedNativeAudioCryptor` below.
+    /// `ensureNativeVideoCryptor` is reachable from BOTH the MainActor
+    /// (`pqcSessionKey` didSet path) and the WebRTC signalling thread
+    /// (`didReceiveRemoteVideoReceiver`) with no serialization between them
+    /// before this task; a genuine simultaneous first call from each thread
+    /// could otherwise construct two `NativeVideoFrameCryptor` instances and
+    /// let the loser's assignment silently orphan the winner's (whichever
+    /// callback subsequently ran `onDecryptFailure`/attach against the
+    /// orphaned one from then on). Cheap: held only around a nil-check +
+    /// pointer store, never around any WebRTC proxy call.
+    private let nativeCryptorCreationLock = NSLock()
 
     // ── IOS-C4b (2026-08-26): native SRTP audio (CallCapabilities.audioSrtpV1) ──
     //
@@ -940,6 +952,7 @@ public final class QAudionPeerConnection: NSObject {
     /// receiver-attach-before-key deadlock.
     @discardableResult
     public func ensureNativeVideoCryptor(participantId: String) -> NativeVideoFrameCryptor {
+        nativeCryptorCreationLock.lock(); defer { nativeCryptorCreationLock.unlock() }
         if let c = nativeVideoCryptor { return c }
         let c = NativeVideoFrameCryptor(factory: factory, participantId: participantId)
         nativeVideoCryptor = c
@@ -1214,6 +1227,12 @@ public final class QAudionPeerConnection: NSObject {
     /// returns the existing instance if one is already there, same as the
     /// three inline `nativeAudioCryptor ?? { ... }()` blocks this replaces.
     private func resolvedNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
+        // W-CRYPTORQUEUE (2026-09-27) — same check-then-set race as
+        // `ensureNativeVideoCryptor`, same fix. See that method's doc on
+        // `nativeCryptorCreationLock` (shared between video and audio: the
+        // two never compete for the same underlying property, but one lock
+        // is simpler to reason about than two for a section this cheap).
+        nativeCryptorCreationLock.lock(); defer { nativeCryptorCreationLock.unlock() }
         if let existing = nativeAudioCryptor { return existing }
         let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
         c.onFrameCryptorStateChange = { [weak self] line in
