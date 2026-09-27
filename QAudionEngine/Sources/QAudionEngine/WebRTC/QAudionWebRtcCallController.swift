@@ -301,9 +301,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             }
         } else {
             log?("audiosrtp caplive=0 nudge=1")
-            peerConnection?.setNativeAudioSrtpMuted(true)
+            peerConnection?.setNativeAudioSrtpMuted(true, source: "nudge")
             try? await Task.sleep(nanoseconds: 150_000_000)
-            peerConnection?.setNativeAudioSrtpMuted(false)
+            peerConnection?.setNativeAudioSrtpMuted(false, source: "nudge")
         }
         if await waitForNativeCaptureLive(
             generation: generation, ptxAtArm: ptxAtArm,
@@ -1270,7 +1270,42 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
-    private var peerConnection: QAudionPeerConnection?
+    /// W-CALLERUNMUTELOST (2026-09-27) — root-cause fix for the native-SRTP
+    /// mic staying muted for a whole call. The bug: a genuine accept
+    /// (`CallService.handleCallAnswered`/`.activateIncomingCallAudio`) can
+    /// land while THIS controller's `QAudionPeerConnection` is still being
+    /// constructed on another thread (measured 150-370 ms, `acceptIncomingCall`
+    /// awaits `fetchIceServers()`/`sharedFactory()` before `init` even
+    /// starts) — `setNativeAudioSrtpMuted(false)` reached `peerConnection?...`
+    /// while it was `nil` and was silently dropped; the freshly-built PC then
+    /// started from its own hardcoded-muted default and nothing ever retried.
+    /// The `didSet` below closes that gap unconditionally, for every
+    /// assignment (the three creation sites — outgoing, incoming, the
+    /// video-upgrade rebuild — and any future one): the moment a
+    /// PeerConnection exists, it is told the LATCHED intent this controller
+    /// currently wants, not whatever that PC's own constructor defaulted to.
+    private var peerConnection: QAudionPeerConnection? {
+        didSet {
+            guard let pc = peerConnection, pc !== oldValue else { return }
+            cryptorAttachQueue.async { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                pc.setNativeAudioSrtpMuted(self.nativeSenderMuted, source: "pcinit")
+            }
+        }
+    }
+    /// W-CALLERUNMUTELOST — the mute state THIS controller currently wants
+    /// applied to the native-SRTP sender, independent of whether a
+    /// `QAudionPeerConnection` exists yet to apply it to. Survives a
+    /// PeerConnection replacement (video-upgrade rebuild, a future retry
+    /// path) — see the `didSet` above, which re-pushes it onto every new
+    /// one. Touched ONLY on `cryptorAttachQueue` (set here, read there, and
+    /// in `installAudioSrtpOnQueue`/`activateNativeAudioSrtp`'s own
+    /// serialization) so there is no cross-thread race with
+    /// `QAudionPeerConnection.pendingAudioSrtpMuted`, which this mirrors.
+    /// Defaults to muted, same as that property, so a controller that never
+    /// receives an explicit unmute (a call that never gets answered) stays
+    /// muted for its whole (short) life.
+    private var nativeSenderMuted = true
     private var wssTurnBridge: WssTurnBridge?
     private var recipientId: String?
 
@@ -1567,6 +1602,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
         // transitions (sender + receiver), same `log` hook.
         pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
+        // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
+        // cryptor-state line right above, for the new mute-apply diagnostic.
+        pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -1739,6 +1777,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
         // transitions (sender + receiver), same `log` hook.
         pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
+        // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
+        // cryptor-state line right above, for the new mute-apply diagnostic.
+        pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -1857,6 +1898,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
         // transitions (sender + receiver), same `log` hook.
         pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
+        // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
+        // cryptor-state line right above, for the new mute-apply diagnostic.
+        pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {
@@ -2543,6 +2587,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         wssTurnBridge = nil
         peerConnection?.close()
         peerConnection = nil
+        // W-CALLERUNMUTELOST — re-arm the latch for hygiene (this controller
+        // instance is discarded per call — a fresh one always starts `true`
+        // — so this mainly guards a hypothetical future reuse, same as
+        // `QAudionPeerConnection.close()`'s symmetric reset).
+        cryptorAttachQueue.async { [weak self] in self?.nativeSenderMuted = true }
         recipientId = nil
         hasAppliedRemoteAnswer = false   // W418 — reset for next call
         videoSealer = nil                // commit 3db2cd81 parity — reset
@@ -3802,8 +3851,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// .setNativeAudioSrtpMuted` — see that method's kdoc; harmless no-op
     /// when this call never negotiated `audio-srtp-v1` (`peerConnection`
     /// nil or `localAudioSrtpTrack` nil there).
-    public func setNativeAudioSrtpMuted(_ muted: Bool) {
-        peerConnection?.setNativeAudioSrtpMuted(muted)
+    ///
+    /// W-CALLERUNMUTELOST (2026-09-27) — latches ``nativeSenderMuted`` on
+    /// `cryptorAttachQueue` FIRST, unconditionally, THEN forwards to
+    /// whichever `peerConnection` exists (possibly none yet, e.g. an
+    /// answer racing this controller's PeerConnection construction — see
+    /// this property's own kdoc): the latch is what makes the request
+    /// survive a `peerConnection` that is still `nil` right now, since the
+    /// `didSet` above re-pushes ``nativeSenderMuted`` the moment one is
+    /// assigned. Hopping onto `cryptorAttachQueue` also serializes this
+    /// against `installAudioSrtpOnQueue`/`activateNativeAudioSrtp`, which
+    /// already run there — no separate lock needed for the shared latch.
+    /// `source` is a bare vocabulary token surfaced in the
+    /// `audiosrtp muteapply` line — see `QAudionPeerConnection
+    /// .onNativeSenderMuteApplied`'s kdoc.
+    public func setNativeAudioSrtpMuted(_ muted: Bool, source: String = "user") {
+        cryptorAttachQueue.async { [weak self] in
+            guard let self else { return }
+            self.nativeSenderMuted = muted
+            self.peerConnection?.setNativeAudioSrtpMuted(muted, source: source)
+        }
     }
 
     /// WIRE_SPEC §8.7 — one-shot latch for `onInboundVideoReady`. Set via

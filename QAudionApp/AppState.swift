@@ -1967,7 +1967,25 @@ final class AppState: ObservableObject {
     /// on `canImport(WebRTC)` — using Any here lets the AppState
     /// header compile even on hosts where the WebRTC XCFramework
     /// hasn't been resolved yet.
-    var webRtcController: Any?
+    var webRtcController: Any? {
+        didSet {
+            // W-CALLERUNMUTELOST (2026-09-27) — every assignment to this
+            // property runs on the main thread (same as the answer path
+            // that races it), so this and `reapplyNativeSenderMute`'s own
+            // read of `peerAnswered`/`isMuted`/`audioSrtpFallbackActive`
+            // never interleave with each other. Covers cases (a)/(b) from
+            // this task's analysis — an answer landing before
+            // `webRtcController` itself exists yet, or a controller
+            // replaced (duplicate-OFFER glare) after the answer already
+            // latched its intent: either way, the FRESH controller gets
+            // told the current intent the moment it is assigned, same as
+            // (F1) a fresh `QAudionPeerConnection` does inside that
+            // controller.
+            if webRtcController != nil {
+                callService.reapplyNativeSenderMute(site: 6)
+            }
+        }
+    }
     /// W-ICEQUEUE (2026-08-13) — `call_ice` candidates that arrived before
     /// `webRtcController` was set. `handleIncomingWebRtcIce` used to drop
     /// these silently (`guard let controller = webRtcController as? ...

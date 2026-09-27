@@ -618,7 +618,26 @@ APP_VOCAB = frozenset("""
     autoreset crash kill killswitch persisted phase snapshot streak switch
 
     hang telemetry dedup
+
+    pcinit nudge
 """.split())
+# W-CALLERUNMUTELOST (2026-09-27) -- the 2 words on the line right above
+# ("pcinit nudge") are for the new "call"-tagged RTLog line
+# QAudionPeerConnection.applyNativeSenderMuteState emits every time it
+# flips the native audio-srtp sender track's `isEnabled` bit:
+#   audiosrtp muteapply m=<0|1> src=<answer|pcinit|act|user|nudge>
+# "audiosrtp"/"mute"/"m"/"src"/"answer"/"act"/"user" are already vocabulary
+# (TELEMETRY_VOCAB or this same APP_VOCAB set); only "pcinit" (a fresh
+# PeerConnection re-applying this controller's latched mute intent) and
+# "nudge" (W-CAPTURELIVE-SIGNAL's capture-liveness probe) are new. Global
+# (not CALL_FORMAT_VOCAB-scoped): every call site that can print this line
+# already negotiated native audio-srtp, so it is never high-volume enough
+# to need the narrower per-shape scoping CALL_FORMAT_VOCAB exists for.
+# `CallService.reapplyNativeSenderMute`'s own new line,
+# "audiosrtp mute want=<0|1> site=<1..6>", needed NO new vocabulary
+# ("audiosrtp"/"mute"/"want"/"site" were already covered by the additions
+# above and TELEMETRY_VOCAB).
+#
 # W-NATIVESRTPPERSIST / W-CRASHCRUMBS / W-NATIVEAUDIOQUALITY (this task) --
 # the 8 words on the line right above this comment were added for the new
 # "call"-tagged RTLog lines this task's spec sections B/C introduce:

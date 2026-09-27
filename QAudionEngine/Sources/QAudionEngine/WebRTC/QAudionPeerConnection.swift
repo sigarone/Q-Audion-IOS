@@ -289,6 +289,18 @@ public final class QAudionPeerConnection: NSObject {
     /// the caller, `CallService.activateIncomingCallAudio()` for the
     /// callee) — see [[project_ios_native_mic_before_accept_2026_09_08]].
     private var pendingAudioSrtpMuted: Bool = true
+    /// W-CALLERUNMUTELOST (2026-09-27) — true once `activateNativeAudioSrtp`
+    /// has confirmed the SENDER FrameCryptor is attached (`attached` local
+    /// in that method). Gates whether `setNativeAudioSrtpMuted(false)` may
+    /// enable ``localAudioSrtpTrack`` immediately: the track can be
+    /// pre-attached (W-PREATTACHMIC) well before the cryptor exists, and
+    /// enabling it in that window would send plaintext mic audio for
+    /// however long the attach takes — the same plaintext-leak class
+    /// W-AUDIOSENDERGATE already closed for the ring-time activation path,
+    /// now also closed for an explicit unmute that races it. See
+    /// ``NativeSenderMuteDecisions/trackEnabledAfterRequest(muted:senderCryptorAttached:)``
+    /// for the pure rule this mirrors. Reset in `close()`.
+    private var nativeSenderCryptorAttached: Bool = false
     /// True once the receiver-side branch of `didAdd rtpReceiver` has kept
     /// the inbound SRTP audio track enabled (peer negotiated the tag) —
     /// read by ``setMicrophoneMuted(_:)`` and the fallback machinery.
@@ -414,6 +426,19 @@ public final class QAudionPeerConnection: NSObject {
     /// — every call site that creates the cryptor goes through it, so this
     /// fires regardless of which one creates it first.
     public var onNativeAudioFrameCryptorStateChange: ((String) -> Void)?
+
+    /// W-CALLERUNMUTELOST (2026-09-27) — one line every time
+    /// ``applyNativeSenderMuteState(_:source:)`` actually flips
+    /// ``localAudioSrtpTrack``'s `isEnabled` bit, same "the engine has no
+    /// call id and cannot reach `RTLog`" reasoning as
+    /// ``onNativeAudioFrameCryptorStateChange`` right above — wired the
+    /// same way, at the same three controller call sites. `source` in the
+    /// line is a bare vocabulary token (`answer`/`pcinit`/`act`/`user`/
+    /// `nudge`), never an id — `act`, not `activate`, keeps `src=act`
+    /// under `ship-ios-logs.py`'s 12-char base64-blob-sweep floor (see
+    /// the W-SHIPLOGVOCAB comment at the `activateNativeAudioSrtp` call
+    /// site).
+    public var onNativeSenderMuteApplied: ((String) -> Void)?
 
     public init(factory: RTCPeerConnectionFactory,
                 audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
@@ -1226,7 +1251,18 @@ public final class QAudionPeerConnection: NSObject {
         let effectiveSender = nativeAudioSender ?? transceiver.sender
         let attached = cryptor.attachSender(effectiveSender)
         if attached {
-            localAudioSrtpTrack?.isEnabled = !pendingAudioSrtpMuted
+            // W-CALLERUNMUTELOST — the cryptor is confirmed attached NOW:
+            // this is the one point where a previously-deferred unmute
+            // (latched in `pendingAudioSrtpMuted` while the track existed
+            // but no cryptor did — see `setNativeAudioSrtpMuted`'s
+            // W-CALLERUNMUTELOST branch) becomes safe to apply.
+            nativeSenderCryptorAttached = true
+            // W-SHIPLOGVOCAB (2026-09-27) — "act", not "activate": reuses the
+            // SAME word `audiosrtp act=1 ...` right below already prints,
+            // and keeps `src=act` at 7 chars — `src=activate` (12 chars, the
+            // exact `ship-ios-logs.py` base64-blob-sweep floor) gets masked
+            // to `[REDACTED:blob]` before the vocabulary gate even runs.
+            applyNativeSenderMuteState(pendingAudioSrtpMuted, source: "act")
             // W-NATIVEAUDIOQUALITY (this task) — pin the encoding bitrate at
             // the SAME point Android's spec calls for ("subito dopo addTrack
             // ... e di nuovo all'attivazione"): activation is where this
@@ -1305,9 +1341,37 @@ public final class QAudionPeerConnection: NSObject {
     /// regardless of ``CallCapabilities/audioSrtpV1`` negotiation: harmless
     /// when ``localAudioSrtpTrack`` is `nil`, which is every call that stays
     /// on the DataChannel/WS-relay path.
-    public func setNativeAudioSrtpMuted(_ muted: Bool) {
+    public func setNativeAudioSrtpMuted(_ muted: Bool, source: String = "user") {
         pendingAudioSrtpMuted = muted
+        guard localAudioSrtpTrack != nil else { return }
+        // W-CALLERUNMUTELOST (2026-09-27) — a MUTE is always safe to apply
+        // right away (disabling a track can't leak plaintext); an UNMUTE is
+        // only applied once the sender cryptor is confirmed attached
+        // (``nativeSenderCryptorAttached``) — otherwise the track is
+        // pre-attached (W-PREATTACHMIC) but still cryptor-less, and
+        // enabling it here would send plaintext mic audio. The latch above
+        // (`pendingAudioSrtpMuted`) already recorded the request either
+        // way: `activateNativeAudioSrtp` applies it the moment the cryptor
+        // attach is confirmed. See `NativeSenderMuteDecisions
+        // .trackEnabledAfterRequest` for the pure rule this mirrors.
+        guard muted || nativeSenderCryptorAttached else { return }
+        applyNativeSenderMuteState(muted, source: source)
+    }
+
+    /// W-CALLERUNMUTELOST (2026-09-27) — the single point that actually
+    /// flips ``localAudioSrtpTrack``'s `isEnabled` bit and prints the
+    /// diagnostic line for it, shared by ``setNativeAudioSrtpMuted(_:source:)``
+    /// (answer / user-mute / SRTP-fallback / a controller re-pushing its
+    /// latched intent onto a freshly (re)created PeerConnection) and
+    /// ``activateNativeAudioSrtp(key:participantId:txSink:)`` (the sender
+    /// cryptor just attached). `source` is a bare vocabulary token, no ids
+    /// — one of `answer`/`pcinit`/`act`/`user`/`nudge`, each either already
+    /// in `ship-ios-logs.py`'s `APP_VOCAB`/`TELEMETRY_VOCAB` or added to
+    /// `APP_VOCAB` alongside this line (`pcinit`, `nudge` — see that
+    /// script's own W-CALLERUNMUTELOST comment).
+    private func applyNativeSenderMuteState(_ muted: Bool, source: String) {
         localAudioSrtpTrack?.isEnabled = !muted
+        onNativeSenderMuteApplied?("audiosrtp muteapply m=\(muted ? 1 : 0) src=\(source)")
     }
 
     /// W-AUDIORXPOSTNEG (2026-08-28) — audio mirror of
@@ -1852,6 +1916,10 @@ public final class QAudionPeerConnection: NSObject {
         nativeAudioSender = nil
         localAudioSrtpTrack = nil
         usingNativeAudioSrtp = false
+        // W-CALLERUNMUTELOST — defensive reset alongside the state above;
+        // this instance is discarded on call end (deinit calls close()), so
+        // this mainly guards a hypothetical future reuse.
+        nativeSenderCryptorAttached = false
         // W-NATIVESRTPDIAG — restore the process-wide WebRTC debug log level
         // this instance raised at `init`, if it did. Runs BEFORE
         // `peerConnection?.close()` below only because every other teardown
