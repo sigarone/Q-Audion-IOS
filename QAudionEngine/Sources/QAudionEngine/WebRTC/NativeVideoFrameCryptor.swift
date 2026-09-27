@@ -41,6 +41,19 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     private var hasKey = false
     private let lock = NSLock()
 
+    /// W-CRYPTORQUEUE (2026-09-27, watchdog 0x8BADF00D deadlock fix) — true
+    /// while an `attachSender`/`attachReceiver` call has released `lock` to
+    /// run the native `RTCFrameCryptor(factory:...)` init (see those
+    /// methods). Guards against building two transformers for the same
+    /// slot concurrently, which the old single check-then-set could not
+    /// detect once construction itself stopped happening under `lock`.
+    /// `disposed` lets a `dispose()` that lands mid-construction win: the
+    /// constructing call discards its result instead of resurrecting a
+    /// cryptor for a call that already tore down.
+    private var senderConstructing = false
+    private var receiverConstructing = false
+    private var disposed = false
+
     /// W-KFFAST (2026-08-25) — fired when the RECEIVER cryptor's native
     /// state callback reports DECRYPTIONFAILED / MISSINGKEY / INTERNALERROR
     /// (rekey skew, a storm of failing frames, ratchet gap). Mirrors
@@ -180,16 +193,49 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     /// to be set yet (the shared KeyProvider holds it; frames are discarded
     /// until installKey runs). Must run on the WebRTC signalling thread / a WebRTC
     /// callback — call from setLocalDescription completion or ensureVideoSealer.
+    ///
+    /// W-CRYPTORQUEUE (2026-09-27) — `RTCFrameCryptor(factory:rtpSender:...)`'s
+    /// init marshals a call (`sender.track()`) onto the WebRTC signalling
+    /// thread and blocks the CALLING thread on `Event::Wait` (no timeout)
+    /// until it returns. Building it while `lock` was held meant a caller
+    /// blocked there held `lock` for the whole wait — the exact lock-order
+    /// inversion behind the 2026-09-27 0x8BADF00D scene-update watchdog
+    /// kill: this device's main thread held `lock` here waiting on the
+    /// signalling thread, while the signalling thread (inside
+    /// `didAdd rtpReceiver` during a SetRemoteDescription) was itself
+    /// blocked waiting for the SAME `lock` in `installKey`/`attachReceiver`.
+    /// `lock` is now released for the native init call; only the
+    /// `senderConstructing` flag flip and the final bookkeeping still need
+    /// it, and MethodCall's own dedicated wait is not the caller's problem
+    /// once this runs on the dedicated cryptor-attach queue rather than
+    /// MainActor or the signalling thread (see
+    /// `QAudionWebRtcCallController.cryptorAttachQueue`'s own doc).
     @discardableResult
     public func attachSender(_ sender: RTCRtpSender) -> Bool {
+        lock.lock()
+        if senderCryptor != nil { lock.unlock(); return true }
+        guard !senderConstructing else {
+            lock.unlock()
+            return false  // another attach is already building one; caller retries
+        }
+        senderConstructing = true
+        lock.unlock()
+
+        let built = RTCFrameCryptor(factory: factory,
+                                    rtpSender: sender,
+                                    participantId: participantId,
+                                    algorithm: .aesGcm,
+                                    keyProvider: keyProvider)
+
         lock.lock(); defer { lock.unlock() }
-        guard senderCryptor == nil else { return true }
-        guard let c = RTCFrameCryptor(factory: factory,
-                                      rtpSender: sender,
-                                      participantId: participantId,
-                                      algorithm: .aesGcm,
-                                      keyProvider: keyProvider) else {
+        senderConstructing = false
+        guard let c = built else {
             print("[NativeVideoFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
+            return false
+        }
+        guard !disposed else {
+            c.enabled = false
+            print("[NativeVideoFrameCryptor] sender cryptor discarded — dispose() ran during construction")
             return false
         }
         c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
@@ -201,16 +247,34 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 
     /// Create + enable the receiver cryptor. Idempotent. Call from the
     /// didAdd-rtpReceiver delegate (runs on the WebRTC signalling thread).
+    /// See `attachSender`'s doc — same construct-outside-`lock` discipline,
+    /// same reason.
     @discardableResult
     public func attachReceiver(_ receiver: RTCRtpReceiver) -> Bool {
+        lock.lock()
+        if receiverCryptor != nil { lock.unlock(); return true }
+        guard !receiverConstructing else {
+            lock.unlock()
+            return false
+        }
+        receiverConstructing = true
+        lock.unlock()
+
+        let built = RTCFrameCryptor(factory: factory,
+                                    rtpReceiver: receiver,
+                                    participantId: participantId,
+                                    algorithm: .aesGcm,
+                                    keyProvider: keyProvider)
+
         lock.lock(); defer { lock.unlock() }
-        guard receiverCryptor == nil else { return true }
-        guard let c = RTCFrameCryptor(factory: factory,
-                                      rtpReceiver: receiver,
-                                      participantId: participantId,
-                                      algorithm: .aesGcm,
-                                      keyProvider: keyProvider) else {
+        receiverConstructing = false
+        guard let c = built else {
             print("[NativeVideoFrameCryptor] receiver cryptor init returned nil — will retry")
+            return false
+        }
+        guard !disposed else {
+            c.enabled = false
+            print("[NativeVideoFrameCryptor] receiver cryptor discarded — dispose() ran during construction")
             return false
         }
         c.keyIndex = 0
@@ -281,8 +345,13 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 
     /// Release BEFORE peerConnection.close() — the cryptors hold a native ref
     /// into the sender/receiver (Android dispose order PeerConnectionHolder.kt:993-997).
+    /// W-CRYPTORQUEUE — also marks `disposed` so an `attachSender`/
+    /// `attachReceiver` construction already in flight (native init running
+    /// with `lock` released, see those methods) discards its result instead
+    /// of resurrecting a cryptor for a call that already tore down.
     public func dispose() {
         lock.lock(); defer { lock.unlock() }
+        disposed = true
         senderCryptor?.enabled = false
         receiverCryptor?.enabled = false
         senderCryptor = nil
