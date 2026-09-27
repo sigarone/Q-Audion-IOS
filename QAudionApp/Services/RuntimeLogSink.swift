@@ -1,6 +1,7 @@
 import Foundation
 import os
 import Darwin
+import QAudionEngine
 
 /// W415 — in-memory ring buffer + helper API for app-side runtime
 /// logging. Two goals:
@@ -74,6 +75,13 @@ public final class RuntimeLogSink: ObservableObject {
         // (defence in depth). Cost on this (main) thread: one linear pass over the bytes of the
         // line, no allocation for a clean line (see `KeyMaterialScrubber`).
         let safeMessage: String = LogRedactor.scrubKeyMaterial(message)
+        // W-CRASHCRUMBS (this task) — every RTLog.* call AND every tee'd
+        // print(...) line (Engine code included) passes through exactly
+        // this function, so this is the ONE place that feeds the crash
+        // breadcrumb ring, already-scrubbed, with no new call sites on any
+        // hot media path. See `CrashBreadcrumbs`'s own header for why this
+        // is safe to read from a POSIX signal handler.
+        CrashBreadcrumbs.add(level.rawValue, tag, safeMessage)
         lock.lock()
         let seq = nextSeq
         nextSeq &+= 1

@@ -2468,7 +2468,22 @@ final class CallService: @unchecked Sendable {
             let endFlag: Int = snapshotEnd.ended ? 1 : 0
             let matchFlag: Int = snapshotEnd.matched ? 1 : 0
             RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=\(endFlag) match=\(matchFlag)")
+            // W-NATIVESRTPCRASHGUARD (this task) — this call ended WITHOUT
+            // crashing (we are running ordinary Swift code, not a signal
+            // handler), so a native-SRTP call breaks any consecutive-crash
+            // streak in progress. Only for the call whose snapshot this
+            // teardown actually owned (`matched`/an unidentified snapshot,
+            // same set `ended` already covers) — a stale end for a call
+            // that was never native, or belongs to someone else, resets
+            // nothing.
+            if nativeSnapshot, snapshotEnd.ended {
+                CallCapabilities.resetNativeSrtpCrashStreak()
+            }
         }
+        // W-CRASHCRUMBS (this task) — clean end: drop the "might have died
+        // mid-call" breadcrumb signal so an unrelated LATER crash (home
+        // screen, Settings, ...) is never misattributed to this call.
+        CrashBreadcrumbs.clearCallContext()
         onDeepfakeAlert?(false)
         stopDurationTimer()
         stopPlpReportTimer()

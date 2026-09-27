@@ -76,8 +76,12 @@ struct CallsSettingsScreen: View {
     /// `SettingsScreen` used before this control moved here. Seeded from
     /// whatever override is already in force (falling back to the compiled
     /// default) so re-entering this screen mid-session shows the real
-    /// current state, not a stale default. Runtime-only — never persisted,
-    /// resets to the compiled default on process restart.
+    /// current state, not a stale default.
+    ///
+    /// W-NATIVESRTPPERSIST (this task) — `audioSrtpDebugOverride` itself is
+    /// now seeded at app launch from the persisted preference
+    /// (`QAudionApp.init()`), so this initial value already reflects a
+    /// previous session's choice, not just this one's.
     @State private var audioSrtpToggle: Bool =
         CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
 
@@ -118,6 +122,17 @@ struct CallsSettingsScreen: View {
                                 set: { newValue in
                                     audioSrtpToggle = newValue
                                     CallCapabilities.audioSrtpDebugOverride = newValue
+                                    // W-NATIVESRTPPERSIST (this task) — the
+                                    // toggle now survives a restart: every
+                                    // write here also updates the persisted
+                                    // preference (`QAudionApp.init()` seeds
+                                    // `audioSrtpDebugOverride` from it on the
+                                    // next launch). A crash-streak safety
+                                    // net (`CallCapabilities
+                                    // .registerNativeSrtpCrashAndMaybeAutoReset`)
+                                    // can still force this back to `false`
+                                    // if native calls keep crashing.
+                                    CallCapabilities.savePersistedAudioSrtpOverride(newValue)
                                     // 2026-09-27 diagnosis (I1) — the toggle
                                     // change had no trace of its own: the
                                     // live test could only infer it from
@@ -129,11 +144,11 @@ struct CallsSettingsScreen: View {
                                     // `srtpdiag event=override_set`), so the
                                     // two platforms' logs read the same way
                                     // side by side.
-                                    RTLog.info("call", "audiosrtp event=override value=\(newValue ? 1 : 0)")
+                                    RTLog.info("call", "audiosrtp event=override value=\(newValue ? 1 : 0) persisted=1")
                                 }
                             )
                         )
-                        warningHint("Funzione sperimentale: se l'audio risulta assente o instabile, disattivala (ha effetto dalla prossima chiamata). Cifra i frame end-to-end; l'impostazione non è salvata e torna disattivata al riavvio dell'app.")
+                        warningHint("Funzione sperimentale: se l'audio risulta assente o instabile, disattivala (ha effetto dalla prossima chiamata). Cifra i frame end-to-end; l'impostazione resta salvata dopo il riavvio dell'app.")
                     }
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")

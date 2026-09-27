@@ -798,21 +798,25 @@ public enum CallCapabilities {
         return earbudActive ? caps + [earbudRelayV1] : caps
     }
 
-    /// W-AUDIOSRTPDEBUGTOGGLE — in-memory-only runtime override for whether
-    /// THIS build advertises ``audioSrtpV1``, read by
+    /// W-AUDIOSRTPDEBUGTOGGLE — runtime override for whether THIS build
+    /// advertises ``audioSrtpV1``, read by
     /// ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``
     /// on every call. `nil` (the default) means "follow
     /// ``audioSrtpSendEnabled`` as compiled," exactly today's behavior.
     /// `true`/`false` forces the advertisement on/off for every call from
-    /// this device until changed again or the process restarts —
-    /// deliberately NOT persisted to `UserDefaults`: this is a live A/B
-    /// testing knob, not a standing preference, and resetting to the
-    /// compiled default on a fresh process is the safer failure mode for a
-    /// flag this sensitive. Exposed unconditionally in the Settings
-    /// "SVILUPPATORE" section (not `#if DEBUG`-gated): unlike the Android
-    /// twin, this build reaches testers ONLY via TestFlight, which builds
-    /// Release — a `#if DEBUG` gate would make the control unreachable in
-    /// the exact build this exists to test with.
+    /// this device until changed again.
+    ///
+    /// W-NATIVESRTPPERSIST (this task) — this in-memory var is now seeded
+    /// once, at app launch (`QAudionApp.init()`), from
+    /// ``loadPersistedAudioSrtpOverride()``, and every WRITE to it from the
+    /// Settings toggle also calls ``savePersistedAudioSrtpOverride(_:)`` —
+    /// see `CallsSettingsScreen`. So the value survives a restart, matching
+    /// Android's `AudioCodecPreferences` persistence, while every EXISTING
+    /// read site here still just reads this plain static var and needs no
+    /// change. Exposed unconditionally in Settings > Chiamate (not `#if
+    /// DEBUG`-gated): this build reaches testers ONLY via TestFlight, which
+    /// builds Release — a `#if DEBUG` gate would make the control
+    /// unreachable in the exact build this exists to test with.
     public static var audioSrtpDebugOverride: Bool?
 
     /// W-NATIVESRTPGATE (this task) — "native SRTP enabled locally", the ONE
@@ -989,6 +993,98 @@ public enum CallCapabilities {
         _nativeSrtpCallSnapshot = nil
         _nativeSrtpSnapshotCallId = nil
         nativeSrtpSnapshotLock.unlock()
+    }
+
+    /// W-NATIVESRTPKILL (this task) — forces the CURRENT snapshot for
+    /// `callId` to `false`, WITHOUT touching the saved preference
+    /// (``savePersistedAudioSrtpOverride(_:)``) or the live override
+    /// (``audioSrtpDebugOverride``). Mirrors Android's remote
+    /// `calls.native_srtp_kill` field-trial-style kill switch: the caller
+    /// (`AppState.logNativeSrtpSnapshot`) checks the remote flag AFTER
+    /// taking the snapshot and calls this when it reads `true`. No-op —
+    /// returns `false` — when the current snapshot does not belong to
+    /// `callId` (a stale/foreign snapshot, nothing to force here) or is
+    /// already `false`, so a caller that always calls this unconditionally
+    /// on a killed flag cannot clobber a DIFFERENT call's live snapshot.
+    @discardableResult
+    public static func forceNativeSrtpCallSnapshotOff(callId: String?) -> Bool {
+        let id = normalizedCallId(callId)
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        guard _nativeSrtpCallSnapshot == true, id != nil, _nativeSrtpSnapshotCallId == id else { return false }
+        _nativeSrtpCallSnapshot = false
+        return true
+    }
+
+    // MARK: - W-NATIVESRTPPERSIST (this task) — persisted override + crash guard
+    //
+    // `audioSrtpDebugOverride` itself stays a plain in-memory static var (every
+    // existing read site — ``liveNativeSrtpEnabled``, the Settings binding —
+    // is untouched); these are the load/save/guard functions layered on top,
+    // called ONLY from app-launch/Settings-write call sites (`QAudionApp.init()`,
+    // `CallsSettingsScreen`), never from a hot media-path read.
+
+    private static let persistedOverrideKey = "qaudion.calls.nativeSrtpOverride.v1"
+    private static let nativeCrashStreakKey = "qaudion.calls.nativeSrtpCrashStreak"
+
+    /// The persisted override, or `nil` if the key was never written (first
+    /// run, or a `reset` — see ``savePersistedAudioSrtpOverride(_:)``). Read
+    /// ONCE, at app launch, into ``audioSrtpDebugOverride`` — see
+    /// `QAudionApp.init()`. Absent key -> `nil` -> the compiled default
+    /// (``audioSrtpSendEnabled``, OFF), exactly today's fresh-install
+    /// behavior; there is no migration to run.
+    public static func loadPersistedAudioSrtpOverride() -> Bool? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: persistedOverrideKey) != nil else { return nil }
+        return defaults.bool(forKey: persistedOverrideKey)
+    }
+
+    /// Persist (`true`/`false`) or clear (`nil`, "follow the compiled
+    /// default") the override. Call from the Settings toggle write path
+    /// only — this does NOT itself update ``audioSrtpDebugOverride``; the
+    /// caller does both (see `CallsSettingsScreen`'s binding).
+    public static func savePersistedAudioSrtpOverride(_ value: Bool?) {
+        let defaults = UserDefaults.standard
+        if let value = value {
+            defaults.set(value, forKey: persistedOverrideKey)
+        } else {
+            defaults.removeObject(forKey: persistedOverrideKey)
+        }
+    }
+
+    /// Consecutive-native-crash counter (0 between streaks). Exposed for
+    /// tests; production code only reads it indirectly through
+    /// ``registerNativeSrtpCrashAndMaybeAutoReset()``.
+    public static func nativeSrtpCrashStreak() -> Int {
+        UserDefaults.standard.integer(forKey: nativeCrashStreakKey)
+    }
+
+    /// Clear the streak — call whenever a native-SRTP call ends WITHOUT a
+    /// crash (`CallService.endCall()`), so only CONSECUTIVE native crashes
+    /// count, not two unrelated ones separated by a working call.
+    public static func resetNativeSrtpCrashStreak() {
+        UserDefaults.standard.removeObject(forKey: nativeCrashStreakKey)
+    }
+
+    /// Owner-decision recommendation (spec section B): if two native-SRTP
+    /// calls crash back to back, force the PERSISTED override back to
+    /// `false` (and the live one, so the very next call already reflects
+    /// it) rather than let a broken native path keep crashing every call.
+    /// Called once per launch from `QAudionApp.init()`, ONLY when the
+    /// previous launch left a pending crash report AND that crash's
+    /// breadcrumb call-context says a native-SRTP call was in progress —
+    /// see ``CrashBreadcrumbs/lastCallContext()``. Returns whether the
+    /// auto-reset fired (2nd consecutive crash), so the caller can log it.
+    @discardableResult
+    public static func registerNativeSrtpCrashAndMaybeAutoReset() -> Bool {
+        let next = nativeSrtpCrashStreak() + 1
+        if next >= 2 {
+            savePersistedAudioSrtpOverride(false)
+            audioSrtpDebugOverride = false
+            UserDefaults.standard.removeObject(forKey: nativeCrashStreakKey)
+            return true
+        }
+        UserDefaults.standard.set(next, forKey: nativeCrashStreakKey)
+        return false
     }
 
     /// W-NATIVESRTPSNAPSHOT — the LOCAL side of the capability intersection.

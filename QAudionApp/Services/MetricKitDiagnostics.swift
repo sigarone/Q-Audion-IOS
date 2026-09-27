@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 #if canImport(MetricKit) && os(iOS)
 import MetricKit
 #endif
@@ -158,6 +159,13 @@ extension MetricKitDiagnostics {
         guard let crashes = payload.crashDiagnostics, !crashes.isEmpty else { return }
         let header: String = countLine("crash", crashes.count)
         print(header)
+        // W-MKCRASHTELEMETRY (this task) — the payload's own delivery window
+        // is the closest thing to a timestamp a diagnostic carries (neither
+        // MXCrashDiagnostic nor MXHangDiagnostic has one of its own); used
+        // both as the `app.crash` event's `crash_ts_ms` and as part of the
+        // local dedup identifier (see `MetricKitCrashTelemetry`).
+        let windowBeginMs: Int64 = Int64(payload.timeStampBegin.timeIntervalSince1970 * 1000)
+        let windowEndMs: Int64 = Int64(payload.timeStampEnd.timeIntervalSince1970 * 1000)
         for c in crashes {
             let meta: String = appOSLine(c.metaData)
             let crashLine: String = "[MetricKit] crash " + meta
@@ -185,7 +193,7 @@ extension MetricKitDiagnostics {
             // in-process CrashReporter cannot catch (no signal handler runs on a
             // RunningBoard kill). The offset is a plain decimal < redaction
             // threshold; binaryName is short. Bounded to keep the W417 pipe sane.
-            emitCrashStack(c)
+            emitCrashStack(c, windowBeginMs: windowBeginMs, windowEndMs: windowEndMs)
         }
     }
 
@@ -194,7 +202,7 @@ extension MetricKitDiagnostics {
     /// offline symbolicator expects. Best-effort: any parse miss is silent —
     /// the term= line above still carries the kill reason.
     @available(iOS 14.0, *)
-    private static func emitCrashStack(_ c: MXCrashDiagnostic) {
+    private static func emitCrashStack(_ c: MXCrashDiagnostic, windowBeginMs: Int64, windowEndMs: Int64) {
         let data: Data = c.callStackTree.jsonRepresentation()
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         guard let stacks = root["callStacks"] as? [[String: Any]] else { return }
@@ -205,6 +213,67 @@ extension MetricKitDiagnostics {
         print("[MetricKit] crash stack:")
         var emitted = 0
         emitFrames(roots, depth: 0, count: &emitted)
+        // W-MKCRASHTELEMETRY (this task) — same `roots` (already the crash-
+        // attributed thread's frames, already the same "binaryName" +
+        // "offsetIntoBinaryTextSegment" shape the print loop above walks)
+        // reused for the app.crash telemetry event's `frames` attribute, so
+        // this function still parses the JSON exactly once.
+        var telemetryFrameCount = 0
+        let telemetryFrames = frameLines(roots, maxCount: MetricKitCrashTelemetry.maxFrames, count: &telemetryFrameCount)
+        emitCrashTelemetry(c, frames: telemetryFrames, windowBeginMs: windowBeginMs, windowEndMs: windowEndMs)
+    }
+
+    /// W-MKCRASHTELEMETRY (this task) — same depth-first, root→leaf walk as
+    /// `emitFrames` (kept SEPARATE from it, unmodified, to carry zero risk to
+    /// the existing stdout summary this app already ships), but COLLECTS
+    /// `"<binaryName> + <offset>"` strings instead of printing them, bounded
+    /// to `maxCount` (15, well under `emitFrames`' own 48-frame stdout cap).
+    @available(iOS 14.0, *)
+    private static func frameLines(_ frames: [[String: Any]], maxCount: Int, count: inout Int) -> [String] {
+        var out: [String] = []
+        for f in frames {
+            if count >= maxCount { return out }
+            let bin: String = (f["binaryName"] as? String) ?? "?"
+            let off: Int = (f["offsetIntoBinaryTextSegment"] as? Int) ?? -1
+            out.append(bin + " + " + String(describing: off))
+            count += 1
+            if let sub = f["subFrames"] as? [[String: Any]], !sub.isEmpty {
+                out.append(contentsOf: frameLines(sub, maxCount: maxCount, count: &count))
+            }
+        }
+        return out
+    }
+
+    /// W-MKCRASHTELEMETRY (this task) — the ONE `app.crash` telemetry event
+    /// per `MXCrashDiagnostic`, deduplicated against
+    /// `qaudion.metrickit.reportedCrashIds` (`MetricKitCrashTelemetry`
+    /// persists it) so a redelivered payload never ships the same crash
+    /// twice. `c.signal`/`c.exceptionType`/`c.exceptionCode` reuse the exact
+    /// same `optString`/`optStringWide` helpers the plain-text summary above
+    /// already uses, for identical clipping/redaction-safety.
+    @available(iOS 14.0, *)
+    private static func emitCrashTelemetry(_ c: MXCrashDiagnostic, frames: [String],
+                                           windowBeginMs: Int64, windowEndMs: Int64) {
+        let meta = c.metaData
+        let input = MetricKitCrashTelemetry.CrashInput(
+            windowBeginMs: windowBeginMs,
+            windowEndMs: windowEndMs,
+            appBuild: optString(meta.applicationBuildVersion),
+            osVersion: optString(meta.osVersion),
+            signal: optString(c.signal),
+            exceptionType: optString(c.exceptionType),
+            exceptionCode: optString(c.exceptionCode),
+            terminationReason: optStringWide(c.terminationReason),
+            frames: frames
+        )
+        let id = MetricKitCrashTelemetry.identifier(for: input)
+        guard MetricKitCrashTelemetry.markReportedIfNew(id) else {
+            print("[MetricKit] crash telemetry=0 dedup=1")
+            return
+        }
+        TelemetryService.shared.emit(kind: MetricKitCrashTelemetry.kind,
+                                     attrs: MetricKitCrashTelemetry.attributes(for: input))
+        print("[MetricKit] crash telemetry=1 dedup=0")
     }
 
     /// Depth-first walk of the frame tree (`subFrames` chains root→leaf).
@@ -235,6 +304,10 @@ extension MetricKitDiagnostics {
         guard let hangs = payload.hangDiagnostics, !hangs.isEmpty else { return }
         let header: String = countLine("hang", hangs.count)
         print(header)
+        // W-MKCRASHTELEMETRY (this task) — see the identical comment in
+        // emitCrashes above.
+        let windowBeginMs: Int64 = Int64(payload.timeStampBegin.timeIntervalSince1970 * 1000)
+        let windowEndMs: Int64 = Int64(payload.timeStampEnd.timeIntervalSince1970 * 1000)
         for h in hangs {
             let meta: String = appOSLine(h.metaData)
             let dur: String = measurementString(h.hangDuration)
@@ -248,7 +321,7 @@ extension MetricKitDiagnostics {
             // reason. MXHangDiagnostic carries the SAME callStackTree shape
             // as MXCrashDiagnostic (both are MXCallStackTree-backed) — the
             // frame walk below just reuses emitFrames, unchanged.
-            emitHangStack(h)
+            emitHangStack(h, windowBeginMs: windowBeginMs, windowEndMs: windowEndMs)
         }
     }
 
@@ -256,7 +329,7 @@ extension MetricKitDiagnostics {
     /// moment of a hang. Best-effort: any parse miss is silent — the
     /// duration= line above still records that a hang happened.
     @available(iOS 14.0, *)
-    private static func emitHangStack(_ h: MXHangDiagnostic) {
+    private static func emitHangStack(_ h: MXHangDiagnostic, windowBeginMs: Int64, windowEndMs: Int64) {
         let data: Data = h.callStackTree.jsonRepresentation()
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         guard let stacks = root["callStacks"] as? [[String: Any]] else { return }
@@ -266,6 +339,43 @@ extension MetricKitDiagnostics {
         print("[MetricKit] hang stack:")
         var emitted = 0
         emitFrames(roots, depth: 0, count: &emitted)
+        // W-MKCRASHTELEMETRY (this task) — see the identical comment in
+        // emitCrashStack above.
+        var telemetryFrameCount = 0
+        let telemetryFrames = frameLines(roots, maxCount: MetricKitCrashTelemetry.maxFrames, count: &telemetryFrameCount)
+        emitHangTelemetry(h, frames: telemetryFrames, windowBeginMs: windowBeginMs, windowEndMs: windowEndMs)
+    }
+
+    /// W-MKCRASHTELEMETRY (this task) — the ONE `app.crash` telemetry event
+    /// (kind shared with the crash path; `crash_kind: "metrickit_hang"`
+    /// distinguishes it) per `MXHangDiagnostic`, deduplicated the same way
+    /// as `emitCrashTelemetry`.
+    @available(iOS 14.0, *)
+    private static func emitHangTelemetry(_ h: MXHangDiagnostic, frames: [String],
+                                          windowBeginMs: Int64, windowEndMs: Int64) {
+        let meta = h.metaData
+        // UnitDuration has no .milliseconds case — convert via .seconds, the
+        // base unit, same as `measurementString` above does implicitly by
+        // reading `.value` on whatever unit the payload already carries (that
+        // path only formats it for display; this one needs an actual ms
+        // integer for the telemetry attrs).
+        let durationMs = Int64(h.hangDuration.converted(to: .seconds).value * 1000)
+        let input = MetricKitCrashTelemetry.HangInput(
+            windowBeginMs: windowBeginMs,
+            windowEndMs: windowEndMs,
+            appBuild: optString(meta.applicationBuildVersion),
+            osVersion: optString(meta.osVersion),
+            hangDurationMs: durationMs,
+            frames: frames
+        )
+        let id = MetricKitCrashTelemetry.identifier(for: input)
+        guard MetricKitCrashTelemetry.markReportedIfNew(id) else {
+            print("[MetricKit] hang telemetry=0 dedup=1")
+            return
+        }
+        TelemetryService.shared.emit(kind: MetricKitCrashTelemetry.kind,
+                                     attrs: MetricKitCrashTelemetry.attributes(for: input))
+        print("[MetricKit] hang telemetry=1 dedup=0")
     }
 
     @available(iOS 14.0, *)

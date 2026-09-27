@@ -614,7 +614,49 @@ APP_VOCAB = frozenset("""
     man merged mute nativemute native neg nsnap preven prevman replaced
     rxrebind sess site src stalearm startfail tok verdict voipcfg
     match stale own reapply
+
+    autoreset crash kill killswitch persisted phase snapshot streak switch
+
+    hang telemetry dedup
 """.split())
+# W-NATIVESRTPPERSIST / W-CRASHCRUMBS / W-NATIVEAUDIOQUALITY (this task) --
+# the 8 words on the line right above this comment were added for the new
+# "call"-tagged RTLog lines this task's spec sections B/C introduce:
+#   audiosrtp event=override value=<0|1> persisted=1
+#   audiosrtp event=override_autoreset reason=crash_streak n=2
+#   audiosrtp event=kill_switch site=<2|3|5>
+# ("override", "reset", "reason", "site", "n", "value" and "event" were
+# already vocabulary; only the words above are new.)
+#
+# W-CRASHTELEMETRY / W-MKCRASHTELEMETRY (this task) -- the 3 words on the
+# line right above ("hang telemetry dedup") are for the new plain
+# `print(...)` lines (tag "stdout", shipped by the W416/W417 stdout-tee
+# path, NOT the encrypted `app.crash` telemetry batch itself -- that one
+# never passes through this script) MetricKitDiagnostics.swift now emits
+# once per MXCrashDiagnostic / MXHangDiagnostic telemetry attempt:
+#   [MetricKit] crash telemetry=1 dedup=0
+#   [MetricKit] crash telemetry=0 dedup=1
+#   [MetricKit] hang telemetry=1 dedup=0
+#   [MetricKit] hang telemetry=0 dedup=1
+# Both "telemetry" and "dedup" are kv KEYS here (not bare free words), but
+# the key of an unprotected key=value token is still judged by
+# _ident_ok()/_word_known() same as any other identifier, so they need to be
+# recognized too -- otherwise "telemetry=1 dedup=0" would burn 2 of the
+# structured gate's MAX_UNKNOWN_WORDS budget on top of the 2 free words
+# ("[MetricKit]", "crash"/"hang") already in the same line, and the
+# free<=structural balance (condition B) is exactly 2<=2 with nothing to
+# spare. "crash"/"hang" themselves are free WORDS (not kv), which is why
+# "hang" is added beside them even though it plays no kv-key role.
+#
+# The single "call"-tagged RTLog line AppState.swift emits after shipping
+# the in-process crash report as telemetry needed NO new vocabulary:
+#   crash event=telemetry_sent
+# ("crash"/"event" are already in this APP_VOCAB set from the
+# W-NATIVESRTPPERSIST addition right above; "telemetry_sent" is a kv VALUE,
+# split by _ident_ok on the underscore into "telemetry"+"sent" -- "sent" is
+# already TELEMETRY_VOCAB and "telemetry" is now covered by this same
+# addition). Global (not CALL_FORMAT_VOCAB-scoped): the MetricKit lines are
+# tag "stdout", not "call".
 
 # ---------------------------------------------------------------------------
 # Copilot follow-up to #120: the 22 words below (added by 1af88afd for the
@@ -1054,6 +1096,17 @@ _KV_VTAG_KEYS = frozenset(["epoch", "wire"])
 _KV_VERSION_KEYS = frozenset(["version", "ver", "appversion", "osversion",
                               "sdkversion"])
 _KV_EPOCH_KEYS = frozenset(["version", "ver", "selfver", "peerver", "cached"])
+# Keys that carry a short truncated-id prefix -- never a full id, never
+# reversible key material -- matching this codebase's `qa.call.h8` /
+# `qa.call.short8` / `CallService.short8` convention (id.review finding,
+# W-KVPRECISION-3 2026-09-27): `h8=`/`id=` already survived the blob sweeps
+# below by the coincidence of staying under RE_BASE64_BLOB's 12-char total
+# token length; `call8=<8hex>` (14 chars) does not, so
+# `CrashBreadcrumbs.setCallContext`'s call-context line silently lost its
+# call id under this same-shaped value. Allow-listing the key explicitly
+# (rather than relying on that length coincidence) fixes it for any length
+# and documents the intent.
+_KV_HEXID_KEYS = frozenset(["h8", "id", "call8"])
 # per-body budgets for the protected key=value tokens (corpus maxima: 3 open
 # tokens; see _protect_benign_kv).
 KV_MAX_OPEN = 6
@@ -1174,7 +1227,15 @@ def _kv_classify(key, val):
     low = val.lower()
     kind = None
     n_val = 0
-    if low in _KV_BOOLS and val in (low, val.capitalize(), val.upper()):
+    # W-KVPRECISION-3 (id.review 2026-09-27): a short truncated-id prefix under
+    # one of the known id-prefix keys (h8, id, call8) is a bounded, non-
+    # reversible-looking hex value -- provably benign. Checked before the
+    # open-vocabulary enum branch below, which would otherwise claim a
+    # lower-case hex string like "abcd1234" and then reject it (none of these
+    # keys read as an enum key), never falling through to this check.
+    if klow in _KV_HEXID_KEYS and _RE_HEX_PREFIX.match(val):
+        kind = "hexid"
+    elif low in _KV_BOOLS and val in (low, val.capitalize(), val.upper()):
         kind = "bool"
     elif RE_KV_INT.match(val) or RE_KV_DEC.match(val) or RE_KV_UNITNUM.match(val):
         kind = "num"
@@ -1262,7 +1323,7 @@ def _protect_benign_kv(s):
         if kind is None:
             return m.group(0)
         is_open = 1 if kind in _KV_OPEN_KINDS else 0
-        is_big = 1 if kind == "num" and _is_bignum(m.group(2)) else 0
+        is_big = 1 if (kind == "num" and _is_bignum(m.group(2))) or kind == "hexid" else 0
         if (budget["open"] + is_open > KV_MAX_OPEN
                 or budget["unknown"] + n_unk > MAX_UNKNOWN_WORDS
                 or budget["idlike"] + is_big > MAX_IDLIKE_TOKENS):
