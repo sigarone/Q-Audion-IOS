@@ -593,7 +593,8 @@ APP_VOCAB = frozenset("""
     turn txdc txfall type udp un unc uncertain undec unknown unseal
     untracked updating upgrade upload upok us user usev4 uvk va vad vbind
     vbwcap vbwcaprx vcap verified version vidcap video voice voiced voip vol
-    vpio vpn vpostneg vspostneg w-callawake w-deactown w-gateowner wait
+    vpio vpn vpostneg vspostneg w-callawake w-deactown w-gateowner
+    w-nudgeown wait
     watchdog wdstart wdstop webrtc why wifi wire writable ws wss
     wsunavailable x xw yet
 

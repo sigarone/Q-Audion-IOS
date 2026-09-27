@@ -325,6 +325,15 @@ RTLOG_NEW = (
     "admgate W-DEACTOWN stale=1 own=-1 cur=1",
     "admgate W-GATEOWNER reapply=0 why=2 tok=17 cur=18",
     "admgate W-GATEOWNER reapply=1 why=1 tok=4 cur=4",
+    # 2026-09-27: W-NUDGEOWN (the capture-live nudge's own owner check, same
+    # family as W-DEACTOWN/W-GATEOWNER above and hit by the exact same
+    # bare-token budget problem — "W" + "NUDGEOWN" alone spend both of
+    # MAX_UNKNOWN_WORDS's slots). Real format strings from
+    # QAudionWebRtcCallController's capture-live check ("audiosrtp W-NUDGEOWN
+    # stale=<1|2|3> tok=<armToken>").
+    "audiosrtp W-NUDGEOWN stale=1 tok=17",
+    "audiosrtp W-NUDGEOWN stale=2 tok=4",
+    "audiosrtp W-NUDGEOWN stale=3 tok=9",
 )
 
 
