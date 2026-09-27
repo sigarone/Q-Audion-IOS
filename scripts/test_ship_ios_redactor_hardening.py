@@ -314,6 +314,17 @@ RTLOG_NEW = (
     "answerguard refuse=1 why=3 id=1A2B3C4D",
     "answerguard nocall=1 id=1A2B3C4D",
     "endguard ignore=1 id=1A2B3C4D",
+    # 2026-09-27: W-DEACTOWN / W-GATEOWNER (native-SRTP back-to-back-call
+    # fixes). Both tags used to be dropped WHOLE by the structured gate: the
+    # bare "W-DEACTOWN"/"W-GATEOWNER" tokens alone already spent the full
+    # MAX_UNKNOWN_WORDS budget (split on the hyphen into an unvocabbed
+    # "w" + tag-name pair), and the unvocabbed "own"/"reapply" kv keys pushed
+    # every one of these over it. These are exactly the lines meant to prove
+    # (or rule out) the stale-deactivate / stale-nudge races in the field.
+    "admgate W-DEACTOWN stale=1 own=7 cur=7",
+    "admgate W-DEACTOWN stale=1 own=-1 cur=1",
+    "admgate W-GATEOWNER reapply=0 why=2 tok=17 cur=18",
+    "admgate W-GATEOWNER reapply=1 why=1 tok=4 cur=4",
 )
 
 

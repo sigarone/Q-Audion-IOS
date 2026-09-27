@@ -593,8 +593,9 @@ APP_VOCAB = frozenset("""
     turn txdc txfall type udp un unc uncertain undec unknown unseal
     untracked updating upgrade upload upok us user usev4 uvk va vad vbind
     vbwcap vbwcaprx vcap verified version vidcap video voice voiced voip vol
-    vpio vpn vpostneg vspostneg w-callawake wait watchdog wdstart wdstop
-    webrtc why wifi wire writable ws wss wsunavailable x xw yet
+    vpio vpn vpostneg vspostneg w-callawake w-deactown w-gateowner wait
+    watchdog wdstart wdstop webrtc why wifi wire writable ws wss
+    wsunavailable x xw yet
 
     actpass audioen band bitrate built c0 c1 c2 c3 cat cbr ch chacha
     checking clk codecs completed connected cps cryptor curdir decfail
@@ -610,7 +611,7 @@ APP_VOCAB = frozenset("""
     disarm en end endbal expired fbsettle fields first fresh hard iter
     man merged mute nativemute native neg nsnap preven prevman replaced
     rxrebind sess site src stalearm startfail tok verdict voipcfg
-    match stale
+    match stale own reapply
 """.split())
 
 # ---------------------------------------------------------------------------
