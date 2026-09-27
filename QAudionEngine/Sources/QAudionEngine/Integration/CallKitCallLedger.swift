@@ -96,17 +96,31 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// `nativeBalanceUUIDs` (a native call is recorded there BEFORE its
     /// activation runs, on every path that passes a uuid), consumed only by
     /// that SAME uuid's `reportCallEnded`: another call's mark is never taken.
-    /// A leftover entry (a call ended only through `endAllOutstanding`) is
-    /// inert, since call uuids are never reused.
+    /// A leftover entry (a call ended only through `endAllOutstanding`, or a
+    /// late activation retry that lands after its own `reportCallEnded`
+    /// already ran — see ``markAudioSelfActivated(_:)``) is inert, since call
+    /// uuids are never reused.
     private var selfActivatedNativeUUIDs: Set<UUID> = []
 
-    /// W-SELFACTID — native uuids whose balance was already consumed, newest
-    /// last, capped at `endedNativeCap`. `reportCallEnded` fires more than
-    /// once for the same call on real devices (W-DOUBLEDECR); the repeat must
-    /// be recognised as the native call it is, so it never falls through to
-    /// the legacy flag above (which a legacy call may still hold).
-    private var endedNativeUUIDs: [UUID] = []
-    private static let endedNativeCap = 8
+    /// W-NATIVEEVICT (2026-09-27) — every CallKit uuid this process has ever
+    /// recorded as a native-SRTP call (``recordNativeBalance(_:)``), kept for
+    /// the LIFETIME of the process, unlike `nativeBalanceUUIDs` (cleared at
+    /// that uuid's own `reportCallEnded`). This is what recognises a LATE,
+    /// out-of-order arrival for that uuid — a delayed `activateAudioSession`
+    /// retry, or a repeated `reportCallEnded` (W-DOUBLEDECR) — as belonging to
+    /// a native call, so it can be kept out of the legacy, process-wide
+    /// bookkeeping (`audioSelfActivated`) instead of silently leaking into
+    /// whichever unrelated legacy call happens to be live when it lands.
+    ///
+    /// Deliberately unbounded, replacing an earlier count-capped list (8
+    /// entries): a small cap let a uuid age out of memory before such a
+    /// delayed arrival showed up, at which point it was indistinguishable
+    /// from a uuid that was never native — exactly the leak this set exists
+    /// to close. Call uuids are never reused, and a phone call is rare enough
+    /// against the process's own lifetime (killed and relaunched far more
+    /// often than it places thousands of calls) that the memory cost is a
+    /// few dozen bytes per call, not a leak of its own.
+    private var nativeUUIDs: Set<UUID> = []
 
     /// W-GHOSTCALL (2026-09-25) — uuids whose `reportNewIncomingCall` has been
     /// asked of CallKit and CallKit has not replied yet. Exists only to make
@@ -140,6 +154,7 @@ final class CallKitCallLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         nativeBalanceUUIDs.insert(uuid)
+        nativeUUIDs.insert(uuid)
     }
 
     /// W-ADMBALANCE-UUID — atomic test-and-remove: `true` exactly once, and
@@ -159,18 +174,25 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// UI/ledger state for this call happens to be.
     ///
     /// W-SELFACTID (2026-09-27) — `uuid` is the CallKit uuid the activation
-    /// was made for. A uuid recorded as native (``recordNativeBalance(_:)``,
-    /// which every caller runs before the activation) is marked under its own
-    /// key; anything else — a call with native SRTP off, or no uuid — sets
-    /// the process-wide flag exactly as before. The native check and the mark
-    /// are one critical section. A native call whose activation retry lands
-    /// only AFTER its own report consumed its record is no longer recorded,
-    /// so that late mark takes the process-wide flag too — where the single
-    /// flag put it before this change.
+    /// was made for. A uuid ever recorded as native (``nativeUUIDs``, set by
+    /// ``recordNativeBalance(_:)`` before the activation) is marked under its
+    /// own key; anything else — a call with native SRTP off, or no uuid —
+    /// sets the process-wide flag exactly as before. The native check and the
+    /// mark are one critical section.
+    ///
+    /// W-NATIVEEVICT (2026-09-27) — checked against ``nativeUUIDs``, not
+    /// `nativeBalanceUUIDs`: a native call's activation retry can land AFTER
+    /// its own `reportCallEnded` already consumed `nativeBalanceUUIDs`'s
+    /// entry (the report runs in an unawaited Task; the retry has its own
+    /// bounded delay loop). That late mark has nothing left to balance for
+    /// its OWN call, but it must still be recognised as native and kept under
+    /// its own key — a no-op the uuid's own end already resolved — rather
+    /// than falling to the process-wide flag below, which the NEXT unrelated
+    /// legacy call would then wrongly consume as its own self-activation.
     func markAudioSelfActivated(_ uuid: UUID?) {
         lock.lock()
         defer { lock.unlock() }
-        if let uuid, nativeBalanceUUIDs.contains(uuid) {
+        if let uuid, nativeUUIDs.contains(uuid) {
             selfActivatedNativeUUIDs.insert(uuid)
         } else {
             audioSelfActivated = true
@@ -200,18 +222,20 @@ final class CallKitCallLedger: @unchecked Sendable {
     ///   exactly as before — true only the first time after a self-activation,
     ///   so a duplicate `reportCallEnded` cannot double-decrement
     ///   `RTCAudioSession.activationCount` (W-DOUBLEDECR).
+    ///
+    /// W-NATIVEEVICT (2026-09-27) — the repeated-report check reads
+    /// ``nativeUUIDs`` (unbounded, lifetime of the process), not a
+    /// count-capped recent list: the uuid is never forgotten, so a duplicate
+    /// report can never age out and fall through to the legacy flag below no
+    /// matter how many other calls ended in between.
     func consumeEndBalance(_ uuid: UUID) -> EndBalance {
         lock.lock()
         defer { lock.unlock() }
         if nativeBalanceUUIDs.remove(uuid) != nil {
             let selfActivated = selfActivatedNativeUUIDs.remove(uuid) != nil
-            endedNativeUUIDs.append(uuid)
-            if endedNativeUUIDs.count > Self.endedNativeCap {
-                endedNativeUUIDs.removeFirst(endedNativeUUIDs.count - Self.endedNativeCap)
-            }
             return EndBalance(nativeManualCall: true, selfActivated: selfActivated, duplicateNative: false)
         }
-        if endedNativeUUIDs.contains(uuid) {
+        if nativeUUIDs.contains(uuid) {
             return EndBalance(nativeManualCall: false, selfActivated: false, duplicateNative: true)
         }
         guard audioSelfActivated else {

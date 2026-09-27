@@ -263,20 +263,25 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertTrue(ledger.consumeEndBalance(native).selfActivated)
     }
 
-    /// An activation that lands after its own native report consumed the
-    /// record is no longer native-keyed: it takes the process-wide flag, as
-    /// the single flag did before.
-    func test_selfActivation_markAfterOwnReport_takesTheProcessWideFlag() {
+    /// W-NATIVEEVICT: an activation that lands after its own native report
+    /// already consumed the record stays native-keyed (a no-op — its own call
+    /// already ended) and must NEVER leak into an unrelated later call's
+    /// legacy flag, unlike the single process-wide flag before this fix.
+    func test_selfActivation_markAfterOwnReport_staysNativeKeyed_neverLeaksToLegacyFlag() {
         let ledger = CallKitCallLedger()
         let native = UUID()
         ledger.recordNativeBalance(native)
         XCTAssertFalse(ledger.consumeEndBalance(native).selfActivated)
         ledger.markAudioSelfActivated(native)
-        XCTAssertTrue(ledger.consumeEndBalance(UUID()).selfActivated)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated,
+                        "a late native mark must never leak into an unrelated call's legacy flag")
     }
 
-    /// The duplicate memory is bounded: the oldest ended native uuid falls out.
-    func test_selfActivation_endedNativeMemoryIsBounded() {
+    /// W-NATIVEEVICT: native-uuid memory is unbounded (replacing an earlier
+    /// 8-entry cap), so a delayed duplicate report is still recognised as
+    /// native no matter how many other calls ended in between, and never
+    /// mistaken for a legacy call's end.
+    func test_selfActivation_nativeMemoryIsUnbounded_lateDuplicateStillRecognised() {
         let ledger = CallKitCallLedger()
         let first = UUID()
         ledger.recordNativeBalance(first)
@@ -286,7 +291,8 @@ final class CallKitCallLedgerTests: XCTestCase {
             ledger.recordNativeBalance(uuid)
             _ = ledger.consumeEndBalance(uuid)
         }
-        XCTAssertFalse(ledger.consumeEndBalance(first).duplicateNative)
+        XCTAssertTrue(ledger.consumeEndBalance(first).duplicateNative,
+                       "a native uuid is never forgotten, so it never falls through to the legacy flag")
     }
 
     // MARK: - beginReport / finishReport (W-GHOSTCALL single-flight)
