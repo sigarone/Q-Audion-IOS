@@ -107,12 +107,28 @@ public enum NativeAudioSessionGate {
     /// Asks the app layer (CallService's gate, on the main thread) to
     /// re-decide whether the unit may run — the engine cannot see the call
     /// state the verdict needs. Wired once at login by AppState.
-    public static var onGateReapplyRequested: ((Int) -> Void)?
+    ///
+    /// W-GATEOWNER (2026-09-27) — carries the arm `token` this request was
+    /// found current for, ALONGSIDE `reason`, not instead of the ownership
+    /// check below: the app layer schedules its own reapply asynchronously
+    /// (`Task { @MainActor in ... }`), so the token checked here can go stale
+    /// before that closure actually runs (a hand-over to a new arm in
+    /// between). The receiver must revalidate with ``isCurrent(token:)``
+    /// right before calling `reapplyNativeAudioUnitGate`, the same way
+    /// `setNativeAudioInactive(ifCurrent:reason:)` is owner-checked at the
+    /// switch itself.
+    public static var onGateReapplyRequested: ((Int, Int) -> Void)?
 
-    /// See ``onGateReapplyRequested``. No-op unless armed.
+    /// See ``onGateReapplyRequested``. No-op unless armed. `token` is the arm
+    /// in force at the time of THIS call, so the receiver has something to
+    /// revalidate against by the time its own (possibly deferred) reapply
+    /// actually runs — see ``onGateReapplyRequested``'s kdoc.
     public static func requestGateReapply(reason: Int) {
-        guard isArmed else { return }
-        onGateReapplyRequested?(reason)
+        lock.lock()
+        let current = armedToken
+        lock.unlock()
+        guard current != 0 else { return }
+        onGateReapplyRequested?(current, reason)
     }
 
     /// W-NUDGEOWN (2026-09-27) — ``requestGateReapply(reason:)`` on behalf of
@@ -122,7 +138,9 @@ public enum NativeAudioSessionGate {
     /// app layer re-decides on the main thread from the CURRENT call's state
     /// and enables the arm in force through its own enable, so even a request
     /// that passes this check just before a hand-over can only re-run the
-    /// successor's own verdict. Returns whether the request was forwarded.
+    /// successor's own verdict, PROVIDED the app layer revalidates `token`
+    /// again once its (possibly deferred) reapply actually runs — see
+    /// ``onGateReapplyRequested``. Returns whether the request was forwarded.
     @discardableResult
     public static func requestGateReapply(ifCurrent token: Int, reason: Int) -> Bool {
         lock.lock()
@@ -132,7 +150,7 @@ public enum NativeAudioSessionGate {
             emit("admgate W-GATEOWNER reapply=0 why=\(reason) tok=\(token) cur=\(current)")
             return false
         }
-        onGateReapplyRequested?(reason)
+        onGateReapplyRequested?(token, reason)
         return true
     }
 

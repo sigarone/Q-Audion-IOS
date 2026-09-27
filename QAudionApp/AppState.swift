@@ -5031,8 +5031,16 @@ final class AppState: ObservableObject {
         }
         // W-ADMNUDGE — the engine's capture-live nudge asks CallService's
         // gate to re-decide (main thread) instead of re-enabling blindly.
-        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] reasonCode in
+        // W-GATEOWNER (2026-09-27) — `token` was only current at the moment
+        // `requestGateReapply` was called, on whatever thread that was; this
+        // closure itself is scheduled onto the MainActor asynchronously, so
+        // the arm can change in between (a hand-over to a new call). Revalidate
+        // `token` here, right before the actual reapply, instead of trusting
+        // the synchronous check the engine already did — see
+        // `NativeAudioSessionGate.onGateReapplyRequested`'s kdoc.
+        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] token, reasonCode in
             Task { @MainActor in
+                guard NativeAudioSessionGate.isCurrent(token: token) else { return }
                 self?.callService.reapplyNativeAudioUnitGate(reasonCode: reasonCode)
             }
         }
