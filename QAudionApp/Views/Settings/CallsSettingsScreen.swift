@@ -118,6 +118,18 @@ struct CallsSettingsScreen: View {
                                 set: { newValue in
                                     audioSrtpToggle = newValue
                                     CallCapabilities.audioSrtpDebugOverride = newValue
+                                    // 2026-09-27 diagnosis (I1) — the toggle
+                                    // change had no trace of its own: the
+                                    // live test could only infer it from
+                                    // whether `nsnap`/`admgate` later showed
+                                    // native=1, one call later. Numeric only,
+                                    // same "audiosrtp event=... value=..."
+                                    // shape as the Android counterpart
+                                    // (AudioCodecSettingsViewModel's
+                                    // `srtpdiag event=override_set`), so the
+                                    // two platforms' logs read the same way
+                                    // side by side.
+                                    RTLog.info("call", "audiosrtp event=override value=\(newValue ? 1 : 0)")
                                 }
                             )
                         )

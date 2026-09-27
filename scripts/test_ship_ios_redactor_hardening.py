@@ -334,6 +334,11 @@ RTLOG_NEW = (
     "audiosrtp W-NUDGEOWN stale=1 tok=17",
     "audiosrtp W-NUDGEOWN stale=2 tok=4",
     "audiosrtp W-NUDGEOWN stale=3 tok=9",
+    # 2026-09-27 diagnosis (I1): the debug toggle's own change, previously
+    # untraced (CallsSettingsScreen.swift). Same "audiosrtp event=... value=..."
+    # shape as the Android counterpart's `srtpdiag event=override_set`.
+    "audiosrtp event=override value=1",
+    "audiosrtp event=override value=0",
 )
 
 

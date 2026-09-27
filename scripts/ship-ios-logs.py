@@ -565,7 +565,7 @@ APP_VOCAB = frozenset("""
     db dc dchangup dcmux decode decoded deferred delta destroyed di diag
     dialandcall dispatch dp drain dtls dtx dup duplicate dupoffer during
     echo ef empty enabled encoded encrypted endcall ended eng entry epoch
-    exchange extension fail failure false features fec feed fetch fetched
+    event exchange extension fail failure false features fec feed fetch fetched
     fir fire flags flush forced fps frameheight framewidth gain gate gcm gen
     giveup grp handshake handshakeready hangup hangupecho hasv4session hb hd
     headroom hf high hkdf hmac host http https icegate id idle idr idrfrc
@@ -576,7 +576,8 @@ APP_VOCAB = frozenset("""
     mobile moderate msg mtu nack nalu nat negative negotiated negotiatedv4
     net netchange network nil no nocontrol noctl noinput noise noop not ns
     null nullptr number off offer offline offset ok old on online opaquehang
-    options opus origin out outbox outp outstanding ov overlay ownercont p2p
+    options opus origin out outbox outp outstanding ov overlay override
+    ownercont p2p
     packet pad parameters patch paused payload pcm pcma pcmu persa piggy-
     back ping pinned pipeline placeholder playout plc pli plp plpfeedback
     ply poll pong port post pqc pre prebootstrap predictor pref present
@@ -591,7 +592,7 @@ APP_VOCAB = frozenset("""
     stats stun suppressed swap target tcp terminate tf tg thresholds time
     timestamp tls tofupin took total totalfail track transport trig true
     turn txdc txfall type udp un unc uncertain undec unknown unseal
-    untracked updating upgrade upload upok us user usev4 uvk va vad vbind
+    untracked updating upgrade upload upok us user usev4 uvk va vad value vbind
     vbwcap vbwcaprx vcap verified version vidcap video voice voiced voip vol
     vpio vpn vpostneg vspostneg w-callawake w-deactown w-gateowner
     w-nudgeown wait
