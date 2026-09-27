@@ -42,6 +42,16 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     private var hasKey = false
     private let lock = NSLock()
 
+    /// W-CRYPTORQUEUE (2026-09-27) — audio mirror of
+    /// ``NativeVideoFrameCryptor``'s identical fields; see `attachSender`'s
+    /// doc for the full rationale (the audio path shares the exact same
+    /// `RTCFrameCryptor(factory:...)`-marshals-to-signalling-thread hazard,
+    /// and PR #128 gave it a second, sender-side delegate assignment that
+    /// widened the exposure to every native-SRTP call, not just video's).
+    private var senderConstructing = false
+    private var receiverConstructing = false
+    private var disposed = false
+
     /// Mirrors ``NativeVideoFrameCryptor/onDecryptFailure`` — fired when the
     /// RECEIVER cryptor's native state callback reports DECRYPTIONFAILED /
     /// MISSINGKEY / INTERNALERROR. Not currently wired to a keyframe request
@@ -65,6 +75,16 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     /// undocumented beyond "the thread WebRTC calls back on", same caveat
     /// as every other cryptor callback in this file).
     private var stateChangeLogGate = FrameCryptorStateChangeLogGate()
+
+    /// W-CRYPTORQUEUE (2026-09-27) — the `frameCryptor(_:didStateChangeWith
+    /// ParticipantId:with:)` delegate below hops here instead of taking
+    /// `lock` inline on whatever thread WebRTC calls it back on (undocumented,
+    /// but plausibly the signalling thread — the same thread `attachSender`/
+    /// `attachReceiver`'s native init can block waiting on). Role resolution
+    /// and the log rate-gate are pure app-side diagnostics, not on the native
+    /// cryptor's critical path, so there is no reason to ever contend for
+    /// `lock` on that thread at all.
+    private let stateChangeQueue = DispatchQueue(label: "qaudion.webrtc.audio-cryptor-state")
 
     public init(factory: RTCPeerConnectionFactory, participantId: String) {
         self.factory = factory
@@ -158,17 +178,39 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
 
     /// Create + enable the sender cryptor. Idempotent. Must run on the
     /// WebRTC signalling thread / a WebRTC callback, same constraint as
-    /// ``NativeVideoFrameCryptor/attachSender(_:)``.
+    /// ``NativeVideoFrameCryptor/attachSender(_:)`` — including that
+    /// method's W-CRYPTORQUEUE discipline: the native
+    /// `RTCFrameCryptor(factory:...)` init runs with `lock` RELEASED (it
+    /// marshals to the signalling thread and blocks the caller on
+    /// `Event::Wait`), so a caller already holding `lock` here can never
+    /// invert lock order against the signalling thread the way the
+    /// 2026-09-27 video-path watchdog kill did.
     @discardableResult
     public func attachSender(_ sender: RTCRtpSender) -> Bool {
+        lock.lock()
+        if senderCryptor != nil { lock.unlock(); return true }
+        guard !senderConstructing else {
+            lock.unlock()
+            return false  // another attach is already building one; caller retries
+        }
+        senderConstructing = true
+        lock.unlock()
+
+        let built = RTCFrameCryptor(factory: factory,
+                                    rtpSender: sender,
+                                    participantId: participantId,
+                                    algorithm: .aesGcm,
+                                    keyProvider: keyProvider)
+
         lock.lock(); defer { lock.unlock() }
-        guard senderCryptor == nil else { return true }
-        guard let c = RTCFrameCryptor(factory: factory,
-                                      rtpSender: sender,
-                                      participantId: participantId,
-                                      algorithm: .aesGcm,
-                                      keyProvider: keyProvider) else {
+        senderConstructing = false
+        guard let c = built else {
             print("[NativeAudioFrameCryptor] sender cryptor init returned nil (sender.track nil?) — will retry")
+            return false
+        }
+        guard !disposed else {
+            c.enabled = false
+            print("[NativeAudioFrameCryptor] sender cryptor discarded — dispose() ran during construction")
             return false
         }
         c.keyIndex = Int32(currentSenderKeyIndex)  // W-KEYSLOTROTATE / W-GATEBYPASS
@@ -184,17 +226,34 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
         return true
     }
 
-    /// Create + enable the receiver cryptor. Idempotent.
+    /// Create + enable the receiver cryptor. Idempotent. See `attachSender`'s
+    /// doc — same construct-outside-`lock` discipline, same reason.
     @discardableResult
     public func attachReceiver(_ receiver: RTCRtpReceiver) -> Bool {
+        lock.lock()
+        if receiverCryptor != nil { lock.unlock(); return true }
+        guard !receiverConstructing else {
+            lock.unlock()
+            return false
+        }
+        receiverConstructing = true
+        lock.unlock()
+
+        let built = RTCFrameCryptor(factory: factory,
+                                    rtpReceiver: receiver,
+                                    participantId: participantId,
+                                    algorithm: .aesGcm,
+                                    keyProvider: keyProvider)
+
         lock.lock(); defer { lock.unlock() }
-        guard receiverCryptor == nil else { return true }
-        guard let c = RTCFrameCryptor(factory: factory,
-                                      rtpReceiver: receiver,
-                                      participantId: participantId,
-                                      algorithm: .aesGcm,
-                                      keyProvider: keyProvider) else {
+        receiverConstructing = false
+        guard let c = built else {
             print("[NativeAudioFrameCryptor] receiver cryptor init returned nil — will retry")
+            return false
+        }
+        guard !disposed else {
+            c.enabled = false
+            print("[NativeAudioFrameCryptor] receiver cryptor discarded — dispose() ran during construction")
             return false
         }
         c.keyIndex = 0
@@ -272,9 +331,11 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     }
 
     /// Release BEFORE peerConnection.close() — same ordering discipline as
-    /// ``NativeVideoFrameCryptor/dispose()``.
+    /// ``NativeVideoFrameCryptor/dispose()``, including marking `disposed`
+    /// for an in-flight construction (W-CRYPTORQUEUE).
     public func dispose() {
         lock.lock(); defer { lock.unlock() }
+        disposed = true
         senderCryptor?.enabled = false
         receiverCryptor?.enabled = false
         senderCryptor = nil
@@ -286,44 +347,60 @@ extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
     /// W-NATIVESRTPDIAG (this task) — now fires ``onFrameCryptorStateChange``
     /// for EVERY transition on EITHER cryptor (rate-limited), in addition to
     /// the pre-existing ``onDecryptFailure`` behavior, which is UNCHANGED:
-    /// still receiver-only, still only the three failure states. Role
-    /// ("tx"/"rx") is resolved by identity against ``senderCryptor``/
-    /// ``receiverCryptor`` under ``lock`` — cheap, and correct even though
-    /// both cryptors share this one delegate object.
+    /// still receiver-only, still only the three failure states.
+    ///
+    /// W-CRYPTORQUEUE (2026-09-27) — role resolution ("tx"/"rx", by identity
+    /// against ``senderCryptor``/``receiverCryptor``) and the log rate-gate
+    /// now run on ``stateChangeQueue`` instead of inline on the delegate's
+    /// own (undocumented) calling thread: taking `lock` there synchronously
+    /// used to risk the same lock-order shape as the sender/receiver attach
+    /// hazard (see `attachSender`'s doc) if this callback ever lands on the
+    /// signalling thread while another thread holds `lock` marshalling into
+    /// a native init. `onFrameCryptorStateChange`/`onDecryptFailure` already
+    /// fire from an undocumented WebRTC callback thread by contract (see
+    /// this file's own VERIFICATION GAP note below and
+    /// ``NativeVideoFrameCryptor/onDecryptFailure``'s doc) — consumers hop to
+    /// @MainActor themselves, so firing them from this queue instead is not
+    /// a new obligation on callers.
     public func frameCryptor(_ frameCryptor: RTCFrameCryptor,
                              didStateChangeWithParticipantId participantId: String,
                              with state: RTCFrameCryptorState) {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        lock.lock()
-        let role: String
-        if frameCryptor === senderCryptor {
-            role = "tx"
-        } else if frameCryptor === receiverCryptor {
-            role = "rx"
-        } else {
-            // Should not happen (a cryptor not tracked by this instance
-            // somehow has this instance as its delegate) — fail open with a
-            // label that still shows up distinctly in the shipped log
-            // rather than silently mislabeling it "tx" or "rx".
-            role = "unk"
-        }
-        let shouldLog = stateChangeLogGate.shouldLog(role: role, stateRawValue: state.rawValue, nowMs: nowMs)
-        lock.unlock()
-
-        if shouldLog {
-            onFrameCryptorStateChange?("audiosrtp cryptor role=\(role) state=\(Self.stateLabel(state))")
-        }
-        switch state {
-        case .decryptionFailed, .missingKey, .internalError:
-            print("[NativeAudioFrameCryptor] \(role) cryptor state=\(state.rawValue) participantId=\(participantId)")
-            // Unchanged semantics: only the RECEIVER side drives the
-            // pre-existing rekey-skew signal (audio has no keyframe request
-            // to make on a sender-side failure the way video does).
-            if role == "rx" {
-                onDecryptFailure?()
+        stateChangeQueue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let role: String
+            if frameCryptor === self.senderCryptor {
+                role = "tx"
+            } else if frameCryptor === self.receiverCryptor {
+                role = "rx"
+            } else {
+                // Should not happen (a cryptor not tracked by this instance
+                // somehow has this instance as its delegate) — fail open
+                // with a label that still shows up distinctly in the
+                // shipped log rather than silently mislabeling it "tx" or
+                // "rx".
+                role = "unk"
             }
-        default:
-            break
+            let shouldLog = self.stateChangeLogGate.shouldLog(role: role, stateRawValue: state.rawValue, nowMs: nowMs)
+            self.lock.unlock()
+
+            if shouldLog {
+                self.onFrameCryptorStateChange?("audiosrtp cryptor role=\(role) state=\(Self.stateLabel(state))")
+            }
+            switch state {
+            case .decryptionFailed, .missingKey, .internalError:
+                print("[NativeAudioFrameCryptor] \(role) cryptor state=\(state.rawValue) participantId=\(participantId)")
+                // Unchanged semantics: only the RECEIVER side drives the
+                // pre-existing rekey-skew signal (audio has no keyframe
+                // request to make on a sender-side failure the way video
+                // does).
+                if role == "rx" {
+                    self.onDecryptFailure?()
+                }
+            default:
+                break
+            }
         }
     }
 

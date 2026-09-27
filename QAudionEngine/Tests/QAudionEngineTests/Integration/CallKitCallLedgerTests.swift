@@ -183,6 +183,118 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertTrue(ledger.consumeNativeBalance(call))
     }
 
+    // MARK: - reportCallEnded self-activation (W-SELFACTID)
+
+    /// THE race: the OLD native call's report runs after the NEXT native call
+    /// self-activated. It balances only its own activation, and the next
+    /// call's report still finds its own.
+    func test_selfActivation_lateReportOfOldCall_doesNotTakeNextCallsMark() {
+        let ledger = CallKitCallLedger()
+        let old = UUID()
+        let next = UUID()
+        ledger.recordNativeBalance(old)
+        ledger.markAudioSelfActivated(old)
+        ledger.recordNativeBalance(next)
+        ledger.markAudioSelfActivated(next)
+        XCTAssertEqual(ledger.consumeEndBalance(old),
+                       .init(nativeManualCall: true, selfActivated: true, duplicateNative: false))
+        XCTAssertEqual(ledger.consumeEndBalance(next),
+                       .init(nativeManualCall: true, selfActivated: true, duplicateNative: false))
+    }
+
+    /// The old call never self-activated (its activation failed): its late
+    /// report must NOT take the next call's mark.
+    func test_selfActivation_oldCallWithoutMark_leavesNextCallsMark() {
+        let ledger = CallKitCallLedger()
+        let old = UUID()
+        let next = UUID()
+        ledger.recordNativeBalance(old)
+        ledger.recordNativeBalance(next)
+        ledger.markAudioSelfActivated(next)
+        XCTAssertEqual(ledger.consumeEndBalance(old),
+                       .init(nativeManualCall: true, selfActivated: false, duplicateNative: false))
+        XCTAssertTrue(ledger.consumeEndBalance(next).selfActivated)
+    }
+
+    /// W-DOUBLEDECR: a repeated report of a native uuid balances nothing and
+    /// never falls through to the legacy flag a legacy call may still hold.
+    func test_selfActivation_duplicateNativeReport_neverTouchesLegacyFlag() {
+        let ledger = CallKitCallLedger()
+        let native = UUID()
+        let legacy = UUID()
+        ledger.recordNativeBalance(native)
+        ledger.markAudioSelfActivated(native)
+        ledger.markAudioSelfActivated(legacy)
+        XCTAssertTrue(ledger.consumeEndBalance(native).selfActivated)
+        XCTAssertEqual(ledger.consumeEndBalance(native),
+                       .init(nativeManualCall: false, selfActivated: false, duplicateNative: true))
+        XCTAssertEqual(ledger.consumeEndBalance(legacy),
+                       .init(nativeManualCall: false, selfActivated: true, duplicateNative: false),
+                       "the legacy call's mark is still there for its own report")
+    }
+
+    /// Native SRTP off: the process-wide flag, exactly as before — any report
+    /// consumes it, once.
+    func test_selfActivation_legacyCalls_keepTheProcessWideFlag() {
+        let ledger = CallKitCallLedger()
+        let first = UUID()
+        let second = UUID()
+        ledger.markAudioSelfActivated(first)
+        XCTAssertEqual(ledger.consumeEndBalance(second),
+                       .init(nativeManualCall: false, selfActivated: true, duplicateNative: false))
+        XCTAssertFalse(ledger.consumeEndBalance(first).selfActivated, "consumed once")
+        ledger.markAudioSelfActivated(nil)
+        XCTAssertTrue(ledger.consumeEndBalance(first).selfActivated, "no uuid: the process-wide flag")
+    }
+
+    /// A legacy call's mark is never taken by a native call's report, and a
+    /// native call's mark never by a legacy call's report.
+    func test_selfActivation_nativeAndLegacyMarksAreSeparate() {
+        let ledger = CallKitCallLedger()
+        let native = UUID()
+        let legacy = UUID()
+        ledger.recordNativeBalance(native)
+        ledger.markAudioSelfActivated(legacy)
+        XCTAssertFalse(ledger.consumeEndBalance(native).selfActivated)
+        ledger.recordNativeBalance(native)
+        ledger.markAudioSelfActivated(native)
+        XCTAssertTrue(ledger.consumeEndBalance(legacy).selfActivated)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated)
+        XCTAssertTrue(ledger.consumeEndBalance(native).selfActivated)
+    }
+
+    /// W-NATIVEEVICT: an activation that lands after its own native report
+    /// already consumed the record stays native-keyed (a no-op — its own call
+    /// already ended) and must NEVER leak into an unrelated later call's
+    /// legacy flag, unlike the single process-wide flag before this fix.
+    func test_selfActivation_markAfterOwnReport_staysNativeKeyed_neverLeaksToLegacyFlag() {
+        let ledger = CallKitCallLedger()
+        let native = UUID()
+        ledger.recordNativeBalance(native)
+        XCTAssertFalse(ledger.consumeEndBalance(native).selfActivated)
+        ledger.markAudioSelfActivated(native)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated,
+                        "a late native mark must never leak into an unrelated call's legacy flag")
+    }
+
+    /// W-NATIVEEVICT: native-uuid memory is unbounded (replacing an earlier
+    /// 8-entry cap), so a delayed duplicate report is still recognised as
+    /// native no matter how many other calls ended in between, and never
+    /// mistaken for a legacy call's end.
+    func test_selfActivation_nativeMemoryIsUnbounded_lateDuplicateStillRecognised() {
+        let ledger = CallKitCallLedger()
+        let first = UUID()
+        ledger.recordNativeBalance(first)
+        _ = ledger.consumeEndBalance(first)
+        for _ in 0..<8 {
+            let uuid = UUID()
+            ledger.recordNativeBalance(uuid)
+            _ = ledger.consumeEndBalance(uuid)
+        }
+        XCTAssertTrue(ledger.consumeEndBalance(first).duplicateNative,
+                       "a native uuid is never forgotten, so it never falls through to the legacy flag")
+    }
+
     // MARK: - beginReport / finishReport (W-GHOSTCALL single-flight)
 
     /// Incident e3acecd7 03.221/03.222: two reports of the same uuid inside the

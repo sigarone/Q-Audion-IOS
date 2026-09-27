@@ -4058,8 +4058,10 @@ final class AppState: ObservableObject {
                         // after we dismissed the system UI, but the call is still
                         // live in-app. Re-assert the session so mic + speaker keep
                         // working (do NOT pause as the normal teardown would).
+                        // W-SELFACTID — the call's own CallKit uuid keys the
+                        // self-activation mark of a native-SRTP call.
                         await (self.callKit as? CallKitProvider)?
-                            .reactivateAudioSessionForSelfManagedCall()
+                            .reactivateAudioSessionForSelfManagedCall(uuid: self.activeCallKitId)
                         return
                     }
                     self.callService.handleAudioSessionDeactivated()
@@ -5029,8 +5031,16 @@ final class AppState: ObservableObject {
         }
         // W-ADMNUDGE — the engine's capture-live nudge asks CallService's
         // gate to re-decide (main thread) instead of re-enabling blindly.
-        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] reasonCode in
+        // W-GATEOWNER (2026-09-27) — `token` was only current at the moment
+        // `requestGateReapply` was called, on whatever thread that was; this
+        // closure itself is scheduled onto the MainActor asynchronously, so
+        // the arm can change in between (a hand-over to a new call). Revalidate
+        // `token` here, right before the actual reapply, instead of trusting
+        // the synchronous check the engine already did — see
+        // `NativeAudioSessionGate.onGateReapplyRequested`'s kdoc.
+        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] token, reasonCode in
             Task { @MainActor in
+                guard NativeAudioSessionGate.isCurrent(token: token) else { return }
                 self?.callService.reapplyNativeAudioUnitGate(reasonCode: reasonCode)
             }
         }
@@ -14808,7 +14818,7 @@ final class AppState: ObservableObject {
             guard provider.releaseFromSystemUI(uuid) else { return }
             self.selfManagedAudioSession = true
             RTLog.info("call", "CallKit-wake-only: native UI dismissed, app owns the call")
-            Task { await provider.reactivateAudioSessionForSelfManagedCall() }
+            Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: uuid) }
         }
     }
 

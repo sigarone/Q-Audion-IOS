@@ -161,6 +161,67 @@ public enum NativeAudioUnitGateDecisions {
         return .notActivated
     }
 
+    /// W-DEACTOWN (2026-09-27) — which call a CallKit `didDeactivate` belongs
+    /// to. Raw values are the numeric `own=` codes of the log lines.
+    public enum DeactivationOwner: Int, Sendable, Equatable {
+        /// Paired with a CallKit `didActivate` handled during the current call.
+        case currentCall = 0
+        /// Paired with the `didActivate` of a call that has since ended: a late
+        /// notification for the previous call of a back-to-back pair.
+        case endedCall = 1
+        /// No CallKit activation to pair it with (none seen, or already
+        /// consumed by an earlier deactivation): taken as the current call's,
+        /// the behaviour before this decision existed.
+        case unattributed = 2
+    }
+
+    /// W-DEACTOWN (2026-09-27) — `didDeactivate` carries no call identity, so
+    /// it is attributed through its pairing: CallKit delivers `didActivate`
+    /// and `didDeactivate` strictly alternating on the provider's queue, so a
+    /// deactivation belongs to the call during which the last CallKit
+    /// `didActivate` was handled. `pairedActivationGeneration` is the call
+    /// generation (CallService's W-STALESEALER counter, bumped at every call
+    /// end) recorded at that `didActivate`, `nil` if there is none;
+    /// `currentGeneration` is the generation now.
+    ///
+    /// Known limit: when CallKit skips `didActivate` for a call because the
+    /// previous call left the session active (W-CKSTARTACTIVATE), a genuine
+    /// deactivation of that call is paired with the previous call and read as
+    /// `.endedCall`. On a native call the caller then keeps the unit enabled
+    /// (never mutes a live call); WebRTC still receives the deactivation
+    /// itself (`CallKitProvider` forwards it before this decision runs).
+    public static func callKitDeactivationOwner(
+        pairedActivationGeneration: Int?,
+        currentGeneration: Int
+    ) -> DeactivationOwner {
+        guard let paired = pairedActivationGeneration else { return .unattributed }
+        return paired == currentGeneration ? .currentCall : .endedCall
+    }
+
+    /// W-NUDGEOWN (2026-09-27) — what the capture-live nudge (manual audio
+    /// mode) may do after its owner-checked stop
+    /// (`NativeAudioSessionGate.setNativeAudioInactive(ifCurrent:reason:)`).
+    public enum NudgeOwnership: Int, Sendable, Equatable {
+        /// This PeerConnection still owns the unit: ask for the restart.
+        case restart = 0
+        /// It no longer does (closed, replaced, or a later call armed): the
+        /// check is stale and must stop here — no restart request and no
+        /// escalation to the relay fallback, both of which would act on the
+        /// successor's call.
+        case stale = 1
+    }
+
+    /// `ownerToken`: the arm token of the PeerConnection the check was armed
+    /// for (0 = it never armed). `stopped`: the owner-checked stop switched
+    /// the unit off. `ownerStillCurrent`: that token is still the arm in force
+    /// (read after a stop that did nothing — the unit may simply have been
+    /// off already, which still wants the restart).
+    public static func nudgeOwnership(ownerToken: Int, stopped: Bool, ownerStillCurrent: Bool) -> NudgeOwnership {
+        guard ownerToken != 0 else { return .stale }
+        if stopped { return .restart }
+        return ownerStillCurrent ? .restart : .stale
+    }
+
     /// W-ADMBALANCE (2026-09-26) — the iteration cap for the locked
     /// `RTCAudioSession.setActive(false)` loop in
     /// `CallKitProvider.reportCallEnded` (the loop itself also stops when the

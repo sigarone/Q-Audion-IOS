@@ -314,6 +314,31 @@ RTLOG_NEW = (
     "answerguard refuse=1 why=3 id=1A2B3C4D",
     "answerguard nocall=1 id=1A2B3C4D",
     "endguard ignore=1 id=1A2B3C4D",
+    # 2026-09-27: W-DEACTOWN / W-GATEOWNER (native-SRTP back-to-back-call
+    # fixes). Both tags used to be dropped WHOLE by the structured gate: the
+    # bare "W-DEACTOWN"/"W-GATEOWNER" tokens alone already spent the full
+    # MAX_UNKNOWN_WORDS budget (split on the hyphen into an unvocabbed
+    # "w" + tag-name pair), and the unvocabbed "own"/"reapply" kv keys pushed
+    # every one of these over it. These are exactly the lines meant to prove
+    # (or rule out) the stale-deactivate / stale-nudge races in the field.
+    "admgate W-DEACTOWN stale=1 own=7 cur=7",
+    "admgate W-DEACTOWN stale=1 own=-1 cur=1",
+    "admgate W-GATEOWNER reapply=0 why=2 tok=17 cur=18",
+    "admgate W-GATEOWNER reapply=1 why=1 tok=4 cur=4",
+    # 2026-09-27: W-NUDGEOWN (the capture-live nudge's own owner check, same
+    # family as W-DEACTOWN/W-GATEOWNER above and hit by the exact same
+    # bare-token budget problem — "W" + "NUDGEOWN" alone spend both of
+    # MAX_UNKNOWN_WORDS's slots). Real format strings from
+    # QAudionWebRtcCallController's capture-live check ("audiosrtp W-NUDGEOWN
+    # stale=<1|2|3> tok=<armToken>").
+    "audiosrtp W-NUDGEOWN stale=1 tok=17",
+    "audiosrtp W-NUDGEOWN stale=2 tok=4",
+    "audiosrtp W-NUDGEOWN stale=3 tok=9",
+    # 2026-09-27 diagnosis (I1): the debug toggle's own change, previously
+    # untraced (CallsSettingsScreen.swift). Same "audiosrtp event=... value=..."
+    # shape as the Android counterpart's `srtpdiag event=override_set`.
+    "audiosrtp event=override value=1",
+    "audiosrtp event=override value=0",
 )
 
 
@@ -456,6 +481,36 @@ check(red(extra_field_line, "call") != extra_field_line,
 check(red("dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0", "call")
       != "dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0",
       "SCOPE-127R2: a bogus why= value on an otherwise real-shaped line still shipped verbatim")
+drop_caches()
+
+# ---------------------------------------------------------------------------
+# W-CRYPTORQUEUE (2026-09-27, watchdog 0x8BADF00D deadlock fix): the new
+# "cryattach media=<video|audio> [reason=rekey] ok=<0|1> [retry=N|exhausted=1]
+# ms=<n>" diagnostic lines QAudionWebRtcCallController now ships from
+# retryVideoSenderCryptorAttachIfNeeded/attachVideoSenderCryptorOnQueue, the
+# ensureVideoSealer rekey branch, and installAudioSrtpOnQueue. Every field
+# name/value here is either bare-numeric or already-recognized vocabulary
+# ("media", "reason", "ok", "retry", "exhausted", "rekey", "video", "audio"
+# are all existing APP_VOCAB/TELEMETRY_VOCAB words); "cryattach" itself is a
+# free word but the line as a whole clears the structural-vs-free balance
+# check without needing any new APP_VOCAB entry. Locking this in as a fixture
+# test (same reasoning as the existing "benign lines must still ship" checks
+# above) so a future redactor change that silently drops it is caught here,
+# not by a phone shipping an empty line on the next incident.
+# ---------------------------------------------------------------------------
+CRYATTACH_LINES = [
+    "cryattach media=video ok=1 ms=42",
+    "cryattach media=video ok=0 retry=3 ms=310",
+    "cryattach media=video ok=0 exhausted=1 ms=1500",
+    "cryattach media=video reason=rekey ok=1 ms=42",
+    "cryattach media=video reason=rekey ok=0 ms=7",
+    "cryattach media=audio ok=1 ms=11",
+    "cryattach media=audio ok=0 retry=3 ms=310",
+    "cryattach media=audio ok=0 exhausted=1 ms=1500",
+]
+for line in CRYATTACH_LINES:
+    check(red(line, "call") == line,
+          "W-CRYPTORQUEUE: %r did not ship verbatim (got %r)" % (line, red(line, "call")))
 drop_caches()
 
 # ---------------------------------------------------------------------------
