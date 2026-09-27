@@ -3504,6 +3504,44 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         switchGate(for: media).currentPendingEpoch()
     }
 
+    // MARK: - W-CRYPTORQUEUE (2026-09-27) — off-thread native sender-cryptor attach
+
+    /// Serializes every native sender-cryptor attach this controller makes
+    /// (video AND audio) off whichever thread triggered it.
+    ///
+    /// Root cause this closes (watchdog 0x8BADF00D, iOS TestFlight
+    /// 1.0.1187, main thread blocked 10s in `RtpSenderProxy::track()`,
+    /// 2026-09-27): `RTCFrameCryptor(factory:rtpSender:...)`'s init calls
+    /// `sender.track()`, which `WebRTCMethodCall` marshals onto the WebRTC
+    /// signalling thread and blocks the CALLING thread on `Event::Wait`
+    /// (no timeout) until the signalling thread services it.
+    /// `retryVideoSenderCryptorAttachIfNeeded`/`installAudioSrtpIfPossible`
+    /// used to call `attachSender` straight from whichever thread reached
+    /// `ensureVideoSealer`: the app's own MainActor (`pqcSessionKey`
+    /// didSet, via `AppState.forwardPqcSessionKeyToController`) OR the
+    /// signalling thread itself (`didReceiveRemoteVideoReceiver`/
+    /// `didReceiveNativeAudioSrtpReceiver`, and the `ensureVideoSealer`
+    /// rekey branch reached from either). Two entries racing from each side
+    /// — one blocked on the marshal, holding `NativeVideoFrameCryptor.lock`
+    /// (before this task's other `lock`-scoping fix), the other stuck on
+    /// that same lock from INSIDE a SetRemoteDescription still running on
+    /// the signalling thread — is a lock-order inversion: neither side can
+    /// ever make progress, and the main-thread half of it is exactly what
+    /// MetricKit's symbolicated stack showed.
+    ///
+    /// Running the attach here instead means the CALLING thread (MainActor
+    /// or signalling) never blocks on the marshal at all — `.async` returns
+    /// immediately — and the only thread that ever waits on
+    /// `Event::Wait` is this queue's own worker, which neither MainActor
+    /// nor the signalling thread needs serviced to make progress. One
+    /// shared serial queue for both media kinds preserves this class's
+    /// existing "whichever trigger fires last wins" ordering (video and
+    /// audio installs were never ordered against each other to begin with —
+    /// they use separate `RekeySwitchGate`s and separate native cryptors —
+    /// so FIFO-behind-each-other here is a strictly stronger guarantee than
+    /// before, not a new constraint).
+    private let cryptorAttachQueue = DispatchQueue(label: "qaudion.webrtc.cryptor-attach")
+
     /// IOS-C4b (2026-08-26) — install/rekey the native SRTP audio path the
     /// moment BOTH the peer's negotiated capabilities (`audioSrtpV1` in the
     /// intersection) AND a 32-byte PQC session key are available. Mirrors
@@ -3539,6 +3577,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Numeric-only fields (see `startAudioIOIfReady`'s gate=N precedent
         // in CallService.swift): the remote-log redactor drops any
         // word=word field or compound word that isn't a bare number.
+        // Cheap, plain-Swift-property reads — no WebRTC proxy call — so
+        // these stay synchronous on whatever thread triggered the install.
         guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else {
             print("audiosrtp install skip=1 reason=1")
             return
@@ -3547,6 +3587,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("audiosrtp install skip=1 reason=2")
             return
         }
+        guard let pc = peerConnection else { return }
+        // W-CRYPTORQUEUE (this task) — everything from here on touches
+        // WebRTC (rebindAudioReceiverCryptorPostNegotiation,
+        // activateNativeAudioSrtp -> attachSender, the two
+        // logNativeSrtp* diagnostics' proxied reads) and now runs on
+        // `cryptorAttachQueue` instead of on whichever thread reached this
+        // guard (MainActor via the `pqcSessionKey` didSet, or the WebRTC
+        // signalling thread via `didReceiveNativeAudioSrtpReceiver` /
+        // `acceptPeerCapabilities`). See `cryptorAttachQueue`'s own doc.
+        cryptorAttachQueue.async { [weak self] in
+            guard let self, self.peerConnection === pc else { return }
+            self.installAudioSrtpOnQueue(pc: pc, key: key, retriesRemaining: retriesRemaining)
+        }
+    }
+
+    /// W-CRYPTORQUEUE (this task) — the WebRTC-touching body of
+    /// `installAudioSrtpIfPossible`, always running on `cryptorAttachQueue`.
+    /// See that method's doc for why, and `cryptorAttachQueue`'s own doc for
+    /// the incident this closes.
+    private func installAudioSrtpOnQueue(pc: QAudionPeerConnection, key: Data, retriesRemaining: Int) {
         // W-AUDIORXPOSTNEG (2026-08-28) — this call site is reached only
         // once `negotiated.useAudioSrtp` is confirmed, which means the SDP
         // round that negotiated it has completed — the same "safe to
@@ -3557,11 +3617,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // is a no-op when it didn't (same receiver, cryptor already live)
         // and a real fix when it did. See NativeAudioFrameCryptor.
         // rebindReceiver's own doc for the live-call failure this closes.
-        _ = peerConnection?.rebindAudioReceiverCryptorPostNegotiation()
+        _ = pc.rebindAudioReceiverCryptorPostNegotiation()
         let participant = recipientId ?? "peer"
         let epoch = pqcSessionKeyEpoch
         let slot = epoch % 16
-        let installed = peerConnection?.activateNativeAudioSrtp(
+        let attachStartedMs = Self.nowMs()
+        let installed = pc.activateNativeAudioSrtp(
             key: key,
             participantId: participant,
             slot: slot,
@@ -3581,9 +3642,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // remote log; the engine itself can only print().
             diag: { [weak self] line in self?.log?(line) }
         ) ?? false
+        let attachMs = Self.nowMs() - attachStartedMs
         if installed {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")
             print("audiosrtp tx=1")
+            log?("cryattach media=audio ok=1 ms=\(attachMs)")
             // WIRE_SPEC §8.7 v1.2 — `activateNativeAudioSrtp` only installs
             // the key now (see its own updated doc); it no longer switches
             // the sender itself. Epoch 0 (this call's first audio key)
@@ -3594,7 +3657,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if epoch > 0 {
                 armRekeySwitch(media: "audio", epoch: epoch)
             } else {
-                peerConnection?.nativeAudioCryptor?.switchSender(slot: slot)
+                pc.nativeAudioCryptor?.switchSender(slot: slot)
                 // W-CAPTURELIVE — only the FIRST activation of a call needs
                 // this: a rekey (epoch > 0) is switching an already-proven
                 // live sender, `armRekeySwitch` above already confirms that
@@ -3608,11 +3671,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             }
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.installAudioSrtpIfPossible(retriesRemaining: retriesRemaining - 1)
+            log?("cryattach media=audio ok=0 retry=\(retriesRemaining) ms=\(attachMs)")
+            cryptorAttachQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                self.installAudioSrtpIfPossible(retriesRemaining: retriesRemaining - 1)
             }
         } else {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach exhausted retries — mic stays muted this call")
+            log?("cryattach media=audio ok=0 exhausted=1 ms=\(attachMs)")
         }
     }
 
@@ -3889,7 +3955,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                         c.switchSender(slot: slot)
                     }
                 }
-                peerConnection?.attachVideoSenderCryptor()  // idempotent
+                // W-CRYPTORQUEUE (this task) — this rekey branch runs from
+                // BOTH the MainActor (`pqcSessionKey` didSet) and the WebRTC
+                // signalling thread (`didReceiveRemoteVideoReceiver` ->
+                // `ensureVideoSealerInternal`), and `attachSender`'s native
+                // init can block its caller on a marshal to that same
+                // signalling thread — see `cryptorAttachQueue`'s own doc.
+                // `attachVideoSenderCryptor()` is idempotent, so deferring it
+                // here changes nothing about correctness, only which thread
+                // can ever be the one that waits.
+                if let pc = peerConnection {
+                    cryptorAttachQueue.async { [weak self] in
+                        guard let self, self.peerConnection === pc else { return }
+                        let started = Self.nowMs()
+                        let attached = pc.attachVideoSenderCryptor()
+                        self.log?("cryattach media=video reason=rekey ok=\(attached ? 1 : 0) ms=\(Self.nowMs() - started)")
+                    }
+                }
                 print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
             }
             return videoSealer
@@ -4012,19 +4094,51 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// same class already fixed for native-audio-srtp today). Safe to call
     /// unconditionally: `attachSender` is idempotent (no-ops once already
     /// attached), so a retry after a success just confirms the same state.
+    ///
+    /// W-CRYPTORQUEUE (this task) — dispatches onto `cryptorAttachQueue`
+    /// instead of calling `attachVideoSenderCryptor()` on whichever thread
+    /// reached `ensureVideoSealer`'s FIRST-install branch (its only call
+    /// site) — see that queue's own doc for why.
     private func retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: Int) {
-        guard let pc = peerConnection, let cryptor = pc.nativeVideoCryptor else { return }
+        guard let pc = peerConnection else { return }
+        cryptorAttachQueue.async { [weak self] in
+            guard let self, self.peerConnection === pc else { return }
+            self.attachVideoSenderCryptorOnQueue(pc: pc, retriesRemaining: retriesRemaining)
+        }
+    }
+
+    /// W-CRYPTORQUEUE (this task) — always runs on `cryptorAttachQueue`; see
+    /// `retryVideoSenderCryptorAttachIfNeeded`, its only entry point.
+    private func attachVideoSenderCryptorOnQueue(pc: QAudionPeerConnection, retriesRemaining: Int) {
+        guard let cryptor = pc.nativeVideoCryptor else { return }
         if cryptor.senderIsAttached { return }
+        // An audio-only call never adds a local video track (`addLocalVideoTrack`
+        // is never called), so `videoSender` stays nil for the call's whole
+        // life and `attachVideoSenderCryptor()` would just fail every one of
+        // the 5 retries below, every single audio-only call — pure log noise,
+        // never a real "attach failed" (verified against
+        // `isVideoSendConfirmedHealthy`, which already treats "no sender" as
+        // healthy=false with no other side effect). `upgradeToVideo()`
+        // re-invokes the attach itself, unretried, via
+        // `ensureVideoSealerInternal`'s rekey branch, once
+        // `addLocalVideoTrack()` actually creates a sender mid-call.
+        guard pc.videoSender != nil else { return }
+        let started = Self.nowMs()
         let attached = pc.attachVideoSenderCryptor()
+        let elapsedMs = Self.nowMs() - started
         if attached {
             print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach succeeded")
+            log?("cryattach media=video ok=1 ms=\(elapsedMs)")
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach failed, retrying (\(retriesRemaining) left)")
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: retriesRemaining - 1)
+            log?("cryattach media=video ok=0 retry=\(retriesRemaining) ms=\(elapsedMs)")
+            cryptorAttachQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                self.attachVideoSenderCryptorOnQueue(pc: pc, retriesRemaining: retriesRemaining - 1)
             }
         } else {
             print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach exhausted retries — staying on WS-relay this call")
+            log?("cryattach media=video ok=0 exhausted=1 ms=\(elapsedMs)")
         }
     }
 
