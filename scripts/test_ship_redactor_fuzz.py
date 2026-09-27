@@ -404,6 +404,12 @@ if IS_SERVER and hasattr(m, "_ops_msg_norm"):
         ("sk_live_ABCDEF1234567890XYZ", "sk_live_abcdef1234567890xyz"),
         ("Bearer sometoken123", "bearer sometoken123"),
         ("key=secretvalue123", "secretvalue123"),
+        # Copilot follow-up to #127 -- "Authorization: Bearer <token>": both
+        # "authorization" and "bearer" match RE_SECRET_PREFIXED's alternation,
+        # so without the nested-scheme group the match starting at
+        # "authorization" ate "authorization: bearer" as prefix+value and left
+        # the actual token untouched.
+        ("Authorization: Bearer sk_live_ABCDEF1234567890XYZ", "sk_live_abcdef1234567890xyz"),
     ]
     for raw, needle in legend_cases:
         norm = m._ops_msg_norm("request failed " + raw + " retry=1")

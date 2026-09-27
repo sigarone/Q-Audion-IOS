@@ -423,8 +423,21 @@ def resolve_scope(msg_value, full_line):
 # ---------------------------------------------------------------------------
 
 PLACEHOLDER = "[REDACTED:secret]"
+# Copilot follow-up to #127 -- a header like "Authorization: Bearer <token>"
+# has BOTH "authorization" and "bearer" match the alternation below: without
+# the optional nested-scheme group, the match starting at "authorization"
+# consumed "authorization: " (the prefix + separator) then greedily ate
+# "bearer" itself as the \S+ "value", leaving the REAL token that follows
+# untouched -- so "authorization: bearer sk_live_..." was only ever
+# partially redacted, letting the actual token print verbatim. The optional
+# group below lets the match swallow one extra scheme word (bearer / basic /
+# digest / token) plus its separating space before the real value, so the
+# whole header -- scheme word and token both -- is redacted as one span. A
+# line with no such composite ("token: abc123") is unaffected: the optional
+# group simply matches nothing.
 RE_SECRET_PREFIXED = re.compile(
-    r"(?i)(bearer|authorization|token|secret|api[-_]?key|password)([\"'\s:=]+)\S+")
+    r"(?i)(bearer|authorization|token|secret|api[-_]?key|password)([\"'\s:=]+)"
+    r"(?:(?:bearer|basic|digest|token)\s+)?\S+")
 RE_LONG_BLOB = re.compile(r"[A-Za-z0-9+/=_-]{16,}")
 
 RE_RAW_UUID = re.compile(
