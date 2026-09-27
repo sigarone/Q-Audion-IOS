@@ -557,6 +557,46 @@ check("callid=" not in red("context: callid=abcd1234-1111-2222-3333-444455556666
 drop_caches()
 
 # ---------------------------------------------------------------------------
+# W-CRASHTELEMETRY / W-MKCRASHTELEMETRY (this task): the new plain-text
+# `print(...)` lines MetricKitDiagnostics.swift emits (tag "stdout") around
+# the new `app.crash` telemetry attempt for a crash/hang diagnostic, and the
+# one new "call"-tagged RTLog line AppState.swift emits after shipping the
+# in-process crash report as telemetry. All must ship VERBATIM -- these are
+# exactly the lines a maintainer greps for to confirm the new telemetry
+# event actually went out (or was deduped) for a given device.
+# ---------------------------------------------------------------------------
+MK_TELEMETRY_LINES = (
+    "[MetricKit] crash telemetry=1 dedup=0",
+    "[MetricKit] crash telemetry=0 dedup=1",
+    "[MetricKit] hang telemetry=1 dedup=0",
+    "[MetricKit] hang telemetry=0 dedup=1",
+)
+for line in MK_TELEMETRY_LINES:
+    check(red(line, "stdout") == line,
+          "W-CRASHTELEMETRY: %r did not ship verbatim (got %r)" % (line, red(line, "stdout")))
+
+CRASH_TELEMETRY_SENT_LINE = "crash event=telemetry_sent"
+check(red(CRASH_TELEMETRY_SENT_LINE, "call") == CRASH_TELEMETRY_SENT_LINE,
+      "W-CRASHTELEMETRY: %r did not ship verbatim (got %r)"
+      % (CRASH_TELEMETRY_SENT_LINE, red(CRASH_TELEMETRY_SENT_LINE, "call")))
+
+# with no unknown-word allowance at all, every vocabulary word these exact
+# lines need must already be in TELEMETRY_VOCAB/APP_VOCAB -- same rigor the
+# RTLOG_NEW check above applies, so a future vocabulary cleanup that quietly
+# drops "hang"/"telemetry"/"dedup"/"emitted" is caught here.
+drop_caches()
+slack = m.MAX_UNKNOWN_WORDS
+m.MAX_UNKNOWN_WORDS = 0
+try:
+    bad = [l for l in MK_TELEMETRY_LINES if red(l, "stdout") != l]
+    bad += [CRASH_TELEMETRY_SENT_LINE] if red(CRASH_TELEMETRY_SENT_LINE, "call") != CRASH_TELEMETRY_SENT_LINE else []
+finally:
+    m.MAX_UNKNOWN_WORDS = slack
+    drop_caches()
+check(not bad, "W-CRASHTELEMETRY: with no unknown-word allowance a vocabulary word of "
+      "the new telemetry lines is missing: %r" % (bad,))
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)

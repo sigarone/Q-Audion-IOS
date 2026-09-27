@@ -616,6 +616,8 @@ APP_VOCAB = frozenset("""
     match stale own reapply
 
     autoreset crash kill killswitch persisted phase snapshot streak switch
+
+    hang telemetry dedup
 """.split())
 # W-NATIVESRTPPERSIST / W-CRASHCRUMBS / W-NATIVEAUDIOQUALITY (this task) --
 # the 8 words on the line right above this comment were added for the new
@@ -625,6 +627,36 @@ APP_VOCAB = frozenset("""
 #   audiosrtp event=kill_switch site=<2|3|5>
 # ("override", "reset", "reason", "site", "n", "value" and "event" were
 # already vocabulary; only the words above are new.)
+#
+# W-CRASHTELEMETRY / W-MKCRASHTELEMETRY (this task) -- the 3 words on the
+# line right above ("hang telemetry dedup") are for the new plain
+# `print(...)` lines (tag "stdout", shipped by the W416/W417 stdout-tee
+# path, NOT the encrypted `app.crash` telemetry batch itself -- that one
+# never passes through this script) MetricKitDiagnostics.swift now emits
+# once per MXCrashDiagnostic / MXHangDiagnostic telemetry attempt:
+#   [MetricKit] crash telemetry=1 dedup=0
+#   [MetricKit] crash telemetry=0 dedup=1
+#   [MetricKit] hang telemetry=1 dedup=0
+#   [MetricKit] hang telemetry=0 dedup=1
+# Both "telemetry" and "dedup" are kv KEYS here (not bare free words), but
+# the key of an unprotected key=value token is still judged by
+# _ident_ok()/_word_known() same as any other identifier, so they need to be
+# recognized too -- otherwise "telemetry=1 dedup=0" would burn 2 of the
+# structured gate's MAX_UNKNOWN_WORDS budget on top of the 2 free words
+# ("[MetricKit]", "crash"/"hang") already in the same line, and the
+# free<=structural balance (condition B) is exactly 2<=2 with nothing to
+# spare. "crash"/"hang" themselves are free WORDS (not kv), which is why
+# "hang" is added beside them even though it plays no kv-key role.
+#
+# The single "call"-tagged RTLog line AppState.swift emits after shipping
+# the in-process crash report as telemetry needed NO new vocabulary:
+#   crash event=telemetry_sent
+# ("crash"/"event" are already in this APP_VOCAB set from the
+# W-NATIVESRTPPERSIST addition right above; "telemetry_sent" is a kv VALUE,
+# split by _ident_ok on the underscore into "telemetry"+"sent" -- "sent" is
+# already TELEMETRY_VOCAB and "telemetry" is now covered by this same
+# addition). Global (not CALL_FORMAT_VOCAB-scoped): the MetricKit lines are
+# tag "stdout", not "call".
 
 # ---------------------------------------------------------------------------
 # Copilot follow-up to #120: the 22 words below (added by 1af88afd for the
