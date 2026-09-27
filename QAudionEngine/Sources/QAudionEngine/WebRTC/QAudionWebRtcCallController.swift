@@ -4111,18 +4111,19 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `retryVideoSenderCryptorAttachIfNeeded`, its only entry point.
     private func attachVideoSenderCryptorOnQueue(pc: QAudionPeerConnection, retriesRemaining: Int) {
         guard let cryptor = pc.nativeVideoCryptor else { return }
-        if cryptor.senderIsAttached { return }
-        // An audio-only call never adds a local video track (`addLocalVideoTrack`
-        // is never called), so `videoSender` stays nil for the call's whole
-        // life and `attachVideoSenderCryptor()` would just fail every one of
-        // the 5 retries below, every single audio-only call — pure log noise,
-        // never a real "attach failed" (verified against
+        // See VideoSenderCryptorAttachDecision's own doc (verified against
         // `isVideoSendConfirmedHealthy`, which already treats "no sender" as
-        // healthy=false with no other side effect). `upgradeToVideo()`
-        // re-invokes the attach itself, unretried, via
-        // `ensureVideoSealerInternal`'s rekey branch, once
-        // `addLocalVideoTrack()` actually creates a sender mid-call.
-        guard pc.videoSender != nil else { return }
+        // healthy=false with no other side effect): `.skipNoSender` covers
+        // the audio-only call, which never adds a local video track, so
+        // `attachVideoSenderCryptor()` would just fail every one of the 5
+        // retries below — pure log noise, never a real transient failure.
+        switch VideoSenderCryptorAttachDecision.evaluate(senderIsAttached: cryptor.senderIsAttached,
+                                                         hasLocalVideoSender: pc.videoSender != nil) {
+        case .alreadyAttached, .skipNoSender:
+            return
+        case .attempt:
+            break
+        }
         let started = Self.nowMs()
         let attached = pc.attachVideoSenderCryptor()
         let elapsedMs = Self.nowMs() - started
