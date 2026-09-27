@@ -5043,8 +5043,16 @@ final class AppState: ObservableObject {
         // starting the manual capture path instead of leaving both running
         // against the same AVAudioSession. See CallService.engageAudioSrtpFallback's
         // kdoc for the live call this closes.
+        // W-CALLERUNMUTELOST (2026-09-27) — forward `nativeSenderMuteSource`
+        // (set by `reapplyNativeSenderMute` immediately before this closure
+        // runs, same thread) as `source:` so the `QAudionPeerConnection`
+        // `audiosrtp muteapply ... src=<...>` line names the real trigger
+        // ("answer" for a genuine accept) instead of always defaulting to
+        // "user". `self?.` short-circuits to that default if this closure
+        // somehow outlived `AppState` itself.
         callService.muteNativeAudioSrtpSender = { [weak self] muted in
-            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(muted)
+            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(
+                muted, source: self?.callService.nativeSenderMuteSource ?? "user")
         }
         // W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as above.
         // See `CallService.consecutiveAudioSrtpWedges`'s kdoc for what this

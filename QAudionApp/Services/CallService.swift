@@ -872,6 +872,19 @@ final class CallService: @unchecked Sendable {
     /// not this cached snapshot — it exists so a call site does not have to
     /// recompute the formula just to log it.
     public private(set) var nativeSenderMuteIntent: Bool = true
+    /// W-CALLERUNMUTELOST (2026-09-27) — the bare vocabulary token (already
+    /// in `ship-ios-logs.py`'s APP_VOCAB, see that script's own
+    /// W-CALLERUNMUTELOST comment) naming which trigger last called
+    /// ``reapplyNativeSenderMute(site:)``: `"answer"` for the two genuine-
+    /// accept sites (1 = callee, 2 = caller), `"user"` for every other one
+    /// (setMuted, SRTP-fallback engage/recover, a fresh `webRtcController`).
+    /// Set immediately before `muteNativeAudioSrtpSender` is invoked so the
+    /// `AppState` wiring can forward it as `QAudionWebRtcCallController
+    /// .setNativeAudioSrtpMuted(_:source:)`'s `source`, and the resulting
+    /// `QAudionPeerConnection` `audiosrtp muteapply ... src=<...>` line
+    /// names its real trigger instead of always reading the closure's own
+    /// `"user"` default — the one piece the three-file fix left unwired.
+    public private(set) var nativeSenderMuteSource: String = "user"
     /// W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as
     /// `muteNativeAudioSrtpSender` above, kept out of this file for the same
     /// reason: `CallService` deliberately never imports WebRTC directly.
@@ -1610,6 +1623,11 @@ final class CallService: @unchecked Sendable {
         let intent = NativeSenderMuteDecisions.shouldMute(
             peerAnswered: peerAnswered, userMuted: isMuted, fallbackActive: audioSrtpFallbackActive)
         nativeSenderMuteIntent = intent
+        // W-CALLERUNMUTELOST (2026-09-27) — see `nativeSenderMuteSource`'s
+        // own kdoc: set BEFORE invoking the closure below, on the same
+        // (main) thread, so the `AppState` wiring reads the value this same
+        // call just computed, never a stale one from a previous site.
+        nativeSenderMuteSource = (site == 1 || site == 2) ? "answer" : "user"
         RTLog.info("call", "audiosrtp mute want=\(intent ? 1 : 0) site=\(site)")
         muteNativeAudioSrtpSender?(intent)
     }
