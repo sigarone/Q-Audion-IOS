@@ -258,8 +258,8 @@ extension MetricKitDiagnostics {
         let input = MetricKitCrashTelemetry.CrashInput(
             windowBeginMs: windowBeginMs,
             windowEndMs: windowEndMs,
-            appBuild: optString(meta?.applicationBuildVersion),
-            osVersion: optString(meta?.osVersion),
+            appBuild: optString(meta.applicationBuildVersion),
+            osVersion: optString(meta.osVersion),
             signal: optString(c.signal),
             exceptionType: optString(c.exceptionType),
             exceptionCode: optString(c.exceptionCode),
@@ -363,8 +363,8 @@ extension MetricKitDiagnostics {
         let input = MetricKitCrashTelemetry.HangInput(
             windowBeginMs: windowBeginMs,
             windowEndMs: windowEndMs,
-            appBuild: optString(meta?.applicationBuildVersion),
-            osVersion: optString(meta?.osVersion),
+            appBuild: optString(meta.applicationBuildVersion),
+            osVersion: optString(meta.osVersion),
             hangDurationMs: durationMs,
             frames: frames
         )
