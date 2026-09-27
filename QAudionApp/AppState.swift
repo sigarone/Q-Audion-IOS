@@ -1967,7 +1967,25 @@ final class AppState: ObservableObject {
     /// on `canImport(WebRTC)` — using Any here lets the AppState
     /// header compile even on hosts where the WebRTC XCFramework
     /// hasn't been resolved yet.
-    var webRtcController: Any?
+    var webRtcController: Any? {
+        didSet {
+            // W-CALLERUNMUTELOST (2026-09-27) — every assignment to this
+            // property runs on the main thread (same as the answer path
+            // that races it), so this and `reapplyNativeSenderMute`'s own
+            // read of `peerAnswered`/`isMuted`/`audioSrtpFallbackActive`
+            // never interleave with each other. Covers cases (a)/(b) from
+            // this task's analysis — an answer landing before
+            // `webRtcController` itself exists yet, or a controller
+            // replaced (duplicate-OFFER glare) after the answer already
+            // latched its intent: either way, the FRESH controller gets
+            // told the current intent the moment it is assigned, same as
+            // (F1) a fresh `QAudionPeerConnection` does inside that
+            // controller.
+            if webRtcController != nil {
+                callService.reapplyNativeSenderMute(site: 6)
+            }
+        }
+    }
     /// W-ICEQUEUE (2026-08-13) — `call_ice` candidates that arrived before
     /// `webRtcController` was set. `handleIncomingWebRtcIce` used to drop
     /// these silently (`guard let controller = webRtcController as? ...
@@ -5025,8 +5043,16 @@ final class AppState: ObservableObject {
         // starting the manual capture path instead of leaving both running
         // against the same AVAudioSession. See CallService.engageAudioSrtpFallback's
         // kdoc for the live call this closes.
+        // W-CALLERUNMUTELOST (2026-09-27) — forward `nativeSenderMuteSource`
+        // (set by `reapplyNativeSenderMute` immediately before this closure
+        // runs, same thread) as `source:` so the `QAudionPeerConnection`
+        // `audiosrtp muteapply ... src=<...>` line names the real trigger
+        // ("answer" for a genuine accept) instead of always defaulting to
+        // "user". `self?.` short-circuits to that default if this closure
+        // somehow outlived `AppState` itself.
         callService.muteNativeAudioSrtpSender = { [weak self] muted in
-            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(muted)
+            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(
+                muted, source: self?.callService.nativeSenderMuteSource ?? "user")
         }
         // W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as above.
         // See `CallService.consecutiveAudioSrtpWedges`'s kdoc for what this

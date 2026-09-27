@@ -864,6 +864,27 @@ final class CallService: @unchecked Sendable {
     /// `engageAudioSrtpFallback()` exactly as it behaved before this existed
     /// — it just skips the release.
     public var muteNativeAudioSrtpSender: ((Bool) -> Void)?
+    /// W-CALLERUNMUTELOST (2026-09-27) — the mute state this service last
+    /// computed for the native audio-srtp sender (`NativeSenderMuteDecisions
+    /// .shouldMute`), read only for diagnostics/tests. The single source of
+    /// truth callers should trust for "is the sender supposed to be muted
+    /// right now" is ``reapplyNativeSenderMute(site:)``'s own recomputation,
+    /// not this cached snapshot — it exists so a call site does not have to
+    /// recompute the formula just to log it.
+    public private(set) var nativeSenderMuteIntent: Bool = true
+    /// W-CALLERUNMUTELOST (2026-09-27) — the bare vocabulary token (already
+    /// in `ship-ios-logs.py`'s APP_VOCAB, see that script's own
+    /// W-CALLERUNMUTELOST comment) naming which trigger last called
+    /// ``reapplyNativeSenderMute(site:)``: `"answer"` for the two genuine-
+    /// accept sites (1 = callee, 2 = caller), `"user"` for every other one
+    /// (setMuted, SRTP-fallback engage/recover, a fresh `webRtcController`).
+    /// Set immediately before `muteNativeAudioSrtpSender` is invoked so the
+    /// `AppState` wiring can forward it as `QAudionWebRtcCallController
+    /// .setNativeAudioSrtpMuted(_:source:)`'s `source`, and the resulting
+    /// `QAudionPeerConnection` `audiosrtp muteapply ... src=<...>` line
+    /// names its real trigger instead of always reading the closure's own
+    /// `"user"` default — the one piece the three-file fix left unwired.
+    public private(set) var nativeSenderMuteSource: String = "user"
     /// W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as
     /// `muteNativeAudioSrtpSender` above, kept out of this file for the same
     /// reason: `CallService` deliberately never imports WebRTC directly.
@@ -1559,14 +1580,56 @@ final class CallService: @unchecked Sendable {
         // W-MICBEFOREACCEPT-NATIVE gate unmutes at accept, honouring
         // `isMuted`) and while the relay fallback owns the mic.
         guard NativeAudioSessionGate.isArmed else { return }
-        if muted {
-            muteNativeAudioSrtpSender?(true)
-        } else if peerAnswered, !audioSrtpFallbackActive {
-            muteNativeAudioSrtpSender?(false)
-        }
+        // W-CALLERUNMUTELOST (2026-09-27) — was the `if muted { mute } else
+        // if peerAnswered, !audioSrtpFallbackActive { unmute }` shape
+        // directly; now the same three inputs go through the shared
+        // formula (site=3) — see `reapplyNativeSenderMute`'s kdoc for why
+        // this is equivalent AND why it now also survives the sender's
+        // PeerConnection not existing yet.
+        reapplyNativeSenderMute(site: 3)
         let mutedFlag: Int = muted ? 1 : 0
         let answeredFlag: Int = peerAnswered ? 1 : 0
         RTLog.info("call", "nativemute mute=\(mutedFlag) ans=\(answeredFlag)")
+    }
+
+    /// W-CALLERUNMUTELOST (2026-09-27) — single choke point for every
+    /// "recompute and (re)apply the native audio-srtp sender's mute state"
+    /// call site. Replaces five near-duplicate `muteNativeAudioSrtpSender?(
+    /// isMuted)` / `muteNativeAudioSrtpSender?(true)` call sites, each of
+    /// which read a different subset of (`peerAnswered`, `isMuted`,
+    /// `audioSrtpFallbackActive`) — see `NativeSenderMuteDecisions
+    /// .shouldMute` for the one formula that replaces all of them (verified
+    /// equivalent to the original conditionals at every call site, with one
+    /// deliberate correction: the two answer-time call sites — site 1 and
+    /// 2 below — no longer unmute when `audioSrtpFallbackActive` happens to
+    /// already be true at answer time; the original code forgot that
+    /// check).
+    ///
+    /// This alone does not fix W-CALLERUNMUTELOST — `muteNativeAudioSrtpSender`
+    /// can still be wired to a controller whose `QAudionPeerConnection`
+    /// does not exist yet. The fix is that the controller
+    /// (`QAudionWebRtcCallController.nativeSenderMuted`) now LATCHES
+    /// whatever this method sends and re-pushes it onto every
+    /// PeerConnection it is handed from then on (that controller's
+    /// `peerConnection` `didSet`) — so a request that arrives "too early"
+    /// is no longer lost, only delayed until a PeerConnection exists.
+    ///
+    /// - Parameter site: bare diagnostic number, no ids — 1 = callee answer
+    ///   (`activateIncomingCallAudio`), 2 = caller answer
+    ///   (`handleCallAnswered`), 3 = `setMuted`, 4 = SRTP-relay fallback
+    ///   engage, 5 = SRTP-relay fallback recover, 6 = a fresh
+    ///   `webRtcController` was just assigned (`AppState`).
+    func reapplyNativeSenderMute(site: Int) {
+        let intent = NativeSenderMuteDecisions.shouldMute(
+            peerAnswered: peerAnswered, userMuted: isMuted, fallbackActive: audioSrtpFallbackActive)
+        nativeSenderMuteIntent = intent
+        // W-CALLERUNMUTELOST (2026-09-27) — see `nativeSenderMuteSource`'s
+        // own kdoc: set BEFORE invoking the closure below, on the same
+        // (main) thread, so the `AppState` wiring reads the value this same
+        // call just computed, never a stale one from a previous site.
+        nativeSenderMuteSource = (site == 1 || site == 2) ? "answer" : "user"
+        RTLog.info("call", "audiosrtp mute want=\(intent ? 1 : 0) site=\(site)")
+        muteNativeAudioSrtpSender?(intent)
     }
 
     /// Feature B ("voce verificata") — start learning `contactId`'s voice
@@ -2233,7 +2296,8 @@ final class CallService: @unchecked Sendable {
         // QAudionPeerConnection.pendingAudioSrtpMuted's kdoc) has its own,
         // separate mute latch and needs its own explicit unblock here.
         // W-NATIVEMUTE (2026-09-26) — honour a mute the user set while ringing.
-        muteNativeAudioSrtpSender?(isMuted)
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=1).
+        reapplyNativeSenderMute(site: 1)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
@@ -4265,7 +4329,11 @@ final class CallService: @unchecked Sendable {
         // setNativeAudioSrtpMuted's kdoc) is a no-op when the network
         // genuinely is down (nothing to release) and the missing half of
         // the fix when it is not.
-        muteNativeAudioSrtpSender?(true)
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now
+        // (site=4); `audioSrtpFallbackActive` is already `true` above, so
+        // `shouldMute` forces this to `true` regardless of `peerAnswered`/
+        // `isMuted`, same as the unconditional `true` this replaces.
+        reapplyNativeSenderMute(site: 4)
         // W-ADMFALLBACK (2026-09-26) — muting the track never stopped
         // WebRTC's VoiceProcessingIO unit, so the custom AudioCapture started
         // below ran a SECOND VoiceProcessingIO next to it (the 'what' /
@@ -4308,7 +4376,8 @@ final class CallService: @unchecked Sendable {
         // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
         // sole TX/RX owner, same as this function's own doc already says.
         // W-NATIVEMUTE (2026-09-26) — honouring the user's own mute.
-        muteNativeAudioSrtpSender?(isMuted)
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=5).
+        reapplyNativeSenderMute(site: 5)
         // W-ADMFALLBACK — native unit back on (same verdict as the call start).
         applyNativeAudioUnitGate(reason: .fallbackRecover)
     }
@@ -4449,7 +4518,8 @@ final class CallService: @unchecked Sendable {
         // accept as the legacy mic (this method's only call site is
         // `finalizeCallActive()`).
         // W-NATIVEMUTE (2026-09-26) — honour a mute the user set while ringing.
-        muteNativeAudioSrtpSender?(isMuted)
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=2).
+        reapplyNativeSenderMute(site: 2)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // W574b — post-answer W469 fallback. The 1.5s timer in startCall
