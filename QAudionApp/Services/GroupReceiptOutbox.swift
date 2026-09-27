@@ -90,6 +90,16 @@ public final class GroupReceiptOutbox {
             valve.noteReadable()
             return decoded
         }
+        if UserDefaults.standard.object(forKey: defaultsKey) != nil {
+            // Something is stored under this key but it is neither a sealed
+            // String nor a legacy Data blob (e.g. an Int, Bool, or array —
+            // any other UserDefaults plist-compatible type). That is a
+            // type-mismatched/corrupt outbox, not an empty one: treating it
+            // as readable here would clear the valve's failure window and
+            // let the next enqueue silently overwrite it.
+            RTLog.error("group", "grp_receipt type mismatch retained=1")
+            return recoverUnreadable()
+        }
         valve.noteReadable()
         return []
     }

@@ -181,7 +181,7 @@ handles. Limits: builds up to 1.0.1181 still print; the callback still receives 
 separate WebRTC copy with its own debug level, untouched here; rebuilding WebRTC without the two prints is the
 complete fix, and `KeyMaterialScrubber` stays as defence in depth.
 
-**After v1.0.1181 (W-VPIOOBS / W-VPIOWD / W-BYPASSDUCK, branch `fix/vpio-observability-suppressor`) -- VP-IO
+**W-VPIOOBS / W-VPIOWD / W-BYPASSDUCK (branch `fix/vpio-observability-suppressor`) -- VP-IO
 tap latency, watchdog generation, bypass echo ducker.** Why: on the test iPhone Apple's
 Voice-Processing I/O never delivers a tap buffer inside the W-AEC-FIX window (71/71 built-in-mic calls in bypass,
 ~1% elsewhere), and the app could not say why or how late. Numeric log lines (tag `call`, accurate timestamp; numeric

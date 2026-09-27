@@ -391,4 +391,31 @@ print("TOTAL cases=%d leaks(>%.0f%%)=%d" % (N, THRESH * 100, tot_leaks))
 if "--show" in sys.argv:
     for name, line, body in leaks[:10]:
         print("  LEAK[%s] line=%r -> body=%r" % (name, line, body))
-sys.exit(1 if tot_leaks else 0)
+
+# ---------------------------------------------------------------------------
+# W-OPS-LEGEND-REDACT regression (server leg only): the --dry-run legend
+# (ops_msgid_legend) prints _ops_msg_norm(msg) straight to the operator's
+# terminal, so a credential-shaped fragment in an unknown WARN/ERROR msg
+# literal must not survive it mostly-verbatim.
+# ---------------------------------------------------------------------------
+legend_leak = False
+if IS_SERVER and hasattr(m, "_ops_msg_norm"):
+    legend_cases = [
+        ("sk_live_ABCDEF1234567890XYZ", "sk_live_abcdef1234567890xyz"),
+        ("Bearer sometoken123", "bearer sometoken123"),
+        ("key=secretvalue123", "secretvalue123"),
+        # Copilot follow-up to #127 -- "Authorization: Bearer <token>": both
+        # "authorization" and "bearer" match RE_SECRET_PREFIXED's alternation,
+        # so without the nested-scheme group the match starting at
+        # "authorization" ate "authorization: bearer" as prefix+value and left
+        # the actual token untouched.
+        ("Authorization: Bearer sk_live_ABCDEF1234567890XYZ", "sk_live_abcdef1234567890xyz"),
+    ]
+    for raw, needle in legend_cases:
+        norm = m._ops_msg_norm("request failed " + raw + " retry=1")
+        leaked = needle in norm
+        print("legend-redact %-32r -> %-60r %s"
+              % (raw, norm, "LEAK" if leaked else "ok"))
+        legend_leak = legend_leak or leaked
+    print("LEGEND TOTAL leaks=%d" % int(legend_leak))
+sys.exit(1 if (tot_leaks or legend_leak) else 0)

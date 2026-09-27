@@ -24,7 +24,8 @@ Rules (all on the UTF-8 bytes of the text; every pattern is ASCII):
       allowed, one trailing separator allowed); a list cut by the end of the text counts with >= 1.
   (d) >= 8 two-digit hex bytes separated by one space or colon, each pair a whole token.
   (e) tail fragment: the text STARTS inside an integer list: [,;] int ([,;] int)* [,;] closer.
-      A closing ']' accepts one integer, a closing ')' needs two or a leading separator.
+      A closing ']' OR ')' accepts one integer (Copilot follow-up to #109: ')' used to need two
+      or a leading separator, missing the last value of a parenthesised list split right before it).
   (f) overlong: only the first 256 KiB are scanned, the rest is replaced (fail closed).
 Replacement: [REDACTED:keybytes]. Matches that touch are merged into one marker.
 """
@@ -185,7 +186,11 @@ def match_tail_fragment(b, limit):
     count, pos, state = int_run(b, p, limit)
     if state != CLOSED or count < 1:
         return -1
-    if b[pos - 1] == 0x5D or count >= 2 or lead:
+    # Copilot follow-up to #109: ')' is accepted symmetrically with ']' here (it used to need two
+    # integers or a leading separator), so the last value of a parenthesised key list split right
+    # before it, e.g. "32) len 32", is caught too. Price: a bare "1) item" or the tail of a
+    # "(file.cc:118): ..." prefix now also counts -- accepted per this port's over-scrubbing policy.
+    if b[pos - 1] == 0x5D or b[pos - 1] == 0x29 or count >= 2 or lead:
         return pos
     return -1
 
@@ -244,18 +249,51 @@ def is_hex_pair_token(b, p, limit):
 
 def match_hex_run(b, i, limit):
     """>= 8 two-digit hex bytes separated by one space or colon, starting at i (the caller checked
-    that i starts a token). Returns the end (exclusive), -1 if there are fewer."""
+    that i starts a token). Returns the end (exclusive) of a full match. Also returns the scan
+    boundary `limit` (Copilot follow-up to #109) when the run was cut by the cap with fewer than
+    MIN_HEX_RUN pairs visible: more hex bytes past `limit` can never be ruled out, so the visible
+    prefix is treated as sensitive too and merges with the 'overlong' span that starts at `limit`.
+    -1 when neither (a genuine, well-inside-the-window end of a run shorter than MIN_HEX_RUN, OR
+    `limit` is simply the real end of the text/line -- len(b) == limit -- with nothing past it to
+    fail closed about)."""
+    # Only a REAL cap cut (more bytes exist past `limit`) can leave more key bytes unseen. When
+    # `limit` is just the end of the whole buffer (the common case for any text/line shorter than
+    # the 256 KiB cap), reaching it is a genuine, unambiguous end.
+    truncated = len(b) > limit
     count = 0
     p = i
     last_end = -1
+    cut_by_cap = False
     while is_hex_pair_token(b, p, limit):
         count += 1
         last_end = p + 2
-        if p + 2 < limit and is_hex_separator(b[p + 2]):
-            p += 3
+        if last_end < limit and is_hex_separator(b[last_end]):
+            p = last_end + 1
         else:
+            # The pair itself reached the boundary: no room left to see whether a separator and
+            # more pairs follow, so this is a cap cut, not a genuine end -- but only when the
+            # buffer truly continues past `limit`.
+            if truncated and last_end >= limit:
+                cut_by_cap = True
             break
-    return last_end if count >= MIN_HEX_RUN else -1
+    if not cut_by_cap and truncated and p + 1 >= limit:
+        # The while-condition check failed for lack of room (not content): the cap cut before the
+        # next candidate pair could even be looked at.
+        cut_by_cap = True
+    if count >= MIN_HEX_RUN:
+        return last_end
+    if cut_by_cap and count >= 1:
+        return limit
+    # Copilot follow-up to #127 -- count == 0 above also covers the cap landing on just the
+    # FIRST character of a would-be pair (p == i == limit - 1): is_hex_pair_token returns False
+    # for lack of room before even looking at that one byte, so the loop body never runs and
+    # count stays 0. That single visible nibble is still cut by the cap (more bytes may follow
+    # past `limit`) and sits immediately before the 'overlong' span, so it must fail closed too
+    # -- but only when it is actually a hex digit, not any trailing byte the cap happens to land
+    # on. Kept in sync with the Swift KeyMaterialScrubber.matchHexRun fix.
+    if cut_by_cap and p < limit and is_hex(b[p]):
+        return limit
+    return -1
 
 
 # --- the scanner -------------------------------------------------------------------------------
@@ -533,7 +571,17 @@ def check_cap(failures):
     expected2 = "before\n" + overlong[:cap] + M + "\nafter " + M + "\nlast"
     if scrub_lines(blob2) != expected2:
         failures.append("cap: an overlong row inside a blob is not cut on its own")
-    print("  cap: 6 checks")
+    # Copilot follow-up to #127 -- match_hex_run() directly: the cap landing on just the FIRST
+    # character of a would-be pair (count stays 0, no full pair ever seen) must still fail closed,
+    # not return -1 and leave that one visible nibble unredacted right before the overlong marker.
+    buf = b"g" * 10 + b"f" + b"0" * 20  # 'f' sits at index 10 == limit - 1 below; more bytes follow.
+    if match_hex_run(buf, 10, 11) != 11:
+        failures.append("cap: match_hex_run does not fail-closed on a single visible hex nibble at the cap")
+    # sanity: a non-hex byte at the same cut point must NOT be treated as a cap-cut key fragment.
+    buf_nonhex = b"g" * 11 + b"0" * 20
+    if match_hex_run(buf_nonhex, 10, 11) != -1:
+        failures.append("cap: match_hex_run over-redacted a non-hex byte sitting at the cap boundary")
+    print("  cap: 8 checks")
 
 
 def check_linear_time(failures):

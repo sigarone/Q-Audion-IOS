@@ -1107,8 +1107,10 @@ jobs:
       #     the artifact that is about to be uploaded (the IPA re-zipped by the
       #     previous step): every Mach-O in the app bundle is scanned (app
       #     binary, Frameworks/*, PlugIns/*), counts and file names are printed.
-      #     Mode: env WEBRTC_KEYLOG_GATE at the top of this job. Report-only ('0')
-      #     by default, so it can never fail a release; '1' enforces.
+      #     Mode: env WEBRTC_KEYLOG_GATE at the top of this job. That job-level env
+      #     currently sets it to '1', so this workflow ENFORCES the gate by default
+      #     (fails the build on a hit); only setting it to something other than '1'
+      #     switches to report-only, which can never fail a release.
       # ----------------------------------------------------------
       - name: Assert no WebRTC key-material logging in the IPA
         # Report-only mode must not be able to break the release even through an

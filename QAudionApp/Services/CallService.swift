@@ -195,8 +195,8 @@ final class CallService: @unchecked Sendable {
     private let nackRxTracker = NackRxTracker()
     private let nackRateLimiter = NackResendRateLimiter()
 
-    /// W-AUDIONACK — clear the retransmit ring and gap tracker. Call on
-    /// every session-key install (initial handshake AND every re-key —
+    /// W-AUDIONACK — clear the TX retransmit ring. Call on every session-key
+    /// install (initial handshake AND every re-key —
     /// `QAudionCallIntegration.onPqcSessionKeyEstablished` fires for both,
     /// see its call sites next to every `engine.initSession(...)`). A frame
     /// cached in the ring was sealed under the key that just rotated away;
@@ -204,9 +204,46 @@ final class CallService: @unchecked Sendable {
     /// security-load-bearing, not just tidiness. Also called from
     /// `teardownAudioStack()` so a new call never starts holding the
     /// previous call's frames.
+    ///
+    /// W-NACKEPOCH (Copilot follow-up to #127) — this used to also call
+    /// `nackRxTracker.reset()` unconditionally. That is now `nackRxTracker`'s
+    /// own job, gated by `adoptKeyEpoch` (see `syncNackTrackerToKeyEpoch`):
+    /// the RX path clears its dedup window itself, synchronously, on the
+    /// first frame it processes under a new epoch — which can run BEFORE
+    /// this method's caller (the async `onPqcSessionKeyEstablished` Task).
+    /// If this method still reset the RX tracker too, that late, unguarded
+    /// `reset()` could run AFTER the RX path had already accepted one or
+    /// more new-epoch frames: it wipes `seenWindow` without bumping
+    /// `keyEpoch`, so a legitimate retransmission of an already-played
+    /// sequence would then pass `wouldAccept` a second time and be
+    /// decoded/played again — the exact bug this rewrite removes.
     func resetNackState() {
         nackRing.clear()
-        nackRxTracker.reset()
+    }
+
+    /// W-NACKEPOCH (Copilot follow-up to #106) — session-key epoch for the RX NACK tracker.
+    /// Bumped SYNCHRONOUSLY on the handshake's own thread, right after `engine.initSession`
+    /// (via `noteSessionKeyInstalled`, called first thing in AppState's `onRelaySessionReady`
+    /// closures); read on the main thread by the RX path. Guarded by its own lock because the
+    /// writer is not the main thread.
+    private let nackKeyEpochLock = NSLock()
+    private var nackKeyEpoch: UInt64 = 0
+
+    /// W-NACKEPOCH — a new session key was just installed in the engine (initial handshake or
+    /// re-key). Only local duplicate/gap bookkeeping is affected; no key material is touched.
+    /// Safe from any thread.
+    func noteSessionKeyInstalled() {
+        nackKeyEpochLock.withLock { nackKeyEpoch &+= 1 }
+    }
+
+    /// W-NACKEPOCH — main thread only (the RX `DispatchQueue.main.async` block). Resets the
+    /// RX tracker the first time a frame is admitted under a new key epoch, BEFORE its
+    /// `wouldAccept` check, so the peer's restarted counter is never judged against the old
+    /// epoch's `highestSeq` — whether or not the main-actor `resetNackState()` Task scheduled
+    /// by `onPqcSessionKeyEstablished` has run yet. That Task still clears the TX ring.
+    private func syncNackTrackerToKeyEpoch() {
+        let epoch: UInt64 = nackKeyEpochLock.withLock { nackKeyEpoch }
+        nackRxTracker.adoptKeyEpoch(epoch)
     }
 
     /// W-VIDTRANS (2026-07-24) — live read of the same three counters that
@@ -3130,6 +3167,8 @@ final class CallService: @unchecked Sendable {
             // decrypted: silence both ways until the end of the call (S26 <-> iOS, 2026-09-20).
             // Now the pre-decrypt step is a READ-ONLY duplicate check and the tracker is updated
             // only after the frame really opened.
+            // W-NACKEPOCH — first align the tracker with the key epoch the engine now holds.
+            self.syncNackTrackerToKeyEpoch()
             if let seq = nackSeq, !self.nackRxTracker.wouldAccept(seq) { return }
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)

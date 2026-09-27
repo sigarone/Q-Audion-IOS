@@ -192,12 +192,23 @@ final class KeyMaterialScrubberTests: XCTestCase {
     }
 
     func test_textThatOnlyLooksLikeATailIsLeftAlone() {
-        XCTAssertEqual(scrub("1) first item"), "1) first item")
-        XCTAssertEqual(scrub("118): voice send channel options"), "118): voice send channel options")
         XCTAssertEqual(scrub("12,34,56 not closed"), "12,34,56 not closed")
         XCTAssertEqual(scrub("300,4] foo"), "300,4] foo")
         XCTAssertEqual(scrub("text 18,19,20] len 32"), "text 18,19,20] len 32")
         XCTAssertEqual(scrub("32 slat << [] len 0"), "32 slat << [] len 0")
+    }
+
+    /// Copilot follow-up to #109: `)` is now accepted symmetrically with `]` as a tail-fragment
+    /// closing delimiter, so a parenthesised key list split by the stdout tee right before its
+    /// last value (`32) len 32`, the shape reported against #109) is caught too. The accepted
+    /// price (this file's over-scrubbing policy) is that a bare numbered item or the tail of a
+    /// `(file.cc:118): ...` prefix -- both used to survive untouched -- are now treated the same
+    /// way as a real tail fragment.
+    func test_aParenthesisedTailFragmentIsNowScrubbedSymmetricallyWithBrackets() {
+        XCTAssertEqual(scrub("32) len 32"), "\(marker) len 32")
+        XCTAssertEqual(scrub("1) first item"), "\(marker) first item")
+        XCTAssertEqual(scrub("118): voice send channel options"), "\(marker): voice send channel options")
+        XCTAssertEqual(kinds("32) len 32"), [.tailFragment])
     }
 
     /// The real shapes cut at EVERY byte offset, the way a 4096-byte pipe read cuts them: no key
@@ -237,6 +248,26 @@ final class KeyMaterialScrubberTests: XCTestCase {
         XCTAssertEqual(scrub("key: AA BB CC DD EE FF 00 11 end"), "key: \(marker) end")
         XCTAssertEqual(scrub("aa:bb cc:dd ee:ff 00:11"), marker)
         XCTAssertEqual(kinds("aa bb cc dd ee ff 00 11"), [.hexRun])
+    }
+
+    /// Copilot follow-up to #109: the 256 KiB scan cap can fall inside a hex key with fewer than
+    /// `minHexBytes` pairs visible before it (here 7 of 8). `matchHexRun` used to see only those 7
+    /// pairs, return -1 (not sensitive), and leave them in the output while only the separate
+    /// `.overlong` span (`limit..<n`) got redacted -- so 7 of the 8 key bytes survived. Fail closed
+    /// instead: the visible prefix now merges into one marker with the overlong tail.
+    func test_hexRunCutAtTheCapBoundaryWithFewerThanEightVisiblePairsIsStillRedacted() {
+        let cap: Int = KeyMaterialScrubber.maxScanBytes
+        let hexRun: String = "aa bb cc dd ee ff 00 11"   // 8 pairs; the cut below leaves 7 visible
+        let eighthPairOffset: Int = 21                    // index of "11" (the 8th pair) in hexRun
+        // A non-hex separator (space) right before the run, so the hex-run scan actually starts
+        // at "aa" (a token boundary) instead of being swallowed into the "x" padding as one run.
+        let padding: String = String(repeating: "x", count: cap - eighthPairOffset - 1) + " "
+        let text: String = padding + hexRun
+        XCTAssertGreaterThan(text.utf8.count, cap)
+        let result: String = scrub(text)
+        XCTAssertEqual(result, padding + marker)
+        XCTAssertFalse(result.contains("aa"))
+        XCTAssertFalse(result.contains("11"))
     }
 
     func test_hexLookAlikesAreLeftAlone() {

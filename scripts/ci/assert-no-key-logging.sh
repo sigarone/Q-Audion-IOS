@@ -126,7 +126,8 @@ while IFS= read -r f; do
   say "  $f size=$size slat=$a derived_key=$b raw_key=$c control=$k"
   if [ "$hits" -ne 0 ]; then
     hit_files=$((hit_files + 1))
-    hit_names="$hit_names $f"
+    hit_names="$hit_names$f
+"
   fi
 done < "$LIST"
 
@@ -136,7 +137,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     echo "### WebRTC key-dump string gate ($( [ "$GATE" = "1" ] && echo enforce || echo report-only ))"
     echo "Mach-O files scanned: $scanned; with key-dump strings: $hit_files; scan errors: $err"
-    if [ -n "$hit_names" ]; then echo; echo "Files with hits:"; for n in $hit_names; do echo "- \`$n\`"; done; fi
+    if [ -n "$hit_names" ]; then echo; echo "Files with hits:"; printf '%s' "$hit_names" | while IFS= read -r n; do [ -n "$n" ] && echo "- \`$n\`"; done; fi
   } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 fi
 

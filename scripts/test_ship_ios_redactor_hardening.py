@@ -54,7 +54,7 @@ m = load(TARGET)
 def red(line, tag="stdout"):
     """Shipped body ('' when the line is dropped)."""
     scope, safe = m.resolve_scope(tag)
-    kept, body = m.redact_body(line, safe, m.extract_attributes(line))
+    kept, body = m.redact_body(line, safe, m.extract_attributes(line), tag)
     return body if kept else ""
 
 
@@ -342,6 +342,121 @@ finally:
     drop_caches()
 check(not bad, "RTLOG: with no unknown-word allowance a vocabulary word of the "
       "new call-diagnosis lines is missing: %r" % (bad,))
+
+# ---------------------------------------------------------------------------
+# Copilot follow-up to #120 (2026-09-26): the 22 words #120 added for the
+# dcmux / audioVp / cancelpush / answerguard / endguard "call"-tagged
+# diagnosis lines used to live in the GLOBAL APP_VOCAB, so ANY tag / ANY
+# message shape could spend one of the two unknown-word budget slots on a
+# word like "wedge" for free. They are now scoped to only the specific line
+# shapes they belong to (CALL_FORMAT_VOCAB / _is_call_format_body). The
+# original Copilot review reproduction: "wedge" opportunistically used in a
+# non-call-format body must NOT gain an extra unknown-word slot from it.
+# ---------------------------------------------------------------------------
+drop_caches()
+COPILOT_REPRO = "state=active zork=1 blarg=2 wedge=1"
+check(red(COPILOT_REPRO, "call") != COPILOT_REPRO,
+      "SCOPE-120: 'state=active zork=1 blarg=2 wedge=1' shipped verbatim -- "
+      "'wedge' bought a 3rd unknown-word slot outside its intended format")
+check("wedge=1" not in red(COPILOT_REPRO, "call"),
+      "SCOPE-120: 'wedge' survived into the fallback body too: %r"
+      % (red(COPILOT_REPRO, "call"),))
+# without the opportunistic 'wedge=1' the same 2 unknown words (zork, blarg)
+# already fit the default budget and ship verbatim -- confirms 'wedge' was
+# the one consuming the 3rd slot, not some other change in body shape.
+check(red("state=active zork=1 blarg=2", "call") == "state=active zork=1 blarg=2",
+      "SCOPE-120: sanity baseline changed -- test fixture needs updating")
+# the SAME word, in its real dcmux format string under the SAME tag, must
+# still ship verbatim (the scoping must not be so narrow it re-breaks #120).
+check(red("dcmux wedge=1 why=buf buf=1600 over=1000 drops=0", "call")
+      == "dcmux wedge=1 why=buf buf=1600 over=1000 drops=0",
+      "SCOPE-120: dcmux wedge= line regressed after scoping APP_VOCAB")
+# the recognized line SHAPE with the WRONG tag must not get the extra vocab
+# either -- scoping is tag AND shape, not shape alone.
+check(red("dcmux wedge=1 why=buf buf=1600 over=1000 drops=0", "net") == "",
+      "SCOPE-120: dcmux-shaped body shipped under a non-'call' tag")
+drop_caches()
+
+# ---------------------------------------------------------------------------
+# Copilot follow-up to #127 (2026-09-26): the FIX ABOVE still matched by
+# PREFIX alone ("dcmux ", "audioVp ", ...), so a "call"-tagged body with a
+# genuine prefix but garbage after it -- unlike COPILOT_REPRO above, which
+# has no prefix at all -- still widened the vocabulary. "wedge" is the
+# real prefix's own vocabulary word; "zork"/"blarg" are not.
+# ---------------------------------------------------------------------------
+COPILOT_REPRO_127 = "dcmux state=active zork=1 blarg=2 wedge=1"
+check(red(COPILOT_REPRO_127, "call") != COPILOT_REPRO_127,
+      "SCOPE-127: 'dcmux state=active zork=1 blarg=2 wedge=1' shipped verbatim "
+      "-- a genuine 'dcmux ' prefix followed by garbage still bought 'wedge' "
+      "an unknown-word exemption outside any real dcmux line shape")
+check("wedge=1" not in red(COPILOT_REPRO_127, "call"),
+      "SCOPE-127: 'wedge' survived into the fallback body too: %r"
+      % (red(COPILOT_REPRO_127, "call"),))
+drop_caches()
+
+# "tx"/"txfall" have no "=" of their own, unlike every other first token
+# above -- a bare (no trailing-space) startswith would also match a longer,
+# bogus word beginning with the same letters (Gemini catch on this fix's
+# own first pass).
+check(red("dcmux txbogus=1 zork=1 blarg=2 tx=9", "call")
+      != "dcmux txbogus=1 zork=1 blarg=2 tx=9",
+      "SCOPE-127: 'dcmux txbogus=1 ...' matched the bare 'tx' token by prefix")
+check(red("dcmux txfallback=1 zork=1 blarg=2", "call")
+      != "dcmux txfallback=1 zork=1 blarg=2",
+      "SCOPE-127: 'dcmux txfallback=1 ...' matched the bare 'txfall' token by prefix")
+# the real "tx " shape, WITH its required trailing space, must still ship
+# (it carries two real kv tokens, so it also clears the unrelated freeword/
+# structural-balance gate -- see the next check for a case that doesn't).
+check(red("dcmux tx dc=1200 ws=800", "call") == "dcmux tx dc=1200 ws=800",
+      "SCOPE-127: real 'dcmux tx dc=...' line regressed after the delimiter fix")
+# "dcmux txfall why=<value>" is the real generator's ENTIRE line (CallService
+# .swift's `"dcmux txfall why=" + why`) -- only 2 free words ("dcmux",
+# "txfall") and 1 structural kv token, so it fails the UNRELATED freeword-
+# vs-structural balance in _passes_structured_gate regardless of the
+# CALL_FORMAT_VOCAB scoping fixed here (confirmed: it fails identically with
+# the vocabulary forced active, i.e. even under the pre-#127 behavior). Not
+# a regression from this fix; not fixed here either -- checking the token
+# match directly instead of the full pipeline, so this delimiter fix is
+# tested without being confounded by that separate, pre-existing gap.
+check(m._is_call_format_body("call", "dcmux txfall why=stale"),
+      "SCOPE-127: 'txfall ' with its required trailing space stopped matching")
+drop_caches()
+
+# ---------------------------------------------------------------------------
+# Copilot follow-up to #127 (round 2): a REAL first token ("wedge=1") still
+# let unrelated key=value pairs ride the widened budget alongside it --
+# "wedge" stopped spending one of the 2 unknown-word slots, leaving both
+# free for arbitrary garbage. The "dcmux wedge=" shape now gets full-line
+# validation (_RE_DCMUX_WEDGE_FULL) instead of a first-token check.
+# ---------------------------------------------------------------------------
+COPILOT_REPRO_127_ROUND2 = "dcmux wedge=1 zork=1 blarg=2"
+check(red(COPILOT_REPRO_127_ROUND2, "call") != COPILOT_REPRO_127_ROUND2,
+      "SCOPE-127R2: 'dcmux wedge=1 zork=1 blarg=2' shipped verbatim -- a real "
+      "first token still let 2 unrelated kv pairs ride the widened budget")
+# every real "dcmux wedge=" field combination the app actually emits
+# (DcWedgeDetector.swift's logLine, all 3 Reason.rawValue cases, both the
+# wedged and not-wedged field sets, including the negative-clamp case) must
+# still ship verbatim.
+for why in ("buf", "drops", "drained"):
+    wedged_line = "dcmux wedge=1 why=%s buf=1600 over=1000 drops=0" % why
+    check(red(wedged_line, "call") == wedged_line,
+          "SCOPE-127R2: real wedged line with why=%s regressed" % why)
+    not_wedged_line = "dcmux wedge=0 why=%s buf=200 low=50 rxago=30 wsec=5" % why
+    check(red(not_wedged_line, "call") == not_wedged_line,
+          "SCOPE-127R2: real not-wedged line with why=%s regressed" % why)
+neg_line = "dcmux wedge=0 why=drops buf=-1 low=99999 rxago=-5 wsec=999999"
+check(red(neg_line, "call") == neg_line,
+      "SCOPE-127R2: real not-wedged line with negative-clamped values regressed")
+# an EXTRA field tacked onto an otherwise-real line must still be rejected
+# (the whole point of full-line validation over a first-token check).
+extra_field_line = "dcmux wedge=1 why=buf buf=1600 over=1000 drops=0 zork=1"
+check(red(extra_field_line, "call") != extra_field_line,
+      "SCOPE-127R2: a real wedge= line with one extra trailing field still shipped verbatim")
+# a bogus `why=` value (not one of Reason's 3 raw values) must not pass either.
+check(red("dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0", "call")
+      != "dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0",
+      "SCOPE-127R2: a bogus why= value on an otherwise real-shaped line still shipped verbatim")
+drop_caches()
 
 # ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))

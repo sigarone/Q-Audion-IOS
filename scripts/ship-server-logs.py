@@ -423,8 +423,21 @@ def resolve_scope(msg_value, full_line):
 # ---------------------------------------------------------------------------
 
 PLACEHOLDER = "[REDACTED:secret]"
+# Copilot follow-up to #127 -- a header like "Authorization: Bearer <token>"
+# has BOTH "authorization" and "bearer" match the alternation below: without
+# the optional nested-scheme group, the match starting at "authorization"
+# consumed "authorization: " (the prefix + separator) then greedily ate
+# "bearer" itself as the \S+ "value", leaving the REAL token that follows
+# untouched -- so "authorization: bearer sk_live_..." was only ever
+# partially redacted, letting the actual token print verbatim. The optional
+# group below lets the match swallow one extra scheme word (bearer / basic /
+# digest / token) plus its separating space before the real value, so the
+# whole header -- scheme word and token both -- is redacted as one span. A
+# line with no such composite ("token: abc123") is unaffected: the optional
+# group simply matches nothing.
 RE_SECRET_PREFIXED = re.compile(
-    r"(?i)(bearer|authorization|token|secret|api[-_]?key|password)([\"'\s:=]+)\S+")
+    r"(?i)(bearer|authorization|token|secret|api[-_]?key|password)([\"'\s:=]+)"
+    r"(?:(?:bearer|basic|digest|token)\s+)?\S+")
 RE_LONG_BLOB = re.compile(r"[A-Za-z0-9+/=_-]{16,}")
 
 RE_RAW_UUID = re.compile(
@@ -1223,11 +1236,30 @@ def _ops_route(path):
     return "other"
 
 
+# W-OPS-LEGEND-REDACT: the --dry-run legend (ops_msgid_legend) prints
+# _ops_msg_norm(msg) straight to the operator's terminal, so a credential
+# embedded in an unknown WARN/ERROR msg literal must not survive this
+# normalization mostly-verbatim (e.g. "sk_live_ABCDEF1234567890XYZ" must not
+# come out as "sk_live_#xyz"). Reuse the SAME keyed/prefixed patterns the
+# body redactor already uses (RE_SECRET_PREFIXED / RE_SECRET_KV /
+# RE_JWT_DOTTED) plus a bare secret-prefix-token pattern for provider-style
+# keys (sk_live_..., pk_test_..., etc.) that appear with no key= wrapper.
+_RE_OPS_SECRET_PREFIX_TOKEN = re.compile(
+    r"(?i)\b[a-z]{2,8}_(?:live|test)_[a-z0-9]{6,}\b")
+
+
 def _ops_msg_norm(msg_value):
-    """msg literal with every hex run / number replaced by '#', so a msg that
-    embeds an id or a counter still fingerprints to ONE stable msgid and the
-    hash never covers an id."""
+    """msg literal with every credential-shaped fragment redacted and every
+    hex run / number replaced by '#', so a msg that embeds an id or a counter
+    still fingerprints to ONE stable msgid and the hash never covers an id
+    -- and the --dry-run legend never echoes a secret fragment."""
     s = _nfkc(msg_value or "").lower()
+    # Redact credential-shaped text BEFORE the hex/digit normalization below,
+    # so it applies on every call path (including via ops_msgid_legend).
+    s = RE_SECRET_PREFIXED.sub("#secret#", s)
+    s = _RE_OPS_SECRET_PREFIX_TOKEN.sub("#secret#", s)
+    s = RE_SECRET_KV.sub("#secret#", s)
+    s = RE_JWT_DOTTED.sub("#secret#", s)
     s = re.sub(r"[0-9a-f]{8,}", "#", s)
     s = re.sub(r"[0-9]+", "#", s)
     return " ".join(s.split())
@@ -2901,11 +2933,15 @@ def main():
 
         if args.dry_run:
             # Show the heartbeat that WOULD ship alongside the call batch.
-            hb_req = build_heartbeat_request(
-                node_id, args.env_name, lines_total, kept, dropped,
-                dropped_redact, cursor_advanced=False,
-                ops_shipped=ops_shipped, dropped_irrelevant=dropped_irrelevant)
-            print_dry_run(hb_req)
+            # --ops-only (history backfill) never emits a heartbeat on the
+            # real POST path (see the `if not args.ops_only:` guard below),
+            # so mirror that here: don't preview one either.
+            if not args.ops_only:
+                hb_req = build_heartbeat_request(
+                    node_id, args.env_name, lines_total, kept, dropped,
+                    dropped_redact, cursor_advanced=False,
+                    ops_shipped=ops_shipped, dropped_irrelevant=dropped_irrelevant)
+                print_dry_run(hb_req)
             print_dry_run(request)
             legend = ops_msgid_legend(records)
             if legend:
