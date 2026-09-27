@@ -284,6 +284,15 @@ def match_hex_run(b, i, limit):
         return last_end
     if cut_by_cap and count >= 1:
         return limit
+    # Copilot follow-up to #127 -- count == 0 above also covers the cap landing on just the
+    # FIRST character of a would-be pair (p == i == limit - 1): is_hex_pair_token returns False
+    # for lack of room before even looking at that one byte, so the loop body never runs and
+    # count stays 0. That single visible nibble is still cut by the cap (more bytes may follow
+    # past `limit`) and sits immediately before the 'overlong' span, so it must fail closed too
+    # -- but only when it is actually a hex digit, not any trailing byte the cap happens to land
+    # on. Kept in sync with the Swift KeyMaterialScrubber.matchHexRun fix.
+    if cut_by_cap and p < limit and is_hex(b[p]):
+        return limit
     return -1
 
 
@@ -562,7 +571,17 @@ def check_cap(failures):
     expected2 = "before\n" + overlong[:cap] + M + "\nafter " + M + "\nlast"
     if scrub_lines(blob2) != expected2:
         failures.append("cap: an overlong row inside a blob is not cut on its own")
-    print("  cap: 6 checks")
+    # Copilot follow-up to #127 -- match_hex_run() directly: the cap landing on just the FIRST
+    # character of a would-be pair (count stays 0, no full pair ever seen) must still fail closed,
+    # not return -1 and leave that one visible nibble unredacted right before the overlong marker.
+    buf = b"g" * 10 + b"f" + b"0" * 20  # 'f' sits at index 10 == limit - 1 below; more bytes follow.
+    if match_hex_run(buf, 10, 11) != 11:
+        failures.append("cap: match_hex_run does not fail-closed on a single visible hex nibble at the cap")
+    # sanity: a non-hex byte at the same cut point must NOT be treated as a cap-cut key fragment.
+    buf_nonhex = b"g" * 11 + b"0" * 20
+    if match_hex_run(buf_nonhex, 10, 11) != -1:
+        failures.append("cap: match_hex_run over-redacted a non-hex byte sitting at the cap boundary")
+    print("  cap: 8 checks")
 
 
 def check_linear_time(failures):

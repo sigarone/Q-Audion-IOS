@@ -505,6 +505,14 @@ public enum KeyMaterialScrubber {
         }
         if count >= minHexBytes { return lastEnd }
         if cutByCap && count >= 1 { return limit }
+        // Copilot follow-up to #127 -- `count == 0` above also covers the cap landing on just
+        // the FIRST character of a would-be pair (`p == i == limit - 1`): `isHexPairToken`
+        // returns false for lack of room before even looking at that one byte, so the loop body
+        // never runs and `count` stays 0. That single visible nibble is still cut by the cap
+        // (more bytes may follow past `limit`) and sits immediately before the `.overlong` span,
+        // so it must fail closed too -- but only when it is actually a hex digit, not any
+        // trailing byte the cap happens to land on.
+        if cutByCap && p < limit && isHex(b[p]) { return limit }
         return -1
     }
 
