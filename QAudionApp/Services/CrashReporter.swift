@@ -1,5 +1,6 @@
 import Foundation
 import MachO
+import QAudionEngine
 
 /// W472 — lightweight in-app native-crash catcher.
 ///
@@ -79,6 +80,19 @@ enum CrashReporter {
         }
     }
 
+    /// W-NATIVESRTPCRASHGUARD (this task) — peek only: does a crash report
+    /// from the PREVIOUS launch exist? Unlike `flushPendingReport()`, this
+    /// does NOT print or delete it — it must be callable from
+    /// `QAudionApp.init()`, BEFORE the stdout tee is attached (whose
+    /// absence is exactly why `flushPendingReport()` has to wait until
+    /// `.onAppear`), so the crash-streak check that reads this can run
+    /// ahead of any call path per spec section B's ordering requirement.
+    static func hasPendingCrashReport() -> Bool {
+        guard let data = FileManager.default.contents(atPath: reportPath),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        return !text.isEmpty
+    }
+
     /// Print any crash report left by the previous launch so the W417
     /// stdout tee uploads it, then delete the file. MUST be called
     /// AFTER `RuntimeLogSink.attachStdoutTee()` — otherwise the prints
@@ -156,7 +170,25 @@ enum CrashReporter {
     }
 
     private static func persist(_ text: String) {
-        guard let data = text.data(using: .utf8) else { return }
+        // W-CRASHCRUMBS (this task) — append the call-context line and the
+        // recent-log trail so a crash report answers "was this a
+        // native-SRTP call, and what led up to it" without a second
+        // reproduction. Same best-effort risk level this function already
+        // accepted for `Thread.callStackSymbols` (not strictly
+        // async-signal-safe, fine for a logic crash that is not itself
+        // inside the allocator) — `lastCallContext()` is a plain
+        // `UserDefaults` read (this function already does exactly that,
+        // below, for `qaudion.crash_count`) and `snapshotForCrash()` uses
+        // `NSLock.try()` so it can never block this handler.
+        var full = text
+        if let ctx = CrashBreadcrumbs.lastCallContext() {
+            full += "\ncontext: " + ctx
+        }
+        let crumbs = CrashBreadcrumbs.snapshotForCrash()
+        if !crumbs.isEmpty {
+            full += "\nbreadcrumbs:\n" + crumbs.joined(separator: "\n")
+        }
+        guard let data = full.data(using: .utf8) else { return }
         try? data.write(to: URL(fileURLWithPath: reportPath))
         let crashKey = "qaudion.crash_count"
         let count = UserDefaults.standard.integer(forKey: crashKey) + 1
