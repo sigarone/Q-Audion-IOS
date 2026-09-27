@@ -484,6 +484,36 @@ check(red("dcmux wedge=1 why=notarealreason buf=1600 over=1000 drops=0", "call")
 drop_caches()
 
 # ---------------------------------------------------------------------------
+# W-CRYPTORQUEUE (2026-09-27, watchdog 0x8BADF00D deadlock fix): the new
+# "cryattach media=<video|audio> [reason=rekey] ok=<0|1> [retry=N|exhausted=1]
+# ms=<n>" diagnostic lines QAudionWebRtcCallController now ships from
+# retryVideoSenderCryptorAttachIfNeeded/attachVideoSenderCryptorOnQueue, the
+# ensureVideoSealer rekey branch, and installAudioSrtpOnQueue. Every field
+# name/value here is either bare-numeric or already-recognized vocabulary
+# ("media", "reason", "ok", "retry", "exhausted", "rekey", "video", "audio"
+# are all existing APP_VOCAB/TELEMETRY_VOCAB words); "cryattach" itself is a
+# free word but the line as a whole clears the structural-vs-free balance
+# check without needing any new APP_VOCAB entry. Locking this in as a fixture
+# test (same reasoning as the existing "benign lines must still ship" checks
+# above) so a future redactor change that silently drops it is caught here,
+# not by a phone shipping an empty line on the next incident.
+# ---------------------------------------------------------------------------
+CRYATTACH_LINES = [
+    "cryattach media=video ok=1 ms=42",
+    "cryattach media=video ok=0 retry=3 ms=310",
+    "cryattach media=video ok=0 exhausted=1 ms=1500",
+    "cryattach media=video reason=rekey ok=1 ms=42",
+    "cryattach media=video reason=rekey ok=0 ms=7",
+    "cryattach media=audio ok=1 ms=11",
+    "cryattach media=audio ok=0 retry=3 ms=310",
+    "cryattach media=audio ok=0 exhausted=1 ms=1500",
+]
+for line in CRYATTACH_LINES:
+    check(red(line, "call") == line,
+          "W-CRYPTORQUEUE: %r did not ship verbatim (got %r)" % (line, red(line, "call")))
+drop_caches()
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)
