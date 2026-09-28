@@ -792,6 +792,39 @@ final class CallService: @unchecked Sendable {
     public var isCallActive: CallActiveProvider?
     public var getCallId: CallIdProvider?
     public var getPeerCapabilities: PeerCapabilitiesProvider?
+    /// W-MEDIAATACCEPT (option b) — §4.10 (I13): fired at the very start of
+    /// `endCall()`, before any other teardown work, with whatever
+    /// `getCallId?()` returns at that moment (may be `nil`). AppState wires
+    /// this to `wipeRingState(_:why:)` — every hangup/cancel/CallKit-end/
+    /// reset path already funnels through `endCall()`, so this one wire-up
+    /// covers all of them.
+    public var onCallTeardownChokepoint: ((String?) -> Void)?
+    /// W-MEDIAATACCEPT (option b) — §10 (I9), NOW FULLY WIRED (G6). Spec
+    /// asks `endCall()` to reset the native-SRTP crash streak only when
+    /// this call actually reached "media" phase (`reachedMediaThisCall`),
+    /// not on every clean end — a call that only rang/built its PC and was
+    /// cancelled proves nothing about the native path. `noteMediaReached()`
+    /// is wired from TWO independent signals now:
+    ///  - the CUSTOM (sealed-audio) decode path (`noteRealInboundDecode()`,
+    ///    below);
+    ///  - the NATIVE audio-srtp path, via `AppState.bridgeControllerLogLine`
+    ///    watching for `QAudionPeerConnection
+    ///    .onNativeAudioFrameCryptorStateChange`'s `"audiosrtp cryptor
+    ///    role=rx state=ok"` line (the same string-based `controller.log`
+    ///    hook every call site already wires, extended rather than adding
+    ///    the new typed hook the spec proposes — see that method's own doc
+    ///    for why).
+    /// `endCall` below now requires this flag, matching spec §10's "la
+    /// serie si azzera solo alla chiusura pulita di una chiamata che ha
+    /// raggiunto media" exactly, for both audio paths.
+    private var reachedMediaThisCall: Bool = false
+    /// Marks that this call reached real bidirectional audio on the CUSTOM
+    /// (sealed-audio) path. See the type-level note above for why the
+    /// native-audio-srtp counterpart is not wired yet, and why `endCall`
+    /// does not gate on this field until it is.
+    public func noteMediaReached() {
+        reachedMediaThisCall = true
+    }
     /// W-GRPVPIO-CRASH-3 (2026-07-17) — returns true while a GROUP call owns
     /// the shared VoiceProcessingIO hardware unit (LiveKit's SFU room drives
     /// it directly). Injected by AppState (`{ groupCallKitId != nil }`).
@@ -820,6 +853,13 @@ final class CallService: @unchecked Sendable {
     /// existed, and every call whose kill switch is off) makes
     /// `startAudioIOIfReady` byte-for-byte what it was before.
     public var getUsesNativeAudioSrtp: (() -> Bool)?
+    /// W-MEDIAATACCEPT (option b) — §4.6 (gate 5): `true` while `mode == 1`
+    /// AND this call is predicted to end up native AND its PeerConnection
+    /// is still being built (`.awaitingSdp`/`.building`) — see
+    /// `RingSignalingDecisions.audioIOGate`. Wired once at login by
+    /// AppState, same live-getter pattern as the others here. `nil`
+    /// (unwired, e.g. every call before this feature existed) never defers.
+    public var mediaPlanePending: (() -> Bool)?
     /// W-MEDIADEADSRTP (2026-08-29) — current audio `inbound-rtp.bytesReceived`
     /// from the live PeerConnection, or -1 when there is no audio RTP leg.
     /// Wired once at login by AppState, same live-getter pattern as
@@ -2510,6 +2550,13 @@ final class CallService: @unchecked Sendable {
     }
 
     func endCall() {
+        // W-MEDIAATACCEPT (option b) — §4.10 (I13): the teardown
+        // chokepoint, before any other work below — every hangup/cancel/
+        // CallKit-end/reset path converges on `endCall()`, so this single
+        // call clears ring-time state (RingSignalingRegistry, CallKeyStore,
+        // held ACCEPT, pending gated actions, timers) for whichever call
+        // this is, no matter which path led here.
+        onCallTeardownChokepoint?(getCallId?())
         // W-STALESEALER — bump FIRST, unconditionally, before any other teardown
         // work, under the SAME lock `installRelaySealers` validates+publishes
         // under: see `relaySlotLock`'s doc comment for why this is both the single
@@ -2540,10 +2587,19 @@ final class CallService: @unchecked Sendable {
             // same set `ended` already covers) — a stale end for a call
             // that was never native, or belongs to someone else, resets
             // nothing.
-            if nativeSnapshot, snapshotEnd.ended {
+            // W-MEDIAATACCEPT (option b) — §10 (I9/G6): now also requires
+            // `reachedMediaThisCall` — the native-path signal is wired (see
+            // that property's doc), so a call that only rang/built its PC
+            // and was cancelled/failed before real audio flowed no longer
+            // resets the streak; only a call that demonstrably reached
+            // media does.
+            if CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+                nativeSnapshot: nativeSnapshot, ended: snapshotEnd.ended, reachedMedia: reachedMediaThisCall
+            ) {
                 CallCapabilities.resetNativeSrtpCrashStreak()
             }
         }
+        reachedMediaThisCall = false
         // W-CRASHCRUMBS (this task) — clean end: drop the "might have died
         // mid-call" breadcrumb signal so an unrelated LATER crash (home
         // screen, Settings, ...) is never misattributed to this call.
@@ -2669,6 +2725,10 @@ final class CallService: @unchecked Sendable {
         lastRealInboundDecodeAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard !firedFirstRealDecode else { return }
         firedFirstRealDecode = true
+        // W-MEDIAATACCEPT (option b) — §10: the custom-path half of
+        // `reachedMediaThisCall` (see that property's doc for the native-
+        // path half this does NOT cover yet).
+        noteMediaReached()
         onFirstRealDecode?()
     }
 
@@ -3937,6 +3997,20 @@ final class CallService: @unchecked Sendable {
             RTLog.info("call", "audioIO defer=1 gate=3")
             return
         }
+        // W-MEDIAATACCEPT (option b) — §4.6 (gate 5): with the incoming
+        // media plane built at accept, CallKit's `didActivate` can win the
+        // race against the still-building PeerConnection. Starting the
+        // custom AVAudioEngine here in that window, on a call that WILL
+        // end up native, would race a second VoiceProcessingIO unit
+        // against WebRTC's own once the PC arms (W-ADMFALLBACK). AppState
+        // wires this to `RingSignalingDecisions.audioIOGate` — `false`
+        // (not predicted native, or not `mode == 1`, or the plane is
+        // already ready/failed) never defers, so this is inert on every
+        // call this feature doesn't apply to.
+        if mediaPlanePending?() == true {
+            RTLog.info("call", "audioIO defer=1 gate=5")
+            return
+        }
         // IOS-C4b (2026-08-26) — the call negotiated CallCapabilities
         // .audioSrtpV1: native WebRTC owns capture+playout directly via its
         // own audio device module (QAudionPeerConnection.activateNativeAudioSrtp
@@ -4224,6 +4298,21 @@ final class CallService: @unchecked Sendable {
         nativeUnitCallKitWaitItem = nil
         lastLoggedNativeUnitVerdict = -1
         nativeUnitOwnerToken = 0
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §4.6: called once the incoming media
+    /// plane leaves `.building` (either `.ready` — the PC is armed — or
+    /// `.failed` — falling back to the custom path). Re-runs
+    /// `startAudioIOIfReady()` now that `mediaPlanePending?()` will read
+    /// `false`, so a `didActivate` that arrived (and was deferred, gate 5)
+    /// while the PC was still building gets its audio I/O started. Resets
+    /// `lastLoggedNativeUnitVerdict` first so the resulting native-unit
+    /// gate re-decision logs its verdict even if it happens to match the
+    /// last (pre-PC) one — same reset `refreshNativeAudioUnitGate` already
+    /// does at its own re-decision sites.
+    public func resumeAudioIOAfterMediaPlane() {
+        lastLoggedNativeUnitVerdict = -1
+        startAudioIOIfReady()
     }
 
     /// Items 4/6 — the ONLY place `isAudioEnabled` becomes `true`. No-op on

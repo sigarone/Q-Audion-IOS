@@ -115,9 +115,15 @@ struct QAudionApp: App {
         // crashing every call the user makes. Must run before any call
         // path AND before the context is cleared below, and does not need
         // the stdout tee (`RTLog` records into the ring directly).
+        // W-MEDIAATACCEPT (option b) — I9/§10: `CrashGuardDecisions
+        // .countsTowardStreak` replaces the two raw `.contains` checks —
+        // with the media plane no longer built at ring, a crash while
+        // merely RINGING (phase "ring", no PeerConnection yet) must not
+        // advance this streak; only "pc"/"media" (or the one-release
+        // "snapshot" grandfather value) do. See that function's doc.
         if CrashReporter.hasPendingCrashReport(),
            let ctx = CrashBreadcrumbs.lastCallContext(),
-           ctx.contains("in_call=1"), ctx.contains("native=1") {
+           CrashGuardDecisions.countsTowardStreak(context: ctx) {
             if CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset() {
                 RTLog.warn("call", "audiosrtp event=override_autoreset reason=crash_streak n=2")
             }

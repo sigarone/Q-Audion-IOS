@@ -595,6 +595,75 @@ finally:
     drop_caches()
 check(not bad, "W-CRASHTELEMETRY: with no unknown-word allowance a vocabulary word of "
       "the new telemetry lines is missing: %r" % (bad,))
+drop_caches()
+
+# ---------------------------------------------------------------------------
+# W-MEDIAATACCEPT (option b, 2026-09-28) -- one sample line per T1-T11
+# telemetry shape from the spec's section 11 table (AppState.swift /
+# CallService.swift / BCryptoCallingApiImpl.swift /
+# QAudionCallIntegration.swift all ship "call"-tagged `RTLog.info`/`.warn`
+# lines with the "ringsig " prefix). Every one must ship BYTE-IDENTICAL --
+# these are exactly the lines the dashboards in spec section 13.3's success
+# criteria (T4 ice=0/answer=0/ptx=0 across >=50 mixed calls, T6 why=2 rate,
+# Android p50 T7, iOS p50 T7 regression) are computed from. T2 ("pqc="/
+# "ring=") is Android-only -- no iOS line uses that shape -- but its first
+# token is still recognized here (see _CALL_FORMAT_FIRST_TOKENS's own
+# comment) for parity with the shared spec table; not exercised below since
+# no iOS call site ever emits it.
+# ---------------------------------------------------------------------------
+RINGSIG_LINES = (
+    "ringsig snapshot mode=1 native=1 kill=0 role=callee",             # T1
+    "ringsig snapshot mode=0 native=0 kill=0 role=caller",             # T1
+    "ringsig op=put why=1",                                           # T3
+    "ringsig op=take why=1",                                          # T3
+    "ringsig op=wipe why=2",                                          # T3
+    "ringsig accept=1 mode=1 ice=0 answer=0 ptx=0",                   # T4
+    "ringsig built=1 ms=420 ready=0 why=0",                           # T5
+    "ringsig built=0 ms=-1 ready=0 why=3",                            # T5
+    "ringsig release=1 why=1 ms=180",                                 # T6
+    "ringsig release=1 why=2 ms=5000",                                # T6
+    "ringsig sendrecv ms=650 mode=1 role=callee",                     # T7
+    "ringsig phase=pc native=1",                                      # T8
+    "ringsig phase=media native=1",                                   # T8
+    "ringsig offer=1 len=842",                                        # T9
+    "ringsig offer=0 len=0",                                          # T9
+    "ringsig upgrade=0 why=1",                                        # T10
+    "ringsig timeout=1 why=1",                                        # T11
+    "ringsig timeout=1 why=2",                                        # T11
+)
+for line in RINGSIG_LINES:
+    check(red(line, "call") == line,
+          "W-MEDIAATACCEPT: %r did not ship verbatim (got %r)" % (line, red(line, "call")))
+drop_caches()
+
+# §11's additional "audioIO defer=1 gate=5" line: "same shape as gate=2/3,
+# no new words" -- i.e. it relies on the SAME pre-existing 2-free-word
+# budget its gate=2/gate=3 siblings already ship under (AppState.swift's
+# `startAudioIOIfReady`), not on any addition this task makes. Checked
+# separately from the zero-unknown-word rigor below, which is specifically
+# about the words THIS task's CALL_FORMAT_VOCAB addition covers.
+AUDIOIO_GATE5_LINE = "audioIO defer=1 gate=5"
+check(red(AUDIOIO_GATE5_LINE, "call") == AUDIOIO_GATE5_LINE,
+      "W-MEDIAATACCEPT: %r did not ship verbatim (got %r)"
+      % (AUDIOIO_GATE5_LINE, red(AUDIOIO_GATE5_LINE, "call")))
+drop_caches()
+
+# Zero-unknown-word rigor (same discipline as the W-CRASHTELEMETRY check
+# above): every word/kv-key the RINGSIG_LINES need must already be real
+# vocabulary (TELEMETRY_VOCAB/APP_VOCAB) or this file's own new
+# CALL_FORMAT_VOCAB additions -- catches a future cleanup that quietly drops
+# "put"/"take"/"wipe"/"release"/"ring"/"pc"/"op"/"ringsig" without noticing
+# these lines silently started spending MAX_UNKNOWN_WORDS budget instead of
+# being free.
+slack = m.MAX_UNKNOWN_WORDS
+m.MAX_UNKNOWN_WORDS = 0
+try:
+    bad = [l for l in RINGSIG_LINES if red(l, "call") != l]
+finally:
+    m.MAX_UNKNOWN_WORDS = slack
+    drop_caches()
+check(not bad, "W-MEDIAATACCEPT: with no unknown-word allowance a vocabulary word of "
+      "the ringsig telemetry lines is missing: %r" % (bad,))
 
 # ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
