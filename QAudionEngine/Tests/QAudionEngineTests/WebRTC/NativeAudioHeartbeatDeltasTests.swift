@@ -121,6 +121,16 @@ final class NativeAudioHeartbeatDeltasTests: XCTestCase {
         XCTAssertEqual(NativeAudioHeartbeatDeltas.relayProtocolCode("quic"), 0)
     }
 
+    /// Review fix — a relay allocated through the WSS-TURN bridge reports
+    /// "udp" for its loopback hop; the bridge flag must win so the heartbeat
+    /// can tell it apart from a real UDP relay, but never invent a relay
+    /// where the stats row has no protocol at all.
+    func test_relayProtocolCode_viaWssBridge_isFour() {
+        XCTAssertEqual(NativeAudioHeartbeatDeltas.relayProtocolCode("udp", viaWssBridge: true), 4)
+        XCTAssertEqual(NativeAudioHeartbeatDeltas.relayProtocolCode("udp", viaWssBridge: false), 1)
+        XCTAssertEqual(NativeAudioHeartbeatDeltas.relayProtocolCode(nil, viaWssBridge: true), 0)
+    }
+
     func test_networkTypeCode_knownValues() {
         XCTAssertEqual(NativeAudioHeartbeatDeltas.networkTypeCode("wifi"), 1)
         XCTAssertEqual(NativeAudioHeartbeatDeltas.networkTypeCode("ethernet"), 2)

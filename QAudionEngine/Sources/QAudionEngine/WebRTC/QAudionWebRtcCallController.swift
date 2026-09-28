@@ -851,6 +851,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// granted). Same "never logged as a raw string" note as
         /// `localCandidateRelayProtocol` above.
         public var localCandidateNetworkType: String?
+        /// N7 review fix — `true` when the selected local candidate is the
+        /// relay allocated THROUGH this call's WSS-TURN bridge (its stats
+        /// `url` is the bridge's own loopback `turn:` endpoint). Such a pair
+        /// reports `relayProtocol == "udp"` (the loopback hop), which would
+        /// otherwise be indistinguishable from a real UDP relay in the
+        /// heartbeat — and "did the call fall back to the WSS bridge" is
+        /// exactly what the UDP-blocked test needs to read. Only a Bool
+        /// leaves this snapshot; the URL itself is never stored or logged.
+        public var localCandidateViaWssBridge: Bool = false
 
         public init() {}
     }
@@ -1043,6 +1052,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // an entitlement). Neither is an address/hostname.
                 snapshot.localCandidateRelayProtocol = localStats.values["relayProtocol"] as? String
                 snapshot.localCandidateNetworkType = localStats.values["networkType"] as? String
+                // N7 review fix — see `localCandidateViaWssBridge`. Compared
+                // up to the query (`?transport=`), which libwebrtc rebuilds
+                // itself when it reports the relay candidate's server URL.
+                if (localStats.values["candidateType"] as? String) == "relay",
+                   let candidateUrl = localStats.values["url"] as? String,
+                   let bridgeIceUrl = self.wssTurnBridgeIceUrl,
+                   let bridgeEndpoint = bridgeIceUrl.split(separator: "?").first {
+                    snapshot.localCandidateViaWssBridge = candidateUrl.hasPrefix(String(bridgeEndpoint))
+                }
             }
             if let remoteCandidateId, let remoteStats = report.statistics[remoteCandidateId] {
                 snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
@@ -1406,6 +1424,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// muted for its whole (short) life.
     private var nativeSenderMuted = true
     private var wssTurnBridge: WssTurnBridge?
+    /// N6 review fix — the ICE URL of the LIVE `wssTurnBridge` (its loopback
+    /// `turn:` endpoint), set together with it and cleared together with it.
+    /// An ICE restart on a network that still gives no UDP evidence REUSES
+    /// this bridge instead of dialing a new one: stopping the old bridge
+    /// mid-restart would kill the relay path the current ICE generation may
+    /// still be using (the bridge's own W-WSSTURNHEAL keeps its loopback port
+    /// stable across WSS reconnects precisely so that path survives a
+    /// network change). Also lets the heartbeat tell a bridged relay pair
+    /// apart from a plain UDP one (`NativeAudioSrtpStatsSnapshot
+    /// .localCandidateViaWssBridge`). Lock-guarded: the stats callback
+    /// (WebRTC signaling thread) reads it while setup/restart/teardown write
+    /// it from other threads.
+    private let wssTurnBridgeIceUrlLock = NSLock()
+    private var _wssTurnBridgeIceUrl: String?
+    private var wssTurnBridgeIceUrl: String? {
+        get { wssTurnBridgeIceUrlLock.lock(); defer { wssTurnBridgeIceUrlLock.unlock() }; return _wssTurnBridgeIceUrl }
+        set { wssTurnBridgeIceUrlLock.lock(); _wssTurnBridgeIceUrl = newValue; wssTurnBridgeIceUrlLock.unlock() }
+    }
     private var recipientId: String?
 
     // MARK: - W-SILENTPATHDEATH / W-OFFERGLARE / W-RESTARTOFFERPARK
@@ -1558,6 +1594,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// (this controller's own park logic, or the peer's) must not be
     /// re-applied.
     private var lastAppliedRemoteRestartSdp: String?
+    /// N6 review fix — how many remote restart offers this call has applied
+    /// (bumped next to `lastAppliedRemoteRestartSdp`). `restartIce` snapshots
+    /// it before its relay refresh await and aborts its own attempt when a
+    /// peer-driven restart landed meanwhile, so the refresh window can never
+    /// turn one network event into two back-to-back ICE restarts. Guarded
+    /// by `restartIceDebounceLock`.
+    private var remoteRestartOffersApplied: Int = 0
 
     /// Fired once per restart ATTEMPT (offer creation kicked off, not
     /// necessarily sent) — AppState uses this to extend the pre-existing
@@ -2691,6 +2734,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         lastIceConnectionState = .new
         hasEverConnectedIce = false
         iceGoodSinceMs = nil
+        // N6 review fix — stop the WSS-TURN bridge BEFORE the early return
+        // below: a bridge dialed by a setup (or restart) refresh that raced
+        // this teardown can exist while `peerConnection` is still nil, and
+        // must not keep its WSS slot and loopback socket until the
+        // controller happens to be deallocated.
+        wssTurnBridge?.stop()
+        wssTurnBridge = nil
+        wssTurnBridgeIceUrl = nil
         guard peerConnection != nil else {
             state = .disconnected
             return
@@ -2700,8 +2751,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-NETVIS — the pair this was measured on is gone; the band must show
         // "—" for the next call rather than the previous call's last RTT.
         setMediaRttMs(nil)
-        wssTurnBridge?.stop()
-        wssTurnBridge = nil
         peerConnection?.close()
         peerConnection = nil
         // W-CALLERUNMUTELOST — re-arm the latch for hygiene (this controller
@@ -3317,46 +3366,40 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // debounce/gate check just above (this point in the method is only
         // ever reached once per genuine restart attempt).
         //
-        // `fetchIceServers()` already IS this exact re-evaluation — re-probe
-        // every relay's UDP STUN RTT, reorder by latency, and conditionally
-        // insert the WSS-bridge ICE server when (and only when) the probe
-        // round came back empty (W-RELAYGATE's own "no positive evidence
-        // direct UDP works" gate) — reused here rather than re-implemented,
-        // so a network that STARTED blocking UDP mid-call (the exact
-        // corporate-firewall scenario the bridge exists for) gets the bridge
-        // candidate applied to the LIVE PeerConnection via `setConfiguration`
-        // (`QAudionPeerConnection.updateIceServers`) before the restart
-        // offer / local re-gather below, instead of only at the NEXT call.
-        // `wssTurnBridge`'s own stop()-then-replace inside `fetchIceServers`
-        // is this work's single-flight: only one bridge instance is ever
-        // live at a time, whichever call (initial setup or this one) last
-        // decided one was needed.
+        // Same re-evaluation call SETUP does (`relayIceServers(from:)`:
+        // re-probe every relay's UDP STUN RTT, reorder by latency, and
+        // insert the WSS-bridge ICE server only when the probe round came
+        // back empty — W-RELAYGATE's "no positive evidence direct UDP
+        // works" gate), applied to the LIVE PeerConnection via
+        // `setConfiguration` (`QAudionPeerConnection.updateIceServers`)
+        // BEFORE the restart offer / local re-gather below: libwebrtc only
+        // hands new ICE servers to the NEXT gathering session, which is
+        // exactly the one this restart creates. It also makes a
+        // `relay-fleet-changed` restart actually move off the departed
+        // relay (AppState refreshes the bundle right before calling this).
         //
-        // Never blocks the main thread: `restartIce` is already `async`, and
-        // every `await` inside `fetchIceServers` (the STUN RTT probe, the
-        // WSS handshake) is itself off-main-thread network I/O — the same
-        // guarantee call SETUP already relies on for this identical call.
+        // Review hardening (see `refreshIceServersForRestart`): bounded by
+        // the probe's own ~1.2 s budget (cached credentials only — never
+        // the 15 s credentials HTTP fetch on a network mid-handover), a
+        // running bridge is REUSED rather than replaced, and nothing is
+        // started or applied for a call that ended meanwhile.
         //
-        // An empty result (no `relayProvider`, or an explicit
-        // `iceServerOverride`) is left alone — `updateIceServers` is only
-        // called with a genuinely refreshed, non-empty list, so a call using
-        // a manual TURN override can never have its override silently
-        // replaced with nothing.
-        //
-        // Log key deliberately `relay=1` (not the more descriptive
-        // `ice_servers_refreshed=1`): verified against this repo's own
-        // redactor (`scripts/ship-ios-logs.py`) that the longer key's
-        // unrecognized word parts ("servers", "refreshed") push this line
-        // over `MAX_UNKNOWN_WORDS` together with "restart_ice"'s own
-        // "restart" and drop the WHOLE line; "relay"/"count" are both
-        // already-recognized vocabulary in that script (confirmed via
-        // direct `redact_body()` round-trip, not assumed), so this shape
-        // ships intact.
+        // After the await: a hangup, a replaced PeerConnection, or a
+        // PEER-driven restart offer applied while this side was probing
+        // (old builds that still offer from the responder, or a crossing
+        // initiator offer on the request-first path) all make this attempt
+        // redundant — sending our own offer/request on top would restart
+        // ICE a second time and reset the checks that are already
+        // converging. The single-flight gate armed above stays armed, so the
+        // watchdog still backs off while that other restart converges.
         if let liveConnection = peerConnection {
-            let refreshedServers = await fetchIceServers()
-            if !refreshedServers.isEmpty {
-                liveConnection.updateIceServers(refreshedServers)
-                log?("restart_ice relay=1 count=\(refreshedServers.count) reason=\(reason)")
+            let remoteRestartsBefore = restartIceDebounceLock.withLock { remoteRestartOffersApplied }
+            await refreshIceServersForRestart(on: liveConnection)
+            guard !intentionalShutdown, peerConnection === liveConnection else { return }
+            let remoteRestartsAfter = restartIceDebounceLock.withLock { remoteRestartOffersApplied }
+            if remoteRestartsAfter != remoteRestartsBefore {
+                log?("restart_ice skip=1 peer=1")
+                return
             }
         }
 
@@ -3560,6 +3603,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // raced it over the WS; drain whatever queued during the SRD.
         drainPendingRemoteIce()
         lastAppliedRemoteRestartSdp = sdp
+        // N6 review fix — see `remoteRestartOffersApplied`.
+        restartIceDebounceLock.withLock { remoteRestartOffersApplied += 1 }
         let answerSdp: String? = await withCheckedContinuation { cont in
             pc.createAnswer(hasVideo: true) { result in
                 switch result {
@@ -4527,7 +4572,49 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         guard let provider = relayProvider else { return [] }
         guard let bundle = await provider.currentOrRefresh() else { return [] }
+        return await relayIceServers(from: bundle, reuseRunningBridge: false).servers
+    }
 
+    /// N6 review fix — the ICE-restart half of the relay re-evaluation
+    /// `restartIce` performs before its offer/request. Differs from call
+    /// SETUP's `fetchIceServers()` in exactly the ways a restart on a
+    /// degraded network needs:
+    ///  - CACHED credentials only (`cachedOrNil`, a non-suspending actor
+    ///    read). `currentOrRefresh()` can go to the network (bundle within
+    ///    5 min of its TTL) with a 15 s request timeout — on a network that
+    ///    is mid-handover that would hold the restart offer hostage for up to
+    ///    15 s, longer than the 10 s single-flight gate, letting a second
+    ///    restart overlap this one. A missing/expired cache instead kicks a
+    ///    background refresh for the NEXT attempt and leaves the live list.
+    ///  - A running WSS-TURN bridge is reused, never replaced (see
+    ///    `wssTurnBridgeIceUrl`).
+    ///  - A manual TURN override (W411) is already exactly what the
+    ///    PeerConnection holds: nothing to refresh.
+    /// Worst case is therefore the probe's own `RelayOrderingConstants
+    /// .overallBudgetSec` (~1.2 s, only when some relay does not answer —
+    /// i.e. exactly when re-deciding the relay set/bridge matters); on a
+    /// healthy network it is one STUN round trip to the slowest relay.
+    private func refreshIceServersForRestart(on liveConnection: QAudionPeerConnection) async {
+        if let override = iceServerOverride, !override.isEmpty { return }
+        guard let provider = relayProvider else { return }
+        guard let bundle = await provider.cachedOrNil() else {
+            Task.detached(priority: .utility) { _ = await provider.currentOrRefresh() }
+            log?("restart_ice relay=0 cached=0")
+            return
+        }
+        let result = await relayIceServers(from: bundle, reuseRunningBridge: true)
+        guard !intentionalShutdown, peerConnection === liveConnection, !result.servers.isEmpty else { return }
+        let applied = liveConnection.updateIceServers(result.servers)
+        log?("restart_ice relay=\(applied ? 1 : 0) count=\(result.servers.count) bridge=\(result.bridged ? 1 : 0) reuse=\(result.reusedBridge ? 1 : 0)")
+    }
+
+    /// The relay half of `fetchIceServers()` (latency ordering + the
+    /// W-RELAYGATE-gated WSS-TURN bridge), shared by call setup and the N6
+    /// ICE-restart refresh. `reuseRunningBridge: true` (restart only) keeps
+    /// an already-running bridge instead of dialing a second one.
+    private func relayIceServers(from bundle: RelayCredentialsProvider.RelayBundle,
+                                 reuseRunningBridge: Bool) async
+        -> (servers: [RTCIceServer], bridged: Bool, reusedBridge: Bool) {
         // W-RELAYGEO (2026-08-26, audit item 5) — order the relay list by
         // a lightweight client-measured RTT probe before handing it to
         // libwebrtc, so the nearest-measured relay(s) start ICE gathering
@@ -4583,6 +4670,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
            }),
            firstTurn.username != nil,
            firstTurn.credential != nil {
+            // N6 review fix — a restart on a network that still shows no
+            // UDP evidence keeps the bridge it already has: same loopback
+            // port, same WSS slot, and the relay pair the current ICE
+            // generation may still be using stays alive (make-before-break).
+            if reuseRunningBridge, wssTurnBridge != nil, let runningIceUrl = wssTurnBridgeIceUrl {
+                servers.insert(
+                    RTCIceServer(
+                        urlStrings: [runningIceUrl],
+                        username: firstTurn.username ?? "",
+                        credential: firstTurn.credential ?? ""
+                    ),
+                    at: 0
+                )
+                return (servers, true, true)
+            }
+            // Bug-C discipline — never dial a bridge for a call that was torn
+            // down while the probe above was in flight.
+            guard !intentionalShutdown else { return (servers, false, false) }
             // W-AUXPIN (2026-09-02, B11) — reuse callingApi's already
             // cert-pinned REST session for this bridge's WSS-TURN handshake
             // instead of URLSession.shared (no pin). nil for any CallingApi
@@ -4607,8 +4712,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 bridgeResult = nil
             }
             if let result = bridgeResult {
+                // Bug-C discipline — a teardown that landed during the start
+                // must not be left holding a live bridge nobody will stop.
+                guard !intentionalShutdown else {
+                    bridge.stop()
+                    return (servers, false, false)
+                }
                 wssTurnBridge?.stop()
                 wssTurnBridge = bridge
+                wssTurnBridgeIceUrl = result.iceUrl
                 servers.insert(
                     RTCIceServer(
                         urlStrings: [result.iceUrl],
@@ -4617,10 +4729,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     ),
                     at: 0
                 )
+                return (servers, true, false)
             }
         }
 
-        return servers
+        return (servers, false, false)
     }
 
     public enum ControllerError: Error, Equatable {
@@ -4769,7 +4882,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // above already covers that).
             if let badSince = iceBadStateEnteredAtMs {
                 let recoveryMs = Self.nowMs() - badSince
-                log?("ice_recovery recovered=1 recovery_ms=\(recoveryMs)")
+                // Review fix — `ice recovered=1`, not `ice_recovery ...`:
+                // verified against `scripts/ship-ios-logs.py`, the compound
+                // leading word is blobbed to `[REDACTED:blob]` in shipping,
+                // leaving the event nameless; this shape ships intact.
+                log?("ice recovered=1 recovery_ms=\(recoveryMs)")
                 iceBadStateEnteredAtMs = nil
             }
         case .failed, .disconnected:

@@ -120,10 +120,15 @@ public enum NativeAudioHeartbeatDeltas {
         let emittedDelta = counterDelta(previous.jitterBufferEmittedCount, current.jitterBufferEmittedCount)
         func averageMs(previousDelaySec: Double, currentDelaySec: Double) -> Int {
             guard emittedDelta > 0,
+                  previousDelaySec.isFinite, currentDelaySec.isFinite,
                   previousDelaySec >= 0, currentDelaySec >= 0,
                   currentDelaySec >= previousDelaySec else { return -1 }
             let deltaSec = currentDelaySec - previousDelaySec
-            return Int(((deltaSec / Double(emittedDelta)) * 1000.0).rounded())
+            // Int(Double) traps on a non-finite or out-of-range value — a
+            // telemetry line must never be able to crash a live call.
+            let avgMs = (deltaSec / Double(emittedDelta)) * 1000.0
+            guard avgMs.isFinite, avgMs < Double(Int32.max) else { return -1 }
+            return Int(avgMs.rounded())
         }
 
         return Deltas(
@@ -150,11 +155,17 @@ public enum NativeAudioHeartbeatDeltas {
     /// codebase: "this repo's redactor rule ... blobs any non-numeric free
     /// text token ... every other log line in this file already encodes
     /// enum/bool state as an Int for the same reason". `nil`/unrecognized -> 0.
-    public static func relayProtocolCode(_ relayProtocol: String?) -> Int {
+    ///
+    /// `4` = the relay was allocated through this call's WSS-TURN bridge
+    /// (review fix): such a candidate reports `relayProtocol == "udp"` for
+    /// its loopback hop, so without this flag a call that fell back to the
+    /// bridge would read as a plain UDP relay. Only meaningful for a relay
+    /// candidate, so it never overrides an absent protocol (-> 0).
+    public static func relayProtocolCode(_ relayProtocol: String?, viaWssBridge: Bool = false) -> Int {
         switch relayProtocol?.lowercased() {
-        case "udp": return 1
-        case "tcp": return 2
-        case "tls": return 3
+        case "udp": return viaWssBridge ? 4 : 1
+        case "tcp": return viaWssBridge ? 4 : 2
+        case "tls": return viaWssBridge ? 4 : 3
         default: return 0
         }
     }

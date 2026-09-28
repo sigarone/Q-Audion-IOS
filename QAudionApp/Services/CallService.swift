@@ -498,9 +498,19 @@ final class CallService: @unchecked Sendable {
             // WHOLE LINE, whereas bare `rtt` is already-recognized
             // vocabulary there (confirmed via direct `redact_body()`
             // round-trip, not assumed).
-            if let rttMs {
+            if let rttMs, rttMs.isFinite {
                 line += " rtt=\(Int(rttMs.rounded()))"
             }
+            // N7 review fix — the resilience fields ride their OWN line
+            // (`audiosrtp hb=2`, same tick, no second timer), not this one.
+            // Verified against `scripts/ship-ios-logs.py`: the redactor allows
+            // at most `MAX_IDLIKE_TOKENS` (2) numbers of 6+ digits per body,
+            // and on a native call this line already carries tx=/rx= (bytes)
+            // plus tsr= (samples) at 6-8 digits within the first seconds —
+            // so the whole line is DROPPED from shipping and anything
+            // appended to it never reaches the server. `hb=2` stays short
+            // and ships intact at every value range (incl. all -1).
+            var resilienceLine: String?
             // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
             // (no second timer) with the wider stats snapshot, ONLY on a
             // call that actually negotiated native SRTP: every field below
@@ -513,7 +523,7 @@ final class CallService: @unchecked Sendable {
                 // shipped as milli-units (x1000, rounded) to stay numeric
                 // rather than a decimal point, matching this line's own
                 // all-integer convention.
-                func milli(_ v: Double) -> Int { v < 0 ? -1 : Int((v * 1000).rounded()) }
+                func milli(_ v: Double) -> Int { (v < 0 || !v.isFinite) ? -1 : Int((v * 1000).rounded()) }
                 line += " rtx=\(stats.outboundRetransmittedPacketsSent)"
                 line += " mslvl=\(milli(stats.mediaSourceAudioLevel))"
                 line += " mseng=\(milli(stats.mediaSourceTotalAudioEnergy))"
@@ -586,27 +596,36 @@ final class CallService: @unchecked Sendable {
                 // Concealment, doubling as the concealed-samples counter's
                 // name), so the line ships whole instead of collapsing to
                 // an empty attribute summary.
-                line += " jitter_ms=\(deltas.jitterBufferDelayMsAvg)"
-                line += " target_ms=\(deltas.jitterBufferTargetDelayMsAvg)"
-                line += " plc=\(deltas.concealedSamplesDelta)"
-                line += " fec_recv=\(deltas.fecPacketsReceivedDelta)"
-                line += " fec_drop=\(deltas.fecPacketsDiscardedDelta)"
-                line += " nack=\(deltas.nackCountDelta)"
+                let rttField: Int
+                if let rttMs, rttMs.isFinite { rttField = Int(rttMs.rounded()) } else { rttField = -1 }
+                var net = "audiosrtp hb=2 rtt=\(rttField)"
+                net += " jitter_ms=\(deltas.jitterBufferDelayMsAvg)"
+                net += " target_ms=\(deltas.jitterBufferTargetDelayMsAvg)"
+                net += " plc=\(deltas.concealedSamplesDelta)"
+                net += " fec_recv=\(deltas.fecPacketsReceivedDelta)"
+                net += " fec_drop=\(deltas.fecPacketsDiscardedDelta)"
+                net += " nack=\(deltas.nackCountDelta)"
                 // Instantaneous (report-snapshot) fields, never delta'd — see
                 // `NativeAudioSrtpStatsSnapshot`'s own field docs for why.
                 // `fractionLost` is 0.0...1.0 -> milli-units, same convention
                 // `milli(_:)` above already uses for the audio-level fields.
-                line += " remote_loss=\(milli(stats.remoteInboundFractionLost))"
-                let remoteRttMs = stats.remoteInboundRoundTripTimeSec < 0
-                    ? -1 : Int((stats.remoteInboundRoundTripTimeSec * 1000).rounded())
-                line += " remote_rtt=\(remoteRttMs)"
+                net += " remote_loss=\(milli(stats.remoteInboundFractionLost))"
+                let remoteRttSec = stats.remoteInboundRoundTripTimeSec
+                let remoteRttMs = (remoteRttSec < 0 || !remoteRttSec.isFinite)
+                    ? -1 : Int((remoteRttSec * 1000).rounded())
+                net += " remote_rtt=\(remoteRttMs)"
                 // Numeric-encoded, never the raw platform string (see
                 // `NativeAudioHeartbeatDeltas.relayProtocolCode`/
                 // `.networkTypeCode`'s own docs) — no addresses either way.
-                line += " relay=\(NativeAudioHeartbeatDeltas.relayProtocolCode(stats.localCandidateRelayProtocol))"
-                line += " network_type=\(NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType))"
+                let relayCode = NativeAudioHeartbeatDeltas.relayProtocolCode(
+                    stats.localCandidateRelayProtocol,
+                    viaWssBridge: stats.localCandidateViaWssBridge)
+                net += " relay=\(relayCode)"
+                net += " network_type=\(NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType))"
+                resilienceLine = net
             }
             RTLog.info("call", line)
+            if let resilienceLine { RTLog.info("call", resilienceLine) }
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
         // outbound-rtp row still does not exist after ~8 s of samples (was
