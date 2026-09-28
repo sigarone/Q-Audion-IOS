@@ -1541,7 +1541,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// when ICE first went bad — the fallback engages
     /// `SrtpFallbackDecisions.fallbackEngageDebounceMs` later, see
     /// `armSrtpFallbackIfNeeded`). Feeds the `duration_ms=` field on the
-    /// `audiosrtp_fallback recover=1` line. `nil` when not currently engaged.
+    /// `audiosrtp fallback=0 recover=1` line. `nil` when not currently engaged.
     private var srtpFallbackEngagedAtMs: Int64?
     /// Debounce task for the fallback engage decision. Cancelled on genuine
     /// ICE recovery (mirrors `iceRecoveryWatchdogTask`'s own cancel-on-heal
@@ -3136,7 +3136,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     // instant, so `disarmSrtpFallbackIfRecovered` can log
                     // how long the fallback actually stayed engaged.
                     self.srtpFallbackEngagedAtMs = Self.nowMs()
-                    self.log?("audiosrtp_fallback engage=1")
+                    self.log?("audiosrtp fallback=1 engage=1")
                     self.onAudioSrtpFallbackEngage?()
                     return
                 }
@@ -3176,10 +3176,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // logging a fabricated one.
         if let engagedAt = srtpFallbackEngagedAtMs {
             let durationMs = Self.nowMs() - engagedAt
-            log?("audiosrtp_fallback recover=1 duration_ms=\(durationMs)")
+            log?("audiosrtp fallback=0 recover=1 ms=\(durationMs)")
             srtpFallbackEngagedAtMs = nil
         } else {
-            log?("audiosrtp_fallback recover=1")
+            log?("audiosrtp fallback=0 recover=1")
         }
         onAudioSrtpFallbackRecover?()
     }
