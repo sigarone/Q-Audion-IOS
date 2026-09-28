@@ -156,6 +156,18 @@ public final class QAudionPeerConnection: NSObject {
     /// published later via `setKey`, and the sender/receiver cryptors are
     /// attached when their tracks exist. Replaces the codec-layer seal.
     public private(set) var nativeVideoCryptor: NativeVideoFrameCryptor?
+    /// W-CRYPTORQUEUE (2026-09-27) — guards the check-then-set in
+    /// `ensureNativeVideoCryptor`/`resolvedNativeAudioCryptor` below.
+    /// `ensureNativeVideoCryptor` is reachable from BOTH the MainActor
+    /// (`pqcSessionKey` didSet path) and the WebRTC signalling thread
+    /// (`didReceiveRemoteVideoReceiver`) with no serialization between them
+    /// before this task; a genuine simultaneous first call from each thread
+    /// could otherwise construct two `NativeVideoFrameCryptor` instances and
+    /// let the loser's assignment silently orphan the winner's (whichever
+    /// callback subsequently ran `onDecryptFailure`/attach against the
+    /// orphaned one from then on). Cheap: held only around a nil-check +
+    /// pointer store, never around any WebRTC proxy call.
+    private let nativeCryptorCreationLock = NSLock()
 
     // ── IOS-C4b (2026-08-26): native SRTP audio (CallCapabilities.audioSrtpV1) ──
     //
@@ -168,16 +180,85 @@ public final class QAudionPeerConnection: NSObject {
 
     /// Pre-created at `init` (both caller AND callee, unlike video which is
     /// asymmetric — mirrors Android's `open()` placement) ONLY when
-    /// `CallCapabilities.audioSrtpSendEnabled` is `true`, so the FIRST SDP
-    /// this build produces or receives already carries an m=audio SEND_RECV
-    /// section with no track attached. `nil` on every build with the kill
-    /// switch off — `init` never calls `addTransceiver` for audio in that
-    /// case, so the SDP is byte-for-byte what it was before this feature.
+    /// `CallCapabilities.isNativeSrtpEnabledLocally` is `true`, so the FIRST
+    /// SDP this build produces or receives already carries an m=audio
+    /// SEND_RECV section with no track attached. `nil` on every build/call
+    /// with native SRTP off (compiled switch off AND no debug override) —
+    /// `init` never calls `addTransceiver`/`pc.add` for audio in that case,
+    /// so the SDP is byte-for-byte what it was before this feature.
+    ///
+    /// W-NATIVESRTPGATE bug fix (this task) — this used to read
+    /// `CallCapabilities.audioSrtpSendEnabled` directly, the COMPILE-TIME
+    /// switch alone. That made the runtime debug override
+    /// (`audioSrtpDebugOverride`, the Settings > Chiamate toggle) a lie:
+    /// flipping it on made `localCaps` advertise `audio-srtp-v1` on the wire
+    /// (``CallCapabilities/applyAdvertisementGates`` already read the
+    /// override), but `init` never built the transceiver to carry it — the
+    /// peer would negotiate a capability this build could not actually put
+    /// an RTP track on. Every other media-path read of
+    /// `audioSrtpSendEnabled` in this file already went through
+    /// `activateNativeAudioSrtp`, which is only ever CALLED once
+    /// `Negotiated.useAudioSrtp` is true (itself derived from the
+    /// intersection, not from this switch again), so this `init` gate was
+    /// the only site with the bug.
     private var audioTransceiver: RTCRtpTransceiver?
+    /// W-NATIVESRTPDIAG (this task) — true once THIS instance has raised the
+    /// process-wide WebRTC debug log level for its own native-SRTP session
+    /// (see `init`'s gated block). `close()` reads this to decide whether it
+    /// owes a restore — never restores unconditionally, so a call that never
+    /// raised the level (native SRTP off) cannot clobber another call's
+    /// raise/restore pairing (only one 1:1 call runs at a time today, but the
+    /// guard costs nothing and keeps the pairing self-contained per instance).
+    private var didRaiseDebugLogLevelForSession = false
+    /// W-NATIVESRTPSNAPSHOT (2026-09-26) — this call's native-SRTP decision,
+    /// latched ONCE at `init` from `CallCapabilities.latchNativeSrtpCallSnapshot()`
+    /// (the same snapshot `localCaps`, `negotiationLocal()` and the audio-unit
+    /// lifecycle in `CallService` read). Drives the m=audio pre-attach, the
+    /// RTCConfiguration extras and manual audio mode for this PeerConnection's
+    /// whole life, whatever the Settings toggle does meanwhile.
+    public let nativeSrtpEnabledForThisCall: Bool
+    /// N6 (network-resilience-max, this task) — the transport policy this
+    /// connection was built with (`.all` for a normal call, `.relay` for a
+    /// forced-TURN call via `TransportGate`). Stored so ``updateIceServers(_:)``
+    /// can rebuild an equivalent `RTCConfiguration` for a live
+    /// `setConfiguration` call without silently reverting a forced-relay call
+    /// back to `.all` — `QAudionPeerConnectionFactory.defaultConfiguration`
+    /// itself always returns `.all` and relies on the caller (this `init`) to
+    /// override it, so anything that rebuilds a configuration after `init`
+    /// must repeat that same override from the ORIGINAL value, not the
+    /// default.
+    private let iceTransportPolicy: RTCIceTransportPolicy
+    /// W-ADMMANUAL (2026-09-26) — the `NativeAudioSessionGate` token this
+    /// PeerConnection armed manual audio mode with (0 = it did not arm).
+    /// `close()` disables the unit and disarms with it, so a replaced
+    /// PeerConnection of the same call can never disarm its successor.
+    ///
+    /// W-NUDGEOWN (2026-09-27) — also read from another thread by the
+    /// controller's capture-live check (``nativeAudioArmToken``), so the
+    /// storage is behind a leaf lock (never held across a gate call).
+    private var manualAudioToken: Int {
+        get { manualAudioTokenLock.lock(); defer { manualAudioTokenLock.unlock() }; return _manualAudioToken }
+        set { manualAudioTokenLock.lock(); _manualAudioToken = newValue; manualAudioTokenLock.unlock() }
+    }
+    private let manualAudioTokenLock = NSLock()
+    private var _manualAudioToken: Int = 0
+
+    /// W-NUDGEOWN (2026-09-27) — the manual-audio arm token this
+    /// PeerConnection holds (0 = it did not arm, or it closed). Whoever acts
+    /// on the audio unit for THIS PeerConnection presents it to
+    /// `NativeAudioSessionGate`'s owner-checked calls, so a stale actor can
+    /// never switch a successor's unit.
+    public var nativeAudioArmToken: Int { manualAudioToken }
     /// The real mic-sourced RTP sender, once ``activateNativeAudioSrtp(key:participantId:rxSink:txSink:)``
     /// has attached a track. `nil` until then (and always `nil` on a call
     /// that never negotiates ``CallCapabilities/audioSrtpV1``).
     public private(set) var nativeAudioSender: RTCRtpSender?
+    /// W-NATIVESRTPDIAG (this task) — read-only access to the pre-created
+    /// native-SRTP audio transceiver, for the one-shot activation
+    /// diagnostics line (`QAudionWebRtcCallController`). `nil` whenever
+    /// ``CallCapabilities/isNativeSrtpEnabledLocally`` was off at `init`
+    /// (the transceiver is never created then).
+    public var nativeAudioTransceiverForDiagnostics: RTCRtpTransceiver? { audioTransceiver }
     private var localAudioSrtpTrack: RTCAudioTrack?
     /// Native libwebrtc FrameCryptor for the 1:1 AUDIO sender+receiver.
     /// Sibling of ``nativeVideoCryptor`` — see ``NativeAudioFrameCryptor``.
@@ -219,6 +300,18 @@ public final class QAudionPeerConnection: NSObject {
     /// the caller, `CallService.activateIncomingCallAudio()` for the
     /// callee) — see [[project_ios_native_mic_before_accept_2026_09_08]].
     private var pendingAudioSrtpMuted: Bool = true
+    /// W-CALLERUNMUTELOST (2026-09-27) — true once `activateNativeAudioSrtp`
+    /// has confirmed the SENDER FrameCryptor is attached (`attached` local
+    /// in that method). Gates whether `setNativeAudioSrtpMuted(false)` may
+    /// enable ``localAudioSrtpTrack`` immediately: the track can be
+    /// pre-attached (W-PREATTACHMIC) well before the cryptor exists, and
+    /// enabling it in that window would send plaintext mic audio for
+    /// however long the attach takes — the same plaintext-leak class
+    /// W-AUDIOSENDERGATE already closed for the ring-time activation path,
+    /// now also closed for an explicit unmute that races it. See
+    /// ``NativeSenderMuteDecisions/trackEnabledAfterRequest(muted:senderCryptorAttached:)``
+    /// for the pure rule this mirrors. Reset in `close()`.
+    private var nativeSenderCryptorAttached: Bool = false
     /// True once the receiver-side branch of `didAdd rtpReceiver` has kept
     /// the inbound SRTP audio track enabled (peer negotiated the tag) —
     /// read by ``setMicrophoneMuted(_:)`` and the fallback machinery.
@@ -298,6 +391,21 @@ public final class QAudionPeerConnection: NSObject {
     /// unlike Android's sibling implementation.
     private static let audioDcBufferedAmountDropThreshold: UInt64 = 1500
     private var lastAudioDcBackpressureLogAtMs: Int64 = 0
+    /// W-DCWEDGE (2026-09-25) — SCTP health, independent of ICE. The send queue
+    /// (`bufferedAmount`) is sampled on every outbound frame, the receive callback
+    /// leaves a flag; both meet in `DcWedgeDetector` under this lock (the send path
+    /// runs on the tx queue, the receive callback on the WebRTC signalling thread).
+    /// While the detector says wedged, `sendAudioFrameData` answers `.useRelay` and
+    /// `CallService` puts the frame on the WS relay — see the evidence and the rules
+    /// on `DcWedgeDetector`. Per PeerConnection, so a new call starts healthy.
+    private let dcWedgeLock = NSLock()
+    private var dcWedge = DcWedgeDetector()
+    private var dcRxSinceSample = false
+    /// W-DCWEDGE — the state-change line (`DcWedgeDetector.Transition.logLine`),
+    /// for the app layer to ship: this engine cannot reach `RTLog`. Forwarded by the
+    /// controller to its `log` hook at every PeerConnection construction site.
+    /// Fires on the tx queue (or whichever thread sampled), outside the lock.
+    public var onAudioDcWedgeChange: ((String) -> Void)?
     /// Invoked on the WebRTC signalling thread for each inbound sealed audio
     /// frame received over the DataChannel. The `Data` is the raw
     /// `WireRelayFrameCodec` envelope — identical to what the WS "audio_frame"
@@ -321,6 +429,28 @@ public final class QAudionPeerConnection: NSObject {
     /// Phase 0 has to answer before the capability tag may be flipped.
     public var onAudioDataChannelStateChange: ((Int) -> Void)?
 
+    /// W-NATIVESRTPDIAG (this task) — forwards
+    /// ``NativeAudioFrameCryptor/onFrameCryptorStateChange`` from whichever
+    /// instance is currently ``nativeAudioCryptor``. The engine has no call
+    /// id and cannot reach `RTLog` — same reason ``onAudioDcWedgeChange``
+    /// exists. Wired once, at creation, by ``resolvedNativeAudioCryptor(participantId:)``
+    /// — every call site that creates the cryptor goes through it, so this
+    /// fires regardless of which one creates it first.
+    public var onNativeAudioFrameCryptorStateChange: ((String) -> Void)?
+
+    /// W-CALLERUNMUTELOST (2026-09-27) — one line every time
+    /// ``applyNativeSenderMuteState(_:source:)`` actually flips
+    /// ``localAudioSrtpTrack``'s `isEnabled` bit, same "the engine has no
+    /// call id and cannot reach `RTLog`" reasoning as
+    /// ``onNativeAudioFrameCryptorStateChange`` right above — wired the
+    /// same way, at the same three controller call sites. `source` in the
+    /// line is a bare vocabulary token (`answer`/`pcinit`/`act`/`user`/
+    /// `nudge`), never an id — `act`, not `activate`, keeps `src=act`
+    /// under `ship-ios-logs.py`'s 12-char base64-blob-sweep floor (see
+    /// the W-SHIPLOGVOCAB comment at the `activateNativeAudioSrtp` call
+    /// site).
+    public var onNativeSenderMuteApplied: ((String) -> Void)?
+
     public init(factory: RTCPeerConnectionFactory,
                 audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
                 iceServers: [RTCIceServer],
@@ -329,9 +459,34 @@ public final class QAudionPeerConnection: NSObject {
         self.factory = factory
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
+        self.iceTransportPolicy = iceTransportPolicy
+        // W-NATIVESRTPSNAPSHOT — the call start already took the KEYED
+        // snapshot (AppState: startCall with the OFFER's call id, call_incoming
+        // and the incoming OFFER with theirs) before any PeerConnection is
+        // built, so this site, which has no call id, keeps whatever the
+        // current call took, and takes an unidentified one only if none exists.
+        let latched = CallCapabilities.latchNativeSrtpCallSnapshot(callId: nil)
+        self.nativeSrtpEnabledForThisCall = latched.value
         super.init()
 
-        let config = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: iceServers)
+        // W-NATIVESRTPDIAG — snapshot ONCE at construction, same value the
+        // pre-creation gate just below reads: a debug-override flip mid-call
+        // must not retroactively change an already-negotiated
+        // RTCConfiguration, exactly like the transceiver pre-creation itself
+        // (which also only ever runs at `init`).
+        let nativeSrtpEnabledLocally = latched.value
+        let freshFlag = latched.fresh ? 1 : 0
+        let staleFlag = latched.stale ? 1 : 0
+        let nativeFlag = nativeSrtpEnabledLocally ? 1 : 0
+        NativeAudioSessionGate.log?("nsnap site=1 native=\(nativeFlag) fresh=\(freshFlag) stale=\(staleFlag)")
+        // W-ADMAUDIT (2026-09-26, every call) — a WebRTC audio unit left
+        // enabled by a previous call must not be inherited; a call with
+        // native SRTP off also drops any stale manual-mode arm. See
+        // `NativeAudioSessionGate.auditAtCallStart`.
+        NativeAudioSessionGate.auditAtCallStart(nativeCall: nativeSrtpEnabledLocally)
+        let config = QAudionPeerConnectionFactory.defaultConfiguration(
+            iceServers: iceServers,
+            nativeSrtpEnabledLocally: nativeSrtpEnabledLocally)
         // W411: honor the user's TransportMode preference. When the
         // app sets `.relay`, host/srflx candidates are filtered out
         // and all media flows through TURN — needed for restricted
@@ -359,10 +514,17 @@ public final class QAudionPeerConnection: NSObject {
         // compile-time kill switch: off (the default), this block never
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
-        if CallCapabilities.audioSrtpSendEnabled {
-            // W-ADMNOMANUAL (2026-08-31) — nothing to arm: WebRTC manages its
-            // own audio unit. See NativeAudioSessionGate for what was tried
-            // and what each attempt measured.
+        if nativeSrtpEnabledLocally {
+            // W-ADMMANUAL (2026-09-26) — replaces W-ADMNOMANUAL's "nothing to
+            // arm". Manual audio mode BEFORE the mic track is added and before
+            // any SDP is applied: in automatic mode WebRTC's audio module
+            // activated the session and started its VoiceProcessingIO unit as
+            // soon as the first audio stream started (ring time, both roles),
+            // before CallKit's didActivate and regardless of whether the peer
+            // negotiated audio-srtp-v1. Now the unit waits for
+            // `isAudioEnabled`, which only CallService's gate sets. See
+            // NativeAudioSessionGate for the contract and the history.
+            manualAudioToken = NativeAudioSessionGate.armManualMode()
             // W-PREATTACHMIC (2026-08-30) — pre-attach the REAL (muted) mic
             // track here, instead of pre-creating a bare transceiver via
             // `addTransceiver`. Measured failure the bare transceiver caused
@@ -394,6 +556,13 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
             audioTransceiver = pc.transceivers.first { $0.mediaType == .audio }
             print("[WebRTC] W-PREATTACHMIC: pre-attached muted mic track (kill switch on) senderResolved=\(nativeAudioSender != nil)")
+            // W-NATIVESRTPDIAG (this task) — raise the WebRTC stderr debug
+            // severity for this call's whole lifetime (restored in `close()`
+            // below). Gated on the SAME condition as the transceiver
+            // pre-creation above, so a normal call (native SRTP off) never
+            // touches the global log level at all.
+            QAudionPeerConnectionFactory.shared.raiseDebugLogLevelForNativeSrtpSession()
+            didRaiseDebugLogLevelForSession = true
         }
     }
 
@@ -450,36 +619,96 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     /// W-DCAUDIO — send one sealed audio frame over the DataChannel if it is open.
-    /// Returns `true` if queued on the DC (or silently dropped for backpressure,
-    /// see below — the DC itself is still healthy); `false` if the DC is not
-    /// open (the caller must then fall back to the WS relay). `data` is the raw
-    /// `WireRelayFrameCodec` envelope (the exact bytes the WS path base64-wraps).
+    /// `.queued` if handed to SCTP; `.shed` if dropped for backpressure (see below —
+    /// a transient, the DC itself is still considered healthy: NOT sent, must not be
+    /// counted as sent); `.useRelay` if the DC cannot carry the frame — not open,
+    /// send refused, or wedged (W-DCWEDGE, below) — and the caller must then fall back
+    /// to the WS relay. `data` is the raw `WireRelayFrameCodec` envelope (the exact
+    /// bytes the WS path base64-wraps).
     ///
     /// W-DCBACKPRESSURE — mirrors Android's Wave 2C-15 hotfix: when
     /// `dc.bufferedAmount` exceeds `audioDcBufferedAmountDropThreshold`, drop
     /// this frame instead of enqueuing it, same as Android's
-    /// `PeerConnectionHolder.sendOnDataChannel`. Returns `true` (not `false`)
-    /// for a backpressure drop — this is a transient, self-recovering
-    /// condition on an otherwise-healthy DC, NOT a reason to force the caller
-    /// into a full WS-relay fallback (which `false` triggers); the receiver's
-    /// PLC/FEC/comfort-noise masks the occasional dropped frame, same as on
-    /// Android. Letting the queue grow unbounded instead produces a
+    /// `PeerConnectionHolder.sendOnDataChannel`. A single such drop answers
+    /// `.shed` (not `.useRelay`) — a transient, self-recovering condition on an
+    /// otherwise-healthy DC, NOT a reason to force the caller into a WS-relay
+    /// fallback; the receiver's PLC/FEC/comfort-noise masks the occasional dropped
+    /// frame, same as on Android. Letting the queue grow unbounded instead produces a
     /// permanent, non-recovering "voice arriving late" — or, worse, the
     /// underlying SCTP association can itself become unhealthy under a
     /// large enough backlog.
+    ///
+    /// W-DCWEDGE (2026-09-25) — but the drops are NOT always transient. In call
+    /// 7727f262 the queue stayed over the threshold for 21 s (ICE flapped and came
+    /// back, the per-frame ICE gate reopened the channel at once) and in 277cff7c
+    /// for 7.4 s with ICE never changing state: every frame was shed, none reached
+    /// the relay, and the caller counted them all as sent. Every frame now feeds
+    /// `DcWedgeDetector`; while it says wedged the answer is `.useRelay` — a
+    /// DIVERSION, not a duplication (each frame goes on exactly one leg, see
+    /// `CallService`) — except one probe frame per `DcWedgeDetector.probeIntervalMs`
+    /// that still goes on the channel so the peer can see it recover.
+    /// `DcWedgeKillSwitch` off = the exact pre-W-DCWEDGE routing.
     @discardableResult
-    public func sendAudioFrameData(_ data: Data) -> Bool {
-        guard let dc = audioDataChannel, dc.readyState == .open else { return false }
+    public func sendAudioFrameData(_ data: Data) -> AudioDcSendOutcome {
+        guard let dc = audioDataChannel, dc.readyState == .open else { return .useRelay }
         let backlog = dc.bufferedAmount
-        if AudioDcBackpressureGate.shouldDrop(bufferedAmount: backlog, threshold: Self.audioDcBufferedAmountDropThreshold) {
-            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-            if nowMs - lastAudioDcBackpressureLogAtMs > 1_000 {
-                print("[WebRTC] DC backpressure: dropping outbound audio frame (bufferedAmount=\(backlog) > \(Self.audioDcBufferedAmountDropThreshold))")
-                lastAudioDcBackpressureLogAtMs = nowMs
+        let shed: Bool = AudioDcBackpressureGate.shouldDrop(bufferedAmount: backlog, threshold: Self.audioDcBufferedAmountDropThreshold)
+        let sample = sampleAudioDcWedge(bufferedAmount: backlog, shed: shed)
+        if let verdict = AudioDcSendOutcome.preSend(shedByBackpressure: shed,
+                                                    wedged: sample.wedged,
+                                                    probe: sample.probe,
+                                                    divertEnabled: DcWedgeKillSwitch.shared.divertEnabled) {
+            if verdict == .shed {
+                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                if nowMs - lastAudioDcBackpressureLogAtMs > 1_000 {
+                    print("[WebRTC] DC backpressure: dropping outbound audio frame (bufferedAmount=\(backlog) > \(Self.audioDcBufferedAmountDropThreshold))")
+                    lastAudioDcBackpressureLogAtMs = nowMs
+                }
             }
-            return true
+            return verdict
         }
-        return dc.sendData(RTCDataBuffer(data: data, isBinary: true))
+        return dc.sendData(RTCDataBuffer(data: data, isBinary: true)) ? .queued : .useRelay
+    }
+
+    /// W-DCWEDGE — feed `DcWedgeDetector` one sample (called on every outbound frame,
+    /// also for the control / NACK frames that share the channel) and answer whether
+    /// the channel is wedged AFTER it, and whether this frame is the probe. The state
+    /// change, if any, is logged here, outside the lock.
+    private func sampleAudioDcWedge(bufferedAmount: UInt64, shed: Bool) -> (wedged: Bool, probe: Bool) {
+        let up: UInt64 = DispatchTime.now().uptimeNanoseconds
+        let nowMs: Int64 = Int64(up / 1_000_000)
+        let buffered: Int64 = Int64(clamping: bufferedAmount)
+        dcWedgeLock.lock()
+        let rx: Bool = dcRxSinceSample
+        dcRxSinceSample = false
+        let transition = dcWedge.onSample(nowMs: nowMs, bufferedAmountBytes: buffered, dropped: shed, rxOnDcSeen: rx)
+        let wedged: Bool = dcWedge.wedged
+        let probe: Bool = dcWedge.shouldProbe(nowMs: nowMs)
+        dcWedgeLock.unlock()
+        if let t = transition {
+            let line: String = t.logLine
+            let printed: String = "[WebRTC] " + line
+            print(printed)
+            onAudioDcWedgeChange?(line)
+        }
+        return (wedged, probe)
+    }
+
+    /// W-DCWEDGE — a frame ARRIVED on the sealed-audio DataChannel, whatever becomes
+    /// of it afterwards: the "the peer still reaches us on the DataChannel" half of
+    /// the wedge exit rule. Called from `didReceiveMessageWith` on the WebRTC
+    /// signalling thread.
+    private func noteAudioDcRx() {
+        dcWedgeLock.lock()
+        dcRxSinceSample = true
+        dcWedgeLock.unlock()
+    }
+
+    /// W-DCWEDGE — `true` while `DcWedgeDetector` says the DataChannel is wedged
+    /// (the controller adds the kill switch for "frames are actually diverted").
+    public var isAudioDcWedged: Bool {
+        dcWedgeLock.lock(); defer { dcWedgeLock.unlock() }
+        return dcWedge.wedged
     }
 
     /// W-DCAUDIO — true when the sealed-audio DataChannel is open (P2P voice is
@@ -495,7 +724,7 @@ public final class QAudionPeerConnection: NSObject {
     /// Read-only diagnostic. ``isAudioDataChannelOpen()`` collapses "no channel
     /// was ever created" and "a channel exists but is connecting / closing /
     /// closed" into the same `false`, and those are three different bugs with
-    /// three different fixes. `sendAudioFrameData` returns `false` for all of
+    /// three different fixes. `sendAudioFrameData` answers `.useRelay` for all of
     /// them alike, so without this the Phase 0 log line cannot say which one
     /// happened.
     public func audioDataChannelStateRaw() -> Int {
@@ -583,7 +812,13 @@ public final class QAudionPeerConnection: NSObject {
     /// no new field on any message: the list was already here and was simply
     /// being discarded after the intersection was taken.
     public func acceptPeerCapabilities(_ peer: [String]?) {
-        let n = CallCapabilities.negotiate(peer: peer)
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — the local side of the
+        // intersection now follows the call's native-SRTP snapshot instead of
+        // the compiled base list: with the debug override on and the compiled
+        // switch off, this side advertised audio-srtp-v1 but never agreed on
+        // it itself (the peer went native, this side did not). With native
+        // SRTP off `negotiationLocal()` IS `CallCapabilities.local`.
+        let n = CallCapabilities.negotiate(local: CallCapabilities.negotiationLocal(), peer: peer)
         peerCapsLock.lock(); peerCallCapabilities = n; peerCapsLock.unlock()
     }
 
@@ -746,6 +981,73 @@ public final class QAudionPeerConnection: NSObject {
         return true
     }
 
+    /// W-NATIVEAUDIOQUALITY (this task, spec section D) — pins the native-
+    /// SRTP audio sender's encoding to a hard 32 kbps floor AND ceiling, so
+    /// WebRTC's own bandwidth estimator cannot lower Opus below the
+    /// packetization/CBR profile `AudioSdpPolicy` already negotiated (an
+    /// estimator is otherwise free to ratchet ANY encoding down under
+    /// congestion, audio included). Same core pattern
+    /// `setVideoDegradationPreference` above already uses (`sender
+    /// .parameters` get/mutate/set-back) and `applyVideoSenderMaxBitrate`
+    /// (`QAudionWebRtcCallController.swift`) already verified for
+    /// `maxBitrateBps` on THIS pinned SDK. `minBitrateBps` is the one new
+    /// property here — a long-standing, ordinary member of
+    /// `RTCRtpEncodingParameters` in every WebRTC iOS SDK release this
+    /// author is aware of, but NOT itself grep-verified against this exact
+    /// vendored `WebRTC.xcframework` build (no local toolchain to unzip/
+    /// inspect it — see this task's own report). No-op if `sender` has no
+    /// encodings yet.
+    ///
+    /// N5 (network-resilience-max, this task) — also sets
+    /// `encoding.networkPriority = .high` here, alongside the min/max
+    /// bitrate clamp this method already applies at every one of its call
+    /// sites (`QAudionWebRtcCallController`'s activate-native-audio-srtp
+    /// paths) — the owner's own spec text: "applied where the 32 kbps clamp
+    /// is applied". `bitratePriority` (a separate, unrelated `Double`
+    /// property on the SAME type) is deliberately left untouched, exactly as
+    /// the owner's constraint requires.
+    ///
+    /// API verified, not guessed, against this exact pinned commit's real
+    /// header (`sdk/objc/api/peerconnection/RTCRtpEncodingParameters.h` @
+    /// webrtc-sdk/webrtc df1011beabae — the same commit
+    /// `QAudionPeerConnectionFactory`'s N2 doc cites for the field-trial
+    /// verification): `@property(nonatomic, assign) RTCPriority
+    /// networkPriority;` — `RTCPriority` is `{VeryLow, Low, Medium, High}`
+    /// (`RTCRtpParameters.h`, same commit). For this DSCP marking to have any
+    /// effect at all, `RTCConfiguration.enableDscp` must also be `true` — set
+    /// unconditionally on the native-SRTP branch by
+    /// `QAudionPeerConnectionFactory.defaultConfiguration` (see that file's
+    /// own N5 doc); this method does not touch `RTCConfiguration` itself, so
+    /// it relies on the PeerConnection having already been built with that
+    /// flag set, which every call site that calls this method's PeerConnection
+    /// always is (native audio srtp is only ever activated on a PeerConnection
+    /// built via `defaultConfiguration(nativeSrtpEnabledLocally: true)`).
+    @discardableResult
+    public func applyNativeAudioSenderBitrateCap(on sender: RTCRtpSender) -> Bool {
+        let params = sender.parameters
+        guard !params.encodings.isEmpty else { return false }
+        let bps = NSNumber(value: AudioSdpPolicy.maxAverageBitrateBps)
+        for encoding in params.encodings {
+            encoding.minBitrateBps = bps
+            encoding.maxBitrateBps = bps
+        }
+        // N5 — DSCP-marking priority hint for the native audio stream;
+        // `bitratePriority` (WebRTC's OWN internal bandwidth-allocation
+        // weight between encodings) is a different property and is left
+        // exactly as it was, per the owner's constraint.
+        // Review hardening: encodings[0] ONLY. libwebrtc treats
+        // networkPriority as a per-SENDER value (`pc/rtp_sender.cc`
+        // `PerSenderRtpEncodingParameterHasValue`): a non-default value on
+        // any other index makes `SetParameters` reject the WHOLE update —
+        // which would silently drop the 32 kbps min=max clamp set in the
+        // same call. An audio sender has one encoding today; this keeps the
+        // clamp safe even if that ever changes.
+        params.encodings[0].networkPriority = .high
+        sender.parameters = params
+        print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender bitrate pinned min=max=\(AudioSdpPolicy.maxAverageBitrateBps) networkPriority=high")
+        return true
+    }
+
     // MARK: - Native video FrameCryptor (insertable streams)
 
     /// Create the per-call native FrameCryptor holder (idempotent). Does NOT
@@ -754,6 +1056,7 @@ public final class QAudionPeerConnection: NSObject {
     /// receiver-attach-before-key deadlock.
     @discardableResult
     public func ensureNativeVideoCryptor(participantId: String) -> NativeVideoFrameCryptor {
+        nativeCryptorCreationLock.lock(); defer { nativeCryptorCreationLock.unlock() }
         if let c = nativeVideoCryptor { return c }
         let c = NativeVideoFrameCryptor(factory: factory, participantId: participantId)
         nativeVideoCryptor = c
@@ -790,7 +1093,7 @@ public final class QAudionPeerConnection: NSObject {
     /// Idempotent: if the track already exists (e.g. a rekey re-calling this
     /// with a fresh key), this only re-applies the key. No-op (returns
     /// `false`) if ``audioTransceiver`` was never pre-created — i.e.
-    /// ``CallCapabilities/audioSrtpSendEnabled`` is off for this build.
+    /// ``CallCapabilities/isNativeSrtpEnabledLocally`` is off for this call.
     ///
     /// - Parameters:
     ///   - key: 32-byte raw PQC session key (same key the sealed-DataChannel
@@ -898,11 +1201,7 @@ public final class QAudionPeerConnection: NSObject {
             return false
         }
 
-        let cryptor = nativeAudioCryptor ?? {
-            let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
-            nativeAudioCryptor = c
-            return c
-        }()
+        let cryptor = resolvedNativeAudioCryptor(participantId: participantId)
         // WIRE_SPEC §8.7 v1.2 (Task 4, completing Task 3's split) — this
         // call site handles BOTH initial activation and later rekeys of
         // native audio-srtp (see `installAudioSrtpIfPossible`'s own doc —
@@ -1001,7 +1300,23 @@ public final class QAudionPeerConnection: NSObject {
         let effectiveSender = nativeAudioSender ?? transceiver.sender
         let attached = cryptor.attachSender(effectiveSender)
         if attached {
-            localAudioSrtpTrack?.isEnabled = !pendingAudioSrtpMuted
+            // W-CALLERUNMUTELOST — the cryptor is confirmed attached NOW:
+            // this is the one point where a previously-deferred unmute
+            // (latched in `pendingAudioSrtpMuted` while the track existed
+            // but no cryptor did — see `setNativeAudioSrtpMuted`'s
+            // W-CALLERUNMUTELOST branch) becomes safe to apply.
+            nativeSenderCryptorAttached = true
+            // W-SHIPLOGVOCAB (2026-09-27) — "act", not "activate": reuses the
+            // SAME word `audiosrtp act=1 ...` right below already prints,
+            // and keeps `src=act` at 7 chars — `src=activate` (12 chars, the
+            // exact `ship-ios-logs.py` base64-blob-sweep floor) gets masked
+            // to `[REDACTED:blob]` before the vocabulary gate even runs.
+            applyNativeSenderMuteState(pendingAudioSrtpMuted, source: "act")
+            // W-NATIVEAUDIOQUALITY (this task) — pin the encoding bitrate at
+            // the SAME point Android's spec calls for ("subito dopo addTrack
+            // ... e di nuovo all'attivazione"): activation is where this
+            // sender starts actually carrying native-SRTP audio.
+            applyNativeAudioSenderBitrateCap(on: effectiveSender)
         }
         diag?("audiosrtp act=1 n=\(diagN) sel=\(diagSel) dir=\(diagDir) br=\(diagBr) en=\(localAudioSrtpTrack?.isEnabled == true ? 1 : 0) att=\(attached ? 1 : 0)")
         if !attached {
@@ -1021,8 +1336,28 @@ public final class QAudionPeerConnection: NSObject {
     /// unchanged, same as video's.
     @discardableResult
     public func ensureNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
-        if let c = nativeAudioCryptor { return c }
+        resolvedNativeAudioCryptor(participantId: participantId)
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — single creation point for
+    /// ``nativeAudioCryptor``, so ``onNativeAudioFrameCryptorStateChange`` is
+    /// wired exactly once regardless of which of the three call sites
+    /// (``activateNativeAudioSrtp``, ``ensureNativeAudioCryptor``,
+    /// ``attachAudioReceiverCryptor``) creates it first. Idempotent —
+    /// returns the existing instance if one is already there, same as the
+    /// three inline `nativeAudioCryptor ?? { ... }()` blocks this replaces.
+    private func resolvedNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
+        // W-CRYPTORQUEUE (2026-09-27) — same check-then-set race as
+        // `ensureNativeVideoCryptor`, same fix. See that method's doc on
+        // `nativeCryptorCreationLock` (shared between video and audio: the
+        // two never compete for the same underlying property, but one lock
+        // is simpler to reason about than two for a section this cheap).
+        nativeCryptorCreationLock.lock(); defer { nativeCryptorCreationLock.unlock() }
+        if let existing = nativeAudioCryptor { return existing }
         let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
+        c.onFrameCryptorStateChange = { [weak self] line in
+            self?.onNativeAudioFrameCryptorStateChange?(line)
+        }
         nativeAudioCryptor = c
         return c
     }
@@ -1037,11 +1372,7 @@ public final class QAudionPeerConnection: NSObject {
     public func attachAudioReceiverCryptor(_ receiver: RTCRtpReceiver,
                                            participantId: String,
                                            rxSink: @escaping (Data) -> Void) -> Bool {
-        let cryptor = nativeAudioCryptor ?? {
-            let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
-            nativeAudioCryptor = c
-            return c
-        }()
+        let cryptor = resolvedNativeAudioCryptor(participantId: participantId)
         let attached = cryptor.attachReceiver(receiver)
         if let track = receiver.track as? RTCAudioTrack, audioRxTap == nil {
             let tap = NativeAudioPcmTap(sink: rxSink)
@@ -1059,9 +1390,37 @@ public final class QAudionPeerConnection: NSObject {
     /// regardless of ``CallCapabilities/audioSrtpV1`` negotiation: harmless
     /// when ``localAudioSrtpTrack`` is `nil`, which is every call that stays
     /// on the DataChannel/WS-relay path.
-    public func setNativeAudioSrtpMuted(_ muted: Bool) {
+    public func setNativeAudioSrtpMuted(_ muted: Bool, source: String = "user") {
         pendingAudioSrtpMuted = muted
+        guard localAudioSrtpTrack != nil else { return }
+        // W-CALLERUNMUTELOST (2026-09-27) — a MUTE is always safe to apply
+        // right away (disabling a track can't leak plaintext); an UNMUTE is
+        // only applied once the sender cryptor is confirmed attached
+        // (``nativeSenderCryptorAttached``) — otherwise the track is
+        // pre-attached (W-PREATTACHMIC) but still cryptor-less, and
+        // enabling it here would send plaintext mic audio. The latch above
+        // (`pendingAudioSrtpMuted`) already recorded the request either
+        // way: `activateNativeAudioSrtp` applies it the moment the cryptor
+        // attach is confirmed. See `NativeSenderMuteDecisions
+        // .trackEnabledAfterRequest` for the pure rule this mirrors.
+        guard muted || nativeSenderCryptorAttached else { return }
+        applyNativeSenderMuteState(muted, source: source)
+    }
+
+    /// W-CALLERUNMUTELOST (2026-09-27) — the single point that actually
+    /// flips ``localAudioSrtpTrack``'s `isEnabled` bit and prints the
+    /// diagnostic line for it, shared by ``setNativeAudioSrtpMuted(_:source:)``
+    /// (answer / user-mute / SRTP-fallback / a controller re-pushing its
+    /// latched intent onto a freshly (re)created PeerConnection) and
+    /// ``activateNativeAudioSrtp(key:participantId:txSink:)`` (the sender
+    /// cryptor just attached). `source` is a bare vocabulary token, no ids
+    /// — one of `answer`/`pcinit`/`act`/`user`/`nudge`, each either already
+    /// in `ship-ios-logs.py`'s `APP_VOCAB`/`TELEMETRY_VOCAB` or added to
+    /// `APP_VOCAB` alongside this line (`pcinit`, `nudge` — see that
+    /// script's own W-CALLERUNMUTELOST comment).
+    private func applyNativeSenderMuteState(_ muted: Bool, source: String) {
         localAudioSrtpTrack?.isEnabled = !muted
+        onNativeSenderMuteApplied?("audiosrtp muteapply m=\(muted ? 1 : 0) src=\(source)")
     }
 
     /// W-AUDIORXPOSTNEG (2026-08-28) — audio mirror of
@@ -1082,7 +1441,11 @@ public final class QAudionPeerConnection: NSObject {
             return false
         }
         audioTransceiver = transceiver
-        let ok = cryptor.rebindReceiver(transceiver.receiver)
+        // W-AUDIORXREBIND (2026-09-26) — tell the cryptor whether this rebind
+        // runs on a COMPLETED negotiation; only such a rebind ends the
+        // "always rebind" phase (see NativeAudioReceiverRebindDecision).
+        let negotiationComplete = pc.signalingState == .stable && !transceiver.mid.isEmpty
+        let ok = cryptor.rebindReceiver(transceiver.receiver, negotiationComplete: negotiationComplete)
         // W-AUDIORXTAPCARRYOVER (2026-08-29) — the rebind above moves the
         // CRYPTOR to the live receiver, but the PCM tap is a renderer
         // registered on a TRACK, and it was added to whichever track the
@@ -1355,6 +1718,43 @@ public final class QAudionPeerConnection: NSObject {
         print("[WebRTC] primeIceRestart: local ICE re-gather kicked (no SDP sent)")
     }
 
+    /// N6 (network-resilience-max, this task) — re-applies the ICE server
+    /// list on the LIVE `RTCPeerConnection`, for the "re-probe relays / add
+    /// the WSS bridge mid-call" ICE-restart path
+    /// (`QAudionWebRtcCallController.restartIce`): a relay set decided again
+    /// after a network change (or an ICE-failed-recovery escalation) must
+    /// reach the PeerConnection BEFORE the restart offer/local re-gather that
+    /// follows, or the fresh gather still only sees the STALE server list
+    /// from `init`.
+    ///
+    /// Rebuilds the WHOLE configuration via
+    /// `QAudionPeerConnectionFactory.defaultConfiguration` (same helper
+    /// `init` itself uses) with this connection's OWN `nativeSrtpEnabledForThisCall`
+    /// and `iceTransportPolicy` — never a bare `RTCConfiguration()` with only
+    /// `iceServers` set — so a native-SRTP or forced-relay call can never
+    /// have its cryptoOptions/tcpCandidatePolicy/jitter-buffer/DSCP fields or
+    /// its `.relay` transport policy silently reset to the SDK defaults by a
+    /// mid-call refresh. Only `iceServers` actually differs from what `init`
+    /// applied.
+    ///
+    /// API verified against this exact pinned commit's real header
+    /// (`sdk/objc/api/peerconnection/RTCPeerConnection.h` @ webrtc-sdk/webrtc
+    /// df1011beabae): `- (BOOL)setConfiguration:(RTCConfiguration *)configuration;`
+    /// — a long-standing, standard WebRTC ObjC API. Returns `false` (does
+    /// nothing else) when there is no live PeerConnection to update, e.g. a
+    /// restart racing a hangup.
+    @discardableResult
+    public func updateIceServers(_ iceServers: [RTCIceServer]) -> Bool {
+        guard let pc = peerConnection else { return false }
+        let config = QAudionPeerConnectionFactory.defaultConfiguration(
+            iceServers: iceServers,
+            nativeSrtpEnabledLocally: nativeSrtpEnabledForThisCall)
+        config.iceTransportPolicy = iceTransportPolicy
+        let applied = pc.setConfiguration(config)
+        print("[WebRTC] updateIceServers: setConfiguration applied=\(applied) serverCount=\(iceServers.count)")
+        return applied
+    }
+
     // MARK: - Offer / Answer
 
     /// - Parameter iceRestart: W-SILENTPATHDEATH (2026-08-25) — when `true`,
@@ -1439,8 +1839,22 @@ public final class QAudionPeerConnection: NSObject {
             // to every SDP this client produces. Safe on every call, even one
             // that never negotiates audioSrtpV1 (see AudioSdpPolicy's own
             // doc): a no-op transform on an m=audio section carrying no RTP
-            // audio.
-            let mungedText = AudioSdpPolicy.apply(sdp.sdp)
+            // audio. UNCONDITIONAL on purpose (2026-09-26 correction,
+            // W-NATIVESRTPGATE-2) — mirrors Android's own AudioSdpPolicy,
+            // which polices every SDP the same way regardless of any native-
+            // SRTP switch; gating this on isNativeSrtpEnabledLocally would
+            // make iOS's SDP diverge from Android's on every ordinary call,
+            // the opposite of the cross-platform parity this policy exists
+            // for.
+            // W-NATIVEAUDIOQUALITY (this task) — additive, native-SRTP-only
+            // mono/fullband + NACK layer, applied AFTER the unconditional
+            // base policy above (never instead of it). Unlike
+            // `AudioSdpPolicy`, this ONE is deliberately gated on
+            // `isNativeSrtpEnabledLocally` — it exists ONLY for the native
+            // path (spec section D), so an ordinary call's SDP is untouched
+            // (see `NativeAudioSdpPolicy`'s own header).
+            let baseMungedText = AudioSdpPolicy.apply(sdp.sdp)
+            let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let munged = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(munged.sdp, tag: iceRestart ? "LOCAL_OFFER_ICE_RESTART" : "LOCAL_OFFER")
             self?.peerConnection?.setLocalDescription(munged, completionHandler: { setErr in
@@ -1488,7 +1902,11 @@ public final class QAudionPeerConnection: NSObject {
             // AFTER the DTLS-role pin (pure string transforms on disjoint
             // attribute sets — order between them does not matter, but
             // matching Android/createOffer's own "policy last" placement).
-            let mungedText = AudioSdpPolicy.apply(pinnedSdpText)
+            // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
+            // W-NATIVEAUDIOQUALITY (this task) — see createOffer's own note;
+            // same additive, native-SRTP-only layer, applied last.
+            let baseMungedText = AudioSdpPolicy.apply(pinnedSdpText)
+            let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let pinnedSdp = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
@@ -1521,7 +1939,12 @@ public final class QAudionPeerConnection: NSObject {
         // encoder even against a peer that sends unmunged defaults (Android
         // applies the same policy bidirectionally — see AudioSdpPolicy's own
         // doc for why this is unilateral-safe).
-        let munged = AudioSdpPolicy.apply(sdp)
+        // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
+        // W-NATIVEAUDIOQUALITY (this task) — see createOffer's own note;
+        // munging the INBOUND SDP the same way constrains our own decoder
+        // preferences even against a peer that sends unmunged defaults.
+        let baseMunged = AudioSdpPolicy.apply(sdp)
+        let munged = NativeAudioSdpPolicy.apply(baseMunged, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
         pc.setRemoteDescription(desc, completionHandler: completion)
@@ -1579,8 +2002,42 @@ public final class QAudionPeerConnection: NSObject {
         nativeAudioSender = nil
         localAudioSrtpTrack = nil
         usingNativeAudioSrtp = false
+        // W-CALLERUNMUTELOST — defensive reset alongside the state above;
+        // this instance is discarded on call end (deinit calls close()), so
+        // this mainly guards a hypothetical future reuse.
+        nativeSenderCryptorAttached = false
+        // W-NATIVESRTPDIAG — restore the process-wide WebRTC debug log level
+        // this instance raised at `init`, if it did. Runs BEFORE
+        // `peerConnection?.close()` below only because every other teardown
+        // line in this function does too — the two are independent (the log
+        // level is a global WebRTC setting, not tied to this specific
+        // RTCPeerConnection's own lifetime).
+        if didRaiseDebugLogLevelForSession {
+            QAudionPeerConnectionFactory.shared.restoreDefaultDebugLogLevel()
+            didRaiseDebugLogLevelForSession = false
+        }
+        // W-ADMMANUAL (2026-09-26) — backstop for every teardown path that
+        // reaches close() without going through CallService first (provider
+        // reset, glare/duplicate-OFFER replacement, deinit): WebRTC's unit is
+        // switched off BEFORE the PeerConnection's streams are torn down, so
+        // the stop runs through the same disable path as a normal call end.
+        // No-op unless THIS PeerConnection armed manual mode and the unit is
+        // still enabled.
+        // W-ADMATOMIC — ownership check and switch-off are one critical
+        // section inside the gate: a replacement PeerConnection that armed
+        // and enabled its unit meanwhile is never switched off from here.
+        let armedToken = manualAudioToken
+        if armedToken != 0 {
+            NativeAudioSessionGate.setNativeAudioInactive(
+                ifCurrent: armedToken,
+                reason: NativeAudioUnitGateDecisions.ChangeReason.peerConnectionClose.rawValue)
+        }
         peerConnection?.close()
         peerConnection = nil
+        if armedToken != 0 {
+            manualAudioToken = 0
+            NativeAudioSessionGate.disarm(token: armedToken)
+        }
         // W-PERSISTENTFACTORY (2026-09-09) — closing this RTCPeerConnection
         // no longer tears down the factory/ADM underneath it (see
         // QAudionPeerConnectionFactory's own kdoc); the shared factory
@@ -1872,6 +2329,8 @@ extension QAudionPeerConnection: RTCDataChannelDelegate {
     }
     public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         guard dataChannel === audioDataChannel else { return }
+        // W-DCWEDGE — the wedge detector's "still reaches us on the DataChannel" flag.
+        noteAudioDcRx()
         let cb = onAudioDataChannelFrame
         cb?(buffer.data)
     }

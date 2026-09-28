@@ -159,6 +159,71 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// own, driven by track add/remove, which is untouched by this change.
     private func buildFactory()
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
+        // N2 (network-resilience-max, this task) — WebRTC-Network-UseNWPathMonitor,
+        // MUST run before any other WebRTC call (`RTCInitFieldTrialDictionary`'s own
+        // header doc: "Must be called before any other call into WebRTC"), hence
+        // ahead of `RTCInitializeSSL()` below, not just ahead of the factory
+        // constructor.
+        //
+        // Verified, not guessed, against the EXACT pinned source this app's own
+        // `WebRTC` binaryTarget is built from (`Package.swift`'s own comment:
+        // "same WebRTC source commit (webrtc-sdk/webrtc df1011beabae = m144_release
+        // tip when the previous binary was built)"):
+        //  - the trial name is REGISTERED at that exact commit —
+        //    `experiments/field_trials.py` @ df1011beabae:
+        //    `FieldTrial('WebRTC-Network-UseNWPathMonitor', 42221045, date(2024, 4, 1))`
+        //    (fetched via `raw.githubusercontent.com/webrtc-sdk/webrtc/df1011beabae/
+        //    experiments/field_trials.py` — this box has no local toolchain to unzip
+        //    the xcframework itself, so the pinned SOURCE commit is the verification
+        //    this task's own instructions call for).
+        //  - the ObjC surface has a FIRST-CLASS constant for exactly this trial —
+        //    `sdk/objc/api/peerconnection/RTCFieldTrials.h/.mm` @ the same commit:
+        //    `RTCFieldTrialUseNWPathMonitor` = `@"WebRTC-Network-UseNWPathMonitor"`,
+        //    `RTCFieldTrialEnabledValue` = `@"Enabled"` — this is not a speculative
+        //    trial name, it is the one case the SDK itself names a constant for.
+        //  - `RTCInitFieldTrialDictionary(NSDictionary<NSString*,NSString*>*)`
+        //    (same file) builds the native init string as `"<key>/<value>/"` per
+        //    entry, i.e. exactly `"WebRTC-Network-UseNWPathMonitor/Enabled/"` for a
+        //    one-entry dictionary — matching this task's own spec string.
+        //  - literal strings are used here rather than the bridged Swift constant
+        //    names (`RTCFieldTrialUseNWPathMonitor`/`RTCFieldTrialEnabledValue`):
+        //    this box cannot compile Swift to confirm the ObjC-to-Swift import
+        //    renames those global `NSString *const` symbols to, and a wrong guess
+        //    there would fail the build outright, whereas the literal string is
+        //    exactly the byte value both constants hold, verified above.
+        //
+        // Residual, disclosed deviation: `RTCInitFieldTrialDictionary` itself is
+        // marked `RTC_OBJC_DEPRECATED("Pass field trials when building
+        // PeerConnectionFactory")` with a `TODO: bugs.webrtc.org/42220378 - Delete
+        // after January 1, 2026` in that same pinned header — today is 2026-09-28,
+        // past that TODO date, but the symbol is still declared (not removed) in
+        // the exact binary this app links, so it still works; it will need
+        // migrating to the newer "pass field trials at factory construction" form
+        // whenever this app's WebRTC binary is next rebuilt past whatever revision
+        // actually deletes it. See this task's report for the full citation trail.
+        //
+        // A dictionary (not a single hardcoded call) so a future SECOND field
+        // trial merges into the SAME init string instead of a competing call
+        // silently overwriting this one (`RTCInitFieldTrialDictionary` replaces
+        // the entire global init string each call, per its own source above).
+        //
+        // Review note (verified against the same pinned sources): on THIS
+        // app's factory path the trial is belt-and-braces, not the switch.
+        // `RTCPeerConnectionFactory(audioDeviceModuleType:bypassVoiceProcessing:
+        // encoderFactory:decoderFactory:audioProcessingModule:)` (below) ends in
+        // `initWithNativeAudioEncoderFactory:...audioDeviceModuleType:...`,
+        // which installs `webrtc::CreateNetworkMonitorFactory()` (the
+        // NWPathMonitor-backed monitor) UNCONDITIONALLY; only the
+        // `initWithNativeDependencies:` path consults this trial (through the
+        // env's DeprecatedGlobalFieldTrials, i.e. this global string). So
+        // libwebrtc already gets interface-change signals here; the trial keeps
+        // that true if the factory is ever built through the other initializer.
+        // Safe to repeat on a wedge-recovery rebuild: at this commit
+        // `InitFieldTrialsFromString` copies the string into persistent,
+        // mutex-guarded storage, so no live reader is left pointing at the
+        // buffer the ObjC wrapper frees on a second call.
+        RTCInitFieldTrialDictionary(["WebRTC-Network-UseNWPathMonitor": "Enabled"])
+
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
         installNativeAudioUnitLogBridge()
@@ -204,6 +269,64 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         return (factory, audioProcessingModule)
     }
 
+    /// W-KEYLOGGATE (2026-09-24) — the minimum severity WebRTC's own DEBUG
+    /// output (which on iOS is stderr) may reach. Deliberately `.warning`,
+    /// never `.info` or lower: the native FrameCryptor prints derived key
+    /// material at INFO (`api/crypto/frame_crypto_transformer.cc`, the
+    /// `secret [..] ... slat << [..] ... derived_key [..]` and `raw_key [..]`
+    /// prints; "slat" is upstream's typo of salt), and the app's stdout/stderr
+    /// tee copies everything on stderr into the log ring that the live-log
+    /// shipper uploads. `RTCSetMinDebugLogLevel` sets ONLY this stderr
+    /// severity (`webrtc::LogMessage::LogToDebug`): a registered
+    /// `RTCCallbackLogger` sink filters on its OWN severity, so the
+    /// W-AUNITTRACE bridge below keeps receiving INFO lines while this is
+    /// `.warning`. That callback still sees the key prints too, so
+    /// `handleNativeLogLine` must never store or log `message` verbatim.
+    /// Pinned by `QAudionPeerConnectionFactoryTests`; do not lower it.
+    static let stderrDebugLogLevel: RTCLoggingSeverity = .warning
+
+    /// W-NATIVESRTPDIAG (this task) — raises the WebRTC stderr DEBUG severity
+    /// (``stderrDebugLogLevel``, normally `.warning`) to `.info` for the
+    /// duration of a call that has native SRTP enabled locally
+    /// (``CallCapabilities/isNativeSrtpEnabledLocally``), so the extra
+    /// libwebrtc INFO lines W-KEYLOGGATE silenced (`channel.cc` state
+    /// changes, `thread.cc` dispatch timing, `connection.cc` candidate
+    /// updates, ...) are available again while this feature is being
+    /// exercised/diagnosed — see ``restoreDefaultDebugLogLevel()`` for the
+    /// counterpart and for why this is safe.
+    ///
+    /// Deliberately a GLOBAL severity change (`RTCSetMinDebugLogLevel` sets
+    /// process-wide state, per its own header — there is no per-PeerConnection
+    /// scope), same as `installNativeAudioUnitLogBridge()`'s own call to it.
+    /// A 1:1 call is the only caller of the native SRTP audio path today, so
+    /// there is no concurrent-call scenario where raise/restore from two
+    /// different calls could race; if that ever changes, this needs a
+    /// reference count instead of a bare set/restore pair.
+    ///
+    /// SAFE despite raising the callback logger's own already-`.info`
+    /// severity's reach to stderr too: the two lines W-KEYLOGGATE exists for
+    /// (`api/crypto/frame_crypto_transformer.cc`'s `RTC_LOG(LS_INFO)` key
+    /// prints) are gone from the bundled `WebRTC.xcframework` at the SOURCE —
+    /// `Package.swift`'s binaryTarget comment pins it to the
+    /// `webrtc-ios-aes256-m144-native-pli-nokeylog` release, built from the
+    /// commit that removed both prints, and `scripts/ci/assert-no-key-logging.sh`
+    /// gates every build of that release on `RTC_LOG(LS_INFO)` no longer
+    /// appearing in `frame_crypto_transformer.cc`. `KeyMaterialScrubber`
+    /// (`Diagnostics/KeyMaterialScrubber.swift`) and `LogRedactor` still
+    /// sanitize every ring/egress point as defence in depth regardless.
+    public func raiseDebugLogLevelForNativeSrtpSession() {
+        RTCSetMinDebugLogLevel(.info)
+    }
+
+    /// Counterpart to ``raiseDebugLogLevelForNativeSrtpSession()`` — restores
+    /// the compiled default (``stderrDebugLogLevel``, `.warning`). Called
+    /// whenever a call that raised the level ends, so a call that never
+    /// touches native SRTP is never affected and the raised level never
+    /// outlives the session it was raised for.
+    public func restoreDefaultDebugLogLevel() {
+        RTCSetMinDebugLogLevel(Self.stderrDebugLogLevel)
+    }
+
     /// W-AUNITTRACE (2026-09-10) — the persistent-factory fix (this file's
     /// own W-PERSISTENTFACTORY, shipped and live-tested v1.0.1129) did NOT
     /// resolve the dead-TX-at-call-2 defect: the same symptom reproduced
@@ -222,8 +345,13 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// own conclusion. Pure instrumentation: emits short, numeric-tailed
     /// lines only for a small set of known messages (see
     /// `handleNativeLogLine`), changes no audio behavior.
+    ///
+    /// W-KEYLOGGATE (2026-09-24) — the DEBUG (stderr) severity is no longer
+    /// `.info`: it is `stderrDebugLogLevel` (`.warning`). Only that stderr
+    /// severity changed; the callback logger below keeps its own `.info`
+    /// severity, so the bridge above still receives every INFO line.
     private func installNativeAudioUnitLogBridge() {
-        RTCSetMinDebugLogLevel(.info)
+        RTCSetMinDebugLogLevel(Self.stderrDebugLogLevel)
         let logger = RTCCallbackLogger()
         logger.severity = .info
         logger.start { [weak self] message in
@@ -330,7 +458,111 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// Build the default `RTCConfiguration` used by all 1:1 calls.
     /// Caller passes `iceServers` (typically built from
     /// `RelayCredentialsProvider.RelayBundle.servers`).
-    public static func defaultConfiguration(iceServers: [RTCIceServer]) -> RTCConfiguration {
+    ///
+    /// - Parameter nativeSrtpEnabledLocally: W-NATIVESRTPDIAG (this task) —
+    ///   ``CallCapabilities/isNativeSrtpEnabledLocally`` for the call this
+    ///   configuration is being built for. Defaults to `false` so every
+    ///   existing call site (and the `QAudionPeerConnectionFactoryTests`
+    ///   call with no third argument) keeps building today's exact
+    ///   `RTCConfiguration` — the extra fields below are added ONLY when
+    ///   `true`, which is itself only possible on a call that already pre-
+    ///   creates the native audio transceiver (see `QAudionPeerConnection
+    ///   .init`'s own gate), so a normal call's ICE/SRTP negotiation is
+    ///   untouched.
+    ///
+    ///   Best-practice parameters for the native-SRTP audio path, applied
+    ///   only then (property names verified against the public
+    ///   `webrtc-sdk/webrtc` Objective-C SDK headers — see this task's own
+    ///   report for which ones could not be grep-verified against the
+    ///   bundled `WebRTC.xcframework` on this box, which has no local
+    ///   toolchain to unzip/inspect it):
+    ///   - `cryptoOptions` — GCM cipher suites on (AES-GCM, matching the
+    ///     native `RTCFrameCryptor`'s own `.aesGcm` algorithm one layer up),
+    ///     the legacy 32-byte-tag AES_128_CM_HMAC_SHA1_32 cipher OFF (no
+    ///     legacy peer to interop with on this brand-new path), encrypted
+    ///     RTP header extensions ON (header extensions otherwise travel in
+    ///     the clear even on an SRTP-GCM call), SFrame frame-encryption
+    ///     requirement OFF (this app's own native `RTCFrameCryptor` is the
+    ///     frame-encryption layer, not WebRTC's built-in SFrame transform —
+    ///     requiring the latter would be a second, unused encryption gate).
+    ///   - `tcpCandidatePolicy = .disabled` — TCP candidates add head-of-line
+    ///     blocking on top of an already-encrypted, already-lossy-tolerant
+    ///     RTP stream; UDP (host/srflx/relay) is sufficient and this app's
+    ///     TURN servers all offer UDP relay.
+    ///   - `audioJitterBufferMaxPackets = 17` — N1 (network-resilience-max,
+    ///     this task; was 50). At this path's 60 ms packetization
+    ///     (``AudioSdpPolicy/ptimeMs``), 17 packets is ~1.02 s of buffering
+    ///     headroom, matching Riferimento A's own documented 1 s cap
+    ///     (`resilience-assessment.md` §3, P1-1: "Riferimento A tiene al
+    ///     massimo 1 s di buffer e un target di 500 ms",
+    ///     `ref-a-lib/.../peer_connection_factory.rs:261-268`) instead of the
+    ///     old 50-packet/3 s ceiling, which the same assessment measured as
+    ///     letting NetEQ's target grow to ~2.2 s worst case (NetEQ targets
+    ///     ~75% of the configured max) before `audioJitterBufferFastAccelerate
+    ///     = false` (kept, see below) lets it recover. 17, not 16 or 18: 1000ms
+    ///     / 60ms = 16.67, and this cap is a packet COUNT (must be an integer)
+    ///     — 17 rounds up so a clean 1 s of jitter is never one packet short of
+    ///     fitting, at the cost of ~20 ms of extra worst-case headroom over an
+    ///     exact 1 s, negligible next to the ~1.4 s reduction this change makes.
+    ///     Deliberately NOT lower: this is a receive-side-only cap (see the
+    ///     "compatible" notes throughout this file — it never touches the fixed
+    ///     60 ms ptime / 32 kbps CBR encode-side contract), so there is no
+    ///     bitrate/ptime trade-off to weigh against going tighter here, only
+    ///     the risk (assessment §3, P1-1 "Rischio") of more frequent buffer
+    ///     under-runs on an EXTREME jitter burst that the old 3 s cushion would
+    ///     have absorbed — accepted per the owner's explicit approval of this
+    ///     whole assessment, condition/test-B language notwithstanding (no
+    ///     live device available in this environment to run test B first).
+    ///   - `audioJitterBufferFastAccelerate = false` — UNCHANGED by N1. The
+    ///     assessment's own P1-1 leaves this "decide after test B: `false` as
+    ///     Riferimento A, or `true` as done for W-JITTERCAP" — this pass keeps
+    ///     `false` (matching Riferimento A, and this file's pre-existing
+    ///     value) since no live-device test B ran in this environment to
+    ///     justify diverging from Riferimento A's own shipped choice; the
+    ///     smaller 17-packet ceiling already bounds the worst case
+    ///     `fastAccelerate=false`'s slower catch-up can reach.
+    ///   - `audioJitterBufferMinDelayMs` is deliberately NOT set.
+    ///     W-NATIVESRTPBUILDFIX (2026-09-26): the CI simulator build proved
+    ///     this pinned SDK's `RTCConfiguration` has no such member.
+    ///   - `enableDscp = true` — N5 (network-resilience-max, this task).
+    ///     Verified against this exact pinned commit's real header
+    ///     (`RTCConfiguration.h` @ webrtc-sdk/webrtc df1011beabae): its own doc
+    ///     comment on `enableDscp` reads "allows DSCP codes to be set on
+    ///     outgoing packets, configured using **networkPriority field of
+    ///     RTCRtpEncodingParameters**" — i.e. this flag is the master switch
+    ///     `QAudionPeerConnection`'s own `encoding.networkPriority = .high`
+    ///     (set on the native audio sender, see that file) requires to have
+    ///     any effect at all; setting one without the other is a documented
+    ///     no-op. Scoped to the native-SRTP branch only, same as every other
+    ///     field here — the legacy sealed-DataChannel path has no
+    ///     `RTCRtpEncodingParameters` of its own to prioritize.
+    ///
+    ///   N4 (network-resilience-max, this task) — turnPortPrunePolicy =
+    ///   keep-first-ready: SKIPPED, not implemented. Verified against this
+    ///   exact pinned commit's real sources (not guessed): the ObjC
+    ///   `RTCConfiguration` surface (`RTCConfiguration.h` @ df1011beabae) has
+    ///   no `turnPortPrunePolicy` property at all — only a plain
+    ///   `BOOL shouldPruneTurnPorts`. Its native bridge
+    ///   (`RTCConfiguration.mm`: `nativeConfig->prune_turn_ports =
+    ///   _shouldPruneTurnPorts`) and the C++ policy resolver it feeds
+    ///   (`api/peer_connection_interface.h` @ the same commit:
+    ///   `GetTurnPortPrunePolicy() { return prune_turn_ports ?
+    ///   PRUNE_BASED_ON_PRIORITY : turn_port_prune_policy; }`, the latter
+    ///   defaulting to `NO_PRUNE`) together prove `shouldPruneTurnPorts = YES`
+    ///   can only ever select `PRUNE_BASED_ON_PRIORITY` — never
+    ///   `KEEP_FIRST_READY`, which the finer-grained
+    ///   `turn_port_prune_policy` C++ field supports but which this pinned
+    ///   ObjC SDK never exposes a way to set. Per this task's own instruction
+    ///   ("if not available, skip and say so"): skipped. Turning on
+    ///   `shouldPruneTurnPorts` anyway (accepting `PRUNE_BASED_ON_PRIORITY`
+    ///   instead) was considered and rejected — it is a DIFFERENT policy than
+    ///   the one the owner approved (priority-based pruning can retire a
+    ///   still-viable lower-priority TURN port the moment a higher-priority
+    ///   one connects, whereas keep-first-ready never prunes a port that is
+    ///   already in a working candidate pair — swapping the policy silently
+    ///   is a bigger behavior change than doing nothing).
+    public static func defaultConfiguration(iceServers: [RTCIceServer],
+                                            nativeSrtpEnabledLocally: Bool = false) -> RTCConfiguration {
         let config = RTCConfiguration()
         config.iceServers = iceServers
         config.sdpSemantics = .unifiedPlan
@@ -339,6 +571,20 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         config.rtcpMuxPolicy = .require
         // Trickle ICE: candidates flow as they're discovered, no pre-gather wait.
         config.iceTransportPolicy = .all
+        if nativeSrtpEnabledLocally {
+            config.cryptoOptions = RTCCryptoOptions(
+                srtpEnableGcmCryptoSuites: true,
+                srtpEnableAes128Sha1_32CryptoCipher: false,
+                srtpEnableEncryptedRtpHeaderExtensions: true,
+                sframeRequireFrameEncryption: false)
+            config.tcpCandidatePolicy = .disabled
+            // N1 (network-resilience-max, this task): was 50 (~3s @ 60ms).
+            config.audioJitterBufferMaxPackets = 17
+            config.audioJitterBufferFastAccelerate = false
+            // N5 (network-resilience-max, this task) — master switch for
+            // `RTCRtpEncodingParameters.networkPriority` (see doc above).
+            config.enableDscp = true
+        }
         return config
     }
 

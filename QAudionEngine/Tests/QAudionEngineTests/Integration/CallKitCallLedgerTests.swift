@@ -136,6 +136,315 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertEqual(ledger.outstandingCount, 1)
     }
 
+    // MARK: - reportCallEnded native balance (W-ADMBALANCE-UUID)
+
+    func test_nativeBalance_consumedOnceForItsOwnUuid() {
+        let ledger = CallKitCallLedger()
+        let call = UUID()
+        ledger.recordNativeBalance(call)
+        ledger.recordNativeBalance(call)
+        XCTAssertTrue(ledger.consumeNativeBalance(call))
+        XCTAssertFalse(ledger.consumeNativeBalance(call), "a duplicate reportCallEnded must not balance twice")
+    }
+
+    /// THE race: the OLD call's report runs after the NEXT native call was
+    /// recorded. It must not take the next call's record, and the next call's
+    /// own report must still find it.
+    func test_nativeBalance_lateReportOfOldCall_doesNotConsumeNextCallsRecord() {
+        let ledger = CallKitCallLedger()
+        let old = UUID()
+        let next = UUID()
+        ledger.recordNativeBalance(old)
+        ledger.recordNativeBalance(next)
+        XCTAssertTrue(ledger.consumeNativeBalance(old))
+        XCTAssertTrue(ledger.consumeNativeBalance(next))
+    }
+
+    /// A legacy (native SRTP off) call is never recorded: its report keeps the
+    /// drain even while a native call's record is pending.
+    func test_nativeBalance_legacyCallNeverConsumesANativeRecord() {
+        let ledger = CallKitCallLedger()
+        let legacy = UUID()
+        let native = UUID()
+        ledger.recordNativeBalance(native)
+        XCTAssertFalse(ledger.consumeNativeBalance(legacy))
+        XCTAssertTrue(ledger.consumeNativeBalance(native))
+    }
+
+    /// A record must survive until its own report: neither the reaper nor a
+    /// provider reset drops it.
+    func test_nativeBalance_survivesDrainOutstandingAndClearRejected() {
+        let ledger = CallKitCallLedger()
+        let call = UUID()
+        ledger.recordOutstanding(call)
+        ledger.recordNativeBalance(call)
+        _ = ledger.drainOutstanding()
+        ledger.clearRejected()
+        XCTAssertTrue(ledger.consumeNativeBalance(call))
+    }
+
+    // MARK: - reportCallEnded self-activation (W-SELFACTID)
+
+    /// THE race: the OLD native call's report runs after the NEXT native call
+    /// self-activated. It balances only its own activation, and the next
+    /// call's report still finds its own.
+    func test_selfActivation_lateReportOfOldCall_doesNotTakeNextCallsMark() {
+        let ledger = CallKitCallLedger()
+        let old = UUID()
+        let next = UUID()
+        ledger.recordNativeBalance(old)
+        ledger.markAudioSelfActivated(old)
+        ledger.recordNativeBalance(next)
+        ledger.markAudioSelfActivated(next)
+        XCTAssertEqual(ledger.consumeEndBalance(old),
+                       .init(nativeManualCall: true, selfActivated: true, duplicateNative: false))
+        XCTAssertEqual(ledger.consumeEndBalance(next),
+                       .init(nativeManualCall: true, selfActivated: true, duplicateNative: false))
+    }
+
+    /// The old call never self-activated (its activation failed): its late
+    /// report must NOT take the next call's mark.
+    func test_selfActivation_oldCallWithoutMark_leavesNextCallsMark() {
+        let ledger = CallKitCallLedger()
+        let old = UUID()
+        let next = UUID()
+        ledger.recordNativeBalance(old)
+        ledger.recordNativeBalance(next)
+        ledger.markAudioSelfActivated(next)
+        XCTAssertEqual(ledger.consumeEndBalance(old),
+                       .init(nativeManualCall: true, selfActivated: false, duplicateNative: false))
+        XCTAssertTrue(ledger.consumeEndBalance(next).selfActivated)
+    }
+
+    /// W-DOUBLEDECR: a repeated report of a native uuid balances nothing and
+    /// never falls through to the legacy flag a legacy call may still hold.
+    func test_selfActivation_duplicateNativeReport_neverTouchesLegacyFlag() {
+        let ledger = CallKitCallLedger()
+        let native = UUID()
+        let legacy = UUID()
+        ledger.recordNativeBalance(native)
+        ledger.markAudioSelfActivated(native)
+        ledger.markAudioSelfActivated(legacy)
+        XCTAssertTrue(ledger.consumeEndBalance(native).selfActivated)
+        XCTAssertEqual(ledger.consumeEndBalance(native),
+                       .init(nativeManualCall: false, selfActivated: false, duplicateNative: true))
+        XCTAssertEqual(ledger.consumeEndBalance(legacy),
+                       .init(nativeManualCall: false, selfActivated: true, duplicateNative: false),
+                       "the legacy call's mark is still there for its own report")
+    }
+
+    /// Native SRTP off: the process-wide flag, exactly as before — any report
+    /// consumes it, once.
+    func test_selfActivation_legacyCalls_keepTheProcessWideFlag() {
+        let ledger = CallKitCallLedger()
+        let first = UUID()
+        let second = UUID()
+        ledger.markAudioSelfActivated(first)
+        XCTAssertEqual(ledger.consumeEndBalance(second),
+                       .init(nativeManualCall: false, selfActivated: true, duplicateNative: false))
+        XCTAssertFalse(ledger.consumeEndBalance(first).selfActivated, "consumed once")
+        ledger.markAudioSelfActivated(nil)
+        XCTAssertTrue(ledger.consumeEndBalance(first).selfActivated, "no uuid: the process-wide flag")
+    }
+
+    /// A legacy call's mark is never taken by a native call's report, and a
+    /// native call's mark never by a legacy call's report.
+    func test_selfActivation_nativeAndLegacyMarksAreSeparate() {
+        let ledger = CallKitCallLedger()
+        let native = UUID()
+        let legacy = UUID()
+        ledger.recordNativeBalance(native)
+        ledger.markAudioSelfActivated(legacy)
+        XCTAssertFalse(ledger.consumeEndBalance(native).selfActivated)
+        ledger.recordNativeBalance(native)
+        ledger.markAudioSelfActivated(native)
+        XCTAssertTrue(ledger.consumeEndBalance(legacy).selfActivated)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated)
+        XCTAssertTrue(ledger.consumeEndBalance(native).selfActivated)
+    }
+
+    /// W-NATIVEEVICT: an activation that lands after its own native report
+    /// already consumed the record stays native-keyed (a no-op — its own call
+    /// already ended) and must NEVER leak into an unrelated later call's
+    /// legacy flag, unlike the single process-wide flag before this fix.
+    func test_selfActivation_markAfterOwnReport_staysNativeKeyed_neverLeaksToLegacyFlag() {
+        let ledger = CallKitCallLedger()
+        let native = UUID()
+        ledger.recordNativeBalance(native)
+        XCTAssertFalse(ledger.consumeEndBalance(native).selfActivated)
+        ledger.markAudioSelfActivated(native)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated,
+                        "a late native mark must never leak into an unrelated call's legacy flag")
+    }
+
+    /// W-NATIVEEVICT: native-uuid memory is unbounded (replacing an earlier
+    /// 8-entry cap), so a delayed duplicate report is still recognised as
+    /// native no matter how many other calls ended in between, and never
+    /// mistaken for a legacy call's end.
+    func test_selfActivation_nativeMemoryIsUnbounded_lateDuplicateStillRecognised() {
+        let ledger = CallKitCallLedger()
+        let first = UUID()
+        ledger.recordNativeBalance(first)
+        _ = ledger.consumeEndBalance(first)
+        for _ in 0..<8 {
+            let uuid = UUID()
+            ledger.recordNativeBalance(uuid)
+            _ = ledger.consumeEndBalance(uuid)
+        }
+        XCTAssertTrue(ledger.consumeEndBalance(first).duplicateNative,
+                       "a native uuid is never forgotten, so it never falls through to the legacy flag")
+    }
+
+    // MARK: - beginReport / finishReport (W-GHOSTCALL single-flight)
+
+    /// Incident e3acecd7 03.221/03.222: two reports of the same uuid inside the
+    /// same millisecond. Only the first may be "the first report".
+    func test_beginReport_firstCallerWins_secondIsADuplicate() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.beginReport(uuid), "second report while the first is in flight")
+    }
+
+    /// `CallKitProvider.reportIncomingCall` releases the claim only when IT took
+    /// it: the losers of `beginReport` never call `finishReport`, so any number of
+    /// duplicates leaves the claimer's claim in place until the claimer finishes.
+    func test_beginReport_duplicatesLeaveTheClaimInPlace_untilTheClaimerFinishes() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.beginReport(uuid), "a third report is still a duplicate")
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid), "only the claimer's release reopens it")
+    }
+
+    /// The claim is not a native report: CallKit has not answered yet.
+    func test_beginReport_doesNotMarkReportedOrOutstanding() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        XCTAssertFalse(ledger.isNativelyReported(uuid))
+        XCTAssertEqual(ledger.outstandingCount, 0)
+    }
+
+    /// After a SUCCESSFUL report the uuid stays a duplicate for good (it is in
+    /// the natively-reported set), whether or not the claim was released.
+    func test_beginReport_afterSuccess_isStillADuplicate() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        ledger.recordNativeReport(uuid)
+        ledger.finishReport(uuid)
+        XCTAssertFalse(ledger.beginReport(uuid))
+    }
+
+    /// A refused report (Focus / block list) releases its claim: a later report
+    /// of the same uuid is a first report again, as it always was.
+    func test_finishReport_afterFailure_letsALaterReportBeFirst() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        XCTAssertTrue(ledger.beginReport(uuid))
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid))
+    }
+
+    func test_finishReport_isIdempotent_andUnknownUuidIsANoOp() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid))
+        ledger.finishReport(uuid)
+        ledger.finishReport(uuid)
+        XCTAssertTrue(ledger.beginReport(uuid))
+    }
+
+    func test_beginReport_differentUuids_areIndependent() {
+        let ledger = CallKitCallLedger()
+        XCTAssertTrue(ledger.beginReport(UUID()))
+        XCTAssertTrue(ledger.beginReport(UUID()))
+    }
+
+    /// W-WAKEONLY releases the native-UI mark while the call stays live; the
+    /// old `isNativelyReported` read went false at that point and so does this.
+    func test_beginReport_afterReleaseFromSystemUI_matchesTheOldRead() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        ledger.recordNativeReport(uuid)
+        XCTAssertFalse(ledger.beginReport(uuid))
+        XCTAssertTrue(ledger.releaseNativeReport(uuid))
+        XCTAssertTrue(ledger.beginReport(uuid))
+    }
+
+    /// The point of the claim: from many threads at once exactly one caller gets
+    /// `true` (each winner leaves one outstanding entry, so the count is the
+    /// number of winners).
+    func test_concurrentBeginReport_exactlyOneWinner() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        DispatchQueue.concurrentPerform(iterations: 200) { _ in
+            if ledger.beginReport(uuid) {
+                ledger.recordOutstanding(UUID())
+            }
+        }
+        XCTAssertEqual(ledger.outstandingCount, 1)
+    }
+
+    // MARK: - CallKitReportFailurePolicy (W-GHOSTCALL)
+
+    func test_shouldArm_doNotDisturbAndBlockList_stillArmTheFallback() {
+        for code in [3, 4] {
+            XCTAssertTrue(
+                CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: false, errorCode: code),
+                "code \(code): the system UI never appeared, so the in-app answer path is armed as before")
+        }
+    }
+
+    /// e3acecd7 03.222: `ok=0 code=2` and the fallback was armed with the native
+    /// UI alive. Code 2 means CallKit already has the call.
+    func test_shouldArm_callUuidAlreadyExists_neverArms() {
+        XCTAssertEqual(CallKitReportFailurePolicy.callUUIDAlreadyExistsCode, 2)
+        XCTAssertFalse(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: false, errorCode: 2))
+        XCTAssertFalse(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: true, errorCode: 2))
+    }
+
+    func test_shouldArm_duplicateReport_neverArms_whateverTheCode() {
+        for code in [0, 1, 2, 3, 4, 5] {
+            XCTAssertFalse(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: true, errorCode: code))
+        }
+    }
+
+    /// Unknown / unentitled refusals keep the old behaviour: the UI did not
+    /// appear, so the fallback stays armed.
+    func test_shouldArm_otherCodes_keepTheOldBehaviour() {
+        for code in [0, 1, 5] {
+            XCTAssertTrue(CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: false, errorCode: code))
+        }
+    }
+
+    /// The whole doubled-push race through the ledger and the policy: the first
+    /// report claims, the second is a duplicate, CallKit refuses the second with
+    /// Code=2 — and nothing is armed.
+    func test_doubledPushKitReport_neverArmsTheManualAnswerPath() {
+        let ledger = CallKitCallLedger()
+        let uuid = UUID()
+        let firstIsFirst = ledger.beginReport(uuid)
+        let secondIsFirst = ledger.beginReport(uuid)
+        XCTAssertTrue(firstIsFirst)
+        XCTAssertFalse(secondIsFirst)
+        // First: CallKit accepts.
+        ledger.recordNativeReport(uuid)
+        ledger.finishReport(uuid)
+        // Second: CallKit refuses with Code=2.
+        if CallKitReportFailurePolicy.shouldArmManualAnswer(alreadyReported: !secondIsFirst, errorCode: 2) {
+            ledger.recordRejected(uuid)
+        }
+        ledger.finishReport(uuid)
+        XCTAssertFalse(ledger.takeRejected(uuid), "no in-app manual-answer arming over a live native UI")
+        XCTAssertTrue(ledger.isNativelyReported(uuid))
+        XCTAssertEqual(ledger.outstandingCount, 1)
+    }
+
     // MARK: - Concurrency
 
     /// The reason this type exists: concurrent mutation from many threads

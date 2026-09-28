@@ -23,7 +23,9 @@ final class PrivacySettingsContainer: ObservableObject {
         //     entirely — see EmbeddedTorManager/TorObfsTransport history —
         //     and the `torEnabled` field itself was deleted from
         //     PrivacySettingsViewModel/TransportSettingsViewModel along with
-        //     it; Reality is now the sole censorship-bypass mechanism on iOS.)
+        //     it. The Reality/xray-core censorship-bypass integration that
+        //     briefly replaced it was itself removed 2026-09-18 — no
+        //     dedicated bypass transport ships on iOS today.)
         //   • "Messaggi a scadenza / Scadenza": PrivacyGate.disappearingSeconds
         //     was likewise read only here. The TTL that actually ships is the
         //     per-conversation Conversation.ephemeralTimerSeconds

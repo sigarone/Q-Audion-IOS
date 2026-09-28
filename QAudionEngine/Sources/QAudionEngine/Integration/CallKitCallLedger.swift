@@ -80,43 +80,207 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// this app assumes throughout (`state == .idle` guards before a new
     /// call starts) never has more than one call's activation pending at
     /// once.
+    ///
+    /// W-SELFACTID (2026-09-27) — that assumption does not hold across a
+    /// back-to-back pair: `reportCallEnded` runs in an unawaited Task, so the
+    /// OLD call's report can run after the NEXT call self-activated, take the
+    /// next call's mark and leave the next call's own report with nothing to
+    /// balance. This flag now serves ONLY calls with native SRTP off (their
+    /// behaviour is unchanged, byte for byte); a native-SRTP call's mark is
+    /// keyed by its CallKit uuid in `selfActivatedNativeUUIDs` below.
     private var audioSelfActivated = false
 
+    /// W-SELFACTID (2026-09-27) — CallKit uuids of native-SRTP calls whose
+    /// `activateAudioSession` succeeded, i.e. that owe exactly one balancing
+    /// `setActive(false)`. Same keying and same lifetime as
+    /// `nativeBalanceUUIDs` (a native call is recorded there BEFORE its
+    /// activation runs, on every path that passes a uuid), consumed only by
+    /// that SAME uuid's `reportCallEnded`: another call's mark is never taken.
+    /// A leftover entry (a call ended only through `endAllOutstanding`, or a
+    /// late activation retry that lands after its own `reportCallEnded`
+    /// already ran — see ``markAudioSelfActivated(_:)``) is inert, since call
+    /// uuids are never reused.
+    private var selfActivatedNativeUUIDs: Set<UUID> = []
+
+    /// W-NATIVEEVICT (2026-09-27) — every CallKit uuid this process has ever
+    /// recorded as a native-SRTP call (``recordNativeBalance(_:)``), kept for
+    /// the LIFETIME of the process, unlike `nativeBalanceUUIDs` (cleared at
+    /// that uuid's own `reportCallEnded`). This is what recognises a LATE,
+    /// out-of-order arrival for that uuid — a delayed `activateAudioSession`
+    /// retry, or a repeated `reportCallEnded` (W-DOUBLEDECR) — as belonging to
+    /// a native call, so it can be kept out of the legacy, process-wide
+    /// bookkeeping (`audioSelfActivated`) instead of silently leaking into
+    /// whichever unrelated legacy call happens to be live when it lands.
+    ///
+    /// Deliberately unbounded, replacing an earlier count-capped list (8
+    /// entries): a small cap let a uuid age out of memory before such a
+    /// delayed arrival showed up, at which point it was indistinguishable
+    /// from a uuid that was never native — exactly the leak this set exists
+    /// to close. Call uuids are never reused, and a phone call is rare enough
+    /// against the process's own lifetime (killed and relaunched far more
+    /// often than it places thousands of calls) that the memory cost is a
+    /// few dozen bytes per call, not a leak of its own.
+    private var nativeUUIDs: Set<UUID> = []
+
+    /// W-GHOSTCALL (2026-09-25) — uuids whose `reportNewIncomingCall` has been
+    /// asked of CallKit and CallKit has not replied yet. Exists only to make
+    /// "am I the first report of this uuid?" one atomic test-and-set taken BEFORE
+    /// the await (see `beginReport`): the old check read `nativelyReportedUUIDs`,
+    /// which is only filled AFTER CallKit's reply to the report comes back, so two
+    /// reports of the same uuid issued within the same millisecond (a doubled
+    /// PushKit push, e3acecd7: 03.221 and 03.222) both saw "not reported yet".
+    private var reportsInFlight: Set<UUID> = []
+
+    /// W-ADMBALANCE-UUID (2026-09-26) — CallKit uuids of native-SRTP (manual
+    /// audio mode) calls, recorded when the call's CallKit start/answer runs
+    /// and consumed by that SAME uuid's `reportCallEnded`, which then issues
+    /// the single balancing deactivation instead of the legacy drain. Keyed
+    /// by uuid, not a process-wide flag: `reportCallEnded` runs in an
+    /// unawaited Task, so a NEW native call could arm a shared flag before
+    /// the OLD call's report consumed it (the old report then took the new
+    /// call's flag and the new call fell back to the drain). A call with
+    /// native SRTP off is never recorded, so its end is the legacy drain.
+    /// Deliberately NOT cleared by `drainOutstanding`/`clearRejected`: a record
+    /// must survive until its own `reportCallEnded`, and a leftover one (a call
+    /// ended only through `endAllOutstanding`) is inert, since call uuids are
+    /// never reused - one UUID per native call that skipped its report.
+    private var nativeBalanceUUIDs: Set<UUID> = []
+
     init() {}
+
+    /// W-ADMBALANCE-UUID — `uuid` is a native-SRTP call (its end owes the
+    /// single balancing deactivation). Idempotent.
+    func recordNativeBalance(_ uuid: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        nativeBalanceUUIDs.insert(uuid)
+        nativeUUIDs.insert(uuid)
+    }
+
+    /// W-ADMBALANCE-UUID — atomic test-and-remove: `true` exactly once, and
+    /// only for a uuid recorded by ``recordNativeBalance(_:)``. Another call's
+    /// record is never consumed. (`reportCallEnded` now goes through
+    /// ``consumeEndBalance(_:)``, which consumes the record and the uuid's
+    /// self-activation mark together.)
+    func consumeNativeBalance(_ uuid: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return nativeBalanceUUIDs.remove(uuid) != nil
+    }
 
     /// Called the instant `activateAudioSession` successfully calls
     /// `RTCAudioSession`'s locked `setActive(true)`. Marks that a matching
     /// deactivate is now owed, independent of whatever CallKit's own native
     /// UI/ledger state for this call happens to be.
-    func markAudioSelfActivated() {
+    ///
+    /// W-SELFACTID (2026-09-27) — `uuid` is the CallKit uuid the activation
+    /// was made for. A uuid ever recorded as native (``nativeUUIDs``, set by
+    /// ``recordNativeBalance(_:)`` before the activation) is marked under its
+    /// own key; anything else — a call with native SRTP off, or no uuid —
+    /// sets the process-wide flag exactly as before. The native check and the
+    /// mark are one critical section.
+    ///
+    /// W-NATIVEEVICT (2026-09-27) — checked against ``nativeUUIDs``, not
+    /// `nativeBalanceUUIDs`: a native call's activation retry can land AFTER
+    /// its own `reportCallEnded` already consumed `nativeBalanceUUIDs`'s
+    /// entry (the report runs in an unawaited Task; the retry has its own
+    /// bounded delay loop). That late mark has nothing left to balance for
+    /// its OWN call, but it must still be recognised as native and kept under
+    /// its own key — a no-op the uuid's own end already resolved — rather
+    /// than falling to the process-wide flag below, which the NEXT unrelated
+    /// legacy call would then wrongly consume as its own self-activation.
+    func markAudioSelfActivated(_ uuid: UUID?) {
         lock.lock()
         defer { lock.unlock() }
-        audioSelfActivated = true
+        if let uuid, nativeUUIDs.contains(uuid) {
+            selfActivatedNativeUUIDs.insert(uuid)
+        } else {
+            audioSelfActivated = true
+        }
     }
 
-    /// Atomically checks AND clears the flag — call exactly once per call
-    /// end, right before deciding whether to balance the activate with a
-    /// `setActive(false)`. Returns `true` only the first time this is
-    /// called after a successful self-activation, so a duplicate
-    /// `reportCallEnded` (confirmed to happen on real devices) cannot
-    /// double-decrement `RTCAudioSession.activationCount` the same way the
-    /// `outstandingUUIDs`-based guard was meant to prevent, but for the
-    /// right piece of state this time.
-    func consumeAudioSelfActivation() -> Bool {
+    /// What `reportCallEnded` must do to balance `uuid`'s self-activation.
+    struct EndBalance: Equatable {
+        /// `uuid` is a native-SRTP call (see ``recordNativeBalance(_:)``):
+        /// at most ONE balancing deactivation, never the legacy drain.
+        let nativeManualCall: Bool
+        /// A self-activation is owed for this report.
+        let selfActivated: Bool
+        /// A repeated report of a native uuid already balanced: nothing to do.
+        let duplicateNative: Bool
+    }
+
+    /// W-SELFACTID (2026-09-27) — the call-end decision for `uuid`, in ONE
+    /// critical section (replaces the two separate test-and-clears, native
+    /// record then process-wide flag):
+    /// * native uuid, first report: its record and ITS OWN self-activation
+    ///   mark are consumed; another call's mark is never taken, so the old
+    ///   call's late report cannot eat the next call's activation.
+    /// * native uuid, repeated report: nothing owed, and the legacy flag is
+    ///   left alone.
+    /// * anything else (native SRTP off): the process-wide flag, test-and-clear,
+    ///   exactly as before — true only the first time after a self-activation,
+    ///   so a duplicate `reportCallEnded` cannot double-decrement
+    ///   `RTCAudioSession.activationCount` (W-DOUBLEDECR).
+    ///
+    /// W-NATIVEEVICT (2026-09-27) — the repeated-report check reads
+    /// ``nativeUUIDs`` (unbounded, lifetime of the process), not a
+    /// count-capped recent list: the uuid is never forgotten, so a duplicate
+    /// report can never age out and fall through to the legacy flag below no
+    /// matter how many other calls ended in between.
+    func consumeEndBalance(_ uuid: UUID) -> EndBalance {
         lock.lock()
         defer { lock.unlock() }
-        guard audioSelfActivated else { return false }
+        if nativeBalanceUUIDs.remove(uuid) != nil {
+            let selfActivated = selfActivatedNativeUUIDs.remove(uuid) != nil
+            return EndBalance(nativeManualCall: true, selfActivated: selfActivated, duplicateNative: false)
+        }
+        if nativeUUIDs.contains(uuid) {
+            return EndBalance(nativeManualCall: false, selfActivated: false, duplicateNative: true)
+        }
+        guard audioSelfActivated else {
+            return EndBalance(nativeManualCall: false, selfActivated: false, duplicateNative: false)
+        }
         audioSelfActivated = false
-        return true
+        return EndBalance(nativeManualCall: false, selfActivated: true, duplicateNative: false)
     }
 
     /// Whether `reportNewIncomingCall` already succeeded for this uuid. Read
     /// BEFORE the provider awaits CallKit, so a second report of the same
     /// uuid (PushKit + WS) can be told apart from a genuine rejection.
+    /// W-GHOSTCALL: the provider now uses `beginReport`, which also covers a
+    /// report that is still in flight; this plain read stays for diagnostics.
     func isNativelyReported(_ uuid: UUID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return nativelyReportedUUIDs.contains(uuid)
+    }
+
+    /// W-GHOSTCALL — atomic claim, taken right before `reportNewIncomingCall` is
+    /// awaited. `true` for exactly one caller per uuid: the first one, while no
+    /// other report of it is in flight and none has succeeded. Every later caller
+    /// gets `false` and must treat its report as a duplicate (it still reports to
+    /// CallKit — the PushKit mandate is one report per push — but must not arm the
+    /// manual-answer fallback if CallKit refuses it). The claimer calls
+    /// `finishReport` when CallKit has replied to the report, success or failure.
+    func beginReport(_ uuid: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if nativelyReportedUUIDs.contains(uuid) || reportsInFlight.contains(uuid) {
+            return false
+        }
+        reportsInFlight.insert(uuid)
+        return true
+    }
+
+    /// W-GHOSTCALL — release the claim taken by `beginReport`. Idempotent. Called
+    /// after `recordNativeReport` on success, so there is no instant at which the
+    /// uuid is in neither set; on failure the uuid simply stops being "in flight"
+    /// and a later report of it is a first report again.
+    func finishReport(_ uuid: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        reportsInFlight.remove(uuid)
     }
 
     /// `reportNewIncomingCall` succeeded: the native UI is up (W-WAKEONLY) and
@@ -216,5 +380,32 @@ final class CallKitCallLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return outstandingUUIDs.count
+    }
+}
+
+/// W-GHOSTCALL (2026-09-25) — whether a refused `reportNewIncomingCall` may arm
+/// the in-app manual-answer fallback (`CallKitCallLedger.recordRejected`).
+///
+/// Arming means "CallKit never showed this call, so answer it by hand from the
+/// in-app banner": `answerCall` then skips `CXAnswerCallAction` and self-activates
+/// audio. That is only right when the system UI genuinely never appeared. Two
+/// refusals say the opposite:
+/// - this report is a duplicate of one already in flight or already up
+///   (`alreadyReported`, from `CallKitCallLedger.beginReport`): the first report's
+///   own outcome decides;
+/// - CallKit's own reply is Code=2 `callUUIDAlreadyExists`: CallKit already HAS
+///   this call, its native UI is live and answerable. Arming the fallback over it
+///   is what e3acecd7 did at 15:04:03.222 (`callkit report ok=0 code=2 dup=0`,
+///   then "arming in-app manual answer path" with the native UI alive), and a
+///   later in-app answer would then skip the real CXAnswerCallAction.
+/// Code 3 (Focus/DnD) and 4 (block list) still arm it, as before.
+enum CallKitReportFailurePolicy {
+
+    /// `CXErrorCodeIncomingCallError.callUUIDAlreadyExists`.
+    static let callUUIDAlreadyExistsCode: Int = 2
+
+    static func shouldArmManualAnswer(alreadyReported: Bool, errorCode: Int) -> Bool {
+        guard !alreadyReported else { return false }
+        return errorCode != callUUIDAlreadyExistsCode
     }
 }

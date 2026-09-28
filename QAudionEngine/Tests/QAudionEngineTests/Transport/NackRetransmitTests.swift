@@ -61,6 +61,99 @@ final class NackRetransmitTests: XCTestCase {
         XCTAssertFalse(tracker.accept(5, nowMs: 10))
     }
 
+    // MARK: - W-REKEYSEQGATE (re-key: the peer's counter restarts at 0 with the new key)
+
+    func test_wouldAccept_isReadOnly_andAgreesWithAccept() {
+        let tracker = NackRxTracker()
+        XCTAssertTrue(tracker.wouldAccept(3))
+        XCTAssertTrue(tracker.wouldAccept(3), "a read-only check must not consume the seq")
+        XCTAssertTrue(tracker.accept(3, nowMs: 0))
+        XCTAssertFalse(tracker.wouldAccept(3))
+        XCTAssertFalse(tracker.accept(3, nowMs: 1))
+    }
+
+    func test_recordingFramesThatNeverOpened_poisonsTheTracker_whichIsWhyOnlyOpenedFramesAreCommitted() {
+        let tracker = NackRxTracker()
+        for seq in 0...5000 { XCTAssertTrue(tracker.accept(Int64(seq), nowMs: 0)) }
+        tracker.reset() // key install (resetNackState)
+        // old-key frames still in flight: they cannot be opened. Recording them (the pre-fix
+        // behaviour) raises highestSeq ...
+        for seq in 5001...5040 { XCTAssertTrue(tracker.accept(Int64(seq), nowMs: 0)) }
+        // ... and the peer's restarted counter is then dropped as "too old".
+        for seq in 0...20 { XCTAssertFalse(tracker.wouldAccept(Int64(seq)), "seq \(seq)") }
+    }
+
+    func test_onlyOpenedFramesCommitted_restartedCounterIsFollowed() {
+        let tracker = NackRxTracker()
+        for seq in 0...5000 { _ = tracker.accept(Int64(seq), nowMs: 0) }
+        tracker.reset() // key install (resetNackState)
+        // old-key frames still in flight: checked read-only, never opened, never committed
+        for seq in 5001...5040 { XCTAssertTrue(tracker.wouldAccept(Int64(seq))) }
+        // the peer switches: its counter restarts at 0 and every frame opens
+        for seq in 0...200 {
+            XCTAssertTrue(tracker.wouldAccept(Int64(seq)), "seq \(seq)")
+            XCTAssertTrue(tracker.accept(Int64(seq), nowMs: Int64(seq) * 20), "seq \(seq)")
+        }
+        // duplicates inside the new epoch are still dropped
+        XCTAssertFalse(tracker.wouldAccept(200))
+    }
+
+    // MARK: - W-NACKEPOCH (the reset must not depend on Task vs main-queue ordering)
+
+    func test_newEpochSeqZero_isAccepted_beforeAnyExplicitReset() {
+        let tracker = NackRxTracker()
+        XCTAssertFalse(tracker.adoptKeyEpoch(0), "epoch 0 is the initial state")
+        for seq in 0...5000 { _ = tracker.accept(Int64(seq), nowMs: 0) }
+        // The race: the new key is live, the explicit reset() has NOT run yet.
+        XCTAssertFalse(tracker.wouldAccept(0), "without the epoch, seq 0 is judged against the old highestSeq")
+        // Key install bumped the epoch synchronously; the RX path adopts it before its check.
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        XCTAssertTrue(tracker.wouldAccept(0))
+        XCTAssertTrue(tracker.accept(0, nowMs: 1))
+        XCTAssertFalse(tracker.wouldAccept(0), "duplicates inside the new epoch are still dropped")
+    }
+
+    func test_adoptKeyEpoch_sameEpoch_keepsState() {
+        let tracker = NackRxTracker()
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        XCTAssertTrue(tracker.accept(7, nowMs: 0))
+        XCTAssertFalse(tracker.adoptKeyEpoch(1))
+        XCTAssertFalse(tracker.wouldAccept(7), "an unchanged epoch must not wipe duplicate memory")
+    }
+
+    func test_lateExplicitReset_afterEpochAdopted_neverRejectsNewEpochFrames() {
+        let tracker = NackRxTracker()
+        for seq in 0...5000 { _ = tracker.accept(Int64(seq), nowMs: 0) }
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        for seq in 0...10 { XCTAssertTrue(tracker.accept(Int64(seq), nowMs: Int64(seq) * 20)) }
+        tracker.reset() // the main-actor resetNackState() Task landing late
+        XCTAssertFalse(tracker.adoptKeyEpoch(1), "reset() keeps the epoch: no second reset")
+        for seq in 11...40 { XCTAssertTrue(tracker.wouldAccept(Int64(seq)), "seq \(seq)") }
+    }
+
+    /// Copilot review of #127 — a late, unguarded `reset()` call does not just
+    /// stop rejecting UNSEEN new-epoch sequences (covered above): it also wipes
+    /// the dedup memory of sequences already accepted under that same epoch, so
+    /// a retransmission of one of them would incorrectly pass `wouldAccept` a
+    /// second time. `reset()` itself has no way to avoid this — it unconditionally
+    /// forgets everything, by design, for the "different epoch" case. The fix is
+    /// at the call site: `CallService.resetNackState()` no longer calls
+    /// `nackRxTracker.reset()` at all (only `adoptKeyEpoch` may reset the RX
+    /// state now), which this test documents by showing what would break if a
+    /// caller reintroduced a raw `reset()` call after frames were already
+    /// accepted in the current epoch.
+    func test_lateExplicitReset_afterEpochAdopted_alsoForgetsAlreadyAcceptedSequences_thisIsWhyCallersMustNotCallResetDirectly() {
+        let tracker = NackRxTracker()
+        XCTAssertTrue(tracker.adoptKeyEpoch(1))
+        XCTAssertTrue(tracker.accept(0, nowMs: 0))
+        XCTAssertFalse(tracker.wouldAccept(0), "seq 0 was just accepted: a duplicate must be rejected")
+        tracker.reset() // the main-actor resetNackState() Task landing late, AFTER seq 0 was accepted
+        XCTAssertTrue(
+            tracker.wouldAccept(0),
+            "reset() wipes duplicate memory without bumping the epoch: a retransmission of an " +
+            "already-played sequence would now be treated as new and could be decoded/played twice")
+    }
+
     func test_gap_notNackEligible_beforeAgingPastThreshold() {
         let tracker = NackRxTracker(nackAgeThresholdMs: 120)
         _ = tracker.accept(0, nowMs: 0)

@@ -18,12 +18,6 @@ final class TransportSettingsContainer: ObservableObject {
     private let vpnService: VpnService
     private let vpnTokenProvider: () -> String
 
-    /// Manual force-Reality applier. Captures `state` as a closure (NOT a
-    /// stored AppState property — same build-landmine avoidance as
-    /// `vpnTokenProvider`) so flipping the toggle activates / reverts the
-    /// Reality tunnel live via `AppState.setForceRealityTransport(_:)`.
-    private let forceRealityApplier: (Bool) -> Void
-
     init(state: AppState) {
         let stored = SettingsStore().loadTransport()
         self.viewModel = stored
@@ -32,11 +26,7 @@ final class TransportSettingsContainer: ObservableObject {
         self.draftPreferredUrlString = stored.preferredTurnServerUrl?.absoluteString ?? ""
         self.vpnService = state.vpnService
         self.vpnTokenProvider = { state.currentAccessToken ?? "" }
-        self.forceRealityApplier = { [weak state] on in state?.setForceRealityTransport(on) }
     }
-
-    /// Apply the manual Reality force toggle. Persists + activates/reverts now.
-    func applyForceReality(_ on: Bool) { forceRealityApplier(on) }
 
     /// Fetch the live exit-node list (Helsinki, Milano, …) for the picker.
     /// Best-effort: a failure leaves the list empty (the row still shows
@@ -113,10 +103,6 @@ private extension TransportSettingsViewModel.Mode {
 /// Replaces stock `Form` with the new design vocabulary.
 struct TransportSettingsScreen: View {
     @StateObject private var container: TransportSettingsContainer
-    // REALITY_PIN fix: observed directly (not via a closure, like `container`'s
-    // other AppState reads) so the `realityKeyChanged` advisory below updates
-    // live when `activateRealityFallback` flips it.
-    @ObservedObject private var appState: AppState
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -126,14 +112,8 @@ struct TransportSettingsScreen: View {
     /// key as the HomeView VpnToggleChip long-press picker, so both stay in sync.
     @AppStorage("vpn.preferredNodeId") private var preferredVpnNodeId: String = ""
 
-    /// Manual force-Reality toggle. SAME UserDefaults key the connect path
-    /// reads (`AppState.forceRealityEnabled`), so a flip here and the connect
-    /// decision stay in sync. Default off — clearnet-first.
-    @AppStorage(AppState.forceRealityDefaultsKey) private var forceReality: Bool = false
-
     init(state: AppState) {
         _container = StateObject(wrappedValue: TransportSettingsContainer(state: state))
-        _appState = ObservedObject(wrappedValue: state)
     }
 
     var body: some View {
@@ -148,34 +128,6 @@ struct TransportSettingsScreen: View {
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14)
                         .padding(.top, 6)
-
-                    SettingsSectionHeader("ANTI-CENSURA (REALITY)")
-                    // commit 54f0a2e wired Reality.xcframework as a real
-                    // conditional .binaryTarget (QAudionEngine/Package.swift),
-                    // so RealityManager's real `#if canImport(Reality)` branch
-                    // now compiles in CI-built binaries — this row was left
-                    // disabled behind the old "not wired yet" copy after the
-                    // backend went live. Live now: bind the toggle.
-                    SettingsToggleRow(
-                        title: "Forza tunnel Reality",
-                        subtitle: "Instrada il segnale nel tunnel anti-censura (test)",
-                        isOn: $forceReality
-                    )
-                    .onChange(of: forceReality) { newValue in
-                        container.applyForceReality(newValue)
-                    }
-                    Text("Instrada segnale e media nel tunnel Reality (VLESS+Reality) invece che in chiaro. Sperimentale.")
-                        .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .padding(.horizontal, 14).padding(.top, 6)
-                    // REALITY_PIN fix: non-blocking advisory when the server-
-                    // issued Reality front public key changed since we last
-                    // pinned it (RealityPinStore) — the tunnel still connects
-                    // under the new key (signal-not-kill); this just surfaces it.
-                    if appState.realityKeyChanged {
-                        errorBanner("La chiave pubblica del front Reality è CAMBIATA rispetto all'ultima connessione. Il tunnel è stato ri-associato alla nuova chiave e la connessione prosegue.")
-                            .padding(.top, 6)
-                    }
 
                     SettingsSectionHeader("NODO VPN (USCITA)")
                     vpnNodeSection

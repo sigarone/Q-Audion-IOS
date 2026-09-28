@@ -439,6 +439,17 @@ public final class QAudionDatabase {
             }
         }
 
+        // 2026-09-19 service-message root fix — `Message.isPlaceholder`, the
+        // marker on the single undecryptable-frame placeholder row so a resend
+        // of the same `client_msg_id` can replace it in place. Mirrors the
+        // v4-v7 migrations: one nullable column, no data rewrite — every
+        // pre-existing row decodes with `isPlaceholder == nil` (an ordinary row).
+        migrator.registerMigration("v9-inbound-placeholder-marker") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "isPlaceholder", .boolean)
+            }
+        }
+
         return migrator
     }
 

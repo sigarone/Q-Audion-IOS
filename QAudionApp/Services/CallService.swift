@@ -195,8 +195,8 @@ final class CallService: @unchecked Sendable {
     private let nackRxTracker = NackRxTracker()
     private let nackRateLimiter = NackResendRateLimiter()
 
-    /// W-AUDIONACK — clear the retransmit ring and gap tracker. Call on
-    /// every session-key install (initial handshake AND every re-key —
+    /// W-AUDIONACK — clear the TX retransmit ring. Call on every session-key
+    /// install (initial handshake AND every re-key —
     /// `QAudionCallIntegration.onPqcSessionKeyEstablished` fires for both,
     /// see its call sites next to every `engine.initSession(...)`). A frame
     /// cached in the ring was sealed under the key that just rotated away;
@@ -204,9 +204,46 @@ final class CallService: @unchecked Sendable {
     /// security-load-bearing, not just tidiness. Also called from
     /// `teardownAudioStack()` so a new call never starts holding the
     /// previous call's frames.
+    ///
+    /// W-NACKEPOCH (Copilot follow-up to #127) — this used to also call
+    /// `nackRxTracker.reset()` unconditionally. That is now `nackRxTracker`'s
+    /// own job, gated by `adoptKeyEpoch` (see `syncNackTrackerToKeyEpoch`):
+    /// the RX path clears its dedup window itself, synchronously, on the
+    /// first frame it processes under a new epoch — which can run BEFORE
+    /// this method's caller (the async `onPqcSessionKeyEstablished` Task).
+    /// If this method still reset the RX tracker too, that late, unguarded
+    /// `reset()` could run AFTER the RX path had already accepted one or
+    /// more new-epoch frames: it wipes `seenWindow` without bumping
+    /// `keyEpoch`, so a legitimate retransmission of an already-played
+    /// sequence would then pass `wouldAccept` a second time and be
+    /// decoded/played again — the exact bug this rewrite removes.
     func resetNackState() {
         nackRing.clear()
-        nackRxTracker.reset()
+    }
+
+    /// W-NACKEPOCH (Copilot follow-up to #106) — session-key epoch for the RX NACK tracker.
+    /// Bumped SYNCHRONOUSLY on the handshake's own thread, right after `engine.initSession`
+    /// (via `noteSessionKeyInstalled`, called first thing in AppState's `onRelaySessionReady`
+    /// closures); read on the main thread by the RX path. Guarded by its own lock because the
+    /// writer is not the main thread.
+    private let nackKeyEpochLock = NSLock()
+    private var nackKeyEpoch: UInt64 = 0
+
+    /// W-NACKEPOCH — a new session key was just installed in the engine (initial handshake or
+    /// re-key). Only local duplicate/gap bookkeeping is affected; no key material is touched.
+    /// Safe from any thread.
+    func noteSessionKeyInstalled() {
+        nackKeyEpochLock.withLock { nackKeyEpoch &+= 1 }
+    }
+
+    /// W-NACKEPOCH — main thread only (the RX `DispatchQueue.main.async` block). Resets the
+    /// RX tracker the first time a frame is admitted under a new key epoch, BEFORE its
+    /// `wouldAccept` check, so the peer's restarted counter is never judged against the old
+    /// epoch's `highestSeq` — whether or not the main-actor `resetNackState()` Task scheduled
+    /// by `onPqcSessionKeyEstablished` has run yet. That Task still clears the TX ring.
+    private func syncNackTrackerToKeyEpoch() {
+        let epoch: UInt64 = nackKeyEpochLock.withLock { nackKeyEpoch }
+        nackRxTracker.adoptKeyEpoch(epoch)
     }
 
     /// W-VIDTRANS (2026-07-24) — live read of the same three counters that
@@ -243,6 +280,12 @@ final class CallService: @unchecked Sendable {
     public private(set) var txFramesWs: Int64 = 0
     public private(set) var rxFramesDc: Int64 = 0
     public private(set) var rxFramesWs: Int64 = 0
+    /// W-DCWEDGE (2026-09-25) — frames the DataChannel back-pressure gate DROPPED
+    /// (`AudioDcSendOutcome.shed`): produced, encrypted, never sent on any leg. They
+    /// used to be counted in `txFramesDc`. Shipped as `tx_gate_drop_d` on the 5 s
+    /// heartbeat and as `drop=` on the `dcmux tx` line. Same tx-queue-only threading
+    /// as `txFramesDc`.
+    public private(set) var txDcDrop: Int64 = 0
 
     /// W-DCMUX — which transport an inbound sealed frame arrived on.
     ///
@@ -298,7 +341,8 @@ final class CallService: @unchecked Sendable {
     // Void (BCryptoWebSocketClient.swift:1058) and exposes no per-send result,
     // so on the WS-relay path this counts frames HANDED to a bound socket, not
     // frames the socket accepted. The DataChannel path has no such gap —
-    // `sendAudioFrameData` returns Bool and is counted only when true. The
+    // `sendAudioFrameData` says whether the frame was queued and is counted only
+    // then (W-DCWEDGE: a frame the back-pressure gate shed is not counted). The
     // difference is visible only while the socket is dead, where Android would
     // read 0 and this reads the offered rate. Closing it needs a return value
     // from the WS client, which is not this change's file.
@@ -316,6 +360,16 @@ final class CallService: @unchecked Sendable {
     /// like Android, where a rate needs two samples
     /// (`CallViewModel.publishNetworkStats`, CallViewModel.kt:1963-1976).
     private var lastThroughputSample: (atSec: Double, tx: Int64, rx: Int64)?
+
+    /// N7 (network-resilience-max, this task) — the previous heartbeat
+    /// tick's CUMULATIVE counters, so each new tick can compute this
+    /// interval's DELTA via `NativeAudioHeartbeatDeltas.compute(previous:
+    /// current:)`. Same "keep the previous sample, diff against it" shape
+    /// as `lastThroughputSample` right above, deliberately kept as its own
+    /// property rather than folded into that tuple: this one only advances
+    /// every 5th throughput sample (the heartbeat's own cadence,
+    /// `srtpHbSampleCounter % 5 == 0`), not every sample.
+    private var lastNativeAudioIntervalCounters: NativeAudioHeartbeatDeltas.IntervalCounters?
 
     /// Live wire throughput in kbps, last computed by [sampleWireThroughput].
     /// `nil` ⇒ "—". Written on the main actor by the sampler only.
@@ -431,7 +485,147 @@ final class CallService: @unchecked Sendable {
             let outSess = AVAudioSession.sharedInstance()
             let outPorts = outSess.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
             let outVol = Int(outSess.outputVolume * 100)
-            RTLog.info("call", "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)")
+            var line = "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)"
+            // N7 (network-resilience-max, this task) — candidate-pair
+            // `currentRoundTripTime`, the SAME measurement this call already
+            // received as `rttMs` (`QAudionWebRtcCallController
+            // .pollMediaRttOnce`'s own doc: "Sample the selected candidate
+            // pair's currentRoundTripTime"). Reused here rather than
+            // re-fetched — no extra stats round trip, no addresses. Key is
+            // `rtt` (not `crtt`): verified against this repo's own redactor
+            // (`scripts/ship-ios-logs.py`) that `crtt` fails its "reads like
+            // a word" lexical check (4 letters, zero vowels) and DROPS THE
+            // WHOLE LINE, whereas bare `rtt` is already-recognized
+            // vocabulary there (confirmed via direct `redact_body()`
+            // round-trip, not assumed).
+            if let rttMs, rttMs.isFinite {
+                line += " rtt=\(Int(rttMs.rounded()))"
+            }
+            // N7 review fix — the resilience fields ride their OWN line
+            // (`audiosrtp hb=2`, same tick, no second timer), not this one.
+            // Verified against `scripts/ship-ios-logs.py`: the redactor allows
+            // at most `MAX_IDLIKE_TOKENS` (2) numbers of 6+ digits per body,
+            // and on a native call this line already carries tx=/rx= (bytes)
+            // plus tsr= (samples) at 6-8 digits within the first seconds —
+            // so the whole line is DROPPED from shipping and anything
+            // appended to it never reaches the server. `hb=2` stays short
+            // and ships intact at every value range (incl. all -1).
+            var resilienceLine: String?
+            // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
+            // (no second timer) with the wider stats snapshot, ONLY on a
+            // call that actually negotiated native SRTP: every field below
+            // reads -1/"none" on the sealed-DataChannel/WS-relay path, and
+            // this heartbeat already fires for those calls too (the base
+            // line above stays useful there) — no point appending 20 more
+            // placeholder fields to a line that will never populate them.
+            if getUsesNativeAudioSrtp?() == true, let stats = getNativeAudioSrtpStats?() {
+                // Audio levels are 0.0...1.0 per the webrtc-stats spec —
+                // shipped as milli-units (x1000, rounded) to stay numeric
+                // rather than a decimal point, matching this line's own
+                // all-integer convention.
+                func milli(_ v: Double) -> Int { (v < 0 || !v.isFinite) ? -1 : Int((v * 1000).rounded()) }
+                line += " rtx=\(stats.outboundRetransmittedPacketsSent)"
+                line += " mslvl=\(milli(stats.mediaSourceAudioLevel))"
+                line += " mseng=\(milli(stats.mediaSourceTotalAudioEnergy))"
+                line += " tsr=\(stats.inboundTotalSamplesReceived)"
+                line += " rxlvl=\(milli(stats.inboundAudioLevel))"
+                line += " isd=\(stats.inboundInsertedSamplesForDeceleration)"
+                line += " rsa=\(stats.inboundRemovedSamplesForAcceleration)"
+                line += " dtls=\(stats.transportDtlsState ?? "none")"
+                line += " srtpc=\(stats.transportSrtpCipher ?? "none")"
+                line += " dtlsc=\(stats.transportDtlsCipher ?? "none")"
+                line += " tlsv=\(stats.transportTlsVersion ?? "none")"
+                line += " role=\(stats.transportDtlsRole ?? "none")"
+                line += " cps=\(stats.selectedCandidatePairState ?? "none")"
+                line += " lct=\(stats.localCandidateType ?? "none")"
+                line += " lproto=\(stats.localCandidateProtocol ?? "none")"
+                line += " rct=\(stats.remoteCandidateType ?? "none")"
+                line += " rproto=\(stats.remoteCandidateProtocol ?? "none")"
+                line += " mime=\(stats.codecMimeType ?? "none")"
+                // W-NATIVESRTPBUILDFIX — plain Int locals instead of
+                // `Optional.map(String.init)` inside the interpolation: the
+                // app target has not been through the compiler with this
+                // block yet, and CLAUDE.md §13 documents `String(_:)`'s
+                // overload set as a type-checker trap.
+                let clockRate: Int = stats.codecClockRate ?? -1
+                let channels: Int = stats.codecChannels ?? -1
+                line += " clk=\(clockRate)"
+                line += " ch=\(channels)"
+                // W-NATIVESRTPFMTP — never the raw fmtp line (text the peer's
+                // SDP controls): only allowlisted numeric params, one flat
+                // `fmtp_<key>=<digits>` token each (FmtpLogTokens).
+                for fmtpToken in FmtpLogTokens.tokens(stats.codecSdpFmtpLine) {
+                    line += " \(fmtpToken)"
+                }
+                // N7 (network-resilience-max, this task) — per-heartbeat
+                // INTERVAL deltas (not cumulative) of the counters this
+                // exact heartbeat already reads a cumulative snapshot for.
+                // `NativeAudioHeartbeatDeltas.compute` is the pure, unit-
+                // tested seam (`NativeAudioHeartbeatDeltasTests`); this call
+                // site only keeps the "previous tick" state, same shape as
+                // `lastThroughputSample`'s own dtSec-based kbps computation
+                // just above in this same method.
+                let currentCounters = NativeAudioHeartbeatDeltas.IntervalCounters(
+                    jitterBufferDelaySec: stats.inboundJitterBufferDelaySec,
+                    jitterBufferTargetDelaySec: stats.inboundJitterBufferTargetDelaySec,
+                    jitterBufferEmittedCount: stats.inboundJitterBufferEmittedCount,
+                    concealedSamples: stats.inboundConcealedSamples,
+                    fecPacketsReceived: stats.inboundFecPacketsReceived,
+                    fecPacketsDiscarded: stats.inboundFecPacketsDiscarded,
+                    nackCount: stats.inboundNackCount,
+                    retransmittedPacketsSent: stats.outboundRetransmittedPacketsSent)
+                let deltas = NativeAudioHeartbeatDeltas.compute(
+                    previous: lastNativeAudioIntervalCounters, current: currentCounters)
+                lastNativeAudioIntervalCounters = currentCounters
+                // Log keys below were each verified individually against
+                // this repo's own redactor (`scripts/ship-ios-logs.py`,
+                // direct `redact_body()` round-trip, not assumed) — the
+                // OBVIOUS abbreviations (`jbms`, `jbtgt`, `concl`, `fecrx`,
+                // `fecdisc`, `rflost`, `rrtt`, `relproto`, `nettype`) each
+                // either fail its "reads like a word" lexical check outright
+                // (a short vowel-less/low-vowel-density blob is treated as
+                // "not a word", which DROPS THE WHOLE LINE, not just that
+                // token) or push the line's unrecognized-word budget over
+                // its cap in combination with `restart_ice`'s own leading
+                // word — same failure class as this file's sibling
+                // `restart_ice relay=1` rename right above. Every key here
+                // is instead built from words ALREADY in that script's own
+                // recognized vocabulary (`jitter`, `target`, `ms`, `fec`,
+                // `recv`, `drop`, `nack`, `remote`, `loss`, `rtt`, `relay`,
+                // `network`, `type`, `plc` — this last one, Packet Loss
+                // Concealment, doubling as the concealed-samples counter's
+                // name), so the line ships whole instead of collapsing to
+                // an empty attribute summary.
+                let rttField: Int
+                if let rttMs, rttMs.isFinite { rttField = Int(rttMs.rounded()) } else { rttField = -1 }
+                var net = "audiosrtp hb=2 rtt=\(rttField)"
+                net += " jitter_ms=\(deltas.jitterBufferDelayMsAvg)"
+                net += " target_ms=\(deltas.jitterBufferTargetDelayMsAvg)"
+                net += " plc=\(deltas.concealedSamplesDelta)"
+                net += " fec_recv=\(deltas.fecPacketsReceivedDelta)"
+                net += " fec_drop=\(deltas.fecPacketsDiscardedDelta)"
+                net += " nack=\(deltas.nackCountDelta)"
+                // Instantaneous (report-snapshot) fields, never delta'd — see
+                // `NativeAudioSrtpStatsSnapshot`'s own field docs for why.
+                // `fractionLost` is 0.0...1.0 -> milli-units, same convention
+                // `milli(_:)` above already uses for the audio-level fields.
+                net += " remote_loss=\(milli(stats.remoteInboundFractionLost))"
+                let remoteRttSec = stats.remoteInboundRoundTripTimeSec
+                let remoteRttMs = (remoteRttSec < 0 || !remoteRttSec.isFinite)
+                    ? -1 : Int((remoteRttSec * 1000).rounded())
+                net += " remote_rtt=\(remoteRttMs)"
+                // Numeric-encoded, never the raw platform string (see
+                // `NativeAudioHeartbeatDeltas.relayProtocolCode`/
+                // `.networkTypeCode`'s own docs) — no addresses either way.
+                let relayCode = NativeAudioHeartbeatDeltas.relayProtocolCode(
+                    stats.localCandidateRelayProtocol,
+                    viaWssBridge: stats.localCandidateViaWssBridge)
+                net += " relay=\(relayCode)"
+                net += " network_type=\(NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType))"
+                resilienceLine = net
+            }
+            RTLog.info("call", line)
+            if let resilienceLine { RTLog.info("call", resilienceLine) }
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
         // outbound-rtp row still does not exist after ~8 s of samples (was
@@ -453,7 +647,11 @@ final class CallService: @unchecked Sendable {
         // root cause is diagnosed from the deadtx line it still emits.
         let ptxNow = getAudioRtpPacketsSent?() ?? -1
         let txDead = rtpTx < 0 || (ptxNow >= 0 && ptxNow == srtpLastPtxSample && ptxNow == 0)
-        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true,
+        // W-ADMGATE (2026-09-26) — on a manual-mode call the unit is started
+        // by the gate, possibly up to `callKitActivationWaitMs` after the
+        // answer: do not charge those beats as a dead sender.
+        let nativeUnitMayRun: Bool = !NativeAudioSessionGate.isArmed || NativeAudioSessionGate.isNativeAudioEnabled
+        if getCallId?() != nil, getUsesNativeAudioSrtp?() == true, nativeUnitMayRun,
            peerAnswered, audioSessionActive, !audioSrtpFallbackActive, txDead {
             srtpDeadTxBeats &+= 1
             // W-DEADTXNET retune (2026-09-02) — live evidence tonight: 3
@@ -504,6 +702,14 @@ final class CallService: @unchecked Sendable {
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
     private var rxDecryptErrorCount: Int64 = 0
+    // W-RXGATE (2026-09-19) — the receive-side twin of W-TXGATE below. Frames that
+    // reach the decoder while this side has no session key yet (the CALLER between
+    // sending the OFFER and processing the ACCEPT, while the callee already sends)
+    // used to be counted in `rxDecryptErrorCount`, which fed rx_dec_err, the
+    // post-call tuner (it persists a PLP for the NEXT call from errors/received)
+    // and the AEAD failure burst meter (a burst forces a mid-call re-key). Counted
+    // apart here so `rxDecryptErrorCount` stays a clean real-failure signal.
+    private var rxPreSessionDropped: Int64 = 0
     // W-TXGATE (2026-07-12) — the mic starts capturing the instant the call UI
     // appears, but the PQC session key isn't derived until the handshake
     // completes (~0.8 s later). Every mic frame in that window used to hit
@@ -688,6 +894,39 @@ final class CallService: @unchecked Sendable {
     public var isCallActive: CallActiveProvider?
     public var getCallId: CallIdProvider?
     public var getPeerCapabilities: PeerCapabilitiesProvider?
+    /// W-MEDIAATACCEPT (option b) — §4.10 (I13): fired at the very start of
+    /// `endCall()`, before any other teardown work, with whatever
+    /// `getCallId?()` returns at that moment (may be `nil`). AppState wires
+    /// this to `wipeRingState(_:why:)` — every hangup/cancel/CallKit-end/
+    /// reset path already funnels through `endCall()`, so this one wire-up
+    /// covers all of them.
+    public var onCallTeardownChokepoint: ((String?) -> Void)?
+    /// W-MEDIAATACCEPT (option b) — §10 (I9), NOW FULLY WIRED (G6). Spec
+    /// asks `endCall()` to reset the native-SRTP crash streak only when
+    /// this call actually reached "media" phase (`reachedMediaThisCall`),
+    /// not on every clean end — a call that only rang/built its PC and was
+    /// cancelled proves nothing about the native path. `noteMediaReached()`
+    /// is wired from TWO independent signals now:
+    ///  - the CUSTOM (sealed-audio) decode path (`noteRealInboundDecode()`,
+    ///    below);
+    ///  - the NATIVE audio-srtp path, via `AppState.bridgeControllerLogLine`
+    ///    watching for `QAudionPeerConnection
+    ///    .onNativeAudioFrameCryptorStateChange`'s `"audiosrtp cryptor
+    ///    role=rx state=ok"` line (the same string-based `controller.log`
+    ///    hook every call site already wires, extended rather than adding
+    ///    the new typed hook the spec proposes — see that method's own doc
+    ///    for why).
+    /// `endCall` below now requires this flag, matching spec §10's "la
+    /// serie si azzera solo alla chiusura pulita di una chiamata che ha
+    /// raggiunto media" exactly, for both audio paths.
+    private var reachedMediaThisCall: Bool = false
+    /// Marks that this call reached real bidirectional audio on the CUSTOM
+    /// (sealed-audio) path. See the type-level note above for why the
+    /// native-audio-srtp counterpart is not wired yet, and why `endCall`
+    /// does not gate on this field until it is.
+    public func noteMediaReached() {
+        reachedMediaThisCall = true
+    }
     /// W-GRPVPIO-CRASH-3 (2026-07-17) — returns true while a GROUP call owns
     /// the shared VoiceProcessingIO hardware unit (LiveKit's SFU room drives
     /// it directly). Injected by AppState (`{ groupCallKitId != nil }`).
@@ -716,6 +955,13 @@ final class CallService: @unchecked Sendable {
     /// existed, and every call whose kill switch is off) makes
     /// `startAudioIOIfReady` byte-for-byte what it was before.
     public var getUsesNativeAudioSrtp: (() -> Bool)?
+    /// W-MEDIAATACCEPT (option b) — §4.6 (gate 5): `true` while `mode == 1`
+    /// AND this call is predicted to end up native AND its PeerConnection
+    /// is still being built (`.awaitingSdp`/`.building`) — see
+    /// `RingSignalingDecisions.audioIOGate`. Wired once at login by
+    /// AppState, same live-getter pattern as the others here. `nil`
+    /// (unwired, e.g. every call before this feature existed) never defers.
+    public var mediaPlanePending: (() -> Bool)?
     /// W-MEDIADEADSRTP (2026-08-29) — current audio `inbound-rtp.bytesReceived`
     /// from the live PeerConnection, or -1 when there is no audio RTP leg.
     /// Wired once at login by AppState, same live-getter pattern as
@@ -744,6 +990,15 @@ final class CallService: @unchecked Sendable {
     /// reordering the jitter buffer already absorbed cleanly.
     public var getAudioRtpPacketsLost: (() -> Int64)?
     public var getAudioRtpJitterSec: (() -> Double)?
+    /// W-NATIVESRTPDIAG (this task) — the wider stats snapshot
+    /// (`QAudionWebRtcCallController.NativeAudioSrtpStatsSnapshot`) read off
+    /// the SAME `getStats` poll the getters above already read from. Wired
+    /// once at login, same live-getter pattern; `nil` before the first poll
+    /// or when there is no `webRtcController` for this call. Consumed only
+    /// by the `audiosrtp hb=` heartbeat below, and only when
+    /// `getUsesNativeAudioSrtp?() == true` — a call on the sealed
+    /// DataChannel/WS relay never reads it.
+    public var getNativeAudioSrtpStats: (() -> QAudionWebRtcCallController.NativeAudioSrtpStatsSnapshot?)?
     /// W-DEADTXRELEASE — mute/unmute the native audio-srtp sender track.
     /// Wired once at login by AppState to
     /// `webRtcController?.setNativeAudioSrtpMuted(_:)`, same live-setter
@@ -751,6 +1006,27 @@ final class CallService: @unchecked Sendable {
     /// `engageAudioSrtpFallback()` exactly as it behaved before this existed
     /// — it just skips the release.
     public var muteNativeAudioSrtpSender: ((Bool) -> Void)?
+    /// W-CALLERUNMUTELOST (2026-09-27) — the mute state this service last
+    /// computed for the native audio-srtp sender (`NativeSenderMuteDecisions
+    /// .shouldMute`), read only for diagnostics/tests. The single source of
+    /// truth callers should trust for "is the sender supposed to be muted
+    /// right now" is ``reapplyNativeSenderMute(site:)``'s own recomputation,
+    /// not this cached snapshot — it exists so a call site does not have to
+    /// recompute the formula just to log it.
+    public private(set) var nativeSenderMuteIntent: Bool = true
+    /// W-CALLERUNMUTELOST (2026-09-27) — the bare vocabulary token (already
+    /// in `ship-ios-logs.py`'s APP_VOCAB, see that script's own
+    /// W-CALLERUNMUTELOST comment) naming which trigger last called
+    /// ``reapplyNativeSenderMute(site:)``: `"answer"` for the two genuine-
+    /// accept sites (1 = callee, 2 = caller), `"user"` for every other one
+    /// (setMuted, SRTP-fallback engage/recover, a fresh `webRtcController`).
+    /// Set immediately before `muteNativeAudioSrtpSender` is invoked so the
+    /// `AppState` wiring can forward it as `QAudionWebRtcCallController
+    /// .setNativeAudioSrtpMuted(_:source:)`'s `source`, and the resulting
+    /// `QAudionPeerConnection` `audiosrtp muteapply ... src=<...>` line
+    /// names its real trigger instead of always reading the closure's own
+    /// `"user"` default — the one piece the three-file fix left unwired.
+    public private(set) var nativeSenderMuteSource: String = "user"
     /// W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as
     /// `muteNativeAudioSrtpSender` above, kept out of this file for the same
     /// reason: `CallService` deliberately never imports WebRTC directly.
@@ -821,6 +1097,50 @@ final class CallService: @unchecked Sendable {
         let rtp = getAudioRtpPacketsReceived?() ?? -1
         return rtp >= 0 ? rtp : framesDecryptedRx
     }
+
+    /// W-HBTELEM (2026-09-21) — one reading of the call-health counters that already exist,
+    /// for the extra attributes of the 5 s `call.media.heartbeat` (and the `jb_depth_now` of a
+    /// `call.disturbance.marker`). The heartbeat's `HeartbeatDeltaTracker` turns two of these
+    /// into per-window deltas. Nothing here counts anything new:
+    ///   * sealed audio frames by transport: the `dcmux tx/rx` counters above;
+    ///   * `rxGapLost`: `rxLossSnapshot().lost`, the meter the PLP reporter already reads;
+    ///   * `fecRecovered`: `rxFecStats().recovered` (`fec fr=`);
+    ///   * jitter buffer: `AudioCapture.playoutStats` (`RX playout pu/un/ov/hd/cc/dp` and the
+    ///     `tf=` target), plus `timeStretchFrames` and `silenceDrops`, which the log line omits;
+    ///   * `interArrivalMaxMs`: a read-only view of the arrival tracker the jitter buffer keeps.
+    /// A group with no audio engine or no call integration simply leaves those fields nil.
+    /// Read on the main actor (the RTP-path probe is main-affine); the underlying counters are
+    /// diagnostics that tolerate being one frame stale, as everywhere else in this file.
+    @MainActor
+    func makeHeartbeatSnapshot() -> HeartbeatSnapshot {
+        var snapshot = HeartbeatSnapshot()
+        snapshot.rxFramesDc = rxFramesDc
+        snapshot.rxFramesWs = rxFramesWs
+        snapshot.txFramesDc = txFramesDc
+        snapshot.txFramesWs = txFramesWs
+        snapshot.txGateDrop = txDcDrop
+        if let integration = callIntegration {
+            snapshot.rxGapLost = integration.rxLossSnapshot().lost
+            snapshot.fecRecovered = integration.rxFecStats().recovered
+        }
+        if let cap = audioCapture {
+            let stats = cap.playoutStats
+            snapshot.jbUnderruns = stats.underruns
+            snapshot.jbOverruns = stats.overruns
+            snapshot.jbHardDrops = stats.hardDrops
+            snapshot.jbSilenceDrops = stats.silenceDrops
+            snapshot.jbConcealed = Int64(stats.concealed)
+            snapshot.jbStretch = stats.timeStretchFrames
+            snapshot.jbDepthNow = stats.depth
+            snapshot.jbTargetNow = stats.targetFrames
+            snapshot.interArrivalMaxMs = cap.recentInterArrivalMaxMs(windowMs: 5_000)
+        }
+        if getUsesNativeAudioSrtp?() == true, !audioSrtpFallbackActive {
+            snapshot.nativeSrtpActive = true
+        }
+        return snapshot
+    }
+
     /// W-SRTPFALLBACK — true while the manual capture/decode path has been
     /// explicitly RE-ENGAGED during a native-audio-srtp call's ICE outage
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
@@ -850,13 +1170,26 @@ final class CallService: @unchecked Sendable {
     /// reads of two Bools on this `@unchecked Sendable` class, same class of
     /// access as every other live getter the controller already uses.
     public var isNativeCaptureExpectedLive: Bool {
-        CaptureLiveDecisions.gateOpen(audioSessionActive: audioSessionActive, peerAnswered: peerAnswered)
+        // W-ADMGATE (2026-09-26) — on a manual-mode (native-SRTP) call nothing
+        // can capture before the gate enabled WebRTC's unit, so the check
+        // waits for that too. Unchanged on every other call.
+        let unitMayRun: Bool = !NativeAudioSessionGate.isArmed || NativeAudioSessionGate.isNativeAudioEnabled
+        return unitMayRun
+            && CaptureLiveDecisions.gateOpen(audioSessionActive: audioSessionActive, peerAnswered: peerAnswered)
     }
     /// W-DCAUDIO — send a sealed audio frame over the WebRTC DataChannel if it is
-    /// open; returns true if queued there, false to fall back to the WS relay.
-    /// Wired by AppState to `QAudionWebRtcCallController.sendAudioFrameData`. The
-    /// payload is the raw WireRelayFrameCodec envelope (same bytes as the WS path).
-    public var sendAudioOverDataChannel: ((Data) -> Bool)?
+    /// open; `.useRelay` = fall back to the WS relay. Wired by AppState to
+    /// `QAudionWebRtcCallController.sendAudioFrameData`. The payload is the raw
+    /// WireRelayFrameCodec envelope (same bytes as the WS path).
+    ///
+    /// W-DCWEDGE (2026-09-25) — the answer is an `AudioDcSendOutcome`, not a Bool:
+    /// `.shed` is a frame the back-pressure gate DROPPED (it used to read as `true` =
+    /// "sent", which is how call 7727f262 showed `dcmux tx dc=5984` for 21 s of
+    /// silence). A shed AUDIO frame is counted in `txDcDrop`, never in `txFramesDc`, and
+    /// is not sent anywhere; a shed CONTROL frame (hangup, NACK) goes on the relay while
+    /// the kill switch is on (`controlFrameNeedsRelay`); `.useRelay` now also covers a
+    /// wedged DataChannel.
+    public var sendAudioOverDataChannel: ((Data) -> AudioDcSendOutcome)?
     /// W-DCHANGUP (2026-08-25) — an inbound 0x03/HANGUP control frame arrived
     /// on the sealed media leg (DataChannel or WS relay). Parameter is the
     /// UTF-8 reason body. The leg belongs to exactly ONE call by
@@ -927,14 +1260,18 @@ final class CallService: @unchecked Sendable {
     ///   `-4` a controller exists but its `PeerConnection` is gone;
     ///   `-1` a PeerConnection exists but no DataChannel was ever created;
     ///   `0…3` the raw `RTCDataChannelState` (0 connecting, 1 open, 2 closing,
-    ///        3 closed) of a channel that exists but is not open.
+    ///        3 closed) of a channel that exists but is not open;
+    ///   `-5` ICE is not carrying (W-DCTXICEGATE), `-7` the channel is open and
+    ///        ICE is carrying but `DcWedgeDetector` says SCTP is not draining
+    ///        (W-DCWEDGE).
     ///
-    /// `sendAudioFrameData` collapses every one of these into the same `false`,
+    /// `sendAudioFrameData` collapses every one of these into the same `.useRelay`,
     /// and they are different bugs: the capability tag is irrelevant for
     /// `-3`/`-2`/`-4`, ICE is the suspect for `-1`/`0`, and `2`/`3` mean a
     /// channel that was alive and died — the case the Android WS-receive
-    /// companion change exists for. `1` (OPEN) must be unreachable here and
-    /// prints as `openbug` if it ever is.
+    /// companion change exists for. `1` (OPEN) is reachable only when
+    /// `dc.sendData` refused the frame (W-DCWEDGE); it prints as `openbug`
+    /// and is a bug when it repeats.
     public var audioDataChannelDiag: (() -> Int)?
     /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — live-getter for the
     /// active call's key-confirmation telemetry snapshot, same pattern as
@@ -1021,7 +1358,52 @@ final class CallService: @unchecked Sendable {
     /// Sendable precisely so it can own this synchronisation. Contract: hold the
     /// lock ONLY to copy the reference in/out — never across seal/open/network or
     /// any call that might re-enter (NSLock is non-recursive).
+    ///
+    /// W-STALESEALER (2026-09-26) — ALSO the lock for `_callGeneration` (below),
+    /// deliberately the SAME lock and not a second one. `_callGeneration` is a
+    /// monotonic counter, bumped unconditionally inside `endCall()`, at EVERY real
+    /// call teardown — `endCall()` is the single choke point every terminal path
+    /// reaches, either directly (this file's own `.error` handshake-outcome case,
+    /// several `AppState` sites: CallKit provider reset, WS `call_peer_offline`/
+    /// `call_busy`/`call_cancel`, `onIncomingCallCancelled`, both
+    /// `beginAndroidOutgoing` failure branches) or through `AppState.endCall()`
+    /// (which also calls it). `installRelaySealers` validates a caller-supplied
+    /// `expectedGeneration` against `_callGeneration` and PUBLISHES the sealer
+    /// references in the SAME locked block — closing the race a two-lock (or
+    /// check-then-act) design would leave open: without that, `endCall()`'s bump +
+    /// slot-clear and `installRelaySealers`'s check + slot-write could interleave
+    /// as check(match) → endCall bump+clear → write(stale sealer resurrected).
+    /// With one lock serialising both, only two orderings exist and both are
+    /// correct: either the install's locked block runs first (publishes, and the
+    /// following `endCall()` immediately clears it again — the call simply ended a
+    /// moment later, harmless) or `endCall()`'s bump runs first (the install's
+    /// locked block then sees a mismatched generation and never writes). See
+    /// `installRelaySealers`'s own doc for the two-phase (cheap early check,
+    /// unlocked crypto, locked re-validate-and-publish) shape that keeps the
+    /// locked regions themselves trivial (pure reference copies / an Int compare
+    /// and assignment — never crypto, I/O, or a call back into this class).
+    ///
+    /// Deliberately NOT bumped by `teardownAudioStack()` itself: that lower-level
+    /// helper also runs as a defensive, SAME-call reset — `startCall(engine:
+    /// contactId:)`'s "cleanup a leftover call" call at its own top, and
+    /// `activateIncomingCallAudio`'s callee-side reset at ANSWER time (which, per
+    /// that method's own doc, can run AFTER `onRelaySessionReady` already
+    /// installed this exact call's sealers) — neither of which is a call ending.
+    /// Bumping there would mute the very call whose closures just captured the
+    /// generation. Only the full `endCall()` (which itself calls
+    /// `teardownAudioStack()`, but is never called BY it) means "this call is
+    /// over".
     private let relaySlotLock = NSLock()
+    private var _callGeneration: Int = 0
+
+    /// Thread-safe read of the current call generation — see `relaySlotLock`'s
+    /// doc above. AppState's caller/responder `onRelaySessionReady` wiring reads
+    /// this SYNCHRONOUSLY at firing time (never at wiring time — a cached,
+    /// reused integration would otherwise carry a stale value) and passes the
+    /// result into `installRelaySealers(expectedGeneration:)`.
+    func currentCallGeneration() -> Int {
+        relaySlotLock.withLock { _callGeneration }
+    }
 
     /// W-LONGAUDIO (2026-08-10) — resolve and latch this call's audio profile.
     ///
@@ -1167,9 +1549,71 @@ final class CallService: @unchecked Sendable {
     ///   • RE-KEYS when the active call's id genuinely changes.
     /// Pure iOS-side logic — no wire-format / HKDF change, so Android, the
     /// firmware earbud counterparty, Desktop and the server are unaffected.
+    ///
+    /// W-STALESEALER (2026-09-26) — `expectedGeneration` is the call generation
+    /// (`currentCallGeneration()`) AppState's caller/responder `onRelaySessionReady`
+    /// closure read SYNCHRONOUSLY at the moment it fired, before hopping to
+    /// `@MainActor` (and, when the identity-confirmation SAS gate is engaged,
+    /// possibly running much later out of `pendingIdentityGatedMedia`). Two checks
+    /// against `_callGeneration`, both done here rather than by the caller:
+    ///   1. an early, cheap rejection right below — skips the reKey/stale-callId/
+    ///      srtpDirKeyV1 branches and the crypto derivation entirely for a call
+    ///      `endCall()` has already bumped past; NOT sufficient alone for
+    ///      correctness (`endCall()` could still run during the crypto work below);
+    ///   2. a re-validation ATOMIC with the sealer-slot publish, in the same
+    ///      `relaySlotLock`-held block that writes `relaySealerSend`/`Recv`/
+    ///      `CallId`/`KeyFp` — see `relaySlotLock`'s doc for why this specific
+    ///      block being locked together with `endCall()`'s bump is what actually
+    ///      closes the race (check(1) alone leaves a window between the check and
+    ///      the write for `endCall()` to bump + clear the very slots this then
+    ///      overwrites, resurrecting sealers for a call that just ended).
+    /// Both checks reuse `RelaySealerInstallGuard.shouldInstall`, so the pure
+    /// match/mismatch decision has exactly one implementation and one test suite.
     public func installRelaySealers(sessionKey: Data, callId: String,
-                                    srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false) {
+                                    srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false,
+                                    isReKeyRound: Bool = false,
+                                    expectedGeneration: Int) {
         let cid = callId.lowercased()
+        // W-STALESEALER (fix-4) — an unknown captured generation (< 0: a
+        // `provideCallGeneration`/`currentCallGeneration()` `?? -1` fallback, meaning
+        // the caller could not prove the call was live) must NOT be treated as stale —
+        // see `RelaySealerInstallGuard`'s doc. Muting a live call is worse than the
+        // rare stale-install race this guard closes, so this logs once and falls
+        // through to install normally; `shouldInstall` below already skips the guard
+        // for this case on its own, this is purely the one-line diagnostic.
+        if expectedGeneration < 0 {
+            let p: String = String(cid.prefix(8))
+            RTLog.warn("call", "W-STALESEALER generation unknown — guard skipped cid=" + p)
+        }
+        // W-STALESEALER — early rejection (see doc above, check 1/2). One
+        // consistent warn for every reason a stale call's install never reaches
+        // the crypto/publish below (superseding the reKey/stale-callId/
+        // srtpDirKeyV1-specific print()s further down, which a dead call would
+        // otherwise still emit for no purpose).
+        guard RelaySealerInstallGuard.shouldInstall(
+            capturedGeneration: expectedGeneration,
+            currentGeneration: relaySlotLock.withLock({ _callGeneration })
+        ) else {
+            let p: String = String(cid.prefix(8))
+            RTLog.warn("call", "relay sealer install dropped (call ended) cid=" + p)
+            return
+        }
+        // W-M15SEALERONCE (2026-09-20) — the M-15 outer pair belongs to the call's
+        // FIRST handshake and lives for the whole call, exactly like Android's
+        // `CallController.outerSealersInstalledOnce`: a re-key rotates the inner
+        // audio key, never this layer. Rebuilding it here while the peer keeps
+        // its original pair made every frame in both directions fail the M-15
+        // open right after the re-key (`unseal failed/replay` x N on iOS, 0 frames
+        // arriving on Android): live call ab7f643b, 2026-09-20 21:47:39Z. This
+        // also covers a first install that is still parked behind the identity
+        // gate: that parked action keeps the FIRST handshake's key.
+        if isReKeyRound {
+            let p: String = String(cid.prefix(8))
+            // CLAUDE.md sec.13: the `+` concatenation must live OUTSIDE print(...).
+            let line: String = "[CallService] W-M15SEALERONCE: re-key round — M-15 sealers left unchanged callId=" + p + "…"
+            print(line)
+            return
+        }
         // Stale-call guard: only (re)key for the call media actually flows on.
         if let active = getCallId?()?.lowercased(), !active.isEmpty, active != cid {
             let a: String = String(cid.prefix(8))
@@ -1221,11 +1665,27 @@ final class CallService: @unchecked Sendable {
                 pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA)
             let send = pair.send
             let recv = pair.recv
-            relaySlotLock.withLock {
+            // W-STALESEALER — re-validate the generation ATOMICALLY with the
+            // publish: this is the ONE locked region that actually closes the
+            // race (see this method's doc + `relaySlotLock`'s doc). Trivial work
+            // only (an Int compare, then 4 reference assignments) — no crypto, no
+            // I/O, nothing that can re-enter this lock, exactly like every other
+            // `relaySlotLock.withLock` block in this file.
+            let published: Bool = relaySlotLock.withLock {
+                guard RelaySealerInstallGuard.shouldInstall(
+                    capturedGeneration: expectedGeneration,
+                    currentGeneration: _callGeneration
+                ) else { return false }
                 relaySealerSend = send
                 relaySealerRecv = recv
                 relaySealerCallId = cid
                 relaySealerKeyFp = kfp
+                return true
+            }
+            guard published else {
+                let p: String = String(cid.prefix(8))
+                RTLog.warn("call", "relay sealer install dropped (call ended) cid=" + p)
+                return
             }
             let verb: String = hadSealer ? "re-keyed" : "installed"
             let p: String = String(cid.prefix(8))
@@ -1254,6 +1714,64 @@ final class CallService: @unchecked Sendable {
     /// Set/cleared by the CallKit mute bridge. Must be called on the main thread.
     public func setMuted(_ muted: Bool) {
         self.isMuted = muted
+        // W-NATIVEMUTE (2026-09-26) — this used to gate ONLY the custom path's
+        // PCM (`processAndSendEncryptedFrame`): on a native-SRTP call the
+        // in-app mute button and CallKit's mute action left the RTP mic
+        // track sending. Forwarded to the native track now, native calls
+        // only (`isArmed`). Unmute is held back before the answer (the
+        // W-MICBEFOREACCEPT-NATIVE gate unmutes at accept, honouring
+        // `isMuted`) and while the relay fallback owns the mic.
+        guard NativeAudioSessionGate.isArmed else { return }
+        // W-CALLERUNMUTELOST (2026-09-27) — was the `if muted { mute } else
+        // if peerAnswered, !audioSrtpFallbackActive { unmute }` shape
+        // directly; now the same three inputs go through the shared
+        // formula (site=3) — see `reapplyNativeSenderMute`'s kdoc for why
+        // this is equivalent AND why it now also survives the sender's
+        // PeerConnection not existing yet.
+        reapplyNativeSenderMute(site: 3)
+        let mutedFlag: Int = muted ? 1 : 0
+        let answeredFlag: Int = peerAnswered ? 1 : 0
+        RTLog.info("call", "nativemute mute=\(mutedFlag) ans=\(answeredFlag)")
+    }
+
+    /// W-CALLERUNMUTELOST (2026-09-27) — single choke point for every
+    /// "recompute and (re)apply the native audio-srtp sender's mute state"
+    /// call site. Replaces five near-duplicate `muteNativeAudioSrtpSender?(
+    /// isMuted)` / `muteNativeAudioSrtpSender?(true)` call sites, each of
+    /// which read a different subset of (`peerAnswered`, `isMuted`,
+    /// `audioSrtpFallbackActive`) — see `NativeSenderMuteDecisions
+    /// .shouldMute` for the one formula that replaces all of them (verified
+    /// equivalent to the original conditionals at every call site, with one
+    /// deliberate correction: the two answer-time call sites — site 1 and
+    /// 2 below — no longer unmute when `audioSrtpFallbackActive` happens to
+    /// already be true at answer time; the original code forgot that
+    /// check).
+    ///
+    /// This alone does not fix W-CALLERUNMUTELOST — `muteNativeAudioSrtpSender`
+    /// can still be wired to a controller whose `QAudionPeerConnection`
+    /// does not exist yet. The fix is that the controller
+    /// (`QAudionWebRtcCallController.nativeSenderMuted`) now LATCHES
+    /// whatever this method sends and re-pushes it onto every
+    /// PeerConnection it is handed from then on (that controller's
+    /// `peerConnection` `didSet`) — so a request that arrives "too early"
+    /// is no longer lost, only delayed until a PeerConnection exists.
+    ///
+    /// - Parameter site: bare diagnostic number, no ids — 1 = callee answer
+    ///   (`activateIncomingCallAudio`), 2 = caller answer
+    ///   (`handleCallAnswered`), 3 = `setMuted`, 4 = SRTP-relay fallback
+    ///   engage, 5 = SRTP-relay fallback recover, 6 = a fresh
+    ///   `webRtcController` was just assigned (`AppState`).
+    func reapplyNativeSenderMute(site: Int) {
+        let intent = NativeSenderMuteDecisions.shouldMute(
+            peerAnswered: peerAnswered, userMuted: isMuted, fallbackActive: audioSrtpFallbackActive)
+        nativeSenderMuteIntent = intent
+        // W-CALLERUNMUTELOST (2026-09-27) — see `nativeSenderMuteSource`'s
+        // own kdoc: set BEFORE invoking the closure below, on the same
+        // (main) thread, so the `AppState` wiring reads the value this same
+        // call just computed, never a stale one from a previous site.
+        nativeSenderMuteSource = (site == 1 || site == 2) ? "answer" : "user"
+        RTLog.info("call", "audiosrtp mute want=\(intent ? 1 : 0) site=\(site)")
+        muteNativeAudioSrtpSender?(intent)
     }
 
     /// Feature B ("voce verificata") — start learning `contactId`'s voice
@@ -1429,6 +1947,21 @@ final class CallService: @unchecked Sendable {
         RTLog.info("call", "plpfeedback peer=\(clamped) applied=\(next)")
     }
 
+    /// W-VPIOOBS (2026-09-25) — the engine package cannot see `RTLog`, so the numeric VP-IO lines
+    /// AudioCapture emits (`audioVp ev=arm|ff|fire|stale|noop|cfg|duck ...`, one per watchdog arm / first
+    /// tap buffer / watchdog expiry / ignored expiry / ignored route override / engine configuration
+    /// change / engine start with the ducker armed) are routed here with an accurate timestamp. The lines
+    /// are numeric on purpose: the log shipper's redactor keeps `key=number` bodies.
+    ///
+    /// W-BYPASSDUCK (2026-09-25) — the same wiring point hands the capture its remote kill switch
+    /// (`ios_bypass_echo_duck`, default ON), read once per call.
+    private func wireVpioCapture(_ capture: AudioCapture) {
+        capture.onDiagLine = { line in
+            RTLog.info("call", line)
+        }
+        capture.bypassEchoDuckEnabled = CallsGate.bypassEchoDuckEnabled()
+    }
+
     func startCall(engine: QAudionEngine, contactId: String) throws {
         // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
         teardownAudioStack(resetDcCounters: true)
@@ -1472,6 +2005,7 @@ final class CallService: @unchecked Sendable {
         // 3 s) instead of leaving the engine dead, and the 10 s engine-state
         // beacon is armed. See AudioInterruptionRecoveryPolicy.
         capture.sessionOwnership = .voiceCall
+        wireVpioCapture(capture)  // W-VPIOOBS / W-BYPASSDUCK
         let playback = AudioPlayback()
 
         // Encrypt-on-mic-frame callback: ogni PCM dal mic passa attraverso
@@ -1756,10 +2290,18 @@ final class CallService: @unchecked Sendable {
         // own startCall() teardown. Save the sealers, run the teardown, then
         // restore them iff they still belong to the call being answered.
         // W-SLOTLOCK — snapshot the sealers atomically before teardown nils them.
-        let (_savedSealerSend, _savedSealerRecv, _savedSealerCallId, _savedSealerKeyFp):
-            (PqcRtpFrameSealer?, PqcRtpFrameSealer?, String?, String?) =
+        // W-STALESEALER (2026-09-26, fix-3) — ALSO snapshot the call generation in
+        // the SAME locked read, so the restore below can tell whether `endCall()`
+        // bumped it since. This whole method has no `await` (it isn't `async`), so
+        // only a genuinely concurrent `endCall()` on ANOTHER thread can race it —
+        // exactly why `CallService` is `@unchecked Sendable` and guards this state
+        // with `relaySlotLock` in the first place: `endCall()`'s `.error`
+        // handshake-outcome case fires off-main, from `QAudionCallIntegration
+        // .onStateChanged`'s own dispatch queue.
+        let (_savedSealerSend, _savedSealerRecv, _savedSealerCallId, _savedSealerKeyFp, _savedGeneration):
+            (PqcRtpFrameSealer?, PqcRtpFrameSealer?, String?, String?, Int) =
             relaySlotLock.withLock {
-                (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp)
+                (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp, _callGeneration)
             }
         // Defensive cleanup: stop any leftover capture from a previous call.
         // W-SRTPFBRESET — keep the fallback latch: this runs at ANSWER time
@@ -1771,24 +2313,60 @@ final class CallService: @unchecked Sendable {
             // active id is unknown (the sealer was installed by W574h only for
             // the active call, so it cannot belong to a superseded one here).
             if active.isEmpty || active == cid {
-                relaySlotLock.withLock {
+                // W-STALESEALER (fix-4) — `_savedGeneration` is read directly from
+                // `_callGeneration` above (never through a `?? -1` fallback), so it
+                // cannot actually be negative today; this mirrors
+                // `installRelaySealers`'s same defensive check anyway, since
+                // `RelaySealerInstallGuard.shouldInstall` treats it identically
+                // wherever it is called from.
+                if _savedGeneration < 0 {
+                    let p: String = String(cid.prefix(8))
+                    RTLog.warn("call", "W-STALESEALER generation unknown — guard skipped cid=" + p)
+                }
+                // W-STALESEALER — restore ATOMICALLY with a re-check of the
+                // generation, same locked check-then-write shape as
+                // `installRelaySealers`'s publish block: if `endCall()` bumped
+                // the generation since the snapshot above (this call ended,
+                // possibly concurrently on another thread, while this method
+                // was mid-teardown), this must NOT resurrect a sealer for it.
+                let restored: Bool = relaySlotLock.withLock {
+                    guard RelaySealerInstallGuard.shouldInstall(
+                        capturedGeneration: _savedGeneration,
+                        currentGeneration: _callGeneration
+                    ) else { return false }
                     relaySealerSend = _savedSealerSend
                     relaySealerRecv = _savedSealerRecv
                     relaySealerCallId = cid
                     relaySealerKeyFp = _savedSealerKeyFp
+                    return true
                 }
                 let p: String = String(cid.prefix(8))
-                let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
-                print(line)
+                if restored {
+                    let line: String = "[CallService] W574i: preserved M-15 relay sealers across answer teardown (callId=" + p + "…)"
+                    print(line)
+                } else {
+                    RTLog.warn("call", "relay sealer restore dropped (call ended) cid=" + p)
+                }
             }
         }
 
         let pipeline = AudioProcessingPipeline()
         pipeline.voiceProcessingOverride = CallsGate.anyVoiceProcessingEnabled
-        do {
-            try pipeline.configureForVoIP()
-        } catch {
-            print("[CallService] activateIncomingCallAudio: AVAudioSession config failed: \(error.localizedDescription)")
+        // W-ADMVOIPCFG (2026-09-26) — on a native-SRTP call (armed AND
+        // negotiated, both known at the callee's answer) the custom path's
+        // raw AVAudioSession configuration + best-effort setActive is skipped:
+        // the custom engine does not run on this call, and WebRTC applies the
+        // identical configuration itself when its unit is enabled. If the
+        // relay fallback later starts AudioCapture, `AudioCapture.start()`
+        // runs `configureForVoIP()` itself (the pipeline is not configured).
+        if NativeAudioSessionGate.isArmed, getUsesNativeAudioSrtp?() == true {
+            RTLog.info("call", "admgate voipcfg=0")
+        } else {
+            do {
+                try pipeline.configureForVoIP()
+            } catch {
+                print("[CallService] activateIncomingCallAudio: AVAudioSession config failed: \(error.localizedDescription)")
+            }
         }
         self.audioPipeline = pipeline
 
@@ -1800,6 +2378,7 @@ final class CallService: @unchecked Sendable {
         // W-AUDIORESUME (2026-09-01) — same voice-call ownership as the
         // outgoing side (see startCall): bounded resume retry + state beacon.
         capture.sessionOwnership = .voiceCall
+        wireVpioCapture(capture)  // W-VPIOOBS / W-BYPASSDUCK
         let playback = AudioPlayback()
 
         // TX path: mic → VP DSP → encrypt → WS send (same as outgoing).
@@ -1858,7 +2437,9 @@ final class CallService: @unchecked Sendable {
         // audio-srtp track (activated at ring time, see
         // QAudionPeerConnection.pendingAudioSrtpMuted's kdoc) has its own,
         // separate mute latch and needs its own explicit unblock here.
-        muteNativeAudioSrtpSender?(false)
+        // W-NATIVEMUTE (2026-09-26) — honour a mute the user set while ringing.
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=1).
+        reapplyNativeSenderMute(site: 1)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // Unified call UI — responder-side Guardian wiring (2026-07-04 gap
@@ -2071,6 +2652,60 @@ final class CallService: @unchecked Sendable {
     }
 
     func endCall() {
+        // W-MEDIAATACCEPT (option b) — §4.10 (I13): the teardown
+        // chokepoint, before any other work below — every hangup/cancel/
+        // CallKit-end/reset path converges on `endCall()`, so this single
+        // call clears ring-time state (RingSignalingRegistry, CallKeyStore,
+        // held ACCEPT, pending gated actions, timers) for whichever call
+        // this is, no matter which path led here.
+        onCallTeardownChokepoint?(getCallId?())
+        // W-STALESEALER — bump FIRST, unconditionally, before any other teardown
+        // work, under the SAME lock `installRelaySealers` validates+publishes
+        // under: see `relaySlotLock`'s doc comment for why this is both the single
+        // choke point every terminal path (this app-wide) funnels through AND why
+        // the shared lock closes the check-then-act race, and for why
+        // `teardownAudioStack()` itself must never do this.
+        relaySlotLock.withLock { _callGeneration &+= 1 }
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — the call's native-SRTP decision
+        // ends with the call (same single choke point as the generation bump
+        // above). The next call takes its own. Idempotent.
+        // W-NATIVESRTPSNAPSHOT-ID — keyed end (logs whether the snapshot
+        // belonged to this call) plus the safety net: this is the one choke
+        // point every normal terminal path shares.
+        // W-NATIVESRTPSNAPSHOT-ENDOWNER — one atomic call: the safety net no
+        // longer drops a snapshot owned by ANOTHER known call id (a stale
+        // teardown deleted the newer call's snapshot). `end=0` = kept.
+        let snapshotEnd = CallCapabilities.endNativeSrtpCallSnapshotAtCallEnd(callId: getCallId?())
+        if let nativeSnapshot = snapshotEnd.value {
+            let nativeFlag: Int = nativeSnapshot ? 1 : 0
+            let endFlag: Int = snapshotEnd.ended ? 1 : 0
+            let matchFlag: Int = snapshotEnd.matched ? 1 : 0
+            RTLog.info("call", "nsnap site=4 native=\(nativeFlag) end=\(endFlag) match=\(matchFlag)")
+            // W-NATIVESRTPCRASHGUARD (this task) — this call ended WITHOUT
+            // crashing (we are running ordinary Swift code, not a signal
+            // handler), so a native-SRTP call breaks any consecutive-crash
+            // streak in progress. Only for the call whose snapshot this
+            // teardown actually owned (`matched`/an unidentified snapshot,
+            // same set `ended` already covers) — a stale end for a call
+            // that was never native, or belongs to someone else, resets
+            // nothing.
+            // W-MEDIAATACCEPT (option b) — §10 (I9/G6): now also requires
+            // `reachedMediaThisCall` — the native-path signal is wired (see
+            // that property's doc), so a call that only rang/built its PC
+            // and was cancelled/failed before real audio flowed no longer
+            // resets the streak; only a call that demonstrably reached
+            // media does.
+            if CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+                nativeSnapshot: nativeSnapshot, ended: snapshotEnd.ended, reachedMedia: reachedMediaThisCall
+            ) {
+                CallCapabilities.resetNativeSrtpCrashStreak()
+            }
+        }
+        reachedMediaThisCall = false
+        // W-CRASHCRUMBS (this task) — clean end: drop the "might have died
+        // mid-call" breadcrumb signal so an unrelated LATER crash (home
+        // screen, Settings, ...) is never misattributed to this call.
+        CrashBreadcrumbs.clearCallContext()
         onDeepfakeAlert?(false)
         stopDurationTimer()
         stopPlpReportTimer()
@@ -2163,6 +2798,12 @@ final class CallService: @unchecked Sendable {
                 noteRealInboundDecode()
                 playDecodedLegacyPcm(pcm)  // single-engine: playback lives on the capture engine (or native, see kdoc)
             } catch {
+                // W-RXGATE (2026-09-19) — a buffered frame that still has no session
+                // behind it is expected, not a decrypt failure.
+                if RxDecodeFailureKind.classify(error) == .preSession {
+                    notePreSessionRxDrop()
+                    continue
+                }
                 rxDecryptErrorCount &+= 1
                 noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
             }
@@ -2186,7 +2827,29 @@ final class CallService: @unchecked Sendable {
         lastRealInboundDecodeAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard !firedFirstRealDecode else { return }
         firedFirstRealDecode = true
+        // W-MEDIAATACCEPT (option b) — §10: the custom-path half of
+        // `reachedMediaThisCall` (see that property's doc for the native-
+        // path half this does NOT cover yet).
+        noteMediaReached()
         onFirstRealDecode?()
+    }
+
+    /// W-RXGATE (2026-09-19) — one inbound audio frame reached the decoder before
+    /// this side had a session key. Routine for the caller (the callee derives its
+    /// key on the OFFER and starts sending as soon as it answers; the caller only
+    /// derives its own when the ACCEPT has been processed), so it is counted in its
+    /// own counter (`rx_pre_hs`) and kept out of `rxDecryptErrorCount`, the AEAD
+    /// failure burst meter and the post-call tuner. See `RxDecodeFailureKind`.
+    /// Called from the same RX branches as the counter it replaces.
+    private func notePreSessionRxDrop() {
+        rxPreSessionDropped &+= 1
+        // Shapes verified against the log shipper's redactor: `rxpre first=1` and
+        // `rxpre n=25` ship, `rxpre first n=1` is dropped whole.
+        if rxPreSessionDropped == 1 {
+            RTLog.info("call", "rxpre first=1")
+        } else if rxPreSessionDropped % 25 == 0 {
+            RTLog.info("call", "rxpre n=" + rxPreSessionDropped.description)
+        }
     }
 
     /// W-AUDIOAEADREKEY (2026-09-02) — B3: note one audio AEAD decrypt
@@ -2376,7 +3039,12 @@ final class CallService: @unchecked Sendable {
         } else {
             sealed = frame
         }
-        let sentOnDc: Bool = sendAudioOverDataChannel?(sealed) ?? false
+        // W-DCWEDGE — a control frame is not audio: one the back-pressure gate SHED went
+        // on no leg at all (it used to be counted as sent, and lost), so it goes on the
+        // relay like one the channel refused (kill switch on; off = dropped as before).
+        let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealed) ?? .useRelay
+        let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
+        let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
         if !sentOnDc {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
@@ -2420,7 +3088,13 @@ final class CallService: @unchecked Sendable {
         } else {
             sealed = frame
         }
-        let sentOnDc: Bool = sendAudioOverDataChannel?(sealed) ?? false
+        // W-DCWEDGE — a request on a wedged (or merely back-pressured) channel used to be
+        // shed and still log `tx=1` (7727f262: 117 requests logged, none delivered). With
+        // the kill switch on, anything that was not queued on the channel goes on the
+        // relay, so `tx=1` is true again (off = dropped as before).
+        let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealed) ?? .useRelay
+        let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
+        let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
         if !sentOnDc {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
@@ -2446,7 +3120,10 @@ final class CallService: @unchecked Sendable {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard nackRateLimiter.tryAcquire(nowMs: nowMs) else { return }
         let cid = getCallId?()
-        let sentOnDc: Bool = sendAudioOverDataChannel?(envelope) ?? false
+        // W-DCWEDGE — same rule as the request: not queued on the channel = on the relay.
+        let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(envelope) ?? .useRelay
+        let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
+        let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
         if !sentOnDc {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
@@ -2526,6 +3203,22 @@ final class CallService: @unchecked Sendable {
         // Verified redactor-safe: short8 caller ids, single-word `why=`
         // tokens, decimal counters — no run of 12+ base64-alphabet
         // characters for RE_RESIDUAL_B64 to catch.
+        RTLog.info("call", line)
+    }
+
+    /// W-DCWEDGE (2026-09-25) — sample the remote kill switch of the wedge diversion.
+    /// `FeatureFlags` is main-actor and the send path is not, so the value lives in the
+    /// engine's lock-guarded `DcWedgeKillSwitch` and is refreshed here once per call
+    /// (from the first encrypted TX frame, see `processAndSendEncryptedFrame`).
+    /// Compiled default ON: an absent key, a flags fetch that never succeeded or a
+    /// non-Bool value all read ON. `ios_dc_wedge_fallback: false` in flags.json restores
+    /// the pre-W-DCWEDGE audio routing from the NEXT call (the detector still runs and logs).
+    @MainActor
+    static func refreshDcWedgeFlag() {
+        let on: Bool = FeatureFlags.bool("ios_dc_wedge_fallback", true)
+        DcWedgeKillSwitch.shared.divertEnabled = on
+        let flag: String = on ? "1" : "0"
+        let line: String = "dcmux wedgesw=" + flag
         RTLog.info("call", line)
     }
 
@@ -2694,12 +3387,12 @@ final class CallService: @unchecked Sendable {
             // `unsealRelayFrame` is the same operation as `openInbound`,
             // pass-through until the recv sealer is installed.
             self.wireRxBytes &+= Int64(inner.count)
-            // W-AUDIONACK — duplicate guard FIRST, before decrypt: a
+            // W-AUDIONACK — duplicate guard: a
             // retransmit racing a late original must never reach playback
             // twice (this wire has no replay window of its own on the
-            // legacy no-AAD path — see NackRxTracker's kdoc). Also the
-            // gap-aging clock: any arrival, decryptable or not, can retire
-            // or start a pending gap. `inner`'s wire shape follows the same
+            // legacy no-AAD path — see NackRxTracker's kdoc). The gap-aging
+            // clock advances only for frames that opened (W-REKEYSEQGATE,
+            // below). `inner`'s wire shape follows the same
             // `androidAudioWireCompat` choice `encodeAudioForWire` makes on
             // TX, so the same flag picks the right decoder here.
             let nackSeq: Int64?
@@ -2708,15 +3401,26 @@ final class CallService: @unchecked Sendable {
             } else {
                 nackSeq = (try? FrameEncoder.deserialize(inner)).map { Int64($0.sequenceNumber) }
             }
-            if let seq = nackSeq {
-                let nowMsForNack = Int64(Date().timeIntervalSince1970 * 1000)
-                guard self.nackRxTracker.accept(seq, nowMs: nowMsForNack) else { return }
-                for missingSeq in self.nackRxTracker.gapsReadyToNack(nowMs: nowMsForNack) {
-                    self.sendNackRequest(seq: missingSeq)
-                }
-            }
+            // W-REKEYSEQGATE (2026-09-20) — this used to `accept` (i.e. RECORD) the seq here, before
+            // decryption. At a re-key the peer's audio counter restarts at 0 with the new key, but
+            // still-in-flight OLD-key frames (high seq, which this side can no longer open) had
+            // already raised `highestSeq`, so every new-key frame was dropped as "too old" and never
+            // decrypted: silence both ways until the end of the call (S26 <-> iOS, 2026-09-20).
+            // Now the pre-decrypt step is a READ-ONLY duplicate check and the tracker is updated
+            // only after the frame really opened.
+            // W-NACKEPOCH — first align the tracker with the key epoch the engine now holds.
+            self.syncNackTrackerToKeyEpoch()
+            if let seq = nackSeq, !self.nackRxTracker.wouldAccept(seq) { return }
             do {
                 let pcm = try integration.processIncomingAudio(serializedFrame: inner)
+                // W-REKEYSEQGATE — commit + gap aging, now fed only by frames that decrypted.
+                if let seq = nackSeq {
+                    let nowMsForNack = Int64(Date().timeIntervalSince1970 * 1000)
+                    self.nackRxTracker.accept(seq, nowMs: nowMsForNack)
+                    for missingSeq in self.nackRxTracker.gapsReadyToNack(nowMs: nowMsForNack) {
+                        self.sendNackRequest(seq: missingSeq)
+                    }
+                }
                 self.framesDecryptedRx &+= 1
                 self.noteRealInboundDecode()
                 if !self.loggedFirstRxDecrypt {
@@ -2799,6 +3503,16 @@ final class CallService: @unchecked Sendable {
                             + " cc=" + s.concealed.description
                             + " dp=" + s.depth.description
                         print(stats)
+                        // W-JBMINFRAMES / W-JBREACTIVE (2026-09-18) — its own
+                        // line, per the structured-shape budget note above:
+                        //   tg = adaptive target ms   ef = effective target ms
+                        //   tf = target frames        rb = reactive bumps
+                        let target: String = "[CallService] RX target:"
+                            + " tg=" + s.adaptiveTargetMs.description
+                            + " ef=" + s.effectiveTargetMs.description
+                            + " tf=" + s.targetFrames.description
+                            + " rb=" + s.reactiveBumps.description
+                        print(target)
                     }
                     // W-FECDECODE (2026-08-25) — same cadence as the playout
                     // block above (~5 s), and ships to the remote timeline
@@ -2830,6 +3544,12 @@ final class CallService: @unchecked Sendable {
                 }
                 self.rxLevelSampleCount &+= Int64(rxSamples.count)
             } catch {
+                // W-RXGATE (2026-09-19) — no session key on this side yet: expected, not a
+                // decrypt failure. Kept out of rx_dec_err, the burst meter and the tuner.
+                if RxDecodeFailureKind.classify(error) == .preSession {
+                    self.notePreSessionRxDrop()
+                    return
+                }
                 self.rxDecryptErrorCount &+= 1
                 self.noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
                 if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
@@ -2858,6 +3578,12 @@ final class CallService: @unchecked Sendable {
     /// turn the later `recoverAudioSrtpFallback` into a no-op that never
     /// un-mutes it (adversarial review of the fix, 2026-09-08).
     private func teardownAudioStack(resetSrtpFallback: Bool = true, resetDcCounters: Bool = false) {
+        // W-ADMGATE (2026-09-26) — FIRST: WebRTC's own audio unit off before
+        // anything else is torn down (and, on the end-call path, before
+        // AppState closes the PeerConnection). No-op unless a native-SRTP call
+        // armed manual mode and the unit is enabled.
+        NativeAudioSessionGate.setNativeAudioActive(
+            false, reason: NativeAudioUnitGateDecisions.ChangeReason.teardown.rawValue)
         // Diagnostic: emit the REAL audio frame counters BEFORE they reset.
         // call.media.summary's `suspect_silent` is a timer-only heuristic and
         // says nothing about audio — these counters are the ground truth that
@@ -2867,6 +3593,10 @@ final class CallService: @unchecked Sendable {
         //       silent call then means PLAYBACK/route (Bug B / speaker).
         //   rx_recv>0 & rx_dec≈0 & rx_dec_err high       → KEY MISMATCH (the
         //       two sides derived different session keys → SAS won't match).
+        //   rx_recv>0 & rx_dec≈0 & rx_dec_err≈0 & rx_pre_hs high
+        //                                                 → THIS side never got a
+        //       session key (W-RXGATE): the ACCEPT was never processed, or was
+        //       processed far later than the peer started sending.
         //   rx_recv≈0                                     → audio never arrived
         //       (peer not capturing / transport / wrong call_id).
         //   engines_started=false                         → engines never ran.
@@ -2879,6 +3609,9 @@ final class CallService: @unchecked Sendable {
                 "rx_recv":         framesReceivedRx,
                 "rx_dec":          framesDecryptedRx,
                 "rx_dec_err":      rxDecryptErrorCount,
+                // W-RXGATE — inbound frames that arrived before this side had a session
+                // key; NOT a fault, kept out of rx_dec_err (see rxPreSessionDropped).
+                "rx_pre_hs":       rxPreSessionDropped,
                 "tx_enc_err":      txEncryptErrorCount,
                 // W-TXGATE — expected mic frames dropped before the session key
                 // existed (~0.8 s handshake window); NOT a fault. Kept separate
@@ -2903,7 +3636,9 @@ final class CallService: @unchecked Sendable {
             // W574c: callId attached so the tune decision (or skip reason)
             // shows up on the server's per-call telemetry timeline.
             AudioAutoTuner.shared.tunePostCall(
-                framesReceived:  framesReceivedRx,
+                // W-RXGATE — pre-session frames were never decryptable by design; leaving
+                // them in the denominator would only dilute the real loss estimate.
+                framesReceived:  max(0, framesReceivedRx &- rxPreSessionDropped),
                 framesDecrypted: framesDecryptedRx,
                 rxDecryptErrors: rxDecryptErrorCount,
                 callId:          getCallId?()
@@ -2922,6 +3657,10 @@ final class CallService: @unchecked Sendable {
             // below. peak_pct is peak/32767 rounded to 1dp.
             if let capture = audioCapture, let pipeline = audioPipeline {
                 let level = capture.consumeLevelStats()
+                // W-VPIOOBS (2026-09-25) — latch "was the engine alive at hangup" NOW, before the
+                // pipeline stats are consumed: AudioCapture.stop() used to be the only latch and it
+                // runs AFTER this read, so engine_running_at_end came out false on 92 of 92 records.
+                capture.noteRunningAtEndNow()
                 let diag = pipeline.consumeAudioDiagStats()
                 let peakPct = Double(level.peak) / Double(Int16.max) * 100
                 // TX mic RMS (% of full scale) alongside the existing TX peak.
@@ -3110,10 +3849,13 @@ final class CallService: @unchecked Sendable {
                     //  * echo_gain_min — DELIBERATELY OMITTED. This is
                     //    Android's OWN software residual-echo-suppressor gain
                     //    floor (`SpeakerEchoSuppressor`); iOS runs no
-                    //    equivalent software suppression stage (Apple's VP-IO
-                    //    is the only canceler in the chain, opaque past
-                    //    `setVoiceProcessingEnabled`), so there is nothing
-                    //    honest to report under this name.
+                    //    equivalent software suppression stage while VP-IO
+                    //    works (Apple's VP-IO is the only canceler in the
+                    //    chain, opaque past `setVoiceProcessingEnabled`), so
+                    //    there is nothing honest to report under this name.
+                    //    The one iOS ducker (W-BYPASSDUCK: VP-IO bypassed AND
+                    //    loudspeaker only) reports `echo_duck_*` instead,
+                    //    merged in below with the W-VPIOOBS fields.
                     "echo_active_frames":  level.echoActiveFrames,
                     "echo_active_rms_pct": (level.echoActiveRmsPct * 10).rounded() / 10,
                     "echo_idle_frames":    level.echoIdleFrames,
@@ -3122,6 +3864,13 @@ final class CallService: @unchecked Sendable {
                     "speaker_ms":          diag.speakerMs,
                     "aec_ever_active":     diag.vpioEverActive
                 ]
+                // W-VPIOOBS (2026-09-25) — VP-IO tap latency (first frame after start), watchdog
+                // expiries with their engine generation, and the once-per-call hardware / OS / mic
+                // mode / port / tap-format snapshot. Same emit, so the same operational-diagnostics
+                // consent gate as every field above. See VpioObservability.diagAttrs.
+                for (vpioKey, vpioValue) in capture.consumeVpioDiagAttrs() {
+                    diagAttrs[vpioKey] = vpioValue
+                }
                 // W-KCMAC/W-ASSURANCE (ship step 5, telemetry-only) — riding the
                 // EXISTING call.audio.diag emission rather than a new channel
                 // (per the design). `nil` when this call never fired
@@ -3172,6 +3921,9 @@ final class CallService: @unchecked Sendable {
         wireTxBytes = 0
         wireRxBytes = 0
         lastThroughputSample = nil
+        // N7 (network-resilience-max) — never let a second call's first
+        // heartbeat diff against the PREVIOUS call's last cumulative sample.
+        lastNativeAudioIntervalCounters = nil
         wireTxKbps = nil
         wireRxKbps = nil
         mediaRttMs = nil
@@ -3181,6 +3933,7 @@ final class CallService: @unchecked Sendable {
         framesReceivedRx = 0
         txEncryptErrorCount = 0
         rxDecryptErrorCount = 0
+        rxPreSessionDropped = 0           // W-RXGATE
         // W-AUDIOAEADREKEY (2026-09-02) — B3: a fresh call must not inherit
         // the previous call's failure history or cooldown clock, same
         // discipline every other per-call counter on this page follows.
@@ -3220,6 +3973,7 @@ final class CallService: @unchecked Sendable {
         if resetDcCounters {
             txFramesDc = 0
             txFramesWs = 0
+            txDcDrop = 0
             rxFramesDc = 0
             rxFramesWs = 0
             loggedFirstTxOnDc = false
@@ -3238,6 +3992,7 @@ final class CallService: @unchecked Sendable {
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
+        resetNativeAudioUnitGateState()  // W-ADMGATE — per-call source/wait state
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
         capfailRetryArmed = false  // W-CAPFAILRETRY — one retry per call
         if resetSrtpFallback {
@@ -3347,6 +4102,20 @@ final class CallService: @unchecked Sendable {
             RTLog.info("call", "audioIO defer=1 gate=3")
             return
         }
+        // W-MEDIAATACCEPT (option b) — §4.6 (gate 5): with the incoming
+        // media plane built at accept, CallKit's `didActivate` can win the
+        // race against the still-building PeerConnection. Starting the
+        // custom AVAudioEngine here in that window, on a call that WILL
+        // end up native, would race a second VoiceProcessingIO unit
+        // against WebRTC's own once the PC arms (W-ADMFALLBACK). AppState
+        // wires this to `RingSignalingDecisions.audioIOGate` — `false`
+        // (not predicted native, or not `mode == 1`, or the plane is
+        // already ready/failed) never defers, so this is inert on every
+        // call this feature doesn't apply to.
+        if mediaPlanePending?() == true {
+            RTLog.info("call", "audioIO defer=1 gate=5")
+            return
+        }
         // IOS-C4b (2026-08-26) — the call negotiated CallCapabilities
         // .audioSrtpV1: native WebRTC owns capture+playout directly via its
         // own audio device module (QAudionPeerConnection.activateNativeAudioSrtp
@@ -3388,6 +4157,10 @@ final class CallService: @unchecked Sendable {
                     + " rec=\(sess.isInputAvailable ? 1 : 0)"
                     + " buf=\(Int(sess.ioBufferDuration * 1000))"
             )
+            // W-ADMGATE (2026-09-26) — this branch is now also THE place
+            // WebRTC's own audio unit is switched on (manual audio mode,
+            // native-SRTP calls only; see NativeAudioSessionGate).
+            applyNativeAudioUnitGate(reason: .gate)
             return
         }
         // SINGLE-ENGINE FIX — start ONE AVAudioEngine only. AudioCapture now
@@ -3595,6 +4368,135 @@ final class CallService: @unchecked Sendable {
         }
     }
 
+    // MARK: - W-ADMGATE (2026-09-26) — WebRTC's own audio unit (manual mode)
+
+    /// Who activated the session for the call in progress (merged, see
+    /// `NativeAudioUnitGateDecisions.mergedSource`). Reset with the session.
+    private var audioActivationSource: AudioSessionActivationSource = .notActivated
+    /// Set once `callKitActivationWaitMs` passed after a self-activation that
+    /// still expected CallKit's didActivate.
+    private var nativeUnitCallKitWaitExpired = false
+    private var nativeUnitCallKitWaitItem: DispatchWorkItem?
+    /// Last verdict logged, so the `admgate verdict=` line is emitted on change only.
+    private var lastLoggedNativeUnitVerdict: Int = -1
+    /// W-DEACTOWN (2026-09-27) — the arm token this call's own enable switched
+    /// the unit on under (`NativeAudioSessionGate.enableNativeAudio`), 0 when
+    /// this call has not enabled it. A CallKit deactivation of THIS call stops
+    /// exactly that arm, owner-checked inside the gate's critical section.
+    /// Main thread; cleared with the rest of the per-call gate state.
+    private var nativeUnitOwnerToken: Int = 0
+    /// W-DEACTOWN (2026-09-27) — the call generation (`_callGeneration`) in
+    /// which CallKit's own `didActivate` was last handled, `nil` once a
+    /// `didDeactivate` consumed it. CallKit alternates the two strictly, so
+    /// this attributes the next identity-less `didDeactivate` to its call
+    /// (`NativeAudioUnitGateDecisions.callKitDeactivationOwner`). NOT part of
+    /// the per-call reset: it must outlive the call's teardown, to recognise a
+    /// late deactivation that arrives after the next call started. Recorded on
+    /// every call (bookkeeping only); read only on a native-SRTP call. Main
+    /// thread.
+    private var callKitActivationGeneration: Int?
+
+    private func resetNativeAudioUnitGateState() {
+        audioActivationSource = .notActivated
+        nativeUnitCallKitWaitExpired = false
+        nativeUnitCallKitWaitItem?.cancel()
+        nativeUnitCallKitWaitItem = nil
+        lastLoggedNativeUnitVerdict = -1
+        nativeUnitOwnerToken = 0
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §4.6: called once the incoming media
+    /// plane leaves `.building` (either `.ready` — the PC is armed — or
+    /// `.failed` — falling back to the custom path). Re-runs
+    /// `startAudioIOIfReady()` now that `mediaPlanePending?()` will read
+    /// `false`, so a `didActivate` that arrived (and was deferred, gate 5)
+    /// while the PC was still building gets its audio I/O started. Resets
+    /// `lastLoggedNativeUnitVerdict` first so the resulting native-unit
+    /// gate re-decision logs its verdict even if it happens to match the
+    /// last (pre-PC) one — same reset `refreshNativeAudioUnitGate` already
+    /// does at its own re-decision sites.
+    public func resumeAudioIOAfterMediaPlane() {
+        lastLoggedNativeUnitVerdict = -1
+        startAudioIOIfReady()
+    }
+
+    /// Items 4/6 — the ONLY place `isAudioEnabled` becomes `true`. No-op on
+    /// any call that did not arm manual mode (native SRTP off for the call):
+    /// the custom path stays exactly as it was. Main thread.
+    private func applyNativeAudioUnitGate(reason: NativeAudioUnitGateDecisions.ChangeReason) {
+        guard NativeAudioSessionGate.isArmed else { return }
+        // W-ADMCONFIRM (2026-09-26) — `audioSessionActive` alone is also true
+        // after CallKitProvider's W571 last resort (every setActive(true)
+        // attempt failed); for a self-activation that expects CallKit the
+        // SDK's real state must agree before the unit may start.
+        let rtcSessionActive: Bool = NativeAudioSessionGate.isSessionActive
+        let unitSessionActive: Bool = NativeAudioUnitGateDecisions.sessionActiveForUnit(
+            appSessionActive: audioSessionActive,
+            source: audioActivationSource,
+            rtcSessionActive: rtcSessionActive)
+        let verdict = NativeAudioUnitGateDecisions.verdict(
+            nativeSnapshot: true,
+            negotiated: getUsesNativeAudioSrtp?() == true,
+            fallbackActive: audioSrtpFallbackActive,
+            sessionActive: unitSessionActive,
+            answered: peerAnswered,
+            source: audioActivationSource,
+            callKitWaitExpired: nativeUnitCallKitWaitExpired)
+        if verdict.rawValue != lastLoggedNativeUnitVerdict {
+            lastLoggedNativeUnitVerdict = verdict.rawValue
+            let verdictCode: Int = verdict.rawValue
+            let sourceCode: Int = audioActivationSource.rawValue
+            let waitedFlag: Int = nativeUnitCallKitWaitExpired ? 1 : 0
+            let rtcActiveFlag: Int = rtcSessionActive ? 1 : 0
+            RTLog.info("call", "admgate verdict=\(verdictCode) src=\(sourceCode) ckwait=\(waitedFlag) act=\(rtcActiveFlag)")
+        }
+        switch verdict {
+        case .enable:
+            // Never two VoiceProcessingIO units: the custom engine must be
+            // fully stopped before WebRTC's starts. It normally never runs on
+            // a native call (this branch skips it); it can only be up if it
+            // started before the negotiation landed, or from a fallback.
+            if let capture = audioCapture, capture.isCapturing {
+                capture.stop(deactivateSession: false)
+                audioEnginesStarted = false
+                RTLog.info("call", "admgate capstop=1")
+            }
+            // W-DEACTOWN — same switch as `setNativeAudioActive(true, ...)`,
+            // plus the arm it was made for: this call's deactivation stops
+            // that arm only.
+            nativeUnitOwnerToken = NativeAudioSessionGate.enableNativeAudio(reason: reason.rawValue)
+        case .awaitingCallKit:
+            scheduleNativeUnitCallKitWait()
+        default:
+            break
+        }
+    }
+
+    /// W-ADMNUDGE — re-run the gate on request (the engine's capture-live
+    /// nudge, after it switched the unit off). Main thread.
+    public func reapplyNativeAudioUnitGate(reasonCode: Int) {
+        let reason = NativeAudioUnitGateDecisions.ChangeReason(rawValue: reasonCode) ?? .gate
+        lastLoggedNativeUnitVerdict = -1  // log the verdict of this re-decision
+        applyNativeAudioUnitGate(reason: reason)
+    }
+
+    /// Bounded wait for CallKit's own didActivate after a self-activation of a
+    /// CallKit-managed call (see `NativeAudioUnitGateDecisions.callKitActivationWaitMs`).
+    private func scheduleNativeUnitCallKitWait() {
+        guard nativeUnitCallKitWaitItem == nil, !nativeUnitCallKitWaitExpired else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.nativeUnitCallKitWaitItem = nil
+            guard NativeAudioSessionGate.isArmed else { return }
+            self.nativeUnitCallKitWaitExpired = true
+            RTLog.info("call", "admgate ckwait=1 expired=1")
+            self.startAudioIOIfReady()
+        }
+        nativeUnitCallKitWaitItem = item
+        let waitMs = Int(NativeAudioUnitGateDecisions.callKitActivationWaitMs)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(waitMs), execute: item)
+    }
+
     /// W-SRTPFALLBACK (2026-08-26) — re-engage the manual capture/decode
     /// path while a native-audio-srtp call's ICE has been down for the full
     /// debounce (`SrtpFallbackDecisions`, wired from
@@ -3621,7 +4523,30 @@ final class CallService: @unchecked Sendable {
         // setNativeAudioSrtpMuted's kdoc) is a no-op when the network
         // genuinely is down (nothing to release) and the missing half of
         // the fix when it is not.
-        muteNativeAudioSrtpSender?(true)
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now
+        // (site=4); `audioSrtpFallbackActive` is already `true` above, so
+        // `shouldMute` forces this to `true` regardless of `peerAnswered`/
+        // `isMuted`, same as the unconditional `true` this replaces.
+        reapplyNativeSenderMute(site: 4)
+        // W-ADMFALLBACK (2026-09-26) — muting the track never stopped
+        // WebRTC's VoiceProcessingIO unit, so the custom AudioCapture started
+        // below ran a SECOND VoiceProcessingIO next to it (the 'what' /
+        // `in=` empty capfail of W-SRTPFBRESET's evidence). On a manual-mode
+        // call the unit is switched off first. The stop is applied by WebRTC
+        // asynchronously on its own audio thread with no completion signal,
+        // so AudioCapture starts after a bounded settle instead of at once
+        // (conservative: the fork's stop latency is not determinable here).
+        let unitStopped = NativeAudioSessionGate.setNativeAudioActive(
+            false, reason: NativeAudioUnitGateDecisions.ChangeReason.fallbackEngage.rawValue)
+        if unitStopped {
+            let settleMs = Int(NativeAudioUnitGateDecisions.fallbackUnitStopSettleMs)
+            RTLog.info("call", "admgate fbsettle=\(settleMs)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(settleMs)) { [weak self] in
+                guard let self, self.audioSrtpFallbackActive else { return }
+                self.startAudioIOIfReady()
+            }
+            return
+        }
         startAudioIOIfReady()
     }
 
@@ -3636,24 +4561,75 @@ final class CallService: @unchecked Sendable {
         // only the manual fallback engine is stepping aside for native
         // audio-srtp to resume. Deactivating the shared session mid-call
         // would tear down its category/mode for no reason.
+        // `stop()` tears VoiceProcessingIO down synchronously
+        // (`CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled` is a
+        // compile-time `false`), so the custom unit is gone before WebRTC's is
+        // switched back on below.
         audioCapture?.stop(deactivateSession: false)
         audioEnginesStarted = false
         // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
         // sole TX/RX owner, same as this function's own doc already says.
-        muteNativeAudioSrtpSender?(false)
+        // W-NATIVEMUTE (2026-09-26) — honouring the user's own mute.
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=5).
+        reapplyNativeSenderMute(site: 5)
+        // W-ADMFALLBACK — native unit back on (same verdict as the call start).
+        applyNativeAudioUnitGate(reason: .fallbackRecover)
     }
 
     /// W464 — CallKit activated the shared `AVAudioSession`. This is the
     /// only safe moment to spin up the mic-capture / speaker-playback
     /// `AVAudioEngine`s. Wired from `AppState` to
     /// `CallKitProvider.onAudioSessionActivated`. Runs on the main thread.
-    public func handleAudioSessionActivated() {
+    ///
+    /// W-ADMGATE (2026-09-26) — `source` says who activated the session (see
+    /// `AudioSessionActivationSource`). The default `.selfManaged` keeps every
+    /// pre-existing caller (CallKit-free mode, CallKit failure fallbacks, the
+    /// W469 self-activation) meaning what it meant; `CallKitProvider` passes
+    /// the real source. Only a manual-mode (native-SRTP) call reads it.
+    public func handleAudioSessionActivated(source: AudioSessionActivationSource = .selfManaged) {
+        // W-DEACTOWN (2026-09-27) — pair CallKit's own activation with the call
+        // it was handled in, for the identity-less `didDeactivate` that follows
+        // it (see `handleAudioSessionDeactivated`). Bookkeeping only.
+        //
+        // `.selfExpectingCallKit` is recorded too: that source still expects a
+        // real CallKit `didActivate` for THIS call, but CallKit skips it
+        // outright when the shared session was already active
+        // (W-CKSTARTACTIVATE) — the gate can still enable the unit for such a
+        // call once the wait times out (`callKitActivationWaitMs`), so it must
+        // be pairable like a real one. Leaving it unrecorded meant a call that
+        // only ever self-activated had `callKitActivationGeneration == nil`
+        // for its whole lifetime; a late `didDeactivate` for THAT call then
+        // read as `.unattributed` instead of `.endedCall` once the next call
+        // had started, and `handleAudioSessionDeactivated` took the
+        // unattributed case as the successor's own deactivation — stopping or
+        // resetting the live unit of the call that never actually deactivated.
+        if source == .callKit || source == .selfExpectingCallKit {
+            callKitActivationGeneration = currentCallGeneration()
+        }
         audioSessionActive = true
+        let merged = NativeAudioUnitGateDecisions.mergedSource(current: audioActivationSource, incoming: source)
+        audioActivationSource = merged
+        if NativeAudioSessionGate.isArmed {
+            let incomingCode: Int = source.rawValue
+            let mergedCode: Int = merged.rawValue
+            RTLog.info("call", "admgate sess=1 src=\(incomingCode) merged=\(mergedCode)")
+            // A self-managed RE-activation while the unit runs is the wake-only
+            // path: CallKit released the session under the running unit
+            // (didDeactivate is not routed here for a self-managed call), so
+            // the unit is restarted on the re-activated session.
+            if source == .selfManaged, NativeAudioSessionGate.isNativeAudioEnabled {
+                NativeAudioSessionGate.setNativeAudioActive(
+                    false, reason: NativeAudioUnitGateDecisions.ChangeReason.selfManagedReactivation.rawValue)
+            }
+        }
         // W-ADMNOMANUAL (2026-08-31) — nothing is relayed to RTCAudioSession
         // here any more; the app's own session config plus WebRTC's automatic
         // audio-unit management is the arrangement that shipped with a healthy
         // session. NativeAudioSessionGate documents every variant that was
         // tried in between and what each one measured.
+        // W-ADMGATE (2026-09-26) — superseded for native-SRTP calls only: the
+        // unit's start/stop is decided in `startAudioIOIfReady`'s native
+        // branch (`applyNativeAudioUnitGate`).
         startAudioIOIfReady()
         // EARPIECE is the default route for an encrypted phone call (user
         // requirement: "gestire il volume della capsula telefonica; lo speaker
@@ -3678,7 +4654,49 @@ final class CallService: @unchecked Sendable {
         // pulled so far. One line, so the next back-to-back test either
         // shows the clash or rules it out.
         RTLog.info("call", "audioSessionDeactivated callId=" + Self.short8(getCallId?()))
+        // W-DEACTOWN (2026-09-27) — didDeactivate carries no call identity; its
+        // CallKit pairing says whose it is. Consumed here whatever the call.
+        let pairedGeneration: Int? = callKitActivationGeneration
+        callKitActivationGeneration = nil
+        if CallCapabilities.nativeSrtpCallSnapshot == true {
+            // Native-SRTP call only. A late deactivation of the PREVIOUS call
+            // of a back-to-back pair used to switch off whichever arm was in
+            // force — the successor's unit, after its own activation, for the
+            // rest of the call — and reset this call's session state. It is
+            // now a logged no-op. The generation check runs on the main
+            // thread, where every generation bump (`endCall`) and every enable
+            // run, so no other call can take the unit in between.
+            let currentGeneration: Int = currentCallGeneration()
+            let owner = NativeAudioUnitGateDecisions.callKitDeactivationOwner(
+                pairedActivationGeneration: pairedGeneration,
+                currentGeneration: currentGeneration)
+            if owner == .endedCall {
+                let pairedCode: Int = pairedGeneration ?? -1
+                RTLog.info("call", "admgate W-DEACTOWN stale=1 own=\(pairedCode) cur=\(currentGeneration)")
+                return
+            }
+            // This call's own deactivation: its unit off with the session
+            // (the reference implementations do exactly this), owner-checked
+            // against the arm this call's enable switched on — atomically with
+            // the switch, inside the gate.
+            let ownerToken: Int = nativeUnitOwnerToken
+            let ownerCode: Int = owner.rawValue
+            RTLog.info("call", "admgate deact=1 own=\(ownerCode) tok=\(ownerToken)")
+            NativeAudioSessionGate.setNativeAudioInactive(
+                ifCurrent: ownerToken,
+                reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
+            audioSessionActive = false
+            resetNativeAudioUnitGateState()
+            return
+        }
+        // W-ADMGATE (2026-09-26) — FIRST: WebRTC's unit off with the session
+        // (the reference implementations do exactly this at didDeactivate).
+        // No-op unless a native-SRTP call armed manual mode. (Calls with native
+        // SRTP off: this path, unchanged.)
+        NativeAudioSessionGate.setNativeAudioActive(
+            false, reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
         audioSessionActive = false
+        resetNativeAudioUnitGateState()
     }
 
     /// W574 — called by AppState when `call_answer` is received (callee has
@@ -3693,7 +4711,9 @@ final class CallService: @unchecked Sendable {
         // the same native audio-srtp unmute, gated on the SAME genuine
         // accept as the legacy mic (this method's only call site is
         // `finalizeCallActive()`).
-        muteNativeAudioSrtpSender?(false)
+        // W-NATIVEMUTE (2026-09-26) — honour a mute the user set while ringing.
+        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=2).
+        reapplyNativeSenderMute(site: 2)
         armMediaDeadWatchdog()  // W-MEDIADEAD — answered ⇒ liveness backstop on
         startAudioIOIfReady()
         // W574b — post-answer W469 fallback. The 1.5s timer in startCall
@@ -3784,6 +4804,8 @@ final class CallService: @unchecked Sendable {
                 let bytes: String = encrypted.count.description
                 let line: String = "[CallService] TX: first frame ENCRYPTED ok (" + bytes + " bytes) — Opus+AEAD pipeline live"
                 print(line)
+                // W-DCWEDGE — once per call: sample the remote kill switch (main actor).
+                Task { @MainActor in CallService.refreshDcWedgeFlag() }
             }
             let txSamples = updateWaveformSamples(from: frameToProcess)
             let cipherSamples = updateCipherSamples(from: encrypted)
@@ -3883,7 +4905,13 @@ final class CallService: @unchecked Sendable {
                 // decodes both the same way. The DataChannel is lower-latency and
                 // keeps media off the server; the WS relay guarantees delivery when
                 // ICE/DTLS cannot form a P2P link.
-                let sentOnDc: Bool = sendAudioOverDataChannel?(sealedFrame) ?? false
+                // W-DCWEDGE — `dcOutcome` says what became of the frame on the channel:
+                // `.queued` (sent), `.shed` (dropped by the back-pressure gate: sent
+                // NOWHERE, and no longer counted as sent) or `.useRelay` (channel not
+                // open / ICE not carrying / wedged: the WS relay carries this frame).
+                // Each frame goes on exactly ONE leg — never both.
+                let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealedFrame) ?? .useRelay
+                let sentOnDc: Bool = !dcOutcome.needsRelay
                 if !sentOnDc {
                     ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
                 }
@@ -3896,7 +4924,12 @@ final class CallService: @unchecked Sendable {
                 // this runs 50 times a second on the audio encode queue and a
                 // trim+lowercase+prefix on every frame is pure allocation
                 // churn on a real-time path for a string almost nobody reads.
-                if sentOnDc {
+                if dcOutcome == .shed {
+                    // W-DCWEDGE — shed, not sent: a drop counter of its own
+                    // (`tx_gate_drop_d`), NOT `txFramesDc` (7727f262: `tx dc=5984`
+                    // counted 21 s of dropped frames as sent on the DataChannel).
+                    txDcDrop &+= 1
+                } else if dcOutcome == .queued {
                     txFramesDc &+= 1
                     if !loggedFirstTxOnDc {
                         loggedFirstTxOnDc = true
@@ -3935,12 +4968,18 @@ final class CallService: @unchecked Sendable {
                         // scratch by reading QAudionWebRtcCallController instead of
                         // reading the log line.
                         case -5: why = "icegate"
+                        // W-DCWEDGE (2026-09-25) — ICE carrying, channel `.open`, but
+                        // `DcWedgeDetector` says SCTP is not draining (AppState -7).
+                        case -7: why = "wedge"
                         case 0:  why = "conn"
                         case 2:  why = "closing"
                         case 3:  why = "closed"
-                        // `1` is OPEN and must be unreachable here: an open
-                        // channel returns true from sendAudioFrameData, including
-                        // for a backpressure drop. If this ever prints, the
+                        // `1` is OPEN. An open channel answers `.queued` or
+                        // `.shed` from sendAudioFrameData (W-DCWEDGE), and
+                        // `.useRelay` only when the channel is wedged (-7) or
+                        // `dc.sendData` REFUSED this frame, so it reaches this
+                        // line only for a refused send (or a wedge that changed
+                        // between the send and this read). If it repeats, the
                         // send-side predicate and the diagnostic disagree and
                         // THAT is the bug, so it gets its own word rather than
                         // being folded into a plausible-looking one.
@@ -3971,7 +5010,10 @@ final class CallService: @unchecked Sendable {
                 // this matches Android's "only when ok"; on the WS relay
                 // `sendAudioFrame` returns Void and no such result exists —
                 // see the counter's declaration for that divergence.
-                wireTxBytes &+= Int64(sealedFrame.count)
+                // W-DCWEDGE — a frame the back-pressure gate shed left nothing on the wire.
+                if dcOutcome != .shed {
+                    wireTxBytes &+= Int64(sealedFrame.count)
+                }
                 if !loggedFirstTxWire {
                     loggedFirstTxWire = true
                     let fmt: String = androidAudioWireCompat ? "WireRelayFrameCodec" : "FrameEncoder"
@@ -3999,12 +5041,16 @@ final class CallService: @unchecked Sendable {
                     // `ws` stays flat, and vice versa. Deliberately beside the
                     // existing heartbeat rather than on its own timer, so the
                     // two can never disagree about which frame count they mean.
-                    let dcmuxLine: String = "dcmux tx dc=" + txFramesDc.description
+                    let dcmuxBase: String = "dcmux tx dc=" + txFramesDc.description
                           + " ws=" + txFramesWs.description
                           + " rx dc=" + rxFramesDc.description
                           + " ws=" + rxFramesWs.description
                           + " callId=" + Self.short8(cid)
                           + " n=" + n
+                    // W-DCWEDGE — frames the back-pressure gate dropped (not in `tx dc`).
+                    // Appended at the END so a reader of the older field order is unaffected;
+                    // a second statement so the chain above does not grow.
+                    let dcmuxLine: String = dcmuxBase + " drop=" + txDcDrop.description
                     print("[CallService] " + dcmuxLine)
                     // The one line that actually answers "what carried this
                     // call's audio, on iOS's own side" — every ~5s for the

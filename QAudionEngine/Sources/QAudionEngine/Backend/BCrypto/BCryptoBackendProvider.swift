@@ -19,6 +19,14 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// computed accessor below.
     private var _wsClient: BCryptoWebSocketClient?
     private let restClient: BCryptoRestClient
+    /// Newest (access, refresh) pair held in the app's shared credential store. The app
+    /// builds many providers and any of them can rotate the pair, but each keeps the
+    /// result only in its own `config`; the store is where every rotation is persisted.
+    /// Read when a socket connects and when the server rejects its token, so a client
+    /// built before the last rotation adopts it instead of presenting a retired token.
+    /// Installed by the app layer (see `persistingRotatedTokens()`); nil in tests and in
+    /// providers that never persist.
+    public var storedTokenPair: (() -> (access: String?, refresh: String?))?
 
     /// On-demand accessor for the WebSocket client. The FIRST access builds
     /// it from the CURRENT `config` (so a socket created AFTER an
@@ -37,8 +45,19 @@ public final class BCryptoBackendProvider: BackendProvider {
         // next connect() authenticates with the new access token. Returns
         // `true` on success → WS resumes reconnect; `false` on genuine
         // revocation → WS parks its loop (never forces QR).
+        c.latestAccessToken = { [weak self] in self?.storedTokenPair?().access }
         c.onAuthFailedRecover = { [weak self] in
             guard let self = self else { return false }
+            // Another provider may already have rotated the pair into the shared store.
+            // Adopting it costs no network call and, above all, does not spend a refresh
+            // token this provider no longer holds a live copy of (presenting a consumed
+            // one is what the server treats as reuse and answers by revoking the family).
+            if let stored = self.storedTokenPair?(),
+               let access = stored.access, !access.isEmpty,
+               access != self._wsClient?.lastPresentedAccessToken {
+                self.applyTokenPair(access: access, refresh: stored.refresh)
+                return true
+            }
             let ok = await self.restClient.recoverAuth()
             guard ok, let fresh = self.restClient.accessToken else { return false }
             self.applyTokenPair(access: fresh, refresh: self.restClient.refreshToken)

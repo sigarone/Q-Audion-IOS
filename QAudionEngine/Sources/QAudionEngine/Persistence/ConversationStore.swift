@@ -279,6 +279,12 @@ public final class ConversationStore {
     /// this `client_msg_id` already persisted? Covers the case the server
     /// stored a client resend twice (two server ids, one idempotency key).
     /// Sender-scoped so two peers' UUIDs can never collide into a drop.
+    ///
+    /// 2026-09-19 service-message root fix — an undecryptable-frame
+    /// PLACEHOLDER row never counts: it carries the failed frame's
+    /// `client_msg_id`, and the resend that repairs it arrives under that same
+    /// id. Treating the placeholder as "already stored" would drop the very
+    /// frame that is meant to replace it.
     public func hasInboundMessage(clientMsgId: String, senderUserId: String) -> Bool {
         do {
             return try db.reader.read { db in
@@ -286,12 +292,165 @@ public final class ConversationStore {
                     .filter(Column("direction") == Message.Direction.incoming.rawValue)
                     .filter(Column("clientMsgId") == clientMsgId)
                     .filter(Column("senderUserId") == senderUserId)
+                    .filter(sql: "isPlaceholder IS NOT 1")
                     .fetchCount(db) > 0
             }
         } catch {
             print("[ConversationStore] hasInboundMessage(clientMsgId:) failed: \(error)")
             return false
         }
+    }
+
+    // MARK: - Inbound user-message gate (2026-09-19 service-message root fix)
+
+    /// What kind of inbound USER row is being recorded. Service traffic has no
+    /// kind: it has no way to become a row at all.
+    public enum InboundUserMessageKind: Equatable, Sendable {
+        case text
+        case attachment
+        /// The single "[messaggio cifrato non leggibile]" row of a CHAT-class
+        /// frame that stayed undecryptable after its retry.
+        case placeholder
+    }
+
+    public enum InboundRecordResult: Equatable, Sendable {
+        case inserted
+        /// A resend of the same `client_msg_id` overwrote the placeholder row
+        /// in place: same row, no second row, unread untouched.
+        case replacedPlaceholder
+        /// A placeholder for this `(sender, client_msg_id)` already exists.
+        case duplicatePlaceholder
+        /// The text was structurally a service payload — nothing was written.
+        case refusedServiceShaped
+        case failed
+    }
+
+    /// Debug tripwire: when `true` a refusal below also asserts. The app turns
+    /// it on for DEBUG builds only; the engine's own tests run in debug and
+    /// exercise the refusal on purpose, so the default is off.
+    public static var assertOnServiceRefusal: Bool = false
+
+    /// THE write boundary for an inbound USER message. Everything that can
+    /// become a visible row, a preview or an unread count on the 1:1 inbound
+    /// path goes through here, and this refuses (writes nothing, returns
+    /// `.refusedServiceShaped`) any text that is structurally a service
+    /// payload. There is deliberately no render-time filter anywhere: a leak
+    /// must fail loudly at this boundary, not be hidden downstream.
+    ///
+    /// One transaction: the row, the conversation preview/activity and the
+    /// unread bump land together or not at all. A `.placeholder` is recorded
+    /// like any other row (+unread), and a later `.text` resend of the same
+    /// `(sender, client_msg_id)` REPLACES it in place instead of adding a row.
+    @discardableResult
+    public func recordInboundUserMessage(
+        _ message: Message,
+        preview: String,
+        incrementUnread: Bool,
+        kind: InboundUserMessageKind
+    ) -> InboundRecordResult {
+        if kind != .placeholder {
+            // Anything that is not plain text is refused, an attachment announce included:
+            // callers pass the friendly text ("Nota vocale"), never the announce JSON.
+            let bodyIsService = ServicePayloadDetector.classify(message.plaintext) != .notService
+            let previewIsService = ServicePayloadDetector.classify(preview) != .notService
+            if bodyIsService || previewIsService {
+                print("[ConversationStore] recordInboundUserMessage refused=1 reason=service_shaped")
+                if Self.assertOnServiceRefusal {
+                    assertionFailure("service-shaped plaintext reached the inbound user-message boundary")
+                }
+                return .refusedServiceShaped
+            }
+        }
+        let truncatedPreview = preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
+        do {
+            return try db.writer.write { (db: Database) -> InboundRecordResult in
+                // Any incoming row already stored under this (sender, client_msg_id): a
+                // placeholder, a real row, or a tombstone. Looked up WITHOUT the placeholder
+                // filter so a deleted or edited row can never be mistaken for "nothing here".
+                var existingRow: Message? = nil
+                if let cmid = message.clientMsgId, !cmid.isEmpty, let sender = message.senderUserId {
+                    existingRow = try Message
+                        .filter(Column("direction") == Message.Direction.incoming.rawValue)
+                        .filter(Column("clientMsgId") == cmid)
+                        .filter(Column("senderUserId") == sender)
+                        .fetchOne(db)
+                }
+                if kind == .placeholder, existingRow != nil {
+                    return .duplicatePlaceholder
+                }
+                // Only a live placeholder is replaceable: a tombstone (deleted) or an edited
+                // row keeps its state when the same client_msg_id shows up again.
+                var placeholder: Message? = nil
+                if let row = existingRow, row.isPlaceholder == true, row.deletedAt == nil {
+                    placeholder = row
+                }
+                if kind == .text, let placeholderRow = placeholder {
+                    let replaced = Message(
+                        id: placeholderRow.id, conversationId: placeholderRow.conversationId,
+                        direction: .incoming, plaintext: message.plaintext,
+                        sentAt: placeholderRow.sentAt, deliveredAt: message.deliveredAt,
+                        readAt: placeholderRow.readAt, status: message.status,
+                        senderUserId: message.senderUserId,
+                        serverMessageId: message.serverMessageId,
+                        clientMsgId: message.clientMsgId,
+                        expiresAt: message.expiresAt,
+                        isViewOnce: message.isViewOnce,
+                        exportBlocked: message.exportBlocked,
+                        viaMesh: message.viaMesh
+                    )
+                    try replaced.save(db)
+                    if let conv = try Conversation.fetchOne(db, key: placeholderRow.conversationId),
+                       conv.lastMessagePreview == InboundMessagePolicy.undecryptablePlaceholderText {
+                        try Self.conversation(conv, withPreview: truncatedPreview, unread: conv.unreadCount,
+                                              activity: conv.lastActivity).save(db)
+                    }
+                    return .replacedPlaceholder
+                }
+                if kind == .attachment, let placeholderRow = placeholder {
+                    // The app binds the downloaded file to the NEW row's id (setMediaInfo), so the
+                    // placeholder cannot simply be overwritten in place: drop it and insert the
+                    // real row in the same transaction. Unread was already counted for the frame.
+                    try Message.filter(key: placeholderRow.id).deleteAll(db)
+                    try message.save(db)
+                    if let conv = try Conversation.fetchOne(db, key: message.conversationId),
+                       conv.lastMessagePreview == InboundMessagePolicy.undecryptablePlaceholderText {
+                        try Self.conversation(conv, withPreview: truncatedPreview, unread: conv.unreadCount,
+                                              activity: conv.lastActivity).save(db)
+                    }
+                    return .replacedPlaceholder
+                }
+                try message.save(db)
+                if let conv = try Conversation.fetchOne(db, key: message.conversationId) {
+                    let unread = incrementUnread ? conv.unreadCount + 1 : conv.unreadCount
+                    try Self.conversation(conv, withPreview: truncatedPreview, unread: unread,
+                                          activity: Date()).save(db)
+                }
+                return .inserted
+            }
+        } catch {
+            print("[ConversationStore] recordInboundUserMessage failed: \(error)")
+            return .failed
+        }
+    }
+
+    /// Copy of `conv` with a new preview / unread / activity, every other
+    /// field (including the screenshot grant) carried forward.
+    private static func conversation(
+        _ conv: Conversation, withPreview preview: String, unread: Int, activity: Date
+    ) -> Conversation {
+        Conversation(
+            id: conv.id,
+            peerUserId: conv.peerUserId,
+            peerDisplayName: conv.peerDisplayName,
+            lastMessagePreview: preview,
+            lastActivity: activity,
+            unreadCount: unread,
+            pinned: conv.pinned,
+            kind: conv.kind,
+            muted: conv.muted,
+            ephemeralTimerSeconds: conv.ephemeralTimerSeconds,
+            screenshotGrantedByPeer: conv.screenshotGrantedByPeer
+        )
     }
 
     public func removeMessage(id: UUID, conversationId: UUID) {
@@ -349,7 +508,8 @@ public final class ConversationStore {
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: viaMesh ?? msg.viaMesh,
-                        wireAttachmentId: msg.wireAttachmentId
+                        wireAttachmentId: msg.wireAttachmentId,
+                        isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
                 }
@@ -385,7 +545,8 @@ public final class ConversationStore {
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
-                        wireAttachmentId: wireAttachmentId
+                        wireAttachmentId: wireAttachmentId,
+                        isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
                 }
@@ -435,7 +596,8 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
+                        viaMesh: msg.viaMesh,
+                        isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
                 }
@@ -466,7 +628,8 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
+                        viaMesh: msg.viaMesh,
+                        isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
                 }
@@ -572,7 +735,8 @@ public final class ConversationStore {
                     isViewOnce: msg.isViewOnce,
                     viewOnceOpened: msg.viewOnceOpened,
                     exportBlocked: msg.exportBlocked,
-                    viaMesh: msg.viaMesh
+                    viaMesh: msg.viaMesh,
+                    isPlaceholder: msg.isPlaceholder
                 )
                 try msg.save(db)
                 return true
@@ -620,7 +784,8 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
+                        viaMesh: msg.viaMesh,
+                        isPlaceholder: nil
                     )
                     try msg.save(db)
                     return true
@@ -673,7 +838,8 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
+                        viaMesh: msg.viaMesh,
+                        isPlaceholder: nil
                     )
                     try msg.save(db)
                     return true
@@ -739,7 +905,8 @@ public final class ConversationStore {
                     isViewOnce: msg.isViewOnce,
                     viewOnceOpened: msg.viewOnceOpened,
                     exportBlocked: msg.exportBlocked,
-                    viaMesh: msg.viaMesh
+                    viaMesh: msg.viaMesh,
+                    isPlaceholder: msg.isPlaceholder
                 )
                 try msg.save(db)
                 return added
@@ -857,7 +1024,8 @@ public final class ConversationStore {
                         isViewOnce: msg.isViewOnce,
                         viewOnceOpened: true,
                         exportBlocked: msg.exportBlocked,
-                        viaMesh: msg.viaMesh
+                        viaMesh: msg.viaMesh,
+                        isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
                 }

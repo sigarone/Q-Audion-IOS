@@ -266,6 +266,19 @@ struct ContentView: View {
                 durationSeconds: 6
             ))
         }
+        // W-VIDPARITY — same shape as the deepfake bridge just above:
+        // `AppState` is a plain `ObservableObject`, not a View, so it has
+        // no reach into the environment-provided `QAudionSnackbarHostState`
+        // (mirrors `GroupCallViewModel.muteRequestToastText` +
+        // `GroupCallView`'s own `.onChange`). Wired here (not on
+        // `VideoCallView`) so the toast still shows even if turning the
+        // camera off swaps the in-call surface to `LiveInCallScreen` in
+        // the same update.
+        .onChange(of: appState.peerVideoPauseToastText) { text in
+            guard let text else { return }
+            snackbarHost.show(.init(text: text, severity: .info))
+            appState.peerVideoPauseToastText = nil
+        }
     }
 
     /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1

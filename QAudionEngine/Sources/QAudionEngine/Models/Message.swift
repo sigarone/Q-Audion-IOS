@@ -112,6 +112,15 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// delivery/read signal for that transport. `nil` for backward
     /// compat with every stored row predating this field.
     public let wireAttachmentId: String?
+    /// 2026-09-19 service-message root fix — `true` only for the single
+    /// "[messaggio cifrato non leggibile]" row an inbound CHAT-class frame
+    /// leaves behind when it stays undecryptable after its retry. The marker
+    /// is what lets a resend of the same `client_msg_id` replace the row IN
+    /// PLACE (`ConversationStore.recordInboundUserMessage`) instead of landing
+    /// next to it, and what keeps the placeholder out of the pre-decrypt
+    /// dedup (a placeholder must never swallow the resend that repairs it).
+    /// `nil` = an ordinary row, the value of every pre-existing stored row.
+    public let isPlaceholder: Bool?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -129,7 +138,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 viewOnceOpened: Bool? = nil,
                 exportBlocked: Bool? = nil,
                 viaMesh: Bool? = nil,
-                wireAttachmentId: String? = nil) {
+                wireAttachmentId: String? = nil,
+                isPlaceholder: Bool? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -153,5 +163,6 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.exportBlocked = exportBlocked
         self.viaMesh = viaMesh
         self.wireAttachmentId = wireAttachmentId
+        self.isPlaceholder = isPlaceholder
     }
 }

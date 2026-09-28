@@ -781,30 +781,326 @@ public enum CallCapabilities {
         // observation hook on the zero-knowledge relay path), not a
         // preference, and must never be overridable. Mirrors Android
         // `CallCapabilities.localCaps`'s identical ordering.
-        if !paired, let override = audioSrtpDebugOverride {
-            caps = override
+        //
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — while a call is in progress the
+        // per-call snapshot (``nativeSrtpCallSnapshot``) wins over the live
+        // override, so flipping the Settings toggle mid-call can no longer make
+        // a later advertisement of the SAME call (an upgrade, a re-answer)
+        // disagree with the m=audio line and the audio-unit lifecycle that call
+        // already committed to. With no snapshot (between calls, and in every
+        // unit test that never begins one) this is exactly the old
+        // `if let override = audioSrtpDebugOverride` branch.
+        if !paired, let effective = nativeSrtpCallSnapshot ?? audioSrtpDebugOverride {
+            caps = effective
                 ? (caps.contains(audioSrtpV1) ? caps : caps + [audioSrtpV1])
                 : caps.filter { $0 != audioSrtpV1 }
         }
         return earbudActive ? caps + [earbudRelayV1] : caps
     }
 
-    /// W-AUDIOSRTPDEBUGTOGGLE — in-memory-only runtime override for whether
-    /// THIS build advertises ``audioSrtpV1``, read by
+    /// W-AUDIOSRTPDEBUGTOGGLE — runtime override for whether THIS build
+    /// advertises ``audioSrtpV1``, read by
     /// ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``
     /// on every call. `nil` (the default) means "follow
     /// ``audioSrtpSendEnabled`` as compiled," exactly today's behavior.
     /// `true`/`false` forces the advertisement on/off for every call from
-    /// this device until changed again or the process restarts —
-    /// deliberately NOT persisted to `UserDefaults`: this is a live A/B
-    /// testing knob, not a standing preference, and resetting to the
-    /// compiled default on a fresh process is the safer failure mode for a
-    /// flag this sensitive. Exposed unconditionally in the Settings
-    /// "SVILUPPATORE" section (not `#if DEBUG`-gated): unlike the Android
-    /// twin, this build reaches testers ONLY via TestFlight, which builds
-    /// Release — a `#if DEBUG` gate would make the control unreachable in
-    /// the exact build this exists to test with.
+    /// this device until changed again.
+    ///
+    /// W-NATIVESRTPPERSIST (this task) — this in-memory var is now seeded
+    /// once, at app launch (`QAudionApp.init()`), from
+    /// ``loadPersistedAudioSrtpOverride()``, and every WRITE to it from the
+    /// Settings toggle also calls ``savePersistedAudioSrtpOverride(_:)`` —
+    /// see `CallsSettingsScreen`. So the value survives a restart, matching
+    /// Android's `AudioCodecPreferences` persistence, while every EXISTING
+    /// read site here still just reads this plain static var and needs no
+    /// change. Exposed unconditionally in Settings > Chiamate (not `#if
+    /// DEBUG`-gated): this build reaches testers ONLY via TestFlight, which
+    /// builds Release — a `#if DEBUG` gate would make the control
+    /// unreachable in the exact build this exists to test with.
     public static var audioSrtpDebugOverride: Bool?
+
+    /// W-NATIVESRTPGATE (this task) — "native SRTP enabled locally", the ONE
+    /// predicate every native-SRTP-audio gate on the media path must read
+    /// instead of ``audioSrtpSendEnabled`` directly. Before this existed,
+    /// `QAudionPeerConnection.init`'s pre-creation of the audio transceiver
+    /// (see its own IOS-C4b comment) read ``audioSrtpSendEnabled`` alone —
+    /// so flipping ``audioSrtpDebugOverride`` on at runtime (the Settings
+    /// "SVILUPPATORE" toggle) made ``localCaps`` advertise `audio-srtp-v1`
+    /// while `init` never built the transceiver to carry it, a mismatch
+    /// between what the wire announced and what the PeerConnection could
+    /// actually negotiate. `nil` override → follow the compiled kill switch,
+    /// exactly ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``'s
+    /// own override semantics (``audioSrtpDebugOverride ?? audioSrtpSendEnabled``,
+    /// same order, same fallback).
+    ///
+    /// W-NATIVESRTPSNAPSHOT (2026-09-26) — reads the per-call snapshot first
+    /// (see ``beginNativeSrtpCallSnapshot()``); only between calls does it fall
+    /// back to the live `override ?? compiled` value.
+    public static var isNativeSrtpEnabledLocally: Bool {
+        nativeSrtpCallSnapshot ?? liveNativeSrtpEnabled
+    }
+
+    /// The un-snapshotted value: `audioSrtpDebugOverride ?? audioSrtpSendEnabled`.
+    static var liveNativeSrtpEnabled: Bool {
+        audioSrtpDebugOverride ?? audioSrtpSendEnabled
+    }
+
+    // ── W-NATIVESRTPSNAPSHOT (2026-09-26): one native-SRTP decision per call ──
+    //
+    // The Settings toggle (`audioSrtpDebugOverride`) is a live static read by
+    // several independent sites: the capability advertisement, the local side
+    // of the capability intersection, `QAudionPeerConnection.init` (m=audio
+    // pre-attach + manual audio mode) and the audio-unit lifecycle in
+    // `CallService`. Read live, a flip in the middle of a call makes those
+    // sites disagree about the SAME call (tag advertised but no m=audio, or
+    // manual mode armed on a call whose caps say legacy). The snapshot fixes
+    // that: it is taken once when a call starts and every one of those sites
+    // reads it until the call ends.
+
+    private static let nativeSrtpSnapshotLock = NSLock()
+    private static var _nativeSrtpCallSnapshot: Bool?
+    /// W-NATIVESRTPSNAPSHOT-ID (2026-09-26) — the call the snapshot belongs to
+    /// (lowercased; `nil` = taken by a site that did not know the call id).
+    private static var _nativeSrtpSnapshotCallId: String?
+
+    /// Outcome of a snapshot request. `fresh`: taken now from the live value.
+    /// `stale`: a snapshot of a DIFFERENT (or unidentified) call was still
+    /// there and has been replaced — the previous call ended on a path that
+    /// never reached `CallService.endCall()`.
+    public struct NativeSrtpSnapshotLatch: Equatable, Sendable {
+        public let value: Bool
+        public let fresh: Bool
+        public let stale: Bool
+    }
+
+    /// The snapshot of the call in progress, or `nil` between calls.
+    public static var nativeSrtpCallSnapshot: Bool? {
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        return _nativeSrtpCallSnapshot
+    }
+
+    /// The call id the current snapshot belongs to (lowercased), if known.
+    public static var nativeSrtpSnapshotCallId: String? {
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        return _nativeSrtpSnapshotCallId
+    }
+
+    private static func normalizedCallId(_ callId: String?) -> String? {
+        guard let id = callId?.lowercased(), !id.isEmpty else { return nil }
+        return id
+    }
+
+    /// Snapshot for a call that is STARTING (outgoing `startCall`, with the
+    /// call id the OFFER will carry). Same rule as
+    /// ``latchNativeSrtpCallSnapshot(callId:)`` with a known id: an existing
+    /// snapshot is kept only if it belongs to this very call id, otherwise a
+    /// fresh one replaces it (`stale` when one was there).
+    @discardableResult
+    public static func beginNativeSrtpCallSnapshot(callId: String?) -> NativeSrtpSnapshotLatch {
+        latchNativeSrtpCallSnapshot(callId: callId)
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ID (2026-09-26) — keyed latch.
+    ///
+    /// * `callId` given: the existing snapshot is returned ONLY if it belongs
+    ///   to the same call id (case-insensitive) — the duplicate rescue OFFER,
+    ///   the call_incoming → OFFER handoff of one incoming call. Any other
+    ///   existing snapshot (a different call id, or one taken without an id)
+    ///   is stale: it is replaced by a fresh one and `stale` is `true`. This
+    ///   is what stops a snapshot left by an aborted outgoing attempt (a path
+    ///   that never reached `CallService.endCall()`) from deciding the NEXT
+    ///   call, e.g. after the toggle was switched off in between.
+    /// * `callId` nil (a site that cannot know it, `QAudionPeerConnection.init`):
+    ///   the existing snapshot is returned whatever its id — every call-start
+    ///   path in the app takes the keyed snapshot BEFORE it builds the
+    ///   PeerConnection — and a fresh, unidentified one is taken only if there
+    ///   is none.
+    @discardableResult
+    public static func latchNativeSrtpCallSnapshot(callId: String?) -> NativeSrtpSnapshotLatch {
+        let id = normalizedCallId(callId)
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        if let existing = _nativeSrtpCallSnapshot {
+            if id == nil || id == _nativeSrtpSnapshotCallId {
+                return NativeSrtpSnapshotLatch(value: existing, fresh: false, stale: false)
+            }
+            let value = liveNativeSrtpEnabled
+            _nativeSrtpCallSnapshot = value
+            _nativeSrtpSnapshotCallId = id
+            return NativeSrtpSnapshotLatch(value: value, fresh: true, stale: true)
+        }
+        let value = liveNativeSrtpEnabled
+        _nativeSrtpCallSnapshot = value
+        _nativeSrtpSnapshotCallId = id
+        return NativeSrtpSnapshotLatch(value: value, fresh: true, stale: false)
+    }
+
+    /// Drop the snapshot only if it belongs to `callId` (case-insensitive).
+    /// Returns whether it did. A `nil`/empty id never matches.
+    @discardableResult
+    public static func endNativeSrtpCallSnapshot(callId: String?) -> Bool {
+        guard let id = normalizedCallId(callId) else { return false }
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        guard _nativeSrtpCallSnapshot != nil, _nativeSrtpSnapshotCallId == id else { return false }
+        _nativeSrtpCallSnapshot = nil
+        _nativeSrtpSnapshotCallId = nil
+        return true
+    }
+
+    /// What ``endNativeSrtpCallSnapshotAtCallEnd(callId:)`` found and did.
+    public struct NativeSrtpSnapshotEnd: Equatable, Sendable {
+        /// The snapshot present at the call end (`nil`: there was none).
+        public let value: Bool?
+        /// It belonged to the ending call id.
+        public let matched: Bool
+        /// It was dropped: on a match, or as the safety net when its owner
+        /// cannot be told apart (unidentified snapshot, or no ending id).
+        public let ended: Bool
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ENDOWNER (2026-09-26) — the `CallService.endCall()`
+    /// end of the snapshot, keyed end and safety net in ONE critical section.
+    ///
+    /// * snapshot owned by `callId` (case-insensitive): dropped, `matched`.
+    /// * snapshot owned by a DIFFERENT, known call id while `callId` is known
+    ///   too: KEPT. It demonstrably belongs to another (newer) call, and a
+    ///   stale teardown must not delete it. The old unconditional clear that
+    ///   followed the keyed end did exactly that, defeating the keying.
+    /// * snapshot without an owner id, or no ending id: dropped (the safety
+    ///   net the unconditional clear always was; nothing proves it belongs to
+    ///   anyone else).
+    @discardableResult
+    public static func endNativeSrtpCallSnapshotAtCallEnd(callId: String?) -> NativeSrtpSnapshotEnd {
+        let id = normalizedCallId(callId)
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        guard let value = _nativeSrtpCallSnapshot else {
+            return NativeSrtpSnapshotEnd(value: nil, matched: false, ended: false)
+        }
+        let owner = _nativeSrtpSnapshotCallId
+        let matched = id != nil && owner == id
+        if !matched, id != nil, owner != nil {
+            return NativeSrtpSnapshotEnd(value: value, matched: false, ended: false)
+        }
+        _nativeSrtpCallSnapshot = nil
+        _nativeSrtpSnapshotCallId = nil
+        return NativeSrtpSnapshotEnd(value: value, matched: matched, ended: true)
+    }
+
+    /// Drop the snapshot unconditionally. Idempotent. (`CallService.endCall()`
+    /// uses ``endNativeSrtpCallSnapshotAtCallEnd(callId:)``, which never drops
+    /// a snapshot owned by another known call.)
+    public static func endNativeSrtpCallSnapshot() {
+        nativeSrtpSnapshotLock.lock()
+        _nativeSrtpCallSnapshot = nil
+        _nativeSrtpSnapshotCallId = nil
+        nativeSrtpSnapshotLock.unlock()
+    }
+
+    /// W-NATIVESRTPKILL (this task) — forces the CURRENT snapshot for
+    /// `callId` to `false`, WITHOUT touching the saved preference
+    /// (``savePersistedAudioSrtpOverride(_:)``) or the live override
+    /// (``audioSrtpDebugOverride``). Mirrors Android's remote
+    /// `calls.native_srtp_kill` field-trial-style kill switch: the caller
+    /// (`AppState.logNativeSrtpSnapshot`) checks the remote flag AFTER
+    /// taking the snapshot and calls this when it reads `true`. No-op —
+    /// returns `false` — when the current snapshot does not belong to
+    /// `callId` (a stale/foreign snapshot, nothing to force here) or is
+    /// already `false`, so a caller that always calls this unconditionally
+    /// on a killed flag cannot clobber a DIFFERENT call's live snapshot.
+    @discardableResult
+    public static func forceNativeSrtpCallSnapshotOff(callId: String?) -> Bool {
+        let id = normalizedCallId(callId)
+        nativeSrtpSnapshotLock.lock(); defer { nativeSrtpSnapshotLock.unlock() }
+        guard _nativeSrtpCallSnapshot == true, id != nil, _nativeSrtpSnapshotCallId == id else { return false }
+        _nativeSrtpCallSnapshot = false
+        return true
+    }
+
+    // MARK: - W-NATIVESRTPPERSIST (this task) — persisted override + crash guard
+    //
+    // `audioSrtpDebugOverride` itself stays a plain in-memory static var (every
+    // existing read site — ``liveNativeSrtpEnabled``, the Settings binding —
+    // is untouched); these are the load/save/guard functions layered on top,
+    // called ONLY from app-launch/Settings-write call sites (`QAudionApp.init()`,
+    // `CallsSettingsScreen`), never from a hot media-path read.
+
+    private static let persistedOverrideKey = "qaudion.calls.nativeSrtpOverride.v1"
+    private static let nativeCrashStreakKey = "qaudion.calls.nativeSrtpCrashStreak"
+
+    /// The persisted override, or `nil` if the key was never written (first
+    /// run, or a `reset` — see ``savePersistedAudioSrtpOverride(_:)``). Read
+    /// ONCE, at app launch, into ``audioSrtpDebugOverride`` — see
+    /// `QAudionApp.init()`. Absent key -> `nil` -> the compiled default
+    /// (``audioSrtpSendEnabled``, OFF), exactly today's fresh-install
+    /// behavior; there is no migration to run.
+    public static func loadPersistedAudioSrtpOverride() -> Bool? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: persistedOverrideKey) != nil else { return nil }
+        return defaults.bool(forKey: persistedOverrideKey)
+    }
+
+    /// Persist (`true`/`false`) or clear (`nil`, "follow the compiled
+    /// default") the override. Call from the Settings toggle write path
+    /// only — this does NOT itself update ``audioSrtpDebugOverride``; the
+    /// caller does both (see `CallsSettingsScreen`'s binding).
+    public static func savePersistedAudioSrtpOverride(_ value: Bool?) {
+        let defaults = UserDefaults.standard
+        if let value = value {
+            defaults.set(value, forKey: persistedOverrideKey)
+        } else {
+            defaults.removeObject(forKey: persistedOverrideKey)
+        }
+    }
+
+    /// Consecutive-native-crash counter (0 between streaks). Exposed for
+    /// tests; production code only reads it indirectly through
+    /// ``registerNativeSrtpCrashAndMaybeAutoReset()``.
+    public static func nativeSrtpCrashStreak() -> Int {
+        UserDefaults.standard.integer(forKey: nativeCrashStreakKey)
+    }
+
+    /// Clear the streak — call whenever a native-SRTP call ends WITHOUT a
+    /// crash (`CallService.endCall()`), so only CONSECUTIVE native crashes
+    /// count, not two unrelated ones separated by a working call.
+    public static func resetNativeSrtpCrashStreak() {
+        UserDefaults.standard.removeObject(forKey: nativeCrashStreakKey)
+    }
+
+    /// Owner-decision recommendation (spec section B): if two native-SRTP
+    /// calls crash back to back, force the PERSISTED override back to
+    /// `false` (and the live one, so the very next call already reflects
+    /// it) rather than let a broken native path keep crashing every call.
+    /// Called once per launch from `QAudionApp.init()`, ONLY when the
+    /// previous launch left a pending crash report AND that crash's
+    /// breadcrumb call-context says a native-SRTP call was in progress —
+    /// see ``CrashBreadcrumbs/lastCallContext()``. Returns whether the
+    /// auto-reset fired (2nd consecutive crash), so the caller can log it.
+    @discardableResult
+    public static func registerNativeSrtpCrashAndMaybeAutoReset() -> Bool {
+        let next = nativeSrtpCrashStreak() + 1
+        if next >= 2 {
+            savePersistedAudioSrtpOverride(false)
+            audioSrtpDebugOverride = false
+            UserDefaults.standard.removeObject(forKey: nativeCrashStreakKey)
+            return true
+        }
+        UserDefaults.standard.set(next, forKey: nativeCrashStreakKey)
+        return false
+    }
+
+    /// W-NATIVESRTPSNAPSHOT — the LOCAL side of the capability intersection.
+    /// `QAudionPeerConnection.acceptPeerCapabilities` used to intersect the
+    /// peer's list with the compiled base list ``local``, which contains
+    /// ``audioSrtpV1`` only when the COMPILED switch is on. With the debug
+    /// override on and the compiled switch off, this build advertised the tag
+    /// (``localCaps`` applies the override) but never agreed on it itself: the
+    /// peer negotiated native audio and this side did not. Now the tag is in
+    /// or out exactly per ``isNativeSrtpEnabledLocally``; every other tag is
+    /// ``local`` unchanged, so with native SRTP off this returns ``local``
+    /// byte-for-byte (the tag is not in it to begin with).
+    public static func negotiationLocal() -> [String] {
+        let withoutSrtp = local.filter { $0 != audioSrtpV1 }
+        return isNativeSrtpEnabledLocally ? withoutSrtp + [audioSrtpV1] : withoutSrtp
+    }
 
     /// #2a gate (Android parity): did the PEER advertise
     /// ``earbudRelayV1`` in its RAW call-setup capability list,

@@ -40,12 +40,19 @@ import Foundation
 ///
 /// **Known keys** (the ONLY keys the app reads from flags.json; any other
 /// key in the remote file is ignored, and an absent key resolves to the
-/// caller's compiled default):
+/// caller's compiled default). Per-user overlay targeting is itself
+/// allowlisted (`overlayEligibleKeys`, W-5POINT6HARDEN) -- a key not on
+/// that list can never resolve differently for one account than another,
+/// even via the authenticated overlay:
 ///
 ///   | key                      | type | default               | effect                                   |
 ///   |--------------------------|------|-----------------------|------------------------------------------|
-///   | `LOG_OTLP_EXPORT_ENABLED`| Bool | `true` | RUNTIME kill-switch for the log SHIPPER (`LiveLogStreamer.flushOnce`), ANDed with the user's local consent (`LiveLogStreamer.isEnabled`, default OFF) -- it can only ever turn shipping OFF, never ON for a device without consent. `false` STOPS uploads on an already-shipped build within the ~15 min refresh window; `true`/absent allow them. **Gates SHIP only -- egress REDACTION (`RuntimeLogSink.redactStructured`) is unconditional and is NEVER gated on this or any flag.** |
-///   | `ENTITLEMENTS_CODE_UI_ENABLED` | Bool | `false` | Shows the activation-code field + "Attiva" in `UpgradeSheet`; `false`/absent shows the plain "funzione non attiva" notice instead. Same value for every install -- App Review, TestFlight, and production all read this exact flag with no install-channel branching (W-5POINT6FIX, 2026-09-14: an earlier version of this ALSO checked the receipt type to hide the field specifically from an App Store install, which is what triggered a Guideline 5.6 rejection -- never reintroduce a receipt/environment check here). |
+///   | `LOG_OTLP_EXPORT_ENABLED`| Bool | `true` | RUNTIME kill-switch for the log SHIPPER (`LiveLogWorker.tick`, driven by `LiveLogStreamer`), ANDed with the user's local consent (`LiveLogStreamer.isEnabled`, default OFF) -- it can only ever turn shipping OFF, never ON for a device without consent. `false` STOPS uploads on an already-shipped build within the ~15 min refresh window; `true`/absent allow them. **Gates SHIP only -- egress REDACTION (`RuntimeLogSink.redactStructured`) is unconditional and is NEVER gated on this or any flag.** |
+///   | `ios_bypass_echo_duck`   | Bool | `true` | Remote kill-switch for the TX echo ducker (`BypassEchoDuck`, W-BYPASSDUCK) that runs only while VP-IO is bypassed AND the output is the loudspeaker (`CallsGate.bypassEchoDuckEnabled()`, read once per call at capture creation). `false` switches it off for the next call; `true`/absent leave it armed. Public flags only -- not overlay-eligible. |
+///   | `ios_dc_wedge_fallback`  | Bool | `true` | W-DCWEDGE kill-switch of the DataChannel-wedge diversion: `true`/absent = while the sealed-audio DataChannel is wedged (send queue stuck over 1500 B for 1 s or 15 shed frames in a row, released only after 3 s drained + a frame received on it) the audio TX goes on the WS relay; `false` = the pre-W-DCWEDGE routing (frames over the back-pressure threshold are dropped, nothing is diverted, a shed hangup / NACK is lost as before). Read once per call, at its first encrypted TX frame (`CallService.refreshDcWedgeFlag`); it can only turn the diversion OFF, never enable anything new. |
+///   | `ENTITLEMENTS_CODE_UI_ENABLED` | Bool | `false` | Shows the activation-code field + "Attiva" in `UpgradeSheet`; `false`/absent shows the plain "funzione non attiva" notice instead. Same value for every install -- App Review, TestFlight, and production all read this exact flag with no install-channel branching (W-5POINT6FIX, 2026-09-14: an earlier version of this ALSO checked the receipt type to hide the field specifically from an App Store install, which is what triggered a Guideline 5.6 rejection -- never reintroduce a receipt/environment check here).
+///   | `calls.native_srtp_kill` | Bool | `false` | W-NATIVESRTPKILL (this task) -- remote kill switch for the native-SRTP audio path, checked at every per-call snapshot decision (`AppState.logNativeSrtpSnapshot`). `true` forces THAT call's snapshot to `false` WITHOUT touching the user's saved Settings preference (`CallCapabilities.savePersistedAudioSrtpOverride`) -- the toggle still reads/shows whatever the user picked, it just cannot take effect fleet-wide while this is on. `false`/absent leaves the snapshot at whatever the toggle/compiled default already decided. Same key name on Android (`FeatureFlags`), so one flag flip kills the feature on both platforms at once. Public flags only -- not overlay-eligible (a kill switch that could be scoped to one account is not a fleet-wide safety net). |
+///   | `calls.ring_signaling_only` | Bool | `true` | W-MEDIAATACCEPT (option b) -- while the callee's phone is RINGING, only the application-layer PQC key agreement and caller-identity verification run (signaling channel only); the WebRTC media plane (`QAudionWebRtcCallController`/`QAudionPeerConnection` creation, SDP answer, ICE, DTLS-SRTP, frame cryptors, audio session) starts only after the human accept. Latched ONCE per call at `call_incoming`, alongside the native-SRTP snapshot and kill switch (`RingSignalingRegistry.latch`, `AppState`) -- later `call_incoming` duplicates for the same call never change it. `false` restores the previously-shipped per-platform behavior (iOS: full setup at ring). Same key name on Android. Public flags only -- not overlay-eligible (Android would honor a per-user override, iOS would ignore it, which would desync the two platforms' behavior for the same call) -- see `overlayEligibleKeys` below. |
 @MainActor
 public final class FeatureFlags {
 
@@ -261,14 +268,38 @@ public final class FeatureFlags {
         }
     }
 
+    // MARK: - Overlay allowlist (W-5POINT6HARDEN, 2026-09-18)
+
+    /// Keys the per-user AUTHENTICATED overlay is permitted to answer for.
+    /// Guideline 5.6 forbids behavior that differs by WHO is looking at the
+    /// app; the public flags.json is safe by construction (one file, one
+    /// value, for everyone -- including App Review). The authenticated
+    /// overlay is per-user/per-group BY DESIGN (see `startAuthenticated`'s
+    /// doc), so any key resolved through it could in principle be set
+    /// differently for one account than another. Default-deny: a key not
+    /// in this set NEVER reads the overlay, no matter what the server
+    /// sends -- only a key explicitly reviewed and added here can be
+    /// account-targeted. `LOG_OTLP_EXPORT_ENABLED` is the only member: it
+    /// can only ever turn telemetry SHIPPING off (never on, and it changes
+    /// no rendered UI), so per-account targeting of it changes no visible
+    /// behavior. `ENTITLEMENTS_CODE_UI_ENABLED` is deliberately NOT here --
+    /// see its doc row above (W-5POINT6FIX): a reviewer-differential value
+    /// on that flag is exactly what got this app rejected under 5.6, and
+    /// this keeps that true even if the overlay service is ever misused to
+    /// target it, not just for the client-side check that was removed.
+    private static let overlayEligibleKeys: Set<String> = ["LOG_OTLP_EXPORT_ENABLED"]
+
     // MARK: - Typed lookups (compiled default always wins on absence)
 
     /// Resolve a Bool flag. Returns `def` when the key is absent or the
     /// stored value is not a Bool. The compiled default is the fail-safe.
     public static func bool(_ key: String, _ def: Bool) -> Bool {
-        // Overlay first: it is what the server resolved for THIS user, with
-        // per-group and per-user overrides already applied.
-        if let b = FeatureFlags.shared.overlay[key] as? Bool { return b }
+        // Overlay first, but only for an allowlisted key -- see
+        // `overlayEligibleKeys`. Every other key ignores the overlay
+        // entirely and reads the SAME public cache every install does.
+        if overlayEligibleKeys.contains(key), let b = FeatureFlags.shared.overlay[key] as? Bool {
+            return b
+        }
         let value = FeatureFlags.shared.cache[key]
         guard let b = value as? Bool else { return def }
         return b
@@ -277,7 +308,9 @@ public final class FeatureFlags {
     /// Resolve a String flag. Returns `def` when the key is absent or the
     /// stored value is not a String. The compiled default is the fail-safe.
     public static func string(_ key: String, _ def: String) -> String {
-        if let s = FeatureFlags.shared.overlay[key] as? String { return s }
+        if overlayEligibleKeys.contains(key), let s = FeatureFlags.shared.overlay[key] as? String {
+            return s
+        }
         let value = FeatureFlags.shared.cache[key]
         guard let s = value as? String else { return def }
         return s

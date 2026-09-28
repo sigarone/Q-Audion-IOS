@@ -344,7 +344,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{count} non letti"
+            "value": "%lld non letti"
           }
         }
       }
@@ -1616,7 +1616,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} ti ha silenziato"
+            "value": "%@ ti ha silenziato"
           }
         }
       }
@@ -2132,7 +2132,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aggiornamento a {version} avviato."
+            "value": "Aggiornamento a %@ avviato."
           }
         }
       }
@@ -2186,7 +2186,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Versione copiata: {summary}"
+            "value": "Versione copiata: %@"
           }
         }
       }
@@ -2366,7 +2366,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{count} membri aggiunti."
+            "value": "%lld membri aggiunti."
           }
         }
       }
@@ -2462,7 +2462,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} non è più admin."
+            "value": "%@ non è più admin."
           }
         }
       }
@@ -2474,7 +2474,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} è ora admin."
+            "value": "%@ è ora admin."
           }
         }
       }
@@ -2696,7 +2696,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} rimosso dalla rubrica."
+            "value": "%@ rimosso dalla rubrica."
           }
         }
       }
@@ -2708,7 +2708,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} verificato via {method}."
+            "value": "%1$@ verificato via %2$@."
           }
         }
       }
@@ -2804,7 +2804,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identità di {name} marcata verificata via {method}."
+            "value": "Identità di %1$@ marcata verificata via %2$@."
           }
         }
       }
@@ -2858,7 +2858,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} bloccato."
+            "value": "%@ bloccato."
           }
         }
       }
@@ -2870,7 +2870,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{name} sbloccato."
+            "value": "%@ sbloccato."
           }
         }
       }
@@ -2882,7 +2882,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apri la chat con {peer} dalla scheda Chat."
+            "value": "Apri la chat con %@ dalla scheda Chat."
           }
         }
       }
@@ -2978,7 +2978,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Interno {ext} non assegnato — verifica il numero."
+            "value": "Interno %lld non assegnato — verifica il numero."
           }
         }
       }
@@ -2990,7 +2990,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Contatto {name} salvato in rubrica."
+            "value": "Contatto %@ salvato in rubrica."
           }
         }
       }
@@ -3002,7 +3002,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Salvataggio fallito: {error}"
+            "value": "Salvataggio fallito: %@"
           }
         }
       }
@@ -3014,7 +3014,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Contatto {name} importato in rubrica."
+            "value": "Contatto %@ importato in rubrica."
           }
         }
       }
@@ -3068,7 +3068,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{failed} foto su {total} non leggibili."
+            "value": "%1$lld foto su %2$lld non leggibili."
           }
         }
       }
@@ -3122,7 +3122,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Allegato non inviato — {error}"
+            "value": "Allegato non inviato — %@"
           }
         }
       }
@@ -3134,7 +3134,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "ID gruppo copiato ({prefix}…)"
+            "value": "ID gruppo copiato (%@…)"
           }
         }
       }
@@ -3230,7 +3230,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Segnate {n} conversazioni come lette."
+            "value": "Segnate %lld conversazioni come lette."
           }
         }
       }
@@ -3452,7 +3452,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gruppo \"{name}\" creato. Invio inviti…"
+            "value": "Gruppo \"%@\" creato. Invio inviti…"
           }
         }
       }
@@ -3464,7 +3464,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Messaggio non inviato — {reason}"
+            "value": "Messaggio non inviato — %@"
           }
         }
       }
@@ -3896,7 +3896,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{failed} foto su {total} non leggibili."
+            "value": "%1$lld foto su %2$lld non leggibili."
           }
         }
       }
@@ -3950,7 +3950,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{failed} foto su {total} non inviate: formato non valido o file troppo grandi."
+            "value": "%1$lld foto su %2$lld non inviate: formato non valido o file troppo grandi."
           }
         }
       }
@@ -4130,7 +4130,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "\"{name}\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
+            "value": "\"%@\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
           }
         }
       }
@@ -4226,7 +4226,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{count} membri · epoch {epoch}"
+            "value": "%1$lld membri · epoch %2$lld"
           }
         }
       }
@@ -4238,7 +4238,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "{visible} di {total}"
+            "value": "%1$lld di %2$lld"
           }
         }
       }
@@ -4365,6 +4365,132 @@
           "stringUnit": {
             "state": "translated",
             "value": "em risco"
+          }
+        }
+      }
+    },
+    "in_call.disturbance_button": {
+      "extractionState": "manual",
+      "comment": "In-call transport row — small pill the user taps to mark the instant an audio glitch was heard (a telemetry marker for the maintainer). Keep it one short word.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disturbo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Glitch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fallo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Problème"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Störung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha"
+          }
+        }
+      }
+    },
+    "in_call.disturbance_button_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the in-call Disturbo pill — reports that an audio glitch was just heard.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Segnala disturbo audio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report audio glitch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informar de un fallo de audio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signaler un problème audio"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audiostörung melden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relatar falha de áudio"
+          }
+        }
+      }
+    },
+    "in_call.disturbance_button_done_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver value of the in-call Disturbo pill for two seconds after a tap — the audio glitch was recorded. One word.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Segnalato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reported"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signalé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gemeldet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relatado"
           }
         }
       }
@@ -5006,7 +5132,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Numero non valido: {error}"
+            "value": "Numero non valido: %@"
           }
         }
       }
@@ -5102,7 +5228,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Richiesta codice fallita: {error}"
+            "value": "Richiesta codice fallita: %@"
           }
         }
       }
@@ -5198,7 +5324,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Codice non valido o scaduto: {error}"
+            "value": "Codice non valido o scaduto: %@"
           }
         }
       }
@@ -5378,7 +5504,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Push numeri al server fallito: {error}"
+            "value": "Push numeri al server fallito: %@"
           }
         }
       }
@@ -5432,7 +5558,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verifica fallita: {msg}"
+            "value": "Verifica fallita: %@"
           }
         }
       }
@@ -5780,7 +5906,7 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Errore imprevisto ({status})."
+            "value": "Errore imprevisto (%lld)."
           }
         }
       }
@@ -17895,47 +18021,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Instalar"
-          }
-        }
-      }
-    },
-    "Instrada segnale e media nel tunnel Reality (VLESS+Reality) invece che in chiaro. Sperimentale.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Instrada segnale e media nel tunnel Reality (VLESS+Reality) invece che in chiaro. Sperimentale."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Routes signaling and media through the Reality tunnel (VLESS+Reality) instead of in the clear. Experimental."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enruta la señalización y el media por el túnel Reality (VLESS+Reality) en lugar de en texto plano. Experimental."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Route le signal et les médias dans le tunnel Reality (VLESS+Reality) au lieu du réseau en clair. Expérimental."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leitet Signalisierung und Medien durch den Reality-Tunnel (VLESS+Reality) statt im Klartext. Experimentell."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Roteia sinalização e mídia pelo túnel Reality (VLESS+Reality) em vez de texto simples. Experimental."
           }
         }
       }
@@ -31337,6 +31422,114 @@
           "stringUnit": {
             "state": "translated",
             "value": "agora"
+          }
+        }
+      }
+    },
+    "call.video_invite.title": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — title shown while the peer is sending video and we are not",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiesta video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video request"
+          }
+        }
+      }
+    },
+    "call.video_invite.body": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — body text; %@ is the peer's display name",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ sta trasmettendo video. Vuoi attivare la tua fotocamera?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is sending video. Turn on your camera?"
+          }
+        }
+      }
+    },
+    "call.video_invite.close_a11y": {
+      "extractionState": "manual",
+      "comment": "Accessibility label — close button on the peer-video-invite banner",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        }
+      }
+    },
+    "call.video_invite.decline_button": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — plain-text button that dismisses the banner and asks the peer to turn their camera off too",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No, solo audio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No, audio only"
+          }
+        }
+      }
+    },
+    "call.video_invite.accept_button": {
+      "extractionState": "manual",
+      "comment": "Peer-video-invite banner — filled button that turns on the local camera",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on video"
+          }
+        }
+      }
+    },
+    "call.video_pause_request.toast": {
+      "extractionState": "manual",
+      "comment": "Snackbar — one-shot toast shown when the peer asks us to turn off our own camera by tapping \"No, audio only\" on their own video-request banner",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'altro utente ha chiesto di disattivare il tuo video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person asked you to turn off your video"
           }
         }
       }

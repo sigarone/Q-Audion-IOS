@@ -40,6 +40,11 @@ final class ChatContainer: ObservableObject {
         case notAuthenticated = "not_authenticated"
         case uploadFailure   = "upload_failure"
         case generic         = "send_error"
+        /// 2026-09-19 service-message root fix — a SERVICE payload has no
+        /// CONTROL session to be sealed on. Typed so the caller can hold it
+        /// (`ServiceSendCoordinator`) instead of ever falling back to the CHAT
+        /// ladder. Never shown to the user: service sends have no UI.
+        case noControlSession = "no_control_session"
 
         // W-L10N-BATCH1 (2026-09-08) — this drives a plain-String error
         // banner (not a SwiftUI Text literal at the display site), so it
@@ -56,7 +61,7 @@ final class ChatContainer: ObservableObject {
                 return String(localized: "chat.send_error.not_authenticated", defaultValue: "Sessione scaduta. Effettua di nuovo l'accesso.", comment: "Message-send failure banner — session expired")
             case .uploadFailure:
                 return String(localized: "chat.send_error.upload_failure", defaultValue: "Caricamento allegato fallito. Riprova.", comment: "Message-send failure banner — attachment upload failed")
-            case .generic:
+            case .generic, .noControlSession:
                 return String(localized: "chat.send_error.generic", defaultValue: "Invio fallito. Riprova più tardi.", comment: "Message-send failure banner — generic send failure")
             }
         }
@@ -404,11 +409,13 @@ final class ChatContainer: ObservableObject {
                             newStatus: .delivered, deliveredAt: Date()
                         )
                     case .queued:
-                        // W-MSGOUTBOX — transport failure: the sealed bytes
-                        // are in `chat_outbox`, the row stays `.sending`
-                        // (clock icon) and the drainer owns it from here —
-                        // it re-sends with the same client_msg_id and only
-                        // flips to `.failed` past `OutboxRetryPolicy`'s caps.
+                        // W-MSGOUTBOX — transport failure: a retry entry
+                        // (bookkeeping only, no sealed bytes) is in
+                        // `chat_outbox`, the row stays `.sending` (clock icon)
+                        // and the drainer owns it from here — it re-seals the
+                        // row's text at transmit time, re-sends with the same
+                        // client_msg_id and only flips to `.failed` past
+                        // `OutboxRetryPolicy`'s caps.
                         ChatOutboxDrain.shared.kick(reason: "live-send-queued")
                     case .failed(let reason):
                         self.markFailed(messageId: msgId, reason: reason)
@@ -889,16 +896,16 @@ final class ChatContainer: ObservableObject {
     }
 
     /// W86: shared envelope-emission tail for delete/edit/reaction.
-    /// Encrypts the JSON envelope as the plaintext of a normal `msg_send`
-    /// (server is unaware — sees ciphertext only). Best-effort
-    /// fire-and-forget; failures log only.
+    /// Encrypts the JSON envelope on the CONTROL channel as the plaintext of
+    /// a `msg_send` (server is unaware — sees ciphertext only). Fire-and-
+    /// forget; held and retried by `ServiceSendCoordinator` when it cannot go
+    /// now, failures log only.
     private func emitControlEnvelope(_ envelope: ChatControlEnvelope) {
         guard let sendService = self.sendService else {
             print("[ChatContainer] emitControlEnvelope: no sendService bound")
             return
         }
         let peerId = peerUserId
-        let envelopeId = UUID()
         let json: String
         do {
             json = try envelope.toJsonString()
@@ -906,25 +913,19 @@ final class ChatContainer: ObservableObject {
             print("[ChatContainer] envelope serialize failed: \(error)")
             return
         }
-        Task { [peerId, json, envelopeId] in
-            // The envelope rides as a normal chat message; the receiver's
-            // handleIncomingMessage detects the qa_ctl marker and routes
-            // it via handleControlEnvelope INSTEAD of appending a row.
-            // We don't store the envelope locally either (would clutter
-            // the chat with unrenderable JSON).
-            // W-CTLNORATCHET (2026-09-10) — a qa_ctl envelope must never
-            // share the real-chat ratchet's chain/skip-key state with this
-            // peer. See ChatMessageSendService.encryptForWire's
-            // forceStatelessFormat doc.
-            let outcome = await sendService.sendEncrypted(
-                messageId: envelopeId,
+        Task { [peerId, json] in
+            // 2026-09-19 service-message root fix — a delete/edit/reaction
+            // envelope is SERVICE traffic: it rides the CONTROL channel only,
+            // is held (bounded queue, flushed in order once a CONTROL session
+            // exists) when it cannot go now, and is never sealed on the chat
+            // ladder. The receiver consumes it on the 0xE6 path; it never
+            // becomes a row. We don't store the envelope locally either.
+            _ = await sendService.sendService(
                 peerUserId: peerId,
                 plaintext: json,
-                forceStatelessFormat: true
+                label: "chat_ctl",
+                delivery: .hold
             )
-            if case .failed(let reason) = outcome {
-                print("[ChatContainer] envelope send failed: \(reason)")
-            }
         }
     }
 
@@ -1547,18 +1548,16 @@ final class ChatContainer: ObservableObject {
         // Resume succeeded — ship using the EXISTING msgId, same
         // seal/announce + status-update tail as a fresh send.
         //
-        // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — this marker is an attachment-announce
-        // control envelope (metadata about the uploaded file), not real user chat text, but unlike
-        // the qa_ctl/qa_grp family it was never covered by W-CTLNORATCHET's `forceStatelessFormat`
-        // (that fix's own kdoc lists avatar_announce/delete/edit/reaction/ephemeral_timer/
-        // screenshot_lock — attachment_announce is not among them). `useControlChannel: true` routes
-        // it onto CONTROL with the same graceful fallback every other migrated path gets, instead of
-        // consuming the CHAT ratchet's chain state like real text does.
+        // 2026-09-19 service-message root fix (IOS-06) — an attachment announce is USER
+        // content: it rides the CHAT class like the text it sits next to, never CONTROL
+        // (CONTROL is service traffic only, and the server will not wake the peer's
+        // device for a 0xE6 frame, so an announce on it would arrive with no push).
+        // It used to be sent with `useControlChannel: true`, which silently degraded to
+        // the CHAT ladder whenever no CONTROL session existed.
         let outcome = await sendService.sendEncrypted(
             messageId: msgId,
             peerUserId: peerId,
-            plaintext: markerJson,
-            useControlChannel: true
+            plaintext: markerJson
         )
         await MainActor.run {
             guard let self = weakContainer.value else { return }
@@ -2315,16 +2314,14 @@ final class ChatContainer: ObservableObject {
     /// cifrato sulla chat e rimane lì" the user reported.
     private func sendControlEnvelope(payload: String) {
         guard let sender = sendService else { return }
-        let msgId = UUID()
         Task { [peerUserId = peerUserId] in
-            // W-CTLNORATCHET (2026-09-10) — a qa_ctl envelope must never
-            // share the real-chat ratchet's chain/skip-key state with this
-            // peer. See ChatMessageSendService.encryptForWire's
-            // forceStatelessFormat doc.
-            _ = await sender.sendEncrypted(messageId: msgId,
-                                           peerUserId: peerUserId,
-                                           plaintext: payload,
-                                           forceStatelessFormat: true)
+            // 2026-09-19 service-message root fix — screenshot-lock and
+            // ephemeral-timer envelopes are SERVICE traffic: CONTROL only,
+            // held until a CONTROL session exists, never on the chat ladder.
+            _ = await sender.sendService(peerUserId: peerUserId,
+                                         plaintext: payload,
+                                         label: "conv_ctl",
+                                         delivery: .hold)
         }
     }
 }

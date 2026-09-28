@@ -9,6 +9,80 @@ extension ReleaseNote {
     /// git tag/commit history. Complements (does not replace) the
     /// hand-curated `releaseNotes` in WhatsNewData.swift.
     public static let generatedReleaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1177",
+              date: "2026-09-19",
+              title: "v1.0.1177",
+              bullets: [
+                "Frames that arrive before this side has a session key are not decrypt failures",
+              ]),
+        .init(id: "v1.0.1176",
+              date: "2026-09-19",
+              title: "v1.0.1176",
+              bullets: [
+                "Ack call_missed, adopt a SAS-verified identity rotation, audible foreground ring",
+              ]),
+        .init(id: "v1.0.1175",
+              date: "2026-09-19",
+              title: "v1.0.1175",
+              bullets: [
+                "Verify that a failover node serves this user, for real",
+              ]),
+        .init(id: "v1.0.1174",
+              date: "2026-09-19",
+              title: "v1.0.1174",
+              bullets: [
+                "A rejected token recovers, and no longer drives failover to the replica",
+                "Address the delivery and read receipts so the server honours them",
+              ]),
+        .init(id: "v1.0.1173",
+              date: "2026-09-19",
+              title: "v1.0.1173",
+              bullets: [
+                "Service messages never become chat rows, unread or notifications",
+              ]),
+        .init(id: "v1.0.1172",
+              date: "2026-09-19",
+              title: "v1.0.1172",
+              bullets: [
+                "Replace CHAT at both call-handshake sites, retain the previous session",
+              ]),
+        .init(id: "v1.0.1171",
+              date: "2026-09-19",
+              title: "v1.0.1171",
+              bullets: [
+                "Replace CONTROL at the caller-side handshake too; nack only over CONTROL",
+              ]),
+        .init(id: "v1.0.1170",
+              date: "2026-09-19",
+              title: "v1.0.1170",
+              bullets: [
+                "Converge CONTROL sessions without a call; add decrypt-nack resend; fix v1.0.1169 build break",
+              ]),
+        .init(id: "v1.0.1169",
+              date: "2026-09-18",
+              title: "v1.0.1169",
+              bullets: [
+                "Never send v1 control envelopes to a v4 peer; converge CONTROL; floor depth in frames",
+              ]),
+        .init(id: "v1.0.1168",
+              date: "2026-09-18",
+              title: "v1.0.1168",
+              bullets: [
+                "Frame-floor the adaptive jitter-target ceiling for 60ms",
+                "Defer call-connect avatar/name-refresh exchange by 5s instead of firing synchronously",
+              ]),
+        .init(id: "v1.0.1167",
+              date: "2026-09-18",
+              title: "v1.0.1167",
+              bullets: [
+                "Buffer+retry a failed avatar-payload decrypt, not just the outer wire",
+              ]),
+        .init(id: "v1.0.1166",
+              date: "2026-09-18",
+              title: "v1.0.1166",
+              bullets: [
+                "Close two residual 5.6 gaps found by the post-removal audit",
+              ]),
         .init(id: "v1.0.1163",
               date: "2026-09-17",
               title: "v1.0.1163",
@@ -65,81 +139,6 @@ extension ReleaseNote {
               title: "v1.0.1153",
               bullets: [
                 "Isolate buildDiagSummary to the main actor (v1.0.1152 build break)",
-              ]),
-        .init(id: "v1.0.1152",
-              date: "2026-09-12",
-              title: "v1.0.1152",
-              bullets: [
-                "App Store readiness pass — privacy manifest in the IPA, no external CTA, report next to block, no TestFlight surfaces",
-              ]),
-        .init(id: "v1.0.1151",
-              date: "2026-09-12",
-              title: "v1.0.1151",
-              bullets: [
-                "Debounce the \"Riconnessione in corso\" banner like the disconnected one",
-              ]),
-        .init(id: "v1.0.1149",
-              date: "2026-09-11",
-              title: "v1.0.1149",
-              bullets: [
-                "Visible C badge now reads Tier-2's 3-signal combine, matches Android",
-              ]),
-        .init(id: "v1.0.1146",
-              date: "2026-09-11",
-              title: "v1.0.1146",
-              bullets: [
-                "Stop responder-side confidence from desyncing the RE-KEY display",
-              ]),
-        .init(id: "v1.0.1144",
-              date: "2026-09-11",
-              title: "v1.0.1144",
-              bullets: [
-                "Runtime A/B toggle for audio-srtp-v1 vs the custom wire",
-              ]),
-        .init(id: "v1.0.1143",
-              date: "2026-09-10",
-              title: "v1.0.1143",
-              bullets: [
-                "NACK/RTX loss repair for the custom sealed-audio wire",
-                "Port Android's rekey countdown freeze + cross-leg desync fix to iOS",
-              ]),
-        .init(id: "v1.0.1142",
-              date: "2026-09-10",
-              title: "v1.0.1142",
-              bullets: [
-                "Flip audio-srtp-v1 kill switch off, isolate defect vs legacy protocol",
-              ]),
-        .init(id: "v1.0.1141",
-              date: "2026-09-10",
-              title: "v1.0.1141",
-              bullets: [
-                "Diag(audio): add per-call cdi (call-did-init) native-audio-unit checkpoint",
-              ]),
-        .init(id: "v1.0.1140",
-              date: "2026-09-10",
-              title: "v1.0.1140",
-              bullets: [
-                "Resample RX-injected PCM to the APM's actual negotiated rate",
-                "Let LiveLogStreamer recover from an expired token instead of failing 401 forever",
-              ]),
-        .init(id: "v1.0.1139",
-              date: "2026-09-10",
-              title: "v1.0.1139",
-              bullets: [
-                "Wire renderPreProcessingDelegate via the setter, not the initializer",
-              ]),
-        .init(id: "v1.0.1138",
-              date: "2026-09-10",
-              title: "v1.0.1138",
-              bullets: [
-                "Diag(audio): instrument the RX fallback-injection path end to end",
-              ]),
-        .init(id: "v1.0.1137",
-              date: "2026-09-10",
-              title: "v1.0.1137",
-              bullets: [
-                "Drop the arbitrary capacity floor in NativeAudioPlayoutInjector",
-                "Mix legacy-relay fallback audio into native pipeline on RX, fix TX capture scale",
               ]),
     ]
 }

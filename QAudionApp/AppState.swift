@@ -283,46 +283,30 @@ final class AppState: ObservableObject {
     /// so ChatContainer can access `messageApi` for read-receipt
     /// emission (W84). Set by `attachPersistentBackend`; cleared on
     /// logout / token refresh.
-    internal var liveProvider: BCryptoBackendProvider?
+    ///
+    /// 2026-09-19 — replacing (or clearing) it retires the provider it replaces. The old
+    /// provider owns a WebSocket client with its own reconnect loop and its own token; left
+    /// alone it kept reconnecting forever with that (soon retired) token, and its
+    /// `onNodeStalled` signal drove the failover of the NEW provider away from the primary
+    /// node. A live capture showed four such clients in one process, one per rebuild.
+    internal var liveProvider: BCryptoBackendProvider? {
+        didSet {
+            guard let old = oldValue, old !== liveProvider else { return }
+            retireProvider(old)
+        }
+    }
+
+    /// Shut down a replaced provider for good: drop the connection tokens AppState holds
+    /// (they are only reasons to keep THAT client open) and disconnect it, which also
+    /// withdraws the standing token the client took on its own `connect()`.
+    private func retireProvider(_ old: BCryptoBackendProvider) {
+        foregroundConnectionToken = nil
+        activeCallConnectionToken = nil
+        old.shutdown()
+    }
     /// Epoch-ms of the last node failover — damps ping-pong if both nodes flap.
     private var lastFailoverMs: Double = 0
 
-    // MARK: - Reality censorship-bypass transport (additive; clearnet-FIRST)
-    //
-    // Reality (VLESS+REALITY over xray-core, via RealityManager) is a SECOND
-    // signaling backend, activated ONLY as a fallback after clearnet is
-    // exhausted — never the default route (design doc §6, bcrypto-server
-    // CENSORSHIP_RESISTANT_TRANSPORT_DESIGN.md). Reality is the SOLE
-    // censorship-bypass mechanism on iOS — embedded Tor (EmbeddedTorManager /
-    // TorObfsTransport) was removed entirely 2026-09-14, on every platform.
-
-    /// UserDefaults key for the MANUAL force toggle (TransportSettingsScreen).
-    /// When set, the persistent socket brings Reality up BEFORE trying
-    /// clearnet, so a tester can verify the tunnel on an OPEN network where the
-    /// automatic hard-failure trigger would never fire.
-    static let forceRealityDefaultsKey = "qaudion.transport.force_reality"
-    /// Read/write the persisted force-Reality preference. Static + UserDefaults
-    /// so a SwiftUI `@AppStorage` binding and the connect path share one source
-    /// of truth.
-    static var forceRealityEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: forceRealityDefaultsKey) }
-        set { UserDefaults.standard.set(newValue, forKey: forceRealityDefaultsKey) }
-    }
-    /// True while signaling is tunneled through the Reality SOCKS5 (either the
-    /// auto fallback or the manual force). Drives a quiet UI indicator and
-    /// guards against re-activating an already-active tunnel. Never persisted.
-    @Published private(set) var transportIsReality: Bool = false
-    /// REALITY_PIN fix: true when `activateRealityFallback` observed the
-    /// server-issued Reality front public key CHANGE from a previously-pinned
-    /// value (`RealityPinStore.Verdict.changed`) — a compromised/coerced CDN
-    /// edge swapping the key would show up here. Non-blocking (signal-not-kill):
-    /// the tunnel still comes up under the new key; this only drives a quiet
-    /// advisory in TransportSettingsScreen. Never auto-clears — same "sticky
-    /// until surfaced" shape as `callIdentityUnauthenticatedChange`.
-    @Published var realityKeyChanged: Bool = false
-    /// Re-entrancy guard so overlapping stall signals / toggle taps can't fire
-    /// two concurrent RealityManager.start() attempts.
-    private var realityActivationInFlight: Bool = false
     /// W90: peer userId of the currently-open chat. ChatContainer.markRead
     /// sets this on .onAppear; ChatContainer deinits clear it. Used by
     /// `handleIncomingMessage` to suppress local-notification banners
@@ -766,6 +750,21 @@ final class AppState: ObservableObject {
     /// re-derive it either.
     var peerCameraSending: Bool { isVideoCall && !remoteVideoPaused }
 
+    /// W-VIDPARITY — drives `PeerVideoInviteBanner` in `VideoCallView`.
+    /// Thin `@MainActor` wrapper around `PeerVideoInviteDecisions
+    /// .shouldShowPeerVideoInviteBanner`, fed from the same lane signals
+    /// `videoLaneName` above already derives from (Android InCallScreen's
+    /// `videoState == RemoteOnly && !dismissed && incomingUpgrade == null`).
+    var showPeerVideoInviteBanner: Bool {
+        PeerVideoInviteDecisions.shouldShowPeerVideoInviteBanner(
+            isVideoCall: isVideoCall,
+            peerCameraSending: peerCameraSending,
+            localCameraSending: localCameraSending,
+            peerScreenShareActive: peerScreenShareActive,
+            dismissedThisCall: peerVideoInviteDismissed,
+            pendingIncomingUpgrade: pendingIncomingUpgrade != nil)
+    }
+
     private var videoLaneName: String {
         guard isVideoCall else { return "Off" }
         if localCameraSending && peerCameraSending { return "Both" }
@@ -906,6 +905,19 @@ final class AppState: ObservableObject {
     /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
     /// MainActor); reset at the start of every new call.
     @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// 2026-09-19 — true while the active call holds a ROTATED identity key that the server publishes for
+    /// the peer and that `commitSetProvenRepinForDevice` refused to pin, because the user had SAS-verified
+    /// the previous key. Drives the banner copy (the key IS published, and one SAS confirmation resolves
+    /// it). Cleared when the key is adopted or the next call starts.
+    @Published var callIdentityRotationAwaitingSas: Bool = false
+    /// The key behind `callIdentityRotationAwaitingSas`: exactly what THIS call's verified handshake
+    /// presented, kept only until the user confirms the SAS (adoption) or the next call starts. In memory only.
+    private struct PendingIdentityRotation {
+        let peerId: String
+        let deviceId: String?
+        let key: Data
+    }
+    private var pendingIdentityRotation: PendingIdentityRotation?
     /// XC-1 (2026-08-05, post-remediation audit follow-up) — true when the
     /// active call's peer presented a signature that FAILED to verify UNDER
     /// THE KEY WE ALREADY TRUST (pin or server-fetched) — i.e. NOT a key
@@ -943,6 +955,76 @@ final class AppState: ObservableObject {
     /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
     /// their media-install work immediately or stash it above.
     private var identityUnverifiedCallIds: Set<String> = []
+    // W-STALESEALER (2026-09-26) — the monotonic call-generation counter AND the
+    // stale-install guard behind the caller/responder `onRelaySessionReady` wiring
+    // both live on `CallService` now, not here: several terminal paths call
+    // `callService.endCall()` directly (CallKit provider reset, WS
+    // `call_peer_offline`/`call_busy`/`call_cancel`, `onIncomingCallCancelled`,
+    // both `beginAndroidOutgoing` failure branches, and `CallService`'s own
+    // `.error` handshake-outcome case) without going through `AppState
+    // .endCall()`, so a counter that only `AppState.endCall()` bumped missed
+    // every one of them. `CallService.endCall()` is the one choke point ALL of
+    // those — and `AppState.endCall()` itself — already call. The generation is
+    // captured by `QAudionCallIntegration` itself now (via its injected
+    // `provideCallGeneration` closure, wired below alongside `resolveSelfUserId`),
+    // at the START of processing each inbound handshake message — NOT at wiring
+    // time (the responder's `ensureResponderIntegration` caches and reuses its
+    // integration across calls, so a value captured once at wiring time could be
+    // stale by the time a REUSED closure fires for a later call) and NOT at
+    // `onRelaySessionReady` firing time either (some handshake paths `await` a
+    // network send or an earbud GATT round-trip BEFORE firing, so a call could
+    // end during that await and firing-time would then read the POST-teardown
+    // value). The captured value arrives as `onRelaySessionReady`'s `generation`
+    // parameter. The accept/reject decision itself lives in `CallService
+    // .installRelaySealers`, which validates it atomically with publishing the
+    // sealer references — see `CallService.relaySlotLock`'s doc comment for the
+    // full picture, including the
+    // atomicity argument and why `teardownAudioStack()` must never bump the
+    // counter.
+
+    /// 2026-09-19 — the user is confirming the SAS of the ACTIVE call. If that call's verified handshake
+    /// presented a ROTATED identity key (one the server publishes for the peer) that
+    /// `commitSetProvenRepinForDevice` refused only because the previous key had been SAS-verified, this
+    /// confirmation IS the fresh out-of-band verification that refusal was waiting for: adopt the new key now
+    /// (re-pin it, drop the SAS record bound to the old key) and let the caller bind the confirmation to the
+    /// new key. Nothing else ever adopted it: tapping CONFERMA used to re-record the verification against
+    /// the OLD pin, so the banner came back on every call.
+    ///
+    /// Anti-substitution: only for the peer of this call, only for the key this call's own handshake
+    /// presented and verified, and only when the session key (hence the SAS words) is bound to the signed
+    /// handshake transcript, which contains the signer identity key: a relay that swapped that key would
+    /// have produced different words on the two ends. Without that binding the words say nothing about the
+    /// identity key and the refusal stays. Call it BEFORE the confirmation is recorded.
+    @discardableResult
+    func adoptPendingIdentityRotationIfEligible() -> Bool {
+        guard let pending = pendingIdentityRotation else { return false }
+        let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        let bound: Bool = activeCallId.flatMap {
+            callService.callIntegration?.isSessionKeyTranscriptBound(callId: $0)
+        } ?? false
+        guard IdentityRotationAdoptionPolicy.mayAdopt(
+            pendingPeerId: pending.peerId,
+            activePeerId: callContactId,
+            sessionKeyTranscriptBound: bound
+        ) else {
+            RTLog.warn("call", "tofupin adopt=0 gate=1 bound=\(bound ? 1 : 0)")
+            return false
+        }
+        switch PeerIdentityPinStore().repin(
+            contactId: pending.peerId, ed25519Pub: pending.key, deviceId: pending.deviceId
+        ) {
+        case .overwritten, .added, .unchanged:
+            SasVerificationStore.shared.clear(peerUserId: pending.peerId)
+            pendingIdentityRotation = nil
+            callIdentityUnauthenticatedChange = false
+            callIdentityRotationAwaitingSas = false
+            RTLog.info("call", "tofupin adopt=1 sas=1")
+            return true
+        case .failed:
+            RTLog.warn("call", "tofupin adopt=0 fail=1")
+            return false
+        }
+    }
 
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
     /// the responder (OFFER-verify) and caller (ACCEPT-verify) integration
@@ -1164,6 +1246,55 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// W-MEDIAATACCEPT (option b) — G7 (partial §6): `callPqcSessionKey` has
+    /// no call id of its own — every direct-write site tags this alongside
+    /// it (lowercased, same convention as everywhere else in this feature)
+    /// so a read site that FEEDS a cryptor/sealer can assert the key it is
+    /// about to install actually belongs to the call it is about to install
+    /// it on, instead of trusting a bare global slot. This is NOT the full
+    /// projection spec §6 asks for (`callPqcSessionKey` recomputed live,
+    /// everywhere, from `CallKeyStore.get(canonicalActiveCallId())`) — that
+    /// still applies to only the one site already doing it
+    /// (`refreshCallPqcSessionKeyProjection`, the incoming media-plane
+    /// builder's seed). This is a narrower, purely-additive safety net for
+    /// the OTHER read sites that install the slot's CURRENT value onto a
+    /// live controller/sealer without going through that projection.
+    /// `callPqcSessionKey(forCallId:)` below is the assert-and-read half;
+    /// see it for what "mismatch" does. What remains unimplemented: a read
+    /// site with no call id at all in scope still reads the bare
+    /// `callPqcSessionKey` unguarded (documented at each such site).
+    private var callPqcSessionKeyCallId: String?
+
+    /// Assert-and-read: returns `callPqcSessionKey` only when
+    /// `callPqcSessionKeyCallId` (the call id it was last written FOR)
+    /// matches `expectedCallId`, case-insensitively. Returns `nil` on any
+    /// mismatch — including either side being unset/empty, which a caller
+    /// with no id of its own to check against explicitly opts INTO by
+    /// passing `nil` (falls back to the unguarded slot, same as before this
+    /// task, rather than a spurious "no key" for every call site this task
+    /// did not reach). A caller that DOES have a call id in scope and gets
+    /// `nil` back must treat it exactly like "no key yet" — never fall back
+    /// to reading `callPqcSessionKey` directly, or this guard is pointless.
+    ///
+    /// Review fix: an UNSET owner (`callPqcSessionKeyCallId == nil` — the
+    /// tag is written on the main actor one hop after the key, and a write
+    /// path that predates the tag may not set it) returns the slot as
+    /// before this task; only a POSITIVE mismatch (owner set to a different
+    /// call) returns `nil`. Refusing on "unknown" would starve a native-SRTP
+    /// controller of its real key (silent call) with no cross-call risk to
+    /// show for it: `endCall` clears key and owner together.
+    private func callPqcSessionKey(forCallId expectedCallId: String?) -> Data? {
+        guard let expected = expectedCallId?.lowercased(), !expected.isEmpty else {
+            return callPqcSessionKey
+        }
+        guard let owner = callPqcSessionKeyCallId?.lowercased(), !owner.isEmpty else {
+            return callPqcSessionKey
+        }
+        guard owner == expected else {
+            return nil
+        }
+        return callPqcSessionKey
+    }
     /// W-KEYSLOTROTATE — completed-rekey count for THIS call's session key
     /// (0 = first real ML-KEM key; +1 each time sasReady re-fires for a
     /// rekey). The transitional SAS key never advances it. Forwarded to the
@@ -1524,6 +1655,48 @@ final class AppState: ObservableObject {
     }
     @Published var pendingIncomingUpgrade: PendingIncomingUpgrade?
 
+    /// W-MEDIAATACCEPT (option b) — §4.9 (G3/iOS-11): a video-upgrade
+    /// request that `acceptPendingIncomingUpgrade` decided to build/answer
+    /// (either auto-accepted — consent already granted this call — or the
+    /// user just tapped Accept) but whose call's media plane is STILL
+    /// `.awaitingSdp`/`.building` (accept just happened; `startIncomingMediaPlane`
+    /// has not finished constructing the PeerConnection yet). Sending an
+    /// upgrade answer through `makeUpgradeResponderController()` in that
+    /// window would build a SECOND, independent PeerConnection racing the
+    /// one already under construction — never observed live, but provably
+    /// possible per spec §4.9 (`acceptUpgradeOfferBuildingPeerConnection`
+    /// has no guard against a concurrent primary build). Keyed by
+    /// (lowercased) call id, same convention as `pendingAcceptGatedActions`;
+    /// at most one entry per call — a retransmit of the same upgrade while
+    /// already deferred just overwrites this with an identical value.
+    /// Replayed once the plane reaches `.ready`
+    /// (`processDeferredIncomingUpgradeIfAny`); dropped on
+    /// `wipeRingState` if the call ends first.
+    private var pendingIncomingUpgradeAwaitingMediaPlane: [String: PendingIncomingUpgrade] = [:]
+
+    /// W-VIDPARITY — banner-dismiss latch for THIS call: once the user
+    /// closes the "Richiesta video" banner (X or "No, solo audio"), it
+    /// must never reappear even if the RemoteOnly lane flaps (peer's
+    /// camera pausing/resuming again). Mirrors Android InCallScreen's
+    /// `dismissed` flag. Per-call — reset alongside the other per-call
+    /// video flags at both call-start and call-end (see
+    /// `remoteVideoPaused`'s reset sites).
+    @Published var peerVideoInviteDismissed: Bool = false
+
+    /// W-VIDPARITY — one-shot resolved toast text for a just-honored
+    /// `call_video_pause_request` from the peer. This is a plain
+    /// `ObservableObject`, not a View, so it has no reach into the
+    /// environment-provided `QAudionSnackbarHostState` — same shape as
+    /// `GroupCallViewModel.muteRequestToastText`: `ContentView` observes
+    /// this via `.onChange` and pushes it through that same snackbar,
+    /// then clears it back to nil.
+    @Published var peerVideoPauseToastText: String? = nil
+
+    /// W-VIDPARITY — re-entrancy guard for `promoteReceiveOnlyToCamera`: a
+    /// fast double tap on "Attiva video" must not start two competing
+    /// video pipelines.
+    private var promotingReceiveOnlyToCamera: Bool = false
+
     /// True once camera video has been consented to in THIS call (either
     /// direction). Later camera renegotiations auto-accept instead of
     /// re-prompting. Reset on call teardown.
@@ -1746,6 +1919,10 @@ final class AppState: ObservableObject {
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
     private var groupFanOutWired: Bool = false
+    /// 2026-09-19 — the CONTROL-install observer of `wireServiceSendHub` is
+    /// registered once per AppState lifetime; the hub hooks themselves are
+    /// swapped on every call.
+    private var serviceSendHubWired: Bool = false
     /// W-GRPMSG: bounded retry buffer for inbound group TEXT messages
     /// whose recv chain isn't installed yet (the sender's
     /// `sender_key_init` is still in flight, or arrived out of order).
@@ -1774,9 +1951,38 @@ final class AppState: ObservableObject {
     /// failure (a genuinely undecryptable message, or the exchange truly
     /// didn't fix it) still surfaces to the user. Capped for the same
     /// flood-safety reason as `bufferedGroupWires`.
-    private var bufferedOneToOneCiphertexts:
-        [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
+    private typealias BufferedOneToOneFrame = (
+        senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?,
+        bufferedAtMs: Int64)
+    private var bufferedOneToOneCiphertexts: [BufferedOneToOneFrame] = []
     private static let maxBufferedOneToOneCiphertexts = 64
+    /// 2026-09-19 service-message root fix (IOS-18) — bounded memory (512) of
+    /// inbound 1:1 frames whose outcome is FINAL (consumed service frame,
+    /// dropped frame, persisted user row, placeholder). Consulted BEFORE
+    /// decrypt on the live, pending-sync and retry paths so a frame that came
+    /// back (the server replays an un-acked entry on every reconnect) is never
+    /// decrypted a second time — a consumed ratchet key cannot open it again,
+    /// and that failure used to become a placeholder row.
+    private var settledInboundFrames = SettledFrameSet()
+    /// 2026-09-19 — decides when a PRESENT-but-failing CONTROL session is
+    /// really diverged (3 distinct failed frames in 2 minutes), so one failed
+    /// frame can never drop a healthy session.
+    private static var controlFailureTracker = ControlFailureTracker()
+    /// 2026-09-19 — when this process last installed a CONTROL session for a
+    /// peer (`noteControlSessionInstalled`). A failed 0xE6 frame only counts
+    /// towards the tracker's quorum when it is evidence about THAT session, not
+    /// about an earlier one (see `ControlFailureTracker.isEvidence`).
+    private static var controlInstalledAtMs: [String: Int64] = [:]
+    /// 2026-09-19 — one final-retry timer per sender for frames buffered after
+    /// a first decrypt failure; the retry (or the session install that
+    /// precedes it) is what turns a still-undecryptable CHAT frame into the
+    /// single placeholder row.
+    private static var bufferedFinalizeScheduled: Set<String> = []
+    private static let bufferedFinalizeDelaySec: UInt64 = 25
+    /// 2026-09-19 (IOS-19) — resends already made per nacked `client_msg_id`
+    /// (cap 2), so a looping or hostile peer cannot multiply them.
+    private static var nackResendCounts: [String: Int] = [:]
+    private static let maxNackResendsPerTarget = 2
     /// 2026-07-17 — same buffering idea as `bufferedGroupWires`, but for a
     /// `group_metadata_changed`/GET-fetched metadata blob whose decrypt
     /// failed because the ACTOR's (the renaming admin's) recv chain isn't
@@ -1829,7 +2035,25 @@ final class AppState: ObservableObject {
     /// on `canImport(WebRTC)` — using Any here lets the AppState
     /// header compile even on hosts where the WebRTC XCFramework
     /// hasn't been resolved yet.
-    var webRtcController: Any?
+    var webRtcController: Any? {
+        didSet {
+            // W-CALLERUNMUTELOST (2026-09-27) — every assignment to this
+            // property runs on the main thread (same as the answer path
+            // that races it), so this and `reapplyNativeSenderMute`'s own
+            // read of `peerAnswered`/`isMuted`/`audioSrtpFallbackActive`
+            // never interleave with each other. Covers cases (a)/(b) from
+            // this task's analysis — an answer landing before
+            // `webRtcController` itself exists yet, or a controller
+            // replaced (duplicate-OFFER glare) after the answer already
+            // latched its intent: either way, the FRESH controller gets
+            // told the current intent the moment it is assigned, same as
+            // (F1) a fresh `QAudionPeerConnection` does inside that
+            // controller.
+            if webRtcController != nil {
+                callService.reapplyNativeSenderMute(site: 6)
+            }
+        }
+    }
     /// W-ICEQUEUE (2026-08-13) — `call_ice` candidates that arrived before
     /// `webRtcController` was set. `handleIncomingWebRtcIce` used to drop
     /// these silently (`guard let controller = webRtcController as? ...
@@ -1843,16 +2067,35 @@ final class AppState: ObservableObject {
     /// built its own controller and started `acceptIncomingCall` — a real,
     /// non-zero window in which an early peer candidate has nowhere to go.
     /// Once ICE starves like this it does not self-heal: a candidate that
-    /// never arrives is a connectivity path that is never tried. Bounded
-    /// (25) so a runaway sender (or a candidate for a call that never gets
-    /// a controller at all) cannot grow this forever; flushed the instant
-    /// `webRtcController` is assigned, cleared on every teardown so a next
-    /// call never inherits a previous one's stale candidates.
+    /// never arrives is a connectivity path that is never tried.
+    ///
+    /// W-MEDIAATACCEPT (option b) — §4.7 (G1/iOS-9): this used to be a
+    /// single GLOBAL FIFO (cap 25, no `call_id` of its own) — replaced by
+    /// `PendingIceCandidateQueue` (QAudionEngine/Call/), a per-`call_id`
+    /// store (cap 100/call) so an entire RING's worth of candidates for a
+    /// `mode == 1` callee can queue without starving out (or leaking into)
+    /// an unrelated call. See that type's own doc for the full rationale.
     /// W-ICEBATCH (2026-08-25) — `removed` carries a batch-form candidate
-    /// REMOVAL through the same FIFO, so a queued add followed by its own
+    /// REMOVAL through the same queue, so a queued add followed by its own
     /// queued removal replays in order at flush time and nets out.
-    private var pendingRemoteIceCandidates: [(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, removed: Bool)] = []
-    private static let pendingRemoteIceCandidatesCap = 25
+
+    /// W-MEDIAATACCEPT (option b) — §4.4/§4.10 (I13): the 2s "waiting for
+    /// SDP" and 8s "build watchdog" timers `startIncomingMediaPlane` arms,
+    /// keyed by callId so `wipeRingState` can cancel exactly this call's
+    /// (never a DIFFERENT, still-ringing call's). `@MainActor` already
+    /// covers this — no separate lock needed.
+    var ringMediaPlaneTimers: [String: [Task<Void, Never>]] = [:]
+
+    /// W-MEDIAATACCEPT (option b) — §4.5/D2 (I12): handshake-completion
+    /// side effects deferred while `mode == 1` holds a call's ACCEPT —
+    /// same shape/purpose as the pre-existing `pendingIdentityGatedMedia`
+    /// gate, but keyed to "has this call's ACCEPT been released" instead
+    /// of "is the caller's identity verified". Drained by
+    /// `drainAcceptGatedActions` right after `releaseHeldAcceptIfDue`.
+    /// Discarded (never drained) by `wipeRingState` if the call ends while
+    /// still ringing — D2: a call nobody answered must not mutate
+    /// persistent chat/ratchet state.
+    var pendingAcceptGatedActions: [String: [() -> Void]] = [:]
     /// Remote video track delivered by the WebRTC stack when the peer
     /// sends video via RTP (Android interop path). Typed as Any? so the
     /// header compiles without a WebRTC import at top level. At runtime
@@ -2288,6 +2531,20 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// W-GHOSTCALL (2026-09-25) — call UUIDs this app has already ended (filled
+    /// in `endCall` and `handleRemoteCallHangup`, before the CallKit report and
+    /// before `activeCallKitId` is cleared). Read by the cancel-push handler and
+    /// the answer path so a late signal cannot revive a dead call — incident
+    /// e3acecd7: the caller hung up over the WS, the server's `call_cancelled`
+    /// push then re-reported the same uuid to CallKit as a fresh ring, and the
+    /// user's answer started an in-call state with no call. Pure value type
+    /// (`RecentlyEndedCallLedger`), main-actor only, 120 s TTL.
+    private var recentlyEndedCallIds = RecentlyEndedCallLedger()
+    /// W-GHOSTCALL — the throwaway uuids the cancel-push handler reports (and ends
+    /// at once) to satisfy the PushKit mandate when the real uuid is already dead.
+    /// Never answerable: `performAcceptIncoming` refuses them.
+    private var ghostPlaceholderCallIds = RecentlyEndedCallLedger()
+
     /// call_accepted two-flag latch (WIRE_SPEC §3.5) — set once THIS
     /// device's local handshake-completion logic (the call_answer
     /// state-advance) has run for a given callId. Whichever of {this,
@@ -2298,6 +2555,16 @@ final class AppState: ObservableObject {
     /// `onCallAccepted` fires for a given callId (the callee's real user
     /// tapped Answer). See `localHandshakeReadyCallId`.
     private var callAcceptedCallId: String?
+    /// W-MEDIAATACCEPT (option b) — review fix for the §5 caller watchdog
+    /// (`armCallAcceptedWithoutAnswerWatchdog`): the (lowercased) call id of
+    /// the last `call_answer` envelope received, gate or no gate. The spec's
+    /// condition is "not finalized AND no call_answer arrived": a callee whose
+    /// build outlives its 5 s reserve releases the ACCEPT first, a caller
+    /// still in its pre-ring `.active` then flips to `.encrypted` on sasReady
+    /// and the later SDP answer (still applied) is dropped by the accept
+    /// gate — `callFinalizedCallId` alone would then read "not finalized"
+    /// and the watchdog would hang up a call with working media.
+    private var callAnswerSeenCallId: String?
     /// W-ANSWERBEFOREREADY (2026-09-08) — set once `finalizeCallActive()`
     /// has run for a given callId. `callState == .active` means two
     /// different things on the caller (the pre-ring state `startCall` sets
@@ -2900,6 +3167,12 @@ final class AppState: ObservableObject {
     }
 
     func initialize() {
+        // 2026-09-19 service-message root fix — bind the service hold queue and
+        // the CONTROL-install observer before ANY provider can exist. The hooks
+        // read `liveProvider` at call time, so binding this early is safe, and
+        // it is what lets `submit` hold a payload instead of dropping it as
+        // "unconfigured" when the provider came from a refresh, not a connect.
+        wireServiceSendHub()
         // I4: materialize the presence objectWillChange forwarding before
         // anything can publish a presence update. `lazy` means touching it
         // here is a no-op on every call after the first.
@@ -3140,6 +3413,18 @@ final class AppState: ObservableObject {
             ]
         )
 
+        // W-CRASHTELEMETRY (this task) — ONE `app.crash` event for the crash
+        // report (if any) `CrashReporter.flushPendingReport()` parsed BEFORE
+        // deleting its file, back in `.onAppear`'s EARLIER call to it. MUST
+        // run AFTER `TelemetryService.shared.start(...)` immediately above:
+        // `emit()` silently drops an event until `started` flips true (see
+        // that method's own doc), and this is the report's ONLY chance —
+        // the text file backing it is already gone by now.
+        if let crashAttrs = CrashReporter.consumePendingCrashTelemetry() {
+            TelemetryService.shared.emit(kind: "app.crash", attrs: crashAttrs)
+            RTLog.info("call", "crash event=telemetry_sent")
+        }
+
         // W545 — per-device synthetic self-tests. Schedules a first
         // run ~3 s after launch in background, emits selftest.*
         // telemetry events with timing percentiles for regression
@@ -3290,33 +3575,6 @@ final class AppState: ObservableObject {
             }
         }
 
-        // W-REALITYPORTSYNC (2026-09-15, audit
-        // reference_ios_full_audit_2026_09_15.md connectivity finding #2) —
-        // a health-triggered `RealityManager.restartInPlace()` binds a NEW
-        // local SOCKS5 port; `BCryptoWebSocketClient.currentSocksPort` is
-        // sticky by design (set once at `activateRealityFallback`'s initial
-        // `connect(viaSocksPort:)`, never re-read on its own), so without
-        // this every subsequent internal reconnect kept redialing the now-
-        // dead old port while `transportIsReality` stayed `true` — the app
-        // looked tunneled but never actually reconnected. Route through the
-        // SAME entry point `activateRealityFallback` uses at initial setup
-        // (`disconnect()` then `connect(viaSocksPort:)`) instead of a
-        // bespoke rebind, so this stays byte-identical to the path already
-        // proven to re-point the socket correctly.
-        NotificationCenter.default.addObserver(
-            forName: RealityManager.tunnelRestartedNotification,
-            object: nil,
-            queue: .main
-        ) { note in
-            guard let port = note.userInfo?["port"] as? Int else { return }
-            Task { @MainActor [weak self] in
-                guard let self, self.transportIsReality, let prov = self.liveProvider else { return }
-                let ws = prov.getWebSocketClient()
-                ws.disconnect()
-                ws.connect(viaSocksPort: port)
-                RTLog.warn("network", "reality socks port resynced after health restart port=\(port)")
-            }
-        }
 
         // W74: re-attempt the persistent WS the moment the app returns
         // to the foreground. iOS suspends URLSessionWebSocketTask while
@@ -3348,6 +3606,19 @@ final class AppState: ObservableObject {
             // when the outer closure binds `[weak self]` and forwards.
             Task { @MainActor [weak self] in
                 guard let self = self, self.isAuthenticated else { return }
+                // G4 — the other event-driven sweep hook (see
+                // `latchIncomingNativeSrtpSnapshot`'s call_incoming one):
+                // catches a ring-time entry orphaned while the app was
+                // backgrounded (no hangup/cancel/timeout signal ever
+                // reached it — e.g. the peer's process died outright).
+                // Review fix: only while no call is in flight — `CallKeyStore
+                // .sweep` ages entries by creation time alone (120 s), so a
+                // foreground return during a longer live call would drop that
+                // call's own per-call key.
+                if self.noCallInFlight() {
+                    RingSignalingRegistry.shared.sweep()
+                    CallKeyStore.shared.sweep()
+                }
                 // A CallKit call left open while the app was away is what
                 // silently costs the NEXT incoming call: iOS believes the phone
                 // is busy and can refuse the report outright, so the user stops
@@ -3641,6 +3912,14 @@ final class AppState: ObservableObject {
                 await self.sendPlpAnnounce(pct: pct, peerId: peerId)
             }
         }
+        // W-HBTELEM (2026-09-21) — the 5 s `call.media.heartbeat` reads the 1:1 call's health
+        // counters (jitter buffer, loss, FEC, frames by transport) through this one provider;
+        // `CallMediaTelemetry` turns two readings into per-window deltas. Group calls are marked
+        // `isGroup` where they connect (`groupTelemetry` wiring below) and never read it, so their
+        // heartbeat keeps its old shape.
+        CallMediaTelemetry.shared.heartbeatSnapshotProvider = { [weak self] in
+            self?.callService.makeHeartbeatSnapshot()
+        }
         // I3 §5 (2026-08-21) — drives a real PQC re-handshake via
         // QAudionCallIntegration.performPqcReKey. Only ever does anything on
         // the device that originated the call — performPqcReKey's own
@@ -3722,9 +4001,15 @@ final class AppState: ObservableObject {
 
         #if canImport(CallKit) && os(iOS)
         if let provider = callKit as? CallKitProvider {
+            // W-GHOSTCALL (2026-09-25) — the closure now answers "was the answer
+            // accepted?": `false` only when `performAcceptIncoming` refused it
+            // (a dead / placeholder call, incident e3acecd7), so the provider
+            // does not activate the audio session for a call that does not
+            // exist. Every other path returns `true`, i.e. exactly what the
+            // provider always did after this callback.
             provider.onAnswerCall = { [weak self] uuid in
-                guard let self = self else { return }
-                await MainActor.run {
+                guard let self = self else { return true }
+                let accepted: Bool = await MainActor.run {
                     // W-GRPRING — a GROUP call reported to CallKit (push-woken /
                     // background invite) must NOT enter the 1:1 accept path:
                     // that would build a responder integration for a peer that
@@ -3732,14 +4017,15 @@ final class AppState: ObservableObject {
                     if self.groupCallKitId == uuid {
                         RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncomingGroupCall (group)")
                         self.performAcceptIncomingGroupCall()
-                        return
+                        return true
                     }
                     RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncoming (1:1)")
                     // CallKit answered → run the shared accept path + dismiss the
                     // native CallKit UI. The same accept body is reused by the
                     // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
-                    self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
+                    return self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
                 }
+                return accepted
             }
             provider.onEndCall = { [weak self] uuid in
                 guard let self = self else { return }
@@ -3748,6 +4034,16 @@ final class AppState: ObservableObject {
                     // call is a reject (still ringing) or a leave (joined).
                     if self.groupCallKitId == uuid {
                         self.endGroupCallFromSystemUI()
+                        return
+                    }
+                    // W-GHOSTCALL (2026-09-25) — `endCall()` below ends whatever
+                    // call the app holds, whichever uuid CallKit named. For the
+                    // leftover ring of an already-dead call while ANOTHER call is
+                    // live (`refuseStaleAnswer` leaves it in place), that would
+                    // hang up the live call: ignore it. The provider still
+                    // fulfils this END action (only an ANSWER the app refuses is
+                    // failed), which dismisses the stale ring.
+                    if self.ignoreEndForStaleUuid(uuid: uuid) {
                         return
                     }
                     self.endCall()
@@ -3828,7 +4124,10 @@ final class AppState: ObservableObject {
             // audio in either direction. These two bridges hand the
             // activation signal to CallService, which then starts /
             // stops its AVAudioEngine capture/playback at the right time.
-            provider.onAudioSessionActivated = { [weak self] in
+            // W-ADMGATE (2026-09-26) — the callback now carries who activated
+            // the session (CallKit's didActivate vs this app's own
+            // activation); CallService only reads it on a native-SRTP call.
+            provider.onAudioSessionActivated = { [weak self] source in
                 Task { @MainActor in
                     guard let self = self else { return }
                     // W-GRPVPIO-CRASH (2026-07-17) — CXProvider's didActivate:
@@ -3862,7 +4161,7 @@ final class AppState: ObservableObject {
                         self.routeGroupCallAudioToSpeaker()
                         return
                     }
-                    self.callService.handleAudioSessionActivated()
+                    self.callService.handleAudioSessionActivated(source: source)
                     self.markOutgoingAudioSessionReady()
                     // W-CALLSPKR (2026-07-20) — same class of gap as
                     // W-GRPSPKR above, different code path: didActivate just
@@ -3899,8 +4198,10 @@ final class AppState: ObservableObject {
                         // after we dismissed the system UI, but the call is still
                         // live in-app. Re-assert the session so mic + speaker keep
                         // working (do NOT pause as the normal teardown would).
+                        // W-SELFACTID — the call's own CallKit uuid keys the
+                        // self-activation mark of a native-SRTP call.
                         await (self.callKit as? CallKitProvider)?
-                            .reactivateAudioSessionForSelfManagedCall()
+                            .reactivateAudioSessionForSelfManagedCall(uuid: self.activeCallKitId)
                         return
                     }
                     self.callService.handleAudioSessionDeactivated()
@@ -3939,7 +4240,7 @@ final class AppState: ObservableObject {
                     ), let ctrl = self.webRtcController as? QAudionWebRtcCallController {
                         ctrl.sendHangupAndClose()
                         self.webRtcController = nil
-                        self.pendingRemoteIceCandidates.removeAll()
+                        PendingIceCandidateQueue.shared.wipeAll()
                     }
                     #endif
                     // W-CKPCRESET follow-up (review finding, 2026-09-02) —
@@ -4160,6 +4461,21 @@ final class AppState: ObservableObject {
                 // `reconcileOpaqueCallWakeup`'s kdoc for why that has to
                 // stay nil until the REAL server call_id is known over the
                 // WS.
+                //
+                // W-GHOSTCALL (2026-09-25) — KNOWN LIMIT, latent. Because the
+                // placeholder is not in `activeCallKitId`, `refuseStaleAnswer`
+                // (via `performAcceptIncoming`) refuses an Answer tapped on it
+                // BEFORE the real `call_incoming` arrives (log `answerguard
+                // refuse=1 why=3`): the CXAnswerCallAction fails, the placeholder
+                // is ended, and the user answers the real ring that follows. Before
+                // the guard that tap set `activeCallKitId` to the placeholder, the
+                // real `call_incoming` was then dropped as `differentCallActive`
+                // and the call sat "answered with no call" (the e3acecd7 state), so
+                // this is not a regression; and it is unreachable today because
+                // bcrypto-server's `internal/push/apns.go` has no `opaque_wakeup`
+                // sender. BEFORE the server enables TRUST-6 on iOS: register these
+                // placeholder uuids in a third ledger and DEFER the answer (latch,
+                // replayed on the real call) instead of refusing it.
                 let placeholderUuid = UUID()
                 let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
                 let shash8: String = String(payload.senderHash.prefix(8))
@@ -4211,8 +4527,31 @@ final class AppState: ObservableObject {
                 // has never seen.
                 let diag: String = "[AppState] W-CANCELPUSH PushKit→cancel uuid=\(payload.callId.uuidString.prefix(8))…"
                 print(diag)
-                await self.callKit?.reportIncomingCall(uuid: payload.callId, callerName: "Q-Audion", hasVideo: false)
-                await self.callKit?.reportCallEnded(uuid: payload.callId, reason: .remoteEnded)
+                // W-GHOSTCALL (2026-09-25) — the "idempotent by construction"
+                // claim above only holds while CallKit still knows the uuid. It
+                // does NOT when this device already ended the call itself (the
+                // caller's hangup usually wins the race over the WS): CallKit
+                // dropped the uuid, so reporting it again is not a no-op, it is
+                // a NEW ring for a dead call, answerable by the user (incident
+                // e3acecd7, 2026-09-23: report ok=1 dup=0, Answer +1.9 s later).
+                // The PushKit mandate still requires SOME report, so when the uuid
+                // is already in `recentlyEndedCallIds` a fresh placeholder uuid is
+                // reported instead, ended at once and marked unanswerable.
+                let cancelPlan: GhostCallPolicy.CancelReportPlan = await MainActor.run {
+                    self.planIncomingCancelReport(callId: payload.callId)
+                }
+                await self.callKit?.reportIncomingCall(uuid: cancelPlan.reportUuid, callerName: "Q-Audion", hasVideo: false)
+                await self.callKit?.reportCallEnded(uuid: cancelPlan.reportUuid, reason: .remoteEnded)
+                // The call already ended here, so its own teardown (stop ring
+                // UI/sound, clear the ring flag) has already run; repeating it now
+                // could hide the ring of a DIFFERENT call that arrived since.
+                guard !cancelPlan.isPlaceholder else { return }
+                // W-GHOSTCALL — the push can also win the race the other way
+                // round: it clears the ring flag below, and without it the later
+                // WS hangup no longer sees a ringing call, so the missed call is
+                // never recorded (and never, if that hangup does not arrive).
+                // Record it now, while the flag is still up.
+                self.recordMissedOnCancelPush(callId: payload.callId)
                 // Same local teardown a WS-delivered call_cancel/call_hangup
                 // would have driven for this call, in case the push wins
                 // the race against a delayed WS message for the SAME call:
@@ -4715,11 +5054,16 @@ final class AppState: ObservableObject {
                 _ = try await live.messageApi.sendMessage(
                     recipientId: peerUserId, content: wireBlob, clientMsgId: clientMsgId)
             },
-            sendReceipt: { [weak self] serverMessageId in
+            sendReceipt: { [weak self] serverMessageId, senderUserId in
                 guard let live = self?.liveProvider else {
                     throw ChatOutboxDrain.TransportError.unavailable
                 }
-                try await live.messageApi.sendDeliveryReceipt(messageId: serverMessageId)
+                if let senderUserId, !senderUserId.isEmpty {
+                    try await live.messageApi.sendDeliveryReceipt(
+                        messageId: serverMessageId, recipientId: senderUserId)
+                } else {
+                    try await live.messageApi.sendDeliveryReceipt(messageId: serverMessageId)
+                }
             },
             encrypt: { [weak self] messageId, peerUserId, plaintext in
                 guard let self else {
@@ -4735,6 +5079,11 @@ final class AppState: ObservableObject {
                 }
             }
         )
+        // 2026-09-19 service-message root fix — the service hold queue is bound
+        // once at `initialize()` (a provider assigned by `performProactiveRefresh`
+        // never reaches this function, so binding only here left the hub
+        // unconfigured); re-binding is idempotent and keeps the held queue.
+        wireServiceSendHub()
         // Server selection: probe all nodes and connect to the fastest one.
         // Runs in background — does not delay the login flow.
         Task { [weak self] in
@@ -4788,6 +5137,13 @@ final class AppState: ObservableObject {
             else { return nil }
             return impl.getActiveCallId()
         }
+        // W-MEDIAATACCEPT (option b) — §4.10 (I13): single teardown
+        // chokepoint for every ring-time artifact of whichever call just
+        // ended, no matter which path (`call_hangup`, `call_cancel`,
+        // CallKit end/reset, peer offline/busy) led into `endCall()`.
+        callService.onCallTeardownChokepoint = { [weak self] cid in
+            self?.wipeRingState(cid, why: 1)
+        }
         // IOS-C4b (2026-08-26) — wired ONCE here, same "lazy provider read
         // live off webRtcController" pattern as the getters above:
         // `webRtcController` is reassigned per call (startCall /
@@ -4797,15 +5153,52 @@ final class AppState: ObservableObject {
         // `startAudioIOIfReady`'s IOS-C4b guard and `NativeAudioPcmTap`'s
         // doc for why the two paths must never run concurrently.
         callService.getUsesNativeAudioSrtp = { [weak self] in
-            (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true
+            guard (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true else {
+                return false
+            }
+            // W-MEDIAATACCEPT (option b) — §4.6: a `.failed` incoming
+            // media-plane build already fell back to the sealed custom
+            // path (§4.4's catch) — the controller may still report a
+            // negotiated `useAudioSrtp` from before the failure, but audio
+            // I/O must follow the fallback, not the stale negotiation.
+            if let cid = self?.canonicalActiveCallId(),
+               RingSignalingRegistry.shared.entry(cid)?.mediaPlane == .failed {
+                return false
+            }
+            return true
+        }
+        // W-MEDIAATACCEPT (option b) — §4.6 (gate 5): predicts whether THIS
+        // call's still-building PC will end up native, from the plan's
+        // latched snapshot and whichever peer capabilities are known so
+        // far (the stashed OFFER's, or the pre-OFFER `call_incoming` stash
+        // — `pendingPeerCapabilities`, same source `buildIncomingWebRtcMediaPlane`
+        // itself falls back to).
+        callService.mediaPlanePending = { [weak self] in
+            guard let self = self,
+                  let cid = self.canonicalActiveCallId(),
+                  let plan = RingSignalingRegistry.shared.entry(cid),
+                  plan.mode == 1 else { return false }
+            let peerCaps = plan.offer?.capabilities ?? self.pendingPeerCapabilities
+            let predictedNative = plan.native && (peerCaps?.contains(CallCapabilities.audioSrtpV1) == true)
+            return RingSignalingDecisions.audioIOGate(
+                mode: plan.mode, mediaPlane: plan.mediaPlane, predictedNative: predictedNative
+            ) == .deferGate5
         }
         // W-DEADTXRELEASE — same live-setter pattern as the getter above:
         // lets engageAudioSrtpFallback() release the native sender before
         // starting the manual capture path instead of leaving both running
         // against the same AVAudioSession. See CallService.engageAudioSrtpFallback's
         // kdoc for the live call this closes.
+        // W-CALLERUNMUTELOST (2026-09-27) — forward `nativeSenderMuteSource`
+        // (set by `reapplyNativeSenderMute` immediately before this closure
+        // runs, same thread) as `source:` so the `QAudionPeerConnection`
+        // `audiosrtp muteapply ... src=<...>` line names the real trigger
+        // ("answer" for a genuine accept) instead of always defaulting to
+        // "user". `self?.` short-circuits to that default if this closure
+        // somehow outlived `AppState` itself.
         callService.muteNativeAudioSrtpSender = { [weak self] muted in
-            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(muted)
+            (self?.webRtcController as? QAudionWebRtcCallController)?.setNativeAudioSrtpMuted(
+                muted, source: self?.callService.nativeSenderMuteSource ?? "user")
         }
         // W-ADMWEDGERESET (2026-09-09) — same live-setter pattern as above.
         // See `CallService.consecutiveAudioSrtpWedges`'s kdoc for what this
@@ -4813,6 +5206,27 @@ final class AppState: ObservableObject {
         // wedged native audio unit that survives more than one call).
         callService.resetAudioSrtpFactory = {
             QAudionPeerConnectionFactory.shared.resetForWedgeRecovery()
+        }
+        // W-ADMMANUAL (2026-09-26) — the manual-audio gate's decision lines
+        // (`admgate ...`, `nsnap ...`) into the same "call" stream. Numeric
+        // only, no key material.
+        NativeAudioSessionGate.log = { line in
+            RTLog.info("call", line)
+        }
+        // W-ADMNUDGE — the engine's capture-live nudge asks CallService's
+        // gate to re-decide (main thread) instead of re-enabling blindly.
+        // W-GATEOWNER (2026-09-27) — `token` was only current at the moment
+        // `requestGateReapply` was called, on whatever thread that was; this
+        // closure itself is scheduled onto the MainActor asynchronously, so
+        // the arm can change in between (a hand-over to a new call). Revalidate
+        // `token` here, right before the actual reapply, instead of trusting
+        // the synchronous check the engine already did — see
+        // `NativeAudioSessionGate.onGateReapplyRequested`'s kdoc.
+        NativeAudioSessionGate.onGateReapplyRequested = { [weak self] token, reasonCode in
+            Task { @MainActor in
+                guard NativeAudioSessionGate.isCurrent(token: token) else { return }
+                self?.callService.reapplyNativeAudioUnitGate(reasonCode: reasonCode)
+            }
         }
         // W-AUNITTRACE (2026-09-10) — forwards WebRTC's own native
         // AudioDeviceIOS lifecycle events (short, numeric-tailed so the
@@ -4895,6 +5309,12 @@ final class AppState: ObservableObject {
         }
         callService.getAudioRtpJitterSec = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpJitterSec ?? -1
+        }
+        // W-NATIVESRTPDIAG (this task) — same live-getter pattern as the
+        // pair above, for the wider stats snapshot the extended
+        // `audiosrtp hb=` heartbeat reads.
+        callService.getNativeAudioSrtpStats = { [weak self] in
+            (self?.webRtcController as? QAudionWebRtcCallController)?.nativeAudioSrtpStats
         }
         // W-LONGAUDIO (2026-08-10) — same live-getter pattern as `getCallId`
         // above. `pendingPeerCapabilities` is the peer's RAW advertised list,
@@ -4994,9 +5414,12 @@ final class AppState: ObservableObject {
         // the WS relay. Resolves the live controller dynamically so it tracks
         // lazy per-call controller creation (the property is the gated `Any?`).
         #if canImport(WebRTC)
+        // W-DCWEDGE (2026-09-25) — the closure answers an `AudioDcSendOutcome` instead of
+        // a Bool: `.queued` / `.shed` (dropped by the back-pressure gate, not sent) /
+        // `.useRelay`. Every early exit below is the old `false`, i.e. `.useRelay`.
         callService.sendAudioOverDataChannel = { [weak self] data in
             guard let self = self, !self.audioPinnedToWsRelay,
-                  let controller = self.webRtcController as? QAudionWebRtcCallController else { return false }
+                  let controller = self.webRtcController as? QAudionWebRtcCallController else { return .useRelay }
             return controller.sendAudioFrameData(data)
         }
         // W-DCMUX (2026-08-11) — WHY the closure above returned false. It tests
@@ -5031,12 +5454,17 @@ final class AppState: ObservableObject {
         //               something else. -2 now means nil specifically; -6
         //               means "non-nil, wrong type" so the NEXT occurrence
         //               tells us which without another log-diving session.
+        //   -7 wedge    (W-DCWEDGE, 2026-09-25) ICE is carrying and the channel
+        //               reads `.open`, but `DcWedgeDetector` says SCTP is not
+        //               draining, so the frames go to the WS relay. Without this
+        //               code that state would fall through to `1` = `openbug`.
         callService.audioDataChannelDiag = { [weak self] in
             guard let self = self else { return -2 }
             if self.audioPinnedToWsRelay { return -3 }
             guard let raw = self.webRtcController else { return -2 }
             guard let controller = raw as? QAudionWebRtcCallController else { return -6 }
             if controller.audioTxIceGateClosed { return -5 }
+            if controller.audioTxWedgeDiverting { return -7 }
             return controller.audioDataChannelStateRaw
         }
         #endif
@@ -5068,8 +5496,13 @@ final class AppState: ObservableObject {
         }
         // FAILOVER: the WS client signals a stalled (dead) node after enough
         // consecutive reconnects. Re-select a different trusted node and switch.
-        ws.onNodeStalled = { [weak self] deadWss in
-            Task { @MainActor in await self?.handleNodeStalled(deadWss) }
+        ws.onNodeStalled = { [weak self, weak provider] deadWss in
+            Task { @MainActor [weak self, weak provider] in
+                // A retired provider's client can still report a stall; that says nothing
+                // about the node the current provider is on.
+                guard let self, let provider, self.liveProvider === provider else { return }
+                await self.handleNodeStalled(deadWss)
+            }
         }
         let cke = ContactKeyExchange(
             identity: sovereignIdentity,
@@ -5197,10 +5630,9 @@ final class AppState: ObservableObject {
                 let plaintext = Data(envelopeJson.utf8)
 
                 let outcome: FastPathOutcome = await MainActor.run {
-                    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — try CONTROL first, same
-                    // graceful-fallback discipline as every other new encrypt path this redesign
-                    // added: falls through to the unchanged v4/v2/KMS-prebootstrap ladder below
-                    // when no CONTROL session exists yet for this peer. Mirrors Android
+                    // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — try CONTROL first; when
+                    // no CONTROL session exists yet for this peer (2026-09-19: the v4/v2 ladder
+                    // is gone) it goes to the KMS-prebootstrap path below. Mirrors Android
                     // `GroupCallController.sealControlEnvelopeForBroadcast` / Desktop
                     // `Application.ts`'s `gc.onSendControlEnvelope` 3-way branch.
                     if AppState.sharedV4Ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
@@ -5211,51 +5643,22 @@ final class AppState: ObservableObject {
                             return .failed
                         }
                         return .sealed(wire: frame, transport: "v5ctrl")
-                    } else if AppState.sharedV4Ratchet.hasV4Session(peer) {
-                        guard let frame = AppState.sharedV4Ratchet.encryptV4Routed(peerId: peer, plaintext: plaintext),
-                              let first = frame.first, first == MessageRatchet.magicV4 else {
-                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v4_encrypt_failed (hasV4Session=true)")
-                            return .failed
-                        }
-                        return .sealed(wire: frame, transport: "v4")
-                    } else if let pskMeta = AppState.resolveGroupCtrlPskNamed(peer: peer) {
-                        // W-GRPCTRL-PARITY (2026-07-20, call FB75E465): the
-                        // old fallback sealed a v3 wire under the HARDCODED
-                        // session epoch 'v1' — a recipe no flag-day peer can
-                        // open: Desktop's `handleGroupCtrlOpaque` and
-                        // Android's `MessageCrypto.decryptV3` both parse the
-                        // epoch tag FROM THE WIRE and look the PSK up BY NAME
-                        // (Android's v3 open has NO contact-newest fallback
-                        // at all, so an epoch of 'v1' matches nothing and the
-                        // envelope dies silently). Mirror Desktop's
-                        // chat-proven `encryptDispatch` recipe instead:
-                        // contact-bound-newest PSK, epoch tag = the PSK NAME
-                        // (minus any `call-` prefix), version-routed. iOS's
-                        // `SovereignKeyVault` has no ratchet-version field
-                        // and never stores call-derived `call-*` (rv>=3)
-                        // names — every contact-bound PSK here is
-                        // X25519/RK_0-derived, i.e. the rv=2 class Desktop
-                        // seals via v2 AEAD — so this seals a v2 (0xE2) wire
-                        // under the channel AAD
-                        // `grpcall-ctrl:<sender>:<recipient>` (the AAD
-                        // Android's `onOpaqueMessage` and Desktop's v2 open
-                        // branch verify). The rv>=3 v3-ratchet branch Desktop
-                        // has is structurally unreachable on iOS: a v3-class
-                        // pairing here is exactly a v4-session pairing,
-                        // already handled above.
-                        let epochTag = pskMeta.name.hasPrefix("call-")
-                            ? String(pskMeta.name.dropFirst("call-".count))
-                            : pskMeta.name
-                        let aad = Data("grpcall-ctrl:\(senderId):\(peer)".utf8)
-                        do {
-                            let wire = try MessageCryptoV2.seal(
-                                plaintext: plaintext, psk: pskMeta.psk, epochTag: epochTag, aad: aad)
-                            return .sealed(wire: wire, transport: "v2:\(epochTag.prefix(16))")
-                        } catch {
-                            print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=v2_encrypt_failed epoch=\(epochTag.prefix(16)): \(error)")
-                            return .failed
-                        }
                     } else {
+                        // 2026-09-19 service-message root fix (IOS-04) — group-call
+                        // control is SERVICE traffic: CONTROL only. This ladder used
+                        // to fall back to the v4 CHAT session and then to a v2 (0xE2)
+                        // PSK seal when no CONTROL session existed; both consumed
+                        // chat-class chain state with control traffic (the collateral
+                        // damage W-CTLNORATCHET documents) and put a control payload
+                        // on a wire the peer treats as user chat. Whatever pairwise
+                        // state exists (v4 CHAT session, contact PSK, nothing), a
+                        // missing CONTROL session goes down ONE path: the qa_kms
+                        // pre-bootstrap below, which carries this very envelope and
+                        // installs CONTROL on both ends (CHAT is create-if-absent
+                        // there, so an existing CHAT session is left alone). A
+                        // separate "no CONTROL" outcome used to return false and
+                        // lose sender_key_rotate / sender_key_nack for good, since
+                        // only sender_key_init is re-sent by the controller.
                         return .noPsk
                     }
                 }
@@ -5286,7 +5689,8 @@ final class AppState: ObservableObject {
                     print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) cmid=\(msgId.prefix(8)) transport=\(transport)")
                     return true
                 case .noPsk:
-                    // GAP A2 — no pairwise v4/v1 session yet: attempt the
+                    // GAP A2 — no CONTROL session for this peer (with or without
+                    // a pairwise CHAT session / PSK): attempt the
                     // KMS-prebootstrap fallback (REAL now, not a documented
                     // no-op — mirrors Android's ADR-014a bootstrap-off-
                     // published-bundle path). Real network round-trip
@@ -5303,7 +5707,7 @@ final class AppState: ObservableObject {
                         print("[GroupCallController][telemetry] ctrl envelope SENT type=\(envType) peer=\(peer.prefix(8)) transport=kms_prebootstrap")
                         return true
                     }
-                    print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_v4_session_and_no_psk_and_prebootstrap_failed (pairwise 1:1 relationship never established)")
+                    print("[GroupCallController][telemetry] ctrl envelope SEND FAILED type=\(envType) peer=\(peer.prefix(8)) reason=no_control_session_and_prebootstrap_failed (no CONTROL session and the qa_kms pre-bootstrap could not be built)")
                     return false
                 }
             }
@@ -5397,8 +5801,14 @@ final class AppState: ObservableObject {
         // which buffers (W481) if no integration is bound yet.
         callService.attachIncomingAudioHandler(wsClient: ws)
         // Subscribe state listener so the UI can show "Connecting → Online".
-        provider.persistentConnection.addStateListener { [weak self] state in
+        provider.persistentConnection.addStateListener { [weak self, weak provider] state in
             DispatchQueue.main.async {
+                // Only the current live provider drives app-level connection state. A retired
+                // provider's final `.disconnected` (or a straggler's `.connecting`) used to
+                // overwrite it, flapping the banner and re-arming the stuck watchdog. The
+                // listener also held `provider` strongly, a cycle (provider → client →
+                // listener → provider) that kept every replaced provider alive.
+                guard let provider, self?.liveProvider === provider else { return }
                 // W550 — emit a sealed telemetry event on every WS
                 // state change so the maintainer dashboard can see
                 // which device is flapping. Pair with the server's
@@ -5512,6 +5922,9 @@ final class AppState: ObservableObject {
                     if prev != .authenticated {
                         Task { @MainActor in
                             ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
+                            // 2026-09-19 service-message root fix — held service
+                            // payloads (CONTROL only) flush once a socket exists.
+                            ServiceSendHub.shared.socketBecameReady()
                         }
                     }
                     // W-GRPRECEIPTOUTBOX — same once-per-reconnect gate,
@@ -5524,17 +5937,7 @@ final class AppState: ObservableObject {
                 }
             }
         }
-        Task { [weak self] in
-            // Clearnet-FIRST (design doc §6): the normal direct WSS dial is the
-            // default for the 99% of users on an open network. ONLY the explicit
-            // manual force flag (tester / known-censored network) brings Reality
-            // up before trying clearnet; the automatic path instead waits for a
-            // hard clearnet failure (handleNodeStalled → no reachable node).
-            if AppState.forceRealityEnabled {
-                print("[AppState] force-Reality enabled — bringing up tunnel before clearnet dial")
-                await self?.activateRealityFallback(reason: "manual-force-at-connect")
-                return
-            }
+        Task {
             do {
                 try await provider.initialize()
                 print("[AppState] persistent WS opened (online presence active)")
@@ -5983,7 +6386,27 @@ final class AppState: ObservableObject {
             // controller to route to, so the whole check is skipped and
             // execution falls through to the existing behavior unchanged.
             #if canImport(WebRTC)
-            if let restartCalling = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+            // W-MEDIAATACCEPT (option b) — review fix: under `mode == 1` the
+            // caller's W-SETUPRETRY `call_offer` retransmits (2.5 s / 7.5 s,
+            // stopped only by call_accepted/call_answer) can now land AFTER
+            // the human accept, i.e. while `startIncomingMediaPlane` is still
+            // building the controller (PC `stable` before its own
+            // setRemoteOffer), or right after it with the ORIGINAL SDP. Today
+            // (legacy) that never happens: the callee answered at ring and the
+            // ladder stopped. Such an envelope is a retransmit, not an ICE
+            // restart — keep it out of `applyRemoteRestartOffer` (it would race
+            // the build's own SRD/answer); it then falls through to the
+            // duplicate filter below and is dropped. A genuine restart offer
+            // carries a fresh SDP and is only possible once the plane is ready.
+            let restartPlan: RingSignalingRegistry.Entry? = RingSignalingRegistry.shared.entry(callIdStr)
+            let restartPlanMode1: Bool = (restartPlan?.mode ?? 0) == 1
+            let restartPlanReady: Bool = restartPlan?.mediaPlane == .ready
+            let restartRingSdp: String = restartPlan?.offer?.sdp ?? ""
+            let restartEnvelopeSdp: String = (data["sdp"] as? String) ?? ""
+            let restartSameAsRingSdp: Bool = !restartRingSdp.isEmpty && restartRingSdp == restartEnvelopeSdp
+            let restartRetransmitOfRingOffer: Bool = restartPlanMode1 && (!restartPlanReady || restartSameAsRingSdp)
+            if !restartRetransmitOfRingOffer,
+               let restartCalling = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
                let activeId = restartCalling.getActiveCallId(),
                activeId.caseInsensitiveCompare(callIdStr) == .orderedSame,
                self.callContactId == senderId,
@@ -6017,6 +6440,8 @@ final class AppState: ObservableObject {
             // D11: a fresh incoming call clears any stale unauthenticated-change
             // banner from a previous call.
             self.callIdentityUnauthenticatedChange = false
+            self.callIdentityRotationAwaitingSas = false
+            self.pendingIdentityRotation = nil
             // XC-1: same reset for the sibling sig_invalid banner.
             self.callHandshakeSignatureInvalid = false
             // P0-3: a fresh incoming call must not inherit a stale media hold
@@ -6033,6 +6458,9 @@ final class AppState: ObservableObject {
             // "peer paused their camera" state from a previous call.
             self.remoteVideoPaused = false
             self.localVideoPaused = false
+            // W-VIDPARITY: a fresh incoming call must not inherit a stale
+            // banner-dismiss latch from a previous call.
+            self.peerVideoInviteDismissed = false
             // #2 (server-fetch trust source): warm the caller's server identity
             // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
             // resolveServerPeerKey can cross-check the OFFER's signer key. Race
@@ -6199,11 +6627,12 @@ final class AppState: ObservableObject {
                     RTLog.info("call", dupLine)
                     let dupCaps: [String]? = data["capabilities"] as? [String]
                     let dupHasVideo: Bool = (callType == "video")
-                    self.handleIncomingWebRtcOffer(
+                    self.routeIncomingWebRtcOffer(
                         callerId: senderId,
                         sdp: dupSdp,
                         peerCapabilities: dupCaps,
-                        hasVideo: dupHasVideo
+                        hasVideo: dupHasVideo,
+                        callId: callIdStr
                     )
                     // Same tail the normal provisioning path runs (:4693).
                     // Idempotent (`incomingAudioStarted`); needed because the
@@ -6216,6 +6645,11 @@ final class AppState: ObservableObject {
                     self.consumeDeferredAnswerIfReady("ws-dupoffer")
                     return
                 }
+                // W-NATIVESRTPSNAPSHOT-ID (2026-09-26) — a NEW incoming call
+                // (provisionNormally): its native-SRTP snapshot, keyed by its
+                // call_id, before anything advertises capabilities for it.
+                self.latchIncomingNativeSrtpSnapshot(callId: callIdStr,
+                                                     alreadyAnswered: self.answeredCallKitId == callUUID)
                 // W-NOCALLKIT cold-start DECLINE: the user already tapped "Rifiuta"
                 // on the notification before this call_incoming landed. Reject the
                 // call NOW — send hangup, skip ALL provisioning (no integration, no
@@ -6240,6 +6674,12 @@ final class AppState: ObservableObject {
                         }
                     }
                     NotificationCenterService.shared.clearIncomingCall(callId: callIdStr)
+                    // W-MEDIAATACCEPT (option b) — I13: this call already
+                    // got a ring plan latched two lines above
+                    // (`latchIncomingNativeSrtpSnapshot`) before this
+                    // decline guard runs — clear it, it was never going to
+                    // be accepted.
+                    self.wipeRingState(callIdStr, why: 3)
                     print("[AppState] W-NOCALLKIT cold-start decline consumed — call rejected before provisioning")
                     return
                 }
@@ -6434,11 +6874,12 @@ final class AppState: ObservableObject {
                         if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                             let caps = data["capabilities"] as? [String]
                             let vid = (callType == "video")
-                            self.handleIncomingWebRtcOffer(
+                            self.routeIncomingWebRtcOffer(
                                 callerId: senderId,
                                 sdp: sdp,
                                 peerCapabilities: caps,
-                                hasVideo: vid
+                                hasVideo: vid,
+                                callId: callIdStr
                             )
                         }
                         // Cold-start answer race — the responder integration +
@@ -6652,6 +7093,46 @@ final class AppState: ObservableObject {
                 self.remoteVideoPaused = paused
             }
         }
+
+        // W-VIDPARITY — peer asked US to turn our camera off (the "No,
+        // solo audio" half of THEIR RemoteOnly banner). No consent dialog:
+        // auto-comply, mirroring Android CallController.kt's pause-request
+        // listener. Named method (not inline here) per CLAUDE.md §13 —
+        // the logic below has several interpolated RTLog lines, which
+        // times out the type-checker if built inline inside this closure.
+        ws.onCallVideoPauseRequest = { [weak self] callId in
+            DispatchQueue.main.async {
+                self?.handleIncomingVideoPauseRequest(callId: callId)
+            }
+        }
+    }
+
+    /// W-VIDPARITY — honor side of `call_video_pause_request`: the peer
+    /// asked us to turn OUR camera off (they tapped "No, solo audio" on
+    /// their own RemoteOnly banner). No consent dialog — auto-comply via
+    /// the normal complete camera-off op (pipeline + flag + beacon), same
+    /// as any other camera-off control, and surface a one-shot toast so
+    /// the local user understands why their video stopped. Mirrors
+    /// Android `CallController.kt`'s pause-request listener exactly.
+    @MainActor
+    private func handleIncomingVideoPauseRequest(callId: String) {
+        let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl
+        let activeCallId = impl?.getActiveCallId()
+        guard PeerVideoInviteDecisions.shouldHonorVideoPauseRequest(
+            activeCallId: activeCallId, requestCallId: callId)
+        else {
+            RTLog.info("call", "vidpause rx match=0")
+            return
+        }
+        let wasSendingFlag = localCameraSending ? 1 : 0
+        videoSetCameraEnabled(false)
+        peerVideoPauseToastText = String(
+            localized: "call.video_pause_request.toast",
+            defaultValue: "L'altro utente ha chiesto di disattivare il tuo video",
+            comment: "Snackbar — one-shot toast shown when the peer asks us to turn off our own camera by tapping \"No, audio only\" on their own video-request banner")
+        // CLAUDE.md §13 — pre-bind before the interpolated RTLog call.
+        let line: String = "vidpause rx match=1 was_sending=\(wasSendingFlag)"
+        RTLog.info("call", line)
     }
 
     /// media-consent v1 — responder side of a mid-call renegotiation.
@@ -6911,7 +7392,7 @@ final class AppState: ObservableObject {
             c.closeSynchronously()
         }
         self.webRtcController = nil
-        self.pendingRemoteIceCandidates.removeAll()
+        PendingIceCandidateQueue.shared.wipeAll()
         self.remoteWebRtcVideoTrack = nil
         // WIRE_SPEC §8.7 — the video leg is gone: drop any parked track +
         // failsafe so a rebuilt upgrade PC starts with a fresh RX gate.
@@ -7071,12 +7552,29 @@ final class AppState: ObservableObject {
         // call's session key + the sovereign/KMS PSK salt BEFORE the answer.
         controller.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
         controller.videoContactPsk = self.callVideoPsk
-        if let key = self.callPqcSessionKey {
+        // G7 — feeds a cryptor: assert this key is actually for the call
+        // this controller is being built for, not a foreign one still
+        // sitting in the global slot. Review fix: asserted against the
+        // WIRE call id, not `controller.pqcCallId` — on the CALLER device
+        // `activeCallKitId` is CallKit's own random UUID, never the wire id
+        // the slot is tagged with, so that comparison always mismatched and
+        // left the upgrade controller with no key at all.
+        if let key = self.callPqcSessionKey(forCallId: self.canonicalActiveCallId()) {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
         }
+        // W-CTRLCLOSE (2026-09-26) — every reset of `webRtcController` goes
+        // through close(): same close-before-replace as the offer/outgoing
+        // sites (this one normally finds nil — a WS-relay call has no
+        // controller — so it only acts on a leak).
+        if let old = self.webRtcController as? QAudionWebRtcCallController, old !== controller {
+            old.closeSynchronously()
+            RTLog.warn("call", "callctrl replaced=1 site=upgrade")
+        }
         self.webRtcController = controller
-        self.flushPendingIceCandidates(to: controller)
+        // G1 — "" = this device's bound wire call id (the queue's key); the
+        // CallKit uuid differs from it on the caller device.
+        self.flushPendingIceCandidates(to: controller, callId: "")
         // Keep the proven WS-relay audio leg untouched — this controller exists
         // ONLY for video. Outbound voice stays on the relay (see
         // sendAudioOverDataChannel pin); video rides this WebRTC PC.
@@ -7119,8 +7617,41 @@ final class AppState: ObservableObject {
     }
 #endif
 
+    /// W-MEDIAATACCEPT (option b) — §4.9 (G3/iOS-11): replays a video-upgrade
+    /// request `acceptPendingIncomingUpgrade` deferred for `callId` (T10)
+    /// because the media plane was still building — call once that plane
+    /// reaches `.ready` (a real controller/PC exists). A no-op when nothing
+    /// was deferred for this call (the ordinary case).
+    @MainActor
+    private func processDeferredIncomingUpgradeIfAny(_ callId: String) {
+        let cid = callId.lowercased()
+        guard let pending = pendingIncomingUpgradeAwaitingMediaPlane[cid] else { return }
+        pendingIncomingUpgradeAwaitingMediaPlane[cid] = nil
+        acceptPendingIncomingUpgrade(pending)
+    }
+
     @MainActor
     private func acceptPendingIncomingUpgrade(_ pending: PendingIncomingUpgrade) {
+        // W-MEDIAATACCEPT (option b) — §4.9 (G3/iOS-11): this call's own
+        // media plane (the incoming WebRTC controller/PC `startIncomingMediaPlane`
+        // is building right now) is not ready yet — defer instead of racing
+        // a SECOND on-demand PeerConnection build
+        // (`acceptUpgradeOfferBuildingPeerConnection`) against the one
+        // already under construction, or handing `acceptUpgradeOffer` a
+        // controller whose `peerConnection` is still nil. Idempotent: a
+        // retransmit of the same request while already deferred just
+        // refreshes this entry. Replayed by
+        // `processDeferredIncomingUpgradeIfAny` once the plane is `.ready`,
+        // and dropped by `wipeRingState` if the call ends first (I13).
+        let cid = pending.callId.lowercased()
+        if !cid.isEmpty,
+           let plan = RingSignalingRegistry.shared.entry(cid),
+           plan.mode == 1,
+           plan.mediaPlane == .awaitingSdp || plan.mediaPlane == .building {
+            pendingIncomingUpgradeAwaitingMediaPlane[cid] = pending
+            RTLog.info("call", "ringsig upgrade=0 why=1")
+            return
+        }
         guard let provider = liveProvider,
               let impl = provider.callingApi as? BCryptoCallingApiImpl else { return }
         // Latch SYNCHRONOUSLY before the async build so an Android upgrade-offer
@@ -7402,7 +7933,10 @@ final class AppState: ObservableObject {
                 // W402: forward the (possibly newly-derived) PQC key
                 // to the WebRTC controller in case the upgrade
                 // crossed a rekey boundary. Idempotent.
-                if let key = self.callPqcSessionKey {
+                // G7 — feeds a cryptor: assert against this device's own
+                // idea of the active call (mid-call already, no ring-time
+                // ambiguity here).
+                if let key = self.callPqcSessionKey(forCallId: self.canonicalActiveCallId()) {
                     controller.videoContactPsk = self.callVideoPsk
                     controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
                     controller.pqcSessionKey = key
@@ -8019,7 +8553,13 @@ final class AppState: ObservableObject {
         let sanitisedWireDisplay = StringSanitiser.displayName(rawWireDisplay, fallback: "")
         // Dedup BEFORE any side effect — beginCall's own id dedup only
         // silences the insert, not the notification banner.
-        if PersistentCallRecordStore.shared.records.contains(where: { $0.id == callIdStr }) {
+        // Case-insensitive: the server spells the id in lowercase while the record written when this
+        // device answered the call carries `UUID.uuidString` (uppercase). The strict comparison never
+        // matched, so an answered call replayed as missed got a second history row and a "Chiamata
+        // persa" banner.
+        if PersistentCallRecordStore.shared.records.contains(where: {
+            $0.id.caseInsensitiveCompare(callIdStr) == .orderedSame
+        }) {
             let line: String = "missedevt dup=1 id=" + String(callIdStr.prefix(8))
             RTLog.info("call", line)
             return
@@ -8153,6 +8693,10 @@ final class AppState: ObservableObject {
         switch reasonString {
         case "busy":      reason = .declined
         case "timeout":   reason = .unanswered
+        // W-GHOSTCALL — the reason an Android caller sends when its own ring
+        // timeout expires (CallController.hangup("timeout_no_answer")): the same
+        // "nobody answered" as `timeout`, it used to fall to `.remoteEnded`.
+        case "timeout_no_answer": reason = .unanswered
         case "error":     reason = .failed("error")
         // W-ENDREASONS (2026-08-25, parity plan A5/B8) — the two server-emitted
         // reasons get a sensible mapping instead of the generic default, and
@@ -8177,12 +8721,28 @@ final class AppState: ObservableObject {
         }
         // If the call was still ringing when the hangup arrived the
         // callee never answered — mark the record as missed.
-        let wasRinging = self.callState == .ringing
+        // W-GHOSTCALL — `callState` alone misses the call CallKit is ringing (it
+        // stays .idle until the user answers), so a caller's own ring timeout was
+        // never recorded as missed (e3acecd7). See
+        // `GhostCallPolicy.wasRingingAtRemoteHangup` for why the ring flag is
+        // part of the rule (outgoing calls hold `activeCallKitId` too).
+        let wasRinging: Bool = GhostCallPolicy.wasRingingAtRemoteHangup(
+            callStateIsRinging: self.callState == .ringing,
+            hasActiveCallKitId: self.activeCallKitId != nil,
+            callWasAnswered: self.callWasAnswered,
+            incomingRingVisible: self.incomingCallRingVisible
+        )
         let missedRecordId = self.activeOutgoingRecordId
         if wasRinging && missedRecordId == nil {
             RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
         }
         let uuid = self.activeCallKitId
+        // W-GHOSTCALL — recorded NOW, synchronously, not inside the Task below:
+        // the CallKit report awaited there takes 0.3-1.5 s and the server's
+        // `call_cancelled` push can land inside that window (e3acecd7: 0.6 s).
+        if let endedUuid = uuid {
+            self.recentlyEndedCallIds.recordEnded(endedUuid)
+        }
         Task {
             // W-NOCALLKIT review H1: in callKitFreeMode the call was NEVER
             // reported to CallKit (no reportIncomingCall), so reporting its end
@@ -8233,6 +8793,15 @@ final class AppState: ObservableObject {
                   let serverMsgId = data["message_id"] as? String,
                   let cipher = Data(base64Encoded: cipherB64) else {
                 print("[AppState] msg_receive missing required fields: \(data.keys)")
+                // 2026-09-19 — a frame that can never be processed (malformed base64,
+                // missing fields) is a TERMINAL outcome: ack it, or the server replays
+                // it on every reconnect for 24 h. Nothing to ack without a message id.
+                if let malformedId = data["message_id"] as? String, !malformedId.isEmpty {
+                    DispatchQueue.main.async {
+                        self.sendOrQueueDeliveryReceipt(
+                            serverMsgId: malformedId, senderId: data["sender_id"] as? String)
+                    }
+                }
                 return
             }
             let clientMsgId = data["client_msg_id"] as? String
@@ -8358,6 +8927,7 @@ final class AppState: ObservableObject {
                 // behavior.
                 self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
+                self.resetAccountScopedRuntimeState()
                 self.errorMessage = "Account cancellato remotamente."
             }
         }
@@ -8495,12 +9065,16 @@ final class AppState: ObservableObject {
             // The other caller (drainPendingOfferReplays) already invokes this on
             // the main actor, so hopping here makes the method consistently
             // main-isolated.
+            // W-NATIVESRTPSNAPSHOT-ID — the envelope's own call id keys the
+            // native-SRTP snapshot (nil if absent: the bound active id is used).
+            let offerEnvelopeCallId: String? = data["call_id"] as? String
             DispatchQueue.main.async {
-                self.handleIncomingWebRtcOffer(
+                self.routeIncomingWebRtcOffer(
                     callerId: callerId,
                     sdp: sdp,
                     peerCapabilities: peerCaps,
-                    hasVideo: offerHasVideo
+                    hasVideo: offerHasVideo,
+                    callId: offerEnvelopeCallId
                 )
             }
         }
@@ -8561,6 +9135,10 @@ final class AppState: ObservableObject {
                 else { return }
                 impl.noteCallSetupProgressed(
                     answerEnvelopeCallId.isEmpty ? nil : answerEnvelopeCallId)
+                // W-MEDIAATACCEPT review fix — see `callAnswerSeenCallId`.
+                let seenAnswerId: String = answerEnvelopeCallId.isEmpty
+                    ? (impl.getActiveCallId() ?? "") : answerEnvelopeCallId
+                self.callAnswerSeenCallId = seenAnswerId.lowercased()
             }
             if let pc = peerCaps, !pc.isEmpty {
                 DispatchQueue.main.async { [weak self] in
@@ -8818,7 +9396,7 @@ final class AppState: ObservableObject {
                 await provider.invalidate()
                 guard let bundle = await provider.currentOrRefresh() else {
                     // A failed refetch is not evidence that anything left.
-                    RTLog.info("call", "relaysupdated refetch=0")
+                    RTLog.info("call", "relay fleet=1 refetch=0")
                     return
                 }
                 let hosts = RelayFleetReselection.relayHosts(
@@ -8828,46 +9406,61 @@ final class AppState: ObservableObject {
                 guard RelayFleetReselection.shouldRestartIce(
                     selectedRelayAddress: inUse, freshRelayHosts: hosts
                 ) else {
-                    RTLog.info("call", "relaysupdated acted=0 fresh=\(hosts.count)")
+                    RTLog.info("call", "relay fleet=1 acted=0 fresh=\(hosts.count)")
                     return
                 }
-                RTLog.info("call", "relaysupdated acted=1 gone=\(inUse ?? "-")")
+                // Never log the relay address itself (it is an IP): only that the
+                // in-use relay left the fleet. The old line shipped `gone=<address>`.
+                RTLog.info("call", "relay fleet=1 acted=1 changed=\(inUse == nil ? 0 : 1)")
                 await ctrl.restartIce(reason: "relay-fleet-changed")
                 #endif
             }
         }
         ws.registerHandler(type: "call_ice") { [weak self] _, data in
-            guard let self = self else { return }
-            // W-ICEBATCH (2026-08-25) — batch form (`ice-batch-v1`): a
-            // `candidates` array of {candidate, sdp_mid?, sdp_mline_index?,
-            // removed?} entries. When the array is present the legacy
-            // top-level fields are empty and MUST be ignored. `removed: true`
-            // entries prune the candidate immediately. Receivers accept BOTH
-            // forms forever, regardless of what was negotiated — only the
-            // SENDER gates the batch form on the capability intersection.
-            if let batch = data["candidates"] as? [[String: Any]] {
-                for entry in batch {
-                    let cand = (entry["candidate"] as? String) ?? ""
-                    let mid = entry["sdp_mid"] as? String
-                    let mline = (entry["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
-                    if (entry["removed"] as? Bool) == true {
-                        self.handleIncomingWebRtcIceRemoval(candidate: cand,
-                                                            sdpMid: mid,
-                                                            sdpMLineIndex: mline)
-                    } else if !cand.isEmpty {
-                        self.handleIncomingWebRtcIce(candidate: cand,
-                                                     sdpMid: mid,
-                                                     sdpMLineIndex: mline)
+            // W-MEDIAATACCEPT (option b) — §4.7 (G1/iOS-9): the server
+            // writes the canonical `call_id` on this envelope (main.go
+            // ~10505) — read it here, off whatever thread the WS delivery
+            // runs on, and hop onto the main actor BEFORE touching any
+            // AppState/PendingIceCandidateQueue state, rather than relying
+            // (as every call site here used to) on this closure's isolation
+            // being inferred from the @MainActor context it was WRITTEN in.
+            let envelopeCallId = (data["call_id"] as? String) ?? ""
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                // W-ICEBATCH (2026-08-25) — batch form (`ice-batch-v1`): a
+                // `candidates` array of {candidate, sdp_mid?, sdp_mline_index?,
+                // removed?} entries. When the array is present the legacy
+                // top-level fields are empty and MUST be ignored. `removed: true`
+                // entries prune the candidate immediately. Receivers accept BOTH
+                // forms forever, regardless of what was negotiated — only the
+                // SENDER gates the batch form on the capability intersection.
+                if let batch = data["candidates"] as? [[String: Any]] {
+                    for entry in batch {
+                        let cand = (entry["candidate"] as? String) ?? ""
+                        let mid = entry["sdp_mid"] as? String
+                        let mline = (entry["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
+                        if (entry["removed"] as? Bool) == true {
+                            self.handleIncomingWebRtcIceRemoval(candidate: cand,
+                                                                sdpMid: mid,
+                                                                sdpMLineIndex: mline,
+                                                                callId: envelopeCallId)
+                        } else if !cand.isEmpty {
+                            self.handleIncomingWebRtcIce(candidate: cand,
+                                                         sdpMid: mid,
+                                                         sdpMLineIndex: mline,
+                                                         callId: envelopeCallId)
+                        }
                     }
+                    return
                 }
-                return
+                let candidate = (data["candidate"] as? String) ?? ""
+                let sdpMid = data["sdp_mid"] as? String
+                let mlineIndex = (data["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
+                self.handleIncomingWebRtcIce(candidate: candidate,
+                                                sdpMid: sdpMid,
+                                                sdpMLineIndex: mlineIndex,
+                                                callId: envelopeCallId)
             }
-            let candidate = (data["candidate"] as? String) ?? ""
-            let sdpMid = data["sdp_mid"] as? String
-            let mlineIndex = (data["sdp_mline_index"] as? Int).map { Int32($0) } ?? 0
-            self.handleIncomingWebRtcIce(candidate: candidate,
-                                            sdpMid: sdpMid,
-                                            sdpMLineIndex: mlineIndex)
         }
 
         // W328 (CRITICAL): handle msg_pending_sync — the server pushes
@@ -8997,6 +9590,9 @@ final class AppState: ObservableObject {
         guard let senderId = entry["sender_id"] as? String,
               !senderId.isEmpty,
               let cipherB64 = entry["encrypted_payload"] as? String else {
+            // 2026-09-19 — a replayed entry that can never be processed is a
+            // TERMINAL outcome: ack it or the server replays it on every reconnect.
+            ackUnprocessablePendingEntry(entry)
             return
         }
         // CRITICAL (Android→iOS key sync): opaque call-signalling queued while
@@ -9024,7 +9620,8 @@ final class AppState: ObservableObject {
             // msg_pending_sync specifically because the server DID persist
             // it, so it does.
             if let serverMsgId = entry["message_id"] as? String, !serverMsgId.isEmpty {
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                sendOrQueueDeliveryReceipt(
+                    serverMsgId: serverMsgId, senderId: entry["sender_id"] as? String)
             }
             return
         }
@@ -9045,10 +9642,19 @@ final class AppState: ObservableObject {
             } else {
                 RTLog.warn("call", "missedevt parse=0 len=" + String(cipherB64.count))
             }
+            // 2026-09-19 — the outcome is final whichever branch ran (recorded and notified, deduped,
+            // or unparseable), so ack it. Without the ack the server keeps the entry and replays it on
+            // every reconnect until its 24 h staleness cutoff: the iPhone showed the same one
+            // call_missed as "undelivered" for hours.
+            if let serverMsgId = entry["message_id"] as? String, !serverMsgId.isEmpty {
+                sendOrQueueDeliveryReceipt(
+                    serverMsgId: serverMsgId, senderId: entry["sender_id"] as? String)
+            }
             return
         }
         guard let serverMsgId = entry["message_id"] as? String,
               let cipher = Data(base64Encoded: cipherB64) else {
+            ackUnprocessablePendingEntry(entry)
             return
         }
         handleIncomingMessage(
@@ -9056,8 +9662,21 @@ final class AppState: ObservableObject {
             serverMsgId: serverMsgId,
             cipher: cipher,
             clientMsgId: entry["client_msg_id"] as? String,
-            serverTs: entry["server_ts"] as? String
+            serverTs: entry["server_ts"] as? String,
+            // A backlog replay: its decrypt failure says nothing about the CONTROL
+            // session installed since (see `ControlFailureTracker.isEvidence`).
+            live: false
         )
+    }
+
+    /// Acks a `msg_pending_sync` entry that can never be processed (malformed
+    /// base64, missing fields): its outcome is final, and an un-acked entry is
+    /// replayed on every reconnect until the server's 24 h TTL. No id, no ack.
+    private func ackUnprocessablePendingEntry(_ entry: [String: Any]) {
+        if let messageId = entry["message_id"] as? String, !messageId.isEmpty {
+            RTLog.warn("chat", "msg_pending_sync malformed=1 acked=1")
+            sendOrQueueDeliveryReceipt(serverMsgId: messageId, senderId: entry["sender_id"] as? String)
+        }
     }
 
     // MARK: - W-GRPMSG: group TEXT message receive
@@ -9181,6 +9800,19 @@ final class AppState: ObservableObject {
         }
 
         let ts = Self.parseGroupServerTs(serverTs)
+
+        // 2026-09-19 service-message root fix (IOS-21) — the same structural
+        // service gate as the 1:1 and mesh paths: a group TEXT frame whose body is
+        // a service envelope (or an attachment descriptor, which rides msg_type 1)
+        // is dropped and acked, never appended as a row or a banner.
+        if msgType != GroupAttachmentEnvelope.msgTypeAttachment,
+           ServicePayloadDetector.classify(plaintext) != .notService {
+            let dropGroup: String = String(groupHex.prefix(8))
+            let dropLine: String = "text service=1 dropped=1 g=" + dropGroup
+            RTLog.warn("group", dropLine)
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
 
         // Fase 1B — attachment frame: the decrypted 0xE4 plaintext is a
         // GroupAttachmentEnvelope JSON, NOT text. Branch on the transport
@@ -9437,25 +10069,52 @@ final class AppState: ObservableObject {
     /// guard) is sufficient — the next `.authenticated` transition retries
     /// anything still stuck, and a duplicate ack is harmless (the server-side
     /// receipt handlers are already idempotent, same as the live path).
+    ///
+    /// Only the entries whose frame the socket accepted (`trySend` true) are
+    /// removed, and the pass stops at the first frame that is not accepted
+    /// (socket gone or stale mid-loop): the unsent suffix stays queued for the
+    /// next `.authenticated` transition.
     private func drainGroupReceiptOutbox() {
         guard let ws = liveProvider?.getWebSocketClient() else { return }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let pending = GroupReceiptOutbox.shared.drainable(nowMs: nowMs)
         guard !pending.isEmpty else { return }
+        var handled: [GroupReceiptOutbox.Entry] = []
+        handled.reserveCapacity(pending.count)
         for entry in pending {
+            let frameType: String
             switch entry.kind {
             case GroupReceiptOutbox.Entry.kindDelivered:
-                ws.send(type: "group_msg_delivered",
-                        data: ["group_id": entry.groupId, "server_message_id": entry.serverMessageId])
+                frameType = "group_msg_delivered"
             case GroupReceiptOutbox.Entry.kindRead:
-                ws.send(type: "group_msg_read",
-                        data: ["group_id": entry.groupId, "server_message_id": entry.serverMessageId])
+                frameType = "group_msg_read"
             default:
-                break
+                // Unknown kind: nothing to send, dropped from the queue as before.
+                handled.append(entry)
+                continue
             }
-            GroupReceiptOutbox.shared.remove(entry)
+            let payload: [String: Any] = ["group_id": entry.groupId,
+                                          "server_message_id": entry.serverMessageId]
+            // `trySend` true means `URLSessionWebSocketTask.send` was invoked
+            // (acceptance is synchronous). A transport error reported later
+            // by the send completion is not observed here, so an entry
+            // removed on true can still be lost in flight.
+            guard ws.trySend(type: frameType, data: payload) else { break }
+            handled.append(entry)
         }
-        RTLog.info("group", "grp_receipt drained=\(pending.count)")
+        // ONE sealed read-modify-write for the whole batch (a per-entry
+        // `remove` was O(n) Keychain reads + O(n^2) AES/JSON on the main
+        // actor). A crash before this line only means a duplicate ack on
+        // the next drain, which the server treats as idempotent.
+        if !handled.isEmpty {
+            GroupReceiptOutbox.shared.remove(contentsOf: handled)
+        }
+        let drainedCount: Int = handled.count
+        RTLog.info("group", "grp_receipt drained=\(drainedCount)")
+        let retainedCount: Int = pending.count - handled.count
+        if retainedCount > 0 {
+            RTLog.info("group", "grp_receipt retained=\(retainedCount)")
+        }
     }
 
     /// Fase 2 — emit `group_msg_read` for every inbound message in this
@@ -9483,11 +10142,11 @@ final class AppState: ObservableObject {
         guard liveProvider?.persistentConnection.state == .authenticated,
               let ws = liveProvider?.getWebSocketClient() else {
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-            for serverMsgId in inboundServerIds {
-                GroupReceiptOutbox.shared.enqueue(
-                    kind: GroupReceiptOutbox.Entry.kindRead, groupId: groupId,
-                    serverMessageId: serverMsgId, nowMs: nowMs)
-            }
+            // One batched call: a group with hundreds of unread messages
+            // opened offline used to seal + write the whole blob per id.
+            GroupReceiptOutbox.shared.enqueue(
+                kind: GroupReceiptOutbox.Entry.kindRead, groupId: groupId,
+                serverMessageIds: inboundServerIds, nowMs: nowMs)
             RTLog.info("group", "grp_receipt queued=\(inboundServerIds.count) kind=read")
             return
         }
@@ -9571,9 +10230,14 @@ final class AppState: ObservableObject {
     private func bufferOneToOneCiphertext(
         senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?
     ) {
+        // 2026-09-19 (IOS-09) — a frame the server replays on reconnect while it
+        // is still waiting in this buffer must not be buffered twice.
+        if bufferedOneToOneCiphertexts.contains(where: { $0.serverMsgId == serverMsgId }) { return }
+        // `bufferedAtMs` lets the final-retry timer (one per sender) tell a frame
+        // that has waited its full patience window from one buffered a moment ago.
         bufferedOneToOneCiphertexts.append(
             (senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
-             serverTs: serverTs))
+             serverTs: serverTs, bufferedAtMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())))
         if bufferedOneToOneCiphertexts.count > Self.maxBufferedOneToOneCiphertexts {
             bufferedOneToOneCiphertexts.removeFirst(
                 bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)
@@ -9589,8 +10253,8 @@ final class AppState: ObservableObject {
     /// still surfaces exactly once, never disappears.
     private func retryBufferedOneToOneMessages(for senderId: String) {
         guard bufferedOneToOneCiphertexts.contains(where: { $0.senderId == senderId }) else { return }
-        var remaining: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
-        var toRetry: [(senderId: String, serverMsgId: String, cipher: Data, clientMsgId: String?, serverTs: String?)] = []
+        var remaining: [BufferedOneToOneFrame] = []
+        var toRetry: [BufferedOneToOneFrame] = []
         for e in bufferedOneToOneCiphertexts {
             if e.senderId == senderId { toRetry.append(e) } else { remaining.append(e) }
         }
@@ -9599,6 +10263,43 @@ final class AppState: ObservableObject {
             handleIncomingMessage(
                 senderId: e.senderId, serverMsgId: e.serverMsgId, cipher: e.cipher,
                 clientMsgId: e.clientMsgId, serverTs: e.serverTs, isRetry: true)
+        }
+    }
+
+    /// The final-retry timer's version of `retryBufferedOneToOneMessages`: it
+    /// only gives up on frames that have themselves waited the full
+    /// `bufferedFinalizeDelaySec` (the timer is armed per SENDER, so a frame
+    /// buffered at t=24 s of a 25 s timer would otherwise be turned into a
+    /// placeholder + nack a second later, long before the patient session
+    /// convergence in `ensureV4Session` has had its ~45 s). Younger frames stay
+    /// buffered and the timer is re-armed for the earliest of them.
+    private func finalizeBufferedOneToOneMessages(for senderId: String) {
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        let patienceMs = Int64(AppState.bufferedFinalizeDelaySec) * 1_000
+        var remaining: [BufferedOneToOneFrame] = []
+        var due: [BufferedOneToOneFrame] = []
+        var earliestDueInMs: Int64? = nil
+        for e in bufferedOneToOneCiphertexts {
+            guard e.senderId == senderId else {
+                remaining.append(e)
+                continue
+            }
+            let dueInMs = patienceMs - (nowMs - e.bufferedAtMs)
+            if dueInMs <= 0 {
+                due.append(e)
+            } else {
+                remaining.append(e)
+                earliestDueInMs = min(earliestDueInMs ?? dueInMs, dueInMs)
+            }
+        }
+        bufferedOneToOneCiphertexts = remaining
+        for e in due {
+            handleIncomingMessage(
+                senderId: e.senderId, serverMsgId: e.serverMsgId, cipher: e.cipher,
+                clientMsgId: e.clientMsgId, serverTs: e.serverTs, isRetry: true)
+        }
+        if let waitMs = earliestDueInMs {
+            scheduleBufferedOneToOneFinalize(for: senderId, afterMs: waitMs)
         }
     }
 
@@ -9652,10 +10353,25 @@ final class AppState: ObservableObject {
     /// Persist an incoming peer message to the local store + post a
     /// NotificationCenter event so any active `ChatContainer` for the
     /// peer refreshes. Decryption uses the same MessageCrypto wire
-    /// format as the send path; if decryption fails we still persist
-    /// a placeholder ("[messaggio cifrato non leggibile]") so the
-    /// conversation history at least shows that something arrived —
-    /// helps debugging when peers are on different protocol versions.
+    /// format as the send path.
+    ///
+    /// 2026-09-19 service-message root fix — this is the single inbound choke
+    /// point for 1:1 frames (live msg_receive, msg_pending_sync replay, retry
+    /// drain), and it is a typed router:
+    ///   1. self-echo and already-settled frames are acked and dropped before any
+    ///      decrypt (`settledInboundFrames`);
+    ///   2. the frame is decrypted, then classified by wire class (0xE6 CONTROL vs
+    ///      CHAT) and by the STRUCTURE of the plaintext (`InboundRouter`);
+    ///   3. service payloads are consumed by `handleInboundServicePayload` (never a
+    ///      row, preview, unread, banner or conversation), anything unrecognised is
+    ///      dropped, and every terminal outcome is acked;
+    ///   4. only genuine user content reaches the persistence tail, whose one write
+    ///      is `ConversationStore.recordInboundUserMessage`;
+    ///   5. a decrypt failure never touches session state. A CONTROL frame fails
+    ///      silently; a CHAT frame is retried once and, if it still fails, leaves
+    ///      the single placeholder row ("[messaggio cifrato non leggibile]", no
+    ///      banner) plus a CONTROL-only nack — the resend of that `client_msg_id`
+    ///      replaces the row in place.
     private func handleIncomingMessage(
         senderId: String,
         serverMsgId: String,
@@ -9667,8 +10383,35 @@ final class AppState: ObservableObject {
         // W-AVATARPOLLUTE — true only when this exact ciphertext already
         // failed once and is being replayed from `bufferedOneToOneCiphertexts`
         // after a fresh key-exchange leg landed. See that buffer's kdoc.
-        isRetry: Bool = false
+        isRetry: Bool = false,
+        // 2026-09-19 — false for a `msg_pending_sync` replay: such a frame can be
+        // older than the CONTROL session installed since, so its decrypt failure
+        // says nothing about that session (`ControlFailureTracker.isEvidence`).
+        live: Bool = true
     ) {
+        // ── 2026-09-19 service-message root fix — router entry gates ──────────
+        // Everything below this point can decrypt, persist or notify, so the two
+        // questions that never need a decrypt are answered first, on every path
+        // (live msg_receive, msg_pending_sync replay, retry drain).
+        //
+        // IOS-20 — a frame whose sender is THIS device is never processed: it
+        // used to fall through to a decrypt with the wrong-direction AAD, a
+        // forced key exchange with ourselves and, after the retry, a
+        // placeholder in a self-conversation. Ack so the server stops holding it.
+        if let selfUserId = currentUserId, !selfUserId.isEmpty, senderId == selfUserId {
+            RTLog.warn("chat", "msg_receive self=1 dropped=1")
+            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
+            return
+        }
+        // IOS-18 — a frame whose outcome is already final is acked again and
+        // never decrypted twice (see `settledInboundFrames`).
+        if settledInboundFrames.containsFrame(
+            serverMessageId: serverMsgId, senderId: senderId, clientMsgId: clientMsgId
+        ) {
+            RTLog.info("chat", "msg_receive settled=1 retry=\(isRetry ? 1 : 0)")
+            sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
+            return
+        }
         // W-MSGDEDUP (2026-09-01) — consumer-side dedup BEFORE decrypt, the
         // 1:1 mirror of `handleIncomingGroupMessage`'s
         // `GroupMessageStore.contains(groupHex:serverMessageId:)` gate
@@ -9691,7 +10434,7 @@ final class AppState: ObservableObject {
             }
             if seenByServerId || seenByClientId {
                 RTLog.info("chat", "msg_receive dup=1 byserver=\(seenByServerId ? 1 : 0) retry=\(isRetry ? 1 : 0)")
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
                 return
             }
         }
@@ -9741,6 +10484,9 @@ final class AppState: ObservableObject {
         // marker JSON would already have been replaced by the
         // "(download in arrivo)" placeholder before we get to parse.
         var decryptedRaw: String = ""
+        // 2026-09-19 — true only for the single placeholder row a CHAT frame
+        // leaves behind when it is still undecryptable after its retry.
+        var isUndecryptablePlaceholder = false
         // W-MSGPSKPICK (2026-08-02): the decrypt attempt is a closure so it
         // can be re-run against the OTHER PSKs bound to this peer. A peer on
         // an older build still picks `auto:` where we now pick the newest,
@@ -9758,15 +10504,14 @@ final class AppState: ObservableObject {
             let pt: Data
             switch MessageWireFormat.detect(cipher) {
             case .v5:
-                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — real target on THIS channel
-                // (msg_send): the attachment-announce marker `ChatContainer
-                // .completeResumeAttachmentSend` ships after a TUS resume completes
-                // (`sendEncrypted(..., useControlChannel: true)`) rides here as a normal inbound
-                // message. The rest of the qa_ctl/qa_grp family already bypasses both ratchets
-                // entirely via `forceStatelessFormat` (W-CTLNORATCHET) and never reaches this case;
-                // `qa_grpcall_ctrl` ships via opaque_message (see the group-call receive path in
-                // `dispatchInboundOpaque`), not here. Fail-closed on any decrypt failure — never a
-                // silent fall-through into the v1 fallback below.
+                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — the CONTROL channel. Since
+                // 2026-09-19 (service-message root fix) this is where EVERY service payload
+                // on msg_send arrives (qa_ctl/qa_grp envelopes, sender keys, nacks, avatar,
+                // timer, screenshot signals); the frame is routed by `InboundRouter`
+                // (0xE6 => the service dispatcher only, never a row). Attachment announces no
+                // longer ride it. `qa_grpcall_ctrl` ships via opaque_message (see the group-call
+                // receive path in `dispatchInboundOpaque`), not here. Fail-closed on any decrypt
+                // failure — never a silent fall-through into the v1 fallback below.
                 let v5Plain = AppState.sharedV4Ratchet.decryptV5Routed(
                     epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: cipher)
                 print("[PQC_DIAG_V5CTRL] decryptV5 sender=\(senderId.prefix(8)) result=\(v5Plain != nil ? "ok" : "nil")")
@@ -9849,7 +10594,32 @@ final class AppState: ObservableObject {
                 RTLog.warn("chat", "msg_receive undec=0 alt=1 from=\(senderId.prefix(8))")
                 pt = ok
             }
-            decryptedRaw = String(data: pt, encoding: .utf8) ?? "[messaggio cifrato non leggibile]"
+            // ── 2026-09-19 service-message root fix — typed inbound router ────────
+            // The wire class (first byte: 0xE6 = CONTROL, everything else = CHAT)
+            // and the structure of the plaintext decide what this frame MAY
+            // become, before anything renders or persists:
+            //   0xE6            → the service dispatcher only; unknown / malformed /
+            //                     plain text on CONTROL is dropped, never a row.
+            //   CHAT, service-  → dropped (channel-is-kind: control is never accepted
+            //   shaped            from CHAT, and never rendered either).
+            //   non-UTF8        → dropped (IOS-12): it used to be replaced by the
+            //                     placeholder string and persisted as a normal row.
+            //   CHAT, otherwise → user content, the only thing that reaches the
+            //                     conversation-persistence tail below.
+            let inboundWireClass = InboundWireClass.of(cipher)
+            if inboundWireClass == .control {
+                AppState.controlFailureTracker.recordSuccess(peerId: senderId)
+            }
+            let routed = InboundRouter.verdict(wireClass: inboundWireClass, plaintext: pt)
+            if case .drop(let dropReason) = routed {
+                let controlFlag: Int = inboundWireClass == .control ? 1 : 0
+                RTLog.warn("chat", "msg_receive drop=1 reason=\(dropReason.rawValue) control=\(controlFlag)")
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
+            decryptedRaw = String(decoding: pt, as: UTF8.self)
             // E2EE avatar transport (2026-07-30) — a successful decrypt
             // from `senderId` proves a real pairwise PSK exists with
             // them right now. Opportunistically deliver our current
@@ -9870,141 +10640,27 @@ final class AppState: ObservableObject {
             // Safe against clobbering a manual rubrica rename — see
             // NameResolutionService.maybeRefreshFromChatActivity's kdoc.
             NameResolutionService.shared.maybeRefreshFromChatActivity(userId: senderId)
-            // W78: cross-platform attachment placeholder. Desktop and
-            // Android send voice notes / files via the qa_ctl:1
-            // `attach_announce` envelope (XChaCha20-Poly1305 + TUS).
-            // iOS does not yet implement that download/decrypt path
-            // (deferred until the engine ships the Double Ratchet
-            // chain-key snapshot needed for parity), so when one of
-            // those envelopes arrives we surface a friendly placeholder
-            // instead of pasting raw JSON into the chat history. Same
-            // shape for `qfile` markers (legacy iOS-internal file
-            // transfer) so a stray Desktop-FileTransfer marker doesn't
-            // leak as text either.
-            // W86: route qa_ctl:1 control envelopes (delete / edit / reaction)
-            // BEFORE persisting as a new inbound row. These mutate
-            // an EXISTING row keyed by clientMsgId rather than
-            // appending. A successful route returns early — the chat
-            // refresh notification fires from inside the route helper.
-            //
-            // Screenshot-lock family (ss_req / ss_resp / ss_lock) now ALSO
-            // parses into a typed case, but it is CONVERSATION-level (no target
-            // row to mutate) and is applied — as a transient dialog signal
-            // (ss_req) or `setScreenshotGranted` state (ss_resp/ss_lock), never
-            // a chat row — by the conversation-level ad-hoc JSON handler
-            // further down this function. So we deliberately let it
-            // FALL THROUGH here (do not route to `handleControlEnvelope`, which
-            // treats it as a no-op) to keep that ad-hoc handler as the single
-            // source of truth and avoid a parse-then-drop regression.
-            if let env = try? ChatControlEnvelope.parse(decryptedRaw) {
-                switch env {
-                case .screenshotRequest, .screenshotResponse, .screenshotLock:
-                    break  // fall through to the ad-hoc conversation-level handler
-                case .delete, .edit, .reaction:
-                    handleControlEnvelope(env, senderId: senderId)
-                    // W-PENDINGACKGAP (2026-09-17): every early-return branch here
-                    // used to skip the ack — harmless while the server deleted a
-                    // pending message on unconfirmed send, but W-PENDINGACKGAP
-                    // removed that, so an offline-queued control envelope replayed
-                    // via msg_pending_sync would sit in the pending queue forever
-                    // and re-apply on every reconnect (a reaction toggling back and
-                    // forth, a delete/edit reapplied). Ack once the effect is
-                    // applied, same rule as the real-message path below.
-                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                    return
-                }
-            }
-            // E2EE avatar transport (2026-07-30, see
-            // docs/E2EE_AVATAR_TRANSPORT_DESIGN.md) — like delete/edit/
-            // reaction above, this must be routed BEFORE message
-            // persistence: it is never a visible chat row, only a
-            // silent local-cache update.
-            //
-            // 2026-08-02: the version-dedup pre-check that used to sit here
-            // moved INTO the coordinator, where it runs inside the per-sender
-            // serialisation. Checking it out here was racy against a second
-            // announce from the same peer (both could read the same cached
-            // version and both proceed), and — worse for diagnosis — a skip
-            // produced no log at all, which is precisely the "did it run or
-            // not?" ambiguity that made this feature so hard to debug.
-            // Fix (2026-07-31, found during full-audit): `try?` here used to
-            // collapse two very different outcomes into the same silent
-            // `nil` — "this JSON just isn't an avatar_announce" (expected,
-            // falls through to other handlers) and "this IS an
-            // avatar_announce but a required field is missing/malformed" (a
-            // real wire-format bug, e.g. the att/avatar key mismatch fixed
-            // earlier today). The malformed case produced ZERO log anywhere
-            // and fell through to being persisted+rendered as raw garbage
-            // JSON in the chat UI. Distinguish them explicitly.
-            do {
-                if let avatarEnv = try AvatarAnnounceEnvelope.parse(decryptedRaw) {
-                    handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
-                    // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                    return
-                }
-            } catch {
-                RTLog.error("avatar", "malformed avatar_announce from=\(senderId.prefix(8)): \(error)")
-                // W-PENDINGACKGAP: malformed on this device means malformed on
-                // every future redelivery too — a retry can never fix it, so ack
-                // now or it loops in the pending queue forever.
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            if routed == .dispatchService {
+                // Service payload: consumed here, acked, settled. It has no
+                // path to a row, a preview, an unread count, a notification or
+                // a conversation (IOS-15/16) — `handleInboundServicePayload`
+                // never touches the conversation-persistence tail below.
+                handleInboundServicePayload(decryptedRaw, senderId: senderId)
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
                 return
             }
-            // W390: route `qa_grp:1` envelopes (sender_key_init,
-            // sender_key_rotate) to the GroupChatService BEFORE
-            // persisting as a chat row. These are protocol messages,
-            // not user-visible text. The handler installs the recv
-            // chain so subsequent group ciphertexts from this sender
-            // can decrypt; if no group session exists locally yet, the
-            // handler drops silently (the peer will re-ship after we
-            // join via the membership signaling layer).
-            if let groupCtlType = GroupChatService.detectGroupCtlType(decryptedRaw) {
-                let mySelfId = currentUserId ?? ""
-                switch groupCtlType {
-                case "sender_key_init":
-                    GroupChatService.shared.handleInboundSenderKeyInit(
-                        envelopeJson: decryptedRaw,
-                        fromUserId: senderId,
-                        selfId: mySelfId)
-                case "sender_key_rotate":
-                    GroupChatService.shared.handleInboundSenderKeyRotate(
-                        envelopeJson: decryptedRaw,
-                        fromUserId: senderId,
-                        selfId: mySelfId)
-                case "group_invite":
-                    // W399 — iOS-only enhancement: full state on first contact.
-                    handleInboundGroupInvite(json: decryptedRaw, fromUserId: senderId)
-                case "member_added":
-                    // W403 — Desktop-aligned wire.
-                    handleInboundMemberAdded(json: decryptedRaw, fromUserId: senderId)
-                case "member_removed":
-                    handleInboundMemberRemoved(json: decryptedRaw, fromUserId: senderId)
-                case "member_left":
-                    handleInboundMemberLeft(json: decryptedRaw, fromUserId: senderId)
-                case "group_member_added":
-                    // W403 LEGACY — accept with epoch gate (drop if env.e
-                    // is present and < state.epoch), then route to the
-                    // canonical handler. Will be removed in a future release.
-                    handleLegacyMemberDelta(
-                        json: decryptedRaw, fromUserId: senderId, isAdded: true)
-                case "group_member_removed":
-                    handleLegacyMemberDelta(
-                        json: decryptedRaw, fromUserId: senderId, isAdded: false)
-                default:
-                    // W403: dropped "group_invite_decline" (was dead code:
-                    // a declined invite is just an ignored sender_key_init).
-                    print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId.prefix(8))…")
-                }
-                // W-GRPMSG: a freshly-installed recv chain may unblock
-                // group TEXT frames we buffered because they arrived
-                // before this sender's sender_key_init. Retry them now.
-                if groupCtlType == "sender_key_init" || groupCtlType == "sender_key_rotate" {
-                    retryBufferedGroupMessages()
-                    retryBufferedGroupMetadata()
-                }
-                // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+            // A `qa_ctl` `attach_announce` that does not parse (e.g. `att` missing) is
+            // shaped like an attachment, so the router lets it through as user content;
+            // rendered as-is it would be the raw JSON as a chat row. Drop and ack it
+            // (the write boundary also refuses announce JSON, as a backstop).
+            if ServicePayloadDetector.classify(decryptedRaw) == .attachmentAnnounce,
+               (try? AttachAnnounceEnvelope.parse(decryptedRaw)) == nil {
+                RTLog.warn("chat", "msg_receive drop=1 reason=5 control=0")
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
                 return
             }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
@@ -10023,29 +10679,46 @@ final class AppState: ObservableObject {
             // the counters carry a numeric tail because the redactor blobs
             // every non-numeric token (see PairwiseChainKeyResolver's own
             // note): `undec=1` is what survives the trip.
-            RTLog.error("chat", "msg_receive undec=1 from=\(senderId.prefix(8)) retry=\(isRetry): \(error)")
-            // W77b: auto-rekey on decrypt failure. Same pattern as
-            // qaudion-desktop's `MessageService.on('needRekey')` → fires
-            // a fresh KEY_EXCHANGE_OFFER with `force=true` so the next
-            // message from this peer rides a freshly-derived PSK. Saves
-            // the user from having to manually re-pair when keychains
-            // get desynced (e.g. after one side reinstalls).
-            triggerKeyExchange(with: senderId, force: true)
-            // W-AVATARPOLLUTE — a FIRST failure buffers instead of showing
-            // "[messaggio cifrato non leggibile]": most of these are an
-            // avatar_announce (or another control payload) racing its own
-            // key exchange, and a retry once that exchange's next leg lands
-            // usually opens it silently. Only a retry that ALSO fails falls
-            // through below — this is the one path allowed to actually show
-            // the failure row, so a truly undecryptable message still
-            // surfaces exactly once rather than vanishing.
+            let wireClass = MessageWireFormat.detect(cipher)
+            RTLog.error("chat", "msg_receive undec=1 wire=\(wireClass) from=\(senderId.prefix(8)) retry=\(isRetry): \(error)")
+            // ── 2026-09-19 service-message root fix — failure policy ──────────────
+            // A decrypt failure is NEVER a reason to touch session state: the old
+            // W77b auto-rekey (`triggerKeyExchange(force: true)` on the first failure
+            // of every non-CONTROL frame, which purges the working PSK and drags the
+            // peer through a re-derive) and W-CTRLDROPRECV (drop a present CONTROL
+            // session on one failed frame) turned every leaked or replayed frame
+            // into pairing churn (IOS-25, IOS-09). Repair belongs to the
+            // `ensureV4Session` state machine and to the call/pre-bootstrap
+            // handshakes that replace sessions; a failed frame only feeds it.
+            //
+            // CONTROL (0xE6): silent by construction — never a row, always acked.
+            if wireClass == .v5 {
+                handleUndecryptableControlFrame(
+                    senderId: senderId, serverMsgId: serverMsgId, cipher: cipher,
+                    clientMsgId: clientMsgId, serverTs: serverTs, isRetry: isRetry, live: live)
+                return
+            }
+            // CHAT, first failure: keep the frame (deduped, bounded) and retry
+            // once a session lands or the final-retry timer fires. NOT acked yet —
+            // the server keeps it pending, so a frame that only needed a repaired
+            // session is delivered again after a restart instead of being lost.
             if !isRetry {
                 bufferOneToOneCiphertext(
                     senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
                     serverTs: serverTs)
+                scheduleBufferedOneToOneFinalize(for: senderId)
                 return
             }
-            plaintext = "[messaggio cifrato non leggibile]"
+            // CHAT, still undecryptable after the retry: a genuine user message was
+            // lost. Ask the sender to resend it — over CONTROL only, held until a
+            // CONTROL session exists (`sendDecryptNackDebounced`) — and leave the
+            // single placeholder row (written by the persistence tail below, no
+            // notification, replaced in place when the resend arrives).
+            if let clientMsgId {
+                sendDecryptNackDebounced(to: senderId, targetClientMsgId: clientMsgId)
+            }
+            plaintext = InboundMessagePolicy.undecryptablePlaceholderText
+            isUndecryptablePlaceholder = true
         }
 
         // Persist into the conversation store. The conversation is
@@ -10066,81 +10739,29 @@ final class AppState: ObservableObject {
             // `looksLikeUUID`, not the full placeholder set — now the
             // canonical `DisplayName.forUser`.
             let resolvedName: String = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            // Created EMPTY (no preview, unread 0): the write boundary below owns
+            // the preview and the unread bump, and can still refuse or fail. With the
+            // frame's text and unread=1 written here, a failed write left a phantom
+            // conversation showing that text, and first contact counted unread twice.
             conv = Conversation(
                 id: UUID(),
                 peerUserId: senderId,
                 peerDisplayName: resolvedName,
-                lastMessagePreview: plaintext,
+                lastMessagePreview: nil,
                 lastActivity: Date(),
-                unreadCount: 1,
+                unreadCount: 0,
                 pinned: false,
                 kind: .oneToOne
             )
             store.upsertConversation(conv)
         }
-        // qa_ctl control envelope detection (Android-compatible wire format).
-        // These are NOT stored as normal message rows — they trigger state changes
-        // and optionally store a system bubble for user visibility.
-        if let data = plaintext.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let qaCtl = json["qa_ctl"] as? Int, qaCtl == 1,
-           let ctlType = json["t"] as? String {
-            let isScreenshotCtl = ctlType == "ss_req" || ctlType == "ss_resp" || ctlType == "ss_lock"
-            let isTimerCtl = ctlType == "ephemeral_timer"
-            if isScreenshotCtl || isTimerCtl {
-                // Android parity fix (2026-08-13): ReceiveMessageUseCase.kt's
-                // ss_req/ss_resp/ss_lock branches never touch the message
-                // store — they only emit to ScreenshotConsentRepository (a
-                // transient SharedFlow) or flip the persisted grant column.
-                // iOS used to ALSO drop a "📸 ..." system bubble into the
-                // conversation for all three, which is what the user flagged
-                // as a stray message that "stays in the chat" — worse, ss_req
-                // had NO approve/deny UI wired to it at all (grantScreenshotPermission()
-                // had zero callers), so the bubble was purely decorative and
-                // the request could never actually be granted from the UI.
-                // Fixed: ss_req now posts a transient notification consumed by
-                // the live ChatContainer/ChatDetailScreen as an approve/deny
-                // dialog (mirrors Android's incomingScreenshotRequest dialog);
-                // ss_resp/ss_lock keep their state mutation but no longer
-                // persist a chat row, matching Android exactly.
-                if ctlType == "ss_req" {
-                    NotificationCenter.default.post(name: AppState.screenshotRequestNotification,
-                                                    object: nil,
-                                                    userInfo: ["peerUserId": senderId])
-                    // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                    sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                    return
-                }
-                if ctlType == "ss_resp" {
-                    let approved = json["approved"] as? Bool ?? false
-                    store.setScreenshotGranted(conversationId: conv.id, granted: approved)
-                } else if ctlType == "ss_lock" {
-                    store.setScreenshotGranted(conversationId: conv.id, granted: false)
-                } else if ctlType == "ephemeral_timer" {
-                    let sec = json["timer_sec"] as? Int ?? 0
-                    store.setEphemeralTimer(conversationId: conv.id, seconds: sec == 0 ? nil : sec)
-                    let label = sec == -1 ? "⏱ Messaggi: visualizza una volta"
-                         : sec == 0 ? "⏱ Messaggi a scomparsa: disattivati"
-                         : "⏱ Messaggi a scomparsa: \(sec)s"
-                    let sysMsg = Message(
-                        id: UUID(), conversationId: conv.id,
-                        direction: .incoming, plaintext: label,
-                        sentAt: Date(), deliveredAt: Date(), readAt: nil,
-                        status: .delivered, senderUserId: senderId
-                    )
-                    store.appendMessage(sysMsg)
-                    store.recordNewMessage(conversationId: conv.id,
-                                           lastMessagePreview: label,
-                                           lastActivity: Date(), incrementUnread: !conv.muted)
-                }
-                NotificationCenter.default.post(name: AppState.chatRefreshNotification,
-                                                object: nil,
-                                                userInfo: ["peerUserId": senderId])
-                // W-PENDINGACKGAP: see the delete/edit/reaction branch above.
-                sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
-                return
-            }
-        }
+        // 2026-09-19 service-message root fix — this is the USER-CONTENT tail only.
+        // The qa_ctl branches that used to sit here (decrypt_nack, ss_req/resp/lock,
+        // ephemeral_timer) ran AFTER the conversation was created above, so a service
+        // envelope could resurrect a deleted conversation with a raw-JSON preview and
+        // unread=1 (IOS-15), and ephemeral_timer wrote a system bubble (IOS-17). They
+        // are service payloads now: consumed by `handleInboundServicePayload` before
+        // this point, with no path that can create a conversation or a row.
 
         let msgUUID = UUID()
         // W80: voice-note receive.
@@ -10226,22 +10847,62 @@ final class AppState: ObservableObject {
             clientMsgId: clientMsgId,
             expiresAt: ephExpiry,
             isViewOnce: isViewOnce ? true : nil,
-            exportBlocked: exportBlocked
+            exportBlocked: exportBlocked,
+            isPlaceholder: isUndecryptablePlaceholder ? true : nil
         )
-        store.appendMessage(msg)
         // W83: bump conversation preview + activity + unread so the
         // chat list reflects new messages and the count badge shows.
         // Use the already-rendered `plaintext` (placeholder for media)
         // so cross-platform attachments don't leak raw JSON to the list.
         // W89: muted conversations skip the unread bump so the badge
         // stays clean (the message still lands and re-orders the list).
+        //
+        // 2026-09-19 service-message root fix (IOS-22/23/24) — the row, the
+        // preview and the unread bump go through the ONE inbound write
+        // boundary, which refuses service-shaped text (there is no render-time
+        // filter anywhere: a leak fails here, loudly) and replaces a
+        // placeholder in place when its resend arrives. The banner below is
+        // only ever scheduled from this point.
         let isMuted = conv.muted
-        store.recordNewMessage(
-            conversationId: conv.id,
-            lastMessagePreview: plaintext,
-            lastActivity: Date(),
-            incrementUnread: !isMuted
-        )
+        let inboundKind: ConversationStore.InboundUserMessageKind
+        if isUndecryptablePlaceholder {
+            inboundKind = .placeholder
+        } else if pendingMarker != nil || pendingAttachAnnounce != nil {
+            inboundKind = .attachment
+        } else {
+            inboundKind = .text
+        }
+        let recorded = store.recordInboundUserMessage(
+            msg, preview: plaintext, incrementUnread: !isMuted, kind: inboundKind)
+        switch recorded {
+        case .inserted:
+            break
+        case .replacedPlaceholder:
+            // The resend of a message we had given up on landed: the
+            // placeholder row now carries the real text. No second row, no
+            // second unread, no banner.
+            RTLog.info("chat", "msg_receive placeholder_replaced=1")
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification, object: nil,
+                userInfo: ["peerUserId": senderId, "conversationId": conv.id]
+            )
+            finishInboundFrame(
+                serverMsgId: serverMsgId, senderId: senderId,
+                clientMsgId: clientMsgId, settleClientKey: true)
+            return
+        case .duplicatePlaceholder, .refusedServiceShaped:
+            RTLog.warn("chat", "msg_receive record=0 dup=1")
+            finishInboundFrame(
+                serverMsgId: serverMsgId, senderId: senderId,
+                clientMsgId: clientMsgId, settleClientKey: !isUndecryptablePlaceholder)
+            return
+        case .failed:
+            // Not acked, not settled: the server keeps the frame, and a redelivery
+            // that can no longer decrypt becomes the placeholder + nack that gets
+            // the sender to resend it — better than acking a message never stored.
+            RTLog.error("chat", "msg_receive record=0 failed=1")
+            return
+        }
         // W90: local-notification banner for inbound messages.
         // Suppression rules:
         //   - skip if conversation is muted (W89).
@@ -10261,10 +10922,13 @@ final class AppState: ObservableObject {
         // muted convs from the banner, but THIS path runs even when
         // the banner is suppressed (active chat) so the user still
         // gets a tactile cue.
-        if !isMuted && activePeerUserId == senderId {
+        // 2026-09-19 — the placeholder row is the honest "a message was lost"
+        // signal and NOTHING else: no haptic, no banner (it used to raise a
+        // banner whose body was the placeholder text).
+        if !isMuted && !isUndecryptablePlaceholder && activePeerUserId == senderId {
             HapticFeedback.messageSent()
         }
-        if bannersGlobalEnabled && !isMuted && activePeerUserId != senderId {
+        if bannersGlobalEnabled && !isMuted && !isUndecryptablePlaceholder && activePeerUserId != senderId {
             let title = conv.peerDisplayName.isEmpty
                 ? DisplayName.forUser(senderId, contacts: self.cachedContacts)
                 : conv.peerDisplayName
@@ -10394,13 +11058,268 @@ final class AppState: ObservableObject {
         // W-MSGOUTBOX (2026-09-01) — queued when the socket is down instead
         // of dropped (`BCryptoWebSocketClient.send` discards the frame when
         // the task is nil); see `sendOrQueueDeliveryReceipt`.
-        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId)
+        // 2026-09-19 — also settles the frame (see `settledInboundFrames`). A
+        // placeholder settles only its server id: the resend of the same
+        // `client_msg_id` must still get through to replace it.
+        finishInboundFrame(
+            serverMsgId: serverMsgId, senderId: senderId,
+            clientMsgId: clientMsgId, settleClientKey: !isUndecryptablePlaceholder)
         // Notify any open ChatContainer to refresh from the store.
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification,
             object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
         )
+    }
+
+    // MARK: - Inbound router helpers (2026-09-19 service-message root fix)
+
+    /// Terminal outcome of an inbound 1:1 frame: settle it (never decrypt it
+    /// again) and ack it (the server stops replaying it).
+    private func finishInboundFrame(
+        serverMsgId: String, senderId: String, clientMsgId: String?, settleClientKey: Bool
+    ) {
+        settledInboundFrames.insertFrame(
+            serverMessageId: serverMsgId, senderId: senderId,
+            clientMsgId: clientMsgId, includeClientKey: settleClientKey)
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
+    }
+
+    /// A 0xE6 (CONTROL) frame that would not open. Silent by construction:
+    /// never a row, never a preview/unread/banner, ALWAYS acked, and it never
+    /// forces a key exchange, purges a PSK or drops a session because of ONE
+    /// failed frame. The frame is kept once for a single retry — it can have
+    /// raced ahead of the pre-bootstrap that installs its session — and the
+    /// failure only feeds the quiet CONTROL-session recovery.
+    private func handleUndecryptableControlFrame(
+        senderId: String, serverMsgId: String, cipher: Data,
+        clientMsgId: String?, serverTs: String?, isRetry: Bool, live: Bool
+    ) {
+        // Ack now, retry or not: a control frame has nothing the server must
+        // keep for us, and an un-acked one is replayed on every reconnect.
+        sendOrQueueDeliveryReceipt(serverMsgId: serverMsgId, senderId: senderId)
+        if isRetry {
+            RTLog.warn("chat", "msg_receive undec=1 wire=v5 giveup=1 suppressed=1")
+            settledInboundFrames.insertFrame(
+                serverMessageId: serverMsgId, senderId: senderId,
+                clientMsgId: clientMsgId, includeClientKey: true)
+            return
+        }
+        bufferOneToOneCiphertext(
+            senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
+            serverTs: serverTs)
+        scheduleBufferedOneToOneFinalize(for: senderId)
+        guard let selfUserId = currentUserId, !selfUserId.isEmpty else { return }
+        let control = AppState.sharedV4Ratchet.hasChannelSession(
+            epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId)
+        if !control {
+            // Absent session: the ordinary recovery (throttled and tie-broken
+            // inside ensureV4Session).
+            AppState.ensureV4Session(selfId: selfUserId, peerId: senderId, liveProvider: liveProvider)
+            return
+        }
+        // Present session that keeps failing: only a QUORUM of distinct failed
+        // frames proves it diverged (see ControlFailureTracker). Then drop it
+        // so the ensure step re-bootstraps it — never on a single failure.
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        // ...and only frames that are evidence about THIS session count: a replay
+        // older than the session, or a frame the peer sealed on its new session
+        // before its pre-bootstrap reached us, fails by construction and three of
+        // them used to drop a healthy session (a ping-pong with the peer's repair).
+        let serverTsMs = Self.parseServerTs(serverTs).map { Int64(($0.timeIntervalSince1970 * 1000).rounded()) }
+        guard ControlFailureTracker.isEvidence(
+            arrivedLive: live, serverTimestampMs: serverTsMs,
+            sessionInstalledAtMs: AppState.controlInstalledAtMs[senderId], nowMs: nowMs
+        ) else {
+            RTLog.info("chat", "control failure stale=1 live=\(live ? 1 : 0)")
+            return
+        }
+        let diverged = AppState.controlFailureTracker.record(
+            peerId: senderId, frameId: serverMsgId, nowMs: nowMs)
+        if diverged {
+            RTLog.warn("chat", "control session diverged=1 dropping=1 from=\(senderId.prefix(8))")
+            AppState.sharedV4Ratchet.dropChannelSession(
+                epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId)
+            AppState.ensureV4Session(selfId: selfUserId, peerId: senderId, liveProvider: liveProvider)
+        }
+    }
+
+    /// One final-retry timer per sender: re-runs the frames buffered for them
+    /// that have waited the full patience window, once, `isRetry: true`
+    /// (`finalizeBufferedOneToOneMessages`; younger ones re-arm it). A frame
+    /// that opens is consumed normally; a CONTROL frame that still fails is
+    /// dropped silently; a CHAT frame that still fails becomes the single
+    /// placeholder row + a nack. `afterMs` is only passed by that re-arm.
+    private func scheduleBufferedOneToOneFinalize(for senderId: String, afterMs: Int64? = nil) {
+        guard !AppState.bufferedFinalizeScheduled.contains(senderId) else { return }
+        AppState.bufferedFinalizeScheduled.insert(senderId)
+        let delayMs = max(afterMs ?? Int64(AppState.bufferedFinalizeDelaySec) * 1_000, 1)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            AppState.bufferedFinalizeScheduled.remove(senderId)
+            self?.finalizeBufferedOneToOneMessages(for: senderId)
+        }
+    }
+
+    /// A CONTROL session was just installed for `peerId` (call handshake or
+    /// pre-bootstrap): flush the service payloads held for them and retry the
+    /// frames that were waiting on the session.
+    fileprivate func noteControlSessionInstalled(peerId: String) {
+        // A new session starts with a clean slate: when it was installed is what
+        // separates a failed frame that is evidence about it from one that is not
+        // (`ControlFailureTracker.isEvidence`), and failures recorded against the
+        // session it replaced say nothing about it.
+        AppState.controlInstalledAtMs[peerId] = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        AppState.controlFailureTracker.recordSuccess(peerId: peerId)
+        ServiceSendHub.shared.controlSessionInstalled(peerId: peerId)
+        retryBufferedOneToOneMessages(for: peerId)
+    }
+
+    /// Single consumer of a decrypted SERVICE payload (CONTROL wire, structurally
+    /// service). Every branch consumes; NONE of them can reach the conversation
+    /// persistence tail of `handleIncomingMessage`, so no service payload can
+    /// become a row, a preview, an unread count, a notification or a
+    /// conversation — including an unknown, malformed or newer-schema envelope,
+    /// which is dropped here instead of falling through to the text path.
+    private func handleInboundServicePayload(_ raw: String, senderId: String) {
+        // W86: typed message-targeted control (delete / edit / reaction) mutates
+        // an EXISTING row keyed by clientMsgId. The screenshot-lock family also
+        // parses into a typed case but is conversation-level and applied by
+        // `applyInboundConversationControl` below, so it falls through here.
+        if let env = try? ChatControlEnvelope.parse(raw) {
+            switch env {
+            case .screenshotRequest, .screenshotResponse, .screenshotLock:
+                break
+            case .delete, .edit, .reaction:
+                handleControlEnvelope(env, senderId: senderId)
+                return
+            }
+        }
+        // E2EE avatar transport (2026-07-30): never a visible chat row, only a
+        // silent local-cache update. `try?` would collapse "not an avatar_announce"
+        // and "an avatar_announce with a missing field" into the same silent nil,
+        // so the malformed case is distinguished (and logged) explicitly — and
+        // dropped, never rendered as raw JSON.
+        do {
+            if let avatarEnv = try AvatarAnnounceEnvelope.parse(raw) {
+                handleInboundAvatarAnnounce(avatarEnv, senderId: senderId)
+                return
+            }
+        } catch {
+            RTLog.error("avatar", "malformed avatar_announce from=\(senderId.prefix(8)): \(error)")
+            return
+        }
+        // W390: `qa_grp:1` envelopes (sender_key_init / rotate / member deltas /
+        // invite) go to the group layer.
+        if let groupCtlType = GroupChatService.detectGroupCtlType(raw) {
+            handleInboundGroupControl(groupCtlType, json: raw, senderId: senderId)
+            return
+        }
+        if applyInboundConversationControl(raw, senderId: senderId) { return }
+        RTLog.warn("chat", "service payload unrecognised dropped=1 from=\(senderId.prefix(8))")
+    }
+
+    /// `qa_grp:1` dispatch (moved out of the receive path unchanged).
+    private func handleInboundGroupControl(_ groupCtlType: String, json: String, senderId: String) {
+        let mySelfId = currentUserId ?? ""
+        switch groupCtlType {
+        case "sender_key_init":
+            GroupChatService.shared.handleInboundSenderKeyInit(
+                envelopeJson: json,
+                fromUserId: senderId,
+                selfId: mySelfId)
+        case "sender_key_rotate":
+            GroupChatService.shared.handleInboundSenderKeyRotate(
+                envelopeJson: json,
+                fromUserId: senderId,
+                selfId: mySelfId)
+        case "group_invite":
+            // W399 — iOS-only enhancement: full state on first contact.
+            handleInboundGroupInvite(json: json, fromUserId: senderId)
+        case "member_added":
+            // W403 — Desktop-aligned wire.
+            handleInboundMemberAdded(json: json, fromUserId: senderId)
+        case "member_removed":
+            handleInboundMemberRemoved(json: json, fromUserId: senderId)
+        case "member_left":
+            handleInboundMemberLeft(json: json, fromUserId: senderId)
+        case "group_member_added":
+            // W403 LEGACY — accept with epoch gate (drop if env.e
+            // is present and < state.epoch), then route to the
+            // canonical handler. Will be removed in a future release.
+            handleLegacyMemberDelta(json: json, fromUserId: senderId, isAdded: true)
+        case "group_member_removed":
+            handleLegacyMemberDelta(json: json, fromUserId: senderId, isAdded: false)
+        default:
+            // W403: dropped "group_invite_decline" (was dead code:
+            // a declined invite is just an ignored sender_key_init).
+            print("[AppState] unknown qa_grp:1 type \(groupCtlType) from \(senderId.prefix(8))…")
+        }
+        // W-GRPMSG: a freshly-installed recv chain may unblock group TEXT
+        // frames we buffered because they arrived before this sender's
+        // sender_key_init. Retry them now.
+        if groupCtlType == "sender_key_init" || groupCtlType == "sender_key_rotate" {
+            retryBufferedGroupMessages()
+            retryBufferedGroupMetadata()
+        }
+    }
+
+    /// The ad-hoc `qa_ctl:1` family that has no typed variant a row could hang
+    /// on: decrypt_nack, ss_req / ss_resp / ss_lock, ephemeral_timer. Returns
+    /// `true` when `raw` is one of them (consumed).
+    ///
+    /// The conversation is only LOOKED UP here, never created (IOS-15): these
+    /// used to run after the conversation had already been created with the raw
+    /// JSON as its preview and unread=1, so a stray one resurrected a deleted
+    /// conversation. `ephemeral_timer` no longer writes a system bubble, bumps
+    /// unread or changes the preview (IOS-17): the timer is conversation
+    /// metadata, and the chat header's timer button already shows it. Applying
+    /// it is idempotent, so a redelivery changes nothing.
+    private func applyInboundConversationControl(_ raw: String, senderId: String) -> Bool {
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let qaCtl = json["qa_ctl"] as? Int, qaCtl == 1,
+              let ctlType = json["t"] as? String else {
+            return false
+        }
+        switch ctlType {
+        case "decrypt_nack":
+            // W-DECRYPTNACK (2026-09-19) — the peer is telling us one of OUR prior
+            // sends never decrypted on their end even after their session with us
+            // recovered. No chat bubble, ever.
+            if let target = json["target"] as? String, !target.isEmpty {
+                resendAfterDecryptNack(peerUserId: senderId, targetClientMsgId: target)
+            }
+            return true
+        case "ss_req":
+            // Android parity (2026-08-13): a transient approve/deny dialog signal,
+            // never a chat row.
+            NotificationCenter.default.post(name: AppState.screenshotRequestNotification,
+                                            object: nil,
+                                            userInfo: ["peerUserId": senderId])
+            return true
+        case "ss_resp", "ss_lock", "ephemeral_timer":
+            let store = ConversationStore()
+            guard let conv = store.loadConversations().first(where: { $0.peerUserId == senderId }) else {
+                RTLog.info("chat", "conversation control ignored=1 noconv=1")
+                return true
+            }
+            if ctlType == "ss_resp" {
+                let approved = json["approved"] as? Bool ?? false
+                store.setScreenshotGranted(conversationId: conv.id, granted: approved)
+            } else if ctlType == "ss_lock" {
+                store.setScreenshotGranted(conversationId: conv.id, granted: false)
+            } else {
+                let sec = json["timer_sec"] as? Int ?? 0
+                store.setEphemeralTimer(conversationId: conv.id, seconds: sec == 0 ? nil : sec)
+            }
+            NotificationCenter.default.post(name: AppState.chatRefreshNotification,
+                                            object: nil,
+                                            userInfo: ["peerUserId": senderId])
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - BLE mesh receive (branch claude/ble-mesh-cleanroom-spike)
@@ -10416,9 +11335,9 @@ final class AppState: ObservableObject {
     /// Deliberately scoped to the CORE text-message case only — control
     /// envelopes (delete/edit/reaction), avatar transport, and group-chat
     /// routing stay WS-only for this increment; a mesh-delivered qa_ctl/
-    /// qa_grp envelope renders as plain (decrypted) text rather than being
-    /// silently dropped, which is an honest if unpolished fallback until
-    /// that parity work happens. `MeshChatMessage.senderUserId`/
+    /// qa_grp envelope (any service payload, an attachment descriptor
+    /// included) is DROPPED below, never rendered as text: service traffic
+    /// must not become a chat row (2026-09-19). `MeshChatMessage.senderUserId`/
     /// `recipientUserId` are the SAME cleartext routing metadata the WS
     /// transport already sends — not secret, and needed to rebuild the
     /// Associated Data the sender bound the ciphertext to.
@@ -10434,6 +11353,14 @@ final class AppState: ObservableObject {
         // spending a decryption on it.
         guard store.findByClientMsgId(shell.clientMsgId) == nil else { return }
         guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
+        // 2026-09-19 service-message root fix (IOS-21) — channel-is-kind on the
+        // mesh too: a chat MESSAGE never rides CONTROL (0xE6 is service traffic
+        // only), so a message packet sealed as one is dropped before any
+        // decryption is spent on it.
+        guard InboundWireClass.of(sealedBytes) == .chat else {
+            RTLog.warn("mesh", "msg_receive control=1 dropped=1")
+            return
+        }
 
         // The key is chosen from the only identifier the public header carries:
         // the sender's node id. Resolving it through the contact list also means
@@ -10445,6 +11372,12 @@ final class AppState: ObservableObject {
             return
         }
         let senderId = senderContact.userId
+        // Our own id in the contact cache would otherwise open a conversation with
+        // ourselves (IOS-20 does the same for the WS path); nothing to decrypt.
+        guard senderId != selfId else {
+            RTLog.warn("mesh", "msg_receive self=1 dropped=1")
+            return
+        }
 
         guard let decrypted = attemptDecryptMeshWireBlob(
             cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId,
@@ -10473,6 +11406,14 @@ final class AppState: ObservableObject {
             return
         }
         let plaintext = envelope.body
+        // 2026-09-19 (IOS-21) — the same structural service gate as the 1:1 and
+        // group paths, BEFORE any conversation is created: a mesh body that is a
+        // service envelope (or an attachment descriptor, which the mesh does not
+        // carry) is dropped, never rendered as raw JSON.
+        guard ServicePayloadDetector.classify(plaintext) == .notService else {
+            RTLog.warn("mesh", "msg_receive service=1 dropped=1")
+            return
+        }
 
         let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
         let conv: Conversation
@@ -10480,9 +11421,12 @@ final class AppState: ObservableObject {
             conv = e
         } else {
             let resolvedName = DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            // Created EMPTY: the write boundary below owns preview and unread (a failed
+            // or duplicate write must not leave a phantom conversation, and unread was
+            // counted here AND by the boundary on first contact).
             conv = Conversation(
                 id: UUID(), peerUserId: senderId, peerDisplayName: resolvedName,
-                lastMessagePreview: plaintext, lastActivity: Date(), unreadCount: 1,
+                lastMessagePreview: nil, lastActivity: Date(), unreadCount: 0,
                 pinned: false, kind: .oneToOne
             )
             store.upsertConversation(conv)
@@ -10494,11 +11438,13 @@ final class AppState: ObservableObject {
             status: .delivered, senderUserId: senderId, clientMsgId: envelope.clientMsgId,
             viaMesh: true
         )
-        store.appendMessage(msg)
-        store.recordNewMessage(
-            conversationId: conv.id, lastMessagePreview: plaintext,
-            lastActivity: Date(), incrementUnread: !conv.muted
-        )
+        // The one inbound write boundary (refuses service-shaped text again).
+        let meshRecorded = store.recordInboundUserMessage(
+            msg, preview: plaintext, incrementUnread: !conv.muted, kind: .text)
+        guard meshRecorded == .inserted else {
+            RTLog.warn("mesh", "msg_receive record=0")
+            return
+        }
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification, object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
@@ -10542,9 +11488,14 @@ final class AppState: ObservableObject {
         )
         let sender = ChatMessageSendService(appState: self)
         Task {
+            // 2026-09-19 service-message root fix (IOS-05) — a receipt is SERVICE
+            // traffic: sealed on CONTROL only, and DROPPED (never held, never on
+            // the CHAT ladder) when there is no CONTROL session. It used to be
+            // sealed on the CHAT chain, where a lost or failed receipt burned
+            // skipped-key slots real messages need.
             let outcome = await sender.encryptForWire(
                 messageId: receiptId, peerUserId: peerUserId, plaintext: receiptText,
-                aadOverride: aad
+                aadOverride: aad, payloadClass: .service
             )
             guard case .success(let sealed) = outcome else {
                 RTLog.warn("mesh", "receipt_send undec=0 sealfail=1")
@@ -10746,14 +11697,14 @@ final class AppState: ObservableObject {
                                        senderId envelopeSenderId: String) {
         let store = ConversationStore()
         // Screenshot-lock family (ss_req / ss_resp / ss_lock) is
-        // CONVERSATION-level, not message-targeted, and is applied by the
-        // ad-hoc JSON handler earlier in `handleIncomingMessage` (which also
-        // renders the system bubble + updates `setScreenshotGranted`). We must
+        // CONVERSATION-level, not message-targeted, and is applied by
+        // `applyInboundConversationControl` (which updates
+        // `setScreenshotGranted` and never writes a system bubble). We must
         // NOT re-apply it here — that path is the single source of truth. These
         // cases are typed-model completeness only; treat them as a safe no-op so
         // the message-targeted dispatch below never runs on them. (In practice
         // the caller doesn't route these variants here — see the parse-guard in
-        // `handleIncomingMessage`.)
+        // `handleInboundServicePayload`.)
         switch env {
         case .screenshotRequest, .screenshotResponse, .screenshotLock:
             return
@@ -10804,6 +11755,13 @@ final class AppState: ObservableObject {
         case .delete:
             applied = store.applyDeleteByClientMsgId(target)
         case .edit(_, let newBody, _):
+            // An edit rewrites an existing row's text BEHIND the inbound write
+            // boundary, so it must pass the same structural gate: otherwise a peer
+            // could turn one of its messages into service-shaped text (2026-09-19).
+            guard ServicePayloadDetector.classify(newBody) == .notService else {
+                RTLog.warn("chat", "edit refused=1 reason=1")
+                return
+            }
             applied = store.applyEditByClientMsgId(target, newPlaintext: newBody)
         case .reaction:
             applied = false  // handled above
@@ -11027,11 +11985,17 @@ final class AppState: ObservableObject {
     /// `.authenticated`. A lost ack is not cosmetic: the server keeps
     /// re-delivering the message until one lands, and every re-delivery
     /// now costs a dedup lookup instead of a ratchet replay failure.
-    private func sendOrQueueDeliveryReceipt(serverMsgId: String) {
+    ///
+    /// 2026-09-19 — `senderId` (the original sender of the acked message) is sent as the
+    /// frame's `recipient_id`. The server deletes a message only on an ack that names one and
+    /// silently drops the id-only form, which is why every message to this device stayed in
+    /// the server's pending queue and was replayed at each reconnect.
+    private func sendOrQueueDeliveryReceipt(serverMsgId: String, senderId: String? = nil) {
         let socketUp = liveProvider?.persistentConnection.state == .authenticated
         if OutboxRetryPolicy.enabled, !socketUp {
             ChatOutboxStore().enqueueDeliveryReceipt(
                 serverMessageId: serverMsgId,
+                senderUserId: senderId,
                 nowMs: Int64(Date().timeIntervalSince1970 * 1000))
             RTLog.info("chat", "receipt queued=1")
             ChatOutboxDrain.shared.kick(reason: "receipt-queued")
@@ -11039,7 +12003,12 @@ final class AppState: ObservableObject {
         }
         if let provider = liveProvider {
             Task {
-                try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
+                if let senderId, !senderId.isEmpty {
+                    try? await provider.messageApi.sendDeliveryReceipt(
+                        messageId: serverMsgId, recipientId: senderId)
+                } else {
+                    try? await provider.messageApi.sendDeliveryReceipt(messageId: serverMsgId)
+                }
             }
         }
     }
@@ -11230,12 +12199,21 @@ final class AppState: ObservableObject {
     /// fan-out. Each emission has userInfo:
     ///   - "recipient": the peer userId to ship to
     ///   - "envelopeJson": the JSON-encoded `qa_grp:1` envelope
-    /// AppState.wireGroupSenderKeyCtlFanOut wraps each emission in the
-    /// 1:1 ratchet via ChatMessageSendService.sendEncrypted, so the
-    /// envelope rides the same per-pair PSK / v3 ratchet path text
-    /// chat uses. The recipient's chat dispatcher detects the
-    /// `qa_grp:1` marker and routes to GroupChatService.
+    /// AppState.wireGroupSenderKeyCtlFanOut ships each emission through
+    /// `ChatMessageSendService.sendService` (2026-09-19: CONTROL channel only,
+    /// held until a CONTROL session exists — no longer the per-pair PSK / v3
+    /// chat ratchet path). The recipient's dispatcher detects the `qa_grp:1`
+    /// marker on the CONTROL wire and routes to GroupChatService.
     static let groupSenderKeyCtlNotification = Notification.Name("qaudion.group.senderKeyCtl")
+
+    /// 2026-09-19 service-message root fix — a CONTROL session was just
+    /// installed for a peer (call handshake or KMS pre-bootstrap). Posted from
+    /// the install sites, which run in closures of assorted isolation, so a
+    /// plain notification keeps them free of any actor hop. userInfo:
+    ///   - "peerId": String
+    /// AppState observes it once (`wireGroupChatFanOut`) and flushes the
+    /// service payloads held for that peer and retries frames that waited on it.
+    static let controlSessionInstalledNotification = Notification.Name("qaudion.crypto.controlSessionInstalled")
 
     /// Fase 2 — group typing indicator, relayed from the WS `group_typing`
     /// handler in `wireIncomingChatHandlers`. userInfo:
@@ -11700,16 +12678,32 @@ final class AppState: ObservableObject {
                     // the NEXT chat message. Safe no-op if the derive
                     // above actually failed (maybeAnnounceAvatarTo fails
                     // closed on a missing PSK).
-                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    // W-AVATARQUIET (2026-09-18) — but never NEXT to the
+                    // exchange itself: the announce waits a quiet period so
+                    // it is sealed well after both sides have settled.
+                    Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: Self.keyExchangeAvatarQuietNanos)
+                        self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
+                    }
                     // W-AVATARPOLLUTE — this PSK is exactly what a buffered
                     // decrypt failure from this sender was probably missing.
                     self?.retryBufferedOneToOneMessages(for: senderId)
+                    // W-AVATARPAYLOADRETRY — same reasoning, one layer down:
+                    // an inbound avatar_announce whose INNER payload decrypt
+                    // failed (every PSK candidate exhausted) gets replayed
+                    // too, instead of waiting on the sender's own cooldown.
+                    self?.avatarAnnounceCoordinator.retryBufferedAvatarAnnounces(for: senderId)
                 }
             case .keyExchangeAccept(let pub):
                 Task { [weak self] in
                     await cke.handleAccept(senderId: senderId, peerPubKey: pub)
-                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                     self?.retryBufferedOneToOneMessages(for: senderId)
+                    self?.avatarAnnounceCoordinator.retryBufferedAvatarAnnounces(for: senderId)
+                    // W-AVATARQUIET — the announce that used to fire right here
+                    // was the 16:14:12 "Messaggio non decifrabile": sealed one
+                    // second after the peer's connect-time session install.
+                    try? await Task.sleep(nanoseconds: Self.keyExchangeAvatarQuietNanos)
+                    self?.maybeAnnounceAvatarTo(senderId, trigger: .keyExchange)
                 }
             case .offer:
                 Task { @MainActor [weak self] in
@@ -12571,7 +13565,10 @@ final class AppState: ObservableObject {
                 return
             }
             guard callService.callIntegration?.currentIsCaller == true else { return }
-            guard let sessionKey = callPqcSessionKey,
+            // G7 — feeds a cipher: only open with a key tagged for THIS
+            // envelope's own call id, never whatever the global slot
+            // currently holds for a different call.
+            guard let sessionKey = callPqcSessionKey(forCallId: callId),
                   let announce = VoiceConfidenceAnnounceCipher.open(sessionKey: sessionKey, callId: callId, payload: sealedPayload)
             else {
                 print("[AppState] VCONF failed to open (bad tag/format) call=\(callId.prefix(8))…")
@@ -13361,13 +14358,44 @@ final class AppState: ObservableObject {
         // Set before returning `integration`, so it is wired before this
         // responder's `onAndroidBundleReceived` can ever run.
         integration.resolveSelfUserId = { [weak self] in self?.currentUserId ?? "" }
+        // W-STALESEALER (fix-3) — see `QAudionCallIntegration.provideCallGeneration`'s
+        // doc: the integration reads this at the START of processing each inbound
+        // handshake message (before any of its internal `await`s), NOT when
+        // `onRelaySessionReady` actually fires, so a call that ends DURING one of
+        // those awaits is caught instead of silently resurrected.
+        integration.provideCallGeneration = { [weak self] in self?.callService.currentCallGeneration() ?? -1 }
         // W574g — install the M-15 WS-relay sealer the instant the engine
         // session key is set, race-free, carrying the handshake's own
         // callId. Responder side: this fires from the inbound OFFER's
         // session-init regardless of whether AppState.callContactId has
         // been set yet (the old onPqcSessionKeyEstablished install raced
         // it and skipped the callee → Android→iOS 100% AEAD fail).
-        integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
+        // W-NACKEPOCH — captured here, on the main actor, so the closure below can bump the
+        // RX NACK tracker's key epoch synchronously on the handshake thread (weak: no
+        // callService -> integration -> closure retain cycle).
+        let nackEpochCallService: CallService = self.callService
+        integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
+            // W-NACKEPOCH (Copilot follow-up to #106) — FIRST, synchronously: the engine has
+            // just installed this key, and new-key frames may already be queued on main. The
+            // RX path resets its NACK tracker on the next frame it admits instead of waiting
+            // for the main-actor resetNackState() Task in onPqcSessionKeyEstablished.
+            nackEpochCallService?.noteSessionKeyInstalled()
+            // W-M15SEALERONCE — read SYNCHRONOUSLY (the integration clears the flag
+            // as soon as this closure returns, before the Task below runs).
+            let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
+            // W-STALESEALER (fix-3) — `generation` is NOT read here. It was captured
+            // by the integration itself, at the START of processing the inbound
+            // handshake message that produced this session key — BEFORE any
+            // `await` that message's handling may have done (e.g. the OFFER path's
+            // `await sendOpaqueRaw(...)`, or the ACCEPT path's earbud GATT
+            // round-trip, both of which run BEFORE this closure fires). Reading it
+            // only now, at firing time, would sample the generation AFTER any such
+            // await — which, if `endCall()` ran during it, is already the
+            // POST-teardown value and would wrongly "match" itself later. See
+            // `QAudionCallIntegration.provideCallGeneration`'s doc for the full
+            // reasoning (this replaces the previous fix's firing-time read, which
+            // closed the wiring-time-vs-reused-integration gap but not this one).
+            let firedGeneration = generation
             Task { @MainActor [weak self, weak integration] in
                 guard let self = self, !cid.isEmpty else { return }
                 // W574x — directional relay-sealer keys when both peers
@@ -13384,9 +14412,19 @@ final class AppState: ObservableObject {
                 // NOT media and are unaffected by the gate.
                 let cidLower = cid.lowercased()
                 let installAudioMedia: () -> Void = { [weak self] in
-                    self?.callService.installRelaySealers(
+                    guard let self = self else { return }
+                    // W-STALESEALER — `firedGeneration` (the integration's own
+                    // entry-time capture, see above) travels into
+                    // `installRelaySealers`, which validates it against the
+                    // CURRENT generation and publishes the sealer references
+                    // atomically under its own lock (closing the window between
+                    // this check and the write — see that method's doc) and logs
+                    // the W-STALESEALER warn itself when it drops the install.
+                    self.callService.installRelaySealers(
                         sessionKey: sessionKey, callId: cid,
-                        srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                        srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                        isReKeyRound: isReKeyRound,
+                        expectedGeneration: firedGeneration)
                 }
                 if self.identityUnverifiedCallIds.contains(cidLower) {
                     self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
@@ -13394,7 +14432,17 @@ final class AppState: ObservableObject {
                     installAudioMedia()
                 }
                 // W-GRPDIAG-4 — see persistMessagePsk doc above.
-                self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
+                //
+                // W-MEDIAATACCEPT (option b) — D2/I12: msg-PSK persistence is
+                // one of the explicitly-deferred handshake side effects — a
+                // call nobody answered (or answered on a DIFFERENT device,
+                // §0 D2 "multi-dispositivo") must not persist a `call-<id>`
+                // msg-PSK the caller will never derive the same way. Runs
+                // immediately for `mode == 0`/no plan/already-released, same
+                // as today.
+                self.runOrDeferUntilAccepted(cidLower) { [weak self] in
+                    self?.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
+                }
                 // Cold-start answer race — the relay session key is now live, so
                 // engine + integration + contactId are all ready. If the user
                 // already answered during the PushKit cold-start gap, replay it.
@@ -13433,11 +14481,48 @@ final class AppState: ObservableObject {
                 setPskName: { [weak self] in self?.pskName = $0 },
                 setPskMethod: { [weak self] in self?.pskMethod = $0 },
                 setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 },
-                onSessionEstablished: { [weak self] peerId in self?.handleCallSessionEstablished(peerId: peerId) }
+                // W-MEDIAATACCEPT (option b) — D2/I12: `handleCallSessionEstablished`
+                // starts the re-key scheduler, the VOICE_KEY announce loop, and
+                // auto voice-learning (I14: none of those may start during
+                // RING). `CallSessionKeyBroker` is itself `@MainActor`, so
+                // `registerPqcSessionKey` below (same synchronous call stack)
+                // invokes this on the main actor — safe to touch
+                // `pendingAcceptGatedActions` here with no extra hop.
+                onSessionEstablished: { [weak self] peerId in
+                    guard let self = self else { return }
+                    let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+                    self.runOrDeferUntilAccepted(cid) { [weak self] in
+                        self?.handleCallSessionEstablished(peerId: peerId)
+                    }
+                }
             )
                 CallSessionKeyBroker.shared.registerPqcSessionKey(
                     sharedSecret, for: peerId)
             }
+        }
+        // W-MEDIAATACCEPT (option b) — §6: per-call isolation, additive to
+        // (not a replacement for) the `callPqcSessionKey` write above — see
+        // `refreshCallPqcSessionKeyProjection`'s doc for why this does not
+        // also touch that published value here.
+        integration.onSessionKeyForCall = { [weak self] key, cid in
+            guard !cid.isEmpty else { return }
+            CallKeyStore.shared.put(callId: cid, key: key, origin: .pqc)
+            // G7 — tag the callee-side global slot's owner alongside the
+            // per-call store write (both fire for the same session-key
+            // event; see `callPqcSessionKeyCallId`'s doc). Review fix: this
+            // closure runs on the integration's handshake thread — hop to
+            // the main actor like the key write itself
+            // (`onPqcSessionKeyEstablished`'s Task) instead of writing
+            // main-actor state off-main.
+            let ownerId: String = cid.lowercased()
+            Task { @MainActor [weak self] in self?.callPqcSessionKeyCallId = ownerId }
+        }
+        // W-MEDIAATACCEPT (option b) — I11: gate every responder ACCEPT
+        // emission point on this call's latched ring plan. No plan yet
+        // (OFFER raced call_incoming, W-OFFERBUFFER) falls back to the
+        // fleet default inside `shouldHoldAccept` itself.
+        integration.shouldHoldResponderAccept = { cid in
+            RingSignalingRegistry.shared.shouldHoldAccept(cid)
         }
         // DISPLAY-ONLY: responder JSON path also reports the negotiated PSK
         // fingerprint. Resolve the human name + method on the app side from
@@ -13518,7 +14603,23 @@ final class AppState: ObservableObject {
                 // performs the check-and-conditionally-create as ONE atomic,
                 // lock-held step (see its kdoc) — the guard above is now
                 // structural rather than a call-site convention.
-                let ok = AppState.sharedV4Ratchet.ensureBootstrapped(
+                //
+                // W-CHATREPLACE (2026-09-19) — REPLACE, retaining the previous
+                // session. The guard above stopped a call from resetting a live
+                // chat ratchet (an in-flight message lost to the reset) but left
+                // two peers whose chat sessions DIFFER permanently unable to
+                // read each other: create-if-absent never repairs a divergence
+                // (live 2026-09-19 08:49:23, A36 could not open the iPhone's chat
+                // frame). Both peers re-derive CHAT from this same handshake, so
+                // it replaces; `decryptV4Routed` falls back to the retained
+                // previous session for frames still in flight, and a repeat
+                // install from the same material is skipped (see
+                // `replaceChannelSession`). Same change on Android/Desktop, and
+                // on the caller leg below. The KMS pre-bootstrap path keeps CHAT
+                // create-if-absent: its sender installs before the peer has
+                // consumed the envelope, so replacing there could break a working
+                // session on one side only.
+                let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v4RoutingEpoch,
                     peerId: peerId
                 ) {
@@ -13531,7 +14632,7 @@ final class AppState: ObservableObject {
                         transcriptHash: transcriptHash
                     )
                 }
-                print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
+                print("[PQC_DIAG_V4] replaceChannelSession CHAT (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(ok)")
 
                 // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — ADDITIVE CONTROL bootstrap
                 // alongside the CHAT one above, from the SAME handshake secret. Never replaces the
@@ -13540,7 +14641,13 @@ final class AppState: ObservableObject {
                 // itself the atomic create-if-absent primitive (same as the CHAT call above), so no
                 // separate try/catch is needed here for the TOCTOU class W-ATOMICBOOTSTRAP closed —
                 // mirrors Android `PqcHandshake.kt` / Desktop `Application.ts`'s identical addition.
-                let controlOk = AppState.sharedV4Ratchet.ensureBootstrapped(
+                // W-CTRLREPLACE (2026-09-18) — REPLACE, not create-if-absent: both
+                // peers re-derive CONTROL from this same handshake, so a pair whose
+                // CONTROL sessions had diverged (present on both sides, every 0xE6
+                // failing) converges at every call; the replaced session is
+                // retained for frames still in flight under it. CHAT above stays
+                // create-if-absent (W-V4CONNECTRESET). Same change on Android/Desktop.
+                let controlOk = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v5ControlRoutingEpoch,
                     peerId: peerId
                 ) {
@@ -13554,7 +14661,13 @@ final class AppState: ObservableObject {
                         transcriptHash: transcriptHash
                     )
                 }
-                print("[PQC_DIAG_V5CTRL] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                print("[PQC_DIAG_V5CTRL] replaceChannelSession (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                if controlOk {
+                    // 2026-09-19 — flush service payloads held for this peer.
+                    NotificationCenter.default.post(
+                        name: AppState.controlSessionInstalledNotification,
+                        object: nil, userInfo: ["peerId": peerId])
+                }
             }
             // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
             // so resolve the active call's id to key the same gate. Safe: this
@@ -13565,17 +14678,34 @@ final class AppState: ObservableObject {
                     bootstrap()
                     return
                 }
-                if self.identityUnverifiedCallIds.contains(cid) {
-                    self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
-                } else {
-                    bootstrap()
+                // W-MEDIAATACCEPT (option b) — D2/I12: discharge the ACCEPT
+                // gate first, the identity gate second (spec §4.5 — "si
+                // scarica prima questo gate, poi quello d'identità"). A call
+                // still ringing under mode==1 defers the whole
+                // identity-gated-or-not decision; the identity gate is
+                // re-evaluated (possibly already resolved by then) only once
+                // the ACCEPT actually releases.
+                let identityGated: () -> Void = {
+                    if self.identityUnverifiedCallIds.contains(cid) {
+                        self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
+                    } else {
+                        bootstrap()
+                    }
                 }
+                self.runOrDeferUntilAccepted(cid, action: identityGated)
             }
         }
         // W-KCMAC (ship step 5) — responder leg. See `handleKcMacReady`'s doc.
         integration.onKcMacReady = { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.handleKcMacReady(event)
+                guard let self = self else { return }
+                // W-MEDIAATACCEPT (option b) — D2/I12: the wire kc_mac
+                // exchange (send + its 5s deadline) is a network-visible
+                // handshake-completion side effect — deferred like the
+                // others while mode==1 holds this call's ACCEPT.
+                self.runOrDeferUntilAccepted(event.callId) { [weak self] in
+                    self?.handleKcMacReady(event)
+                }
             }
         }
         // Pre-negotiation hooks — same shape the caller-side block in
@@ -13740,6 +14870,11 @@ final class AppState: ObservableObject {
                         guard let self else { return }
                         if self.callContactId == nil || self.callContactId == peerId {
                             self.callIdentityUnauthenticatedChange = true
+                            // Remember the refused key so the SAS confirmation of this call can adopt it
+                            // (`adoptPendingIdentityRotationIfEligible`); before, nothing ever did.
+                            self.pendingIdentityRotation = PendingIdentityRotation(
+                                peerId: peerId, deviceId: deviceId, key: key)
+                            self.callIdentityRotationAwaitingSas = true
                         }
                     }
                     return
@@ -13999,7 +15134,26 @@ final class AppState: ObservableObject {
         // has no other call_answer emitter, so the caller would stay stuck in
         // .ringing without this. WebRTC calls send their own SDP-bearing
         // call_answer from the controller — skip to avoid a duplicate.
-        if webRtcController == nil, let calling = liveProvider?.callingApi {
+        // W-MEDIAATACCEPT (option b) — §4.4: with `mode == 1` the incoming
+        // media-plane builder (`startIncomingMediaPlane` /
+        // `buildIncomingWebRtcMediaPlane`) is either about to send, or has
+        // already sent, a REAL SDP-bearing `call_answer` for this call —
+        // this blank-SDP WS-relay fallback must not race it while that
+        // build is in flight (`checkAndMarkAnswerSent`'s dedup would then
+        // silently eat the real answer, the exact regression spec §4.4
+        // warns about). Only `.none`/`.failed` (no plan, legacy mode, or
+        // the build already gave up) fall through to the blank answer.
+        let ringCallIdForAnswerGuard = canonicalActiveCallId() ?? ""
+        let mediaPlaneStillBuilding: Bool = {
+            guard !ringCallIdForAnswerGuard.isEmpty,
+                  let plan = RingSignalingRegistry.shared.entry(ringCallIdForAnswerGuard),
+                  plan.mode == 1 else { return false }
+            switch plan.mediaPlane {
+            case .awaitingSdp, .building, .ready: return true
+            case .none, .failed: return false
+            }
+        }()
+        if webRtcController == nil, !mediaPlaneStillBuilding, let calling = liveProvider?.callingApi {
             Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
         }
         print("[AppState] deferred answer consumed: \(trigger)")
@@ -14038,7 +15192,7 @@ final class AppState: ObservableObject {
             guard provider.releaseFromSystemUI(uuid) else { return }
             self.selfManagedAudioSession = true
             RTLog.info("call", "CallKit-wake-only: native UI dismissed, app owns the call")
-            Task { await provider.reactivateAudioSessionForSelfManagedCall() }
+            Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: uuid) }
         }
     }
 
@@ -14200,6 +15354,49 @@ final class AppState: ObservableObject {
         return display
     }
 
+    /// W-GHOSTCALL (2026-09-25) — decide which uuid the `call_cancelled` push
+    /// handler reports to CallKit (see `GhostCallPolicy.cancelReportPlan`), and,
+    /// for a placeholder, record it as unanswerable BEFORE the report reaches
+    /// CallKit so an Answer that lands on its fading ring is already known to be a
+    /// ghost. Extracted from the `onIncomingCancel` closure so that closure stays
+    /// a single main-actor call (CLAUDE.md §13/§14).
+    @MainActor
+    private func planIncomingCancelReport(callId: UUID) -> GhostCallPolicy.CancelReportPlan {
+        let plan: GhostCallPolicy.CancelReportPlan = GhostCallPolicy.cancelReportPlan(
+            callId: callId,
+            isRecentlyEnded: recentlyEndedCallIds.wasRecentlyEnded(callId),
+            placeholder: UUID()
+        )
+        if plan.isPlaceholder {
+            ghostPlaceholderCallIds.recordEnded(plan.reportUuid)
+            let ghostId8: String = String(callId.uuidString.prefix(8))
+            let ghostLine: String = "cancelpush ghost=1 id=" + ghostId8
+            RTLog.info("call", ghostLine)
+        }
+        return plan
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — records the call the `call_cancelled` push is
+    /// cancelling as missed, when it is the ringing, unanswered incoming call (see
+    /// `GhostCallPolicy.shouldRecordMissedOnCancelPush`). Must run BEFORE the push
+    /// handler clears `incomingCallRingVisible`. Takes the record id so the WS
+    /// hangup that may follow finds none and does not record it a second time.
+    @MainActor
+    private func recordMissedOnCancelPush(callId: UUID) {
+        let shouldRecord: Bool = GhostCallPolicy.shouldRecordMissedOnCancelPush(
+            cancelCallId: callId,
+            activeCallKitId: self.activeCallKitId,
+            callWasAnswered: self.callWasAnswered,
+            incomingRingVisible: self.incomingCallRingVisible
+        )
+        guard shouldRecord, let recordId = self.activeOutgoingRecordId else { return }
+        PersistentCallRecordStore.shared.markMissed(id: recordId)
+        self.activeOutgoingRecordId = nil
+        let missedId8: String = String(callId.uuidString.prefix(8))
+        let missedLine: String = "cancelpush missed=1 id=" + missedId8
+        RTLog.info("call", missedLine)
+    }
+
     /// TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit backlog
     /// item 9) — reconciles the generic placeholder CallKit call reported
     /// for an opaque call-wakeup push with the REAL incoming call once its
@@ -14300,6 +15497,124 @@ final class AppState: ObservableObject {
     /// device's X25519 public key; the peer's response (ACCEPT) is
     /// handled automatically by `wireOpaqueMessageHandler`.
     /// Fire-and-forget — failure is logged, never surfaced to the UI.
+    /// W-DECRYPTNACK — per (senderId, clientMsgId) debounce, mirrors
+    /// Android's identical map in `ReceiveMessageUseCase`.
+    private static var decryptNackLastSentMs: [String: Int64] = [:]
+    /// Held nacks live for `ServiceSendQueue.ttlMs` when no CONTROL session
+    /// exists. A shorter debounce re-enqueued the same target about once a
+    /// minute meanwhile, and up to ~10 duplicate nacks flushed together once
+    /// the session landed.
+    private static let decryptNackDebounceMs: Int64 = ServiceSendQueue.ttlMs
+
+    /// W-DECRYPTNACK (2026-09-19) — tell `peerId` that `targetClientMsgId`
+    /// (one of THEIR sends to us) never decrypted even after our session with
+    /// them recovered. Fire-and-forget, debounced. Only call site: the "still
+    /// lost after the retry" branch in `handleIncomingMessage`'s decrypt-failure
+    /// catch.
+    ///
+    /// 2026-09-19 service-message root fix — the nack is SERVICE traffic: it is
+    /// sealed on the CONTROL channel ONLY and, with no CONTROL session, HELD in
+    /// the bounded per-peer queue (which also drives session convergence) and
+    /// flushed in order once one exists. It is never sealed on the chat ladder:
+    /// a chat-class nack that fails to open surfaces on the peer as the very
+    /// "Messaggio non decifrabile" it was meant to repair (live 2026-09-19
+    /// 08:49:23, A36).
+    private func sendDecryptNackDebounced(to peerId: String, targetClientMsgId: String) {
+        let key = "\(peerId):\(targetClientMsgId)"
+        let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        if let last = AppState.decryptNackLastSentMs[key], now - last < AppState.decryptNackDebounceMs {
+            return
+        }
+        AppState.decryptNackLastSentMs[key] = now
+        // Built as JSON (not interpolated): `target` is a peer-supplied string.
+        let object: [String: Any] = [
+            "qa_ctl": 1,
+            "t": "decrypt_nack",
+            "target": targetClientMsgId,
+            "ts": Int64(Date().timeIntervalSince1970),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let payload = String(data: data, encoding: .utf8) else {
+            return
+        }
+        let sendService = ChatMessageSendService(appState: self)
+        Task {
+            let submission = await sendService.sendService(
+                peerUserId: peerId, plaintext: payload, label: "decrypt_nack", delivery: .hold)
+            let heldFlag: Int = submission == .sent ? 0 : 1
+            RTLog.info("chat", "decrypt_nack submitted held=\(heldFlag)")
+        }
+    }
+
+    /// W-DECRYPTNACK — re-send a specific prior message after the recipient
+    /// reports it never decrypted on their end. Mirrors Android's
+    /// `SendMessageUseCase.resendAfterDecryptNack`. Refuses unless
+    /// `targetClientMsgId` resolves to a row THIS device genuinely sent TO
+    /// `peerUserId` (an attacker naming an arbitrary/inbound id must trigger
+    /// nothing), and text-only (an attachment's `plaintext` is its already-
+    /// consumed upload envelope, not real content to re-ship).
+    ///
+    /// 2026-09-19 (IOS-19) — the resend reuses the ORIGINAL `client_msg_id` and
+    /// the ORIGINAL row: nothing is appended, so this device never grows a
+    /// second outgoing bubble, and the peer's placeholder for that id is
+    /// replaced IN PLACE when the resend arrives. Capped at
+    /// `maxNackResendsPerTarget` per id, and ignored for a deleted row.
+    private func resendAfterDecryptNack(peerUserId: String, targetClientMsgId: String) {
+        let store = ConversationStore()
+        guard let (convId, original) = store.findByClientMsgId(targetClientMsgId) else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not found — ignoring")
+            return
+        }
+        // The row must belong to the conversation with the peer who NACKED it: any
+        // contact can name a client_msg_id from another conversation, and without
+        // this that conversation's plaintext would be re-sealed to the caller.
+        guard store.loadConversations().first(where: { $0.id == convId })?.peerUserId == peerUserId else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… is not in the conversation with the nacking peer — ignoring")
+            return
+        }
+        guard original.direction == .outgoing, original.mediaLocalPath == nil else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not our own text send — ignoring")
+            return
+        }
+        // A deleted (tombstoned) row has nothing left to resend.
+        guard original.deletedAt == nil else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… was deleted — ignoring")
+            return
+        }
+        // The frame must ship under the id the peer recorded: the wire client_msg_id
+        // is `messageId.uuidString`, so the row's own id/clientMsgId has to be that UUID.
+        let resendId: UUID
+        if let stored = original.clientMsgId, let parsed = UUID(uuidString: stored), parsed.uuidString == stored {
+            resendId = parsed
+        } else if original.id.uuidString == targetClientMsgId {
+            resendId = original.id
+        } else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… id is not a canonical UUID — ignoring")
+            return
+        }
+        let already = AppState.nackResendCounts[targetClientMsgId] ?? 0
+        guard already < AppState.maxNackResendsPerTarget else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… resend cap reached — ignoring")
+            return
+        }
+        AppState.nackResendCounts[targetClientMsgId] = already + 1
+        let plaintext = original.plaintext
+        let sendService = ChatMessageSendService(appState: self)
+        Task { @MainActor in
+            let outcome = await sendService.sendEncrypted(messageId: resendId, peerUserId: peerUserId, plaintext: plaintext)
+            guard case .failed = outcome else {
+                print("[AppState] W-DECRYPTNACK resent target=\(targetClientMsgId.prefix(8))… peer=\(peerUserId.prefix(8))… (same id, no new row) conv=\(convId.uuidString.prefix(8))…")
+                return
+            }
+            // The counter was taken before the send: a transient failure must not
+            // burn one of the two resends the peer is allowed to ask for.
+            if let used = AppState.nackResendCounts[targetClientMsgId], used > 0 {
+                AppState.nackResendCounts[targetClientMsgId] = used - 1
+            }
+            print("[AppState] W-DECRYPTNACK resend FAILED target=\(targetClientMsgId.prefix(8))… peer=\(peerUserId.prefix(8))…")
+        }
+    }
+
     func triggerKeyExchange(with contactId: String, force: Bool = false) {
         guard let cke = contactKeyExchange else {
             print("[AppState] triggerKeyExchange called before WS up — pending")
@@ -14509,160 +15824,31 @@ final class AppState: ObservableObject {
         lastFailoverMs = now
         let jitter = Double.random(in: 0...5_000)
         try? await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000))
-        let newWss = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
-        // W-REALITYAUTODISABLE (2026-09-15) — align with Android
-        // (NetworkProtocolRouter.kt, commits 18078eb9c/4b5f42b55, same day):
-        // this used to auto-promote Reality here on a hard clearnet-block
-        // signal (CLEARNET-FIRST fallback, design doc §6). DISABLED — the
-        // trigger only proved every trusted clearnet node was unreachable, it
-        // never proved the Reality tunnel it then brought up actually carried
-        // traffic (activateRealityFallback flips transportIsReality=true on
-        // bare SOCKS-port-bound success, before any real probe). Live
-        // incident on Android: devices auto-promoted into a tunnel that never
-        // carried traffic, stuck silently with no working network, not even
-        // self-clearing across a restart. iOS never independently hit this
-        // (RealityManager's own W-REALITYHEALTH watchdog already covers more
-        // than Android's ever did), but the SAME unproven-activation shape
-        // exists here too, so it gets the same fix: no more auto-trigger.
-        // Reality stays fully available via the manual force path
-        // (setForceRealityTransport → activateRealityFallback(reason:
-        // "manual-force")) — a tester/user who explicitly wants it still
-        // gets it, and would notice if it weren't working. The line below
-        // only logs; it deliberately never calls activateRealityFallback.
-        // The former W-REALITYBREAKER recovery watch, which only ever
-        // started from this AUTO trigger, was removed outright rather than
-        // left orphaned — see its former call site below for the pointer to
-        // Android's matching removal (commit 4b5f42b55).
-        if newWss == nil {
-            RTLog.warn("network", "handleNodeStalled: every trusted clearnet node unreachable — Reality auto-promotion is disabled (W-REALITYAUTODISABLE); use Force Reality Transport in Settings to bring up the tunnel manually")
-        }
+        _ = await ServerSelector.shared.reselectExcluding(deadWssUrl: deadWss, provider: prov)
     }
 
-    /// Bring up the Reality censorship-bypass tunnel and re-point the persistent
-    /// signaling WebSocket through its local SOCKS5 (start() → local SOCKS5
-    /// port → dial the WSS through it), for the app's real
-    /// `wss://voip.bcrypto.com` transport.
-    ///
-    /// Reuses the EXISTING `RealityManager` + its xray config builder: this only
-    /// sources the server-issued params and feeds them in. The WSS TLS + cert
-    /// pinning above the socket run UNCHANGED through the tunnel (see
-    /// `BCryptoWebSocketClient.connect(viaSocksPort:)`), so nothing above the
-    /// transport layer knows Reality exists.
-    ///
-    /// Params come from the SAME `/calling/relays` bundle the TURN
-    /// selectors already use: the warm in-memory cache first (populated while
-    /// clearnet was healthy — covers a mid-session block), then a best-effort
-    /// fresh fetch (works on the open network of the manual-force test path). On
-    /// a truly blocked cold start neither is available and this no-ops — a known
-    /// v1 bootstrap limit the design doc §6.3 explicitly defers, not something
-    /// this last-mile solves.
-    @MainActor
-    func activateRealityFallback(reason: String) async {
-        guard let prov = liveProvider else { return }
-        // Already tunneling, or a concurrent activation is mid-flight → no-op.
-        if transportIsReality || realityActivationInFlight { return }
-        realityActivationInFlight = true
-        defer { realityActivationInFlight = false }
-
-        guard let relayProvider = ensureRelayProvider() else { return }
-        var params = await relayProvider.cachedOrNil()?.reality
-        if params == nil {
-            params = await relayProvider.currentOrRefresh()?.reality
-        }
-        guard let reality = params, reality.isUsable else {
-            print("[AppState] Reality fallback (\(reason)): server has no usable reality params — cannot bypass")
-            return
-        }
-
-        // REALITY_PIN fix: TOFU-pin the front's public key by hostname. A
-        // mismatch means the server-issued key CHANGED since we last saw it —
-        // a compromised/coerced CDN edge could do this with zero other signal.
-        // Non-blocking (signal-not-kill): log loud, re-pin to the new value
-        // (already done inside checkAndPin), still connect — refusing to
-        // connect would break the user's only censorship-bypass path.
-        let pinVerdict = RealityPinStore.checkAndPin(hostname: reality.hostname, publicKey: reality.publicKey)
-        if pinVerdict == .changed {
-            RTLog.error("security", "Reality front public key CHANGED for \(reality.hostname)")
-            realityKeyChanged = true
-        }
-
-        // Map the server-issued relay block into RealityManager's config shape.
-        // The client hardcodes NOTHING — every field is server-chosen (design
-        // doc §4.2). fingerprint defaults to "chrome" inside RealityManager.
-        let managerParams = RealityManager.Params(
-            serverAddress: reality.hostname,
-            serverPort: reality.port,
-            uuid: reality.uuid,
-            publicKey: reality.publicKey,
-            shortId: reality.shortId,
-            serverName: reality.serverName,
-            flow: reality.flow
-        )
-
-        do {
-            let socksPort = try await RealityManager.shared.start(params: managerParams)
-            let ws = prov.getWebSocketClient()
-            // Tear the (blocked / direct) socket down first so
-            // connect(viaSocksPort:) — which only proceeds from `.disconnected`
-            // — takes effect, then re-dial the SAME WSS through the tunnel. The
-            // socks port is sticky across the socket's own internal reconnects
-            // (see BCryptoWebSocketClient.currentSocksPort), so a later drop
-            // keeps routing through Reality instead of silently reverting to the
-            // blocked clearnet path.
-            ws.disconnect()
-            ws.connect(viaSocksPort: Int(socksPort))
-            transportIsReality = true
-            print("[AppState] Reality fallback (\(reason)) ACTIVE — WSS tunneled via 127.0.0.1:\(socksPort)")
-        } catch {
-            print("[AppState] Reality fallback (\(reason)) FAILED to start: \(error)")
-            errorMessage = "Tunnel Reality non disponibile: \(error.localizedDescription). Connessione diretta in corso."
-            // start() threw before we ever got to disconnect()/connect(viaSocksPort:)
-            // above, so the socket is left exactly as this function found it — which,
-            // for the "auto-clearnet-block" caller, means already disconnected (every
-            // trusted clearnet node was just exhausted) with nothing left to bring it
-            // back. Without this, the client stays silently offline forever. Fall back
-            // to a plain clearnet connect — same call the manual OFF path uses in
-            // setForceRealityTransport(_:) — so at minimum normal reconnect/backoff
-            // resumes instead of the client going dark.
-            let ws = prov.getWebSocketClient()
-            ws.connect()
-        }
+    /// 2026-09-19 — drops every piece of IN-MEMORY state that belongs to the
+    /// account that is leaving. `LocalCryptoWipe.wipeAll()` clears the
+    /// persisted stores; this is its counterpart for what only lives in the
+    /// process and would otherwise outlive a logout / remote wipe / account
+    /// deletion and act under the NEXT identity: the held service payloads
+    /// (plaintext, e.g. group sender-key seeds, up to 10 minutes), the
+    /// receive-side ledgers keyed by the previous account's peers and frames,
+    /// the buffered undecryptable ciphertexts, and the per-peer throttles of
+    /// `ensureV4Session` (a throttle armed by the old account must not delay the
+    /// new one's first session convergence). Call it right after every
+    /// `LocalCryptoWipe.wipeAll()`.
+    func resetAccountScopedRuntimeState() {
+        ServiceSendHub.shared.reset()
+        AppState.nackResendCounts.removeAll()
+        AppState.decryptNackLastSentMs.removeAll()
+        AppState.controlFailureTracker = ControlFailureTracker()
+        AppState.controlInstalledAtMs.removeAll()
+        AppState.v4EnsureFirstWantedMs.removeAll()
+        AppState.v4EnsureLastAttemptMs.removeAll()
+        settledInboundFrames = SettledFrameSet()
+        bufferedOneToOneCiphertexts.removeAll()
     }
-
-    /// Manual force path (TransportSettingsScreen toggle / debug hook). Persists
-    /// the preference and applies it immediately when a live provider exists:
-    /// ON → bring Reality up now; OFF → tear the tunnel down and re-dial
-    /// clearnet directly. Lets a tester verify the Reality path on an OPEN
-    /// network, where the automatic hard-failure trigger would never fire.
-    @MainActor
-    func setForceRealityTransport(_ on: Bool) {
-        AppState.forceRealityEnabled = on
-        guard let prov = liveProvider else { return } // applied at next connect
-        let ws = prov.getWebSocketClient()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if on {
-                await self.activateRealityFallback(reason: "manual-force")
-            } else {
-                // Revert to clearnet: drop the tunnel + re-dial direct.
-                ws.disconnect()
-                await RealityManager.shared.stop()
-                self.transportIsReality = false
-                ws.connect()
-                print("[AppState] Reality force OFF — reverted to direct clearnet WSS")
-            }
-        }
-    }
-
-    // W-REALITYBREAKER (2026-09-11) — the backward trip that reverted an
-    // AUTO-activated Reality tunnel once direct clearnet genuinely recovered
-    // — REMOVED 2026-09-15 (W-REALITYAUTODISABLE) alongside the auto-trigger
-    // it existed to unwind. It only ever started from handleNodeStalled's
-    // auto path, which no longer activates Reality at all; a manual force
-    // is reverted directly by setForceRealityTransport's own OFF branch
-    // above, which never needed this. Mirrors Android's equivalent removal
-    // (NetworkProtocolRouter's onRecoveredToDirect, commit 4b5f42b55) —
-    // dead code deleted outright rather than left orphaned, same call.
 
     func logout() {
         authService.clearToken()
@@ -14676,6 +15862,7 @@ final class AppState: ObservableObject {
         // A user-initiated logout used to leave every crypto key + contact/
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
+        resetAccountScopedRuntimeState()
         engine?.destroySession()
         engine?.release()
         engine = nil
@@ -14691,14 +15878,6 @@ final class AppState: ObservableObject {
         // cache re-fetches fail with the old (invalidated) auth token.
         _relayProvider = nil
         wsConnectionState = .disconnected
-        // Reality lifecycle: reset the runtime tunnel state so the next login
-        // starts clearnet-first with a correct indicator, and tear the tunnel
-        // down (idempotent, fire-and-forget). The PERSISTED force preference
-        // (`forceRealityEnabled`) is intentionally left as the tester set it.
-        if transportIsReality {
-            transportIsReality = false
-            Task { await RealityManager.shared.stop() }
-        }
         // W72: drop presence subscriptions + cached statuses so the next
         // login starts with a clean slate.
         presenceService.reset()
@@ -15158,6 +16337,8 @@ final class AppState: ObservableObject {
         // D11: a fresh outgoing call clears any stale unauthenticated-change
         // banner from a previous call.
         callIdentityUnauthenticatedChange = false
+        callIdentityRotationAwaitingSas = false
+        pendingIdentityRotation = nil
         // XC-1: same reset for the sibling sig_invalid banner.
         callHandshakeSignatureInvalid = false
         // P0-3: a fresh outgoing call must not inherit a stale media hold
@@ -15173,6 +16354,9 @@ final class AppState: ObservableObject {
         // paused their camera" state from a previous call.
         remoteVideoPaused = false
         localVideoPaused = false
+        // W-VIDPARITY: a fresh outgoing call must not inherit a stale
+        // banner-dismiss latch from a previous call.
+        peerVideoInviteDismissed = false
         // #2 (server-fetch trust source): warm the peer's server identity key
         // so the handshake verify of the callee's ACCEPT has the §5c server key.
         prefetchServerPeerKey(contactId)
@@ -15201,6 +16385,23 @@ final class AppState: ObservableObject {
             return
         }
         callContactId = contactId
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — ONE native-SRTP decision for this
+        // outgoing call, taken before anything advertises capabilities (the
+        // PQC `call_offer` below can leave before the WebRTC PeerConnection
+        // exists).
+        // W-NATIVESRTPSNAPSHOT-ID — keyed by the call id the OFFER will carry:
+        // the canonical outgoing id used to be minted further down (right
+        // before `beginAndroidOutgoing`); it is minted HERE now and that site
+        // uses this same value, so the snapshot, the call_offer, the PQC
+        // bundle and the WebRTC rail share one id. A random UUID either way.
+        let nativeSrtpOutgoingCallId: String = UUID().uuidString.lowercased()
+        let outgoingSnapshot = CallCapabilities.beginNativeSrtpCallSnapshot(callId: nativeSrtpOutgoingCallId)
+        // W-MEDIAATACCEPT (option b) — §10: site 2 itself is DIAL (phase
+        // "ring" inside logNativeSrtpSnapshot — no PC yet); the outgoing
+        // side's own "pc" breadcrumb goes right before
+        // `controller.startOutgoingCall(...)` below, using this captured
+        // value so it doesn't have to re-derive the kill-switch decision.
+        let outgoingEffectiveNative: Bool = logNativeSrtpSnapshot(outgoingSnapshot, site: 2)
         drainPendingOfferReplays(for: contactId)  // W-OFFERBUFFER (defensive; caller path)
         callState = .connecting
         isInCall = true
@@ -15322,6 +16523,8 @@ final class AppState: ObservableObject {
         callPqcSessionKey = Self.deriveTransitionalSasKey(
             selfId: currentUserId ?? "",
             peerId: contactId)
+        // G7 — this transitional seed is for THIS outgoing call.
+        callPqcSessionKeyCallId = nativeSrtpOutgoingCallId
         pskActive = !(callPqcSessionKey?.isEmpty ?? true)
         // Drop the PREVIOUS call's PSK display metadata now, unconditionally
         // — this transitional key is derived straight from the local PSK
@@ -15514,6 +16717,9 @@ final class AppState: ObservableObject {
                 // message can arrive, so `onAndroidBundleReceived`'s
                 // `resolveSelfUserId?()` call is never nil-when-it-shouldn't-be.
                 integration.resolveSelfUserId = { [weak self] in self?.currentUserId ?? "" }
+                // W-STALESEALER (fix-3) — see the responder leg's identical wiring
+                // / `QAudionCallIntegration.provideCallGeneration`'s doc.
+                integration.provideCallGeneration = { [weak self] in self?.callService.currentCallGeneration() ?? -1 }
                 // Phase-10b: wire the handshake-signing closures (sign OFFER +
                 // verify ACCEPT + TOFU pin) on the caller-side integration.
                 wireHandshakeSigning(on: integration)
@@ -15610,7 +16816,20 @@ final class AppState: ObservableObject {
                 // callService → integration → closure. The peerId is
                 // captured by-value from `contactId`.
                 // W574g — race-free M-15 relay sealer install (caller side).
-                integration.onRelaySessionReady = { [weak self, weak integration] sessionKey, cid in
+                // W-NACKEPOCH — see the responder wiring's identical capture.
+                let nackEpochCallService: CallService = self.callService
+                integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
+                    // W-NACKEPOCH — FIRST, synchronously (see the responder wiring).
+                    nackEpochCallService?.noteSessionKeyInstalled()
+                    // W-M15SEALERONCE — read SYNCHRONOUSLY (see the responder wiring).
+                    let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
+                    // W-STALESEALER (fix-3) — `generation` is the integration's own
+                    // entry-time capture (before any `await` in the ACCEPT path that
+                    // produced this session key — e.g. the earbud GATT round-trip in
+                    // `onAndroidBundleReceived`'s `.accept` case): see the responder
+                    // leg's identical comment / `QAudionCallIntegration
+                    // .provideCallGeneration`'s doc for the full reasoning.
+                    let firedGeneration = generation
                     Task { @MainActor [weak self, weak integration] in
                         guard let self = self, !cid.isEmpty else { return }
                         // W574x — directional relay-sealer keys when both peers
@@ -15622,9 +16841,34 @@ final class AppState: ObservableObject {
                         let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
                         let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
                         let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
-                        self.callService.installRelaySealers(
-                            sessionKey: sessionKey, callId: cid,
-                            srtpDirKeyV1: useDir, selfIsRoleA: roleA)
+                        // P0-3 — hold the audio media install if this call's handshake
+                        // identity verdict was `.abort`; run it immediately otherwise.
+                        // Mirrors the responder leg's identical gate above verbatim —
+                        // this leg previously called installRelaySealers unconditionally,
+                        // so a caller whose ACCEPT-verify failed still got live audio
+                        // before the user confirmed the SAS, defeating the media hold on
+                        // this leg (confirmed live: sealers installed ~124ms after the
+                        // abort verdict, audio flowing ~18s before SAS confirmation,
+                        // while the UI still showed the awaiting-confirmation state).
+                        // persistMessagePsk below is NOT media and stays unaffected by
+                        // the gate, exactly like the responder leg.
+                        let cidLower = cid.lowercased()
+                        let installAudioMedia: () -> Void = { [weak self] in
+                            guard let self = self else { return }
+                            // W-STALESEALER — see the responder leg's identical comment:
+                            // `installRelaySealers` itself validates `firedGeneration`
+                            // atomically with the sealer-slot publish and logs the warn.
+                            self.callService.installRelaySealers(
+                                sessionKey: sessionKey, callId: cid,
+                                srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                                isReKeyRound: isReKeyRound,
+                                expectedGeneration: firedGeneration)
+                        }
+                        if self.identityUnverifiedCallIds.contains(cidLower) {
+                            self.pendingIdentityGatedMedia[cidLower, default: []].append(installAudioMedia)
+                        } else {
+                            installAudioMedia()
+                        }
                         // W-GRPDIAG-4 — see persistMessagePsk doc above.
                         self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                     }
@@ -15663,6 +16907,20 @@ final class AppState: ObservableObject {
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
                             sharedSecret, for: peerId)
                     }
+                }
+                // W-MEDIAATACCEPT (option b) — §6: caller side. The caller
+                // always builds its PC immediately at DIAL regardless of
+                // `calls.ring_signaling_only` (only the CALLEE defers), so
+                // this is purely the same additive CallKeyStore isolation
+                // as the responder wiring — no hold gate applies here.
+                integration.onSessionKeyForCall = { [weak self] key, cid in
+                    guard !cid.isEmpty else { return }
+                    CallKeyStore.shared.put(callId: cid, key: key, origin: .pqc)
+                    // G7 — tag the caller-side global slot's owner alongside
+                    // the per-call store write (see `callPqcSessionKeyCallId`'s doc).
+                    // Review fix: main-actor hop (handshake thread), as above.
+                    let ownerId: String = cid.lowercased()
+                    Task { @MainActor [weak self] in self?.callPqcSessionKeyCallId = ownerId }
                 }
                 // DISPLAY-ONLY: caller JSON path PSK metadata (mirror of the
                 // responder wiring above). Resolves name+method app-side.
@@ -15709,7 +16967,10 @@ final class AppState: ObservableObject {
                         // partner is the responder leg above plus the KMS
                         // pre-bootstrap path, all now funneled through the same
                         // ``v4RoutingLock``-held primitive).
-                        let ok = AppState.sharedV4Ratchet.ensureBootstrapped(
+                        // W-CHATREPLACE (2026-09-19) — REPLACE, like the responder leg
+                        // above: see its note for why CHAT can no longer stay
+                        // create-if-absent (a diverged pair never repairs).
+                        let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v4RoutingEpoch,
                             peerId: peerId
                         ) {
@@ -15722,11 +16983,20 @@ final class AppState: ObservableObject {
                                 transcriptHash: transcriptHash
                             )
                         }
-                        print("[PQC_DIAG_V4] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(ok)")
+                        print("[PQC_DIAG_V4] replaceChannelSession CHAT (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(ok)")
 
                         // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — see the responder leg's
                         // identical CONTROL bootstrap above (same rationale, both directions).
-                        let controlOk = AppState.sharedV4Ratchet.ensureBootstrapped(
+                        // W-CTRLREPLACECALLER (2026-09-19) — REPLACE, like the responder leg.
+                        // W-CTRLREPLACE (2026-09-18) only fixed the responder closure: when
+                        // THIS device placed the call, its CONTROL stayed create-if-absent
+                        // while the Android callee replaced its own with the call-derived
+                        // session — a one-way mismatch (live 2026-09-19 08:49, iPhone → A36):
+                        // the iPhone's frames still opened on the peer through its retained
+                        // previous session, the peer's new frames never opened here. Both
+                        // handshake completion sites now replace, so a call converges the
+                        // pair no matter who dialled.
+                        let controlOk = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v5ControlRoutingEpoch,
                             peerId: peerId
                         ) {
@@ -15740,7 +17010,13 @@ final class AppState: ObservableObject {
                                 transcriptHash: transcriptHash
                             )
                         }
-                        print("[PQC_DIAG_V5CTRL] ensureBootstrapped (existing-or-bootstrapped, atomic) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                        print("[PQC_DIAG_V5CTRL] replaceChannelSession (installed, previous retained) peer=\(peerId.prefix(8)) ok=\(controlOk)")
+                        if controlOk {
+                            // 2026-09-19 — flush service payloads held for this peer.
+                            NotificationCenter.default.post(
+                                name: AppState.controlSessionInstalledNotification,
+                                object: nil, userInfo: ["peerId": peerId])
+                        }
                     }
                     // P0-3 — same active-callId resolution as the responder leg
                     // above (this closure carries no callId parameter either).
@@ -15778,7 +17054,9 @@ final class AppState: ObservableObject {
                 // generated by the engine went to /dev/null and any
                 // iOS-originated call to Android sat for the full
                 // 35s PqcHandshake timeout.
-                let outgoingCallId = UUID().uuidString.lowercased()
+                // W-NATIVESRTPSNAPSHOT-ID — minted at the top of startCall (the
+                // native-SRTP snapshot is keyed by it); same random UUID as before.
+                let outgoingCallId = nativeSrtpOutgoingCallId
                 sharedOutgoingCallId = outgoingCallId  // expose to WebRTC Task below
                 // Caller-id substitution: ship the local public phone
                 // number (digits-only, see `LocalCallerIdSettings`) as
@@ -15871,7 +17149,11 @@ final class AppState: ObservableObject {
                 // on /api/v1/turn-ws (server requires Bearer token since W559).
                 controller.accessToken = currentAccessToken
                 // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
-                controller.log = { line in RTLog.info("call", line) }
+                // G6 — also watches for the native rx-cryptor "ok" line to
+                // mark this call as having reached media (crash-streak gate).
+                controller.log = { [weak self] line in
+                    self?.bridgeControllerLogLine(line, role: "caller", callId: nativeSrtpOutgoingCallId, native: outgoingEffectiveNative)
+                }
                 // W411: apply user-configured Transport overrides.
                 #if canImport(WebRTC)
                 if let customUrl = TransportGate.preferredTurnUrl {
@@ -15908,7 +17190,10 @@ final class AppState: ObservableObject {
                 // idempotent, mirrors Android's `applyAudioRekey` pulling
                 // from a durable store rather than depending solely on the
                 // async NotificationCenter forward.
-                if let key = self.callPqcSessionKey {
+                // G7 — feeds a cryptor: assert against THIS outgoing call's
+                // own id (the same one the W369 transitional seed above was
+                // tagged with).
+                if let key = self.callPqcSessionKey(forCallId: nativeSrtpOutgoingCallId) {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
         }
@@ -15930,7 +17215,7 @@ final class AppState: ObservableObject {
                 // there was no remote evidence of whether this path built a
                 // FRESH controller or reused the previous call's.
                 RTLog.info("call", "callctrl build=1 out=1 key=\(self.callPqcSessionKey != nil ? 1 : 0)")
-                flushPendingIceCandidates(to: controller)
+                flushPendingIceCandidates(to: controller, callId: nativeSrtpOutgoingCallId)
                 // Android↔iOS remote video: Android sends video via WebRTC
                 // RTP (not WS video_frame envelopes). Wire the track callback
                 // so VideoCallView can render it via WebRTCRemoteVideoView.
@@ -16170,6 +17455,13 @@ final class AppState: ObservableObject {
                 // back to minting its own UUID (old behaviour, harmless for
                 // pure-WebRTC peers).
                 let webRtcCallId: String? = sharedOutgoingCallId.isEmpty ? nil : sharedOutgoingCallId
+                // W-MEDIAATACCEPT (option b) — §10: about to build the
+                // outgoing PeerConnection — advance the crash-guard phase
+                // from "ring" (site 2, above) to "pc" before any
+                // RTCPeerConnection exists, mirroring the callee's own
+                // "pc" breadcrumb in `startIncomingMediaPlane`.
+                CrashBreadcrumbs.setCallContext(inCall: true, native: outgoingEffectiveNative, role: "caller",
+                                                 callId: nativeSrtpOutgoingCallId, phase: "pc")
                 Task { [weak self] in
                     do {
                         try await controller.startOutgoingCall(
@@ -16213,8 +17505,7 @@ final class AppState: ObservableObject {
                         RTLog.warn("call", "webrtc start_outgoing ok=0 err=\(error)")
                         print("[AppState] WebRTC startOutgoingCall failed: \(error)")
                         await MainActor.run {
-                            self?.webRtcController = nil
-                            self?.pendingRemoteIceCandidates.removeAll()
+                            self?.dropFailedOutgoingWebRtcController()
                         }
                     }
                 }
@@ -16226,6 +17517,10 @@ final class AppState: ObservableObject {
                 if recentCalls.count > 20 { recentCalls = Array(recentCalls.prefix(20)) }
             }
         } catch {
+            // W-NATIVESRTPSNAPSHOT-ID — this abort never reaches
+            // `CallService.endCall()`: drop THIS attempt's snapshot here
+            // (keyed, so it can never clear another call's).
+            dropAbortedOutgoingNativeSrtpSnapshot(callId: nativeSrtpOutgoingCallId)
             let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
             CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "answer_failed:\(error.localizedDescription)")
             clearKeyConfirmationState(callId: cid)
@@ -16240,11 +17535,18 @@ final class AppState: ObservableObject {
 
     /// Start the in-app ringtone using AudioServicesPlayAlertSound.
     /// Repeats every 3 s. Safe to call multiple times (idempotent).
+    ///
+    /// 2026-09-19 — the ring is the SAME sound CallKit rings with in the background (two rings of
+    /// `qaudion_ringtone.caf`, cut to a 3 s unit and normalized to a -3 dBFS peak). It was
+    /// `AudioServicesPlayAlertSound(1005)`, the one-second SMS chime, every 3 s: on a phone in hand it
+    /// was barely audible and nothing like the ring the same call has when the app is in the
+    /// background. Falls back to that chime only if the resource is missing from the bundle, so a
+    /// packaging slip never means a silent ring. A system sound (not an audio player) on purpose:
+    /// it seizes no audio session, which CallKit and WebRTC configure when the call is answered.
     func startInAppRingtone() {
         guard ringtoneTimer == nil else { return }
-        // 1005 = "sms-received5.caf" — short, distinctive, non-intrusive.
-        // Using 1000 (classic tring) would clash with system notifications.
-        let soundId: SystemSoundID = 1005
+        // 1005 = "sms-received5.caf" — the fallback only.
+        let soundId: SystemSoundID = Self.registerInAppRingSound() ?? 1005
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: 3.0)
         timer.setEventHandler { AudioServicesPlayAlertSound(soundId) }
@@ -16256,6 +17558,33 @@ final class AppState: ObservableObject {
     func stopInAppRingtone() {
         ringtoneTimer?.cancel()
         ringtoneTimer = nil
+        // Disposing the id also stops a unit that is still playing, so the ring does not tail into the
+        // call, and frees it: the next ring registers a fresh one.
+        Self.disposeInAppRingSound()
+    }
+
+    /// SystemSoundID of the bundled 3 s ring unit while a ring is active; nil otherwise.
+    private static var inAppRingSoundId: SystemSoundID?
+
+    private static func registerInAppRingSound() -> SystemSoundID? {
+        if let id = inAppRingSoundId { return id }
+        guard let url = Bundle.main.url(forResource: "qaudion_ringtone_unit", withExtension: "caf") else {
+            RTLog.warn("call", "inappring res=0")
+            return nil
+        }
+        var id: SystemSoundID = 0
+        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError else {
+            RTLog.warn("call", "inappring reg=0")
+            return nil
+        }
+        inAppRingSoundId = id
+        return id
+    }
+
+    private static func disposeInAppRingSound() {
+        guard let id = inAppRingSoundId else { return }
+        AudioServicesDisposeSystemSoundID(id)
+        inAppRingSoundId = nil
     }
 
     /// W-RINGBACKCONFIRMED (2026-09-02) — re-evaluate and (if changed)
@@ -16333,9 +17662,10 @@ final class AppState: ObservableObject {
     ///
     /// The WS-relay fallback this grace buys time for exists on iOS
     /// per-frame: `sendAudioOverDataChannel` (wired to
-    /// `QAudionWebRtcCallController.sendAudioFrameData`) returns `false`
-    /// when the sealed DataChannel cannot deliver, and `CallService` then
-    /// routes that frame over the WS relay.
+    /// `QAudionWebRtcCallController.sendAudioFrameData`) answers `.useRelay`
+    /// (`AudioDcSendOutcome`, W-DCWEDGE) when the sealed DataChannel cannot
+    /// deliver, and `CallService` then routes that frame over the WS relay;
+    /// `.shed` (a frame the back-pressure gate dropped) is not relayed.
     ///
     /// CORRECTION (2026-08-30, W-DCTXICEGATE): the paragraph above used to
     /// say "whenever the sealed DataChannel isn't open" and claim nothing
@@ -16616,6 +17946,20 @@ final class AppState: ObservableObject {
     /// exists, [maybeAnnounceAvatarTo] is called directly instead —
     /// covers the common case immediately rather than waiting for the
     /// next chat message.
+    /// W-AVATARDEFER (2026-09-18): how long [maybeExchangeAvatarOnCallConnect]
+    /// waits before actually sending anything — see that function's own kdoc
+    /// for why. Not tuned against any measured settle time; picked as a
+    /// comfortably safe margin past a call's own PQC handshake without being
+    /// long enough to feel like the avatar "never arrives" in a short call.
+    // W-AVATARQUIET (2026-09-18) — 5 s still landed inside the peer's
+    // connect-time session work; the exchange must sit well clear of any
+    // session change (see the Android twin's CALL_CONNECT_AVATAR_QUIET_MS).
+    private static let avatarConnectExchangeDelaySeconds: TimeInterval = 25
+
+    /// W-AVATARQUIET — same quiet period after a KEY_EXCHANGE_OFFER/ACCEPT
+    /// lands before the `.keyExchange` avatar trigger may seal anything.
+    static let keyExchangeAvatarQuietNanos: UInt64 = 20_000_000_000
+
     @MainActor
     private func maybeExchangeAvatarOnCallConnect() {
         // W-AVATARCALLEE (2026-08-01): every branch here logs. This whole
@@ -16627,6 +17971,35 @@ final class AppState: ObservableObject {
         // performAcceptIncoming look like it had done nothing at all.
         guard let peerId = self.callContactId else {
             RTLog.warn("avatar", "call-connect exchange skipped — callContactId is nil")
+            return
+        }
+        // W-AVATARDEFER (2026-09-18): this used to do its work right here,
+        // synchronously inside call_answer handling. Live evidence (Pavel,
+        // Android<->iOS test calls the same night): the message this sends
+        // can reach the peer before that peer's OWN pairwise-PSK/session
+        // state has settled from the call's own handshake, fail to decrypt
+        // there, and trigger Android's auto-rekey recovery — which repairs
+        // the SESSION for every later message but can never retroactively
+        // recover the one ciphertext that revealed the desync (a freshly
+        // negotiated session cannot decrypt something sealed before it
+        // existed). Neither the avatar nor the name-refresh riding this same
+        // hook is time-critical — arriving a few seconds into an already-
+        // stable call is exactly as good as arriving in the first instant —
+        // so defer the actual send instead of racing whatever the call's own
+        // connect sequence is still settling. Preconditions (`callContactId`,
+        // `callState`) are re-checked after the delay in
+        // [performAvatarExchangeOnCallConnect], since the call can end or
+        // move to a different peer during the wait.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.avatarConnectExchangeDelaySeconds) { [weak self] in
+            self?.performAvatarExchangeOnCallConnect(peerId: peerId)
+        }
+    }
+
+    @MainActor
+    private func performAvatarExchangeOnCallConnect(peerId: String) {
+        guard self.callContactId == peerId,
+              self.callState == .active || self.callState == .encrypted else {
+            RTLog.info("avatar", "call-connect exchange skipped — call no longer active for this peer after defer")
             return
         }
         let hasPsk = (try? PairwiseChainKeyResolver.resolvePsk(
@@ -16693,6 +18066,95 @@ final class AppState: ObservableObject {
         return activeCallKitId?.uuidString.lowercased()
     }
 
+    /// W-MEDIAATACCEPT (option b) — G6 (spec §10/I9, T8): bridges a
+    /// `QAudionWebRtcCallController.log` diagnostic line to the ordinary
+    /// RTLog sink (unchanged behavior for every other line), AND, for the
+    /// ONE line that proves this call reached real native bidirectional
+    /// audio — an inbound/receive `NativeAudioFrameCryptor` reporting "ok"
+    /// (`"audiosrtp cryptor role=rx state=ok"`) — advances the crash-guard
+    /// phase to "media" and marks the call as having reached media
+    /// (`CallService.noteMediaReached()`), which `CallService.endCall` now
+    /// requires before resetting the native-SRTP crash streak (see that
+    /// property's own doc — this is the wiring it was waiting on).
+    ///
+    /// Deliberately reuses the EXISTING string-based `log` hook (already
+    /// wired at every controller-construction call site) rather than adding
+    /// the spec's proposed typed `onNativeAudioFrameCryptorOk(role)` hook —
+    /// same signal, no new plumbing through `QAudionPeerConnection`/
+    /// `NativeAudioFrameCryptor` this task could not verify compiles
+    /// without a Swift toolchain. `native` is the call's own effective
+    /// native-SRTP decision (so a custom/non-native call, which can never
+    /// emit this exact line anyway, is an explicit no-op rather than
+    /// relying on that alone) and `role`/`callId` are the same values the
+    /// call site's own `phase: "pc"` breadcrumb next to it already uses.
+    ///
+    /// Deliberately NOT `@MainActor`: `controller.log` can fire from an
+    /// undocumented WebRTC callback thread — `NativeAudioFrameCryptor`'s own
+    /// doc on `onFrameCryptorStateChange`/`onDecryptFailure` says so
+    /// explicitly ("consumers hop to @MainActor themselves"), and this hook
+    /// forwards exactly that line. The passthrough log itself needs no
+    /// isolation (`RTLog.info` is thread-safe, same as every other call site
+    /// that already logged this line with no hop at all); only the new
+    /// media-reached side effect touches AppState/CallService state, so
+    /// ONLY that part hops — same `Task { @MainActor [weak self] in ... }`
+    /// pattern this file already uses for every other non-`@MainActor`
+    /// controller callback (`onRemoteVideoTrack`, `onInboundVideoReady`, …).
+    nonisolated private func bridgeControllerLogLine(_ line: String, role: String, callId: String?, native: Bool) {
+        RTLog.info("call", line)
+        guard native, line == "audiosrtp cryptor role=rx state=ok" else { return }
+        Task { @MainActor [weak self] in
+            self?.callService.noteMediaReached()
+            CrashBreadcrumbs.setCallContext(inCall: true, native: true, role: role, callId: callId, phase: "media")
+            RTLog.info("call", "ringsig phase=media native=1")
+        }
+    }
+
+    /// W-MEDIAATACCEPT (option b) — a plain wall-clock millisecond reading
+    /// for the T5/T6/T7/T11 telemetry lines' `ms=` fields (elapsed-since-
+    /// accept, etc.) — local clock only, never compared across devices.
+    static func nowMsForTelemetry() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §6/§9, DELIBERATELY NARROW SCOPE. The
+    /// spec's full ask (§6) is for `callPqcSessionKey` to become a pure,
+    /// always-live projection of `CallKeyStore.get(canonicalActiveCallId())`,
+    /// recomputed on every `CallKeyStore` write/wipe, with all ~12 existing
+    /// read sites left untouched. NOT implemented that broadly here: this
+    /// codebase's existing `onPqcSessionKeyEstablished` → `CallSessionKeyBroker
+    /// .bind(setSessionKey:)` write path fires the instant a handshake
+    /// completes — for the CALLEE under `mode == 1` that is still at RING
+    /// time, well before `canonicalActiveCallId()` is guaranteed to agree
+    /// with the just-completed call (it depends on `activeCallKitId`/
+    /// `BCryptoCallingApiImpl.getActiveCallId()`, both call-site-dependent
+    /// and not exercised end-to-end here without a compiler). Auto-firing
+    /// this on every handshake completion risked resetting
+    /// `callPqcSessionKey` to `nil` mid-handshake for a call this function
+    /// doesn't yet recognize as canonical — a regression this task cannot
+    /// safely rule out by reading alone.
+    ///
+    /// Instead: `CallKeyStore` is written in parallel (harmless, additive)
+    /// from `QAudionCallIntegration.onSessionKeyForCall`, and
+    /// `callPqcSessionKey`'s own write path is UNCHANGED. This method is
+    /// called at exactly one, safe, well-understood point —
+    /// `startIncomingMediaPlane`, right before seeding the incoming
+    /// controller (§4.4) — where `canonicalActiveCallId()` is the call
+    /// actually being accepted. That is also where `CallKeyStore.take(_:)`
+    /// is used directly as the seed, so this call mainly keeps the
+    /// published/observable value in sync with what the controller was
+    /// actually seeded with, for any other UI reading `callPqcSessionKey`.
+    @MainActor
+    func refreshCallPqcSessionKeyProjection() {
+        guard let active = canonicalActiveCallId(),
+              let projected = CallKeyStore.shared.get(active) else { return }
+        if projected != callPqcSessionKey {
+            callPqcSessionKey = projected
+        }
+        // G7 — tag regardless of whether the byte value happened to be
+        // unchanged: the call id it is FOR may still have changed.
+        callPqcSessionKeyCallId = active
+    }
+
     @MainActor
     private func handleCallAccepted(callId: String) {
         // W-SETUPRETRY (2026-08-25) — the callee's real-user accept proves the
@@ -16727,7 +18189,7 @@ final class AppState: ObservableObject {
             isRinging: self.callState == .ringing,
             isPreRingActive: self.callState == .active,
             alreadyFinalized: self.callFinalizedCallId == wireId
-        ), self.localHandshakeReadyCallId == wireId else {
+        ) else {
             // W-ACCEPTEDBEFOREREADY — this used to be a silent `return`,
             // which is exactly why the bug above went unnoticed until raw
             // device logs were pulled by hand. Short, numeric-tailed so it
@@ -16735,7 +18197,49 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "callaccepted dropped=1 ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) handshakeready=\(self.localHandshakeReadyCallId == wireId ? 1 : 0)")
             return
         }
+        guard self.localHandshakeReadyCallId == wireId else {
+            // W-MEDIAATACCEPT (option b) — §5 item 2: an accept landing
+            // before OUR own handshake is ready is the ORDINARY path
+            // against a (b) callee (D1: its ACCEPT is trattenuto until
+            // after its own call_answer, so `call_accepted` — sent at ITS
+            // ring-plan accept — reliably arrives before the ACCEPT this
+            // side needs). `info`, not `warn`, for exactly this combination.
+            RTLog.info("call", "callaccepted dropped=1 ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) handshakeready=0")
+            // §5 item 1: 12s "accepted but no answer" watchdog — today the
+            // call would otherwise ride the server's own 60s ring timeout.
+            self.armCallAcceptedWithoutAnswerWatchdog(wireId: wireId)
+            return
+        }
         self.finalizeCallActive()
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §5 item 1. Armed the moment
+    /// `call_accepted` arrives before this side's own handshake (hence
+    /// `call_answer`) is ready. If 12s later `callFinalizedCallId` still
+    /// isn't `wireId` — no `call_answer` (or later handshake completion)
+    /// ever un-stuck the call — end it locally with `setup_failed` rather
+    /// than riding the server's own 60s ring timeout.
+    private func armCallAcceptedWithoutAnswerWatchdog(wireId: String) {
+        let watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard let self = self, !Task.isCancelled else { return }
+            // Review fix — `callFinalizedCallId` is reset to nil at every
+            // call end, so without this a watchdog that outlived its call
+            // (teardown chokepoint keyed on a different id, or a call that
+            // ended and a NEW one started inside the 12 s) would read
+            // "not finalized" and hang up the unrelated current call.
+            guard self.canonicalActiveCallId() == wireId else { return }
+            guard self.callFinalizedCallId != wireId,
+                  self.callAnswerSeenCallId != wireId else { return }
+            RTLog.info("call", "ringsig timeout=1 why=1")
+            TelemetryService.shared.emit(
+                kind: "call.ended",
+                callId: wireId,
+                attrs: ["reason": "setup_failed"]
+            )
+            self.endCall(notifyPeerInBand: true)
+        }
+        ringMediaPlaneTimers[wireId, default: []].append(watchdog)
     }
 
     /// W-FGREAP (2026-08-13) — true when this app has no call of its own, in
@@ -16830,9 +18334,20 @@ extension AppState {
     /// (`answerIncomingCall` when `CallsGate.callKitFreeMode`,
     /// `dismissNativeUI=false`). Idempotent via the Bug A guard. The crypto +
     /// signalling are unchanged — only WHO triggers the accept differs.
+    ///
+    /// W-GHOSTCALL (2026-09-25) — returns `false` only when the answer was REFUSED
+    /// (the uuid is not the live call: it ended, or it is a ghost placeholder, or
+    /// another call is active); `true` for every accepted or duplicate answer, so
+    /// callers that ignore the result behave exactly as before. `onAnswerCall`
+    /// hands the result to `CallKitProvider`, which then skips activating the
+    /// audio session for a call that does not exist.
     @MainActor
-    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) {
+    @discardableResult
+    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) -> Bool {
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) dismissNativeUI=\(dismissNativeUI) alreadyAnswered=\(self.answeredCallKitId == uuid)")
+        // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
+        // ring into an in-call state (incident e3acecd7).
+        if self.refuseStaleAnswer(uuid: uuid) { return false }
         // Bug A — idempotent answer (CallKit/in-app/notification may all target
         // the same call). A repeat would re-enter activateIncomingCallAudio
         // mid-start → uncatchable NSException.
@@ -16841,9 +18356,12 @@ extension AppState {
             // established identifier convention (.prefix(8)) instead of
             // printing it in full.
             print("[AppState] performAcceptIncoming: duplicate answer for \(uuid.uuidString.prefix(8))… ignored (Bug A guard)")
-            return
+            return true
         }
         self.answeredCallKitId = uuid
+        // W-GHOSTCALL — backstop behind the guard above: an answered call must
+        // have a peer within 3 s, or it is ended.
+        self.armAnsweredWithoutCallWatchdog(uuid: uuid)
         self.isInCall = true
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming — isInCall=true set for uuid=\(uuid)")
         // W-1TO1RING — the ring screen has done its job, tear it down. All
@@ -16913,6 +18431,44 @@ extension AppState {
                     RTLog.warn("call", "sigsend fail kind=call_accepted cid=\(acceptedCallId.prefix(8)) err=\(error)")
                 }
             }
+        }
+        // W-MEDIAATACCEPT (option b) — §2.1/§4.4 (I3 T4): the human accept.
+        // Mark the ring plan accepted (idempotent — first call wins, so a
+        // duplicate accept path can never rewind `acceptedAtMs`), log T4
+        // (must read ice=0 answer=0 under `mode == 1`), then start the
+        // media plane. `startIncomingMediaPlane` itself no-ops under
+        // `mode == 0` (legacy — the full setup already ran at ring) or
+        // when there is no latched plan at all (`callId` was empty at
+        // ring, §3). Placed AFTER the call_accepted send above and BEFORE
+        // `vidcap`/`consumeDeferredAnswerIfReady` per spec §4.4.
+        //
+        // `canonicalActiveCallId()` (falling back to the CallKit uuid) —
+        // NOT `uuid.uuidString` alone — because the ring plan was latched
+        // at `call_incoming` under the wire `call_id` verbatim
+        // (`latchIncomingNativeSrtpSnapshot`), while `uuid` here is a
+        // CallKit `UUID` that only HAPPENS to parse back to the same
+        // string when the server's call_id is itself valid UUID syntax
+        // (see `canonicalActiveCallId()`'s own doc for this exact
+        // caveat) — using the same resolver both places keeps the key
+        // consistent even on the rare non-UUID call_id.
+        let ringPlanCallId = canonicalActiveCallId() ?? uuid.uuidString.lowercased()
+        RingSignalingRegistry.shared.markAccepted(ringPlanCallId)
+        if let plan = RingSignalingRegistry.shared.entry(ringPlanCallId) {
+            let ptx = self.callService.getAudioRtpPacketsSent?() ?? 0
+            RTLog.info("call", "ringsig accept=1 mode=\(plan.mode) ice=\(plan.preAcceptIce) answer=\(plan.preAcceptAnswers) ptx=\(ptx)")
+        }
+        self.startIncomingMediaPlane(callId: ringPlanCallId, trigger: "accept")
+        // W-MEDIAATACCEPT (option b) — I11: the 5s reserve release timer,
+        // armed unconditionally at accept (alongside the `onAnswerSent`
+        // trigger already wired). Whichever fires first wins —
+        // `releaseHeldAcceptIfDue` is idempotent (checks `acceptReleased`).
+        if let plan = RingSignalingRegistry.shared.entry(ringPlanCallId), plan.mode == 1 {
+            let reserveTimer = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self = self, !Task.isCancelled else { return }
+                self.releaseHeldAcceptIfDue(ringPlanCallId, why: 2)
+            }
+            ringMediaPlaneTimers[ringPlanCallId, default: []].append(reserveTimer)
         }
         // W-VIDPRIVACY — start the callee's video-capture pipeline now that
         // the user has actually accepted, gated on their accept-with/without-
@@ -17027,6 +18583,87 @@ extension AppState {
         // Bug B fallback (configureForVoIP best-effort setActive + 0.7s
         // self-activate), reached via consumeDeferredAnswerIfReady →
         // startIncomingCallAudioOnAnswer.
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — the answer guard. Asks `GhostCallPolicy` whether
+    /// `uuid` is the live call and, when it is not, refuses it: logs, and ends the
+    /// uuid at CallKit so no ghost ring lingers. Returns `true` when the answer was
+    /// REFUSED (nothing else may run for it).
+    ///
+    /// The CallKit end is skipped while a DIFFERENT call is active:
+    /// `CallKitProvider.reportCallEnded` also drains the shared audio session
+    /// (its self-activation flag is per session, not per uuid), so reporting a
+    /// stale uuid as ended during a live call could cut that call's audio. In
+    /// every case the ledgers know about, the stale uuid is already ended at
+    /// CallKit anyway.
+    @MainActor
+    private func refuseStaleAnswer(uuid: UUID) -> Bool {
+        let verdict: GhostCallPolicy.AnswerVerdict = GhostCallPolicy.answerVerdict(
+            uuid: uuid,
+            activeCallKitId: self.activeCallKitId,
+            isRecentlyEnded: self.recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: self.ghostPlaceholderCallIds.wasRecentlyEnded(uuid)
+        )
+        guard verdict != .accept else { return false }
+        let refusedId8: String = String(uuid.uuidString.prefix(8))
+        let refusedWhy: String = String(describing: verdict.logCode)
+        let refusedLine: String = "answerguard refuse=1 why=" + refusedWhy + " id=" + refusedId8
+        RTLog.warn("call", refusedLine)
+        let otherCallActive: Bool = self.activeCallKitId != nil && self.activeCallKitId != uuid
+        if !otherCallActive && !CallsGate.callKitFreeMode {
+            Task { [weak self] in
+                await self?.callKit?.reportCallEnded(uuid: uuid, reason: .remoteEnded)
+            }
+        }
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — the end-action twin of `refuseStaleAnswer`: when
+    /// that guard skips the CallKit end because another call is live, the stale
+    /// ring can stay on screen, and Reject on it must not hang up the LIVE call
+    /// (`onEndCall` ends whatever call the app holds). Asks `GhostCallPolicy`
+    /// (deliberately narrow: only a ledger-known dead uuid, only while a
+    /// different call is active) and logs; returns `true` when the end must be
+    /// ignored.
+    @MainActor
+    private func ignoreEndForStaleUuid(uuid: UUID) -> Bool {
+        let ignore: Bool = GhostCallPolicy.shouldIgnoreEndForStaleUuid(
+            uuid: uuid,
+            activeCallKitId: self.activeCallKitId,
+            isRecentlyEnded: self.recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: self.ghostPlaceholderCallIds.wasRecentlyEnded(uuid)
+        )
+        guard ignore else { return false }
+        let staleId8: String = String(uuid.uuidString.prefix(8))
+        let staleLine: String = "endguard ignore=1 id=" + staleId8
+        RTLog.warn("call", staleLine)
+        return true
+    }
+
+    /// W-GHOSTCALL (2026-09-25) — backstop behind `refuseStaleAnswer`: if, 3 s
+    /// after an answer was accepted, that call is still the answered one but the
+    /// app has no peer for it (`callContactId` nil — the "risposto senza chiamata"
+    /// state of e3acecd7, `callId=none` for 6.6 s), end it. Inert for a normal
+    /// call: its peer is set within milliseconds of the ring, and `endCall`
+    /// clears `answeredCallKitId`, so a call that ended (or was replaced) in the
+    /// meantime is left alone.
+    @MainActor
+    private func armAnsweredWithoutCallWatchdog(uuid: UUID) {
+        let graceSeconds: TimeInterval = GhostCallPolicy.answeredWithoutCallGraceSeconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + graceSeconds) { [weak self] in
+            guard let self else { return }
+            let orphaned: Bool = GhostCallPolicy.isAnsweredWithoutCall(
+                answeredCallKitId: self.answeredCallKitId,
+                expectedUuid: uuid,
+                callContactId: self.callContactId
+            )
+            guard orphaned else { return }
+            let orphanId8: String = String(uuid.uuidString.prefix(8))
+            let orphanLine: String = "answerguard nocall=1 id=" + orphanId8
+            RTLog.warn("call", orphanLine)
+            self.endCall(notifyPeerInBand: false)
+        }
     }
 
     #if os(iOS)
@@ -17058,6 +18695,124 @@ extension AppState {
     }
     #endif
 
+    /// W-VIDPARITY / BUG (C) — turn the local camera ON after answering a
+    /// video call WITHOUT video (W-VIDPRIVACY `.receiveOnly`). No SDP
+    /// renegotiation: the callee already negotiated `m=video` with an
+    /// inert `WebRTCPixelBufferCapturer` placeholder at answer time
+    /// (`handleIncomingWebRtcOffer` sets `controller.useExternalVideoSource
+    /// = true` and accepts with `audioOnly: !hasVideo`), so promoting to a
+    /// real camera only needs to replace the `.external` pipeline with a
+    /// `.camera` one and re-wire the SAME placeholder capturer — exactly
+    /// what `performAcceptIncoming`'s `.cameraConsented` branch already
+    /// does for a call answered WITH video (see that branch, above, for
+    /// the pixel-buffer wiring race this mirrors). `upgradeToVideo()` is
+    /// the WRONG tool here: `m=video` already exists (nothing to
+    /// renegotiate) and its own `guard isInCall, !isVideoCall` makes it a
+    /// silent no-op on an already-video call anyway — see
+    /// `PeerVideoInviteDecisions.localCameraEnableRoute`'s kdoc for the
+    /// 3-way routing `setLocalCameraEnabled` uses to reach this method.
+    @MainActor
+    func promoteReceiveOnlyToCamera() async {
+        guard !promotingReceiveOnlyToCamera else { return }
+        guard let peerId = callContactId, !peerId.isEmpty else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=no_peer")
+            return
+        }
+        // Same camera-permission pre-check as performWebRtcVideoUpgrade's
+        // own gate, same user-facing text — leaves receive-only intact.
+        let camAuth = AVCaptureDevice.authorizationStatus(for: .video)
+        if camAuth == .denied || camAuth == .restricted {
+            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            RTLog.warn("call", "vidcap promote ok=0 reason=permission_denied")
+            return
+        }
+        // W-VIDPARITY round 2 — pin the call this promotion is FOR before
+        // the long-running awaits below (camera permission prompt / AV
+        // session start can take a long time). A hangup or a new call
+        // arriving while suspended must not let the resumed task install a
+        // camera pipeline or announce video for a call that is no longer
+        // this one.
+        guard let callIdBefore = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+              !callIdBefore.isEmpty else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=no_call")
+            return
+        }
+        promotingReceiveOnlyToCamera = true
+        defer { promotingReceiveOnlyToCamera = false }
+        // startVideoPipeline calls `videoPipeline?.stop()` on whatever is
+        // already there, but only ASSIGNS `self.videoPipeline` to the NEW
+        // pipeline on success — its early `guard let ws ... else { return }`
+        // and its catch branches leave `videoPipeline` pointing at the OLD
+        // (now-stopped) `.external` pipeline instance. So `videoPipeline !=
+        // nil` alone cannot tell success from failure here; capture the old
+        // instance first and require the property to have actually changed
+        // (`VideoCallPipeline` is an `NSObject` subclass, so `!==` identity
+        // compare is valid and cheap).
+        let previousPipeline = videoPipeline
+        await startVideoPipeline(for: peerId, sourceMode: .camera, startPaused: true)
+        guard isStillTheActiveCall(callIdBefore) else {
+            tearDownStalePromotion(previousPipeline: previousPipeline)
+            RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+            return
+        }
+        guard let newPipeline = videoPipeline, newPipeline !== previousPipeline else {
+            RTLog.warn("call", "vidcap promote ok=0 reason=pipeline_start_failed")
+            guard isStillTheActiveCall(callIdBefore) else {
+                tearDownStalePromotion(previousPipeline: previousPipeline)
+                RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+                return
+            }
+            // Roll back to receive-only exactly as it was before the attempt.
+            await startVideoPipeline(for: peerId, sourceMode: .external)
+            guard isStillTheActiveCall(callIdBefore) else {
+                tearDownStalePromotion(previousPipeline: previousPipeline)
+                RTLog.warn("call", "vidcap promote ok=0 reason=call_changed")
+                return
+            }
+            localVideoPaused = true
+            announceVideoState(force: false)
+            return
+        }
+        newPipeline.setVideoPaused(false)
+        #if os(iOS)
+        wirePixelBufferCapturerWithRetry(retriesRemaining: 5)
+        #endif
+        localVideoPaused = false
+        videoTransitionCause = "local-camera-start"
+        announceVideoState(force: false)
+        VideoKeyframeController.shared.requestKeyFrame()
+        RTLog.info("call", "vidcap promote ok=1 reason=receive_only_upgrade")
+    }
+
+    /// W-VIDPARITY round 2 — true iff `callIdBefore` is still the call
+    /// `getActiveCallId()` believes is live, i.e. neither ended nor
+    /// replaced by a new call while `promoteReceiveOnlyToCamera` was
+    /// suspended on an await. Same case-insensitive compare
+    /// `shouldHonorVideoPauseRequest` already applies to call ids
+    /// (iOS/Android can echo the same id in different case).
+    @MainActor
+    private func isStillTheActiveCall(_ callIdBefore: String) -> Bool {
+        guard isInCall else { return false }
+        let callIdNow = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        return PeerVideoInviteDecisions.shouldHonorVideoPauseRequest(
+            activeCallId: callIdNow, requestCallId: callIdBefore)
+    }
+
+    /// W-VIDPARITY round 2 — undo a camera pipeline `promoteReceiveOnlyToCamera`
+    /// installed, discovered stale because the call ended/changed while an
+    /// await was in flight. Only touches `videoPipeline` when it is STILL
+    /// the pipeline this attempt itself installed (`!== previousPipeline`)
+    /// — never a later call's own pipeline. Stop/nil order mirrors
+    /// `endCall()`'s teardown (abrController before videoPipeline).
+    @MainActor
+    private func tearDownStalePromotion(previousPipeline: VideoCallPipeline?) {
+        guard let installed = videoPipeline, installed !== previousPipeline else { return }
+        abrController?.stop()
+        abrController = nil
+        installed.stop()
+        videoPipeline = nil
+    }
+
     func answerIncomingCall(audioOnly: Bool = false) {
         stopInAppRingtone()
         guard let uuid = activeCallKitId else { return }
@@ -17086,7 +18841,7 @@ extension AppState {
                     let direct = CallSignalingFailurePolicy.directAcceptOnCallKitAnswerFailure
                     RTLog.warn("call", "answer fail kind=cx_answer_call uuid=\(uuid.uuidString.prefix(8)) direct=\(direct ? 1 : 0) err=\(error)")
                     guard direct else { return }
-                    await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
+                    _ = await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
                 }
             }
         }
@@ -17548,7 +19303,8 @@ extension AppState {
         guard let provider = liveProvider,
               let impl = provider.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId(), !callId.isEmpty,
-              let sessionKey = callPqcSessionKey
+              // G7 — feeds a cipher: assert against THIS active call's id.
+              let sessionKey = callPqcSessionKey(forCallId: callId)
         else { return }
         let announce = VoiceConfidenceAnnounceCipher.Announce(seq: seq, confidence: confidence, atEpochMs: atEpochMs)
         guard let sealed = VoiceConfidenceAnnounceCipher.seal(sessionKey: sessionKey, callId: callId, announce: announce) else { return }
@@ -17588,6 +19344,17 @@ extension AppState {
         incomingCallRingVisible = false
         guard !isEndingCall else { return }
         isEndingCall = true
+        // W-STALESEALER — no bump needed here: `callService.endCall()` below
+        // (reached unconditionally further down this function) already bumps
+        // `CallService.currentCallGeneration()` itself, unconditionally, on
+        // every call — deliberately NOT gated on `isEndingCall` above, so it
+        // stays correct regardless of that latch's own 0.3 s reset window. A
+        // redundant extra bump from an overlapping teardown is harmless (the
+        // guard only needs the two generations to differ, never a specific
+        // delta). See `CallService.relaySlotLock`'s doc comment.
+        // 2026-09-19 — a rotated identity key awaiting this call's SAS confirmation does not outlive the call.
+        pendingIdentityRotation = nil
+        callIdentityRotationAwaitingSas = false
 
         // W-DCHANGUP (2026-08-25) — third, fastest hangup channel: a sealed
         // control frame on the active media leg (DataChannel when open, WS
@@ -17626,6 +19393,13 @@ extension AppState {
                     RTLog.error("call", "sigsend fail kind=call_hangup site=endcall cid=\(hangupCallId.prefix(8)) err=\(error)")
                 }
             }
+        }
+
+        // W-GHOSTCALL — remember this uuid as ended BEFORE the CallKit report
+        // below and before `activeCallKitId` is cleared further down, so a late
+        // `call_cancelled` push or a tap on the fading ring cannot revive it.
+        if let endedUuid = activeCallKitId {
+            recentlyEndedCallIds.recordEnded(endedUuid)
         }
 
         // W-NOCALLKIT review H1: skip CallKit teardown in callKitFreeMode — the
@@ -17696,6 +19470,20 @@ extension AppState {
         // not on the `CallingApi` protocol.
         let wireCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
         let endCallId = (wireCallId ?? (callLogId == "none" ? nil : callLogId))?.lowercased()
+
+        // P0-3 — a call that ends (hangup, decline, or error) while its
+        // identity-unverified media gate was never released (user never
+        // confirmed the SAS) must not leave its entry behind: the pending
+        // media-install closures in `pendingIdentityGatedMedia` are dropped
+        // (no leaked references, and no sealer can ever install itself for
+        // a call that no longer exists) and its `identityUnverifiedCallIds`
+        // membership is cleared, keyed the same way the gate itself is
+        // (lowercased wire call id). No-op when the gate was never engaged
+        // for this call.
+        if let gatedCallId = wireCallId?.lowercased() {
+            identityUnverifiedCallIds.remove(gatedCallId)
+            pendingIdentityGatedMedia.removeValue(forKey: gatedCallId)
+        }
 
         // W541-3: telemetry event for call end. callState carries the
         // terminal state which the maintainer correlates with peer's
@@ -17813,6 +19601,7 @@ extension AppState {
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
         localHandshakeReadyCallId = nil  // call_accepted latch — re-arm for the next call
         callAcceptedCallId = nil  // call_accepted latch — re-arm for the next call
+        callAnswerSeenCallId = nil  // W-MEDIAATACCEPT §5 watchdog latch — re-arm for the next call
         callFinalizedCallId = nil  // W-ANSWERBEFOREREADY — re-arm for the next call
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
@@ -17832,6 +19621,9 @@ extension AppState {
         // above: this is UI-only signalling state, not renegotiated per call).
         remoteVideoPaused = false
         localVideoPaused = false
+        // W-VIDPARITY — drop the banner-dismiss latch so it doesn't leak
+        // into the next call (same reasoning as remoteVideoPaused above).
+        peerVideoInviteDismissed = false
         // media-consent v1 — per-call consent + pending dialogs/watchdogs
         // die with the call.
         videoConsentGranted = false
@@ -17853,6 +19645,15 @@ extension AppState {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
+        callPqcSessionKeyCallId = nil  // G7 — the slot has no owner between calls.
+        // W-MEDIAATACCEPT (option b) — §4.10/§6: the per-call store this
+        // slot is now additionally sourced from must not outlive the call
+        // either. `wipeAll` here (not a single keyed `wipe`) because this
+        // call's own wire callId is not reliably in scope at every one of
+        // this function's many call sites — see `CallService
+        // .onCallTeardownChokepoint` for the keyed wipe on the normal path;
+        // this is defense in depth for whichever caller reaches here.
+        CallKeyStore.shared.wipeAll(why: 1)
         callPqcRekeyEpoch = -1
         lastCountedPqcKey = nil
         // W-VOICECONFSYNC — per-call announce/anti-replay state must not
@@ -17936,7 +19737,7 @@ extension AppState {
         }
         #endif
         webRtcController = nil
-        pendingRemoteIceCandidates.removeAll()
+        PendingIceCandidateQueue.shared.wipeAll()
         remoteWebRtcVideoTrack = nil
         // W-LONGAUDIO (2026-08-10) — drop the peer-capability BINDING for the
         // call that just ended. Belt and braces: the reader already refuses a
@@ -18100,6 +19901,197 @@ extension AppState {
         }
     }
 
+    /// W-CTRLCLOSE (2026-09-26) — `startOutgoingCall` threw: the controller
+    /// used to be dropped WITHOUT close(), leaving its PeerConnection (and, on
+    /// a native-SRTP call, WebRTC's audio streams on the shared factory) to
+    /// deinit whenever the last reference went. Closed explicitly now, like
+    /// every other reset site. Extracted from the failure closure on purpose
+    /// (CLAUDE.md section 13: keep deep closure bodies trivial).
+    func dropFailedOutgoingWebRtcController() {
+        if let ctrl = webRtcController as? QAudionWebRtcCallController {
+            ctrl.closeSynchronously()
+            RTLog.warn("call", "callctrl closed=1 site=startfail")
+        }
+        webRtcController = nil
+        PendingIceCandidateQueue.shared.wipeAll()
+    }
+
+    /// W-NATIVESRTPSNAPSHOT (2026-09-26) — one numeric line per snapshot
+    /// decision. `site`: 2 outgoing call start, 3 incoming OFFER (1 is the
+    /// PeerConnection's own latch, logged by the engine; 4 is the call end,
+    /// logged by CallService).
+    ///
+    /// W-MEDIAATACCEPT (option b) — I8: `skipKillSwitchRecheck` is `true`
+    /// only when this is site 3 (inside the incoming media-plane builder)
+    /// AND a `RingSignalingRegistry` plan with `mode == 1` already exists
+    /// for this call — the kill switch was already applied ONCE, at ring
+    /// (site 5), and must not be re-read at accept: re-reading it here
+    /// could flip an ALREADY-announced (T1) native=1 decision to native=0
+    /// after the callee has told the peer/telemetry it would use the
+    /// native path, mid-build. `mode == 0` (legacy) and outgoing (site 2)
+    /// keep re-checking every time, unchanged from today.
+    ///
+    /// Returns the effective (post-kill-switch) native value so callers —
+    /// today just `latchIncomingNativeSrtpSnapshot` — can feed it straight
+    /// into `RingSignalingRegistry.latch(...)` without re-deriving it.
+    @discardableResult
+    func logNativeSrtpSnapshot(_ latch: CallCapabilities.NativeSrtpSnapshotLatch, site: Int, skipKillSwitchRecheck: Bool = false) -> Bool {
+        let nativeFlag: Int = latch.value ? 1 : 0
+        let freshFlag: Int = latch.fresh ? 1 : 0
+        let staleFlag: Int = latch.stale ? 1 : 0
+        let line: String = "nsnap site=\(site) native=\(nativeFlag) fresh=\(freshFlag) stale=\(staleFlag)"
+        RTLog.info("call", line)
+
+        // W-NATIVESRTPKILL (this task) — remote safety net (spec section 0,
+        // owner-recommended): `calls.native_srtp_kill` forces THIS call's
+        // snapshot off, without touching the saved preference, so a bad
+        // native-SRTP rollout can be killed fleet-wide without a build.
+        // Checked at every snapshot site (2/3/5) EXCEPT when
+        // `skipKillSwitchRecheck` says the call already fixed this at ring
+        // (I8, see doc above), same as Android's own "force OFF at the
+        // snapshot of call start" placement.
+        var effectiveNative = latch.value
+        if !skipKillSwitchRecheck, latch.value, FeatureFlags.bool("calls.native_srtp_kill", false) {
+            let callId = CallCapabilities.nativeSrtpSnapshotCallId
+            if CallCapabilities.forceNativeSrtpCallSnapshotOff(callId: callId) {
+                effectiveNative = false
+                RTLog.warn("call", "audiosrtp event=kill_switch site=\(site)")
+            }
+        }
+
+        // W-CRASHCRUMBS (this task) — persist the call context so a crash
+        // (or OS kill) before `CallService.endCall()` runs is attributable
+        // to a native-SRTP call on the NEXT launch. Cleared by
+        // `CallService.endCall()` on a clean end.
+        //
+        // W-MEDIAATACCEPT (option b) — I9/§10: sites 2 (outgoing dial) and
+        // 5 (call_incoming) are RINGING — no PeerConnection exists yet, so
+        // a crash there must not count toward the native-SRTP crash streak
+        // (`CrashGuardDecisions.countsTowardStreak`). Site 3 is the
+        // incoming media-plane builder — a PC is about to exist — so it
+        // keeps the "pc" phase regardless of which mode triggered the
+        // build. `"snapshot"` (this file's phase value before this task)
+        // is kept ONLY as `CrashGuardDecisions`'s documented one-release
+        // grandfather value; no call site should emit it anymore.
+        let phase: String = (site == 2 || site == 5) ? "ring" : "pc"
+        let call8 = CallCapabilities.nativeSrtpSnapshotCallId
+        CrashBreadcrumbs.setCallContext(inCall: true, native: effectiveNative, role: nil,
+                                         callId: call8, phase: phase)
+        return effectiveNative
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ID — responder side, at `call_incoming`: the
+    /// incoming call's snapshot, keyed by its wire `call_id`. Runs only on the
+    /// `.provisionNormally` path (a different active call has already been
+    /// dropped there), so it can never replace a live call's snapshot. A
+    /// server that omitted the id gets a per-envelope key: a new call must
+    /// never inherit an unidentified snapshot.
+    ///
+    /// `alreadyAnswered` — W-MEDIAATACCEPT review fix: `true` when the human
+    /// accepted this exact call (`answeredCallKitId`) before this envelope
+    /// arrived; forces the legacy `mode == 0` plan (see the body).
+    func latchIncomingNativeSrtpSnapshot(callId: String, alreadyAnswered: Bool = false) {
+        let generatedKey: String = "in-" + UUID().uuidString.lowercased()
+        let key: String = callId.isEmpty ? generatedKey : callId
+        let latch = CallCapabilities.latchNativeSrtpCallSnapshot(callId: key)
+        let effectiveNative = logNativeSrtpSnapshot(latch, site: 5)
+
+        // W-MEDIAATACCEPT (option b) — §3/§4.2 (T1, I8): latch the
+        // ring-time plan (mode/native/kill) ONCE, right alongside the
+        // native-SRTP snapshot above, from the exact same call_incoming —
+        // a duplicate call_incoming for this call never changes it
+        // (RingSignalingRegistry.latch is first-write-wins). An empty wire
+        // `call_id` forces mode=0: there is no stable key every later site
+        // (routeIncomingWebRtcOffer, performAcceptIncoming, ...) could use
+        // to look this plan back up by, so the legacy full-setup-at-ring
+        // path is the only one that still works without one.
+        let killSwitchOn = FeatureFlags.bool("calls.native_srtp_kill", false)
+        let signalingOnly = FeatureFlags.bool("calls.ring_signaling_only", true)
+        // Kept current at every call_incoming (also read at login) so a
+        // callId-less lookup elsewhere (OFFER arriving before its own
+        // call_incoming, W-OFFERBUFFER) falls back to today's fleet
+        // setting rather than a stale one.
+        RingSignalingRegistry.shared.defaultMode = signalingOnly ? 1 : 0
+        // Idempotent re-assignment (cheap, stateless closure) rather than a
+        // one-time init-site wire: this file has no single `AppState.init()`
+        // choke point every call path is guaranteed to run through before
+        // the first `call_incoming`, so the first `call_incoming` itself is
+        // used to guarantee this is wired before it can ever fire (I11's
+        // release trigger — see `releaseHeldAcceptIfDue`).
+        RingSignalingRegistry.shared.onAnswerSent = { [weak self] cid in
+            Task { @MainActor in self?.releaseHeldAcceptIfDue(cid, why: 1) }
+        }
+        // G4 — event-driven TTL sweep for the two ring-time stores
+        // (`RingSignalingRegistry.sweep()`/`CallKeyStore.sweep()` were dead
+        // code — never wired to anything, so a call that vanished with no
+        // hangup/cancel/timeout signal (a lost socket, a killed process on
+        // the OTHER end) could pin a slot until this device's own
+        // `maxEntries`-4 LRU eviction happened to reclaim it). `call_incoming`
+        // is a natural, already-low-frequency hook for this — see
+        // `willEnterForeground` for the other one. Cheap no-op on the
+        // common near-empty table; runs BEFORE this call's own `latch`
+        // below so a just-expired entry can never be the one evicted to
+        // make room for it.
+        RingSignalingRegistry.shared.sweep()
+        CallKeyStore.shared.sweep()
+        // Review fix (I13) — D2-deferred commits whose ring plan the sweep
+        // just expired (a call that vanished while ringing, no hangup ever
+        // reached `endCall`) must not linger: those closures capture the
+        // handshake's session key.
+        pendingAcceptGatedActions = pendingAcceptGatedActions.filter { RingSignalingRegistry.shared.entry($0.key) != nil }
+        // W-MEDIAATACCEPT (option b) — review fix (cold-start accept): a
+        // human who ALREADY accepted this call before its `call_incoming`
+        // landed (PushKit cold start: CallKit rings from the push, the
+        // user answers during the WS-reconnect gap — see
+        // `consumeDeferredAnswerIfReady`'s doc) has nothing left to
+        // protect at ring. Latching `mode == 1` here would leave the plan
+        // with no `acceptedAtMs` (`performAcceptIncoming` ran while no
+        // plan existed, so its `markAccepted` was a no-op and no reserve
+        // timer was armed): no media plane would ever be built and the
+        // responder ACCEPT would stay held forever — a silent call. Such a
+        // call takes the legacy (`mode == 0`) path, which is exactly
+        // today's shipped behavior for this cold-start sequence.
+        let mode: Int = (callId.isEmpty || alreadyAnswered) ? 0 : (signalingOnly ? 1 : 0)
+        var latchedMode: Int = mode
+        if !callId.isEmpty {
+            let latched = RingSignalingRegistry.shared.latch(callId, mode: mode, native: effectiveNative, kill: killSwitchOn)
+            latchedMode = latched?.mode ?? mode
+            if latchedMode == 0 {
+                // An OFFER processed BEFORE this latch (PushKit set
+                // `callContactId` first, so it was not buffered) was gated
+                // on `RingSignalingRegistry.defaultMode` — whose initial
+                // value is 1 — and may be held. A `mode == 0` call never
+                // releases through `releaseHeldAcceptIfDue`, so hand any
+                // such ACCEPT to the wire now (legacy: ACCEPT at ring). A
+                // no-op when nothing is held.
+                let heldCallId: String = callId.lowercased()
+                Task { [weak self] in
+                    _ = await self?.responderCallIntegration?.releaseHeldAccept(callId: heldCallId)
+                }
+            }
+        }
+        RTLog.info("call", "ringsig snapshot mode=\(latchedMode) native=\(effectiveNative ? 1 : 0) kill=\(killSwitchOn ? 1 : 0) role=callee")
+        // G2 (§4.8) — local-only prewarm (relay credentials + the shared
+        // WebRTC factory), fire-and-forget, ONLY for a `mode == 1` callee:
+        // a `mode == 0` (legacy) call already builds its media plane right
+        // here at ring, so prewarming would just race that real build for
+        // no benefit. See `RingMediaPlanePrewarm`'s own doc for exactly
+        // what this does and does not touch.
+        if latchedMode == 1 {
+            RingMediaPlanePrewarm.prewarm(relayProvider: ensureRelayProvider())
+        }
+    }
+
+    /// W-NATIVESRTPSNAPSHOT-ID — an outgoing attempt aborted before
+    /// `CallService.endCall()`: drop its snapshot (keyed: a no-op if another
+    /// call's snapshot is current).
+    func dropAbortedOutgoingNativeSrtpSnapshot(callId: String) {
+        let dropped: Bool = CallCapabilities.endNativeSrtpCallSnapshot(callId: callId)
+        let droppedFlag: Int = dropped ? 1 : 0
+        let line: String = "nsnap site=6 end=1 match=\(droppedFlag)"
+        RTLog.info("call", line)
+    }
+
     func setMuted(_ muted: Bool) {
         // Forward to CallService which gates outgoing PCM before encryption.
         callService.setMuted(muted)
@@ -18151,6 +20143,19 @@ extension AppState {
         // route-specific is needed here. The audio engine rebuilds itself on
         // the real speaker<->receiver flip (AudioCapture's debounced route
         // handler), same cost as a manual toggle today.
+        //
+        // W-NATIVESPKR (2026-09-26) — native-SRTP call (manual audio mode
+        // armed): same soft/iPad model, but through RTCAudioSession's
+        // configuration lock, without `.interruptSpokenAudioAndMixWithOthers`,
+        // and with WebRTC's own session configuration updated so its next
+        // reconfiguration of the session keeps `.defaultToSpeaker`. Every
+        // other call takes the unchanged path below.
+        if NativeAudioSessionGate.isArmed {
+            let hardOverride: Bool = UIDevice.current.userInterfaceIdiom == .pad
+            NativeAudioSessionGate.applySpeakerRoute(speakerOn: enabled, hardOverride: hardOverride)
+            updateProximityMonitoring()
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         do {
             #if !targetEnvironment(simulator)
@@ -18900,8 +20905,14 @@ extension AppState {
             // closure (delivered on .main queue but not declared @MainActor)
             // requires an explicit MainActor hop under Swift 6 strict mode.
             Task { @MainActor [weak self] in
+                // G7 — feeds the PQC SRTP cryptor installation below: assert
+                // against this device's own idea of the active call. The
+                // broker's notification itself carries no call id at all —
+                // this is the best available signal for "the call sasReady
+                // just fired for", same call id `refreshCallPqcSessionKeyProjection`
+                // and every other mid-call read site in this file uses.
                 guard let self = self,
-                      let key = self.callPqcSessionKey else { return }
+                      let key = self.callPqcSessionKey(forCallId: self.canonicalActiveCallId()) else { return }
                 // W-KEYSLOTROTATE — epoch accounting: the FIRST sasReady of
                 // a call carries the initial real key (epoch 0); every
                 // subsequent firing is a completed rekey (+1). Keyed on the
@@ -19192,23 +21203,76 @@ extension AppState {
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 let sender = ChatMessageSendService(appState: self)
-                // W-CTLNORATCHET (2026-09-10) — sender_key_init/rotate must
-                // never share the real-chat ratchet's chain/skip-key state
-                // with this peer. See encryptForWire's forceStatelessFormat
-                // doc for the live incident this closes.
-                let outcome = await sender.sendEncrypted(
-                    messageId: UUID(),
+                // 2026-09-19 service-message root fix — sender_key_init/rotate and
+                // the member/invite envelopes are SERVICE traffic: CONTROL only,
+                // held (bounded per-peer queue, in order) until a CONTROL session
+                // exists, never sealed on the chat ladder. A sender key that never
+                // arrives is what leaves the group's frames undecryptable, so this
+                // is a hold, not a best-effort drop.
+                let submission = await sender.sendService(
                     peerUserId: recipient,
                     plaintext: envelopeJson,
-                    forceStatelessFormat: true)
-                switch outcome {
-                case .delivered, .sent:
-                    break
-                case .failed(let reason):
+                    label: "group_ctl",
+                    delivery: .hold)
+                if submission == .held {
                     // I8 FIX: recipient is a full userId — truncate to match
                     // this file's established identifier convention.
-                    print("[AppState] sender_key_ctl ship to \(recipient.prefix(8))… failed: \(reason)")
+                    print("[AppState] sender_key_ctl to \(recipient.prefix(8))… held until a CONTROL session exists")
                 }
+            }
+        }
+        // 2026-09-19 service-message root fix — QA tripwire: in DEBUG builds the
+        // inbound user-message write boundary asserts (instead of only dropping
+        // and logging) when service-shaped text reaches it, so a leak is loud on
+        // a developer device. Release builds drop + log.
+        #if DEBUG
+        ConversationStore.assertOnServiceRefusal = true
+        #endif
+    }
+
+    /// 2026-09-19 service-message root fix — binds the bounded per-peer hold
+    /// queue for service payloads (CONTROL only, fail closed) and the observer
+    /// that flushes it when a CONTROL session lands. Primitive closures only
+    /// (CLAUDE.md §16), each reading the CURRENT provider / ratchet at call
+    /// time, so calling this before any provider exists is safe and calling it
+    /// again is idempotent: the hooks are swapped, the held queue survives and
+    /// the observer is registered exactly once. Runs from `initialize()` (not
+    /// from `wireGroupChatFanOut`, which only runs on a connect and never for a
+    /// provider assigned by `performProactiveRefresh`) and again from
+    /// `connectPersistentSocket`.
+    func wireServiceSendHub() {
+        ServiceSendHub.shared.configure(
+            hasControlSession: { peerId in
+                AppState.sharedV4Ratchet.hasChannelSession(
+                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerId)
+            },
+            isSocketReady: { [weak self] in
+                self?.liveProvider?.persistentConnection.state == .authenticated
+            },
+            ensureSession: { [weak self] peerId in
+                guard let self, let selfId = self.currentUserId, !selfId.isEmpty else { return }
+                AppState.ensureV4Session(selfId: selfId, peerId: peerId, liveProvider: self.liveProvider)
+            },
+            sealAndSend: { [weak self] entry in
+                guard let self else { return .failed }
+                return await ChatMessageSendService(appState: self).shipServiceNow(
+                    messageId: entry.id, peerUserId: entry.peerId, plaintext: entry.plaintext)
+            }
+        )
+        guard !serviceSendHubWired else { return }
+        serviceSendHubWired = true
+        // A CONTROL session just landed for a peer: flush what is held for them
+        // and retry frames that waited on it.
+        NotificationCenter.default.addObserver(
+            forName: AppState.controlSessionInstalledNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let installedPeer = note.userInfo?["peerId"] as? String, !installedPeer.isEmpty else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                self?.noteControlSessionInstalled(peerId: installedPeer)
             }
         }
     }
@@ -22170,7 +24234,9 @@ extension AppState {
         // identity verdict is unverified, replayed by
         // confirmIdentityAndReleaseMedia() once the user reconfirms the SAS.
         let initialRotateVideo: () -> Void = { [weak pipeline, weak self] in
-            pipeline?.rotatePqcSealer(self?.callPqcSessionKey, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+            // G7 — feeds a sealer: assert against `videoCallId`, the same
+            // id passed alongside it to `rotatePqcSealer` itself.
+            pipeline?.rotatePqcSealer(self?.callPqcSessionKey(forCallId: videoCallId), callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
         }
         if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
             self.pendingIdentityGatedMedia[videoCallId.lowercased(), default: []].append(initialRotateVideo)
@@ -22429,6 +24495,80 @@ extension AppState {
         // lost frame is not permanent.
         announceVideoState(force: false)
     }
+
+    /// W-VIDPARITY — X button on `PeerVideoInviteBanner`: dismiss for this
+    /// call only, no wire signal. Mirrors Android InCallScreen's "Chiudi".
+    @MainActor
+    func dismissPeerVideoInvite() {
+        peerVideoInviteDismissed = true
+        RTLog.info("call", "vidinvite action=dismiss")
+    }
+
+    /// W-VIDPARITY — "No, solo audio" on `PeerVideoInviteBanner`: dismiss
+    /// AND ask the peer to turn their own camera off too, so both sides
+    /// end up voice-only.
+    @MainActor
+    func declinePeerVideoInvite() {
+        peerVideoInviteDismissed = true
+        requestPeerVideoPause()
+        RTLog.info("call", "vidinvite action=decline")
+    }
+
+    /// W-VIDPARITY — send `call_video_pause_request` for the active call.
+    /// Best-effort, one-shot: unlike the §8.9 beacon this is a single user
+    /// action, not something a heartbeat will retry.
+    @MainActor
+    func requestPeerVideoPause() {
+        guard let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId() else {
+            RTLog.warn("call", "vidpause tx ok=0")
+            return
+        }
+        Task {
+            do {
+                try await impl.sendCallVideoPauseRequest(callId: callId)
+                RTLog.info("call", "vidpause tx ok=1")
+            } catch {
+                RTLog.warn("call", "vidpause tx ok=0")
+            }
+        }
+    }
+
+    /// W-VIDPARITY — "Attiva video" on `PeerVideoInviteBanner`: dismiss the
+    /// banner (an accept is also a dismiss — it must not reappear once the
+    /// user has already acted on it) and turn our own camera on.
+    @MainActor
+    func acceptPeerVideoInvite() {
+        peerVideoInviteDismissed = true
+        setLocalCameraEnabled(true)
+        RTLog.info("call", "vidinvite action=accept")
+    }
+
+    /// W-VIDPARITY — single entry point for "turn my camera on/off" that
+    /// every in-call control (bottom camera button, banner's "Attiva
+    /// video") should call, replacing direct `videoSetCameraEnabled`/
+    /// `upgradeToVideo` calls. Turning OFF is always the same complete
+    /// op; turning ON routes through `PeerVideoInviteDecisions
+    /// .localCameraEnableRoute` because "on" means three different things
+    /// depending on how the call got here — see that type's kdoc.
+    @MainActor
+    func setLocalCameraEnabled(_ enabled: Bool) {
+        guard enabled else {
+            videoSetCameraEnabled(false)
+            return
+        }
+        let pipelineIsExternalSource = videoPipeline?.sourceMode == .external || videoPipeline == nil
+        switch PeerVideoInviteDecisions.localCameraEnableRoute(
+            isVideoCall: isVideoCall, pipelineIsExternalSource: pipelineIsExternalSource
+        ) {
+        case .upgradeFromAudio:
+            upgradeToVideo()
+        case .promoteReceiveOnly:
+            Task { @MainActor in await self.promoteReceiveOnlyToCamera() }
+        case .resumeCapture:
+            videoSetCameraEnabled(true)
+        }
+    }
 }
 
 // MARK: - W366: group call lifecycle
@@ -22494,7 +24634,7 @@ extension AppState {
                 let peerPrefix = (attrs["peer_prefix"] as? String) ?? "group"
                 let sasSource = (attrs["sas_source"] as? String) ?? "sfu"
                 Task { @MainActor in
-                    CallMediaTelemetry.shared.recordConnected(callId: cid, peerPrefix: peerPrefix, sasSource: sasSource)
+                    CallMediaTelemetry.shared.recordConnected(callId: cid, peerPrefix: peerPrefix, sasSource: sasSource, isGroup: true)
                 }
             case "call.media.ended":
                 let reason = (attrs["reason"] as? String) ?? "unknown"
@@ -22536,6 +24676,92 @@ extension AppState {
     /// `v4RoutingLock` then serializes both directions). Same Keychain-backed
     /// vault as ``ratchet`` so v3.1 and v4 share the device trust boundary.
     static let sharedV4Ratchet: MessageRatchet = MessageRatchet(vault: KeychainRatchetVault())
+
+    /// W-CTRLENSURESEND (2026-09-19) — per-peer state for `ensureV4Session`,
+    /// mirroring Android's `EnsureV4SessionUseCase` (`firstWanted`/
+    /// `lastAttempt`, identical `PATIENT_INITIATOR_DELAY_MS`/
+    /// `RETRY_INTERVAL_MS` values). Closes the "CONTROL sessions only
+    /// converge at the next call" gap: the receive-time half of convergence
+    /// (`replaceChannelSession` inside `bootstrapV4FromPreBootstrap` above)
+    /// only fires once a `qa_kms_prebootstrap` envelope actually arrives, and
+    /// until now NOTHING on iOS ever sent one outside of an active call or
+    /// the group-call-ctrl-send-failure fallback (`attemptGroupCtrlKmsPreBootstrap`'s
+    /// only prior call site). `ensureV4Session` is that missing sender,
+    /// called from every outgoing chat send (`ChatMessageSendService.
+    /// encryptForWire`) and from a present-but-broken CONTROL decrypt
+    /// failure (`handleIncomingMessage`, after `dropChannelSession`).
+    private static var v4EnsureFirstWantedMs: [String: Int64] = [:]
+    private static var v4EnsureLastAttemptMs: [String: Int64] = [:]
+    private static let v4EnsurePatientDelayMs: Int64 = 45_000
+    private static let v4EnsureRetryIntervalMs: Int64 = 120_000
+    private static var v4EnsureRecheckScheduled: Set<String> = []
+
+    /// One pending re-check per peer, fired just after the patient-initiator wait.
+    private static func scheduleEnsureRecheck(selfId: String, peerId: String, liveProvider: BCryptoBackendProvider?) {
+        guard !v4EnsureRecheckScheduled.contains(peerId) else { return }
+        v4EnsureRecheckScheduled.insert(peerId)
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(AppState.v4EnsurePatientDelayMs + 1_000) * 1_000_000)
+            AppState.v4EnsureRecheckScheduled.remove(peerId)
+            AppState.ensureV4Session(selfId: selfId, peerId: peerId, liveProvider: liveProvider)
+        }
+    }
+
+    /// Fire-and-forget: sends a fresh `qa_kms_prebootstrap` envelope to
+    /// `peerId` when this device is missing either the CHAT or CONTROL
+    /// session with them. Throttled to one envelope per peer per
+    /// `v4EnsureRetryIntervalMs`, and lexicographically tie-broken exactly
+    /// like Android's `EnsureV4SessionUseCase.mayInitiate` so two devices
+    /// that both notice the gap at once don't each seal a different root
+    /// into the same vault slot. Safe to call on every send — the
+    /// already-converged case (the overwhelming majority) returns after one
+    /// cheap `hasV4Session`/`hasChannelSession` check.
+    static func ensureV4Session(selfId: String, peerId: String, liveProvider: BCryptoBackendProvider?) {
+        guard !selfId.isEmpty, !peerId.isEmpty, selfId != peerId else { return }
+        guard let kmsClient = liveProvider?.kmsClient else { return }
+        let ratchet = AppState.sharedV4Ratchet
+        guard ratchet.isV4Enabled() else { return }
+        let hasSession = ratchet.hasV4Session(peerId) &&
+            ratchet.hasChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peerId)
+        let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        if hasSession {
+            v4EnsureFirstWantedMs.removeValue(forKey: peerId)
+            return
+        }
+        let wantedSince: Int64
+        if let existing = v4EnsureFirstWantedMs[peerId] {
+            wantedSince = existing
+        } else {
+            wantedSince = now
+            v4EnsureFirstWantedMs[peerId] = now
+        }
+        let initiator = selfId < peerId || now - wantedSince >= v4EnsurePatientDelayMs
+        let last = v4EnsureLastAttemptMs[peerId]
+        let throttled = last != nil && now - last! < v4EnsureRetryIntervalMs
+        guard initiator, !throttled else {
+            // The larger-id side is meant to wait `v4EnsurePatientDelayMs` and then
+            // start anyway — but nothing called this function again once the wait
+            // was over, so a device that dropped its CONTROL session waited on the
+            // peer forever if the peer (whose own copy looked fine) never started
+            // (live 2026-09-19 08:48 → 08:49, S26: "poll gave up after 40 attempts").
+            if !initiator { scheduleEnsureRecheck(selfId: selfId, peerId: peerId, liveProvider: liveProvider) }
+            return
+        }
+        v4EnsureLastAttemptMs[peerId] = now
+        print("[AppState] ensureV4Session: peer=\(peerId.prefix(8))… missing session, sending prebootstrap")
+        Task {
+            let marker = "{\"qa_v4_bootstrap\":1,\"from\":\"\(selfId)\"}"
+            guard let wrapped = await AppState.attemptGroupCtrlKmsPreBootstrap(
+                peer: peerId, selfId: selfId, envelopeJson: marker, kmsClient: kmsClient
+            ) else {
+                print("[AppState] ensureV4Session: prebootstrap build failed peer=\(peerId.prefix(8))…")
+                return
+            }
+            guard let ws = liveProvider?.getWebSocketClient() else { return }
+            ws.sendOpaqueMessageString(recipientId: peerId, payload: wrapped)
+            print("[AppState] ensureV4Session: prebootstrap sent peer=\(peerId.prefix(8))…")
+        }
+    }
 
     /// GAP A2 (2026-07-15 group-video-call incident recon) — group-call
     /// KMS-prebootstrap fallback, mirroring Android's ADR-014a
@@ -22902,6 +25128,11 @@ extension AppState {
         // same peer. `ensureBootstrapped` closes it — one atomic, lock-held
         // check-and-create, same primitive every v4 bootstrap trigger now uses.
         let zeroEpoch = Data(count: 16)
+        // W-CHATREPLACE (2026-09-19) — CHAT deliberately stays create-if-absent HERE while the
+        // call handshake now replaces it: this path installs on the SENDER before the peer has
+        // consumed the envelope (and the peer may fail to decode it), so replacing a working
+        // CHAT session here could break it on one side only. CONTROL, whose frames are
+        // re-sendable envelopes, replaces below.
         let ok = ratchet.ensureBootstrapped(epochId: MessageRatchet.v4RoutingEpoch, peerId: peer) {
             ratchet.bootstrapV4(
                 effectiveSecret: rk0,
@@ -22919,7 +25150,13 @@ extension AppState {
         // rk0, alongside (never instead of) the CHAT bootstrap above. Mirrors Android
         // `KmsPreBootstrapSender/Receiver.kt`'s identical addition: the CHAT `ensureBootstrapped`
         // result above is unaffected by this — it already ran and its value is not reused here.
-        let controlOk = ratchet.ensureBootstrapped(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
+        // W-CTRLREPLACERECV (2026-09-19) — REPLACE, not create-if-absent: this envelope
+        // arrives outside any call (chat activity, KMS pre-bootstrap), so it was the only
+        // receive-time convergence point left on a create-if-absent primitive — a pair
+        // whose CONTROL sessions had already diverged stayed diverged until their next
+        // call. Mirrors the call-handshake fix (W-CTRLREPLACE, ~line 13489) and Android's
+        // `KmsPreBootstrapReceiver.bootstrapV4FromEnvelope`, which already replaces here.
+        let controlOk = ratchet.replaceChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
             ratchet.bootstrapV5Control(
                 peerId: peer,
                 effectiveSecret: rk0,
@@ -22930,8 +25167,16 @@ extension AppState {
                 transcriptHash: transcriptHash
             )
         }
-        RTLog.info("crypto", "v5 control prebootstrap ensureBootstrapped ok=\(controlOk ? 1 : 0)")
-        print("[AppState] KmsPreBootstrap: v5 control session bootstrapped=\(controlOk) peer=\(peer.prefix(8))…")
+        RTLog.info("crypto", "v5 control prebootstrap replaceChannelSession ok=\(controlOk ? 1 : 0)")
+        print("[AppState] KmsPreBootstrap: v5 control session replaced=\(controlOk) peer=\(peer.prefix(8))…")
+        if controlOk {
+            // 2026-09-19 — flush service payloads held for this peer (after a short
+            // grace inside the coordinator, so this envelope's own pre-bootstrap
+            // reaches the wire ahead of frames sealed on the new session).
+            NotificationCenter.default.post(
+                name: AppState.controlSessionInstalledNotification,
+                object: nil, userInfo: ["peerId": peer])
+        }
     }
 
     /// W-GRPSENDERKEY (2026-07-13): PSK lookup ladder for the group-call
@@ -23103,17 +25348,101 @@ enum RatchetV4DispatchError: Error {
 
 #if canImport(WebRTC)
 extension AppState {
+    /// W-MEDIAATACCEPT (option b) — §4.3: new single entry point for the 3
+    /// existing callers of what used to be `handleIncomingWebRtcOffer`
+    /// (the ws-dupoffer rescue, the call_incoming SDP handoff, and the
+    /// `call_offer` handler). Under `mode == 1` (ring-signaling-only) the
+    /// SDP is only stashed in the `RingSignalingRegistry` plan — the
+    /// PeerConnection is NOT built here; `startIncomingMediaPlane` builds
+    /// it later, at accept. Under `mode == 0` (legacy) or when there is no
+    /// latched plan at all (e.g. a bare `call_offer` outside any tracked
+    /// call), this falls straight through to `buildIncomingWebRtcMediaPlane`
+    /// — today's unchanged behavior.
+    func routeIncomingWebRtcOffer(
+        callerId: String,
+        sdp: String,
+        peerCapabilities: [String]? = nil,
+        hasVideo: Bool = false,
+        callId: String? = nil
+    ) {
+        let cid = (callId ?? canonicalActiveCallId() ?? "").lowercased()
+        if !cid.isEmpty, let plan = RingSignalingRegistry.shared.entry(cid), plan.mode == 1 {
+            switch plan.mediaPlane {
+            case .none, .awaitingSdp:
+                let update = RingSignalingRegistry.shared.updateOffer(
+                    cid, sdp: sdp, capabilities: peerCapabilities, hasVideo: hasVideo
+                )
+                switch update {
+                case .accepted(let len):
+                    RTLog.info("call", "ringsig offer=1 len=\(len)")
+                case .ignoredEmpty:
+                    RTLog.info("call", "ringsig offer=0 len=0")
+                case .noPlan:
+                    break  // can't happen — `plan` was just read above
+                }
+                // Cold-start / notification-accept race (§2.1 "RING →
+                // ACCEPTED senza KEYED"): the human already accepted
+                // before this OFFER arrived — build now instead of
+                // waiting for a `startIncomingMediaPlane` call that
+                // already ran (and found no SDP) or never will.
+                if RingSignalingRegistry.shared.entry(cid)?.acceptedAtMs != nil {
+                    startIncomingMediaPlane(callId: cid, trigger: "offer")
+                }
+                return
+            case .building, .ready, .failed:
+                // A build is already in flight (or done/failed) for this
+                // call — nothing left for a fresh OFFER to do here. A
+                // duplicate/retransmitted OFFER at this point is handled
+                // by the legacy dedup inside `buildIncomingWebRtcMediaPlane`
+                // itself on the `mode == 0` path only; under `mode == 1`
+                // once building has started there is no controller-less
+                // state left to stash into, so this is a deliberate no-op
+                // (the retransmit carries no new information the already-
+                // running build needs).
+                return
+            }
+        }
+        // `mode == 0`, or no latched plan (bare call_offer / unidentified
+        // call) — today's unchanged, immediate-build behavior.
+        buildIncomingWebRtcMediaPlane(
+            callerId: callerId, sdp: sdp, peerCapabilities: peerCapabilities,
+            hasVideo: hasVideo, callId: callId
+        )
+    }
+
     /// W347: handle inbound `call_offer` SDP via the WebRTC bridge. Spins
     /// up a fresh QAudionWebRtcCallController for this call, applies the
     /// remote offer, and ships the answer through the existing
     /// `CallingApi.sendCallAnswer` envelope.
-    func handleIncomingWebRtcOffer(
+    ///
+    /// W-MEDIAATACCEPT (option b) — §4.3: this is the renamed body of what
+    /// used to be `handleIncomingWebRtcOffer` — UNCHANGED below except
+    /// where §4.4 explicitly says so (the key seed, the ICE flush, and the
+    /// post-build/`catch` bookkeeping). Called either immediately (`mode
+    /// == 0`/no plan, via `routeIncomingWebRtcOffer` above) or at accept
+    /// (`mode == 1`, via `startIncomingMediaPlane`).
+    func buildIncomingWebRtcMediaPlane(
         callerId: String,
         sdp: String,
         peerCapabilities: [String]? = nil,
-        hasVideo: Bool = false
+        hasVideo: Bool = false,
+        callId: String? = nil
     ) {
         print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: caller=\(callerId.prefix(8)) sdpLen=\(sdp.count) hasVideo=\(hasVideo) — building WebRTC controller")
+        // W-NATIVESRTPSNAPSHOT (2026-09-26) — responder side. Keyed by the
+        // OFFER's call id (the envelope's `call_id` where the caller passes it,
+        // else the bound active call id): a rescued duplicate OFFER of the SAME
+        // call keeps the snapshot `call_incoming` took; a snapshot left by a
+        // different call is replaced (stale=1).
+        let offerCallId: String? = callId ?? canonicalActiveCallId()
+        let nativeLatch = CallCapabilities.latchNativeSrtpCallSnapshot(callId: offerCallId)
+        // W-MEDIAATACCEPT (option b) — I8: a `mode == 1` plan already fixed
+        // native/kill for this call at ring (T1) — do not let this site's
+        // usual kill-switch re-check flip that decision mid-build.
+        let planMode1AtSite3 = (offerCallId?.isEmpty == false)
+            && (RingSignalingRegistry.shared.entry(offerCallId!)?.mode == 1)
+        let mediaPlaneEffectiveNative = logNativeSrtpSnapshot(nativeLatch, site: 3, skipKillSwitchRecheck: planMode1AtSite3)
+        // G6 — now consumed below, by `controller.log`'s media-reached bridge.
         // W-CTRLBUILDDIAG (2026-08-30) — the prints in this function are
         // multi-word free-form English, which the remote-log redactor drops
         // whole (verified against redact_body, same story as W-AUDIOGATEDIAG).
@@ -23135,7 +25464,11 @@ extension AppState {
         // WSS-TURN bridge JWT auth (responder side mirrors caller).
         controller.accessToken = currentAccessToken
         // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
-        controller.log = { line in RTLog.info("call", line) }
+        // G6 — also watches for the native rx-cryptor "ok" line to mark this
+        // call as having reached media (crash-streak gate).
+        controller.log = { [weak self] line in
+            self?.bridgeControllerLogLine(line, role: "callee", callId: offerCallId, native: mediaPlaneEffectiveNative)
+        }
         // W411: apply Transport overrides on the responder side too.
         if let customUrl = TransportGate.preferredTurnUrl {
             controller.iceServerOverride = [
@@ -23181,9 +25514,24 @@ extension AppState {
         // didn't. Mirrors Android's `applyAudioRekey`, which reads
         // `activeKey.get()` — a durable store, pulled fresh at the point
         // of use — rather than depending on a broadcast landing.
-        if let key = self.callPqcSessionKey {
+        //
+        // W-MEDIAATACCEPT (option b) — §4.4/§6: seed from the per-call
+        // `CallKeyStore` first — with the responder integration instance
+        // shared/reused across calls, `self.callPqcSessionKey` alone can
+        // no longer be trusted to be THIS call's key by the time the build
+        // reaches accept (option b widens the ring→accept window). Falls
+        // back to the legacy slot when the store has nothing for this
+        // call (`mode == 0`, or a key installed through a path this task
+        // did not move onto `onSessionKeyForCall`). G7 — the fallback
+        // itself is now asserted against `offerCallId` too, so it can never
+        // hand this build a DIFFERENT call's leftover global-slot key.
+        let seedKey = CallKeyStore.shared.take(offerCallId) ?? self.callPqcSessionKey(forCallId: offerCallId)
+        if let key = seedKey {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
+            // Keep the published projection in sync with what THIS call's
+            // controller was actually seeded with (see that method's doc).
+            self.refreshCallPqcSessionKeyProjection()
         }
         // W-CTRLLEAK (2026-09-08, adversarial review of W-SASPIN/
         // W-CAPTURELIVE-SIGNAL) — unlike every other `webRtcController =`
@@ -23206,7 +25554,7 @@ extension AppState {
         // already held and delivered above; key=0 when it must still
         // arrive via sasReady → forwardPqcSessionKeyToController).
         RTLog.info("call", "callctrl build=1 key=\(self.callPqcSessionKey != nil ? 1 : 0)")
-        flushPendingIceCandidates(to: controller)
+        flushPendingIceCandidates(to: controller, callId: offerCallId ?? "")
         // Mirror of the caller-side wiring: Android sends remote video via
         // WebRTC RTP so the callee also needs this callback.
         // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
@@ -23439,6 +25787,15 @@ extension AppState {
                 // without-video, and `self.videoPipeline` is nil here post-
                 // Task-1 (W-CAMARMEARLY) since the pipeline no longer starts
                 // this early.
+                //
+                // W-MEDIAATACCEPT (option b) — §4.4 (T5): the build
+                // succeeded — `acceptIncomingCall` only returns after its
+                // own `sendCallAnswer` completed (Controller), so by this
+                // point the real SDP-bearing `call_answer` is already out
+                // and `RingSignalingRegistry.onAnswerSent` has already
+                // fired the I11 release. See `noteIncomingMediaPlaneBuilt`
+                // (kept out of this closure: type-checker depth, SWIFT6_PATTERNS §4).
+                self.noteIncomingMediaPlaneBuilt(planId: offerCallId, hasVideo: hasVideo)
             } catch {
                 // W-DCSTUCK-DIAG (2026-08-13): was print()-only, sitting one
                 // line away from the ICE-candidate-queue RTLog calls below
@@ -23454,8 +25811,273 @@ extension AppState {
                 // ok=0 is the numeric-safe fact; the description is
                 // best-effort (may partially redact).
                 RTLog.warn("call", "webrtc accept_offer ok=0 err=\(error)")
+                // W-MEDIAATACCEPT (option b) — §4.4 (T5/I11): the build
+                // failed. See `noteIncomingMediaPlaneBuildFailed`.
+                self.noteIncomingMediaPlaneBuildFailed(planId: offerCallId, recipientId: cid)
             }
         }
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §4.4 (T5), success half of the incoming
+    /// build's bookkeeping. Review fix (fresh-eyes pass): only for a LIVE
+    /// `mode == 1` plan — a `mode == 0` (legacy) build runs at ring and must
+    /// stay byte-for-byte today's behavior (no `resumeAudioIOAfterMediaPlane`
+    /// before accept), and a call wiped while the build was in flight has no
+    /// entry. Never downgrades `.failed` (8 s watchdog already shipped a blank
+    /// `call_answer` and moved audio to the custom path; the caller never gets
+    /// this late SDP answer, so flipping to `.ready` would put the two legs on
+    /// different audio paths).
+    @MainActor
+    private func noteIncomingMediaPlaneBuilt(planId: String?, hasVideo: Bool) {
+        guard let pid = planId?.lowercased(), !pid.isEmpty,
+              let plan = RingSignalingRegistry.shared.entry(pid), plan.mode == 1 else { return }
+        if plan.mediaPlane == .building {
+            RingSignalingRegistry.shared.setMediaPlane(pid, .ready)
+            let ms: Int64 = plan.acceptedAtMs.map { Self.nowMsForTelemetry() - $0 } ?? -1
+            RTLog.info("call", "ringsig built=1 ms=\(ms) ready=0 why=0")
+        }
+        // §4.6 (gate 5): a `didActivate` deferred while the PC was building
+        // gets its audio I/O started now (native if negotiated, else custom).
+        self.callService.resumeAudioIOAfterMediaPlane()
+        // G3 (§4.9) — replay a video-upgrade request deferred during the build.
+        self.processDeferredIncomingUpgradeIfAny(pid)
+        #if os(iOS)
+        // §4.4 — the accept-time `.cameraConsented` pixel-buffer wiring has a
+        // 5 x 300 ms retry budget; with the PC now built AT accept the
+        // placeholder capturer can appear after it ran out (black video to
+        // the peer). Idempotent; a no-op wire for `.receiveOnly`.
+        if hasVideo {
+            self.wirePixelBufferCapturerWithRetry(retriesRemaining: 5)
+        }
+        #endif
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §4.4 (T5/I11), failure half: the build
+    /// threw. Same live-`mode == 1` gate as `noteIncomingMediaPlaneBuilt`
+    /// (a legacy ring-time failure keeps today's behavior: no blank
+    /// `call_answer` before the human accepted).
+    @MainActor
+    private func noteIncomingMediaPlaneBuildFailed(planId: String?, recipientId: String) {
+        guard let pid = planId?.lowercased(), !pid.isEmpty,
+              let plan = RingSignalingRegistry.shared.entry(pid), plan.mode == 1 else { return }
+        RingSignalingRegistry.shared.setMediaPlane(pid, .failed)
+        let ms: Int64 = plan.acceptedAtMs.map { Self.nowMsForTelemetry() - $0 } ?? -1
+        RTLog.info("call", "ringsig built=0 ms=\(ms) ready=0 why=1")
+        finishFailedIncomingMediaPlane(pid, recipientId: recipientId, replayDeferredUpgrade: true)
+    }
+
+    /// W-MEDIAATACCEPT (option b) — shared tail of every path that gives up
+    /// on the incoming media plane (build threw, SDP never arrived in 2 s,
+    /// 8 s watchdog), AFTER the caller marked the plan `.failed`:
+    /// - a blank `call_answer` if this call never sent one (the caller would
+    ///   otherwise wait for its own timeouts) — only while the entry still
+    ///   exists, never for a call already wiped;
+    /// - the ACCEPT release THROUGH `releaseHeldAcceptIfDue`, so the D2/I12
+    ///   deferred commits (msg-PSK, v4/v5 bootstrap, re-key scheduler,
+    ///   VOICE_KEY loop) are drained too — the previous catch path marked the
+    ///   plan released directly and left them queued until the wipe;
+    /// - gate 5 unblocked: audio I/O falls back to the custom (sealed) path;
+    /// - a video-upgrade request deferred during the build is replayed when
+    ///   no build is still in flight (`replayDeferredUpgrade`).
+    @MainActor
+    private func finishFailedIncomingMediaPlane(_ cid: String, recipientId: String?, replayDeferredUpgrade: Bool) {
+        if RingSignalingRegistry.shared.entry(cid)?.answerSent == false,
+           let peer = recipientId, !peer.isEmpty,
+           let calling = self.liveProvider?.callingApi {
+            Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
+        }
+        self.releaseHeldAcceptIfDue(cid, why: 3)
+        self.callService.resumeAudioIOAfterMediaPlane()
+        if replayDeferredUpgrade {
+            self.processDeferredIncomingUpgradeIfAny(cid)
+        }
+    }
+
+    // MARK: - W-MEDIAATACCEPT (option b) — §4.4: media plane starts at accept
+
+    /// Builds the incoming WebRTC media plane (controller/PC/SDP-answer/
+    /// ICE/DTLS/cryptors/audio session) for a `mode == 1` call — called
+    /// from `performAcceptIncoming` right after the human accept,
+    /// from `routeIncomingWebRtcOffer` when the SDP arrives for a call
+    /// already accepted, and from the `call_incoming` SDP handoff when
+    /// that call turns out to already be accepted (cold-start PushKit/FCM
+    /// race, or `pendingNotificationAnswer`). Idempotent per `callId` —
+    /// see `RingSignalingDecisions.shouldStartMediaPlane`; a second call
+    /// once building/ready/failed is a cheap no-op.
+    func startIncomingMediaPlane(callId: String, trigger: String) {
+        let cid = callId.lowercased()
+        guard !cid.isEmpty,
+              let plan = RingSignalingRegistry.shared.entry(cid),
+              plan.mode == 1, plan.acceptedAtMs != nil else { return }
+        let hasSdp = plan.offer != nil
+        guard RingSignalingDecisions.shouldStartMediaPlane(
+            mode: plan.mode, accepted: true, hasSdp: hasSdp, state: plan.mediaPlane
+        ) else {
+            // Not buildable yet — either already building/ready/failed (a
+            // harmless duplicate call, e.g. accept AND a same-tick OFFER
+            // both trying to start it), or accepted with no SDP at all
+            // yet: arm the one-time 2s wait for it (cold-start race, §2.1
+            // "RING → ACCEPTED senza KEYED").
+            guard plan.mediaPlane == .none, !hasSdp else { return }
+            RingSignalingRegistry.shared.setMediaPlane(cid, .awaitingSdp)
+            let waitForSdp = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self = self, !Task.isCancelled else { return }
+                // Review fix — a timer that outlived its call (teardown
+                // chokepoint missed it) must never act on the NEXT call.
+                guard self.canonicalActiveCallId() == cid else { return }
+                // The SDP may have arrived (and already started a build)
+                // during the wait — only fail if we're still exactly where
+                // we left off.
+                guard RingSignalingRegistry.shared.entry(cid)?.mediaPlane == .awaitingSdp else { return }
+                RingSignalingRegistry.shared.setMediaPlane(cid, .failed)
+                RTLog.info("call", "ringsig built=0 ms=-1 ready=0 why=3")
+                // §4.6 — blank answer, ACCEPT release + D2 drain, custom
+                // audio path unblocked; no build ever started, so a
+                // deferred upgrade can be replayed right away.
+                self.finishFailedIncomingMediaPlane(cid, recipientId: self.callContactId, replayDeferredUpgrade: true)
+            }
+            ringMediaPlaneTimers[cid, default: []].append(waitForSdp)
+            return
+        }
+        guard let offer = plan.offer else { return }  // unreachable: hasSdp already gated this
+        RingSignalingRegistry.shared.setMediaPlane(cid, .building)
+        // §10 (I9) — about to build a PeerConnection: advance the crash
+        // guard from "ring" to "pc" before any RTCPeerConnection exists.
+        CrashBreadcrumbs.setCallContext(inCall: true, native: plan.native, role: "callee", callId: cid, phase: "pc")
+        // §4.4 8s build watchdog, from accept — if this call's own
+        // `call_answer` still hasn't gone out 8s after the human accepted,
+        // give up on the native build rather than leaving the caller
+        // waiting indefinitely.
+        let watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self = self, !Task.isCancelled else { return }
+            // Review fix — same stale-timer guard as the 2s wait above; and
+            // only while the build is genuinely still pending (a build that
+            // already failed was handled by its own catch path).
+            guard self.canonicalActiveCallId() == cid,
+                  let cur = RingSignalingRegistry.shared.entry(cid),
+                  !cur.answerSent, cur.mediaPlane == .building else { return }
+            RTLog.info("call", "ringsig timeout=1 why=2")
+            RingSignalingRegistry.shared.setMediaPlane(cid, .failed)
+            // W-MEDIAATACCEPT (option b) — §4.4 (I3/gate 5): a `didActivate`
+            // deferred at gate 5 must be unblocked on EVERY path that marks
+            // `.failed`. The build may still complete later, so a deferred
+            // upgrade is NOT replayed here (it would race a second PC build);
+            // `noteIncomingMediaPlaneBuilt` replays it if the build lands.
+            self.finishFailedIncomingMediaPlane(cid, recipientId: self.callContactId, replayDeferredUpgrade: false)
+        }
+        ringMediaPlaneTimers[cid, default: []].append(watchdog)
+        buildIncomingWebRtcMediaPlane(
+            callerId: self.callContactId ?? "",
+            sdp: offer.sdp,
+            peerCapabilities: offer.capabilities,
+            hasVideo: offer.hasVideo,
+            callId: cid
+        )
+    }
+
+    /// W-MEDIAATACCEPT (option b) — I11: releases this call's held
+    /// responder ACCEPT, if any, and idempotently no-ops otherwise
+    /// (`RingSignalingRegistry.markReleased`/`acceptReleased` guard —
+    /// whichever of "own call_answer sent" or "5s reserve elapsed" fires
+    /// FIRST wins; the other is then a no-op). `why`: 1 = after
+    /// call_answer, 2 = 5s reserve timer, 3 = a failure path (media-plane
+    /// build failed, SDP never arrived, 8s watchdog).
+    func releaseHeldAcceptIfDue(_ callId: String, why: Int) {
+        let cid = callId.lowercased()
+        guard let plan = RingSignalingRegistry.shared.entry(cid), !plan.acceptReleased else { return }
+        // Review fix — every legitimate trigger (own call_answer sent, 5 s
+        // reserve, failure paths) fires while THIS call is the bound one; a
+        // stale timer/callback for a call that already ended must neither
+        // release nor drain its deferred commits (D2).
+        guard canonicalActiveCallId() == cid else { return }
+        RingSignalingRegistry.shared.markReleased(cid)
+        let ms = plan.acceptedAtMs.map { Self.nowMsForTelemetry() - $0 } ?? -1
+        RTLog.info("call", "ringsig release=1 why=\(why) ms=\(ms)")
+        // Review fix — drain the D2/I12 deferred commits only AFTER the held
+        // ACCEPT had its send attempt: legacy ordering put the ACCEPT on the
+        // wire before `kc_mac`, the v4/v5 bootstrap and the VOICE_KEY loop,
+        // all of which the caller can only process once it holds the key.
+        // A call wiped in between drains nothing (`wipeRingState` clears the
+        // queue first).
+        Task { @MainActor [weak self] in
+            _ = await self?.responderCallIntegration?.releaseHeldAccept(callId: cid)
+            self?.drainAcceptGatedActions(cid)
+        }
+    }
+
+    /// W-MEDIAATACCEPT (option b) — D2/I12: runs the handshake-completion
+    /// side effects that were deferred while `mode == 1` held the ACCEPT
+    /// (msg-PSK persistence, v4/v5 ratchet bootstrap, `kc_mac`, the
+    /// re-key/VOICE_KEY loops, auto voice-learning) — see
+    /// `pendingAcceptGatedActions`'s own doc. Safe to call even when
+    /// nothing is queued (legacy `mode == 0` calls never queue anything).
+    func drainAcceptGatedActions(_ callId: String) {
+        let cid = callId.lowercased()
+        guard let actions = pendingAcceptGatedActions[cid] else { return }
+        pendingAcceptGatedActions[cid] = nil
+        for action in actions { action() }
+    }
+
+    /// W-MEDIAATACCEPT (option b) — D2/I12: the single gate every callee-side
+    /// handshake-completion side effect (msg-PSK persistence, v4/v5 ratchet
+    /// bootstrap, `kc_mac`, `handleCallSessionEstablished`'s rekey/VOICE_KEY/
+    /// voice-learning) must go through. `callId == nil`/empty, no latched
+    /// `RingSignalingRegistry` entry (legacy `call_offer` outside any tracked
+    /// call), `mode == 0` (legacy), or an already-released ACCEPT (mid-call
+    /// re-key, or a `mode == 1` call whose ACCEPT already went out) all run
+    /// `action` immediately — identical to today's behavior. Only a `mode ==
+    /// 1` call still holding its ACCEPT defers: `action` is queued in
+    /// `pendingAcceptGatedActions` and runs later, from
+    /// `drainAcceptGatedActions` right after `releaseHeldAcceptIfDue` — or
+    /// never, if `wipeRingState` discards the queue first (call ended while
+    /// still ringing, D2: no persistent state may change for a call nobody
+    /// answered).
+    ///
+    /// Must be called on `@MainActor` (touches `pendingAcceptGatedActions`
+    /// with no separate lock, same as every other access to it).
+    func runOrDeferUntilAccepted(_ callId: String?, action: @escaping () -> Void) {
+        guard let cid = callId?.lowercased(), !cid.isEmpty,
+              let plan = RingSignalingRegistry.shared.entry(cid),
+              plan.mode == 1, !plan.acceptReleased else {
+            action()
+            return
+        }
+        pendingAcceptGatedActions[cid, default: []].append(action)
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §4.10/I13: the single chokepoint for
+    /// tearing down every ring-time artifact of one call — reject, cancel,
+    /// timeout, call end, or supersession by a newer `call_incoming`.
+    /// `why`: 1 end, 2 remote cancel/hangup while ringing, 3 local reject,
+    /// 4 TTL, 5 superseded by a new call. Safe to call for a call that was
+    /// never `mode == 1` (every step below is a no-op on an absent entry).
+    func wipeRingState(_ callId: String?, why: Int) {
+        guard let callId = callId?.lowercased(), !callId.isEmpty else { return }
+        RingSignalingRegistry.shared.wipe(callId, why: why)
+        CallKeyStore.shared.wipe(callId, why: why)
+        responderCallIntegration?.dropHeldAccept(callId: callId)
+        pendingAcceptGatedActions[callId] = nil
+        // G1 (§4.7) — this call's queued remote ICE candidates/removals.
+        PendingIceCandidateQueue.shared.wipe(callId)
+        // G3 (§4.9) — a video-upgrade request deferred while this call's
+        // media plane was still building must not survive the call.
+        pendingIncomingUpgradeAwaitingMediaPlane[callId] = nil
+        if let timers = ringMediaPlaneTimers[callId] {
+            for t in timers { t.cancel() }
+            ringMediaPlaneTimers[callId] = nil
+        }
+        // W-MEDIAATACCEPT (option b) — deliberately `op=`, not the spec's
+        // literal `key=`: `key` is in `ship-ios-logs.py`'s `_KV_DENY_WORDS`
+        // (an identity/secret-shaped kv key is never protected regardless
+        // of value — by design, to catch a REAL "key=<material>" leak
+        // elsewhere), so `key=wipe` would ship as `[REDACTED:secret]` on a
+        // real device rather than the intended status line. `op` carries
+        // the same information (T3's "key store operation") without
+        // colliding with that deny list. See `test_ship_ios_redactor_hardening.py`'s
+        // W-MEDIAATACCEPT block.
+        RTLog.info("call", "ringsig op=wipe why=\(why)")
     }
 
     func handleIncomingWebRtcAnswer(sdp: String, peerCapabilities: [String]? = nil) {
@@ -23485,17 +26107,26 @@ extension AppState {
         }
     }
 
-    func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+    /// W-MEDIAATACCEPT (option b) — §4.7 (G1/iOS-9): `callId` is the
+    /// envelope's own `call_id` (may be empty on an older/legacy sender —
+    /// falls back to `canonicalActiveCallId()`, matching this device's own
+    /// idea of which call it is bound to, so a best-effort single-call
+    /// device keeps working exactly as before).
+    func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, callId: String = "") {
         guard let controller = webRtcController as? QAudionWebRtcCallController else {
             // W-ICEQUEUE — was a silent `return`. The controller isn't up yet
             // (this side hasn't finished processing the offer/answer that
             // must precede any real candidate); queue it instead of losing
-            // it forever. See `pendingRemoteIceCandidates`'s kdoc.
-            if pendingRemoteIceCandidates.count >= Self.pendingRemoteIceCandidatesCap {
-                pendingRemoteIceCandidates.removeFirst()
+            // it forever. See `PendingIceCandidateQueue`'s kdoc.
+            let bound = canonicalActiveCallId() ?? ""
+            let effectiveId = callId.isEmpty ? bound : callId
+            let queued = PendingIceCandidateQueue.shared.enqueue(
+                callId: effectiveId, boundCallId: bound,
+                .init(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex, removed: false)
+            )
+            if queued {
+                RTLog.warn("call", "ice candidate queued — no controller yet")
             }
-            pendingRemoteIceCandidates.append((candidate, sdpMid, sdpMLineIndex, false))
-            RTLog.warn("call", "ice candidate queued — no controller yet n=\(pendingRemoteIceCandidates.count)")
             return
         }
         controller.handleRemoteIce(candidate: candidate,
@@ -23506,16 +26137,20 @@ extension AppState {
     /// W-ICEBATCH (2026-08-25) — batch-form candidate REMOVAL (`removed:
     /// true`): the peer withdrew this candidate, prune it immediately so
     /// it does not sit stale in the ICE agent aging out via failed
-    /// connectivity checks. Queued through the same W-ICEQUEUE FIFO when
+    /// connectivity checks. Queued through the same per-call queue when
     /// the controller isn't up yet, so an add + its own removal replay in
     /// order at flush time.
-    func handleIncomingWebRtcIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+    func handleIncomingWebRtcIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, callId: String = "") {
         guard let controller = webRtcController as? QAudionWebRtcCallController else {
-            if pendingRemoteIceCandidates.count >= Self.pendingRemoteIceCandidatesCap {
-                pendingRemoteIceCandidates.removeFirst()
+            let bound = canonicalActiveCallId() ?? ""
+            let effectiveId = callId.isEmpty ? bound : callId
+            let queued = PendingIceCandidateQueue.shared.enqueue(
+                callId: effectiveId, boundCallId: bound,
+                .init(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex, removed: true)
+            )
+            if queued {
+                RTLog.warn("call", "ice removal queued — no controller yet")
             }
-            pendingRemoteIceCandidates.append((candidate, sdpMid, sdpMLineIndex, true))
-            RTLog.warn("call", "ice removal queued — no controller yet n=\(pendingRemoteIceCandidates.count)")
             return
         }
         controller.handleRemoteIceRemoval(candidate: candidate,
@@ -23524,13 +26159,17 @@ extension AppState {
     }
 
     /// W-ICEQUEUE — apply every candidate that arrived before `controller`
-    /// existed. Call once, right after `webRtcController` is assigned, at
-    /// every construction site (outgoing / incoming / video-upgrade
-    /// responder). A no-op empty queue costs one array check.
-    private func flushPendingIceCandidates(to controller: QAudionWebRtcCallController) {
-        guard !pendingRemoteIceCandidates.isEmpty else { return }
-        let queued = pendingRemoteIceCandidates
-        pendingRemoteIceCandidates.removeAll()
+    /// existed FOR THIS `callId`. Call once, right after `webRtcController`
+    /// is assigned, at every construction site (outgoing / incoming /
+    /// video-upgrade responder). A no-op empty queue costs one dictionary
+    /// lookup. `callId` empty is a legacy/best-effort caller (pre-G1 call
+    /// sites this task did not otherwise touch) — drains whatever this
+    /// device's own bound call id resolves to instead.
+    private func flushPendingIceCandidates(to controller: QAudionWebRtcCallController, callId: String = "") {
+        let effectiveId = callId.isEmpty ? (canonicalActiveCallId() ?? "") : callId.lowercased()
+        guard !effectiveId.isEmpty else { return }
+        let queued = PendingIceCandidateQueue.shared.drain(effectiveId)
+        guard !queued.isEmpty else { return }
         RTLog.info("call", "ice candidate flush n=\(queued.count)")
         for c in queued {
             if c.removed {
@@ -23545,18 +26184,19 @@ extension AppState {
 extension AppState {
     /// WebRTC framework not available in this target — no-op stubs so the
     /// AppState handlers keep their call sites intact.
-    func handleIncomingWebRtcOffer(
+    func routeIncomingWebRtcOffer(
         callerId: String,
         sdp: String,
         peerCapabilities: [String]? = nil,
-        hasVideo: Bool = false
+        hasVideo: Bool = false,
+        callId: String? = nil
     ) {
         print("[AppState] WebRTC: call_offer received but WebRTC framework not linked")
     }
     func handleIncomingWebRtcAnswer(sdp: String, peerCapabilities: [String]? = nil) {
         print("[AppState] WebRTC: call_answer received but WebRTC framework not linked")
     }
-    func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {}
-    func handleIncomingWebRtcIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {}
+    func handleIncomingWebRtcIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, callId: String = "") {}
+    func handleIncomingWebRtcIceRemoval(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, callId: String = "") {}
 }
 #endif

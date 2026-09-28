@@ -70,6 +70,21 @@ struct CallsSettingsScreen: View {
     // UserDefaults-backed via CallsGate (not Keychain); read once on appear.
     @State private var callKitFreeMode: Bool = false
 
+    /// W-AUDIOSRTPDEBUGTOGGLE / W-CODECMENUSRTP — mirrors
+    /// `CallCapabilities.audioSrtpDebugOverride` (a plain static var, not
+    /// itself observable) into local SwiftUI state, exactly the pattern
+    /// `SettingsScreen` used before this control moved here. Seeded from
+    /// whatever override is already in force (falling back to the compiled
+    /// default) so re-entering this screen mid-session shows the real
+    /// current state, not a stale default.
+    ///
+    /// W-NATIVESRTPPERSIST (this task) — `audioSrtpDebugOverride` itself is
+    /// now seeded at app launch from the persisted preference
+    /// (`QAudionApp.init()`), so this initial value already reflects a
+    /// previous session's choice, not just this one's.
+    @State private var audioSrtpToggle: Bool =
+        CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
+
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
@@ -83,6 +98,58 @@ struct CallsSettingsScreen: View {
                     kvRow(label: "Audio Codec",
                           value: container.viewModel.codecPreference.rawValue.capitalized,
                           mono: false)
+
+                    // W-CODECMENUSRTP — moved out of the internal-only
+                    // Settings surface so the transport choice is reachable
+                    // in every build, right under the codec it sits
+                    // alongside. Same binding the internal toggle used:
+                    // `CallCapabilities.audioSrtpDebugOverride ??
+                    // audioSrtpSendEnabled`, in-memory only, per-call
+                    // snapshot means a mid-call flip cannot affect the call
+                    // already in progress.
+                    //
+                    // The row subtitle is kept short because
+                    // `SettingsToggleRow` caps it at `.lineLimit(2)`; the
+                    // full disclosure (and the experimental warning, same
+                    // pattern as "MODALITÀ CHIAMATA (SPERIMENTALE)" below)
+                    // lives in the uncapped `warningHint` underneath.
+                    VStack(spacing: 8) {
+                        SettingsToggleRow(
+                            title: "Audio SRTP standard (WebRTC)",
+                            subtitle: "Sostituisce il protocollo Q-Audion con WebRTC DTLS-SRTP standard, se attivo su entrambi i dispositivi.",
+                            isOn: Binding(
+                                get: { audioSrtpToggle },
+                                set: { newValue in
+                                    audioSrtpToggle = newValue
+                                    CallCapabilities.audioSrtpDebugOverride = newValue
+                                    // W-NATIVESRTPPERSIST (this task) — the
+                                    // toggle now survives a restart: every
+                                    // write here also updates the persisted
+                                    // preference (`QAudionApp.init()` seeds
+                                    // `audioSrtpDebugOverride` from it on the
+                                    // next launch). A crash-streak safety
+                                    // net (`CallCapabilities
+                                    // .registerNativeSrtpCrashAndMaybeAutoReset`)
+                                    // can still force this back to `false`
+                                    // if native calls keep crashing.
+                                    CallCapabilities.savePersistedAudioSrtpOverride(newValue)
+                                    // 2026-09-27 diagnosis (I1) — the toggle
+                                    // change had no trace of its own: the
+                                    // live test could only infer it from
+                                    // whether `nsnap`/`admgate` later showed
+                                    // native=1, one call later. Numeric only,
+                                    // same "audiosrtp event=... value=..."
+                                    // shape as the Android counterpart
+                                    // (AudioCodecSettingsViewModel's
+                                    // `srtpdiag event=override_set`), so the
+                                    // two platforms' logs read the same way
+                                    // side by side.
+                                    RTLog.info("call", "audiosrtp event=override value=\(newValue ? 1 : 0) persisted=1")
+                                }
+                            )
+                        )
+                        warningHint("Funzione sperimentale: se l'audio risulta assente o instabile, disattivala (ha effetto dalla prossima chiamata). Cifra i frame end-to-end; l'impostazione resta salvata dopo il riavvio dell'app.")
+                    }
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
                     kvRow(label: "Preset audio",

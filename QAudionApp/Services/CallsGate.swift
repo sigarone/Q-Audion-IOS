@@ -62,6 +62,25 @@ public enum CallsGate {
     public static func setNs(_ value: Bool)  { UserDefaults.standard.set(value, forKey: keyNs) }
     public static func setAgc(_ value: Bool) { UserDefaults.standard.set(value, forKey: keyAgc) }
 
+    // MARK: - W-BYPASSDUCK — TX echo ducker while VP-IO is bypassed (remote kill switch)
+
+    /// `flags.json` key of the remote kill switch for `BypassEchoDuck` (the TX echo ducker that runs only
+    /// with VP-IO bypassed AND the loudspeaker as output). Default ON: an absent key, an unfetched file or
+    /// a non-Bool value leave it armed; publishing `false` switches it off for the next call within the
+    /// ~15 min flag refresh, with no release. Read from the PUBLIC flags only (`FeatureFlags` never
+    /// resolves this key from the per-user overlay), so every install resolves the same value.
+    public static let keyBypassEchoDuck = BypassEchoDuck.remoteFlagKey
+
+    /// Read once per call, when the capture is created (main thread, from AppState). `FeatureFlags` is
+    /// main-actor isolated; off the main thread this returns the compiled default (ON) rather than
+    /// blocking, so the switch is only honoured for captures created on main — which is every 1:1 call.
+    public static func bypassEchoDuckEnabled() -> Bool {
+        guard Thread.isMainThread else { return BypassEchoDuck.remoteFlagDefault }
+        return MainActor.assumeIsolated {
+            FeatureFlags.bool(keyBypassEchoDuck, BypassEchoDuck.remoteFlagDefault)
+        }
+    }
+
     // MARK: - W-NOCALLKIT — CallKit-free incoming-call mode (revertible)
 
     /// When true, iOS abandons CallKit + PushKit and handles the incoming-call

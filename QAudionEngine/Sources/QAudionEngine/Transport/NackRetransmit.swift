@@ -106,6 +106,9 @@ public final class NackRxTracker {
     }
     private var pendingGaps: [Int64: PendingGap] = [:]
     private var pendingOrder: [Int64] = []
+    /// W-NACKEPOCH — the session-key epoch this state belongs to. See `adoptKeyEpoch`.
+    /// Deliberately NOT cleared by `reset()`: it tracks the key, not the bookkeeping.
+    private var keyEpoch: UInt64 = 0
 
     public init(
         lookbackWindow: Int = NackRetransmitRing.defaultCapacity,
@@ -155,6 +158,18 @@ public final class NackRxTracker {
         return true
     }
 
+    /// W-REKEYSEQGATE (2026-09-20) — read-only twin of `accept`: would this seq be delivered?
+    /// Changes NOTHING. The receive path uses it as its duplicate check BEFORE decryption and
+    /// calls `accept` (which records the seq) only AFTER the frame really opened: a frame that
+    /// fails to decrypt (a still-in-flight old-key frame around a re-key) must never raise
+    /// `highestSeq`, otherwise the peer's counter — which restarts at 0 with the new key — is
+    /// dropped as "too old" and the call stays silent.
+    public func wouldAccept(_ seq: Int64) -> Bool {
+        if seq < 0 { return false }
+        if highestSeq >= 0 && seq <= highestSeq - Int64(lookbackWindow) { return false }
+        return seenWindow[slot(for: seq)] != seq
+    }
+
     /// Gaps that have aged past `nackAgeThresholdMs` and have not been
     /// requested yet — each is marked requested (never asked for twice),
     /// and a gap `lookbackWindow` or more behind `highestSeq` is dropped
@@ -176,6 +191,28 @@ public final class NackRxTracker {
         }
         pendingOrder = stillPending
         return ready
+    }
+
+    /// W-NACKEPOCH (Copilot follow-up to #106) — bring the tracker onto the session-key epoch
+    /// the receive path is about to decrypt under: if `epoch` differs from the one this state
+    /// was built for, forget everything (exactly `reset()`) and remember the new epoch; if it
+    /// is the same, change nothing. Call it immediately before `wouldAccept` on every frame.
+    ///
+    /// Why: the explicit `reset()` on a re-key used to be the only way the tracker learned
+    /// about a new key, and it ran asynchronously (a main-actor Task) AFTER the new key was
+    /// already live in the engine, while inbound frames are queued independently. A new-key
+    /// frame admitted in between was checked against the OLD epoch's `highestSeq`, so the
+    /// peer's restarted counter (seq 0, 1, ...) was rejected as "too old" although it would
+    /// have decrypted. Keying the reset to an epoch value that is bumped synchronously at key
+    /// install removes any dependency on how the two queues happen to interleave.
+    ///
+    /// - Returns: `true` if the epoch changed and the state was reset.
+    @discardableResult
+    public func adoptKeyEpoch(_ epoch: UInt64) -> Bool {
+        if epoch == keyEpoch { return false }
+        keyEpoch = epoch
+        reset()
+        return true
     }
 
     /// Forget everything. Call on every re-key.

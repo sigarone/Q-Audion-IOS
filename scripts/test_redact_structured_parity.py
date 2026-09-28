@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-Parity port + test of RuntimeLogSink.redactStructured (RuntimeLogSink.swift).
+Parity port + test of RuntimeLogSink.redactStructured (LogRedactor.swift since v1.0.1180;
+RuntimeLogSink.redactStructured now just forwards to it, unchanged).
 
 This mirrors the EXACT 5-step egress redactor used on BOTH iOS egress paths:
-  - the text path  : RuntimeLogSink.entriesSince() (msg field)
+  - the text path  : LiveLogWorker (msg field; it was RuntimeLogSink.entriesSince() before v1.0.1180)
   - the structured path (P2, this change): TelemetryService.emit() attr values
 
 It is NOT the Loki shipper (scripts/ship-ios-logs.py), which uses a different,
@@ -17,7 +18,7 @@ Run:  python scripts/test_redact_structured_parity.py
 Exit: 0 = all parity assertions pass, 1 = a MUST-SCRUB leaked or a MUST-PRESERVE
         was destroyed.
 
-Swift source of truth (RuntimeLogSink.swift):
+Swift source of truth (QAudionApp/Services/LogRedactor.swift):
   uuidRegex        : \b[0-9a-fA-F]{8}-{4}-{4}-{4}-{12}\b
   fingerprintRegex : (?i)\b(keyfp|selectedpskfingerprint|short8|h8|fp)([\s:=]+)([0-9a-fA-F]{8,16})\b
   jwtRegex         : [A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}
@@ -34,7 +35,7 @@ import sys
 
 REDACT = "***REDACTED***"
 
-# --- regexes (ported 1:1 from RuntimeLogSink.swift) ---
+# --- regexes (ported 1:1 from LogRedactor.swift, formerly RuntimeLogSink.swift) ---
 UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 FINGERPRINT_RE = re.compile(

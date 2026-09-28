@@ -586,8 +586,18 @@ struct GroupCallView: View {
         } else {
             base = viewModel.participants
         }
-        let speaking = base.filter { viewModel.activeSpeakerIds.contains($0.id) }
-        let resting = base.filter { !viewModel.activeSpeakerIds.contains($0.id) }
+        // Single stable pass (was two `filter` passes, each re-reading the
+        // @Published set per element): same partition, same relative order.
+        let activeIds: Set<String> = viewModel.activeSpeakerIds
+        var speaking: [GroupCallViewModel.ParticipantUI] = []
+        var resting: [GroupCallViewModel.ParticipantUI] = []
+        for participant in base {
+            if activeIds.contains(participant.id) {
+                speaking.append(participant)
+            } else {
+                resting.append(participant)
+            }
+        }
         return speaking + resting
     }
 
@@ -597,9 +607,12 @@ struct GroupCallView: View {
     /// gets full-size tiles via `adaptiveGridLayout` (capacity is a
     /// CEILING per page, not a per-page target).
     private func gridPages(pageCapacity: Int) -> [[GroupCallViewModel.ParticipantUI]] {
-        guard pageCapacity > 0, !gridParticipants.isEmpty else { return gridParticipants.isEmpty ? [] : [gridParticipants] }
-        return stride(from: 0, to: gridParticipants.count, by: pageCapacity).map {
-            Array(gridParticipants[$0..<min($0 + pageCapacity, gridParticipants.count)])
+        // Evaluate the (filter + partition) computed property ONCE — the
+        // previous body re-ran it up to five times per call.
+        let all: [GroupCallViewModel.ParticipantUI] = gridParticipants
+        guard pageCapacity > 0, !all.isEmpty else { return all.isEmpty ? [] : [all] }
+        return stride(from: 0, to: all.count, by: pageCapacity).map {
+            Array(all[$0..<min($0 + pageCapacity, all.count)])
         }
     }
 

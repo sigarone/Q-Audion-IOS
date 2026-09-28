@@ -49,6 +49,16 @@ import Foundation
 /// libwebrtc's own SDP parser round-trips. Mirrors Android's own reasoning
 /// (`AudioSdpPolicy.kt` "Today this lands on the m=audio section of LIVE
 /// calls... safe by construction").
+///
+/// 2026-09-26 correction (W-NATIVESRTPGATE-2) — an earlier revision of this
+/// task's own native-SRTP-diagnostics work gated the call to `apply()` at
+/// all three `QAudionPeerConnection` call sites
+/// (createOffer/createAnswer/applyRemoteSdp) on
+/// ``CallCapabilities/isNativeSrtpEnabledLocally``. That was wrong: it made
+/// an ORDINARY call's SDP differ from Android's, which polices every SDP
+/// the same way with no such switch — the opposite of the cross-platform
+/// parity this file exists for. Reverted; the three call sites are
+/// unconditional again, exactly as before that gating was added.
 enum AudioSdpPolicy {
 
     static let maxAverageBitrateBps: Int = 32_000

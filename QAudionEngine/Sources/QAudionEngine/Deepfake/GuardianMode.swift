@@ -13,8 +13,7 @@ public final class GuardianMode: @unchecked Sendable {
     /// lfcc`), this does NOT fuse an ML score with a real LFCC/voiceprint
     /// mismatch score. `DeepfakeClassifier` (a second, `async` AASIST path)
     /// and `SpeakerVerifier`/`LfccExtractor` (the actual LFCC leg, requires
-    /// speaker enrollment) exist in this module but aren't wired in here —
-    /// same Sprint-22-pending status as the third `LcnnDetector` leg.
+    /// speaker enrollment) exist in this module but aren't wired in here.
 
     private let analyzer = VoiceprintAnalyzer()
     private let confidence = ConfidenceIndex()

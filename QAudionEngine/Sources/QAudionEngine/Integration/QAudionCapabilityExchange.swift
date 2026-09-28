@@ -37,9 +37,9 @@ public enum QAudionCapabilityExchange {
         case dcIce = 0x05               // was dcSdpOffer on iOS
         case audioData = 0x06           // moved from 0x03
         case voiceAnalysis = 0x07       // moved from 0x04
-        case callHangup = 0x08          // new
-        case keyExchangeOffer = 0x09    // new (no handler yet — enum stub for Desktop/Android interop)
-        case keyExchangeAccept = 0x0a   // new (no handler yet — enum stub for Desktop/Android interop)
+        case callHangup = 0x08          // decoded then dropped on purpose (see QAudionCallIntegration.onCapabilityMessageReceived)
+        case keyExchangeOffer = 0x09    // consumed by ContactKeyExchange.handleOffer
+        case keyExchangeAccept = 0x0a   // consumed by ContactKeyExchange.handleAccept
     }
 
     public enum Message {
@@ -320,12 +320,14 @@ public enum QAudionCapabilityExchange {
             let reason = String(data: pubKey, encoding: .utf8) ?? ""
             return .callHangup(reason: reason)
 
+        // KEY_EXCHANGE_OFFER / ACCEPT are produced and consumed by
+        // ContactKeyExchange (routed from QAudionCallIntegration). The payload
+        // is a classical X25519 public key by design (first-contact PSK
+        // derivation, not the call handshake).
         case .keyExchangeOffer:
-            // TODO(desktop-interop): wire into hybrid PQC handshake path
             return .keyExchangeOffer(payload: Data(pubKey))
 
         case .keyExchangeAccept:
-            // TODO(desktop-interop): wire into hybrid PQC handshake path
             return .keyExchangeAccept(payload: Data(pubKey))
         }
     }

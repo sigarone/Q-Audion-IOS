@@ -31,7 +31,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// should not — know about the app's logging stack. Same primitive-only
     /// boundary the mesh runtime keeps.
     public var log: ((String) -> Void)?
-    public var onAnswerCall: ((UUID) async -> Void)?
+    /// Fired when the user answers. Returns whether the app ACCEPTED the answer:
+    /// `false` = it refused a dead / placeholder call (W-GHOSTCALL, incident
+    /// e3acecd7), in which case the provider fails the native answer action and
+    /// skips the audio-session activation that normally follows, because there is
+    /// no call to activate it for. A nil handler counts as accepted (the
+    /// pre-existing behaviour).
+    public var onAnswerCall: ((UUID) async -> Bool)?
     public var onEndCall: ((UUID) async -> Void)?
     public var onMutedChanged: ((UUID, Bool) async -> Void)?
     /// W-CKHOLD (2026-09-02) — fired from `provider(_:perform:
@@ -47,7 +53,15 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// + speaker playback). Starting the engine before this point throws
     /// "Session activation failed" and the call has no audio. AppState
     /// wires this to `CallService.handleAudioSessionActivated()`.
-    public var onAudioSessionActivated: (() -> Void)?
+    ///
+    /// W-ADMGATE (2026-09-26) — now carries WHO activated the session:
+    /// `.callKit` from `provider(_:didActivate:)`, `.selfExpectingCallKit`
+    /// from this app's own activation after a CXStart/CXAnswer action (CallKit's
+    /// didActivate still expected), `.selfManaged` from an activation CallKit
+    /// will never follow (suppressed/foreground answer, wake-only). Only a
+    /// native-SRTP call reads it (WebRTC's own audio unit must start on a
+    /// CallKit-activated session); every other consumer ignores it.
+    public var onAudioSessionActivated: ((AudioSessionActivationSource) -> Void)?
     /// W464 — fired when CallKit released the audio session (call ended
     /// or interrupted). AppState wires this to
     /// `CallService.handleAudioSessionDeactivated()`.
@@ -115,7 +129,20 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
         // vs WS) is logged at the call sites in AppState.
-        let alreadyUp: Bool = ledger.isNativelyReported(uuid)
+        // W-GHOSTCALL (2026-09-25) — the "am I the first report?" question is now
+        // one atomic claim taken BEFORE the await (`beginReport`). It used to be a
+        // plain read of the natively-reported set, which is only filled once
+        // CallKit has answered: two reports of the same uuid issued in the same
+        // millisecond (a doubled PushKit push, e3acecd7 03.221/03.222) both read
+        // "not reported yet", so the second one's Code=2 refusal was taken for a
+        // genuine rejection. The second report still goes to CallKit (one report
+        // per push is the PushKit mandate); it is only labelled a duplicate.
+        let claimed: Bool = ledger.beginReport(uuid)
+        let alreadyUp: Bool = !claimed
+        // Only the report that took the claim releases it: a duplicate that comes
+        // back from CallKit first must not reopen the "first report" window while
+        // the claimer is still in flight.
+        defer { if claimed { ledger.finishReport(uuid) } }
         // I8 FIX — truncate the call UUID (same convention as AppState's
         // W-CALLDIAG lines for this same call) instead of printing it whole.
         print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
@@ -142,13 +169,19 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             // call CallKit actually knows about was reported by the other
             // branch, never latched to this banner's answer path.
             let nsErr = error as NSError
+            // W-GHOSTCALL — Code=2 (callUUIDAlreadyExists) is not a rejection
+            // either: CallKit already HAS this call and its native UI is live, so
+            // the manual-answer fallback must not be armed over it, whichever
+            // report of the uuid got the refusal. See CallKitReportFailurePolicy.
+            let armFallback: Bool = CallKitReportFailurePolicy.shouldArmManualAnswer(
+                alreadyReported: alreadyUp, errorCode: nsErr.code)
             // I8 FIX — truncated uuid, see above.
-            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(alreadyUp ? "native UI already live, NOT arming fallback" : "arming in-app manual answer path") for \(uuid.uuidString.prefix(8))…")
+            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(armFallback ? "arming in-app manual answer path" : "native UI already live, NOT arming fallback") for \(uuid.uuidString.prefix(8))…")
             // Numeric tail so this survives the remote-log redactor: without it
             // the whole CallKit path is invisible off-device, and a rejection
             // that costs the user an incoming call looks exactly like silence.
             log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
-            if !alreadyUp {
+            if armFallback {
                 ledger.recordRejected(uuid)
             }
         }
@@ -224,12 +257,45 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // pair, serializing the drain against any concurrent activation
         // (including the next call's own) the same way every other mutation
         // of this shared session already is.
-        if ledger.consumeAudioSelfActivation() {
+        //
+        // W-ADMBALANCE (2026-09-26) — native-SRTP (manual audio mode) calls
+        // only: ONE locked setActive(false), balancing this app's own
+        // self-activation and nothing else. In manual mode WebRTC's own
+        // configure/unconfigure of the session are paired by the unit's
+        // disable (CallService switches it off before the PeerConnection
+        // closes) and CallKit's didDeactivate balances its own didActivate.
+        // Draining those too made THIS app deactivate the real session while
+        // CallKit was about to (Apple's CallKit guidance: the app must not),
+        // and — with a next call already activated — deactivate that one.
+        // Legacy calls keep the drain above byte-for-byte
+        // (`NativeAudioUnitGateDecisions.deactivationCalls`).
+        // W-ADMBALANCE-UUID (2026-09-26) — "native call" is looked up by THIS
+        // report's uuid (recorded at that call's own CallKit start/answer,
+        // `recordNativeBalanceIfNativeCall`), not read from a process-wide
+        // flag armed by whichever PeerConnection armed last: this report runs
+        // in an unawaited Task, so a NEXT native call could arm before it and
+        // have its flag consumed here. Consumed once per uuid.
+        // W-SELFACTID (2026-09-27) — the self-activation mark of a native call
+        // is keyed by the same uuid and consumed in the same critical section:
+        // the OLD call's late report used to take the NEXT call's mark (one
+        // process-wide flag) and leave the next call's own activation
+        // unbalanced. Calls with native SRTP off keep the process-wide flag.
+        let endBalance = ledger.consumeEndBalance(uuid)
+        let nativeManualCall = endBalance.nativeManualCall
+        if !endBalance.selfActivated, nativeManualCall || endBalance.duplicateNative {
+            let dupFlag = endBalance.duplicateNative ? 1 : 0
+            log?("admgate W-SELFACTID endbal=0 dup=\(dupFlag)")
+        }
+        if endBalance.selfActivated {
             let rtcSession = RTCAudioSession.sharedInstance()
             rtcSession.lockForConfiguration()
-            let maxDrainIterations = 10
+            // `activationCount` is imported as Int32 (ObjC `int`) — the CI
+            // build rejected passing it where Int is expected.
+            let countBefore = rtcSession.activationCount
+            let plannedIterations = NativeAudioUnitGateDecisions.deactivationCalls(
+                activationCount: Int(countBefore), nativeManualCall: nativeManualCall)
             var drainedCount = 0
-            while rtcSession.activationCount > 0 && drainedCount < maxDrainIterations {
+            while rtcSession.activationCount > 0 && drainedCount < plannedIterations {
                 do {
                     try rtcSession.setActive(false)
                 } catch {
@@ -238,8 +304,14 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 }
                 drainedCount += 1
             }
-            print("[CallKitProvider] reportCallEnded audio session drained iterations=\(drainedCount) activationCount=\(rtcSession.activationCount)")
+            let countAfter = rtcSession.activationCount
+            let activeAfter = rtcSession.isActive ? 1 : 0
+            print("[CallKitProvider] reportCallEnded audio session drained iterations=\(drainedCount) activationCount=\(countAfter)")
             rtcSession.unlockForConfiguration()
+            if nativeManualCall {
+                let line = "admgate endbal=1 before=\(countBefore) iter=\(drainedCount) after=\(countAfter) act=\(activeAfter)"
+                log?(line)
+            }
         }
         ledger.forget(uuid)
         let cxReason: CXCallEndedReason
@@ -346,8 +418,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// its hold (we dismissed the system UI but the call is still live in-app).
     /// Reuses the proven answer-time activation (retry + fire
     /// onAudioSessionActivated → CallService restarts the engines if needed).
-    public func reactivateAudioSessionForSelfManagedCall() async {
-        await activateAudioSession(logSite: "answer")
+    ///
+    /// W-SELFACTID (2026-09-27) — `uuid`: the CallKit uuid of the self-managed
+    /// call, so a native-SRTP call's re-activation is marked under its own
+    /// uuid (see `CallKitCallLedger.markAudioSelfActivated`). `nil` keeps the
+    /// process-wide mark, as before.
+    public func reactivateAudioSessionForSelfManagedCall(uuid: UUID? = nil) async {
+        await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid)
     }
 
     /// W478 — answer an incoming call via the CallKit CXCallController.
@@ -375,17 +452,41 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             //
             // The previous order (activate THEN answer) started the audio engine
             // before callIntegration existed → mic/speaker silent, level bars frozen.
-            await onAnswerCall?(uuid)
+            let accepted: Bool = (await onAnswerCall?(uuid)) ?? true
+            // W-GHOSTCALL — refused (dead / placeholder call): nothing to activate.
+            guard accepted else {
+                log?("callkit answer refused=1 path=manual")
+                return
+            }
+            recordNativeBalanceIfNativeCall(uuid)
             // W556-fix — deterministic self-activation with retry. The old
             // single `try? setActive(true)` could fail silently (swallowed) and
             // then onAudioSessionActivated() started the engine on an INACTIVE
             // session → capture.start() failed → silent call. See
             // activateAudioSession(logSite:).
-            await activateAudioSession(logSite: "answer")
+            // W-ADMGATE — CallKit never registered this call: no didActivate.
+            await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid)
             return
         }
         let action = CXAnswerCallAction(call: uuid)
         try await controller.request(CXTransaction(action: action))
+    }
+
+    /// W-ADMBALANCE-UUID (2026-09-26) — record `uuid` for `reportCallEnded`'s
+    /// single balancing deactivation when THIS call runs native SRTP (manual
+    /// audio mode). Called at the call's own CallKit start / answer (CallKit
+    /// or manual path), where the native-SRTP decision read is this call's:
+    /// an outgoing `startCall` takes its keyed snapshot before it requests
+    /// the CXStartCallAction, and an incoming call latches its snapshot at
+    /// `call_incoming`, before it can normally be answered. An answer that
+    /// lands before `call_incoming` (push-woken call) finds no snapshot yet
+    /// and reads the live value `call_incoming` is about to latch — that is
+    /// what `isNativeSrtpEnabledLocally` (snapshot ?? live) returns. With the
+    /// toggle off it is `false` on every path: nothing is recorded and every
+    /// call end keeps the legacy drain.
+    private func recordNativeBalanceIfNativeCall(_ uuid: UUID) {
+        guard CallCapabilities.isNativeSrtpEnabledLocally else { return }
+        ledger.recordNativeBalance(uuid)
     }
 
     /// W556-fix — deterministically bring the AVAudioSession to ACTIVE after the
@@ -450,7 +551,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// assumed) before writing this. `useManualAudio` is still never touched
     /// — this is the automatic-mode-compatible half of the fix, not the
     /// 1053/1056/1066 manual-mode regression class.
-    private func activateAudioSession(logSite: String) async {
+    ///
+    /// W-SELFACTID (2026-09-27) — `uuid`: the CallKit uuid this activation is
+    /// made for; the self-activation mark of a native-SRTP call is keyed by it
+    /// (see `CallKitCallLedger.markAudioSelfActivated`).
+    private func activateAudioSession(logSite: String, source: AudioSessionActivationSource, uuid: UUID?) async {
         let rtcSession = RTCAudioSession.sharedInstance()
         // W-NOMIXOPTION (2026-09-10) — best-practices audit: `.interruptSpoken
         // AudioAndMixWithOthers` is Apple's documented option for apps whose
@@ -513,6 +618,17 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             print("[CallKitProvider] setCategory fail site=\(logSite) code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
         for attempt in 0..<4 {
+            // W-GHOSTCALL (2026-09-25) — take the configuration lock again for
+            // every retry. It is held on entry to attempt 0 (taken above: category
+            // and first setActive stay ONE critical section) and is RELEASED before
+            // the wait below, because it must never be held across an `await`: the
+            // lock is thread-affine and the task may resume on another thread. The
+            // evidence: in e3acecd7 attempt 0 failed and attempts 1-3, run after
+            // the old 120 ms sleep with the lock still nominally held, all failed
+            // with code=-1 "Must call ... lockForConfiguration".
+            if attempt > 0 {
+                rtcSession.lockForConfiguration()
+            }
             do {
                 try rtcSession.setActive(true)
                 print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt)) activationCount=\(rtcSession.activationCount)")
@@ -523,8 +639,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // (it deliberately doesn't for a foreground/W520 answer —
                 // see the ledger's own kdoc for why that distinction is the
                 // whole point of this flag).
-                ledger.markAudioSelfActivated()
-                onAudioSessionActivated?()
+                // W-SELFACTID — keyed by this call's uuid on a native call.
+                ledger.markAudioSelfActivated(uuid)
+                onAudioSessionActivated?(source)
                 return
             } catch {
                 // W-SETACTIVEFAIL (2026-09-10) — the live device trace that
@@ -542,6 +659,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // activationCount/isActive at the moment of failure are not.
                 let nsErr = error as NSError
                 print("[CallKitProvider] setActive retry \(attempt) site=\(logSite) code=\(nsErr.code) activationCount=\(rtcSession.activationCount) isActive=\(rtcSession.isActive ? 1 : 0): \(error.localizedDescription)")
+                // W-GHOSTCALL — release BEFORE the await (see the top of the
+                // loop): the lock must never be held across a suspension point.
+                rtcSession.unlockForConfiguration()
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120 ms
             }
         }
@@ -555,8 +675,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // and eventually a call-quality banner. This is the lesser evil vs.
         // a silent dead call.
         print("[CallKitProvider] setActive never confirmed after 4 attempts site=\(logSite) — forcing engine start (session may be marginal)")
-        rtcSession.unlockForConfiguration()
-        onAudioSessionActivated?()
+        // W-GHOSTCALL — no unlock here any more: every failed attempt above has
+        // already released the configuration lock before its wait.
+        onAudioSessionActivated?(source)
     }
 
     // MARK: - CXProviderDelegate
@@ -603,6 +724,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             print("[CallKitProvider] setCategory fail site=start code=\((error as NSError).code) err=\(error.localizedDescription)")
         }
         rtcSession.unlockForConfiguration()
+        // W-NATIVESPKR (2026-09-26) — native-SRTP calls only: start from
+        // output override `.none` (reference-implementation parity).
+        NativeAudioSessionGate.resetOutputOverrideForNativeCall(site: 1)
+        recordNativeBalanceIfNativeCall(action.callUUID)
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
         action.fulfill()
         // W-CKSTARTACTIVATE (2026-09-09) — the answer side has had this
@@ -611,8 +736,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // this side never got it. Same asymmetry-is-the-bug reasoning
         // applies unchanged: fulfill() has already closed the start
         // transaction, so setActive(true) no longer races it.
+        let startedUUID: UUID = action.callUUID
         Task {
-            await activateAudioSession(logSite: "start")
+            // W-ADMGATE — CallKit's own didActivate is still expected.
+            await activateAudioSession(logSite: "start", source: .selfExpectingCallKit, uuid: startedUUID)
         }
     }
 
@@ -620,15 +747,29 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // I8 FIX — truncated uuid, see above.
         print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) ENTER uuid=\(action.callUUID.uuidString.prefix(8))…")
         Task {
-            await onAnswerCall?(action.callUUID)
+            let accepted: Bool = (await onAnswerCall?(action.callUUID)) ?? true
+            // W-GHOSTCALL — the app refused this answer (dead / placeholder call,
+            // e3acecd7): no call exists, so the action FAILS instead of being
+            // fulfilled (a fulfilled answer leaves CallKit believing the stale
+            // call is answered and active, and able to put a live call on hold),
+            // and the audio session is not activated for it.
+            guard accepted else {
+                action.fail()
+                log?("callkit answer refused=1 path=native")
+                return
+            }
             action.fulfill()
             print("[CallKitProvider] W-CALLFG-DIAG provider(perform: CXAnswerCallAction) — onAnswerCall done, action.fulfill() called uuid=\(action.callUUID.uuidString.prefix(8))…")
+            // W-NATIVESPKR (2026-09-26) — native-SRTP calls only.
+            NativeAudioSessionGate.resetOutputOverrideForNativeCall(site: 2)
+            recordNativeBalanceIfNativeCall(action.callUUID)
             // W556-fix — guarantee the engine starts even if CallKit never
             // calls provider(_:didActivate:) (the foreground-answer case). Safe
             // to self-activate AFTER fulfill: the answer transaction is closed,
             // so setActive(true) no longer hits the "session activation failed"
             // race. Idempotent with didActivate if it does arrive.
-            await activateAudioSession(logSite: "answer")
+            // W-ADMGATE — CallKit's own didActivate is still expected.
+            await activateAudioSession(logSite: "answer", source: .selfExpectingCallKit, uuid: action.callUUID)
         }
     }
 
@@ -693,7 +834,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         RTCAudioSession.sharedInstance().audioSessionDidActivate(audioSession)
         // W464 — the session is now active: this is the moment
         // CallService may safely start its AVAudioEngine capture/playback.
-        onAudioSessionActivated?()
+        onAudioSessionActivated?(.callKit)
     }
 
     public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {

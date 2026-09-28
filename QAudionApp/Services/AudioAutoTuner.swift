@@ -8,9 +8,12 @@ import QAudionEngine
 /// loop has no iOS equivalent.
 ///
 /// Metric: rxLossRate = rxDecryptErrors / framesReceived.
-/// AEAD failures before the PQC handshake (~first 1 s) inflate this number;
-/// the MIN_FRAMES gate (100 frames ≈ 2 s @ 50 fps) excludes calls too short
-/// for a reliable estimate.
+/// Frames that arrive before this side has a session key are NOT in either
+/// term (W-RXGATE, 2026-09-19): `CallService` keeps them out of
+/// `rxDecryptErrors` and subtracts them from `framesReceived`. Before that,
+/// a caller whose ACCEPT was processed late read the callee's pre-key audio as
+/// a 40% loss and persisted PLP 40 for the next call. The MIN_FRAMES gate
+/// (100 frames ≈ 2 s @ 50 fps) excludes calls too short for a reliable estimate.
 ///
 /// W523 (2026-08-13) — bitrate is NO LONGER tuned. It used to move between 24
 /// and 40 kbps per call (same shape as Android's AudioAutoTuner, ported
@@ -64,7 +67,8 @@ public final class AudioAutoTuner {
 
     /// Call from CallService.teardownAudioStack() BEFORE per-call counters reset.
     /// - Parameters:
-    ///   - framesReceived: total audio_frame envelopes off the WS (pre-decrypt)
+    ///   - framesReceived: audio_frame envelopes off the WS (pre-decrypt), net of
+    ///     the frames that arrived before this side had a session key (W-RXGATE)
     ///   - framesDecrypted: frames successfully decrypted and played
     ///   - rxDecryptErrors: AEAD + format failures during decryption
     ///   - callId: active call id, for the telemetry timeline (W574c)

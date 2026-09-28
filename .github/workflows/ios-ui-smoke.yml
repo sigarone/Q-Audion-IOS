@@ -124,23 +124,6 @@ jobs:
           fi
           echo "QAudionPacketTunnel dependency removed from this run's project.yml (committed file untouched)"
 
-      # Reality.xcframework (VLESS+REALITY) -- same cache key as
-      # engine-tests.yml's ios-simulator-tests job so a warm cache is reused.
-      - name: Cache reality xcframework
-        id: cache-reality
-        uses: actions/cache@v5
-        with:
-          path: QAudionApp/Vendor/Reality.xcframework
-          key: reality-xcframework-sim-${{ runner.os }}-${{ hashFiles('RealityCore/go.sum', 'scripts/build-reality-xcframework.sh') }}
-
-      - name: Build reality xcframework
-        if: steps.cache-reality.outputs.cache-hit != 'true'
-        continue-on-error: true
-        timeout-minutes: 20
-        env:
-          GOTOOLCHAIN: auto
-        run: bash scripts/build-reality-xcframework.sh
-
       - name: Install xcodegen
         run: |
           if command -v xcodegen >/dev/null 2>&1; then

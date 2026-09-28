@@ -98,6 +98,41 @@ struct QAudionApp: App {
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
 
+        // W-NATIVESRTPPERSIST (this task) — load the persisted native-SRTP
+        // override BEFORE anything else that could start a call (same
+        // ordering rationale as `CrashReporter.installHandlers()` above,
+        // and the Android counterpart's `QAudionApplication.onCreate`
+        // ordering — spec section B). `nil` (fresh install / explicit
+        // reset) leaves `audioSrtpDebugOverride` at its own default (`nil`
+        // -> compiled OFF), so a fresh install's behavior is unchanged.
+        CallCapabilities.audioSrtpDebugOverride = CallCapabilities.loadPersistedAudioSrtpOverride()
+
+        // W-NATIVESRTPCRASHGUARD (this task) — a crash (or an OS kill) while
+        // a native-SRTP call was in progress leaves its breadcrumb
+        // call-context in place (`CallService.endCall()` never ran to clear
+        // it). Two such crashes IN A ROW force the toggle back OFF —
+        // persisted AND live — so a broken native path cannot keep
+        // crashing every call the user makes. Must run before any call
+        // path AND before the context is cleared below, and does not need
+        // the stdout tee (`RTLog` records into the ring directly).
+        // W-MEDIAATACCEPT (option b) — I9/§10: `CrashGuardDecisions
+        // .countsTowardStreak` replaces the two raw `.contains` checks —
+        // with the media plane no longer built at ring, a crash while
+        // merely RINGING (phase "ring", no PeerConnection yet) must not
+        // advance this streak; only "pc"/"media" (or the one-release
+        // "snapshot" grandfather value) do. See that function's doc.
+        if CrashReporter.hasPendingCrashReport(),
+           let ctx = CrashBreadcrumbs.lastCallContext(),
+           CrashGuardDecisions.countsTowardStreak(context: ctx) {
+            if CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset() {
+                RTLog.warn("call", "audiosrtp event=override_autoreset reason=crash_streak n=2")
+            }
+        }
+        // Consumed (whether or not it triggered the guard above) — a stale
+        // "in_call=1" must not survive to be misread by a LATER, unrelated
+        // crash (e.g. one on the home screen).
+        CrashBreadcrumbs.clearCallContext()
+
         // In-app language override — must install its Bundle swizzle before
         // WindowGroup's first `body` evaluation (right after this init()
         // returns), so every LocalizedStringKey lookup in the very first
@@ -246,10 +281,6 @@ struct QAudionApp: App {
                 // MUST be after attachStdoutTee() so the prints are
                 // captured by the W417 telemetry and shipped to the server.
                 CrashReporter.flushPendingReport()
-                // W-MK — register the MetricKit subscriber. MUST be after
-                // attachStdoutTee() so the per-payload prints are captured
-                // by the W417 telemetry, same rationale as the crash flush.
-                MetricKitDiagnostics.start()
                 // W-FLAGS — start the remote feature-flag poll. Primitive-only
                 // signature (CLAUDE.md §16): a compile-time flags URL String,
                 // NO AppState. Plain URLSession (public, un-authed, NOT the
@@ -259,6 +290,23 @@ struct QAudionApp: App {
                 // never blocks launch, fails safe to the compiled defaults.
                 FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
                 appState.initialize()
+                // W-MK — register the MetricKit subscriber. MUST be after
+                // attachStdoutTee() so the per-payload prints are captured
+                // by the W417 telemetry, same rationale as the crash flush
+                // above. W-MKCRASHTELEMETRY (this task) moved this AFTER
+                // appState.initialize() (was between the crash flush and
+                // FeatureFlags.start above): initialize() is what calls
+                // TelemetryService.shared.start(...), and MetricKitDiagnostics
+                // now also calls TelemetryService.shared.emit(kind: "app.crash",
+                // ...) for a crash/hang diagnostic. `emit()` silently drops an
+                // event until TelemetryService.started flips true, so
+                // registering the MetricKit subscriber (whose didReceive could
+                // in principle fire immediately) before that flip would risk
+                // losing exactly the event this task adds. Registering a few
+                // synchronous statements later, still in the same runloop
+                // turn, costs nothing — MetricKit queues payloads until a
+                // subscriber exists.
+                MetricKitDiagnostics.start()
                 // W441: sweep expired messages immediately + every 60s.
                 EphemeralMessageJanitor.shared.start()
                 // W441: listen for OS screenshot events and warn in the log.

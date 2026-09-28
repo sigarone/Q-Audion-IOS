@@ -91,6 +91,192 @@ The maintainer always has a trail server-side.
 `GET /api/v1/files/recent` server-side and use HTTP fetch instead of
 SSH. Until that's done, SSH+SFTP is the working path.
 
+**Since v1.0.1180 (W-LIVELOGOFFMAIN) — where the pump lives now.** Redaction, JSON
+serialisation, the bounded backlog and the upload run OFF the main thread on the
+`LiveLogWorker` actor (`QAudionApp/Services/LiveLogWorker.swift`); `LiveLogStreamer` is only
+the consent / start / stop facade, and `LogRedactor` is the (unchanged) redactor split out of
+the main-actor `RuntimeLogSink`. Only a short per-tick copy of the NEW ring entries and the
+token / kill-switch read (every 30 s) still touch the main thread. On HTTP 429 / 503 the pump
+honours `Retry-After`, else backs off 5 s doubling to 120 s (+ up to 20% jitter), and keeps
+collecting into a bounded backlog (2000 lines / 512 KiB, oldest dropped and counted) instead
+of retrying. Lines to look for in the shipped log (tag `net`): `livelog upload error seq=..
+reason=..` (unchanged), `livelog backoff n=<streak> s=<seconds> ra=<0|1>` (one per throttled
+failure) and `livelog backlog drop=<n>` (reported after the next confirmed chunk). The chunk
+format is unchanged and pinned by `LiveLogBlobTests`; the pure decisions are `LiveLogBackoff`,
+`LiveLogBacklog`, `LiveLogBlob` in `QAudionEngine/.../Diagnostics/`.
+
+**Since v1.0.1180 (W-HBTELEM) — call-quality telemetry.** The 5 s `call.media.heartbeat` now
+also carries, when the counter exists: `rx_frames_d`, `tx_frames_d`, `rx_gap_d`,
+`jb_underrun_d`, `jb_overrun_d`, `jb_hard_drop_d`, `jb_silence_drop_d`, `jb_concealed_d`,
+`jb_stretch_d`, `jb_depth_now`, `jb_target_now`, `iat_max_ms`, `fec_rec_d`, `transport`
+(`dc` / `ws` / `dc+ws` / `srtp`) and `main_stall_ms_max` (how much later than 5 s the heartbeat
+timer fired = how long the main thread was blocked at that instant). `_d` = count since the
+previous heartbeat of the same call (`HeartbeatDeltaTracker`, never negative, survives counter
+resets). `nack_req_d` / `nack_srv_d` are NOT sent: iOS has no NACK counters. The new 1:1
+in-call "Disturbo" pill emits `call.disturbance.marker` (`since_start_ms`, `source=button`, a
+copy of the last completed window's attributes and the live `jb_depth_now`), at most one per
+second; same consent gate, batching and transport as the heartbeat. Query them in the server's
+`telemetry/*.jsonl` by `kind`.
+
+**Reading those numbers (known limits, W-HBTELEM / W-LIVELOGOFFMAIN).**
+`main_stall_ms_max` is ONE sample per window (how late the 5 s heartbeat timer fired), not a
+maximum: it only sees a stall that overlaps the timer's due instant, and timer coalescing gives
+it a floor of a few tens of ms, so read anything under ~100-150 ms as zero.
+`iat_max_ms` is the largest arrival gap over the last `5000 / frameMs` arrivals of the jitter
+buffer (about the last 5 s, not aligned to the heartbeat): it never reads below one frame; a
+stall late in a window shows up again in the next one; a burst right after a stall can push the
+stall out of the window before the heartbeat looks; and an arrival is the push after
+decrypt/decode on the main thread, so a main-thread stall also appears here (compare it with
+`main_stall_ms_max`). On the native SRTP path (`transport=srtp`) the sealed-frame counters do not
+exist, so `rx_frames_d` / `tx_frames_d` are LEFT OUT there, never sent as 0; and a window in which
+no sealed frame moved has no `transport` at all (on the server that window forms its own cluster,
+because `transport` is part of the cluster signature). The "Disturbo" pill is shown only while the
+operational-diagnostics consent is on (without it the emitter discards every event). In the log
+shipper, `livelog backlog drop=N` undercounts: it counts lines the worker left out of a
+collection (the first collection after a (re)start or a long period without a token keeps only
+the newest 2000 ring lines), not lines the 5000-entry ring had already evicted before it looked.
+
+**Since v1.0.1181 (W-KEYSCRUB) -- key bytes never enter the app log.** The iPhone native crypto
+library prints key material to stdout during handshakes and re-keys (`derived_key [1,2,..,32] len 32`,
+`secret [..] len 32 slat << [] len 0`; "slat" is the library's typo of salt) and the stdout tee
+recorded it, so the live-log shipper uploaded it in clear (299 lines in 90 blobs in 7 days). The pure
+function `KeyMaterialScrubber` (`QAudionEngine/.../Diagnostics/KeyMaterialScrubber.swift`, a
+hand-written linear byte scanner, no regex) replaces it with `[REDACTED:keybytes]`. It runs at ring
+entry (`RuntimeLogSink.record`: the ring, the on-screen viewer, the export, the bug-report tail, the
+shipper, the OSLog mirror and `BugReporter.onError` only see scrubbed text) and again at the start of
+both `LogRedactor` entry points (`redact` for the stdout tee, off-main; `redactStructured` for every
+egress incl. `TelemetryService` attrs and `ReportCrypto`), plus on the `OSLogStore` lines of the log
+export. **The app calls `scrubLines(_:)` only** (via `LogRedactor.scrubKeyMaterial`): it cuts the text
+at every line feed and scans each line on its own (per-line 256 KiB cap), because
+`ReportCrypto.buildDiagSummary` runs `redactStructured` on the whole multi-line `recentLogsAsString`
+tail, and `scrub(_:)` (one log entry: `derived_key` takes the rest of the TEXT) is not idempotent on a
+blob of already-scrubbed lines: it turned every line after a `derived_key <marker>` line into one
+marker, so the 200-character `diag_summary` showed an old slice instead of the newest lines.
+Patterns: `derived_key` + the rest of the line; `secret`/`slat`/`salt` + a bracketed group;
+any `[..]`/`(..)` list of 8+ integers 0-255; 8+ hex bytes separated by space or colon; the head and the
+tail of a key line that the 4096-byte pipe read cut in two. **Policy: over-scrubbing is deliberate** (8
+small numbers in brackets are scrubbed in ANY line). To see where it acted: `grep REDACTED:keybytes`.
+Known limits: builds up to 1.0.1180 still ship the bytes; the raw byte forward of the tee to the
+original stdout (a debugger console) is not scrubbed; a key in a shape none of the patterns knows
+(bare base64 with no keyword) is left to `LogRedactor`'s long-run rules; hex runs cut in two below 8
+pairs each are not caught; a list of integers spread over 3+ lines is not caught in its middle lines
+(one line feed, the way the tee cuts a key line, is). Tests: `KeyMaterialScrubberTests` (engine) and
+`python scripts/test_keymaterial_scrub_parity.py` (Python port, same golden vectors
+`Diagnostics/Resources/key-material-scrub-vectors.json`, `vectors` for `scrub` and `lineVectors` for
+`scrubLines`); the port is what replays the real blobs.
+
+**Since v1.0.1182 (W-KEYLOGGATE) -- the iPhone no longer lets WebRTC INFO lines reach stderr.** The key
+prints (`api/crypto/frame_crypto_transformer.cc`, `RTC_LOG(LS_INFO)` at ~260 and ~284) only got into the
+stdout/stderr tee because W-AUNITTRACE (2026-09-10) called `RTCSetMinDebugLogLevel(.info)`. It now uses
+`QAudionPeerConnectionFactory.stderrDebugLogLevel` = `.warning` (pinned by
+`testStderrDebugLogLevelStaysAtWarningOrAbove`; do not lower it). `RTCSetMinDebugLogLevel` sets ONLY the
+debug/stderr severity (`LogMessage::LogToDebug`, `rtc_base/logging.cc`); the `RTCCallbackLogger` (severity
+`.info`, same function) filters on its own level, so the W-AUNITTRACE `aunit ...` lines keep coming (they
+never depended on stderr). Trade-off: WebRTC INFO lines are gone from the shipped log (in the last 7 days
+these were `channel.cc` "Changing voice/video state", `thread.cc` "took Nms to dispatch", `connection.cc`
+"Updating local candidate type", `cpu_info.cc`); WARNING and ERROR lines stay (TURN "Connection with server
+failed", `RTCAudioSession` "Failed to setActive", ...) and can hold IP addresses, which the shipper redactor
+handles. Limits: builds up to 1.0.1181 still print; the callback still receives the key prints in memory
+(`handleNativeLogLine` only pattern-matches, it must never store `message`); `LiveKitWebRTC` (group calls) is a
+separate WebRTC copy with its own debug level, untouched here; rebuilding WebRTC without the two prints is the
+complete fix, and `KeyMaterialScrubber` stays as defence in depth.
+
+**W-VPIOOBS / W-VPIOWD / W-BYPASSDUCK (branch `fix/vpio-observability-suppressor`) -- VP-IO
+tap latency, watchdog generation, bypass echo ducker.** Why: on the test iPhone Apple's
+Voice-Processing I/O never delivers a tap buffer inside the W-AEC-FIX window (71/71 built-in-mic calls in bypass,
+~1% elsewhere), and the app could not say why or how late. Numeric log lines (tag `call`, accurate timestamp; numeric
+on purpose, for the shipper's redactor, but see the end of this block for what was verified):
+`audioVp ev=arm gen=N since_start_ms=0 eng_ms=..` (watchdog armed; `eng_ms` =
+`engine.start()` -> end of `start()`), `ev=ff gen=N ms=.. eng_ms=..` (first tap buffer, ms from the end of `start()`
+/ from `engine.start()`; `ms` is the tap's own timestamp, the line's timestamp is that of the check: the +1.2 s
+watchdog, or earlier the next `start()` / `stop()` / the diag read when the engine is replaced or the call ends
+first), `ev=fire gen=N since_start_ms=.. stale=0 er=0|1` (watchdog restarted the engine without
+VP-IO; `er` = `AVAudioEngine.isRunning`, 0 = the engine had been stopped, e.g. by a configuration change),
+`ev=stale gen=N cur=M ff=0|1 since_start_ms=..` (a timer of a replaced engine expired and was IGNORED),
+`ev=noop gen=N since_start_ms=..` (an `.override` route change with an unchanged route was ignored), `ev=cfg gen=N
+eng_ms=..` (an `AVAudioEngineConfigurationChange` on the live engine; the observer is registered BEFORE
+`engine.start()`, a change posted during the start is counted once `start()` returns), `ev=duck gen=N on= en= vpio=
+spk=` (per engine start: ducker eligible / remote switch / VP-IO active / loudspeaker). `call.audio.diag` (same
+consent gate as every field there; a key is omitted when it was not measured): `vpio_watchdog_gen` (+1 per start and
+per stop), `vpio_starts`, `vpio_first_frame_ms` / `vpio_first_frame_eng_ms` (FIRST VP-IO start; absent = it delivered
+nothing before the 1.2 s window closed, the engine was replaced or the call ended), `vpio_last_frame_ms`,
+`vpio_starve_fired`, `vpio_starve_stale`, `vpio_starve_gen`, `vpio_starve_ms`, `engine_cfg_changes_2s`, and once per call `hw_machine` (sysctl), `os_build`, `mic_mode`
+(0 standard, 1 wide spectrum, 2 voice isolation), `input_ports`, `preferred_input` (AVAudioSession port types;
+`ContinuityMicrophone` ships as `ContinuityMic`, the on-device redactor masks a 20+ character run), `tap_fmt_before` /
+`tap_fmt_after` (`<Hz>/<channels>` of the input node before / after enabling voice processing). `engine_running_at_end`
+is now real (it was false on every record: `stop()` latched it after the stats were consumed). Reading: no
+`vpio_first_frame_ms` + `vpio_starve_fired>=1` = the tap stayed silent for the whole 1.2 s window (the window is
+NOT widened, so "late" vs "never" past 1.2 s is still unknown); `tap_fmt_before` != `tap_fmt_after` = the format
+moves when VP-IO is enabled; `er=0` / `engine_cfg_changes_2s>0` = the engine was stopped under the tap.
+`vpio_starve_stale>0` used to mean a false starve (an older engine's timer judging a newer one); it is ignored now.
+Watchdog fix: the timer only judges the engine generation it was armed for (`VpioWatchdogDecisions.starveVerdict`),
+and an `.override` within 1.5 s of a start whose effective route (input/output port type + uid, speaker flag) equals
+the one the engine was built for does not rebuild the engine (`isOverrideNoOp`); a real speaker toggle still does.
+The shared throttle / suppress window is deliberately NOT armed at the end of `start()`: `AppState` re-asserts
+`setSpeaker(true)` right after `start()` on the CallKit `didActivate` path and that window would drop the rebuild.
+Ducker (`BypassEchoDuck`): only with VP-IO NOT active on the engine AND the built-in loudspeaker as output; while the
+far end is audible (RX frame RMS >= 1% within 200 ms) and the mic is not clearly local speech the TX gain goes to
+0.25 (-12 dB) in 100 ms, is held 120 ms, released in 300 ms (100 ms when local speech dominates). "Local speech" =
+mic >= 1.4 x (leave: 1.0 x) the PEAK-HELD RX level (`heldPlayedRms`, 500 ms decay: the mic hears a frame 0.3-0.4 s
+after it was stamped on arrival, so the last frame's level would read the echo of a strong syllable as local speech).
+Folded into the make-up AGC as its last multiplier (the AGC is not limited; a duck before the AGC would be undone by
+it). Kill switch: `flags.json` key `ios_bypass_echo_duck` (default ON; publishing it `false` for the first calls is
+the A/B without a new build). Telemetry: `echo_duck_enabled`, `echo_duck_frames`, `echo_duck_active_pct`,
+`echo_duck_gain_min`, `echo_duck_near_pct` (0 = the near-end test never fired). Uncalibrated on iOS (no ERLE
+measured): the raw iPhone mic is quiet, so in practice it is a -12 dB gate on the TX while the far end talks. With the
+ducker active, tx `rms_pct` / `peak_pct` / `clip_samples` in `call.audio.diag` are measured AFTER the duck (about 12 dB
+lower while the far end talks) and do not compare with the earlier series when `echo_duck_active_pct > 0`; `agc_gain`
+is the AGC law alone (the duck is not in it). The server's `TELEMETRY_ATTRIBUTE_CONTRACT.md` (bcrypto-server/docs)
+does not list the new keys yet (they are additive, so nothing breaks; add them to that document alongside this
+change). Log pipeline: replaying the seven `audioVp` line forms (synthetic values) through the redactor of `main` as
+of #111 (`scripts/ship-ios-logs.py`) gave 2 of 7 verbatim (`ff`, `noop`); `arm` came back with `since_start_ms`
+masked; `fire`, `stale`, `cfg` and `duck` were dropped. Which redactor version runs on the log pipeline is not
+verified, and real phone logs were not tested; the `call.audio.diag` fields use a different path and are not
+affected. If that stricter redactor is, or becomes, the one running there, its vocabulary needs `gen`, `cur`, `ff`,
+`er`, `stale`, `since_start_ms`, `eng_ms`, `ms`, `on`, `en`, `vpio`, `spk` and the `ev` words: that is a separate
+shipper-vocabulary change, not part of this branch.
+Tests: `VpioObservabilityTests`, `VpioWatchdogDecisionsTests`, `BypassEchoDuckTests` (engine).
+
+**Since the build after v1.0.1181 (W-DCWEDGE) -- a wedged DataChannel goes to the WS relay.** Calls
+7727f262 (queue over 1500 B for 21 s, ICE back at +1 s) and 277cff7c (7.4 s, ICE never changed
+state): `sendAudioFrameData` answered `true` for a frame the back-pressure gate DROPPED, so
+`CallService` counted it as sent on the DataChannel (`dcmux tx dc=5984 ws=16`) and never looked at
+the relay, and the ICE gate reopened the channel the instant ICE was `connected`. Now the pure
+`DcWedgeDetector` (`QAudionEngine/.../WebRTC/DcWedgeDetector.swift`, same enter/exit rules and
+thresholds as Android's twin, probe included (New-Q-Audion-Android PR #62 mirrors the probe); iOS
+samples it after the ICE gate, Android
+before its own ICE check) watches the send queue on every outbound frame: wedged when
+`bufferedAmount` > 1500 B on every
+sample for 1000 ms OR 15 shed frames in a row; released only after < 500 B for 3000 ms AND a frame
+received on the DataChannel in the last 500 ms (ICE is not an input). While wedged the frame goes on
+the WS relay INSTEAD of the DataChannel (a diversion, never a duplication: the receiver's M-15
+anti-replay window would eat a copy but book it as an open failure). The control frames (hangup,
+NACK request, NACK resend) ride the same routing, and for THEM anything that was not queued on the
+channel goes on the relay while the kill switch is on (a control frame the back-pressure gate shed
+used to be lost while `audionack tx=1` was logged: 117 of them in 7727f262). Probe:
+while wedged AND drained (< 500 B) one frame per 400 ms still goes on the channel (`shouldProbe`),
+because a hole hits both directions, both phones wedge, and without it nobody would ever write on
+the channel that the other side needs to see to release. `AudioDcSendOutcome` (`queued` / `shed` /
+`useRelay`) replaces the Bool: a shed frame is counted in `txDcDrop`, NOT in `txFramesDc`, and is no
+longer added to the FLUSSO bytes. What to look for in the shipped log (tag `call`; the `wedge=` and
+`wedgesw=` lines: numbers only apart from `why=`, every token < 12 characters; `dcmux txfall` keeps
+its `st= callId= n=` fields): `dcmux wedge=1 why=<buf|drops> buf=.. over=.. drops=..` (entry),
+`dcmux wedge=0 why=drained buf=.. low=.. rxago=.. wsec=..` (exit), `dcmux txfall why=wedge` (the
+per-frame fallback line, ICE carrying and the channel `.open`), `dcmux wedgesw=<0|1>` (kill switch
+read at the call's first TX frame), `drop=<n>` at the END of the `dcmux tx` line. Heartbeat:
+`tx_gate_drop_d` (Android's attribute name; on iOS the DataChannel sheds only, left out on the
+native SRTP path). Kill switch: remote flag `ios_dc_wedge_fallback` (default ON, `false` = the
+pre-W-DCWEDGE routing from the next call, audio and control frames alike; the detector still runs
+and logs) via `DcWedgeKillSwitch` / `CallService.refreshDcWedgeFlag`. Tests: `DcWedgeDetectorTests`
+(thresholds on both sides, hysteresis, the two real stalls, the probe and the symmetric deadlock,
+the log-line token limit, the routing rule), `HeartbeatDeltaTrackerTests`. Verification: only the
+pure-logic files (`DcWedgeDetector`, `HeartbeatDeltaTracker`) were compiled and run, in a Linux
+container; the Apple-framework files (`QAudionPeerConnection`, `QAudionWebRtcCallController`,
+`CallService`, `AppState`) were never compiled by anyone when this was written (no macOS on the
+machine that wrote it) and nothing ran on a device. The probe was added on the iOS side first; the
+Android twin (New-Q-Audion-Android PR #62) mirrors the probe. It has never run on a device: prove it
+with network shaping, or set `probeIntervalMs = 0` to drop it (the kill switch turns it off too).
+
 ## Project snapshot
 
 - **Repo:** `github.com/sigarone/Q-Audion-IOS`
@@ -322,6 +508,10 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 4. **Always bump the tag** for a new release (e.g. `v1.0.23`). Don't re-use old tags; don't build from branches.
 5. **Treat Apple emails after upload as canonical**. The publish step reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
+7. **New testable logic (parsing, policy, formatting, decision functions) goes into `QAudionEngine`**, where
+   `engine-tests.yml` runs `QAudionEngineTests` on pushes to main/develop and on PRs. `QAudionAppTests/` is not wired into any
+   build target (`QAudionApp/project.yml` declares no unit-test target and no workflow runs that folder), so
+   app-level tests do not run today; keep the app side a thin call into the engine.
 
 ### 13. Swift type-checker timeout traps (Xcode 26.4)
 

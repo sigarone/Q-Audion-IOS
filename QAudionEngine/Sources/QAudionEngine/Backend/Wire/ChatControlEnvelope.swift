@@ -46,8 +46,9 @@ import Foundation
 /// | ss_lock   | `{"qa_ctl":1,"t":"ss_lock","ts":<unix-s>}`                         |
 ///
 /// RECEIVE-SIDE NOTE: iOS applies these envelopes through the conversation-level
-/// ad-hoc JSON handler in `AppState.handleIncomingMessage` (which also renders
-/// the system bubble and updates `ConversationStore.setScreenshotGranted`).
+/// handler `AppState.applyInboundConversationControl` (which updates
+/// `ConversationStore.setScreenshotGranted` and never writes a system bubble:
+/// service traffic is not a chat row).
 /// These enum cases exist so the typed wire model is complete and parity-checked
 /// against Android/Desktop; `handleControlEnvelope`'s message-targeted dispatch
 /// intentionally treats them as no-ops (see comment there) so there is exactly

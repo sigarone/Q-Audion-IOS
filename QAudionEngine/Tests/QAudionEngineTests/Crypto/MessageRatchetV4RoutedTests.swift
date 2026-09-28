@@ -205,4 +205,94 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         let recovered = ratchet.decryptV4Routed(peerId: "A", frame: frame!)
         XCTAssertEqual(recovered, plaintext, "dispatch-seam round-trip mismatch")
     }
+
+    // MARK: - W-CHATREPLACE (2026-09-19): CHAT replaces at a call handshake
+
+    private let secret0 = Data((0..<32).map { UInt8(0x10 &+ $0) })
+    private let secret1 = Data((0..<32).map { UInt8(0x40 &+ $0) })
+    private let secret2 = Data((0..<32).map { UInt8(0x70 &+ $0) })
+
+    /// Alice's view of Bob (peer "B") and Bob's view of Alice (peer "A") in ONE vault,
+    /// the same topology as the tests above. Real-core only, like them.
+    private func installAlice(_ ratchet: MessageRatchet, _ material: Data) -> Bool {
+        ratchet.replaceChannelSession(epochId: MessageRatchet.v4RoutingEpoch, peerId: "B") {
+            ratchet.bootstrapV4(
+                effectiveSecret: material, selfEpochId: self.zero, peerEpochId: self.zero,
+                selfIdentityPub: self.idA, peerIdentityPub: self.idB, transcriptHash: self.th)
+        }
+    }
+
+    private func installBob(_ ratchet: MessageRatchet, _ material: Data) -> Bool {
+        ratchet.replaceChannelSession(epochId: MessageRatchet.v4RoutingEpoch, peerId: "A") {
+            ratchet.bootstrapV4(
+                effectiveSecret: material, selfEpochId: self.zero, peerEpochId: self.zero,
+                selfIdentityPub: self.idB, peerIdentityPub: self.idA, transcriptHash: self.th)
+        }
+    }
+
+    /// A pair whose chat sessions DIFFER converges once both replace from the same handshake.
+    func testChatReplaceConvergesADivergedPairWithRealCore() throws {
+        try XCTSkipUnless(
+            RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
+            "CHAT replace needs the real native core linked AND the flag ON")
+        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        XCTAssertTrue(installAlice(ratchet, secret1))
+        XCTAssertTrue(installBob(ratchet, secret0))
+        let diverged = ratchet.encryptV4Routed(peerId: "B", plaintext: Data("while-diverged".utf8))
+        XCTAssertNotNil(diverged)
+        XCTAssertNil(ratchet.decryptV4Routed(peerId: "A", frame: diverged ?? Data()),
+                     "a diverged pair must not open each other's frames")
+
+        XCTAssertTrue(installAlice(ratchet, secret2))
+        XCTAssertTrue(installBob(ratchet, secret2))
+        let plaintext = Data("after-call".utf8)
+        let frame = ratchet.encryptV4Routed(peerId: "B", plaintext: plaintext)
+        XCTAssertNotNil(frame)
+        XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: frame ?? Data()), plaintext)
+    }
+
+    /// A frame sealed under the session that was just replaced still opens (previous retained).
+    func testChatReplaceKeepsInFlightFramesOpenableWithRealCore() throws {
+        try XCTSkipUnless(
+            RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
+            "CHAT replace needs the real native core linked AND the flag ON")
+        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        XCTAssertTrue(installAlice(ratchet, secret1))
+        XCTAssertTrue(installBob(ratchet, secret1))
+
+        let inFlightPlaintext = Data("in-flight-at-connect".utf8)
+        let inFlight = ratchet.encryptV4Routed(peerId: "B", plaintext: inFlightPlaintext)
+        XCTAssertNotNil(inFlight)
+        XCTAssertTrue(installAlice(ratchet, secret2))
+        XCTAssertTrue(installBob(ratchet, secret2))
+
+        XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: inFlight ?? Data()), inFlightPlaintext)
+        let postPlaintext = Data("post-replace".utf8)
+        let post = ratchet.encryptV4Routed(peerId: "B", plaintext: postPlaintext)
+        XCTAssertNotNil(post)
+        XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: post ?? Data()), postPlaintext)
+    }
+
+    /// Installing the SAME material again must not reset a chain that has advanced.
+    func testChatReplaceFromTheSameMaterialDoesNotResetTheChainWithRealCore() throws {
+        try XCTSkipUnless(
+            RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
+            "CHAT replace needs the real native core linked AND the flag ON")
+        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        XCTAssertTrue(installAlice(ratchet, secret2))
+        XCTAssertTrue(installBob(ratchet, secret2))
+        for word in ["one", "two"] {
+            let pt = Data(word.utf8)
+            let frame = ratchet.encryptV4Routed(peerId: "B", plaintext: pt)
+            XCTAssertNotNil(frame)
+            XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: frame ?? Data()), pt)
+        }
+        // A duplicate completion of the same handshake fires on Alice only. A reset would
+        // restart her send chain at index 0; Bob would reject it as a replay.
+        XCTAssertTrue(installAlice(ratchet, secret2))
+        let pt = Data("three-after-duplicate-install".utf8)
+        let frame = ratchet.encryptV4Routed(peerId: "B", plaintext: pt)
+        XCTAssertNotNil(frame)
+        XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: frame ?? Data()), pt)
+    }
 }

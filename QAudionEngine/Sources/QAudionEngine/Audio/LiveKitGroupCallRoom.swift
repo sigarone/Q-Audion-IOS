@@ -1008,7 +1008,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// .recomputeSenderParameters()`'s read of it — both verified
     /// module-internal against the pinned fork's real source
     /// (client-sdk-swift 2.16.0, byte-identical to this file's
-    /// 2.16.0-aes256-raw6 tag) — so there is no safe PUBLIC lever to
+    /// 2.16.0-aes256-raw7 tag) — so there is no safe PUBLIC lever to
     /// graduate an already-published group video track's bitrate the way
     /// the 1:1 path does. Unpublish+republish with a lower
     /// `VideoPublishOptions` would fake one, but at the cost of a new track
@@ -1115,7 +1115,7 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// canImport(LiveKit)` split). This is the SAME per-publication API
     /// `adaptiveStream`'s own internal timer would be driving automatically
     /// if it were on — verified against the pinned fork's real source
-    /// (2.16.0-aes256-raw6, byte-identical to upstream client-sdk-swift
+    /// (2.16.0-aes256-raw7, byte-identical to upstream client-sdk-swift
     /// 2.16.0 for this file per `Package.swift`'s own audit comment):
     /// `RemoteTrackPublication.set(enabled:)` and `.set(videoQuality:)`
     /// both gate on `checkUserCanModifyTrackSettings()`, which requires
@@ -1584,10 +1584,9 @@ extension LiveKitGroupCallRoom: TrackDelegate {
 
 /// LiveKit SPM dependency did not resolve/compile in this build environment
 /// (see `Package.swift`'s `.package(url: ".../client-sdk-swift", ...)` pin
-/// for the version-compatibility rationale). Mirrors the `#if
-/// canImport(Reality)` stub pattern already used in this package: the real
-/// implementation above compiles wherever the dependency resolves; every
-/// other build configuration gets this inert stub so the rest of
+/// for the version-compatibility rationale). Conditional-compile stub: the
+/// real implementation above compiles wherever the dependency resolves;
+/// every other build configuration gets this inert stub so the rest of
 /// QAudionEngine is never blocked on it. `GroupCallController` treats a
 /// throw from `connect` exactly like a `group_call_sfu_unavailable` server
 /// reply and falls back to the existing WS-relay mesh path.

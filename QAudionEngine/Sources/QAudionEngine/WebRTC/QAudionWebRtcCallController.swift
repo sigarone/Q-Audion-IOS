@@ -175,13 +175,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// check re-armed — invalidate an older in-flight check instead of two
     /// overlapping ones racing to nudge/escalate independently.
     private func armNativeAudioCaptureLiveCheck() {
+        // W-NUDGEOWN (2026-09-27) — the owner of this check: the manual-audio
+        // arm token of the PeerConnection it is armed for (0 = it did not arm).
+        // Read once, here; the manual-mode nudge presents it to the gate.
+        let armToken: Int = peerConnection?.nativeAudioArmToken ?? 0
         captureLiveLock.lock()
         hasConfirmedNativeAudioCaptureLive = false
         captureLiveCheckGeneration += 1
         let generation = captureLiveCheckGeneration
         captureLiveLock.unlock()
         Task { [weak self] in
-            await self?.verifyNativeAudioCaptureLiveOrRecover(generation: generation)
+            await self?.verifyNativeAudioCaptureLiveOrRecover(generation: generation, armToken: armToken)
         }
     }
 
@@ -206,7 +210,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// accept EITHER the tap OR packet growth as proof of life; (3) only then
     /// the mute/unmute nudge, one more window, and — still nothing — the same
     /// relay fallback ICE-loss uses. Every log token ≤ 11 chars (redactor).
-    private func verifyNativeAudioCaptureLiveOrRecover(generation: Int) async {
+    ///
+    /// W-NUDGEOWN (2026-09-27) — `armToken`: the arm token of the
+    /// PeerConnection this check was armed for (see
+    /// `armNativeAudioCaptureLiveCheck`); the manual-mode nudge acts only for it.
+    private func verifyNativeAudioCaptureLiveOrRecover(generation: Int, armToken: Int) async {
         var waitedMs: Int64 = 0
         var gateWaits = 0
         while !(isNativeCaptureExpectedLive?() ?? true) {
@@ -251,10 +259,52 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("audiosrtp caplive=8")
             return
         }
-        log?("audiosrtp caplive=0 nudge=1")
-        peerConnection?.setNativeAudioSrtpMuted(true)
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        peerConnection?.setNativeAudioSrtpMuted(false)
+        // W-NUDGEOWN — set when the manual-mode branch below ran: the relay
+        // fallback escalation at the end then also requires the arm to still
+        // be this check's.
+        var manualModeNudge = false
+        if peerConnection?.nativeSrtpEnabledForThisCall == true, NativeAudioSessionGate.isArmed {
+            manualModeNudge = true
+            // W-ADMNUDGE (2026-09-26) — manual audio mode: the nudge restarts
+            // WebRTC's own audio unit (isAudioEnabled false, then the
+            // CallService gate re-decides) — WebRTC's supported unit restart:
+            // reconfigure, re-initialize and start VoiceProcessingIO. The old
+            // track mute/unmute never touched the unit (the dead-TX shape is
+            // a unit that never delivers frames), and force-UNmuted a sender
+            // the user may have muted. Re-enabling goes through the gate, so
+            // a relay fallback or teardown during the 150 ms wins.
+            log?("audiosrtp caplive=0 nudge=2")
+            // W-NUDGEOWN (2026-09-27) — owner-checked against THIS check's
+            // PeerConnection arm, atomically with the switch (inside the
+            // gate). The unowned stop it replaces could pass the generation
+            // check above just before a duplicate-offer/replacement closed this
+            // controller and, once the replacement had armed and enabled its
+            // unit, switch the SUCCESSOR's unit off. A stale owner stops here:
+            // no restart request and no relay-fallback escalation below.
+            let nudgeReason: Int = NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue
+            let stopped: Bool = NativeAudioSessionGate.setNativeAudioInactive(
+                ifCurrent: armToken, reason: nudgeReason)
+            let ownership = NativeAudioUnitGateDecisions.nudgeOwnership(
+                ownerToken: armToken,
+                stopped: stopped,
+                ownerStillCurrent: NativeAudioSessionGate.isCurrent(token: armToken))
+            guard ownership == .restart else {
+                log?("audiosrtp W-NUDGEOWN stale=1 tok=\(armToken)")
+                return
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if isCurrentCaptureLiveCheck(generation), peerConnection != nil {
+                guard NativeAudioSessionGate.requestGateReapply(ifCurrent: armToken, reason: nudgeReason) else {
+                    log?("audiosrtp W-NUDGEOWN stale=2 tok=\(armToken)")
+                    return
+                }
+            }
+        } else {
+            log?("audiosrtp caplive=0 nudge=1")
+            peerConnection?.setNativeAudioSrtpMuted(true, source: "nudge")
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            peerConnection?.setNativeAudioSrtpMuted(false, source: "nudge")
+        }
         if await waitForNativeCaptureLive(
             generation: generation, ptxAtArm: ptxAtArm,
             windowMs: CaptureLiveDecisions.afterNudgeWindowMs, via: 3, gateWaits: gateWaits
@@ -262,6 +312,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard isCurrentCaptureLiveCheck(generation), peerConnection != nil,
               !srtpFallbackEngaged, !isIceStateBad(lastIceConnectionState) else {
             log?("audiosrtp caplive=8")
+            return
+        }
+        // W-NUDGEOWN — a manual-mode check whose PeerConnection no longer owns
+        // the unit (replaced meanwhile) does not escalate on the successor's
+        // behalf.
+        if manualModeNudge, !NativeAudioSessionGate.isCurrent(token: armToken) {
+            log?("audiosrtp W-NUDGEOWN stale=3 tok=\(armToken)")
             return
         }
         log?("audiosrtp caplive=0 after=0 fb=1")
@@ -407,6 +464,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// same contract as `onDecryptFailureDetected`.
     public var onAudioDecryptFailureDetected: (() -> Void)?
 
+    /// W-NATIVESRTPDIAG (this task) — true once this call has logged its
+    /// one-shot "native SRTP enabled locally / announced by peer /
+    /// negotiated" summary line (see ``acceptPeerCapabilities(_:)``). This
+    /// controller is one-per-call, so a plain instance flag is enough to
+    /// guarantee exactly one such line even though `acceptPeerCapabilities`
+    /// is itself idempotent and may run more than once per call (duplicate
+    /// envelope, W418-style).
+    private var didLogNativeSrtpCallStartSummary = false
+
     /// W-DCAUDIO — inbound sealed-audio frames received over the WebRTC
     /// DataChannel ("qaudion-audio"). Set by the app layer (CallService) to route
     /// the raw WireRelayFrameCodec bytes into `handleIncomingEncryptedFrame`,
@@ -423,10 +489,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var onAudioDataChannelStateChange: ((Int) -> Void)?
 
     /// W-DCAUDIO — send a sealed audio frame over the DataChannel if it is open.
-    /// Returns `true` if queued on the DC; `false` if the DC is not open, in which
-    /// case the caller (CallService) falls back to the WS relay.
+    /// `.queued` if handed to the DC; `.shed` if the back-pressure gate dropped it
+    /// (not sent anywhere — W-DCWEDGE, see `QAudionPeerConnection.sendAudioFrameData`);
+    /// `.useRelay` if the DC is not open or is wedged, in which case the caller
+    /// (CallService) falls back to the WS relay.
     ///
-    /// W-DCTXICEGATE (2026-08-30) — ALSO returns `false` while ICE is not
+    /// W-DCTXICEGATE (2026-08-30) — ALSO answers `.useRelay` while ICE is not
     /// actually carrying, because "the DataChannel is open" stops meaning
     /// "the DataChannel can deliver" the moment ICE goes down mid-call.
     /// This controller repairs a handoff with `restartIce` on the SAME
@@ -441,11 +509,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// CallTransportFactory.shouldDivertToRelayLeg): route THIS frame to
     /// the leg that can deliver it, without touching the recovery machine.
     /// The instant ICE reports `.connected`/`.completed` again, the very
-    /// next frame goes back to the DataChannel — no mode, no debounce.
+    /// next frame goes back to the DataChannel — no mode, no debounce — UNLESS
+    /// the DataChannel is wedged (W-DCWEDGE, 2026-09-25): ICE `connected` says
+    /// nothing about whether SCTP is draining (call 7727f262: ICE back at
+    /// 17:10:12, queue stuck until 17:10:27), so `DcWedgeDetector` keeps the
+    /// frames on the relay until the queue has drained AND the peer's frames
+    /// arrive on the channel again. ICE is not an input of that detector.
+    /// That holds once the detector has DECLARED the wedge: it is sampled only
+    /// by the frames that get past this gate, so a stall that starts DURING an
+    /// ICE outage is not seen while the gate is closed, and after it reopens the
+    /// detector needs ~1 s / 15 shed frames to declare it. Android's transport
+    /// samples before its own ICE check, so it sees the queue during the outage
+    /// too: a known gap of this port, not closed here.
     @discardableResult
-    public func sendAudioFrameData(_ data: Data) -> Bool {
-        guard Self.iceIsCarrying(lastIceConnectionState) else { return false }
-        return peerConnection?.sendAudioFrameData(data) ?? false
+    public func sendAudioFrameData(_ data: Data) -> AudioDcSendOutcome {
+        guard Self.iceIsCarrying(lastIceConnectionState) else { return .useRelay }
+        return peerConnection?.sendAudioFrameData(data) ?? .useRelay
     }
 
     /// W-DCTXICEGATE — the single definition of "ICE is actually carrying
@@ -465,6 +544,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         !Self.iceIsCarrying(lastIceConnectionState)
     }
 
+    /// W-DCWEDGE — second diagnostic twin: `true` when the wedge detector (and
+    /// nothing else) is what is diverting audio to the WS relay right now — ICE is
+    /// carrying and the channel reads `.open`, yet frames go to the relay because
+    /// SCTP is not draining. The app's W-DCMUX fallback-reason closure reports it as
+    /// `why=wedge`; without it that state would read as `openbug`.
+    ///
+    /// The channel must really read `.open` here: the detector's `wedged` flag is
+    /// only changed by a sample (taken by frames that get past the `.open` guard in
+    /// `sendAudioFrameData`) and the detector is never reset in production, so it
+    /// stays `true` after the channel closes. Without this check a channel that
+    /// closed while wedged (ICE still up) would keep reporting `why=wedge` instead
+    /// of the raw `closing`/`closed` state. Diagnostic only: routing already sends
+    /// those frames to the relay through the `.open` guard.
+    public var audioTxWedgeDiverting: Bool {
+        (peerConnection?.isAudioDataChannelOpen() ?? false) &&
+            (peerConnection?.isAudioDcWedged ?? false) && DcWedgeKillSwitch.shared.divertEnabled
+    }
+
     /// W-DCMUX (2026-08-11) — the DataChannel's raw `RTCDataChannelState`, or
     /// `-1` when this controller has a PeerConnection but no channel object, or
     /// `-4` when it has no PeerConnection at all.
@@ -473,7 +570,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `-2` for "no controller", and "no controller" and "a controller whose PC
     /// is gone" are different failures — the first means this call never built a
     /// WebRTC leg, the second means it built one and lost it.
-    /// ``sendAudioFrameData`` returns the same `false` for both.
+    /// ``sendAudioFrameData`` answers the same `.useRelay` for both.
     public var audioDataChannelStateRaw: Int {
         guard let pc = peerConnection else { return -4 }
         return pc.audioDataChannelStateRaw()
@@ -585,10 +682,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// "is RTT meaningful" and "where does audio actually go" can never
     /// disagree. (Before W-DCTXICEGATE this was DC-open only, which during
     /// an ICE outage reported a meaningful RTT for a leg delivering
-    /// nothing.)
+    /// nothing.) W-DCWEDGE adds the third half: while the wedge detector diverts
+    /// the frames to the relay the ICE pair carries no voice either.
     public var isAudioDataChannelOpen: Bool {
         Self.iceIsCarrying(lastIceConnectionState) &&
-            (peerConnection?.isAudioDataChannelOpen() ?? false)
+            (peerConnection?.isAudioDataChannelOpen() ?? false) &&
+            !audioTxWedgeDiverting
     }
 
     private func setMediaRttMs(_ value: Double?) {
@@ -654,6 +753,123 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public private(set) var audioRtpConcealedSamples: Int64 = -1
     public private(set) var audioRtpConcealmentEvents: Int64 = -1
 
+    /// W-NATIVESRTPDIAG (this task) — every additional WebRTC stat this
+    /// task's diagnostics need, beyond the fields already read above by
+    /// earlier work, off the SAME `getStats` report ``pollMediaRttOnce()``
+    /// already fetches once per second — no extra round trip. `-1`/`nil`
+    /// (per field's own type) means "no such row in this report", same
+    /// convention as every other field on this file. `Sendable` so it can
+    /// cross the `getStats` callback's own thread boundary as a value type,
+    /// same as this file's other stat properties.
+    public struct NativeAudioSrtpStatsSnapshot: Sendable {
+        public var outboundRetransmittedPacketsSent: Int64 = -1
+        public var mediaSourceAudioLevel: Double = -1
+        public var mediaSourceTotalAudioEnergy: Double = -1
+        public var inboundTotalSamplesReceived: Int64 = -1
+        public var inboundAudioLevel: Double = -1
+        public var inboundInsertedSamplesForDeceleration: Int64 = -1
+        public var inboundRemovedSamplesForAcceleration: Int64 = -1
+        public var transportDtlsState: String?
+        public var transportSrtpCipher: String?
+        public var transportDtlsCipher: String?
+        public var transportTlsVersion: String?
+        public var transportDtlsRole: String?
+        public var selectedCandidatePairState: String?
+        public var localCandidateType: String?
+        public var localCandidateProtocol: String?
+        public var remoteCandidateType: String?
+        public var remoteCandidateProtocol: String?
+        public var codecMimeType: String?
+        public var codecClockRate: Int?
+        public var codecChannels: Int?
+        public var codecSdpFmtpLine: String?
+
+        // N7 (network-resilience-max, this task) — the additional raw stats
+        // the heartbeat's new INTERVAL-delta fields (`CallService`'s
+        // `jitter_ms`/`target_ms`/`plc`/`fec_recv`/`fec_drop`/`nack` log
+        // keys — see `NativeAudioHeartbeatDeltas`) and instantaneous fields
+        // (`remote_loss`/`remote_rtt`/`relay`/`network_type`) are computed/
+        // read from. `-1`/`nil` = "no such row this report", same convention
+        // as every field above.
+
+        /// `inbound-rtp` (kind=audio) `jitterBufferDelay` — cumulative
+        /// seconds. A SEPARATE copy of the same value the class's own
+        /// pre-existing (lock-guarded) `mediaJitterBufferDelaySec` property
+        /// already carries — duplicated here, from the SAME parsing pass in
+        /// `pollMediaRttOnce()`, so `CallService`'s heartbeat (which only
+        /// reads this snapshot via `getNativeAudioSrtpStats`, not the
+        /// controller's other properties directly) has everything the N7
+        /// interval-delta computation needs in ONE place, with no new
+        /// cross-target closure to wire.
+        public var inboundJitterBufferDelaySec: Double = -1
+        /// `inbound-rtp` (kind=audio) `jitterBufferEmittedCount` — cumulative.
+        /// Same duplication rationale as `inboundJitterBufferDelaySec` above,
+        /// paired with it for the interval-averaging math
+        /// (`NativeAudioHeartbeatDeltas.compute`).
+        public var inboundJitterBufferEmittedCount: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `jitterBufferTargetDelay` — cumulative
+        /// seconds, pairs with `inboundJitterBufferEmittedCount` the SAME way
+        /// `inboundJitterBufferDelaySec` does; NetEQ's TARGET rather than the
+        /// delay actually experienced.
+        public var inboundJitterBufferTargetDelaySec: Double = -1
+        /// `inbound-rtp` (kind=audio) `concealedSamples` — cumulative. A
+        /// SEPARATE copy of the same value the class's own pre-existing
+        /// `audioRtpConcealedSamples` property already carries, duplicated
+        /// here for the same "one self-contained snapshot" reason as
+        /// `inboundJitterBufferDelaySec` above.
+        public var inboundConcealedSamples: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `fecPacketsReceived` — cumulative.
+        public var inboundFecPacketsReceived: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `fecPacketsDiscarded` — cumulative.
+        public var inboundFecPacketsDiscarded: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `nackCount` — cumulative count of NACK
+        /// feedback packets THIS receiver has sent for the inbound stream
+        /// (RFC 4585 generic NACK, the same mechanism ``NativeAudioSdpPolicy``
+        /// negotiates `a=rtcp-fb:<pt> nack` for).
+        public var inboundNackCount: Int64 = -1
+        /// `remote-inbound-rtp` (kind=audio) `fractionLost` — the PEER's most
+        /// recently reported RTCP receiver-report fraction lost for OUR
+        /// outbound audio, 0.0...1.0. Instantaneous (a report field, not a
+        /// running sum) — read as-is each heartbeat, never delta'd.
+        public var remoteInboundFractionLost: Double = -1
+        /// `remote-inbound-rtp` (kind=audio) `roundTripTime` — the peer's own
+        /// RTCP-measured RTT for our outbound audio, seconds. Instantaneous,
+        /// same as `remoteInboundFractionLost` above.
+        public var remoteInboundRoundTripTimeSec: Double = -1
+        /// `local-candidate` row (of the selected/fallback pair already
+        /// resolved for `mediaRttMs`) `relayProtocol` — "udp"/"tcp"/"tls",
+        /// only present when that candidate's own `candidateType == "relay"`.
+        /// Never logged as this raw string (see
+        /// `NativeAudioHeartbeatDeltas.relayProtocolCode`) — no addresses,
+        /// hostnames or other identifying data are carried by this field
+        /// regardless, but the numeric-only heartbeat-line discipline this
+        /// file already follows for every enum-shaped value applies here too.
+        public var localCandidateRelayProtocol: String?
+        /// `local-candidate` row `networkType` —
+        /// "wifi"/"ethernet"/"cellular"/"vpn"/"loopback"/"unknown", best-effort
+        /// (requires an entitlement Apple does not guarantee is always
+        /// granted). Same "never logged as a raw string" note as
+        /// `localCandidateRelayProtocol` above.
+        public var localCandidateNetworkType: String?
+        /// N7 review fix — `true` when the selected local candidate is the
+        /// relay allocated THROUGH this call's WSS-TURN bridge (its stats
+        /// `url` is the bridge's own loopback `turn:` endpoint). Such a pair
+        /// reports `relayProtocol == "udp"` (the loopback hop), which would
+        /// otherwise be indistinguishable from a real UDP relay in the
+        /// heartbeat — and "did the call fall back to the WSS bridge" is
+        /// exactly what the UDP-blocked test needs to read. Only a Bool
+        /// leaves this snapshot; the URL itself is never stored or logged.
+        public var localCandidateViaWssBridge: Bool = false
+
+        public init() {}
+    }
+
+    /// Latest snapshot from ``pollMediaRttOnce()``, or every field at its
+    /// "absent" value before the first poll / on a call with no audio
+    /// `inbound`/`outbound-rtp` row (every call on the sealed
+    /// DataChannel/WS relay).
+    public private(set) var nativeAudioSrtpStats = NativeAudioSrtpStatsSnapshot()
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -704,6 +920,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var audioJitterSec: Double = -1
             var audioConcealedSamples: Int64 = -1
             var audioConcealmentEvents: Int64 = -1
+            // W-NATIVESRTPDIAG (this task) — see NativeAudioSrtpStatsSnapshot's
+            // own field docs for what each of these is.
+            var snapshot = NativeAudioSrtpStatsSnapshot()
+            var audioCodecId: String?
+            var preferredLocalCandidateId: String?
+            var preferredRemoteCandidateId: String?
+            var fallbackLocalCandidateId: String?
+            var fallbackRemoteCandidateId: String?
             for (_, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
@@ -714,23 +938,80 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     audioJitterSec = (s.values["jitter"] as? NSNumber)?.doubleValue ?? -1
                     audioConcealedSamples = (s.values["concealedSamples"] as? NSNumber)?.int64Value ?? -1
                     audioConcealmentEvents = (s.values["concealmentEvents"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundTotalSamplesReceived = (s.values["totalSamplesReceived"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.inboundInsertedSamplesForDeceleration =
+                        (s.values["insertedSamplesForDeceleration"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundRemovedSamplesForAcceleration =
+                        (s.values["removedSamplesForAcceleration"] as? NSNumber)?.int64Value ?? -1
+                    audioCodecId = s.values["codecId"] as? String
+                    // N7 (network-resilience-max, this task) — see
+                    // `NativeAudioSrtpStatsSnapshot`'s own field docs. The
+                    // first three duplicate `jbDelaySec`/`jbEmitted`/
+                    // `audioConcealedSamples` (already computed a few lines
+                    // up in this same pass) into the snapshot so
+                    // `CallService`'s heartbeat has them without a new
+                    // closure — see those fields' own kdoc for why.
+                    snapshot.inboundJitterBufferDelaySec = jbDelaySec
+                    snapshot.inboundJitterBufferEmittedCount = jbEmitted
+                    snapshot.inboundConcealedSamples = audioConcealedSamples
+                    snapshot.inboundJitterBufferTargetDelaySec =
+                        (s.values["jitterBufferTargetDelay"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.inboundFecPacketsReceived =
+                        (s.values["fecPacketsReceived"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundFecPacketsDiscarded =
+                        (s.values["fecPacketsDiscarded"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundNackCount = (s.values["nackCount"] as? NSNumber)?.int64Value ?? -1
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                     audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.outboundRetransmittedPacketsSent =
+                        (s.values["retransmittedPacketsSent"] as? NSNumber)?.int64Value ?? -1
+                }
+                // N7 — the PEER's RTCP receiver-report view of OUR outbound
+                // audio: fractionLost/roundTripTime. Instantaneous per report,
+                // never delta'd (see the snapshot field docs).
+                if s.type == "remote-inbound-rtp", (s.values["kind"] as? String) == "audio" {
+                    snapshot.remoteInboundFractionLost =
+                        (s.values["fractionLost"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.remoteInboundRoundTripTimeSec =
+                        (s.values["roundTripTime"] as? NSNumber)?.doubleValue ?? -1
+                }
+                if s.type == "media-source", (s.values["kind"] as? String) == "audio" {
+                    snapshot.mediaSourceAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.mediaSourceTotalAudioEnergy = (s.values["totalAudioEnergy"] as? NSNumber)?.doubleValue ?? -1
+                }
+                if s.type == "transport", snapshot.transportDtlsState == nil {
+                    // W-NATIVESRTPDIAG — bundlePolicy is `.maxBundle`
+                    // (`defaultConfiguration`), so a 1:1 call has exactly one
+                    // transport row in practice; take the first one seen.
+                    snapshot.transportDtlsState = s.values["dtlsState"] as? String
+                    snapshot.transportSrtpCipher = s.values["srtpCipher"] as? String
+                    snapshot.transportDtlsCipher = s.values["dtlsCipher"] as? String
+                    snapshot.transportTlsVersion = s.values["tlsVersion"] as? String
+                    snapshot.transportDtlsRole = s.values["dtlsRole"] as? String
                 }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
                 let rttSec = (s.values["currentRoundTripTime"] as? NSNumber)?.doubleValue
+                let pairState = s.values["state"] as? String
+                let localId = s.values["localCandidateId"] as? String
+                let remoteId = s.values["remoteCandidateId"] as? String
                 if !haveFallback {
                     haveFallback = true
                     fallbackRttSec = rttSec
+                    fallbackLocalCandidateId = localId
+                    fallbackRemoteCandidateId = remoteId
                 }
                 let nominated = (s.values["nominated"] as? NSNumber)?.boolValue ?? false
                 let selected = (s.values["selected"] as? NSNumber)?.boolValue ?? false
                 if (nominated || selected), !havePreferred {
                     havePreferred = true
                     preferredRttSec = rttSec
+                    preferredLocalCandidateId = localId
+                    preferredRemoteCandidateId = remoteId
+                    snapshot.selectedCandidatePairState = pairState
                 }
             }
             // No succeeded pair ⇒ ICE never converged (or has failed) ⇒ there
@@ -750,6 +1031,42 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self.audioRtpConcealedSamples = audioConcealedSamples
             self.audioRtpConcealmentEvents = audioConcealmentEvents
             self.setMediaJitterBuffer(delaySec: jbDelaySec, emittedCount: jbEmitted)
+
+            // W-NATIVESRTPDIAG — second, cheap dictionary lookup pass to
+            // resolve the foreign-key references collected above (codecId /
+            // local+remoteCandidateId) into their own stats rows — still the
+            // SAME `getStats` report, no extra round trip.
+            if let codecId = audioCodecId, let codecStats = report.statistics[codecId] {
+                snapshot.codecMimeType = codecStats.values["mimeType"] as? String
+                snapshot.codecClockRate = (codecStats.values["clockRate"] as? NSNumber)?.intValue
+                snapshot.codecChannels = (codecStats.values["channels"] as? NSNumber)?.intValue
+                snapshot.codecSdpFmtpLine = codecStats.values["sdpFmtpLine"] as? String
+            }
+            let localCandidateId = havePreferred ? preferredLocalCandidateId : fallbackLocalCandidateId
+            let remoteCandidateId = havePreferred ? preferredRemoteCandidateId : fallbackRemoteCandidateId
+            if let localCandidateId, let localStats = report.statistics[localCandidateId] {
+                snapshot.localCandidateType = localStats.values["candidateType"] as? String
+                snapshot.localCandidateProtocol = localStats.values["protocol"] as? String
+                // N7 — relayProtocol only populated by libwebrtc when
+                // candidateType=="relay"; networkType is best-effort (needs
+                // an entitlement). Neither is an address/hostname.
+                snapshot.localCandidateRelayProtocol = localStats.values["relayProtocol"] as? String
+                snapshot.localCandidateNetworkType = localStats.values["networkType"] as? String
+                // N7 review fix — see `localCandidateViaWssBridge`. Compared
+                // up to the query (`?transport=`), which libwebrtc rebuilds
+                // itself when it reports the relay candidate's server URL.
+                if (localStats.values["candidateType"] as? String) == "relay",
+                   let candidateUrl = localStats.values["url"] as? String,
+                   let bridgeIceUrl = self.wssTurnBridgeIceUrl,
+                   let bridgeEndpoint = bridgeIceUrl.split(separator: "?").first {
+                    snapshot.localCandidateViaWssBridge = candidateUrl.hasPrefix(String(bridgeEndpoint))
+                }
+            }
+            if let remoteCandidateId, let remoteStats = report.statistics[remoteCandidateId] {
+                snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
+                snapshot.remoteCandidateProtocol = remoteStats.values["protocol"] as? String
+            }
+            self.nativeAudioSrtpStats = snapshot
         }
     }
 
@@ -1070,8 +1387,61 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     private let callingApi: CallingApi
     private let relayProvider: RelayCredentialsProvider?
-    private var peerConnection: QAudionPeerConnection?
+    /// W-CALLERUNMUTELOST (2026-09-27) — root-cause fix for the native-SRTP
+    /// mic staying muted for a whole call. The bug: a genuine accept
+    /// (`CallService.handleCallAnswered`/`.activateIncomingCallAudio`) can
+    /// land while THIS controller's `QAudionPeerConnection` is still being
+    /// constructed on another thread (measured 150-370 ms, `acceptIncomingCall`
+    /// awaits `fetchIceServers()`/`sharedFactory()` before `init` even
+    /// starts) — `setNativeAudioSrtpMuted(false)` reached `peerConnection?...`
+    /// while it was `nil` and was silently dropped; the freshly-built PC then
+    /// started from its own hardcoded-muted default and nothing ever retried.
+    /// The `didSet` below closes that gap unconditionally, for every
+    /// assignment (the three creation sites — outgoing, incoming, the
+    /// video-upgrade rebuild — and any future one): the moment a
+    /// PeerConnection exists, it is told the LATCHED intent this controller
+    /// currently wants, not whatever that PC's own constructor defaulted to.
+    private var peerConnection: QAudionPeerConnection? {
+        didSet {
+            guard let pc = peerConnection, pc !== oldValue else { return }
+            cryptorAttachQueue.async { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                pc.setNativeAudioSrtpMuted(self.nativeSenderMuted, source: "pcinit")
+            }
+        }
+    }
+    /// W-CALLERUNMUTELOST — the mute state THIS controller currently wants
+    /// applied to the native-SRTP sender, independent of whether a
+    /// `QAudionPeerConnection` exists yet to apply it to. Survives a
+    /// PeerConnection replacement (video-upgrade rebuild, a future retry
+    /// path) — see the `didSet` above, which re-pushes it onto every new
+    /// one. Touched ONLY on `cryptorAttachQueue` (set here, read there, and
+    /// in `installAudioSrtpOnQueue`/`activateNativeAudioSrtp`'s own
+    /// serialization) so there is no cross-thread race with
+    /// `QAudionPeerConnection.pendingAudioSrtpMuted`, which this mirrors.
+    /// Defaults to muted, same as that property, so a controller that never
+    /// receives an explicit unmute (a call that never gets answered) stays
+    /// muted for its whole (short) life.
+    private var nativeSenderMuted = true
     private var wssTurnBridge: WssTurnBridge?
+    /// N6 review fix — the ICE URL of the LIVE `wssTurnBridge` (its loopback
+    /// `turn:` endpoint), set together with it and cleared together with it.
+    /// An ICE restart on a network that still gives no UDP evidence REUSES
+    /// this bridge instead of dialing a new one: stopping the old bridge
+    /// mid-restart would kill the relay path the current ICE generation may
+    /// still be using (the bridge's own W-WSSTURNHEAL keeps its loopback port
+    /// stable across WSS reconnects precisely so that path survives a
+    /// network change). Also lets the heartbeat tell a bridged relay pair
+    /// apart from a plain UDP one (`NativeAudioSrtpStatsSnapshot
+    /// .localCandidateViaWssBridge`). Lock-guarded: the stats callback
+    /// (WebRTC signaling thread) reads it while setup/restart/teardown write
+    /// it from other threads.
+    private let wssTurnBridgeIceUrlLock = NSLock()
+    private var _wssTurnBridgeIceUrl: String?
+    private var wssTurnBridgeIceUrl: String? {
+        get { wssTurnBridgeIceUrlLock.lock(); defer { wssTurnBridgeIceUrlLock.unlock() }; return _wssTurnBridgeIceUrl }
+        set { wssTurnBridgeIceUrlLock.lock(); _wssTurnBridgeIceUrl = newValue; wssTurnBridgeIceUrlLock.unlock() }
+    }
     private var recipientId: String?
 
     // MARK: - W-SILENTPATHDEATH / W-OFFERGLARE / W-RESTARTOFFERPARK
@@ -1166,6 +1536,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// outage and not yet recovered — the "never double-engage" guard
     /// `SrtpFallbackDecisions` checks.
     private var srtpFallbackEngaged: Bool = false
+    /// N7 (network-resilience-max, this task) — monotonic ms timestamp the
+    /// fallback actually ENGAGED (distinct from `iceBadSinceMs`, which marks
+    /// when ICE first went bad — the fallback engages
+    /// `SrtpFallbackDecisions.fallbackEngageDebounceMs` later, see
+    /// `armSrtpFallbackIfNeeded`). Feeds the `duration_ms=` field on the
+    /// `audiosrtp fallback=0 recover=1` line. `nil` when not currently engaged.
+    private var srtpFallbackEngagedAtMs: Int64?
     /// Debounce task for the fallback engage decision. Cancelled on genuine
     /// ICE recovery (mirrors `iceRecoveryWatchdogTask`'s own cancel-on-heal
     /// discipline) so a self-healed blip never fires the engage callback
@@ -1190,6 +1567,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// falls back to the WS-relay safety net on the very next frame.
     private var iceGoodSinceMs: Int64?
 
+    /// N7 (network-resilience-max, this task) — monotonic ms timestamp the
+    /// CURRENT bad-ICE streak started (`.failed`/`.disconnected`), or `nil`
+    /// when ICE is not currently bad. Distinct from `iceBadSinceMs` above:
+    /// that one is gated on `peerConnection?.usingNativeAudioSrtp == true`
+    /// (only armed for the SRTP-fallback decision) and reset differently;
+    /// this one is unconditional, for every call, so the "ICE restart
+    /// recovered after Nms" telemetry (`resilience-assessment.md` §4, "Cosa
+    /// manca" item 5: "eventi di ICE restart con il tempo di ripristino")
+    /// exists for every call, not only a native-SRTP one.
+    private var iceBadStateEnteredAtMs: Int64?
+
     private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     /// `true` once ICE has connected at least once THIS call. Gates the
@@ -1206,6 +1594,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// (this controller's own park logic, or the peer's) must not be
     /// re-applied.
     private var lastAppliedRemoteRestartSdp: String?
+    /// N6 review fix — how many remote restart offers this call has applied
+    /// (bumped next to `lastAppliedRemoteRestartSdp`). `restartIce` snapshots
+    /// it before its relay refresh await and aborts its own attempt when a
+    /// peer-driven restart landed meanwhile, so the refresh window can never
+    /// turn one network event into two back-to-back ICE restarts. Guarded
+    /// by `restartIceDebounceLock`.
+    private var remoteRestartOffersApplied: Int = 0
 
     /// Fired once per restart ATTEMPT (offer creation kicked off, not
     /// necessarily sent) — AppState uses this to extend the pre-existing
@@ -1361,6 +1756,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // creation event, which is the one that proves the caller even got as
         // far as putting an m=application section in the offer.
         pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
+        // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
+        // as every other numeric-only diagnostic of this controller.
+        pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
+        // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
+        // cryptor-state line right above, for the new mute-apply diagnostic.
+        pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -1527,6 +1931,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-DCMUX — on this side the hook's first firing IS the `didOpen`
         // receipt: it is how the callee proves the channel arrived at all.
         pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
+        // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
+        // as every other numeric-only diagnostic of this controller.
+        pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
+        // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
+        // cryptor-state line right above, for the new mute-apply diagnostic.
+        pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -1639,6 +2052,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // hook is expected to stay quiet; that silence is itself the evidence
         // that distinguishes Phase 0 outcome (c) from (a).
         pc.onAudioDataChannelStateChange = { [weak self] st in self?.onAudioDataChannelStateChange?(st) }
+        // W-DCWEDGE — the wedge enter/exit line goes out through the same `log` hook
+        // as every other numeric-only diagnostic of this controller.
+        pc.onAudioDcWedgeChange = { [weak self] line in self?.log?(line) }
+        // W-NATIVESRTPDIAG (this task) — native audio FrameCryptor state
+        // transitions (sender + receiver), same `log` hook.
+        pc.onNativeAudioFrameCryptorStateChange = { [weak self] line in self?.log?(line) }
+        // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
+        // cryptor-state line right above, for the new mute-apply diagnostic.
+        pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {
@@ -1855,24 +2277,49 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             videoUpgradeInProgress = false
-            // OFFERER-UPGRADE DECODE FIX (2026-07-05) — this is the ONLY
-            // flow where our video transceiver was created by a LOCAL
-            // addTrack on a second-round offer; the receiver cryptor
-            // attached at didAdd-time binds before the receiver's RTP
-            // channel is live and inbound video then reaches the decoder
-            // STILL ENCRYPTED (framesDecoded pinned at 0 forever — the
-            // black-screen bug). Re-create it now, against the receiver as
-            // it exists AFTER the answer associated the transceiver. See
-            // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
-            _ = pc.rebindVideoReceiverCryptorPostNegotiation()
-            // BUG2 fix (2026-07-11) — SENDER half of the exact same
-            // pre-negotiation-attach-timing bug. upgradeToVideo()'s
-            // attachVideoSenderCryptor() call ran right after
-            // addLocalVideoTrack(), before this answer ever came back —
-            // rebind it now against the sender as it exists post-
-            // negotiation, mirroring the receiver rebind above. See
-            // QAudionPeerConnection.rebindVideoSenderCryptorPostNegotiation.
-            _ = pc.rebindVideoSenderCryptorPostNegotiation()
+            // W-CRYPTORQUEUE (2026-09-27 follow-up) — this call runs on
+            // MainActor (see AppState's `Task { @MainActor ... } { try
+            // await controller.applyUpgradeAnswer(...) }`). Both rebinds
+            // below reconstruct a native RTCFrameCryptor via
+            // attachReceiver/attachSender (NativeVideoFrameCryptor.
+            // rebindReceiver/rebindSender), whose RTCFrameCryptor(...) init
+            // marshals onto the WebRTC signalling thread and blocks the
+            // CALLING thread on the same untimed Event::Wait documented on
+            // `cryptorAttachQueue` above — the queue that install/retry/
+            // rekey already moved off MainActor/the signalling thread for
+            // exactly this reason. Running these two synchronously here left
+            // MainActor exposed to that same marshal wait whenever the
+            // signalling thread is busy (concurrent SetRemoteDescription, an
+            // ICE-restart burst) — no lock-order inversion (attachSender/
+            // attachReceiver already release `lock` before the native init,
+            // see their own docs), so not the 0x8BADF00D deadlock, but the
+            // same class of MainActor stall. Hopping onto `cryptorAttachQueue`
+            // closes that gap the same way; `beginVideoTxHold()` below
+            // already mutes the local video track synchronously and only
+            // releases it on the peer's call_media_ready or a 2s timeout, so
+            // deferring these rebinds by one queue hop does not risk sending
+            // a frame through a not-yet-rebound cryptor.
+            cryptorAttachQueue.async { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                // OFFERER-UPGRADE DECODE FIX (2026-07-05) — this is the ONLY
+                // flow where our video transceiver was created by a LOCAL
+                // addTrack on a second-round offer; the receiver cryptor
+                // attached at didAdd-time binds before the receiver's RTP
+                // channel is live and inbound video then reaches the decoder
+                // STILL ENCRYPTED (framesDecoded pinned at 0 forever — the
+                // black-screen bug). Re-create it now, against the receiver as
+                // it exists AFTER the answer associated the transceiver. See
+                // QAudionPeerConnection.rebindVideoReceiverCryptorPostNegotiation.
+                _ = pc.rebindVideoReceiverCryptorPostNegotiation()
+                // BUG2 fix (2026-07-11) — SENDER half of the exact same
+                // pre-negotiation-attach-timing bug. upgradeToVideo()'s
+                // attachVideoSenderCryptor() call ran right after
+                // addLocalVideoTrack(), before this answer ever came back —
+                // rebind it now against the sender as it exists post-
+                // negotiation, mirroring the receiver rebind above. See
+                // QAudionPeerConnection.rebindVideoSenderCryptorPostNegotiation.
+                _ = pc.rebindVideoSenderCryptorPostNegotiation()
+            }
             // WIRE_SPEC §8.7 (SHOULD) — upgrader path: we start sending
             // video now that the answer is applied. Hold TX until the
             // peer's call_media_ready (or 2s), then enable + force IDR.
@@ -2287,6 +2734,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         lastIceConnectionState = .new
         hasEverConnectedIce = false
         iceGoodSinceMs = nil
+        // N6 review fix — stop the WSS-TURN bridge BEFORE the early return
+        // below: a bridge dialed by a setup (or restart) refresh that raced
+        // this teardown can exist while `peerConnection` is still nil, and
+        // must not keep its WSS slot and loopback socket until the
+        // controller happens to be deallocated.
+        wssTurnBridge?.stop()
+        wssTurnBridge = nil
+        wssTurnBridgeIceUrl = nil
         guard peerConnection != nil else {
             state = .disconnected
             return
@@ -2296,10 +2751,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-NETVIS — the pair this was measured on is gone; the band must show
         // "—" for the next call rather than the previous call's last RTT.
         setMediaRttMs(nil)
-        wssTurnBridge?.stop()
-        wssTurnBridge = nil
         peerConnection?.close()
         peerConnection = nil
+        // W-CALLERUNMUTELOST — re-arm the latch for hygiene (this controller
+        // instance is discarded per call — a fresh one always starts `true`
+        // — so this mainly guards a hypothetical future reuse, same as
+        // `QAudionPeerConnection.close()`'s symmetric reset).
+        cryptorAttachQueue.async { [weak self] in self?.nativeSenderMuted = true }
         recipientId = nil
         hasAppliedRemoteAnswer = false   // W418 — reset for next call
         videoSealer = nil                // commit 3db2cd81 parity — reset
@@ -2674,7 +3132,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if engage {
                     self.srtpFallbackTask = nil
                     self.srtpFallbackEngaged = true
-                    self.log?("audiosrtp_fallback engage=1")
+                    // N7 (network-resilience-max, this task) — engage
+                    // instant, so `disarmSrtpFallbackIfRecovered` can log
+                    // how long the fallback actually stayed engaged.
+                    self.srtpFallbackEngagedAtMs = Self.nowMs()
+                    self.log?("audiosrtp fallback=1 engage=1")
                     self.onAudioSrtpFallbackEngage?()
                     return
                 }
@@ -2704,7 +3166,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceBad: false
         ) else { return }
         srtpFallbackEngaged = false
-        log?("audiosrtp_fallback recover=1")
+        // N7 (network-resilience-max, this task) — W-SRTPFALLBACK
+        // activation+duration telemetry (`resilience-assessment.md` §4,
+        // "Cosa manca" item 5: "attivazione e durata di W-SRTPFALLBACK").
+        // `engagedAt` should always be set here (recovery only reaches this
+        // line when `fallbackEngaged` was true, and engaging always sets
+        // it first) — the `if let` is defensive, never a silent bug mask:
+        // an absent timestamp simply omits `duration_ms=` rather than
+        // logging a fabricated one.
+        if let engagedAt = srtpFallbackEngagedAtMs {
+            let durationMs = Self.nowMs() - engagedAt
+            log?("audiosrtp fallback=0 recover=1 ms=\(durationMs)")
+            srtpFallbackEngagedAtMs = nil
+        } else {
+            log?("audiosrtp fallback=0 recover=1")
+        }
         onAudioSrtpFallbackRecover?()
     }
 
@@ -2881,6 +3357,52 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return
         }
         onRestartAttemptStarted?()
+
+        // N6 (network-resilience-max, this task) — re-evaluate relay
+        // reachability + the WSS-TURN bridge on EVERY ICE restart, proactive
+        // (W-PROACTIVEHANDOFF, a real interface change) or reactive (the
+        // ICE-failed-recovery watchdog above) — both trigger paths funnel
+        // through this one method, already single-flighted by the
+        // debounce/gate check just above (this point in the method is only
+        // ever reached once per genuine restart attempt).
+        //
+        // Same re-evaluation call SETUP does (`relayIceServers(from:)`:
+        // re-probe every relay's UDP STUN RTT, reorder by latency, and
+        // insert the WSS-bridge ICE server only when the probe round came
+        // back empty — W-RELAYGATE's "no positive evidence direct UDP
+        // works" gate), applied to the LIVE PeerConnection via
+        // `setConfiguration` (`QAudionPeerConnection.updateIceServers`)
+        // BEFORE the restart offer / local re-gather below: libwebrtc only
+        // hands new ICE servers to the NEXT gathering session, which is
+        // exactly the one this restart creates. It also makes a
+        // `relay-fleet-changed` restart actually move off the departed
+        // relay (AppState refreshes the bundle right before calling this).
+        //
+        // Review hardening (see `refreshIceServersForRestart`): bounded by
+        // the probe's own ~1.2 s budget (cached credentials only — never
+        // the 15 s credentials HTTP fetch on a network mid-handover), a
+        // running bridge is REUSED rather than replaced, and nothing is
+        // started or applied for a call that ended meanwhile.
+        //
+        // After the await: a hangup, a replaced PeerConnection, or a
+        // PEER-driven restart offer applied while this side was probing
+        // (old builds that still offer from the responder, or a crossing
+        // initiator offer on the request-first path) all make this attempt
+        // redundant — sending our own offer/request on top would restart
+        // ICE a second time and reset the checks that are already
+        // converging. The single-flight gate armed above stays armed, so the
+        // watchdog still backs off while that other restart converges.
+        if let liveConnection = peerConnection {
+            let remoteRestartsBefore = restartIceDebounceLock.withLock { remoteRestartOffersApplied }
+            await refreshIceServersForRestart(on: liveConnection)
+            guard !intentionalShutdown, peerConnection === liveConnection else { return }
+            let remoteRestartsAfter = restartIceDebounceLock.withLock { remoteRestartOffersApplied }
+            if remoteRestartsAfter != remoteRestartsBefore {
+                log?("restart_ice skip=1 peer=1")
+                return
+            }
+        }
+
         // W-RESPONDERREQFIRST (2026-08-30) — the RESPONDER asks the
         // offering leg to drive the fresh offer (`restart_ice_request`)
         // whenever the peer negotiated `restart-ice-req-v1`, instead of
@@ -3081,6 +3603,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // raced it over the WS; drain whatever queued during the SRD.
         drainPendingRemoteIce()
         lastAppliedRemoteRestartSdp = sdp
+        // N6 review fix — see `remoteRestartOffersApplied`.
+        restartIceDebounceLock.withLock { remoteRestartOffersApplied += 1 }
         let answerSdp: String? = await withCheckedContinuation { cont in
             pc.createAnswer(hasVideo: true) { result in
                 switch result {
@@ -3137,6 +3661,25 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// ```
     public func acceptPeerCapabilities(_ peer: [String]?) {
         peerConnection?.acceptPeerCapabilities(peer)
+        // W-NATIVESRTPDIAG (this task) — one-shot, remote-visible summary of
+        // the three distinct "is native SRTP a thing on this call" questions,
+        // for EVERY call (not gated on any of them being true): whether THIS
+        // build/device would use it at all (``isNativeSrtpEnabledLocally``,
+        // the compiled switch or the debug override), whether the PEER's raw
+        // advertised list says it can too (before intersection), and whether
+        // the two sides actually agreed (the intersection). Distinguishing
+        // "enabled locally but peer doesn't have it" from "peer has it but we
+        // don't" from "both do but something else emptied the intersection"
+        // (e.g. an earbud call) is exactly the split a silent-call
+        // archaeology session on this feature would otherwise have to
+        // reconstruct from absence of evidence.
+        if !didLogNativeSrtpCallStartSummary, let negotiated = peerNegotiated() {
+            didLogNativeSrtpCallStartSummary = true
+            let enabledLocally = CallCapabilities.isNativeSrtpEnabledLocally
+            let announcedByPeer = negotiated.peerRawTags.contains(CallCapabilities.audioSrtpV1)
+            let negotiatedSrtp = negotiated.useAudioSrtp
+            log?("audiosrtp summary local=\(enabledLocally ? 1 : 0) peer=\(announcedByPeer ? 1 : 0) negotiated=\(negotiatedSrtp ? 1 : 0)")
+        }
         // WIRE_SPEC §8.7 / .legacy-latch fix — UPWARD re-evaluation only.
         // The AES-256 fail-close path (ensureVideoSealer) latches
         // `videoSealer = .legacy` when the caps known AT THAT MOMENT don't
@@ -3267,6 +3810,44 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         switchGate(for: media).currentPendingEpoch()
     }
 
+    // MARK: - W-CRYPTORQUEUE (2026-09-27) — off-thread native sender-cryptor attach
+
+    /// Serializes every native sender-cryptor attach this controller makes
+    /// (video AND audio) off whichever thread triggered it.
+    ///
+    /// Root cause this closes (watchdog 0x8BADF00D, iOS TestFlight
+    /// 1.0.1187, main thread blocked 10s in `RtpSenderProxy::track()`,
+    /// 2026-09-27): `RTCFrameCryptor(factory:rtpSender:...)`'s init calls
+    /// `sender.track()`, which `WebRTCMethodCall` marshals onto the WebRTC
+    /// signalling thread and blocks the CALLING thread on `Event::Wait`
+    /// (no timeout) until the signalling thread services it.
+    /// `retryVideoSenderCryptorAttachIfNeeded`/`installAudioSrtpIfPossible`
+    /// used to call `attachSender` straight from whichever thread reached
+    /// `ensureVideoSealer`: the app's own MainActor (`pqcSessionKey`
+    /// didSet, via `AppState.forwardPqcSessionKeyToController`) OR the
+    /// signalling thread itself (`didReceiveRemoteVideoReceiver`/
+    /// `didReceiveNativeAudioSrtpReceiver`, and the `ensureVideoSealer`
+    /// rekey branch reached from either). Two entries racing from each side
+    /// — one blocked on the marshal, holding `NativeVideoFrameCryptor.lock`
+    /// (before this task's other `lock`-scoping fix), the other stuck on
+    /// that same lock from INSIDE a SetRemoteDescription still running on
+    /// the signalling thread — is a lock-order inversion: neither side can
+    /// ever make progress, and the main-thread half of it is exactly what
+    /// MetricKit's symbolicated stack showed.
+    ///
+    /// Running the attach here instead means the CALLING thread (MainActor
+    /// or signalling) never blocks on the marshal at all — `.async` returns
+    /// immediately — and the only thread that ever waits on
+    /// `Event::Wait` is this queue's own worker, which neither MainActor
+    /// nor the signalling thread needs serviced to make progress. One
+    /// shared serial queue for both media kinds preserves this class's
+    /// existing "whichever trigger fires last wins" ordering (video and
+    /// audio installs were never ordered against each other to begin with —
+    /// they use separate `RekeySwitchGate`s and separate native cryptors —
+    /// so FIFO-behind-each-other here is a strictly stronger guarantee than
+    /// before, not a new constraint).
+    private let cryptorAttachQueue = DispatchQueue(label: "qaudion.webrtc.cryptor-attach")
+
     /// IOS-C4b (2026-08-26) — install/rekey the native SRTP audio path the
     /// moment BOTH the peer's negotiated capabilities (`audioSrtpV1` in the
     /// intersection) AND a 32-byte PQC session key are available. Mirrors
@@ -3302,6 +3883,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Numeric-only fields (see `startAudioIOIfReady`'s gate=N precedent
         // in CallService.swift): the remote-log redactor drops any
         // word=word field or compound word that isn't a bare number.
+        // Cheap, plain-Swift-property reads — no WebRTC proxy call — so
+        // these stay synchronous on whatever thread triggered the install.
         guard let negotiated = peerNegotiated(), negotiated.useAudioSrtp else {
             print("audiosrtp install skip=1 reason=1")
             return
@@ -3310,6 +3893,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("audiosrtp install skip=1 reason=2")
             return
         }
+        guard let pc = peerConnection else { return }
+        // W-CRYPTORQUEUE (this task) — everything from here on touches
+        // WebRTC (rebindAudioReceiverCryptorPostNegotiation,
+        // activateNativeAudioSrtp -> attachSender, the two
+        // logNativeSrtp* diagnostics' proxied reads) and now runs on
+        // `cryptorAttachQueue` instead of on whichever thread reached this
+        // guard (MainActor via the `pqcSessionKey` didSet, or the WebRTC
+        // signalling thread via `didReceiveNativeAudioSrtpReceiver` /
+        // `acceptPeerCapabilities`). See `cryptorAttachQueue`'s own doc.
+        cryptorAttachQueue.async { [weak self] in
+            guard let self, self.peerConnection === pc else { return }
+            self.installAudioSrtpOnQueue(pc: pc, key: key, retriesRemaining: retriesRemaining)
+        }
+    }
+
+    /// W-CRYPTORQUEUE (this task) — the WebRTC-touching body of
+    /// `installAudioSrtpIfPossible`, always running on `cryptorAttachQueue`.
+    /// See that method's doc for why, and `cryptorAttachQueue`'s own doc for
+    /// the incident this closes.
+    private func installAudioSrtpOnQueue(pc: QAudionPeerConnection, key: Data, retriesRemaining: Int) {
         // W-AUDIORXPOSTNEG (2026-08-28) — this call site is reached only
         // once `negotiated.useAudioSrtp` is confirmed, which means the SDP
         // round that negotiated it has completed — the same "safe to
@@ -3320,11 +3923,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // is a no-op when it didn't (same receiver, cryptor already live)
         // and a real fix when it did. See NativeAudioFrameCryptor.
         // rebindReceiver's own doc for the live-call failure this closes.
-        _ = peerConnection?.rebindAudioReceiverCryptorPostNegotiation()
+        _ = pc.rebindAudioReceiverCryptorPostNegotiation()
         let participant = recipientId ?? "peer"
         let epoch = pqcSessionKeyEpoch
         let slot = epoch % 16
-        let installed = peerConnection?.activateNativeAudioSrtp(
+        let attachStartedMs = Self.nowMs()
+        let installed = pc.activateNativeAudioSrtp(
             key: key,
             participantId: participant,
             slot: slot,
@@ -3344,9 +3948,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // remote log; the engine itself can only print().
             diag: { [weak self] line in self?.log?(line) }
         ) ?? false
+        let attachMs = Self.nowMs() - attachStartedMs
         if installed {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")
             print("audiosrtp tx=1")
+            log?("cryattach media=audio ok=1 ms=\(attachMs)")
             // WIRE_SPEC §8.7 v1.2 — `activateNativeAudioSrtp` only installs
             // the key now (see its own updated doc); it no longer switches
             // the sender itself. Epoch 0 (this call's first audio key)
@@ -3357,21 +3963,108 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if epoch > 0 {
                 armRekeySwitch(media: "audio", epoch: epoch)
             } else {
-                peerConnection?.nativeAudioCryptor?.switchSender(slot: slot)
+                pc.nativeAudioCryptor?.switchSender(slot: slot)
                 // W-CAPTURELIVE — only the FIRST activation of a call needs
                 // this: a rekey (epoch > 0) is switching an already-proven
                 // live sender, `armRekeySwitch` above already confirms that
                 // switch on its own terms.
                 armNativeAudioCaptureLiveCheck()
+                // W-NATIVESRTPDIAG (this task) — one-shot diagnostics, ONLY
+                // on this call's FIRST activation (epoch 0 — a rekey is not
+                // "activation").
+                logNativeSrtpActivationDiagnostics()
+                logNativeSrtpAudioSdpSummary()
             }
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach failed, retrying (\(retriesRemaining) left)")
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.installAudioSrtpIfPossible(retriesRemaining: retriesRemaining - 1)
+            log?("cryattach media=audio ok=0 retry=\(retriesRemaining) ms=\(attachMs)")
+            cryptorAttachQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                self.installAudioSrtpIfPossible(retriesRemaining: retriesRemaining - 1)
             }
         } else {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX attach exhausted retries — mic stays muted this call")
+            log?("cryattach media=audio ok=0 exhausted=1 ms=\(attachMs)")
         }
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — one-shot, remote-visible snapshot of
+    /// everything relevant to "did the native audio path actually come up
+    /// cleanly": the selected transceiver's negotiated state, whether the
+    /// sender track is enabled, whether the FrameCryptor key was installed
+    /// by the time this line is emitted (this call site runs synchronously
+    /// AFTER `activateNativeAudioSrtp` already installed it — see that
+    /// method's own doc — so `keyok=0` here would itself be a bug), and
+    /// the full `RTCAudioSession`/route state WebRTC's native audio unit is
+    /// about to start against.
+    ///
+    /// `RTCRtpTransceiver.currentDirection:` — an out-param METHOD on this
+    /// pinned SDK (the property form failed the CI simulator build); see the
+    /// call site below.
+    private func logNativeSrtpActivationDiagnostics() {
+        var parts: [String] = []
+        if let transceiver = peerConnection?.nativeAudioTransceiverForDiagnostics {
+            parts.append("mid=\(transceiver.mid.isEmpty ? "none" : transceiver.mid)")
+            parts.append("dir=\(transceiver.direction.rawValue)")
+            // W-NATIVESRTPBUILDFIX (2026-09-26) — on this pinned SDK
+            // `currentDirection` is the ObjC out-param METHOD
+            // `-currentDirection:(RTCRtpTransceiverDirection *)`, not a
+            // property (the CI simulator build rejected the property form).
+            // It returns NO before the transceiver has a negotiated
+            // direction; logged as -1 then.
+            var currentDir = RTCRtpTransceiverDirection.inactive
+            let hasCurrentDir = transceiver.currentDirection(&currentDir)
+            let currentDirRaw: Int = hasCurrentDir ? Int(currentDir.rawValue) : -1
+            parts.append("curdir=\(currentDirRaw)")
+        }
+        let senderTrackEnabled = peerConnection?.nativeAudioSender?.track?.isEnabled ?? false
+        parts.append("senden=\(senderTrackEnabled ? 1 : 0)")
+        // See this method's own doc — always expected to read 1 here; a 0
+        // would mean `activateNativeAudioSrtp`'s own install-then-attach
+        // ordering broke.
+        let keyInstalled = peerConnection?.nativeAudioCryptor?.keyIsSet ?? false
+        parts.append("keyok=\(keyInstalled ? 1 : 0)")
+
+        // RTCAudioSession's own wrapper state — the fields WebRTC's native
+        // audio unit itself is about to start against, distinct from the
+        // app's manual AVAudioEngine session bookkeeping this task
+        // deliberately does not touch (see this task's own scope note).
+        let rtcSession = RTCAudioSession.sharedInstance()
+        parts.append("cat=\(rtcSession.category)")
+        parts.append("mode=\(rtcSession.mode)")
+        parts.append("opts=\(rtcSession.categoryOptions.rawValue)")
+        parts.append("active=\(rtcSession.isActive ? 1 : 0)")
+        parts.append("manual=\(rtcSession.useManualAudio ? 1 : 0)")
+        parts.append("audioen=\(rtcSession.isAudioEnabled ? 1 : 0)")
+
+        // Route/hardware fields read off the plain AVAudioSession (same
+        // proven-correct API `CallService.sampleWireThroughput`'s own
+        // `audiosrtp hb=` line already uses for output ports/volume), rather
+        // than guessing whether `RTCAudioSession` re-exposes each of these
+        // under the identical name.
+        let avSession = AVAudioSession.sharedInstance()
+        let inPorts = avSession.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: "+")
+        let outPorts = avSession.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
+        parts.append("inp=\(inPorts.isEmpty ? "none" : inPorts)")
+        parts.append("outp=\(outPorts.isEmpty ? "none" : outPorts)")
+        parts.append("inavail=\(avSession.isInputAvailable ? 1 : 0)")
+        parts.append("sr=\(Int(avSession.sampleRate))")
+        parts.append("iobufms=\(Int(avSession.ioBufferDuration * 1000))")
+
+        log?("audiosrtp activation " + parts.joined(separator: " "))
+    }
+
+    /// W-NATIVESRTPDIAG (this task) — one-shot, sanitized summary of the
+    /// negotiated audio m=section (see ``AudioSdpSummary`` for exactly what
+    /// it reads and why nothing sensitive can appear in it). Reads the
+    /// CURRENT local description: by the time this runs (this call's first
+    /// native-SRTP activation), a full offer/answer round has already
+    /// completed on both roles, so `localDescription` reflects the final
+    /// negotiated state either way.
+    private func logNativeSrtpAudioSdpSummary() {
+        guard let sdp = peerConnection?.peerConnection?.localDescription?.sdp,
+              let summary = AudioSdpSummary.summarize(sdp) else { return }
+        log?("audiosrtp sdp " + summary)
     }
 
     /// Read the current peer-negotiated capability set. Returns `nil`
@@ -3390,8 +4083,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// .setNativeAudioSrtpMuted` — see that method's kdoc; harmless no-op
     /// when this call never negotiated `audio-srtp-v1` (`peerConnection`
     /// nil or `localAudioSrtpTrack` nil there).
-    public func setNativeAudioSrtpMuted(_ muted: Bool) {
-        peerConnection?.setNativeAudioSrtpMuted(muted)
+    ///
+    /// W-CALLERUNMUTELOST (2026-09-27) — latches ``nativeSenderMuted`` on
+    /// `cryptorAttachQueue` FIRST, unconditionally, THEN forwards to
+    /// whichever `peerConnection` exists (possibly none yet, e.g. an
+    /// answer racing this controller's PeerConnection construction — see
+    /// this property's own kdoc): the latch is what makes the request
+    /// survive a `peerConnection` that is still `nil` right now, since the
+    /// `didSet` above re-pushes ``nativeSenderMuted`` the moment one is
+    /// assigned. Hopping onto `cryptorAttachQueue` also serializes this
+    /// against `installAudioSrtpOnQueue`/`activateNativeAudioSrtp`, which
+    /// already run there — no separate lock needed for the shared latch.
+    /// `source` is a bare vocabulary token surfaced in the
+    /// `audiosrtp muteapply` line — see `QAudionPeerConnection
+    /// .onNativeSenderMuteApplied`'s kdoc.
+    public func setNativeAudioSrtpMuted(_ muted: Bool, source: String = "user") {
+        cryptorAttachQueue.async { [weak self] in
+            guard let self else { return }
+            self.nativeSenderMuted = muted
+            self.peerConnection?.setNativeAudioSrtpMuted(muted, source: source)
+        }
     }
 
     /// WIRE_SPEC §8.7 — one-shot latch for `onInboundVideoReady`. Set via
@@ -3568,7 +4279,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                         c.switchSender(slot: slot)
                     }
                 }
-                peerConnection?.attachVideoSenderCryptor()  // idempotent
+                // W-CRYPTORQUEUE (this task) — this rekey branch runs from
+                // BOTH the MainActor (`pqcSessionKey` didSet) and the WebRTC
+                // signalling thread (`didReceiveRemoteVideoReceiver` ->
+                // `ensureVideoSealerInternal`), and `attachSender`'s native
+                // init can block its caller on a marshal to that same
+                // signalling thread — see `cryptorAttachQueue`'s own doc.
+                // `attachVideoSenderCryptor()` is idempotent, so deferring it
+                // here changes nothing about correctness, only which thread
+                // can ever be the one that waits.
+                if let pc = peerConnection {
+                    cryptorAttachQueue.async { [weak self] in
+                        guard let self, self.peerConnection === pc else { return }
+                        let started = Self.nowMs()
+                        let attached = pc.attachVideoSenderCryptor()
+                        self.log?("cryattach media=video reason=rekey ok=\(attached ? 1 : 0) ms=\(Self.nowMs() - started)")
+                    }
+                }
                 print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
             }
             return videoSealer
@@ -3691,19 +4418,52 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// same class already fixed for native-audio-srtp today). Safe to call
     /// unconditionally: `attachSender` is idempotent (no-ops once already
     /// attached), so a retry after a success just confirms the same state.
+    ///
+    /// W-CRYPTORQUEUE (this task) — dispatches onto `cryptorAttachQueue`
+    /// instead of calling `attachVideoSenderCryptor()` on whichever thread
+    /// reached `ensureVideoSealer`'s FIRST-install branch (its only call
+    /// site) — see that queue's own doc for why.
     private func retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: Int) {
-        guard let pc = peerConnection, let cryptor = pc.nativeVideoCryptor else { return }
-        if cryptor.senderIsAttached { return }
+        guard let pc = peerConnection else { return }
+        cryptorAttachQueue.async { [weak self] in
+            guard let self, self.peerConnection === pc else { return }
+            self.attachVideoSenderCryptorOnQueue(pc: pc, retriesRemaining: retriesRemaining)
+        }
+    }
+
+    /// W-CRYPTORQUEUE (this task) — always runs on `cryptorAttachQueue`; see
+    /// `retryVideoSenderCryptorAttachIfNeeded`, its only entry point.
+    private func attachVideoSenderCryptorOnQueue(pc: QAudionPeerConnection, retriesRemaining: Int) {
+        guard let cryptor = pc.nativeVideoCryptor else { return }
+        // See VideoSenderCryptorAttachDecision's own doc (verified against
+        // `isVideoSendConfirmedHealthy`, which already treats "no sender" as
+        // healthy=false with no other side effect): `.skipNoSender` covers
+        // the audio-only call, which never adds a local video track, so
+        // `attachVideoSenderCryptor()` would just fail every one of the 5
+        // retries below — pure log noise, never a real transient failure.
+        switch VideoSenderCryptorAttachDecision.evaluate(senderIsAttached: cryptor.senderIsAttached,
+                                                         hasLocalVideoSender: pc.videoSender != nil) {
+        case .alreadyAttached, .skipNoSender:
+            return
+        case .attempt:
+            break
+        }
+        let started = Self.nowMs()
         let attached = pc.attachVideoSenderCryptor()
+        let elapsedMs = Self.nowMs() - started
         if attached {
             print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach succeeded")
+            log?("cryattach media=video ok=1 ms=\(elapsedMs)")
         } else if retriesRemaining > 0 {
             print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach failed, retrying (\(retriesRemaining) left)")
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: retriesRemaining - 1)
+            log?("cryattach media=video ok=0 retry=\(retriesRemaining) ms=\(elapsedMs)")
+            cryptorAttachQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.peerConnection === pc else { return }
+                self.attachVideoSenderCryptorOnQueue(pc: pc, retriesRemaining: retriesRemaining - 1)
             }
         } else {
             print("[WebRtcCallController] W-VIDEOSENDHEALTH: video sender cryptor attach exhausted retries — staying on WS-relay this call")
+            log?("cryattach media=video ok=0 exhausted=1 ms=\(elapsedMs)")
         }
     }
 
@@ -3812,7 +4572,49 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         guard let provider = relayProvider else { return [] }
         guard let bundle = await provider.currentOrRefresh() else { return [] }
+        return await relayIceServers(from: bundle, reuseRunningBridge: false).servers
+    }
 
+    /// N6 review fix — the ICE-restart half of the relay re-evaluation
+    /// `restartIce` performs before its offer/request. Differs from call
+    /// SETUP's `fetchIceServers()` in exactly the ways a restart on a
+    /// degraded network needs:
+    ///  - CACHED credentials only (`cachedOrNil`, a non-suspending actor
+    ///    read). `currentOrRefresh()` can go to the network (bundle within
+    ///    5 min of its TTL) with a 15 s request timeout — on a network that
+    ///    is mid-handover that would hold the restart offer hostage for up to
+    ///    15 s, longer than the 10 s single-flight gate, letting a second
+    ///    restart overlap this one. A missing/expired cache instead kicks a
+    ///    background refresh for the NEXT attempt and leaves the live list.
+    ///  - A running WSS-TURN bridge is reused, never replaced (see
+    ///    `wssTurnBridgeIceUrl`).
+    ///  - A manual TURN override (W411) is already exactly what the
+    ///    PeerConnection holds: nothing to refresh.
+    /// Worst case is therefore the probe's own `RelayOrderingConstants
+    /// .overallBudgetSec` (~1.2 s, only when some relay does not answer —
+    /// i.e. exactly when re-deciding the relay set/bridge matters); on a
+    /// healthy network it is one STUN round trip to the slowest relay.
+    private func refreshIceServersForRestart(on liveConnection: QAudionPeerConnection) async {
+        if let override = iceServerOverride, !override.isEmpty { return }
+        guard let provider = relayProvider else { return }
+        guard let bundle = await provider.cachedOrNil() else {
+            Task.detached(priority: .utility) { _ = await provider.currentOrRefresh() }
+            log?("restart_ice relay=0 cached=0")
+            return
+        }
+        let result = await relayIceServers(from: bundle, reuseRunningBridge: true)
+        guard !intentionalShutdown, peerConnection === liveConnection, !result.servers.isEmpty else { return }
+        let applied = liveConnection.updateIceServers(result.servers)
+        log?("restart_ice relay=\(applied ? 1 : 0) count=\(result.servers.count) bridge=\(result.bridged ? 1 : 0) reuse=\(result.reusedBridge ? 1 : 0)")
+    }
+
+    /// The relay half of `fetchIceServers()` (latency ordering + the
+    /// W-RELAYGATE-gated WSS-TURN bridge), shared by call setup and the N6
+    /// ICE-restart refresh. `reuseRunningBridge: true` (restart only) keeps
+    /// an already-running bridge instead of dialing a second one.
+    private func relayIceServers(from bundle: RelayCredentialsProvider.RelayBundle,
+                                 reuseRunningBridge: Bool) async
+        -> (servers: [RTCIceServer], bridged: Bool, reusedBridge: Bool) {
         // W-RELAYGEO (2026-08-26, audit item 5) — order the relay list by
         // a lightweight client-measured RTT probe before handing it to
         // libwebrtc, so the nearest-measured relay(s) start ICE gathering
@@ -3868,13 +4670,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
            }),
            firstTurn.username != nil,
            firstTurn.credential != nil {
-            // Route this bridge's WSS-TURN socket through the SAME Reality
-            // tunnel the signaling socket uses when active (see
-            // WssTurnBridge.socksPort doc) — otherwise a call's TURN media
-            // traffic dials clearnet directly even while signaling is
-            // tunneled. `activeSocksPort` is `nil` when Reality isn't
-            // running, which preserves today's direct-dial behavior.
-            let socksPort = await RealityManager.shared.activeSocksPort
+            // N6 review fix — a restart on a network that still shows no
+            // UDP evidence keeps the bridge it already has: same loopback
+            // port, same WSS slot, and the relay pair the current ICE
+            // generation may still be using stays alive (make-before-break).
+            if reuseRunningBridge, wssTurnBridge != nil, let runningIceUrl = wssTurnBridgeIceUrl {
+                servers.insert(
+                    RTCIceServer(
+                        urlStrings: [runningIceUrl],
+                        username: firstTurn.username ?? "",
+                        credential: firstTurn.credential ?? ""
+                    ),
+                    at: 0
+                )
+                return (servers, true, true)
+            }
+            // Bug-C discipline — never dial a bridge for a call that was torn
+            // down while the probe above was in flight.
+            guard !intentionalShutdown else { return (servers, false, false) }
             // W-AUXPIN (2026-09-02, B11) — reuse callingApi's already
             // cert-pinned REST session for this bridge's WSS-TURN handshake
             // instead of URLSession.shared (no pin). nil for any CallingApi
@@ -3885,7 +4698,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 username: firstTurn.username,
                 credential: firstTurn.credential,
                 accessToken: accessToken,
-                socksPort: socksPort.map(Int.init),
                 pinnedSession: callingApi.pinnedUrlSession()
             )
             // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that
@@ -3900,8 +4712,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 bridgeResult = nil
             }
             if let result = bridgeResult {
+                // Bug-C discipline — a teardown that landed during the start
+                // must not be left holding a live bridge nobody will stop.
+                guard !intentionalShutdown else {
+                    bridge.stop()
+                    return (servers, false, false)
+                }
                 wssTurnBridge?.stop()
                 wssTurnBridge = bridge
+                wssTurnBridgeIceUrl = result.iceUrl
                 servers.insert(
                     RTCIceServer(
                         urlStrings: [result.iceUrl],
@@ -3910,10 +4729,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     ),
                     at: 0
                 )
+                return (servers, true, false)
             }
         }
 
-        return servers
+        return (servers, false, false)
     }
 
     public enum ControllerError: Error, Equatable {
@@ -4053,6 +4873,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-VIDEOSENDGATE — start (or leave running) the good-ICE
             // streak `isVideoSendConfirmedHealthy` debounces against.
             if iceGoodSinceMs == nil { iceGoodSinceMs = Self.nowMs() }
+            // N7 (network-resilience-max, this task) — the "end, with
+            // recovery ms" half of the ICE-restart telemetry the assessment
+            // flagged as missing. Only logged when this really WAS a
+            // recovery from a bad streak (`iceBadStateEnteredAtMs != nil`) —
+            // a plain first-ever `.connected` on a healthy call logs
+            // nothing here (the existing `ice state=\(s.rawValue)` line
+            // above already covers that).
+            if let badSince = iceBadStateEnteredAtMs {
+                let recoveryMs = Self.nowMs() - badSince
+                // Review fix — `ice recovered=1`, not `ice_recovery ...`:
+                // verified against `scripts/ship-ios-logs.py`, the compound
+                // leading word is blobbed to `[REDACTED:blob]` in shipping,
+                // leaving the event nameless; this shape ships intact.
+                log?("ice recovered=1 recovery_ms=\(recoveryMs)")
+                iceBadStateEnteredAtMs = nil
+            }
         case .failed, .disconnected:
             if s == .failed { state = .failed("ICE failed") }
             else { state = .disconnected; stopVideoStatsTelemetry() }
@@ -4067,6 +4903,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-VIDEOSENDGATE — ungated: the video WS-relay send leg must
             // resume on the very next frame, not after any debounce.
             iceGoodSinceMs = nil
+            // N7 — first bad transition of this streak only (mirrors the
+            // `iceGoodSinceMs == nil` guard above, inverted): a second
+            // `.disconnected`/`.failed` flip-flop within the SAME streak
+            // must not push the clock forward and understate recovery time.
+            if iceBadStateEnteredAtMs == nil { iceBadStateEnteredAtMs = Self.nowMs() }
         case .closed:
             state = .disconnected
             stopVideoStatsTelemetry()
@@ -4074,6 +4915,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             srtpFallbackTask?.cancel()
             srtpFallbackTask = nil
             iceGoodSinceMs = nil
+            // N7 — a terminal teardown is not a "recovery"; never log one
+            // for a call that just hung up while ICE happened to be bad.
+            iceBadStateEnteredAtMs = nil
         default:
             break
         }

@@ -193,6 +193,9 @@ extension BCryptoBackendProvider {
             TokenVault.saveAccessToken(access)
             if let r = refresh, !r.isEmpty { TokenVault.saveRefreshToken(r) }
         }
+        // The same store, read back: lets this provider's socket pick up a rotation another
+        // provider persisted (see `storedTokenPair`).
+        storedTokenPair = { (access: TokenVault.loadAccessToken(), refresh: TokenVault.loadRefreshToken()) }
         return self
     }
 }

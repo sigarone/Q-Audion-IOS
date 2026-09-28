@@ -120,6 +120,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// (see ``VideoStateBeacon``).
     public var onCallVideoState: ((_ callId: String, _ paused: Bool, _ seq: Int?) -> Void)?
 
+    /// W-VIDPARITY — `call_video_pause_request` (either direction,
+    /// transparent relay, same envelope class as `call_video_state`
+    /// above). The peer is asking US to turn OUR camera off — the "No,
+    /// solo audio" half of Android's RemoteOnly banner. No SDP/consent:
+    /// the honor side auto-complies (mirrors Android `CallController.kt`'s
+    /// pause-request listener). Wire shape carries only `call_id` — no
+    /// `recipient_id`, the server resolves the peer from the call.
+    public var onCallVideoPauseRequest: ((_ callId: String) -> Void)?
+
     /// W-ACTIVECALLASSERT (2026-08-25) — live view of the call id this
     /// process currently believes is live, or `nil` when it holds no call
     /// state. Consulted on EVERY `authenticate` frame so a mid-call
@@ -227,7 +236,24 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     public var onNodeStalled: ((String) -> Void)?
     /// Consecutive failed reconnects to the same node after which `onNodeStalled`
     /// fires. High enough that a flap (counter resets on auth) never trips it.
+    /// Only failures the node did NOT answer count: a server that closes the socket
+    /// with an authentication rejection is demonstrably up (see `handleDisconnect`).
     private let failoverAfterAttempts = 3
+    /// Newest access token held in the app's shared credential store, or nil when
+    /// there is none. Consulted at every `connect()`: the app builds several
+    /// providers and any of them can rotate the token pair, but each keeps the pair
+    /// only in its OWN config, so a client built earlier would keep presenting a
+    /// token the server has since retired (`bad_token` on every reconnect). The
+    /// store is the one place every rotation lands.
+    public var latestAccessToken: (() -> String?)?
+    /// The access token carried by the most recent `authenticate` frame this client
+    /// sent. Lets the recovery hook tell "the stored pair is newer than what was
+    /// rejected" from "the stored pair is exactly what was rejected".
+    private var _lastPresentedAccessToken: String?
+    public var lastPresentedAccessToken: String? {
+        lock.lock(); defer { lock.unlock() }
+        return _lastPresentedAccessToken
+    }
     /// Interval between outbound ping keepalives. ADAPTIVE by transport (set by
     /// `applyAdaptiveTiming(for:)` from the NWPathMonitor): WiFi 20 s (beats
     /// carrier/NAT idle timeouts and keeps the server from marking us stale),
@@ -239,13 +265,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// connection as dead and tear it down so the reconnect loop picks it up.
     /// ADAPTIVE by transport: WiFi 30 s, cellular 120 s, wired/other 45 s.
     private var pongTimeoutSec: TimeInterval = 30
-    /// SOCKS5 port from the most recent explicit `connect(viaSocksPort:)` call
-    /// (nil = direct dial). Sticky across INTERNAL reconnects (forceReconnect,
-    /// the backoff retry below) so a Reality-routed session keeps routing
-    /// through Reality after a drop instead of silently falling back to a
-    /// direct dial the network may be blocking. Only an explicit external
-    /// `connect(viaSocksPort:)` call changes it.
-    private var currentSocksPort: Int?
     /// Debounce flag for `forceReconnect()`. iOS suspends URLSessionWebSocketTask
     /// silently when the app is backgrounded; the very first send() after
     /// foregrounding may discover task==nil and kick a reconnect. Without this
@@ -277,7 +296,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     // none of them should have to know about the others to avoid stepping on
     // each other's `disconnect()`.
     //
-    // `connect(viaSocksPort:)` keeps its existing public contract — it is
+    // `connect()` keeps its existing public contract — it is
     // still safe to call directly with no token in hand — but it now also
     // holds one FOR the caller (`legacyStandingToken`) so a caller that never
     // adopts the token API sees no behavior change: as long as nobody calls
@@ -359,10 +378,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         if shouldBeConnected() {
             lock.lock()
             let isDisconnected = (_state == .disconnected)
-            let socksPort = currentSocksPort
             lock.unlock()
             if isDisconnected {
-                connect(viaSocksPort: socksPort)
+                connect()
             }
         } else {
             lock.lock()
@@ -380,13 +398,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// have reconnected it). Retrying blind in either case would either
     /// reopen a socket nobody wants anymore or race a second concurrent
     /// connect attempt.
-    private func retryConnectIfStillDesired(viaSocksPort socksPort: Int?) {
+    private func retryConnectIfStillDesired() {
         guard shouldBeConnected() else { return }
         lock.lock()
         let isDisconnected = (_state == .disconnected)
         lock.unlock()
         guard isDisconnected else { return }
-        connect(viaSocksPort: socksPort)
+        connect()
     }
 
     // MARK: - IOS-E1 — outbound WS media-frame bound
@@ -967,6 +985,19 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let seq = data["seq"] as? Int
             self.onCallVideoState?(callId, paused, seq)
         }
+
+        // W-VIDPARITY — call_video_pause_request (peer→us). Same envelope
+        // class as call_video_state; no recipient_id on the wire (server
+        // resolves the peer). Missing/empty call_id is silently ignored —
+        // there is nothing to honor without a call id, same guard shape
+        // every other handler in this method uses.
+        registerHandler(type: "call_video_pause_request") { [weak self] _, data in
+            guard let self = self,
+                  let callId = data["call_id"] as? String,
+                  !callId.isEmpty
+            else { return }
+            self.onCallVideoPauseRequest?(callId)
+        }
     }
 
     public var state: ConnectionState { lock.lock(); defer { lock.unlock() }; return _state }
@@ -974,14 +1005,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// Diagnostic only. See `_lastDisconnectReason` for why this exists.
     public var lastDisconnectReason: String? { lock.lock(); defer { lock.unlock() }; return _lastDisconnectReason }
 
-    /// - Parameter viaSocksPort: when set, routes the WS connection through a
-    ///   local loopback SOCKS5 proxy on `127.0.0.1:<port>` instead of dialing
-    ///   directly — used by the Reality censorship-bypass backend
-    ///   (RealityManager); default `nil` preserves today's direct-dial
-    ///   behavior unchanged. Caller is responsible for having the tunnel
-    ///   already up (e.g. `await RealityManager.shared.start(params:)`)
-    ///   before passing its port.
-    public func connect(viaSocksPort socksPort: Int? = nil) {
+    public func connect() {
         lock.lock()
         // W-CONNWANT — a caller that reaches the socket directly (no token
         // in hand) still gets one held on its behalf, so shouldBeConnected()
@@ -1001,7 +1025,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
         _state = .connecting
-        currentSocksPort = socksPort
         // IOS-E5 — any explicit connect() (forceReconnect, willEnterForeground,
         // the un-park call from handlePathUpdate itself) takes ownership away
         // from a park, exactly like it cancels a timer-based backoff retry.
@@ -1056,19 +1079,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // when the app is in background.
         sessionConfig.networkServiceType = .callSignaling
 
-        // Reality censorship-bypass path (additive, default off — see
-        // RealityManager.swift / bcrypto-server's CENSORSHIP_RESISTANT_
-        // TRANSPORT_DESIGN.md §4.4). The WSS handshake + cert pinning below
-        // runs UNCHANGED through this tunnel — nothing above the transport
-        // layer needs to know Reality exists.
-        if let socksPort {
-            sessionConfig.connectionProxyDictionary = [
-                "SOCKSEnable": true,
-                "SOCKSProxy": "127.0.0.1",
-                "SOCKSPort": socksPort
-            ] as [String: Any]
-        }
-
         // SECURITY C-6 / H-1 / H-5 — pick the TLS-challenge mode the same
         // way BCryptoRestClient does, and route the WS-open event so the
         // auth token is sent ONLY after the upgrade completes (H-5):
@@ -1099,7 +1109,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // queued on (or dropped by) a socket that had not finished the
         // HTTP→WS handshake — the server then saw an unauthenticated
         // socket and silently dropped subsequent frames.
-        let pendingToken = config.accessToken
+        let pendingToken = Self.tokenForConnect(stored: latestAccessToken?(), configured: config.accessToken)
         let delegate = WSSessionDelegate(mode: challengeMode) { [weak self] in
             guard let self = self, let token = pendingToken else { return }
             self.authenticate(token: token)
@@ -1248,10 +1258,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // backoff actually throttle a runaway loop; a genuinely successful
         // reconnect still resets it to 0 in handleMessage("authenticated").
         let listeners = stateListeners
-        let socksPort = currentSocksPort
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
-        connect(viaSocksPort: socksPort)
+        connect()
 
         // Failsafe (per OpenRouter glm-5.1 review 2026-05-08 Bug 1):
         // if `connect()` opens a task that NEVER authenticates AND NEVER
@@ -1361,13 +1370,31 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// (internal/signaling/messages.go). `id` is a UUID used for request/response
     /// correlation (e.g. pairing a server `pong` with the triggering `ping`).
     public func send(type: String, data: [String: Any]) {
+        _ = trySend(type: type, data: data)
+    }
+
+    /// Same wire behaviour as `send(type:data:)`, but reports whether the frame
+    /// was handed to a socket task. `false` means the frame was NOT accepted
+    /// and the caller still owns it: the envelope could not be encoded, there
+    /// is no task (the socket is not connected), the socket was found stale (a
+    /// reconnect is kicked and the frame is still attempted best-effort, but
+    /// it is not reported as accepted), or a media frame hit the outbound
+    /// backpressure cap. `true` means `URLSessionWebSocketTask.send` was
+    /// invoked for the frame: acceptance is synchronous. A transmission error
+    /// the OS reports later, through the send completion handler, is only
+    /// logged and is not observed by the caller, so a frame reported as
+    /// accepted can still be lost; `true` is not a delivery guarantee.
+    /// Callers that must not lose a frame (a durable outbox) remove it from
+    /// their queue only on `true`.
+    @discardableResult
+    public func trySend(type: String, data: [String: Any]) -> Bool {
         let message: [String: Any] = [
             "type": type,
             "data": data,
             "id": UUID().uuidString
         ]
         guard let jsonData = try? JSONSerialization.data(withJSONObject: message),
-              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return false }
         // W419 — log dispatch attempt + capture send errors. The previous
         // `{ _ in }` swallowed every transmission failure: if the WS was
         // suspended (app backgrounded) or already torn down, sends became
@@ -1398,13 +1425,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             if Self.shouldKickReconnect(forType: type) {
                 forceReconnect()
             }
-            return
+            return false
         }
+        var acceptedOnLiveSocket = true
         if stale && Self.shouldKickReconnect(forType: type) {
             print("[BCryptoWS] send(\(type)) STALE socket — kicking reconnect; attempting send anyway (best-effort)")
             forceReconnect()
             // Fall through and try the send — `task.send` will report the
             // error in its completion if the cancelled task rejects it.
+            // The attempt is best-effort only, so it is not reported as
+            // accepted (`trySend` doc).
+            acceptedOnLiveSocket = false
         }
         // IOS-E1 — media-only backpressure gate (see the kdoc block above
         // `outboundMediaFramesInFlight`). No-op for non-media types.
@@ -1416,7 +1447,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // DROPPED outbound media backlog…" (prose-heavy) is DROPPED
             // whole, both re-verified 2026-08-25.
             print("[BCryptoWS] media send drop kind=\(type.hasPrefix("audio") ? "audio" : "video") cap=\(Self.maxOutboundMediaFramesInFlight)")
-            return
+            return false
         }
         task?.send(.string(jsonString)) { [weak self] error in
             self?.completeOutboundMediaFrame(forType: type)
@@ -1424,6 +1455,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 print("[BCryptoWS] send(\(type)) FAILED: \(error.localizedDescription)")
             }
         }
+        return acceptedOnLiveSocket
     }
 
     /// Whitelist of message types that warrant a reconnect kick when the
@@ -1939,6 +1971,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     }
 
     private func authenticate(token: String) {
+        lock.lock()
+        _lastPresentedAccessToken = token
+        lock.unlock()
         var data: [String: Any] = ["token": token]
         // Binary relay framing is negotiated per socket, inside the existing
         // auth handshake — no new message type, one added field. An old server
@@ -1961,6 +1996,33 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             data["active_call_id"] = liveCallId
         }
         send(type: "authenticate", data: data)
+    }
+
+    /// Token a new connection presents: the shared store's newest when it has one,
+    /// else whatever this client's own config holds. Internal so a test can pin the
+    /// preference without opening a socket.
+    static func tokenForConnect(stored: String?, configured: String?) -> String? {
+        if let stored, !stored.isEmpty { return stored }
+        return configured
+    }
+
+    /// Whether a failed reconnect counts as "this node looks dead". Only after `threshold`
+    /// consecutive failures, and never for a close that carried an authentication
+    /// rejection (the node answered). Internal for tests.
+    static func shouldSignalNodeStalled(attempt: Int, threshold: Int, authRejected: Bool) -> Bool {
+        attempt >= threshold && !authRejected
+    }
+
+    /// True when the server closed the socket because it rejected the token: policy
+    /// violation with the reason `auth_failed`. The server answers a bad token with an
+    /// `error` frame followed by that close, but the frame is queued behind the close
+    /// and does not reliably reach the client, so the close is the signal that always
+    /// does. Policy violation is also used for other closes (auth deadline, revoked
+    /// device keys, reconnect rate limit, inbound flood), none of which a new token
+    /// can fix, so the reason string is part of the test. Internal for tests.
+    static func isAuthRejectionClose(code: URLSessionWebSocketTask.CloseCode, reason: Data?) -> Bool {
+        guard code == .policyViolation, let reason else { return false }
+        return String(data: reason, encoding: .utf8) == "auth_failed"
     }
 
     /// The ONE input that may turn binary framing on for a socket: a literal
@@ -2067,9 +2129,29 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 }
                 self.receiveLoop(generation: generation)
             case .failure(let error):
-                self.handleDisconnect(generation: generation, reason: (error as NSError).description)
+                // A rejected token reaches us as a close frame (policy violation /
+                // "auth_failed"), not as a frame this class can rely on. Run the same
+                // silent recovery the `error` frame would, BEFORE handleDisconnect so
+                // the reconnect that follows waits for it instead of racing it.
+                let authRejected = Self.isAuthRejectionClose(code: task.closeCode, reason: task.closeReason)
+                if authRejected { self.handleAuthRejectedClose(generation: generation) }
+                self.handleDisconnect(
+                    generation: generation,
+                    reason: (error as NSError).description,
+                    authRejected: authRejected)
             }
         }
+    }
+
+    /// Server closed the socket over our token. Ignored when a newer `connect()` has
+    /// already replaced this socket (its verdict says nothing about the live one).
+    private func handleAuthRejectedClose(generation: Int) {
+        lock.lock()
+        let live = (generation == connectionGeneration)
+        lock.unlock()
+        guard live else { return }
+        print("[BCryptoWS] auth rejected by close frame — starting silent recovery")
+        handleAuthFailed()
     }
 
     /// Inbound WebSocket BINARY frame.
@@ -2609,7 +2691,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             reconnectAttempt = 0
             shouldUnpark = true
         }
-        let socksPortForUnpark = currentSocksPort
         lock.unlock()
 
         if shouldUnpark {
@@ -2618,7 +2699,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // "offlinepark unpark reconnect_attempt=N" (prose-heavy, two
             // unrecognized words) does not, re-verified 2026-08-25.
             print("[BCryptoWS] net park=0 attempt=0")
-            retryConnectIfStillDesired(viaSocksPort: socksPortForUnpark)
+            retryConnectIfStillDesired()
             return
         }
 
@@ -2713,7 +2794,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
     }
 
-    private func handleDisconnect(generation: Int? = nil, reason: String? = nil) {
+    private func handleDisconnect(generation: Int? = nil, reason: String? = nil, authRejected: Bool = false) {
         lock.lock()
         // Drop stale disconnect callbacks from zombie connections. This fires when
         // a cancelled task's receive closure delivers its .failure result AFTER a
@@ -2770,7 +2851,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // DEAD. Signal the app to fail over to a different node (it re-selects +
         // reconnects). The backoff reconnect below still proceeds and is superseded
         // when the app switches the server URL.
-        if attempt >= failoverAfterAttempts, let onStalled = onNodeStalled {
+        // A close that carried an authentication rejection was ANSWERED by the node: it is
+        // reachable and working, the problem is this client's token. Counting it toward
+        // failover moved a healthy user onto the disaster-recovery replica (which holds a
+        // different database and never authenticated this device) every time a stale token
+        // looped three times.
+        if Self.shouldSignalNodeStalled(attempt: attempt, threshold: failoverAfterAttempts, authRejected: authRejected),
+           let onStalled = onNodeStalled {
             let deadWss = config.serverUrl
                 .replacingOccurrences(of: "https://", with: "wss://")
                 .replacingOccurrences(of: "http://", with: "ws://") + "/ws"
@@ -2783,7 +2870,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         pingTimer?.cancel()
         pingTimer = nil
         let listeners = stateListeners
-        let socksPort = currentSocksPort
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
 
@@ -2820,7 +2906,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let jitter = baseDelay * (Double.random(in: -0.25...0.25))
         let delay = max(0.5, baseDelay + jitter)
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.retryConnectIfStillDesired(viaSocksPort: socksPort)
+            self?.retryConnectIfStillDesired()
         }
     }
 }

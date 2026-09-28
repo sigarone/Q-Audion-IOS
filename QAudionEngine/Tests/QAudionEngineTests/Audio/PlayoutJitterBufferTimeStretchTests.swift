@@ -178,8 +178,11 @@ final class PlayoutJitterBufferTimeStretchTests: XCTestCase {
     func test_firesAtThe60msLongFrameCadenceToo_shortenedByTheSameFixedSampleShave() {
         let jb = PlayoutJitterBuffer()
         jb.setInboundFrameDurationMs(60)
-        // trim(140ms)@60ms=2, timeStretchWatermark(200ms)@60ms=3.
-        for i in 0..<3 { jb.push(loudFrame(seed: i, samples: 2880)) }
+        // W-JBMINFRAMES (2026-09-18): the target is floored at 2 frames at 60 ms, and the
+        // monotonic chain keeps every rung strictly above it — nominal=2, trim=3,
+        // timeStretchWatermark=4 — so the "try time-stretch first" band is depth 4 (it was
+        // 3 when the target could sit at a single frame).
+        for i in 0..<4 { jb.push(loudFrame(seed: i, samples: 2880)) }
         let delivered = jb.popWithDriftCatchup()
         XCTAssertNotNil(delivered)
         let expected = AudioConstants.maxBytesPerFrame - PlayoutJitterBuffer.timeStretchShaveSamples * 2
