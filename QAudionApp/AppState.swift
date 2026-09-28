@@ -2009,6 +2009,24 @@ final class AppState: ObservableObject {
     /// queued removal replays in order at flush time and nets out.
     private var pendingRemoteIceCandidates: [(candidate: String, sdpMid: String?, sdpMLineIndex: Int32, removed: Bool)] = []
     private static let pendingRemoteIceCandidatesCap = 25
+
+    /// W-MEDIAATACCEPT (option b) — §4.4/§4.10 (I13): the 2s "waiting for
+    /// SDP" and 8s "build watchdog" timers `startIncomingMediaPlane` arms,
+    /// keyed by callId so `wipeRingState` can cancel exactly this call's
+    /// (never a DIFFERENT, still-ringing call's). `@MainActor` already
+    /// covers this — no separate lock needed.
+    var ringMediaPlaneTimers: [String: [Task<Void, Never>]] = [:]
+
+    /// W-MEDIAATACCEPT (option b) — §4.5/D2 (I12): handshake-completion
+    /// side effects deferred while `mode == 1` holds a call's ACCEPT —
+    /// same shape/purpose as the pre-existing `pendingIdentityGatedMedia`
+    /// gate, but keyed to "has this call's ACCEPT been released" instead
+    /// of "is the caller's identity verified". Drained by
+    /// `drainAcceptGatedActions` right after `releaseHeldAcceptIfDue`.
+    /// Discarded (never drained) by `wipeRingState` if the call ends while
+    /// still ringing — D2: a call nobody answered must not mutate
+    /// persistent chat/ratchet state.
+    var pendingAcceptGatedActions: [String: [() -> Void]] = [:]
     /// Remote video track delivered by the WebRTC stack when the peer
     /// sends video via RTP (Android interop path). Typed as Any? so the
     /// header compiles without a WebRTC import at top level. At runtime
@@ -5027,6 +5045,13 @@ final class AppState: ObservableObject {
             else { return nil }
             return impl.getActiveCallId()
         }
+        // W-MEDIAATACCEPT (option b) — §4.10 (I13): single teardown
+        // chokepoint for every ring-time artifact of whichever call just
+        // ended, no matter which path (`call_hangup`, `call_cancel`,
+        // CallKit end/reset, peer offline/busy) led into `endCall()`.
+        callService.onCallTeardownChokepoint = { [weak self] cid in
+            self?.wipeRingState(cid, why: 1)
+        }
         // IOS-C4b (2026-08-26) — wired ONCE here, same "lazy provider read
         // live off webRtcController" pattern as the getters above:
         // `webRtcController` is reassigned per call (startCall /
@@ -5036,7 +5061,36 @@ final class AppState: ObservableObject {
         // `startAudioIOIfReady`'s IOS-C4b guard and `NativeAudioPcmTap`'s
         // doc for why the two paths must never run concurrently.
         callService.getUsesNativeAudioSrtp = { [weak self] in
-            (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true
+            guard (self?.webRtcController as? QAudionWebRtcCallController)?.peerNegotiated()?.useAudioSrtp == true else {
+                return false
+            }
+            // W-MEDIAATACCEPT (option b) — §4.6: a `.failed` incoming
+            // media-plane build already fell back to the sealed custom
+            // path (§4.4's catch) — the controller may still report a
+            // negotiated `useAudioSrtp` from before the failure, but audio
+            // I/O must follow the fallback, not the stale negotiation.
+            if let cid = self?.canonicalActiveCallId(),
+               RingSignalingRegistry.shared.entry(cid)?.mediaPlane == .failed {
+                return false
+            }
+            return true
+        }
+        // W-MEDIAATACCEPT (option b) — §4.6 (gate 5): predicts whether THIS
+        // call's still-building PC will end up native, from the plan's
+        // latched snapshot and whichever peer capabilities are known so
+        // far (the stashed OFFER's, or the pre-OFFER `call_incoming` stash
+        // — `pendingPeerCapabilities`, same source `buildIncomingWebRtcMediaPlane`
+        // itself falls back to).
+        callService.mediaPlanePending = { [weak self] in
+            guard let self = self,
+                  let cid = self.canonicalActiveCallId(),
+                  let plan = RingSignalingRegistry.shared.entry(cid),
+                  plan.mode == 1 else { return false }
+            let peerCaps = plan.offer?.capabilities ?? self.pendingPeerCapabilities
+            let predictedNative = plan.native && (peerCaps?.contains(CallCapabilities.audioSrtpV1) == true)
+            return RingSignalingDecisions.audioIOGate(
+                mode: plan.mode, mediaPlane: plan.mediaPlane, predictedNative: predictedNative
+            ) == .deferGate5
         }
         // W-DEADTXRELEASE — same live-setter pattern as the getter above:
         // lets engageAudioSrtpFallback() release the native sender before
@@ -6507,6 +6561,12 @@ final class AppState: ObservableObject {
                         }
                     }
                     NotificationCenterService.shared.clearIncomingCall(callId: callIdStr)
+                    // W-MEDIAATACCEPT (option b) — I13: this call already
+                    // got a ring plan latched two lines above
+                    // (`latchIncomingNativeSrtpSnapshot`) before this
+                    // decline guard runs — clear it, it was never going to
+                    // be accepted.
+                    self.wipeRingState(callIdStr, why: 3)
                     print("[AppState] W-NOCALLKIT cold-start decline consumed — call rejected before provisioning")
                     return
                 }
@@ -14224,6 +14284,21 @@ final class AppState: ObservableObject {
                     sharedSecret, for: peerId)
             }
         }
+        // W-MEDIAATACCEPT (option b) — §6: per-call isolation, additive to
+        // (not a replacement for) the `callPqcSessionKey` write above — see
+        // `refreshCallPqcSessionKeyProjection`'s doc for why this does not
+        // also touch that published value here.
+        integration.onSessionKeyForCall = { key, cid in
+            guard !cid.isEmpty else { return }
+            CallKeyStore.shared.put(callId: cid, key: key, origin: .pqc)
+        }
+        // W-MEDIAATACCEPT (option b) — I11: gate every responder ACCEPT
+        // emission point on this call's latched ring plan. No plan yet
+        // (OFFER raced call_incoming, W-OFFERBUFFER) falls back to the
+        // fleet default inside `shouldHoldAccept` itself.
+        integration.shouldHoldResponderAccept = { cid in
+            RingSignalingRegistry.shared.shouldHoldAccept(cid)
+        }
         // DISPLAY-ONLY: responder JSON path also reports the negotiated PSK
         // fingerprint. Resolve the human name + method on the app side from
         // our own vault, then record it for the in-call key panel. Never
@@ -14817,7 +14892,26 @@ final class AppState: ObservableObject {
         // has no other call_answer emitter, so the caller would stay stuck in
         // .ringing without this. WebRTC calls send their own SDP-bearing
         // call_answer from the controller — skip to avoid a duplicate.
-        if webRtcController == nil, let calling = liveProvider?.callingApi {
+        // W-MEDIAATACCEPT (option b) — §4.4: with `mode == 1` the incoming
+        // media-plane builder (`startIncomingMediaPlane` /
+        // `buildIncomingWebRtcMediaPlane`) is either about to send, or has
+        // already sent, a REAL SDP-bearing `call_answer` for this call —
+        // this blank-SDP WS-relay fallback must not race it while that
+        // build is in flight (`checkAndMarkAnswerSent`'s dedup would then
+        // silently eat the real answer, the exact regression spec §4.4
+        // warns about). Only `.none`/`.failed` (no plan, legacy mode, or
+        // the build already gave up) fall through to the blank answer.
+        let ringCallIdForAnswerGuard = canonicalActiveCallId() ?? ""
+        let mediaPlaneStillBuilding: Bool = {
+            guard !ringCallIdForAnswerGuard.isEmpty,
+                  let plan = RingSignalingRegistry.shared.entry(ringCallIdForAnswerGuard),
+                  plan.mode == 1 else { return false }
+            switch plan.mediaPlane {
+            case .awaitingSdp, .building, .ready: return true
+            case .none, .failed: return false
+            }
+        }()
+        if webRtcController == nil, !mediaPlaneStillBuilding, let calling = liveProvider?.callingApi {
             Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
         }
         print("[AppState] deferred answer consumed: \(trigger)")
@@ -16060,7 +16154,12 @@ final class AppState: ObservableObject {
         // bundle and the WebRTC rail share one id. A random UUID either way.
         let nativeSrtpOutgoingCallId: String = UUID().uuidString.lowercased()
         let outgoingSnapshot = CallCapabilities.beginNativeSrtpCallSnapshot(callId: nativeSrtpOutgoingCallId)
-        logNativeSrtpSnapshot(outgoingSnapshot, site: 2)
+        // W-MEDIAATACCEPT (option b) — §10: site 2 itself is DIAL (phase
+        // "ring" inside logNativeSrtpSnapshot — no PC yet); the outgoing
+        // side's own "pc" breadcrumb goes right before
+        // `controller.startOutgoingCall(...)` below, using this captured
+        // value so it doesn't have to re-derive the kill-switch decision.
+        let outgoingEffectiveNative: Bool = logNativeSrtpSnapshot(outgoingSnapshot, site: 2)
         drainPendingOfferReplays(for: contactId)  // W-OFFERBUFFER (defensive; caller path)
         callState = .connecting
         isInCall = true
@@ -16564,6 +16663,15 @@ final class AppState: ObservableObject {
                         CallSessionKeyBroker.shared.registerPqcSessionKey(
                             sharedSecret, for: peerId)
                     }
+                }
+                // W-MEDIAATACCEPT (option b) — §6: caller side. The caller
+                // always builds its PC immediately at DIAL regardless of
+                // `calls.ring_signaling_only` (only the CALLEE defers), so
+                // this is purely the same additive CallKeyStore isolation
+                // as the responder wiring — no hold gate applies here.
+                integration.onSessionKeyForCall = { key, cid in
+                    guard !cid.isEmpty else { return }
+                    CallKeyStore.shared.put(callId: cid, key: key, origin: .pqc)
                 }
                 // DISPLAY-ONLY: caller JSON path PSK metadata (mirror of the
                 // responder wiring above). Resolves name+method app-side.
@@ -17091,6 +17199,13 @@ final class AppState: ObservableObject {
                 // back to minting its own UUID (old behaviour, harmless for
                 // pure-WebRTC peers).
                 let webRtcCallId: String? = sharedOutgoingCallId.isEmpty ? nil : sharedOutgoingCallId
+                // W-MEDIAATACCEPT (option b) — §10: about to build the
+                // outgoing PeerConnection — advance the crash-guard phase
+                // from "ring" (site 2, above) to "pc" before any
+                // RTCPeerConnection exists, mirroring the callee's own
+                // "pc" breadcrumb in `startIncomingMediaPlane`.
+                CrashBreadcrumbs.setCallContext(inCall: true, native: outgoingEffectiveNative, role: "caller",
+                                                 callId: nativeSrtpOutgoingCallId, phase: "pc")
                 Task { [weak self] in
                     do {
                         try await controller.startOutgoingCall(
@@ -17695,6 +17810,49 @@ final class AppState: ObservableObject {
         return activeCallKitId?.uuidString.lowercased()
     }
 
+    /// W-MEDIAATACCEPT (option b) — a plain wall-clock millisecond reading
+    /// for the T5/T6/T7/T11 telemetry lines' `ms=` fields (elapsed-since-
+    /// accept, etc.) — local clock only, never compared across devices.
+    static func nowMsForTelemetry() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §6/§9, DELIBERATELY NARROW SCOPE. The
+    /// spec's full ask (§6) is for `callPqcSessionKey` to become a pure,
+    /// always-live projection of `CallKeyStore.get(canonicalActiveCallId())`,
+    /// recomputed on every `CallKeyStore` write/wipe, with all ~12 existing
+    /// read sites left untouched. NOT implemented that broadly here: this
+    /// codebase's existing `onPqcSessionKeyEstablished` → `CallSessionKeyBroker
+    /// .bind(setSessionKey:)` write path fires the instant a handshake
+    /// completes — for the CALLEE under `mode == 1` that is still at RING
+    /// time, well before `canonicalActiveCallId()` is guaranteed to agree
+    /// with the just-completed call (it depends on `activeCallKitId`/
+    /// `BCryptoCallingApiImpl.getActiveCallId()`, both call-site-dependent
+    /// and not exercised end-to-end here without a compiler). Auto-firing
+    /// this on every handshake completion risked resetting
+    /// `callPqcSessionKey` to `nil` mid-handshake for a call this function
+    /// doesn't yet recognize as canonical — a regression this task cannot
+    /// safely rule out by reading alone.
+    ///
+    /// Instead: `CallKeyStore` is written in parallel (harmless, additive)
+    /// from `QAudionCallIntegration.onSessionKeyForCall`, and
+    /// `callPqcSessionKey`'s own write path is UNCHANGED. This method is
+    /// called at exactly one, safe, well-understood point —
+    /// `startIncomingMediaPlane`, right before seeding the incoming
+    /// controller (§4.4) — where `canonicalActiveCallId()` is the call
+    /// actually being accepted. That is also where `CallKeyStore.take(_:)`
+    /// is used directly as the seed, so this call mainly keeps the
+    /// published/observable value in sync with what the controller was
+    /// actually seeded with, for any other UI reading `callPqcSessionKey`.
+    @MainActor
+    func refreshCallPqcSessionKeyProjection() {
+        guard let active = canonicalActiveCallId(),
+              let projected = CallKeyStore.shared.get(active) else { return }
+        if projected != callPqcSessionKey {
+            callPqcSessionKey = projected
+        }
+    }
+
     @MainActor
     private func handleCallAccepted(callId: String) {
         // W-SETUPRETRY (2026-08-25) — the callee's real-user accept proves the
@@ -17729,7 +17887,7 @@ final class AppState: ObservableObject {
             isRinging: self.callState == .ringing,
             isPreRingActive: self.callState == .active,
             alreadyFinalized: self.callFinalizedCallId == wireId
-        ), self.localHandshakeReadyCallId == wireId else {
+        ) else {
             // W-ACCEPTEDBEFOREREADY — this used to be a silent `return`,
             // which is exactly why the bug above went unnoticed until raw
             // device logs were pulled by hand. Short, numeric-tailed so it
@@ -17737,7 +17895,42 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "callaccepted dropped=1 ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) handshakeready=\(self.localHandshakeReadyCallId == wireId ? 1 : 0)")
             return
         }
+        guard self.localHandshakeReadyCallId == wireId else {
+            // W-MEDIAATACCEPT (option b) — §5 item 2: an accept landing
+            // before OUR own handshake is ready is the ORDINARY path
+            // against a (b) callee (D1: its ACCEPT is trattenuto until
+            // after its own call_answer, so `call_accepted` — sent at ITS
+            // ring-plan accept — reliably arrives before the ACCEPT this
+            // side needs). `info`, not `warn`, for exactly this combination.
+            RTLog.info("call", "callaccepted dropped=1 ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) handshakeready=0")
+            // §5 item 1: 12s "accepted but no answer" watchdog — today the
+            // call would otherwise ride the server's own 60s ring timeout.
+            self.armCallAcceptedWithoutAnswerWatchdog(wireId: wireId)
+            return
+        }
         self.finalizeCallActive()
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §5 item 1. Armed the moment
+    /// `call_accepted` arrives before this side's own handshake (hence
+    /// `call_answer`) is ready. If 12s later `callFinalizedCallId` still
+    /// isn't `wireId` — no `call_answer` (or later handshake completion)
+    /// ever un-stuck the call — end it locally with `setup_failed` rather
+    /// than riding the server's own 60s ring timeout.
+    private func armCallAcceptedWithoutAnswerWatchdog(wireId: String) {
+        let watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard let self = self, !Task.isCancelled else { return }
+            guard self.callFinalizedCallId != wireId else { return }
+            RTLog.info("call", "ringsig timeout=1 why=1")
+            TelemetryService.shared.emit(
+                kind: "call.ended",
+                callId: wireId,
+                attrs: ["reason": "setup_failed"]
+            )
+            self.endCall(notifyPeerInBand: true)
+        }
+        ringMediaPlaneTimers[wireId, default: []].append(watchdog)
     }
 
     /// W-FGREAP (2026-08-13) — true when this app has no call of its own, in
@@ -17929,6 +18122,44 @@ extension AppState {
                     RTLog.warn("call", "sigsend fail kind=call_accepted cid=\(acceptedCallId.prefix(8)) err=\(error)")
                 }
             }
+        }
+        // W-MEDIAATACCEPT (option b) — §2.1/§4.4 (I3 T4): the human accept.
+        // Mark the ring plan accepted (idempotent — first call wins, so a
+        // duplicate accept path can never rewind `acceptedAtMs`), log T4
+        // (must read ice=0 answer=0 under `mode == 1`), then start the
+        // media plane. `startIncomingMediaPlane` itself no-ops under
+        // `mode == 0` (legacy — the full setup already ran at ring) or
+        // when there is no latched plan at all (`callId` was empty at
+        // ring, §3). Placed AFTER the call_accepted send above and BEFORE
+        // `vidcap`/`consumeDeferredAnswerIfReady` per spec §4.4.
+        //
+        // `canonicalActiveCallId()` (falling back to the CallKit uuid) —
+        // NOT `uuid.uuidString` alone — because the ring plan was latched
+        // at `call_incoming` under the wire `call_id` verbatim
+        // (`latchIncomingNativeSrtpSnapshot`), while `uuid` here is a
+        // CallKit `UUID` that only HAPPENS to parse back to the same
+        // string when the server's call_id is itself valid UUID syntax
+        // (see `canonicalActiveCallId()`'s own doc for this exact
+        // caveat) — using the same resolver both places keeps the key
+        // consistent even on the rare non-UUID call_id.
+        let ringPlanCallId = canonicalActiveCallId() ?? uuid.uuidString.lowercased()
+        RingSignalingRegistry.shared.markAccepted(ringPlanCallId)
+        if let plan = RingSignalingRegistry.shared.entry(ringPlanCallId) {
+            let ptx = self.callService.getAudioRtpPacketsSent?() ?? 0
+            RTLog.info("call", "ringsig accept=1 mode=\(plan.mode) ice=\(plan.preAcceptIce) answer=\(plan.preAcceptAnswers) ptx=\(ptx)")
+        }
+        self.startIncomingMediaPlane(callId: ringPlanCallId, trigger: "accept")
+        // W-MEDIAATACCEPT (option b) — I11: the 5s reserve release timer,
+        // armed unconditionally at accept (alongside the `onAnswerSent`
+        // trigger already wired). Whichever fires first wins —
+        // `releaseHeldAcceptIfDue` is idempotent (checks `acceptReleased`).
+        if let plan = RingSignalingRegistry.shared.entry(ringPlanCallId), plan.mode == 1 {
+            let reserveTimer = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self = self, !Task.isCancelled else { return }
+                self.releaseHeldAcceptIfDue(ringPlanCallId, why: 2)
+            }
+            ringMediaPlaneTimers[ringPlanCallId, default: []].append(reserveTimer)
         }
         // W-VIDPRIVACY — start the callee's video-capture pipeline now that
         // the user has actually accepted, gated on their accept-with/without-
@@ -19103,6 +19334,14 @@ extension AppState {
         // would otherwise let one call's verified SAS appear on the
         // next, unverified call.
         callPqcSessionKey = nil
+        // W-MEDIAATACCEPT (option b) — §4.10/§6: the per-call store this
+        // slot is now additionally sourced from must not outlive the call
+        // either. `wipeAll` here (not a single keyed `wipe`) because this
+        // call's own wire callId is not reliably in scope at every one of
+        // this function's many call sites — see `CallService
+        // .onCallTeardownChokepoint` for the keyed wipe on the normal path;
+        // this is defense in depth for whichever caller reaches here.
+        CallKeyStore.shared.wipeAll(why: 1)
         callPqcRekeyEpoch = -1
         lastCountedPqcKey = nil
         // W-VOICECONFSYNC — per-call announce/anti-replay state must not
@@ -19369,7 +19608,22 @@ extension AppState {
     /// decision. `site`: 2 outgoing call start, 3 incoming OFFER (1 is the
     /// PeerConnection's own latch, logged by the engine; 4 is the call end,
     /// logged by CallService).
-    func logNativeSrtpSnapshot(_ latch: CallCapabilities.NativeSrtpSnapshotLatch, site: Int) {
+    ///
+    /// W-MEDIAATACCEPT (option b) — I8: `skipKillSwitchRecheck` is `true`
+    /// only when this is site 3 (inside the incoming media-plane builder)
+    /// AND a `RingSignalingRegistry` plan with `mode == 1` already exists
+    /// for this call — the kill switch was already applied ONCE, at ring
+    /// (site 5), and must not be re-read at accept: re-reading it here
+    /// could flip an ALREADY-announced (T1) native=1 decision to native=0
+    /// after the callee has told the peer/telemetry it would use the
+    /// native path, mid-build. `mode == 0` (legacy) and outgoing (site 2)
+    /// keep re-checking every time, unchanged from today.
+    ///
+    /// Returns the effective (post-kill-switch) native value so callers —
+    /// today just `latchIncomingNativeSrtpSnapshot` — can feed it straight
+    /// into `RingSignalingRegistry.latch(...)` without re-deriving it.
+    @discardableResult
+    func logNativeSrtpSnapshot(_ latch: CallCapabilities.NativeSrtpSnapshotLatch, site: Int, skipKillSwitchRecheck: Bool = false) -> Bool {
         let nativeFlag: Int = latch.value ? 1 : 0
         let freshFlag: Int = latch.fresh ? 1 : 0
         let staleFlag: Int = latch.stale ? 1 : 0
@@ -19380,10 +19634,12 @@ extension AppState {
         // owner-recommended): `calls.native_srtp_kill` forces THIS call's
         // snapshot off, without touching the saved preference, so a bad
         // native-SRTP rollout can be killed fleet-wide without a build.
-        // Checked at every snapshot site (2/3/5), same as Android's own
-        // "force OFF at the snapshot of call start" placement.
+        // Checked at every snapshot site (2/3/5) EXCEPT when
+        // `skipKillSwitchRecheck` says the call already fixed this at ring
+        // (I8, see doc above), same as Android's own "force OFF at the
+        // snapshot of call start" placement.
         var effectiveNative = latch.value
-        if latch.value, FeatureFlags.bool("calls.native_srtp_kill", false) {
+        if !skipKillSwitchRecheck, latch.value, FeatureFlags.bool("calls.native_srtp_kill", false) {
             let callId = CallCapabilities.nativeSrtpSnapshotCallId
             if CallCapabilities.forceNativeSrtpCallSnapshotOff(callId: callId) {
                 effectiveNative = false
@@ -19395,9 +19651,21 @@ extension AppState {
         // (or OS kill) before `CallService.endCall()` runs is attributable
         // to a native-SRTP call on the NEXT launch. Cleared by
         // `CallService.endCall()` on a clean end.
+        //
+        // W-MEDIAATACCEPT (option b) — I9/§10: sites 2 (outgoing dial) and
+        // 5 (call_incoming) are RINGING — no PeerConnection exists yet, so
+        // a crash there must not count toward the native-SRTP crash streak
+        // (`CrashGuardDecisions.countsTowardStreak`). Site 3 is the
+        // incoming media-plane builder — a PC is about to exist — so it
+        // keeps the "pc" phase regardless of which mode triggered the
+        // build. `"snapshot"` (this file's phase value before this task)
+        // is kept ONLY as `CrashGuardDecisions`'s documented one-release
+        // grandfather value; no call site should emit it anymore.
+        let phase: String = (site == 2 || site == 5) ? "ring" : "pc"
         let call8 = CallCapabilities.nativeSrtpSnapshotCallId
         CrashBreadcrumbs.setCallContext(inCall: true, native: effectiveNative, role: nil,
-                                         callId: call8, phase: "snapshot")
+                                         callId: call8, phase: phase)
+        return effectiveNative
     }
 
     /// W-NATIVESRTPSNAPSHOT-ID — responder side, at `call_incoming`: the
@@ -19410,7 +19678,38 @@ extension AppState {
         let generatedKey: String = "in-" + UUID().uuidString.lowercased()
         let key: String = callId.isEmpty ? generatedKey : callId
         let latch = CallCapabilities.latchNativeSrtpCallSnapshot(callId: key)
-        logNativeSrtpSnapshot(latch, site: 5)
+        let effectiveNative = logNativeSrtpSnapshot(latch, site: 5)
+
+        // W-MEDIAATACCEPT (option b) — §3/§4.2 (T1, I8): latch the
+        // ring-time plan (mode/native/kill) ONCE, right alongside the
+        // native-SRTP snapshot above, from the exact same call_incoming —
+        // a duplicate call_incoming for this call never changes it
+        // (RingSignalingRegistry.latch is first-write-wins). An empty wire
+        // `call_id` forces mode=0: there is no stable key every later site
+        // (routeIncomingWebRtcOffer, performAcceptIncoming, ...) could use
+        // to look this plan back up by, so the legacy full-setup-at-ring
+        // path is the only one that still works without one.
+        let killSwitchOn = FeatureFlags.bool("calls.native_srtp_kill", false)
+        let signalingOnly = FeatureFlags.bool("calls.ring_signaling_only", true)
+        // Kept current at every call_incoming (also read at login) so a
+        // callId-less lookup elsewhere (OFFER arriving before its own
+        // call_incoming, W-OFFERBUFFER) falls back to today's fleet
+        // setting rather than a stale one.
+        RingSignalingRegistry.shared.defaultMode = signalingOnly ? 1 : 0
+        // Idempotent re-assignment (cheap, stateless closure) rather than a
+        // one-time init-site wire: this file has no single `AppState.init()`
+        // choke point every call path is guaranteed to run through before
+        // the first `call_incoming`, so the first `call_incoming` itself is
+        // used to guarantee this is wired before it can ever fire (I11's
+        // release trigger — see `releaseHeldAcceptIfDue`).
+        RingSignalingRegistry.shared.onAnswerSent = { [weak self] cid in
+            Task { @MainActor in self?.releaseHeldAcceptIfDue(cid, why: 1) }
+        }
+        let mode: Int = callId.isEmpty ? 0 : (signalingOnly ? 1 : 0)
+        if !callId.isEmpty {
+            RingSignalingRegistry.shared.latch(callId, mode: mode, native: effectiveNative, kill: killSwitchOn)
+        }
+        RTLog.info("call", "ringsig snapshot mode=\(mode) native=\(effectiveNative ? 1 : 0) kill=\(killSwitchOn ? 1 : 0) role=callee")
     }
 
     /// W-NATIVESRTPSNAPSHOT-ID — an outgoing attempt aborted before
@@ -24671,11 +24970,80 @@ enum RatchetV4DispatchError: Error {
 
 #if canImport(WebRTC)
 extension AppState {
+    /// W-MEDIAATACCEPT (option b) — §4.3: new single entry point for the 3
+    /// existing callers of what used to be `handleIncomingWebRtcOffer`
+    /// (the ws-dupoffer rescue, the call_incoming SDP handoff, and the
+    /// `call_offer` handler). Under `mode == 1` (ring-signaling-only) the
+    /// SDP is only stashed in the `RingSignalingRegistry` plan — the
+    /// PeerConnection is NOT built here; `startIncomingMediaPlane` builds
+    /// it later, at accept. Under `mode == 0` (legacy) or when there is no
+    /// latched plan at all (e.g. a bare `call_offer` outside any tracked
+    /// call), this falls straight through to `buildIncomingWebRtcMediaPlane`
+    /// — today's unchanged behavior.
+    func routeIncomingWebRtcOffer(
+        callerId: String,
+        sdp: String,
+        peerCapabilities: [String]? = nil,
+        hasVideo: Bool = false,
+        callId: String? = nil
+    ) {
+        let cid = (callId ?? canonicalActiveCallId() ?? "").lowercased()
+        if !cid.isEmpty, let plan = RingSignalingRegistry.shared.entry(cid), plan.mode == 1 {
+            switch plan.mediaPlane {
+            case .none, .awaitingSdp:
+                let update = RingSignalingRegistry.shared.updateOffer(
+                    cid, sdp: sdp, capabilities: peerCapabilities, hasVideo: hasVideo
+                )
+                switch update {
+                case .accepted(let len):
+                    RTLog.info("call", "ringsig offer=1 len=\(len)")
+                case .ignoredEmpty:
+                    RTLog.info("call", "ringsig offer=0 len=0")
+                case .noPlan:
+                    break  // can't happen — `plan` was just read above
+                }
+                // Cold-start / notification-accept race (§2.1 "RING →
+                // ACCEPTED senza KEYED"): the human already accepted
+                // before this OFFER arrived — build now instead of
+                // waiting for a `startIncomingMediaPlane` call that
+                // already ran (and found no SDP) or never will.
+                if RingSignalingRegistry.shared.entry(cid)?.acceptedAtMs != nil {
+                    startIncomingMediaPlane(callId: cid, trigger: "offer")
+                }
+                return
+            case .building, .ready, .failed:
+                // A build is already in flight (or done/failed) for this
+                // call — nothing left for a fresh OFFER to do here. A
+                // duplicate/retransmitted OFFER at this point is handled
+                // by the legacy dedup inside `buildIncomingWebRtcMediaPlane`
+                // itself on the `mode == 0` path only; under `mode == 1`
+                // once building has started there is no controller-less
+                // state left to stash into, so this is a deliberate no-op
+                // (the retransmit carries no new information the already-
+                // running build needs).
+                return
+            }
+        }
+        // `mode == 0`, or no latched plan (bare call_offer / unidentified
+        // call) — today's unchanged, immediate-build behavior.
+        buildIncomingWebRtcMediaPlane(
+            callerId: callerId, sdp: sdp, peerCapabilities: peerCapabilities,
+            hasVideo: hasVideo, callId: callId
+        )
+    }
+
     /// W347: handle inbound `call_offer` SDP via the WebRTC bridge. Spins
     /// up a fresh QAudionWebRtcCallController for this call, applies the
     /// remote offer, and ships the answer through the existing
     /// `CallingApi.sendCallAnswer` envelope.
-    func handleIncomingWebRtcOffer(
+    ///
+    /// W-MEDIAATACCEPT (option b) — §4.3: this is the renamed body of what
+    /// used to be `handleIncomingWebRtcOffer` — UNCHANGED below except
+    /// where §4.4 explicitly says so (the key seed, the ICE flush, and the
+    /// post-build/`catch` bookkeeping). Called either immediately (`mode
+    /// == 0`/no plan, via `routeIncomingWebRtcOffer` above) or at accept
+    /// (`mode == 1`, via `startIncomingMediaPlane`).
+    func buildIncomingWebRtcMediaPlane(
         callerId: String,
         sdp: String,
         peerCapabilities: [String]? = nil,
@@ -24690,7 +25058,13 @@ extension AppState {
         // different call is replaced (stale=1).
         let offerCallId: String? = callId ?? canonicalActiveCallId()
         let nativeLatch = CallCapabilities.latchNativeSrtpCallSnapshot(callId: offerCallId)
-        logNativeSrtpSnapshot(nativeLatch, site: 3)
+        // W-MEDIAATACCEPT (option b) — I8: a `mode == 1` plan already fixed
+        // native/kill for this call at ring (T1) — do not let this site's
+        // usual kill-switch re-check flip that decision mid-build.
+        let planMode1AtSite3 = (offerCallId?.isEmpty == false)
+            && (RingSignalingRegistry.shared.entry(offerCallId!)?.mode == 1)
+        let mediaPlaneEffectiveNative = logNativeSrtpSnapshot(nativeLatch, site: 3, skipKillSwitchRecheck: planMode1AtSite3)
+        _ = mediaPlaneEffectiveNative  // kept for readability at the call site; not otherwise consumed here today
         // W-CTRLBUILDDIAG (2026-08-30) — the prints in this function are
         // multi-word free-form English, which the remote-log redactor drops
         // whole (verified against redact_body, same story as W-AUDIOGATEDIAG).
@@ -24758,9 +25132,22 @@ extension AppState {
         // didn't. Mirrors Android's `applyAudioRekey`, which reads
         // `activeKey.get()` — a durable store, pulled fresh at the point
         // of use — rather than depending on a broadcast landing.
-        if let key = self.callPqcSessionKey {
+        //
+        // W-MEDIAATACCEPT (option b) — §4.4/§6: seed from the per-call
+        // `CallKeyStore` first — with the responder integration instance
+        // shared/reused across calls, `self.callPqcSessionKey` alone can
+        // no longer be trusted to be THIS call's key by the time the build
+        // reaches accept (option b widens the ring→accept window). Falls
+        // back to the legacy slot when the store has nothing for this
+        // call (`mode == 0`, or a key installed through a path this task
+        // did not move onto `onSessionKeyForCall`).
+        let seedKey = CallKeyStore.shared.take(offerCallId) ?? self.callPqcSessionKey
+        if let key = seedKey {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
+            // Keep the published projection in sync with what THIS call's
+            // controller was actually seeded with (see that method's doc).
+            self.refreshCallPqcSessionKeyProjection()
         }
         // W-CTRLLEAK (2026-09-08, adversarial review of W-SASPIN/
         // W-CAPTURELIVE-SIGNAL) — unlike every other `webRtcController =`
@@ -25016,6 +25403,20 @@ extension AppState {
                 // without-video, and `self.videoPipeline` is nil here post-
                 // Task-1 (W-CAMARMEARLY) since the pipeline no longer starts
                 // this early.
+                //
+                // W-MEDIAATACCEPT (option b) — §4.4 (T5): the build
+                // succeeded — `acceptIncomingCall` only returns after its
+                // own `sendCallAnswer` completed (Controller), so by this
+                // point the real SDP-bearing `call_answer` is already out
+                // and `RingSignalingRegistry.onAnswerSent` has already
+                // fired the I11 release. Nothing left to do here but mark
+                // the plan `.ready` and log the build time.
+                if let planId = offerCallId, !planId.isEmpty,
+                   let plan = RingSignalingRegistry.shared.entry(planId) {
+                    RingSignalingRegistry.shared.setMediaPlane(planId, .ready)
+                    let ms = plan.acceptedAtMs.map { Self.nowMsForTelemetry() - $0 } ?? -1
+                    RTLog.info("call", "ringsig built=1 ms=\(ms) ready=0 why=0")
+                }
             } catch {
                 // W-DCSTUCK-DIAG (2026-08-13): was print()-only, sitting one
                 // line away from the ICE-candidate-queue RTLog calls below
@@ -25031,8 +25432,167 @@ extension AppState {
                 // ok=0 is the numeric-safe fact; the description is
                 // best-effort (may partially redact).
                 RTLog.warn("call", "webrtc accept_offer ok=0 err=\(error)")
+                // W-MEDIAATACCEPT (option b) — §4.4 (T5/I11): the build
+                // failed. Mark `.failed` (unblocks `getUsesNativeAudioSrtp`
+                // → the sealed custom path, and future
+                // `consumeDeferredAnswerIfReady` calls), ship a blank
+                // `call_answer` if this call's controller never managed to
+                // send one of its own (otherwise the caller is stuck
+                // waiting), and release any still-held ACCEPT so the
+                // handshake at least completes over the WS-relay fallback.
+                if let planId = offerCallId, !planId.isEmpty {
+                    RingSignalingRegistry.shared.setMediaPlane(planId, .failed)
+                    let ms = RingSignalingRegistry.shared.entry(planId)?.acceptedAtMs
+                        .map { Self.nowMsForTelemetry() - $0 } ?? -1
+                    RTLog.info("call", "ringsig built=0 ms=\(ms) ready=0 why=1")
+                    if RingSignalingRegistry.shared.entry(planId)?.answerSent != true,
+                       let calling = self.liveProvider?.callingApi {
+                        Task { try? await calling.sendCallAnswer(recipientId: cid, sdp: "") }
+                    }
+                    RingSignalingRegistry.shared.markReleased(planId)
+                    _ = await self.responderCallIntegration?.releaseHeldAccept(callId: planId)
+                    RTLog.info("call", "ringsig release=1 why=3 ms=0")
+                }
             }
         }
+    }
+
+    // MARK: - W-MEDIAATACCEPT (option b) — §4.4: media plane starts at accept
+
+    /// Builds the incoming WebRTC media plane (controller/PC/SDP-answer/
+    /// ICE/DTLS/cryptors/audio session) for a `mode == 1` call — called
+    /// from `performAcceptIncoming` right after the human accept,
+    /// from `routeIncomingWebRtcOffer` when the SDP arrives for a call
+    /// already accepted, and from the `call_incoming` SDP handoff when
+    /// that call turns out to already be accepted (cold-start PushKit/FCM
+    /// race, or `pendingNotificationAnswer`). Idempotent per `callId` —
+    /// see `RingSignalingDecisions.shouldStartMediaPlane`; a second call
+    /// once building/ready/failed is a cheap no-op.
+    func startIncomingMediaPlane(callId: String, trigger: String) {
+        let cid = callId.lowercased()
+        guard !cid.isEmpty,
+              let plan = RingSignalingRegistry.shared.entry(cid),
+              plan.mode == 1, plan.acceptedAtMs != nil else { return }
+        let hasSdp = plan.offer != nil
+        guard RingSignalingDecisions.shouldStartMediaPlane(
+            mode: plan.mode, accepted: true, hasSdp: hasSdp, state: plan.mediaPlane
+        ) else {
+            // Not buildable yet — either already building/ready/failed (a
+            // harmless duplicate call, e.g. accept AND a same-tick OFFER
+            // both trying to start it), or accepted with no SDP at all
+            // yet: arm the one-time 2s wait for it (cold-start race, §2.1
+            // "RING → ACCEPTED senza KEYED").
+            guard plan.mediaPlane == .none, !hasSdp else { return }
+            RingSignalingRegistry.shared.setMediaPlane(cid, .awaitingSdp)
+            let waitForSdp = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self = self, !Task.isCancelled else { return }
+                // The SDP may have arrived (and already started a build)
+                // during the wait — only fail if we're still exactly where
+                // we left off.
+                guard RingSignalingRegistry.shared.entry(cid)?.mediaPlane == .awaitingSdp else { return }
+                RingSignalingRegistry.shared.setMediaPlane(cid, .failed)
+                RTLog.info("call", "ringsig built=0 ms=-1 ready=0 why=3")
+                if RingSignalingRegistry.shared.entry(cid)?.answerSent != true,
+                   let peer = self.callContactId, let calling = self.liveProvider?.callingApi {
+                    Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
+                }
+                self.releaseHeldAcceptIfDue(cid, why: 3)
+                // §4.6 — the custom (WS-relay) audio path is unblocked
+                // the same way a successful native build unblocks it.
+                self.callService.resumeAudioIOAfterMediaPlane()
+            }
+            ringMediaPlaneTimers[cid, default: []].append(waitForSdp)
+            return
+        }
+        guard let offer = plan.offer else { return }  // unreachable: hasSdp already gated this
+        RingSignalingRegistry.shared.setMediaPlane(cid, .building)
+        // §10 (I9) — about to build a PeerConnection: advance the crash
+        // guard from "ring" to "pc" before any RTCPeerConnection exists.
+        CrashBreadcrumbs.setCallContext(inCall: true, native: plan.native, role: "callee", callId: cid, phase: "pc")
+        // §4.4 8s build watchdog, from accept — if this call's own
+        // `call_answer` still hasn't gone out 8s after the human accepted,
+        // give up on the native build rather than leaving the caller
+        // waiting indefinitely.
+        let watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self = self, !Task.isCancelled else { return }
+            guard RingSignalingRegistry.shared.entry(cid)?.answerSent != true else { return }
+            RTLog.info("call", "ringsig timeout=1 why=2")
+            RingSignalingRegistry.shared.setMediaPlane(cid, .failed)
+            if let peer = self.callContactId, let calling = self.liveProvider?.callingApi {
+                Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
+            }
+            self.releaseHeldAcceptIfDue(cid, why: 3)
+        }
+        ringMediaPlaneTimers[cid, default: []].append(watchdog)
+        buildIncomingWebRtcMediaPlane(
+            callerId: self.callContactId ?? "",
+            sdp: offer.sdp,
+            peerCapabilities: offer.capabilities,
+            hasVideo: offer.hasVideo,
+            callId: cid
+        )
+    }
+
+    /// W-MEDIAATACCEPT (option b) — I11: releases this call's held
+    /// responder ACCEPT, if any, and idempotently no-ops otherwise
+    /// (`RingSignalingRegistry.markReleased`/`acceptReleased` guard —
+    /// whichever of "own call_answer sent" or "5s reserve elapsed" fires
+    /// FIRST wins; the other is then a no-op). `why`: 1 = after
+    /// call_answer, 2 = 5s reserve timer, 3 = a failure path (media-plane
+    /// build failed, SDP never arrived, 8s watchdog).
+    func releaseHeldAcceptIfDue(_ callId: String, why: Int) {
+        let cid = callId.lowercased()
+        guard let plan = RingSignalingRegistry.shared.entry(cid), !plan.acceptReleased else { return }
+        RingSignalingRegistry.shared.markReleased(cid)
+        let ms = plan.acceptedAtMs.map { Self.nowMsForTelemetry() - $0 } ?? -1
+        RTLog.info("call", "ringsig release=1 why=\(why) ms=\(ms)")
+        Task { [weak self] in
+            _ = await self?.responderCallIntegration?.releaseHeldAccept(callId: cid)
+        }
+        drainAcceptGatedActions(cid)
+    }
+
+    /// W-MEDIAATACCEPT (option b) — D2/I12: runs the handshake-completion
+    /// side effects that were deferred while `mode == 1` held the ACCEPT
+    /// (msg-PSK persistence, v4/v5 ratchet bootstrap, `kc_mac`, the
+    /// re-key/VOICE_KEY loops, auto voice-learning) — see
+    /// `pendingAcceptGatedActions`'s own doc. Safe to call even when
+    /// nothing is queued (legacy `mode == 0` calls never queue anything).
+    func drainAcceptGatedActions(_ callId: String) {
+        let cid = callId.lowercased()
+        guard let actions = pendingAcceptGatedActions[cid] else { return }
+        pendingAcceptGatedActions[cid] = nil
+        for action in actions { action() }
+    }
+
+    /// W-MEDIAATACCEPT (option b) — §4.10/I13: the single chokepoint for
+    /// tearing down every ring-time artifact of one call — reject, cancel,
+    /// timeout, call end, or supersession by a newer `call_incoming`.
+    /// `why`: 1 end, 2 remote cancel/hangup while ringing, 3 local reject,
+    /// 4 TTL, 5 superseded by a new call. Safe to call for a call that was
+    /// never `mode == 1` (every step below is a no-op on an absent entry).
+    func wipeRingState(_ callId: String?, why: Int) {
+        guard let callId = callId?.lowercased(), !callId.isEmpty else { return }
+        RingSignalingRegistry.shared.wipe(callId, why: why)
+        CallKeyStore.shared.wipe(callId, why: why)
+        responderCallIntegration?.dropHeldAccept(callId: callId)
+        pendingAcceptGatedActions[callId] = nil
+        if let timers = ringMediaPlaneTimers[callId] {
+            for t in timers { t.cancel() }
+            ringMediaPlaneTimers[callId] = nil
+        }
+        // W-MEDIAATACCEPT (option b) — deliberately `op=`, not the spec's
+        // literal `key=`: `key` is in `ship-ios-logs.py`'s `_KV_DENY_WORDS`
+        // (an identity/secret-shaped kv key is never protected regardless
+        // of value — by design, to catch a REAL "key=<material>" leak
+        // elsewhere), so `key=wipe` would ship as `[REDACTED:secret]` on a
+        // real device rather than the intended status line. `op` carries
+        // the same information (T3's "key store operation") without
+        // colliding with that deny list. See `test_ship_ios_redactor_hardening.py`'s
+        // W-MEDIAATACCEPT block.
+        RTLog.info("call", "ringsig op=wipe why=\(why)")
     }
 
     func handleIncomingWebRtcAnswer(sdp: String, peerCapabilities: [String]? = nil) {

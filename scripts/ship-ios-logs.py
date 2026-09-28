@@ -697,6 +697,8 @@ APP_VOCAB = frozenset("""
 CALL_FORMAT_VOCAB = frozenset("""
     answerguard arm cancelpush cfg drained drops endguard er ev ff ghost
     ignore missed nocall over refuse rxago since stale wedge wedgesw wsec
+
+    ringsig put take wipe release ring pc op
 """.split())
 
 # Real RTLog "call"-tagged line shapes CALL_FORMAT_VOCAB's words belong to,
@@ -732,6 +734,20 @@ _CALL_FORMAT_FIRST_TOKENS = (
     ("cancelpush ", ("ghost=", "missed=")),
     ("answerguard ", ("refuse=", "nocall=")),
     ("endguard ", ("ignore=",)),
+    # W-MEDIAATACCEPT (option b) -- T1-T11 (AppState.swift / CallService.swift
+    # / BCryptoCallingApiImpl.swift / QAudionCallIntegration.swift / Android
+    # parity table, see the spec's telemetry section). "pqc=" is Android's
+    # own T2 shape (`ringsig pqc=<...> ring=<...> ...`); kept here for
+    # symmetry with that table even though no iOS line emits it today, same
+    # as this table already carries entries generously. T3 uses "op=", NOT
+    # the spec's literal "key=" -- "key" is in _KV_DENY_WORDS (an identity/
+    # secret-shaped kv key is never protected regardless of value, by
+    # design) so "key=wipe" would ship as [REDACTED:secret] on a real
+    # device; "op=" carries the same "key-store operation" meaning without
+    # colliding with that deny list (see AppState.swift's `wipeRingState`).
+    ("ringsig ", ("snapshot ", "pqc=", "op=", "accept=", "built=",
+                  "release=", "sendrecv ", "phase=", "offer=", "upgrade=",
+                  "timeout=")),
 )
 
 # Mutable, module-level: the extra vocabulary active for the body currently

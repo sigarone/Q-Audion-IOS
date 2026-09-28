@@ -498,6 +498,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `case .offer` responder path (2026-07-11: that path had no
     /// double-OFFER guard at all — see the fix at its call site).
     private var lastSentLegacyAcceptWire: Data?
+
+    // MARK: - W-MEDIAATACCEPT (option b) — I11: held responder ACCEPT
+
+    /// One held (not-yet-sent) responder ACCEPT per call, captured at the
+    /// moment the handshake computed it. `String` = the JSON
+    /// (AndroidHandshakeEnvelope) wire; `Data` = the legacy QUAD binary
+    /// accept. Released by `releaseHeldAccept(callId:)`, dropped by
+    /// `dropHeldAccept(callId:)`/`onCallEnded()`.
+    enum HeldAccept {
+        case json(String)
+        case quad(Data)
+    }
+    private var heldAcceptByCall: [String: HeldAccept] = [:]
+
+    /// Same-shaped stored sender for the QUAD ACCEPT as `retrySenderClosure`
+    /// already is for the JSON one (both captured the moment the handshake
+    /// FIRST computes an accept for this call) — needed so
+    /// `releaseHeldAccept` can actually perform the send later, once the
+    /// local `sendOpaqueMessage` parameter that produced it is long out of
+    /// scope.
+    private var retrySenderClosureQuad: ((Data) async throws -> Void)?
+
+    /// Wired by AppState to `RingSignalingRegistry.shared.shouldHoldAccept(_:)`.
+    /// `nil` (a caller-side integration instance, or a unit test that never
+    /// wires it) never holds — every emission point below degrades to
+    /// today's immediate-send behavior.
+    public var shouldHoldResponderAccept: ((String) -> Bool)?
     /// Timestamp of the first OFFER/ACCEPT send for this call. Used to
     /// bound retries within the handshake window (default 30 s).
     private var handshakeStartedAt: Date?
@@ -613,6 +640,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Fires at most once per call. The integration does not retain
     /// the secret; the caller is responsible for lifecycle.
     public var onPqcSessionKeyEstablished: ((Data) -> Void)?
+
+    /// W-MEDIAATACCEPT (option b) — §4.5/§6: fires alongside EVERY
+    /// ``onPqcSessionKeyEstablished`` call (both the QUAD and JSON,
+    /// responder and caller, and the earbud-counterparty paths), carrying
+    /// the `callId` that closure alone does not — `CallKeyStore` needs it
+    /// to isolate the key per call rather than trusting a single shared
+    /// slot. AppState wires this to `CallKeyStore.shared.put(callId:key:)`
+    /// plus a refresh of the `callPqcSessionKey` read projection. No-op
+    /// when nil (e.g. in unit tests that don't wire it).
+    public var onSessionKeyForCall: ((Data, String) -> Void)?
 
     /// DISPLAY-ONLY companion to ``onPqcSessionKeyEstablished``. Fires the
     /// SAME 32-byte session key PLUS the negotiated sovereign-PSK
@@ -1906,7 +1943,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if let cached = lock.withLock({ lastSentLegacyAcceptWire }) {
                     print("[QAudionCallIntegration] QUAD OFFER duplicate for callId=\(normalizedOfferCid.prefix(8))… — replaying cached ACCEPT")
                     Task {
-                        do { try await sendOpaqueMessage(cached) } catch {
+                        do {
+                            // W-MEDIAATACCEPT (option b) — I11: same hold
+                            // gate as the first QUAD send below.
+                            try await self.emitQuadAccept(callId: normalizedOfferCid, accept: cached, sendOpaqueMessage: sendOpaqueMessage)
+                        } catch {
                             // W-SIGSWALLOW (2026-09-01) — was `try?`.
                             print("[QAudionCallIntegration] QUAD ACCEPT replay send fail callId=\(normalizedOfferCid.prefix(8))… err=\(error)")
                         }
@@ -1925,9 +1966,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: result.sharedSecret)
             onRelaySessionReady?(result.sharedSecret, stashedCallId ?? "", entryGeneration)
             let accept = QAudionCapabilityExchange.createAccept(ciphertext: result.ciphertext, pskFingerprint: nil)
-            lock.withLock { lastSentLegacyAcceptWire = accept }
+            // W-MEDIAATACCEPT (option b) — captured for `releaseHeldAccept`,
+            // same idea as `retrySenderClosure` for the JSON path: the local
+            // `sendOpaqueMessage` parameter is out of scope by release time.
+            lock.withLock { lastSentLegacyAcceptWire = accept; retrySenderClosureQuad = sendOpaqueMessage }
             Task {
-                do { try await sendOpaqueMessage(accept) } catch {
+                do {
+                    // W-MEDIAATACCEPT (option b) — I11: the first responder
+                    // QUAD ACCEPT for this call. Held when `mode == 1` and
+                    // not yet accepted; derivation/session-init above is
+                    // UNCHANGED — only the wire send is gated.
+                    try await self.emitQuadAccept(callId: normalizedOfferCid, accept: accept, sendOpaqueMessage: sendOpaqueMessage)
+                } catch {
                     // W-SIGSWALLOW (2026-09-01) — was `try?` (audit memory
                     // reference_ios_stability_audit_2026_09_01, P1 item 7): the
                     // ACCEPT has no send-side retry of its own; recovery is the
@@ -1948,6 +1998,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // AFTER engine.initSession so the audio pipeline is already
             // active under the same key — observers can rely on it.
             onPqcSessionKeyEstablished?(result.sharedSecret)
+            // W-MEDIAATACCEPT (option b) — §6: CallKeyStore isolation needs
+            // the callId this closure alone doesn't carry.
+            onSessionKeyForCall?(result.sharedSecret, stashedCallId ?? "")
             // vkey-v1: same 32 bytes are the IKM for K_video. Fired so the
             // app/controller layer can derive K_video once the negotiated
             // tags are known (see onVideoKeyEstablished docs).
@@ -1996,6 +2049,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // After this fires, both ends hold the same 32 bytes for
             // SAS derivation.
             onPqcSessionKeyEstablished?(sharedSecret)
+            // W-MEDIAATACCEPT (option b) — §6: caller side (this branch
+            // decapsulates the peer's QUAD ACCEPT); `normalizedAcceptCid`
+            // is already this call's lowercased id, computed above.
+            onSessionKeyForCall?(sharedSecret, normalizedAcceptCid)
             // vkey-v1: caller side — same IKM surface as the responder.
             onVideoKeyEstablished?(sharedSecret)
 
@@ -2842,14 +2899,21 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // ORIGINAL ACCEPT back, not the re-key's).
                 if let cached = lock.withLock({ acceptWireByOfferFingerprint[offerDedupKey] }) {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — replaying cached ACCEPT")
-                    try await sendOpaqueRaw(cached)
+                    // W-MEDIAATACCEPT (option b) — I11: a duplicate-OFFER
+                    // replay must obey the SAME hold gate as the first
+                    // send — "mentre trattiene, niente replay, solo log".
+                    try await emitJsonAccept(callId: callId, wire: cached, sendOpaqueRaw: sendOpaqueRaw)
                 } else {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 }
                 return
             }
             print("[QAudionCallIntegration] OFFER for callId=\(callId.prefix(8))… — processing (fingerprint=\(offerFingerprint.prefix(12))…, reKey=\(isReKeyRound), roundsSeen=\(processedOfferFingerprintsByCall.count))")
-            try await sendOpaqueRaw(wire)
+            // W-MEDIAATACCEPT (option b) — I11: the first responder ACCEPT
+            // for this call. Held (not sent) when `mode == 1` and the human
+            // has not accepted yet; the derivation/session-init below is
+            // UNCHANGED either way — only the wire send is gated.
+            try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw)
             if !isReKeyRound {
                 try engine.initialize()
             }
@@ -2887,6 +2951,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             offerRetryTask = nil
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // W-MEDIAATACCEPT (option b) — §6: JSON responder OFFER path.
+            onSessionKeyForCall?(combined, callId)
             // DISPLAY-ONLY: surface the PSK fingerprint negotiated on this
             // responder OFFER path (`selectedFp`, in scope from step 4).
             onPqcSessionKeyEstablishedWithPsk?(combined, selectedFp)
@@ -3542,6 +3608,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
+            // W-MEDIAATACCEPT (option b) — §6: JSON caller ACCEPT-received path.
+            onSessionKeyForCall?(combined, callId)
             // NOT display-only (it used to be, hence the old comment here).
             // AppState feeds this straight into `resolvePskBytes`, which is the
             // HKDF *salt* for K_video — so a value that fails to resolve there
@@ -5411,6 +5479,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lastSentAcceptWire = nil
         handshakeStartedAt = nil
         retrySenderClosure = nil
+        // W-MEDIAATACCEPT (option b) — I13: a held-but-never-released
+        // ACCEPT (call ended while still ringing) must never survive into
+        // whatever call reuses this integration instance next.
+        heldAcceptByCall.removeAll()
+        retrySenderClosureQuad = nil
         lock.unlock()
         offerRetryTask?.cancel()
         offerRetryTask = nil
@@ -5460,6 +5533,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         offerRetryTask = nil
         onStateChanged?(.active)
         onPqcSessionKeyEstablished?(sessionKey)
+        // W-MEDIAATACCEPT (option b) — §6: earbud-counterparty completion
+        // path (R7: unaffected by the ring-signaling-only mode itself, but
+        // CallKeyStore isolation is a universal property, not a PQC-only one).
+        onSessionKeyForCall?(sessionKey, callId)
         // vkey-v1: K_counter is the IKM for the phone-level K_video on
         // sovereign-earbud calls (parallel handshake gating happens in
         // the app layer via the negotiated tags).
@@ -5610,6 +5687,85 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         offerRetryTask = nil
     }
 
+    // MARK: - W-MEDIAATACCEPT (option b) — I11: held responder ACCEPT
+
+    /// Single gate for a JSON responder ACCEPT — first computation
+    /// (`case .offer`'s `sendOpaqueRaw(wire)`) AND the duplicate-OFFER
+    /// replay (`sendOpaqueRaw(cached)`) both funnel through here. Holds
+    /// (stores, does not send) when `shouldHoldResponderAccept` says so;
+    /// otherwise sends immediately — today's behavior when that closure is
+    /// nil or returns false. Never touches the surrounding crypto/session
+    /// derivation, only the wire send.
+    private func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void) async throws {
+        let cid = callId.lowercased()
+        if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true {
+            lock.withLock { heldAcceptByCall[cid] = .json(wire) }
+            print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT held (json) callId=\(cid.prefix(8))…")
+            return
+        }
+        try await sendOpaqueRaw(wire)
+    }
+
+    /// Same gate as `emitJsonAccept`, for the legacy QUAD binary ACCEPT
+    /// (`case .offer`'s first send AND its duplicate-OFFER replay).
+    private func emitQuadAccept(callId: String, accept: Data, sendOpaqueMessage: @escaping (Data) async throws -> Void) async throws {
+        let cid = callId.lowercased()
+        if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true {
+            lock.withLock { heldAcceptByCall[cid] = .quad(accept) }
+            print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT held (quad) callId=\(cid.prefix(8))…")
+            return
+        }
+        try await sendOpaqueMessage(accept)
+    }
+
+    /// AppState calls this once the callee's own `call_answer` for this
+    /// call has been sent (or the 5 s reserve timer elapsed) — I11. Sends
+    /// whatever ACCEPT is currently held for `callId`, if any, using the
+    /// sender captured at computation time. Returns whether a held ACCEPT
+    /// was actually found and sent; a `false` with no held entry is the
+    /// ordinary case for a call that was never in `mode == 1` (nothing was
+    /// ever held) or was already released.
+    @discardableResult
+    public func releaseHeldAccept(callId: String) async -> Bool {
+        let cid = callId.lowercased()
+        let held: HeldAccept? = lock.withLock {
+            let v = heldAcceptByCall[cid]
+            heldAcceptByCall[cid] = nil
+            return v
+        }
+        guard let held = held else { return false }
+        do {
+            switch held {
+            case .json(let wire):
+                guard let sender = lock.withLock({ retrySenderClosure }) else {
+                    print("[QAudionCallIntegration] W-MEDIAATACCEPT release(json) callId=\(cid.prefix(8))… no sender")
+                    return false
+                }
+                try await sender(wire)
+            case .quad(let data):
+                guard let sender = lock.withLock({ retrySenderClosureQuad }) else {
+                    print("[QAudionCallIntegration] W-MEDIAATACCEPT release(quad) callId=\(cid.prefix(8))… no sender")
+                    return false
+                }
+                try await sender(data)
+            }
+            print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT released callId=\(cid.prefix(8))…")
+            return true
+        } catch {
+            // W-SIGSWALLOW parity — never silently drop a release failure.
+            print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT release send fail callId=\(cid.prefix(8))… err=\(error)")
+            return false
+        }
+    }
+
+    /// Drops a held ACCEPT without sending it — call ended/rejected/
+    /// cancelled/superseded while still ringing (I13). Safe no-op if
+    /// nothing is held for `callId`.
+    public func dropHeldAccept(callId: String) {
+        let cid = callId.lowercased()
+        lock.withLock { heldAcceptByCall[cid] = nil }
+    }
+
     // MARK: - W531: WS-reconnect handshake replay
 
     /// Re-emit the last unACKed handshake bundle if we're still in
@@ -5620,9 +5776,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// call that's in `.capabilitySent` (caller) state OR has not yet
     /// reached `.active` (responder).
     public func replayPendingHandshake() async {
-        let snapshot: (started: Date?, state: CallState, offer: String?, accept: String?, isCaller: Bool, sender: ((String) async throws -> Void)?) =
+        let snapshot: (started: Date?, state: CallState, offer: String?, accept: String?, isCaller: Bool, sender: ((String) async throws -> Void)?, responderCallId: String?) =
             lock.withLock {
-                (handshakeStartedAt, state, lastSentOfferWire, lastSentAcceptWire, isCaller, retrySenderClosure)
+                (handshakeStartedAt, state, lastSentOfferWire, lastSentAcceptWire, isCaller, retrySenderClosure, pendingResponderCallId)
             }
         guard let startedAt = snapshot.started else { return }
         guard Date().timeIntervalSince(startedAt) < handshakeTimeoutSec else { return }
@@ -5641,6 +5797,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let toReplay: String? = snapshot.isCaller ? snapshot.offer : snapshot.accept
         guard let wire = toReplay else { return }
         let role: String = snapshot.isCaller ? "OFFER" : "ACCEPT"
+        // W-MEDIAATACCEPT (option b) — I11: the responder branch of this
+        // replay is subject to the SAME hold gate as every other ACCEPT
+        // emission point. The caller's own OFFER replay is never held.
+        if !snapshot.isCaller {
+            try? await emitJsonAccept(callId: snapshot.responderCallId ?? "", wire: wire, sendOpaqueRaw: sender)
+            let logLine: String = "[QAudionCallIntegration] W531: replaying " + role + " on WS reconnect"
+            print(logLine)
+            return
+        }
         let logLine: String = "[QAudionCallIntegration] W531: replaying " + role + " on WS reconnect"
         print(logLine)
         try? await sender(wire)

@@ -226,6 +226,12 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         ws.send(type: "call_answer", data: data)
+        // W-MEDIAATACCEPT (option b) — T4/I11: counts this send toward the
+        // pre-accept `answer` counter (must read 0 under `mode == 1`) and,
+        // once the call HAS been accepted, is the I11 release trigger for
+        // this call's held responder ACCEPT (`RingSignalingRegistry
+        // .onAnswerSent`, wired by AppState to `releaseHeldAcceptIfDue`).
+        RingSignalingRegistry.shared.noteAnswerSent(cid, sdpEmpty: sdp.isEmpty)
         // W-SETUPRETRY — a lost call_answer used to strand the caller in its
         // full ring timeout on a call this side already answered. Bounded
         // retransmit of the byte-identical payload; the caller's RX side is
@@ -293,6 +299,9 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ]
         data["sdp_mid"] = sdpMid ?? ""
         ws.send(type: "call_ice", data: data)
+        // W-MEDIAATACCEPT (option b) — T4: pre-accept local ICE-candidate
+        // counter (must read 0 under `mode == 1` — I3). No-op once accepted.
+        RingSignalingRegistry.shared.noteLocalIceSent(cid)
     }
 
     /// Tier-1 (2026-07-16 wire contract) — 1:1 call TARGETED reaction.
