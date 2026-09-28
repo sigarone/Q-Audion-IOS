@@ -88,7 +88,7 @@ public enum PskAdvertising {
     /// Android's `PqcHandshake.kt` OFFER/ACCEPT role computation and Desktop's
     /// `AndroidBundleHandshake.ts` equivalent, shipped in the same commit series.
     public static func rolesForAdvertisement(_ entries: [Entry]) -> [Int] {
-        eligibleSortedEntries(entries).map { $0.origin == .nfc ? 1 : 0 }
+        eligibleSortedEntries(entries).map { PskAdvertV3.role(for: $0.origin) }
     }
 
     /// W-PSKBLIND (2026-07-25) — the same eligible entries, in the same order, as
@@ -105,7 +105,7 @@ public enum PskAdvertising {
             PskAdvertResolver.Candidate(
                 staticFp: canonicalFingerprint(forPsk: $0.material),
                 psk: $0.material,
-                localRole: $0.origin == .nfc ? PskAdvertV3.roleNfc : PskAdvertV3.roleOrdinary
+                localRole: PskAdvertV3.role(for: $0.origin)
             )
         }
     }

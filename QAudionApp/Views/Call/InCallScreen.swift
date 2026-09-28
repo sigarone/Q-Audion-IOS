@@ -1186,7 +1186,7 @@ struct InCallScreen: View {
     private var sasPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             if sasCeremonyRedundant {
-                Text("Non necessario: già autenticato via NFC")
+                Text("Non necessario: già autenticato di persona")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant.opacity(0.85))
             }
@@ -1428,7 +1428,7 @@ struct InCallScreen: View {
                     tint: extras.success,
                     icon: "wave.3.right.circle.fill",
                     info: .nfc,
-                    accessibilityLabel: "NFC in comune con il contatto"
+                    accessibilityLabel: "Chiave di persona in comune con il contatto"
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a
@@ -1603,7 +1603,7 @@ struct InCallScreen: View {
             switch self {
             case .voiceKey:         return "Voce come chiave"
             case .contactVoice:     return "Voce remota"
-            case .nfc:              return "NFC in comune"
+            case .nfc:              return "Chiave di persona in comune"
             case .psk:              return "Chiave pre-condivisa (PSK)"
             case .sas:              return "Verifica identità (SAS)"
             case .pqc:              return "Post-quantistico (PQC)"
@@ -1618,7 +1618,7 @@ struct InCallScreen: View {
             case .contactVoice:
                 return "Verifica continua, durante la chiamata, che la voce che stai ASCOLTANDO corrisponda a quella già imparata per questo contatto nelle chiamate precedenti. Se il contatto parla per la prima volta, l'apprendimento avviene automaticamente in sottofondo nei primi secondi."
             case .nfc:
-                return "Tu e il contatto avete in comune un segreto scambiato fisicamente avvicinando i telefoni (NFC). Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
+                return "Tu e il contatto avete in comune un segreto scambiato di persona, avvicinando i telefoni (NFC) o inquadrando il codice QR con il Bluetooth attivo. Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
             case .psk:
                 return "In questa chiamata è stata mescolata una chiave pre-condivisa — di qualunque origine: NFC, QR, KMS o inserita a mano — nella chiave di sessione. Aggiunge protezione oltre al solo scambio post-quantistico."
             case .sas:

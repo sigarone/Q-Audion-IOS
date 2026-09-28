@@ -109,7 +109,7 @@ public enum AssuranceStateUI {
         case .nfcAuthenticated: // S2 — reachable since W-NFCBADGE (2026-07-23).
             return Presentation(
                 style: .badge,
-                message: "Autenticato di persona (tap NFC) + chiave pre-condivisa: \(secretLabel)",
+                message: "Autenticato di persona (NFC o QR + Bluetooth) + chiave pre-condivisa: \(secretLabel)",
                 sasRequired: false,
                 isPhysicalPresenceProof: true
             )

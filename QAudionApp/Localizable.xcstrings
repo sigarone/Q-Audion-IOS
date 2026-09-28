@@ -21778,43 +21778,43 @@
         }
       }
     },
-    "Non necessario: già autenticato via NFC": {
+    "Non necessario: già autenticato di persona": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Non necessario: già autenticato via NFC"
+            "value": "Non necessario: già autenticato di persona"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not needed: already authenticated via NFC"
+            "value": "Not needed: already authenticated in person"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No es necesario: ya autenticado por NFC"
+            "value": "No es necesario: ya autenticado en persona"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pas nécessaire : déjà authentifié via NFC"
+            "value": "Pas nécessaire : déjà authentifié en personne"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nicht erforderlich: bereits über NFC authentifiziert"
+            "value": "Nicht erforderlich: bereits persönlich authentifiziert"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Não necessário: já autenticado via NFC"
+            "value": "Não necessário: já autenticado pessoalmente"
           }
         }
       }
@@ -31530,6 +31530,170 @@
           "stringUnit": {
             "state": "translated",
             "value": "The other person asked you to turn off your video"
+          }
+        }
+      }
+    },
+    "Associa di persona (QR + Bluetooth)": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associa di persona (QR + Bluetooth)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pair in person (QR + Bluetooth)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emparejar en persona (QR + Bluetooth)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associer en personne (QR + Bluetooth)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich koppeln (QR + Bluetooth)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parear pessoalmente (QR + Bluetooth)"
+          }
+        }
+      }
+    },
+    "Associa di persona": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associa di persona"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pair in person"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emparejar en persona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associer en personne"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich koppeln"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parear pessoalmente"
+          }
+        }
+      }
+    },
+    "Codice non valido": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid code"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiger Code"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código inválido"
+          }
+        }
+      }
+    },
+    "Scansiona di nuovo": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scansiona di nuovo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan again"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escanear de nuevo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanner à nouveau"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut scannen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escanear novamente"
           }
         }
       }

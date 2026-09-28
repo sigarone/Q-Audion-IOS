@@ -24,6 +24,15 @@ struct QrScannerSheet: View {
     /// Caller-supplied handler for an accepted (decoded + confirmed) payload.
     /// Invoked just before the sheet dismisses.
     let onAccepted: (QrPayloadRouter.Decoded) -> Void
+    /// Local account id for in-person QR + Bluetooth pairing
+    /// (`qaudion://pair/…`); nil leaves that flow unavailable.
+    var proximityLocalUserId: String? = nil
+    /// Published identity keys of an account, for the pairing screen's
+    /// account check (`ContactsListContainer.publishedIdentityKeys`).
+    var proximityServerIdentityKeys: ((String) async -> Set<Data>)? = nil
+    /// Fired after a proximity pairing completed on both phones and its key
+    /// was stored.
+    var onProximityCompleted: ((ProximityPairingSummary) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .scanning
@@ -31,6 +40,11 @@ struct QrScannerSheet: View {
     private enum Phase: Equatable {
         case scanning
         case decoded(QrPayloadRouter.Decoded)
+        case proximity(ProximityQrPayload)
+        case proximityInvalid(String)
+        /// A valid pairing code scanned where in-person pairing is not
+        /// offered (no local account id handed in, e.g. Key Management).
+        case proximityElsewhere
     }
 
     var body: some View {
@@ -39,7 +53,7 @@ struct QrScannerSheet: View {
             case .scanning:
                 QrScannerView(
                     onScanned: { raw in
-                        phase = .decoded(QrPayloadRouter.route(raw))
+                        handleScanned(raw)
                     },
                     onCancel: { dismiss() }
                 )
@@ -50,8 +64,89 @@ struct QrScannerSheet: View {
                                       onScanAgain: { phase = .scanning },
                                       onCancel: { dismiss() })
                 }
+            case .proximity(let payload):
+                NavigationStack {
+                    ProximityPairingScanContent(payload: payload,
+                                                localUserId: proximityLocalUserId,
+                                                serverIdentityKeys: proximityServerIdentityKeys,
+                                                onCompleted: { result in handleProximityCompleted(result) },
+                                                onRescan: { rescan() })
+                        .navigationTitle("Associa di persona")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Chiudi") { dismiss() }
+                            }
+                        }
+                }
+            case .proximityElsewhere:
+                NavigationStack {
+                    ProximityPairingInvalidCodeView(message: QrScannerSheet.pairElsewhereMessage,
+                                                    onScanAgain: { rescan() })
+                        .navigationTitle("Associa di persona")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Chiudi") { dismiss() }
+                            }
+                        }
+                }
+            case .proximityInvalid(let message):
+                NavigationStack {
+                    ProximityPairingInvalidCodeView(message: message, onScanAgain: { rescan() })
+                        .navigationTitle("Codice non valido")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Annulla") { dismiss() }
+                            }
+                        }
+                }
             }
         }
+        .onAppear { warmUpBluetoothForPairing() }
+    }
+
+    /// When this scanner can pair in person, get the one-time Bluetooth
+    /// prompt answered while the camera is still framing the code: answered
+    /// after the scan, its time would count against the code's 8 s window
+    /// and the very first pairing would expire.
+    private func warmUpBluetoothForPairing() {
+        guard proximityLocalUserId != nil else { return }
+        ProximityBluetoothPermission.requestIfNeeded()
+    }
+
+    /// A `qaudion://pair/` code goes straight to the Bluetooth exchange — no
+    /// confirm step first, that is the point of it. Every other shape keeps
+    /// the existing decode-then-confirm flow.
+    private func handleScanned(_ raw: String) {
+        guard ProximityQrPayload.looksLikeProximityPairing(raw) else {
+            phase = .decoded(QrPayloadRouter.route(raw))
+            return
+        }
+        guard proximityLocalUserId != nil else {
+            phase = .proximityElsewhere
+            return
+        }
+        do {
+            let payload: ProximityQrPayload = try ProximityQrPayload.decode(text: raw)
+            phase = .proximity(payload)
+        } catch {
+            let message: String = ProximityPairingError.invalidQrCode("scan").userMessage
+            phase = .proximityInvalid(message)
+        }
+    }
+
+    private func handleProximityCompleted(_ result: ProximityPairingSummary) {
+        onProximityCompleted?(result)
+        dismiss()
+    }
+
+    static let pairElsewhereMessage: String =
+        "Questo è un codice di associazione di persona. Per usarlo apri Contatti → Aggiungi contatto → Scansiona QR."
+
+    private func rescan() {
+        phase = .scanning
     }
 }
 

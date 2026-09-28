@@ -35,6 +35,10 @@ struct ContactsScreen: View {
     @State private var searchText: String = ""
     @State private var selectedTab: Tab = .all
     @State private var showingNewContact: Bool = false
+    /// In person: scan a contact's identity or pairing QR, or show our own
+    /// rotating pairing QR (docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md).
+    @State private var showingQrScanner: Bool = false
+    @State private var showingProximityPair: Bool = false
     /// W58: ordinamento corrente della lista TUTTI. Persisted in
     /// UserDefaults così la scelta sopravvive ai riavvi.
     @State private var sortMode: SortMode = SortMode.loadFromDefaults()
@@ -125,19 +129,8 @@ struct ContactsScreen: View {
         // Placed on the ZStack rather than inside a tab branch so it sits
         // over TUTTI, SCOPRI and BLOCCATI alike.
         .overlay(alignment: .bottomTrailing) {
-            Button {
-                showingNewContact = true
-            } label: {
-                Label("Aggiungi contatto", systemImage: "person.badge.plus")
-                    .qaudionStyle(type.labelMedium)
-                    .foregroundStyle(scheme.onPrimary)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .background(Capsule().fill(scheme.primary))
-                    .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
-            }
-            .buttonStyle(.plain)
-            .padding(16)
+            addContactMenu
+                .padding(16)
         }
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
@@ -160,6 +153,21 @@ struct ContactsScreen: View {
         }
         .onChange(of: appState.presenceService.statuses) { _ in
             updateSortedContacts()
+        }
+        .sheet(isPresented: $showingQrScanner) {
+            QrScannerSheet(onAccepted: { decoded in handleScannedContact(decoded) },
+                           proximityLocalUserId: appState.currentUserId,
+                           proximityServerIdentityKeys: { (userId: String) async -> Set<Data> in
+                               await container.publishedIdentityKeys(userId)
+                           },
+                           onProximityCompleted: { result in handleProximityPaired(result) })
+        }
+        .sheet(isPresented: $showingProximityPair) {
+            ProximityPairingDisplaySheet(localUserId: appState.currentUserId,
+                                         serverIdentityKeys: { (userId: String) async -> Set<Data> in
+                                             await container.publishedIdentityKeys(userId)
+                                         },
+                                         onCompleted: { result in handleProximityPaired(result) })
         }
         .sheet(isPresented: $showingNewContact) {
             // W23.E: full ContactEditor in Add mode.
@@ -186,6 +194,57 @@ struct ContactsScreen: View {
                 .toolbar(.hidden, for: .navigationBar)
             }
         }
+    }
+
+    /// "Aggiungi contatto": by extension, or in person by QR — the same
+    /// scanner reads identity codes and in-person pairing codes, and the
+    /// last entry shows this phone's own rotating pairing code.
+    private var addContactMenu: some View {
+        Menu {
+            Button {
+                showingNewContact = true
+            } label: {
+                Label("Nuovo contatto", systemImage: "person.badge.plus")
+            }
+            Button {
+                showingQrScanner = true
+            } label: {
+                Label("Scansiona QR", systemImage: "qrcode.viewfinder")
+            }
+            Button {
+                showingProximityPair = true
+            } label: {
+                Label("Associa di persona (QR + Bluetooth)", systemImage: "person.2.wave.2")
+            }
+        } label: {
+            Label("Aggiungi contatto", systemImage: "person.badge.plus")
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onPrimary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(Capsule().fill(scheme.primary))
+                .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func handleScannedContact(_ decoded: QrPayloadRouter.Decoded) {
+        let added: Bool = container.addScannedContact(decoded)
+        let text: String = added ? "Contatto aggiunto." : "Questo codice non contiene un contatto."
+        let severity: QAudionSnackbarSeverity = added ? .info : .error
+        snackbar?.show(.init(text: text, severity: severity))
+    }
+
+    /// In-person pairing finished on both phones; its key is already stored.
+    /// The container adds the peer only if missing (never rewrites a known
+    /// contact); the sheet that ran it is closed so the result is visible.
+    private func handleProximityPaired(_ result: ProximityPairingSummary) {
+        let outcome: ContactsListContainer.ProximityOutcome = container.recordProximityPairing(result)
+        showingProximityPair = false
+        showingQrScanner = false
+        let text: String = outcome.title + " — " + outcome.detail
+        let severity: QAudionSnackbarSeverity = outcome.isError ? .error : .info
+        snackbar?.show(.init(text: text, severity: severity))
     }
 
     private func saveNewContact(_ draft: ContactEditorScreen.Draft) {

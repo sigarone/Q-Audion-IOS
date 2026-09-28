@@ -97,6 +97,31 @@ public final class PeerIdentityPinStore {
         return nil
     }
 
+    /// Every pinned key for `contactId`: the legacy bare pin plus each
+    /// per-device (`"<contactId>|<deviceId>"`) pin, in no particular order.
+    /// Read-only. Empty when the peer has no pin at all (or the Keychain is
+    /// locked).
+    ///
+    /// For callers with no device-id context that need to know whether a
+    /// presented key is one this peer has ALREADY proven on any of its
+    /// devices (proximity pairing's identity policy): `pinnedKey(contactId:)`
+    /// alone reads only the legacy account, so a peer whose pins are all
+    /// per-device would look like a first contact.
+    public func allPinnedKeys(contactId: String) -> [Data] {
+        guard !contactId.isEmpty else { return [] }
+        var keys: [Data] = []
+        if let legacy = rawPinnedKey(account: contactId) {
+            keys.append(legacy)
+        }
+        let prefix: String = contactId + "|"
+        for acct in allAccounts() where acct.hasPrefix(prefix) {
+            if let key = rawPinnedKey(account: acct) {
+                keys.append(key)
+            }
+        }
+        return keys
+    }
+
     /// Raw single-account Keychain read (no migration fallback).
     private func rawPinnedKey(account: String) -> Data? {
         #if canImport(Security)

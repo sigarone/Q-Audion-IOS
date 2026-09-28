@@ -13190,6 +13190,8 @@ final class AppState: ObservableObject {
             switch vault.origin(name: name) {
             case .nfc:
                 method = "NFC"
+            case .proximity:
+                method = "QR+BLE"
             case .qr, .manual, .kms, .callDerived, .deviceInternal, .identityKey:
                 switch vault.getKeyClass(name: name) {
                 case .hwOnly: method = "HW"
@@ -13853,7 +13855,13 @@ final class AppState: ObservableObject {
         // notion `sigOk`'s own verdict is anchored to elsewhere in
         // `QAudionCallIntegration`. See `AssuranceState.resolveNfcMixInputs`
         // for the pure decision logic (unit-tested).
-        let selectedIsNfc = AppState.resolvePskDisplayMeta(fingerprint: state.selectedFp).method == "NFC"
+        // A QR + Bluetooth proximity key (`PskOrigin.proximity`, method "QR+BLE")
+        // is presence evidence of the same kind as an NFC tap — both users
+        // confirmed the SAS in person — so it feeds the same S2 tier and the same
+        // captured-identity binding check (`resolveNfcPeerIdentityKey` reads the
+        // shared presence-identity vault field both ceremonies write).
+        let selectedMethod: String? = AppState.resolvePskDisplayMeta(fingerprint: state.selectedFp).method
+        let selectedIsNfc: Bool = (selectedMethod == "NFC") || (selectedMethod == "QR+BLE")
         // W-NFCIDBIND (2026-07-29) — the identity captured AT THE TAP, read
         // from the vault's dedicated sidecar field, NOT derived from the
         // fingerprint (which is SHA-256(psk), never an identity key — see
@@ -13895,14 +13903,19 @@ final class AppState: ObservableObject {
         // false in practice today (nobody sets a non-zero role yet — see
         // `AndroidHandshakeBundle.pskRoles`'s doc) until step 7 ships role
         // advertisement for real.
-        let expectedButMissing = state.peerAdvertisedRoles.contains(1) && !mixRoles.contains(.nfc)
+        // Role 3 (QR + Bluetooth proximity) is presence evidence exactly like
+        // role 1 (NFC) — see `selectedIsNfc` above.
+        let peerAdvertisesPresenceRole: Bool = state.peerAdvertisedRoles.contains(where: { (role: Int) -> Bool in
+            return PskAdvertV3.isPresenceRole(role)
+        })
+        let expectedButMissing = peerAdvertisesPresenceRole && !mixRoles.contains(.nfc)
         // W-NFCCOMMON — the independent "NFC in comune" fact: true whenever the peer's
         // OFFER/ACCEPT advert shows a mutual NFC-tier fingerprint, regardless of whether
         // THIS call's mixRoles/decide() verdict actually used it. Same underlying set as
         // expectedButMissing above, without the `!mixRoles.contains(.nfc)` restriction —
         // when NFC WAS mixed (S2), this is trivially also true, which is correct: the
         // trust bar's "NFC ✓" chip should light in that case too, same as before.
-        let mutualNfcInCommon = state.peerAdvertisedRoles.contains(1)
+        let mutualNfcInCommon = peerAdvertisesPresenceRole
         // W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a pre-shared key of ANY
         // origin was mixed into this call", independent of `assurance`'s single-select
         // verdict: shows in EVERY state a PSK was mixed, including warning states.
