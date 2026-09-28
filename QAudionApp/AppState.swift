@@ -6580,7 +6580,7 @@ final class AppState: ObservableObject {
                     RTLog.info("call", dupLine)
                     let dupCaps: [String]? = data["capabilities"] as? [String]
                     let dupHasVideo: Bool = (callType == "video")
-                    self.handleIncomingWebRtcOffer(
+                    self.routeIncomingWebRtcOffer(
                         callerId: senderId,
                         sdp: dupSdp,
                         peerCapabilities: dupCaps,
@@ -6826,7 +6826,7 @@ final class AppState: ObservableObject {
                         if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                             let caps = data["capabilities"] as? [String]
                             let vid = (callType == "video")
-                            self.handleIncomingWebRtcOffer(
+                            self.routeIncomingWebRtcOffer(
                                 callerId: senderId,
                                 sdp: sdp,
                                 peerCapabilities: caps,
@@ -9015,7 +9015,7 @@ final class AppState: ObservableObject {
             // native-SRTP snapshot (nil if absent: the bound active id is used).
             let offerEnvelopeCallId: String? = data["call_id"] as? String
             DispatchQueue.main.async {
-                self.handleIncomingWebRtcOffer(
+                self.routeIncomingWebRtcOffer(
                     callerId: callerId,
                     sdp: sdp,
                     peerCapabilities: peerCaps,
@@ -26019,7 +26019,7 @@ extension AppState {
 extension AppState {
     /// WebRTC framework not available in this target — no-op stubs so the
     /// AppState handlers keep their call sites intact.
-    func handleIncomingWebRtcOffer(
+    func routeIncomingWebRtcOffer(
         callerId: String,
         sdp: String,
         peerCapabilities: [String]? = nil,
