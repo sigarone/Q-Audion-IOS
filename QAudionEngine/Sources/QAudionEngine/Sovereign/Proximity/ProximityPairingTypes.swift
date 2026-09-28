@@ -37,6 +37,21 @@ public enum ProximityPairing {
     public static let sasBytes: Int = 8
     public static let sasDigits: Int = 6
     public static let maxUserIdBytes: Int = 256
+    /// SHA-256 output: TH1, TH_S, TH_D (spec §10).
+    public static let transcriptHashBytes: Int = 32
+    /// AES-256-GCM key: K_enc_S / K_enc_D (spec §4, §10).
+    public static let aeadKeyBytes: Int = 32
+    /// AES-256-GCM nonce. Always all zero: every K_enc seals exactly one message (spec §4).
+    public static let aeadNonceBytes: Int = 12
+    /// AES-256-GCM tag, appended to the ciphertext (spec §4, §8).
+    public static let aeadTagBytes: Int = 16
+    /// OFFER body: `ek_D[1568] ‖ xpk_D[32] ‖ nonce_D[32]`, ephemeral keys only (spec §8).
+    public static let offerBodyBytes: Int = 1632
+    /// `idBlock` bytes before `userId`: `idPub[32] ‖ encPub[32] ‖ u16be(n)` (spec §8).
+    public static let idBlockFixedBytes: Int = 66
+    /// A sealed box without its userId: `idBlock` fixed part ‖ sig[64] ‖ mac[32] ‖ tag[16].
+    /// A sealed box is exactly `sealedIdentityFixedBytes + n` bytes (spec §8: FINISH = 178 + n).
+    public static let sealedIdentityFixedBytes: Int = 178
 
     /// Spec §8 userId grammar: 1...256 bytes, each one of `[A-Za-z0-9._-]`.
     /// Server account ids are UUIDs, so this costs nothing — and it removes
@@ -83,6 +98,10 @@ public enum ProximityPairing {
         public static let frame: Data = Data("qaudion-prox-v1/frame".utf8)
         public static let hello: Data = Data("qaudion-prox-v1/hello".utf8)
         public static let transcript: Data = Data("qaudion-prox-v1/transcript".utf8)
+        public static let transcriptScanner: Data = Data("qaudion-prox-v1/transcript-scanner".utf8)
+        public static let transcriptDisplayer: Data = Data("qaudion-prox-v1/transcript-displayer".utf8)
+        public static let encScanner: Data = Data("qaudion-prox-v1/enc-scanner".utf8)
+        public static let encDisplayer: Data = Data("qaudion-prox-v1/enc-displayer".utf8)
         public static let macScanner: Data = Data("qaudion-prox-v1/mac-scanner".utf8)
         public static let macDisplayer: Data = Data("qaudion-prox-v1/mac-displayer".utf8)
         public static let confirmScanner: Data = Data("qaudion-prox-v1/confirm-scanner".utf8)
@@ -150,7 +169,8 @@ public struct ProximityQrPayload: Equatable, Sendable {
     }
 }
 
-/// A peer's long-term identity as carried in OFFER / ACCEPT.
+/// A peer's long-term identity as carried, sealed, in ACCEPT / FINISH (the
+/// `idBlock` of spec §8). Never on the air in clear.
 public struct ProximityPeerIdentity: Equatable, Sendable {
     /// Server account id.
     public let userId: String
@@ -211,7 +231,8 @@ public struct ProximityLocalIdentity {
         self.encryptionPublicKey = publicIdentity.encryptionPublicKey
     }
 
-    /// The identity as the peer will see it in OFFER / ACCEPT.
+    /// The identity as the peer will see it once it opens our sealed box
+    /// (ACCEPT for the scanner, FINISH for the displayer).
     public var publicIdentity: ProximityPeerIdentity {
         // Force-try is safe: every field was validated by the initializer above.
         // swiftlint:disable:next force_try

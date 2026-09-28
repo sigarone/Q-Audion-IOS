@@ -10,14 +10,23 @@ import CLiboqs
 // `ProximityPairing`. Byte-for-byte cross-checked against the independent
 // Python implementation by ProximityPairingKatTests.
 //
+// Key schedule (SIGMA-I, spec §10): stage 1 derives, from the hybrid shared
+// secret and TH1 (a transcript WITHOUT identities), the keys that seal and MAC
+// the two identity blocks; stage 2 re-extracts PRK1 under TH_D (a transcript
+// that chains both identity blocks) into the confirmation keys, SAS and PSK.
+//
 // Failure policy (fail closed, never fall back):
 // - Throwing functions throw `ProximityPairingError` on any wrong input length
 //   or library failure. They never return random, zero or partial bytes.
+//   `aeadOpen` throws `.authenticationFailed` for anything wrong with the
+//   sealed bytes (tag, length) and `.cryptoFailure` for a wrong local key or
+//   associated-data length.
 // - Non-throwing derivations (frameKey, helloTag, commitment, transcriptHash,
-//   transcriptMac, confirmationMac, signaturePayload) return EMPTY `Data` when
-//   an input has the wrong length. Every consumer rejects empty values:
-//   `constantTimeEquals` is false whenever either side is empty, `sign`
-//   refuses an empty payload, `deriveSessionKeys` throws on a wrong-length
+//   identityTranscriptHash, transcriptMac, confirmationMac, signaturePayload)
+//   return EMPTY `Data` when an input has the wrong length. Every consumer
+//   rejects empty values: `constantTimeEquals` is false whenever either side
+//   is empty, `sign` refuses an empty payload, `deriveHandshakeKeys` /
+//   `deriveSessionKeys` / `aeadSeal` / `aeadOpen` throw on a wrong-length
 //   transcript hash and `ProximityQrPayload.init` throws on a wrong-length
 //   frame key / commitment. A caller bug therefore aborts the pairing; it can
 //   never make a check pass or produce a usable key.
@@ -223,8 +232,9 @@ public enum ProximityPairingCrypto {
 
     /// Decapsulates `ciphertext` (exactly 1568 bytes) with `secretKey`
     /// (exactly 3168 bytes). A tampered ciphertext does NOT throw: ML-KEM's
-    /// implicit rejection returns an unrelated shared secret, which then fails
-    /// the transcript MAC. A secret key failing the FIPS 203 §7.3 hash check throws.
+    /// implicit rejection returns an unrelated shared secret, whose stage-1
+    /// keys then fail to open sealed_S. A secret key failing the FIPS 203 §7.3
+    /// hash check throws.
     public static func kemDecapsulate(ciphertext: Data, secretKey: Data) throws -> Data {
         guard ciphertext.count == ProximityPairing.mlKemCiphertextBytes else {
             throw ProximityPairingError.cryptoFailure("ML-KEM ciphertext length")
@@ -359,10 +369,12 @@ public enum ProximityPairingCrypto {
         return hmacSha256(key: frameKey, message: message)
     }
 
-    /// `SHA-256(L_COMMIT ‖ sessionId ‖ offerBody)`. Empty on a wrong sessionId
-    /// length or an empty offer body.
+    /// `SHA-256(L_COMMIT ‖ sessionId ‖ offerBody)` over the ephemeral-only
+    /// OFFER body (spec §6). Empty unless sessionId is 16 bytes and offerBody
+    /// exactly 1632.
     public static func commitment(sessionId: Data, offerBody: Data) -> Data {
-        guard sessionId.count == ProximityPairing.sessionIdBytes, !offerBody.isEmpty else {
+        guard sessionId.count == ProximityPairing.sessionIdBytes,
+              offerBody.count == ProximityPairing.offerBodyBytes else {
             return Data()
         }
         var message = Data()
@@ -372,16 +384,17 @@ public enum ProximityPairingCrypto {
         return sha256(message)
     }
 
-    // MARK: - Key schedule (spec §10)
+    // MARK: - Transcript hashes (spec §10)
 
-    /// `SHA-256(L_TRANSCRIPT ‖ lp32(qrBytes) ‖ lp32(helloBody) ‖ lp32(offerBody) ‖ lp32(acceptUnsigned))`.
-    /// Empty unless qrBytes is 85 bytes, helloBody 100 bytes and both other bodies non-empty.
+    /// TH1 = `SHA-256(L_TRANSCRIPT ‖ lp32(qrBytes) ‖ lp32(helloBody) ‖ lp32(offerBody) ‖ lp32(ct))`:
+    /// the handshake transcript, before either identity is known. Empty unless
+    /// qrBytes is 85 bytes, helloBody 100, offerBody 1632 and ct 1568.
     public static func transcriptHash(qrBytes: Data, helloBody: Data,
-                                      offerBody: Data, acceptUnsignedBody: Data) -> Data {
+                                      offerBody: Data, mlKemCiphertext: Data) -> Data {
         guard qrBytes.count == ProximityPairing.qrPayloadBytes,
               helloBody.count == ProximityPairing.helloBodyBytes,
-              !offerBody.isEmpty,
-              !acceptUnsignedBody.isEmpty else {
+              offerBody.count == ProximityPairing.offerBodyBytes,
+              mlKemCiphertext.count == ProximityPairing.mlKemCiphertextBytes else {
             return Data()
         }
         var message = Data()
@@ -389,66 +402,82 @@ public enum ProximityPairingCrypto {
         message.append(ProximityBytes.lp32(qrBytes))
         message.append(ProximityBytes.lp32(helloBody))
         message.append(ProximityBytes.lp32(offerBody))
-        message.append(ProximityBytes.lp32(acceptUnsignedBody))
+        message.append(ProximityBytes.lp32(mlKemCiphertext))
         return sha256(message)
     }
 
-    /// Every key derived from one pairing session. Call `zeroize()` as soon
-    /// as the session ends; after it every field is empty, so a stale use
-    /// fails closed instead of running with an all-zero key.
-    public struct SessionKeys {
-        public private(set) var macKeyScanner: Data
-        public private(set) var macKeyDisplayer: Data
-        public private(set) var confirmKeyScanner: Data
-        public private(set) var confirmKeyDisplayer: Data
-        /// 6-digit short authentication string shown to both users.
-        public private(set) var sas: String
-        /// 32-byte pre-shared key handed to the completion result.
-        public private(set) var psk: Data
-        /// HKDF PRK — exposed for the KAT only.
-        internal private(set) var prk: Data
-        /// Raw 8 SAS bytes — exposed for the KAT only.
-        internal private(set) var sasBytes: Data
+    /// SIGMA-I chained transcript over one identity block:
+    /// - scanner:   TH_S = `SHA-256(L_TH_S ‖ TH1 ‖ lp32(idBlock_S))`, `previousHash` = TH1;
+    /// - displayer: TH_D = `SHA-256(L_TH_D ‖ TH_S ‖ lp32(idBlock_D))`, `previousHash` = TH_S.
+    /// Empty unless `previousHash` is 32 bytes and `idBlock` is 67...322 bytes
+    /// (the only lengths a valid idBlock can have).
+    public static func identityTranscriptHash(role: ProximityRole, previousHash: Data, idBlock: Data) -> Data {
+        let minimum: Int = ProximityPairing.idBlockFixedBytes + 1
+        let maximum: Int = ProximityPairing.idBlockFixedBytes + ProximityPairing.maxUserIdBytes
+        guard previousHash.count == ProximityPairing.transcriptHashBytes,
+              idBlock.count >= minimum, idBlock.count <= maximum else {
+            return Data()
+        }
+        var message = Data()
+        switch role {
+        case .scanner:
+            message.append(ProximityPairing.Label.transcriptScanner)
+        case .displayer:
+            message.append(ProximityPairing.Label.transcriptDisplayer)
+        }
+        message.append(previousHash)
+        message.append(ProximityBytes.lp32(idBlock))
+        return sha256(message)
+    }
 
-        fileprivate init(macKeyScanner: Data, macKeyDisplayer: Data,
-                         confirmKeyScanner: Data, confirmKeyDisplayer: Data,
-                         sas: String, psk: Data, prk: Data, sasBytes: Data) {
+    // MARK: - Key schedule, stage 1 (spec §10)
+
+    /// The stage-1 keys: they seal and MAC the identity blocks. Kept until
+    /// stage 2 has consumed PRK1, then zeroized. After `zeroize()` every field
+    /// is empty, so a stale use fails closed instead of running with an
+    /// all-zero key.
+    public struct HandshakeKeys {
+        /// K_enc_S — seals `sealed_S` (ACCEPT).
+        public private(set) var encKeyScanner: Data
+        /// K_enc_D — seals `sealed_D` (FINISH).
+        public private(set) var encKeyDisplayer: Data
+        /// K_mac_S — `mac_S = HMAC(K_mac_S, TH_S)`.
+        public private(set) var macKeyScanner: Data
+        /// K_mac_D — `mac_D = HMAC(K_mac_D, TH_D)`.
+        public private(set) var macKeyDisplayer: Data
+        /// PRK1 — the stage-2 IKM. Internal: read by `deriveSessionKeys` and the KAT only.
+        internal private(set) var prk: Data
+
+        fileprivate init(encKeyScanner: Data, encKeyDisplayer: Data,
+                         macKeyScanner: Data, macKeyDisplayer: Data, prk: Data) {
+            self.encKeyScanner = encKeyScanner
+            self.encKeyDisplayer = encKeyDisplayer
             self.macKeyScanner = macKeyScanner
             self.macKeyDisplayer = macKeyDisplayer
-            self.confirmKeyScanner = confirmKeyScanner
-            self.confirmKeyDisplayer = confirmKeyDisplayer
-            self.sas = sas
-            self.psk = psk
             self.prk = prk
-            self.sasBytes = sasBytes
         }
 
         public mutating func zeroize() {
+            CryptoConstants.zeroize(&encKeyScanner)
+            CryptoConstants.zeroize(&encKeyDisplayer)
             CryptoConstants.zeroize(&macKeyScanner)
             CryptoConstants.zeroize(&macKeyDisplayer)
-            CryptoConstants.zeroize(&confirmKeyScanner)
-            CryptoConstants.zeroize(&confirmKeyDisplayer)
-            CryptoConstants.zeroize(&psk)
             CryptoConstants.zeroize(&prk)
-            CryptoConstants.zeroize(&sasBytes)
+            encKeyScanner = Data()
+            encKeyDisplayer = Data()
             macKeyScanner = Data()
             macKeyDisplayer = Data()
-            confirmKeyScanner = Data()
-            confirmKeyDisplayer = Data()
-            psk = Data()
             prk = Data()
-            sasBytes = Data()
-            sas = ""
         }
     }
 
-    /// `PRK = HKDF-Extract(salt = TH, IKM = ss_kem ‖ ss_x ‖ nonce_S ‖ nonce_D)`
-    /// and the six HKDF-Expand outputs of spec §10. Every input must be exactly
-    /// 32 bytes, otherwise `.cryptoFailure`.
-    public static func deriveSessionKeys(transcriptHash: Data, kemSharedSecret: Data,
-                                         x25519SharedSecret: Data, scannerNonce: Data,
-                                         displayerNonce: Data) throws -> SessionKeys {
-        guard transcriptHash.count == 32 else {
+    /// `PRK1 = HKDF-Extract(salt = TH1, IKM = ss_kem ‖ ss_x ‖ nonce_S ‖ nonce_D)`
+    /// and K_enc_S, K_enc_D, K_mac_S, K_mac_D (spec §10). Every input must be
+    /// exactly 32 bytes, otherwise `.cryptoFailure`.
+    public static func deriveHandshakeKeys(transcriptHash: Data, kemSharedSecret: Data,
+                                           x25519SharedSecret: Data, scannerNonce: Data,
+                                           displayerNonce: Data) throws -> HandshakeKeys {
+        guard transcriptHash.count == ProximityPairing.transcriptHashBytes else {
             throw ProximityPairingError.cryptoFailure("transcript hash length")
         }
         guard kemSharedSecret.count == ProximityPairing.sharedSecretBytes else {
@@ -473,6 +502,73 @@ public enum ProximityPairingCrypto {
 
         let prk = HKDF<SHA256>.extract(inputKeyMaterial: SymmetricKey(data: ikm),
                                        salt: Data(transcriptHash))
+        let prkBytes: Data = prk.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Data in
+            return Data(buf)
+        }
+        let encS: Data = expand(prk: prk, label: ProximityPairing.Label.encScanner, count: ProximityPairing.aeadKeyBytes)
+        let encD: Data = expand(prk: prk, label: ProximityPairing.Label.encDisplayer, count: ProximityPairing.aeadKeyBytes)
+        let macS: Data = expand(prk: prk, label: ProximityPairing.Label.macScanner, count: ProximityPairing.macBytes)
+        let macD: Data = expand(prk: prk, label: ProximityPairing.Label.macDisplayer, count: ProximityPairing.macBytes)
+        return HandshakeKeys(encKeyScanner: encS, encKeyDisplayer: encD,
+                             macKeyScanner: macS, macKeyDisplayer: macD, prk: prkBytes)
+    }
+
+    // MARK: - Key schedule, stage 2 (spec §10)
+
+    /// The final keys, bound to the whole transcript including both
+    /// identities. Call `zeroize()` as soon as the session ends; after it
+    /// every field is empty, so a stale use fails closed.
+    public struct SessionKeys {
+        public private(set) var confirmKeyScanner: Data
+        public private(set) var confirmKeyDisplayer: Data
+        /// 6-digit short authentication string shown to both users.
+        public private(set) var sas: String
+        /// 32-byte pre-shared key handed to the completion result.
+        public private(set) var psk: Data
+        /// PRK2 — exposed for the KAT only.
+        internal private(set) var prk: Data
+        /// Raw 8 SAS bytes — exposed for the KAT only.
+        internal private(set) var sasBytes: Data
+
+        fileprivate init(confirmKeyScanner: Data, confirmKeyDisplayer: Data,
+                         sas: String, psk: Data, prk: Data, sasBytes: Data) {
+            self.confirmKeyScanner = confirmKeyScanner
+            self.confirmKeyDisplayer = confirmKeyDisplayer
+            self.sas = sas
+            self.psk = psk
+            self.prk = prk
+            self.sasBytes = sasBytes
+        }
+
+        public mutating func zeroize() {
+            CryptoConstants.zeroize(&confirmKeyScanner)
+            CryptoConstants.zeroize(&confirmKeyDisplayer)
+            CryptoConstants.zeroize(&psk)
+            CryptoConstants.zeroize(&prk)
+            CryptoConstants.zeroize(&sasBytes)
+            confirmKeyScanner = Data()
+            confirmKeyDisplayer = Data()
+            psk = Data()
+            prk = Data()
+            sasBytes = Data()
+            sas = ""
+        }
+    }
+
+    /// `PRK2 = HKDF-Extract(salt = TH_D, IKM = PRK1)` and the four HKDF-Expand
+    /// outputs of spec §10 stage 2. Throws `.cryptoFailure` when TH_D is not
+    /// 32 bytes or `handshakeKeys` was already zeroized. Does not zeroize
+    /// `handshakeKeys`: the caller owns it and scrubs it right after this.
+    public static func deriveSessionKeys(handshakeKeys: HandshakeKeys,
+                                         displayerTranscriptHash: Data) throws -> SessionKeys {
+        guard displayerTranscriptHash.count == ProximityPairing.transcriptHashBytes else {
+            throw ProximityPairingError.cryptoFailure("displayer transcript hash length")
+        }
+        guard handshakeKeys.prk.count == ProximityPairing.sharedSecretBytes else {
+            throw ProximityPairingError.cryptoFailure("stage-1 key")
+        }
+        let prk = HKDF<SHA256>.extract(inputKeyMaterial: SymmetricKey(data: handshakeKeys.prk),
+                                       salt: Data(displayerTranscriptHash))
 
         // SAS first: its core is the only step that can fail after the length
         // checks, and nothing else has been materialized yet at that point.
@@ -488,20 +584,84 @@ public enum ProximityPairingCrypto {
         let prkBytes: Data = prk.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Data in
             return Data(buf)
         }
-        let macS: Data = expand(prk: prk, label: ProximityPairing.Label.macScanner, count: ProximityPairing.macBytes)
-        let macD: Data = expand(prk: prk, label: ProximityPairing.Label.macDisplayer, count: ProximityPairing.macBytes)
         let confirmS: Data = expand(prk: prk, label: ProximityPairing.Label.confirmScanner, count: ProximityPairing.macBytes)
         let confirmD: Data = expand(prk: prk, label: ProximityPairing.Label.confirmDisplayer, count: ProximityPairing.macBytes)
         let pskBytes: Data = expand(prk: prk, label: ProximityPairing.Label.psk, count: ProximityPairing.pskBytes)
 
-        return SessionKeys(macKeyScanner: macS, macKeyDisplayer: macD,
-                           confirmKeyScanner: confirmS, confirmKeyDisplayer: confirmD,
+        return SessionKeys(confirmKeyScanner: confirmS, confirmKeyDisplayer: confirmD,
                            sas: code, psk: pskBytes, prk: prkBytes, sasBytes: sasRaw)
     }
 
-    /// `HMAC-SHA256(K_mac_role, TH)`. Empty unless key and TH are 32 bytes.
+    // MARK: - Identity sealing (spec §4, §8)
+
+    /// `Seal(K, aad, p)`: AES-256-GCM with the all-zero 12-byte nonce, output
+    /// `ciphertext ‖ tag[16]`. The fixed nonce is safe only because every
+    /// K_enc_S / K_enc_D seals exactly one message. `key` must be 32 bytes and
+    /// `transcriptHash` (the aad: TH1 for sealed_S, TH_S for sealed_D) 32
+    /// bytes, otherwise `.cryptoFailure`.
+    public static func aeadSeal(_ plaintext: Data, key: Data, transcriptHash: Data) throws -> Data {
+        guard key.count == ProximityPairing.aeadKeyBytes else {
+            throw ProximityPairingError.cryptoFailure("AEAD key length")
+        }
+        guard transcriptHash.count == ProximityPairing.transcriptHashBytes else {
+            throw ProximityPairingError.cryptoFailure("AEAD associated data length")
+        }
+        guard !plaintext.isEmpty else {
+            throw ProximityPairingError.cryptoFailure("empty AEAD plaintext")
+        }
+        let box: AES.GCM.SealedBox
+        do {
+            let nonce: AES.GCM.Nonce = try AES.GCM.Nonce(data: Data(count: ProximityPairing.aeadNonceBytes))
+            box = try AES.GCM.seal(Data(plaintext), using: SymmetricKey(data: key), nonce: nonce,
+                                   authenticating: Data(transcriptHash))
+        } catch {
+            throw ProximityPairingError.cryptoFailure("AES-GCM seal")
+        }
+        var out: Data = Data(box.ciphertext)
+        let tag: Data = Data(box.tag)
+        guard out.count == plaintext.count, tag.count == ProximityPairing.aeadTagBytes else {
+            throw ProximityPairingError.cryptoFailure("AES-GCM output length")
+        }
+        out.append(tag)
+        return out
+    }
+
+    /// Opens a `ciphertext ‖ tag[16]` box sealed by `aeadSeal` with the same
+    /// key and aad. A wrong tag, a wrong aad, a wrong key or a box too short to
+    /// hold a tag throws `.authenticationFailed`; a local key / aad of the
+    /// wrong length throws `.cryptoFailure`.
+    public static func aeadOpen(_ sealed: Data, key: Data, transcriptHash: Data) throws -> Data {
+        guard key.count == ProximityPairing.aeadKeyBytes else {
+            throw ProximityPairingError.cryptoFailure("AEAD key length")
+        }
+        guard transcriptHash.count == ProximityPairing.transcriptHashBytes else {
+            throw ProximityPairingError.cryptoFailure("AEAD associated data length")
+        }
+        let box: Data = Data(sealed)
+        guard box.count > ProximityPairing.aeadTagBytes else {
+            throw ProximityPairingError.authenticationFailed("sealed length")
+        }
+        let split: Int = box.count - ProximityPairing.aeadTagBytes
+        let ciphertext: Data = Data(box.prefix(split))
+        let tag: Data = Data(box.suffix(ProximityPairing.aeadTagBytes))
+        do {
+            let nonce: AES.GCM.Nonce = try AES.GCM.Nonce(data: Data(count: ProximityPairing.aeadNonceBytes))
+            let sealedBox: AES.GCM.SealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag)
+            let plaintext: Data = try AES.GCM.open(sealedBox, using: SymmetricKey(data: key),
+                                                   authenticating: Data(transcriptHash))
+            return Data(plaintext)
+        } catch {
+            throw ProximityPairingError.authenticationFailed("AES-GCM open")
+        }
+    }
+
+    // MARK: - Identity proofs and confirmation (spec §9, §10)
+
+    /// `HMAC-SHA256(K_mac_role, TH_role)` — mac_S over TH_S, mac_D over TH_D.
+    /// Empty unless key and transcript hash are 32 bytes.
     public static func transcriptMac(key: Data, transcriptHash: Data) -> Data {
-        guard key.count == ProximityPairing.macBytes, transcriptHash.count == 32 else {
+        guard key.count == ProximityPairing.macBytes,
+              transcriptHash.count == ProximityPairing.transcriptHashBytes else {
             return Data()
         }
         return hmacSha256(key: key, message: transcriptHash)
@@ -515,10 +675,10 @@ public enum ProximityPairingCrypto {
         return hmacSha256(key: key, message: ProximityPairing.Label.userConfirmed)
     }
 
-    /// `L_SIG_S ‖ TH` (scanner) or `L_SIG_D ‖ TH` (displayer): the payload the
-    /// given role signs. Empty unless TH is 32 bytes.
+    /// `L_SIG_S ‖ TH_S` (scanner) or `L_SIG_D ‖ TH_D` (displayer): the payload
+    /// the given role signs. Empty unless the transcript hash is 32 bytes.
     public static func signaturePayload(role: ProximityRole, transcriptHash: Data) -> Data {
-        guard transcriptHash.count == 32 else {
+        guard transcriptHash.count == ProximityPairing.transcriptHashBytes else {
             return Data()
         }
         var payload = Data()
