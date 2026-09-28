@@ -248,7 +248,14 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
 
     fileprivate func linkSend(_ link: ProximityBleDisplayerLink, _ message: Data) {
         guard !link.isClosed, links[link.central.identifier] === link else { return }
-        let maxLength: Int = link.central.maximumUpdateValueLength
+        // CoreBluetooth reports the negotiated ATT_MTU − 3 here, which can
+        // exceed 512 (GATT_MAX_ATTR_LEN — Bluetooth Core spec Vol 3 Part F
+        // §3.2.9) at MTU ≥ 516. Android's Bluetooth stack silently drops an
+        // incoming notification bigger than 512 bytes before the app ever
+        // sees it (confirmed against AOSP `gatt_cl.cc`'s `GATT_MAX_ATTR_LEN`
+        // check) — an uncapped fragment size here breaks every pairing with
+        // an Android peer once MTU negotiation goes past 515.
+        let maxLength: Int = min(link.central.maximumUpdateValueLength, proximityBleMaxAttributeValue)
         let pieces: [Data]
         do {
             pieces = try ProximityFraming.fragments(of: message, maxValueLength: maxLength)
@@ -681,7 +688,12 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         guard sender === link, !sender.isClosed, phase == .connected, let p = remotePeripheral else { return }
         // .withoutResponse length (ATT_MTU − 3) even though writes go WITH
         // response: the stack then never falls back to prepare/execute writes.
-        let maxLength: Int = p.maximumWriteValueLength(for: .withoutResponse)
+        // Capped at 512 (GATT_MAX_ATTR_LEN) for the same reason as the
+        // displayer's notify path above: an Android GATT server truncates an
+        // incoming write over 512 bytes to 512 (AOSP `gatt_sr.cc`), so an
+        // uncapped write here reassembles short on the Android side and the
+        // pairing aborts on a protocol violation instead of completing.
+        let maxLength: Int = min(p.maximumWriteValueLength(for: .withoutResponse), proximityBleMaxAttributeValue)
         let pieces: [Data]
         do {
             pieces = try ProximityFraming.fragments(of: message, maxValueLength: maxLength)
@@ -996,7 +1008,7 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         }
         let reason: UInt8 = ProximityPairing.AbortReason.protocolViolation.rawValue
         let abort: Data = ProximityMessage.abort(reason: reason).encoded()
-        let maxLength: Int = p.maximumWriteValueLength(for: .withoutResponse)
+        let maxLength: Int = min(p.maximumWriteValueLength(for: .withoutResponse), proximityBleMaxAttributeValue)
         guard let pieces = try? ProximityFraming.fragments(of: abort, maxValueLength: maxLength) else {
             failLink(error)
             return

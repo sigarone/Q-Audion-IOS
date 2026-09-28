@@ -188,13 +188,18 @@ seq      : 0 on the FIRST fragment of a message, +1 for each following
            fragments (seq 0…255) — a 257th fragment is an error
 ```
 
-Fragment size = `ATT_MTU − 3` (iOS: `maximumWriteValueLength(for:
+Fragment size = `min(ATT_MTU − 3, 512)` (iOS: `maximumWriteValueLength(for:
 .withoutResponse)` for writes even though writes are sent WITH response, so
 the stack never falls back to prepare/execute long writes;
-`CBCentral.maximumUpdateValueLength` for notifications). A receiver rejects a
-fragment with unknown flag bits, empty payload, a seq mismatch, FIRST in the
-middle of a message, a non-FIRST start, or a reassembled size > 4096 B. Any
-framing error aborts the pairing.
+`CBCentral.maximumUpdateValueLength` for notifications). The 512-byte cap is
+`GATT_MAX_ATTR_LEN` (Bluetooth Core spec Vol 3 Part F §3.2.9) — a plain
+`ATT_MTU − 3` is uncapped and reaches 514 B at MTU 517, which Android's
+Bluetooth stack drops (a notification bigger than 512 B) or truncates (a
+write bigger than 512 B) below the app; a sender that skips this cap breaks
+every pairing against an Android peer once MTU negotiation goes past 515.
+A receiver rejects a fragment with unknown flag bits, empty payload, a seq
+mismatch, FIRST in the middle of a message, a non-FIRST start, or a
+reassembled size > 4096 B. Any framing error aborts the pairing.
 
 Writes are sent one at a time, the next after the previous write's response.
 Notifications are queued and resumed on "ready to update subscribers".
