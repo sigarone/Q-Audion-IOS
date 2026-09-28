@@ -17,8 +17,8 @@ phones run an authenticated hybrid ML-KEM-1024 + X25519 exchange over it, and
 both users confirm a 6-digit code before anything is stored.
 
 The resulting PSK is stored with `PskOrigin.proximity` (non-exportable), is
-advertised with wire role `3` (WIRE_SPEC §3.3.1), and is mixed into call
-session keys exactly like every other PSK.
+advertised with wire role `3` (§12; WIRE_SPEC §3.3.1 role recovery), and is
+mixed into call session keys exactly like every other PSK.
 
 ## 2. Threat model and security properties
 
@@ -291,7 +291,12 @@ Nothing writes pins (the call handshake owns pinning). On completion:
 - the peer's full Ed25519 key in the presence-identity field of the vault blob
   (`nfcpid`, shared with NFC), so `AssuranceState.resolveNfcMixInputs` can
   prove at call time that the mixed secret is bound to the verified caller;
-- wire role `3` (proximity) in PSK advertisements;
+- wire role `3` (proximity) in PSK advertisements. `WIRE_SPEC.md` §3.3.1 still
+  lists roles 0–2: that file is hash-locked byte-identical across the four
+  repos (`.github/workflows/wire-spec-lock.yml`), so the one-line addition
+  "`3` proximity" must land in all four together with the Android port. No
+  wire change depends on it — receivers already recover the role by walking
+  all 256 values;
 - the app adds the peer as a contact (userId + encPub) if missing.
 
 ## 13. Android port notes (informative)

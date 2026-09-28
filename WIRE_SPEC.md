@@ -421,8 +421,7 @@ change. Freshness is free: the ephemeral key is per call, so the tag is per call
 preimage and sends `pskRoles` as null. The receiver computes each local secret's
 tag under **every** role value `0..255` and looks each up among the received
 tags; the value that matches IS the sender's recorded role. The full byte range,
-not just the defined roles (`0` ordinary / `1` NFC / `2` QR / `3` proximity —
-QR + Bluetooth LE ceremony, `docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md`), for two reasons: a
+not just the defined roles (`0` ordinary / `1` NFC / `2` QR), for two reasons: a
 role disagreement between the two sides must not cost the PSK, and a role added
 later must interoperate with an older build without a lockstep release. Cost is
 `256 * m` HMAC-SHA256 for `m` local secrets — the tag's secrecy rests on the psk,
