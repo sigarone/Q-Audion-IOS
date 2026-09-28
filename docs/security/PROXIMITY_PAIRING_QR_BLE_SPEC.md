@@ -31,14 +31,17 @@ Attacker capabilities considered:
 | A3 | Remote attacker holding a photo / screenshot / forwarded image of the QR | The QR rotates every 2 s and a frame is accepted for 8 s (real time, sleep included) only; a screenshot replaces the whole session at once; while the screen is recorded, mirrored or shared the code is not shown and no session runs; completing the exchange needs a BLE radio within range of the displayer. A stale image is useless. |
 | A4 | Real-time relay: live video of the displayer's screen + an attacker radio near the displayer | **Not preventable by any BLE-only protocol** (BLE has no physical-layer distance bounding; the attacker's radio can terminate the protocol itself, so round-trip timing proves nothing). Detected by the human step: both screens show the peer's name and the same 6-digit SAS, both users must confirm, and the session is single-use. If the attacker wins the race, the displayer shows a name/code the person in front of it does not see, and the legitimate scanner shows no code at all — it gets BUSY, or, if the attacker also advertises the session UUID from closer by (it is broadcast in the clear) and captures the scanner's connection, it shows only a connection error or times out. **The rule both users follow is therefore: confirm only when BOTH screens show the same code at the same time.** A failed check or a refusal never puts a fresh code up by itself (§11). |
 | A5 | Someone presenting a known contact's userId with a different identity key | The presented Ed25519 key is compared with every key the contact has pinned (`PeerIdentityPinStore`, legacy and per-device) and the presented keys with the identity key the address book holds; any mismatch is a red warning on the confirmation screen. Independently, the claimed account's server-published identity keys are fetched and the confirmation screen says whether the phone proved one of them (§12). A completion never rewrites a known contact. |
-| A6 | Passive observer of the BLE exchange | Learns no key material (A1) but does learn both account ids and both long-term public keys, plus Ed25519 signatures over the transcript — a transferable proof that these two accounts paired at that time. v1 has no identity hiding; a SIGMA-I style encryption of ACCEPT/FINISH identities under a first-stage key is the candidate v1.1 change and must be decided before the Android port. |
+| A6 | Passive observer of the BLE exchange (with or without the QR) | Learns no key material (A1) and no identity: OFFER carries only ephemeral keys, and both identity blocks, signatures and MACs travel inside AES-256-GCM boxes keyed from the hybrid shared secret (SIGMA-I, §10). The scanner's identity is revealed only to whoever holds `dk_D` — the real displayer, since its ephemeral keys are committed in the QR. The displayer's identity is revealed only to a scanner that has completed a valid ACCEPT; an active relay attacker holding the live QR (A4) can be that scanner, which is the inherent SIGMA-I responder limit. No transferable proof of the pairing ever travels in clear. |
 | A7 | Any radio in range | Can always deny service (jam, squat on the advertised session UUID, win the connection race). BLE gives range, not exclusivity. It cannot complete a pairing without the live QR, and cannot learn or influence the PSK. |
 
 Properties: mutual authentication of long-term Ed25519 identity keys, key
 confirmation, transcript binding (incl. the QR bytes), forward secrecy
 (ephemeral KEM + X25519 keys, zeroized after use), post-quantum
 confidentiality (ML-KEM-1024, NIST category 5), hybrid defense in depth
-(X25519), single-use sessions, contributory randomness from both sides.
+(X25519), identity hiding from passive observers (SIGMA-I sealed identity
+blocks, A6), final keys bound to both identities (stage-2 extract over the
+full transcript), single-use sessions, contributory randomness from both
+sides.
 
 Honest limit: the NFC tap bounds distance at a few centimetres by physics;
 this protocol bounds it at BLE range (~10 m) plus a human check. An optional
@@ -72,6 +75,7 @@ labels are ASCII, no NUL terminator; `‖` is concatenation.
 | frameKey | 32 B |
 | commitment | 32 B |
 | MACs | 32 B |
+| identity sealing | AES-256-GCM, 12-byte all-zero nonce (every key seals exactly one message), 16-byte tag appended |
 | userId | UTF-8, 1..256 bytes |
 | max protocol message | 4096 B |
 | frame rotation | 2.0 s |
@@ -91,6 +95,10 @@ L_COMMIT      = "qaudion-prox-v1/commit"
 L_FRAME       = "qaudion-prox-v1/frame"
 L_HELLO       = "qaudion-prox-v1/hello"
 L_TRANSCRIPT  = "qaudion-prox-v1/transcript"
+L_TH_S        = "qaudion-prox-v1/transcript-scanner"
+L_TH_D        = "qaudion-prox-v1/transcript-displayer"
+L_ENC_S       = "qaudion-prox-v1/enc-scanner"
+L_ENC_D       = "qaudion-prox-v1/enc-displayer"
 L_MAC_S       = "qaudion-prox-v1/mac-scanner"
 L_MAC_D       = "qaudion-prox-v1/mac-displayer"
 L_CONFIRM_S   = "qaudion-prox-v1/confirm-scanner"
@@ -125,8 +133,9 @@ first; nothing inside the string is.
 ## 6. Displayer session setup and frame rotation
 
 On start the displayer generates: `sessionId`, `sessionSecret`, an ML-KEM-1024
-keypair `(ek_D, dk_D)`, an X25519 keypair `(xsk_D, xpk_D)`, `nonce_D`, and
-builds its OFFER body (§8) from these plus its identity. Then:
+keypair `(ek_D, dk_D)`, an X25519 keypair `(xsk_D, xpk_D)` and `nonce_D`,
+and builds its OFFER body (§8) from these ephemeral values only — its
+identity is never in the OFFER or the QR. Then:
 
 ```
 commitment  = SHA-256( L_COMMIT ‖ sessionId ‖ offerBody_D )
@@ -203,24 +212,29 @@ A reassembled message is `u8(type) ‖ body`.
 | type | name | direction | body |
 |---|---|---|---|
 | 0x01 | HELLO | S→D | `u32be(frameIndex) ‖ xpk_S[32] ‖ nonce_S[32] ‖ tag[32]` (100 B) |
-| 0x02 | OFFER | D→S | `ek_D[1568] ‖ xpk_D[32] ‖ nonce_D[32] ‖ idPub_D[32] ‖ encPub_D[32] ‖ u16be(n) ‖ userId_D[n]` |
-| 0x03 | ACCEPT | S→D | `ct[1568] ‖ idPub_S[32] ‖ encPub_S[32] ‖ u16be(n) ‖ userId_S[n] ‖ sig_S[64] ‖ mac_S[32]` |
-| 0x04 | FINISH | D→S | `sig_D[64] ‖ mac_D[32]` |
+| 0x02 | OFFER | D→S | `ek_D[1568] ‖ xpk_D[32] ‖ nonce_D[32]` (1632 B) |
+| 0x03 | ACCEPT | S→D | `ct[1568] ‖ sealed_S` where `sealed_S = Seal(K_enc_S, aad = TH1, idBlock_S ‖ sig_S[64] ‖ mac_S[32])` (1746 + n B) |
+| 0x04 | FINISH | D→S | `sealed_D = Seal(K_enc_D, aad = TH_S, idBlock_D ‖ sig_D[64] ‖ mac_D[32])` (178 + n B) |
 | 0x05 | CONFIRM | both | `mac[32]` |
 | 0x06 | ABORT | both | `u8(reason)` |
 | 0x07 | BUSY | D→S | empty |
 
-`idPub` = Ed25519 identity public key (the key call handshakes are signed
-with); `encPub` = X25519 identity public key (the contact key shown in the
-identity QR); `userId` = the server account id. Parsers MUST check exact
-lengths, `1 ≤ n ≤ 256`, and no trailing bytes, and MUST reject any userId
+`idBlock = idPub[32] ‖ encPub[32] ‖ u16be(n) ‖ userId[n]`, where `idPub` =
+Ed25519 identity public key (the key call handshakes are signed with),
+`encPub` = X25519 identity public key (the contact key shown in the identity
+QR) and `userId` = the server account id. `Seal(K, aad, p)` = AES-256-GCM
+with key `K`, the all-zero 12-byte nonce, additional data `aad`, output
+`ciphertext ‖ tag[16]`; a tag that does not verify is an authentication
+failure. Identities therefore never travel in clear: OFFER carries only
+ephemeral keys, and each identity block goes inside a sealed box whose key
+only the two ends of this exchange can derive. Parsers MUST check exact
+lengths (a sealed box is 162 + n bytes before opening, the opened plaintext
+exactly 66 + n + 96), `1 ≤ n ≤ 256`, no trailing bytes, and MUST reject any userId
 byte outside `[A-Za-z0-9._-]` (server ids are UUIDs). The grammar leaves no
 way to write "the same id" as different bytes — no padding, NBSP,
 zero-width or bidi characters, no `|` (the pin store's account separator) —
 so the name shown for a userId and every exact-match lookup (pins, contacts,
 self check) always agree. The KAT (§15) lists valid and invalid ids.
-
-The **ACCEPT unsigned part** is `ct ‖ idPub_S ‖ encPub_S ‖ u16be(n) ‖ userId_S`.
 
 ABORT reasons: 1 user rejected, 2 authentication failed, 3 protocol
 violation, 4 timeout, 5 identity rejected, 6 cancelled, 7 internal error,
@@ -246,22 +260,25 @@ D: frame i known and fresh (§6)?  tag valid (constant-time)?
            (an invalid HELLO does NOT consume the session)
      yes → lock the session to this central, stop advertising, stop
            rotating/hide the QR; any other central gets BUSY
-D → S  OFFER
+D → S  OFFER (ephemeral keys only)
 S: SHA-256(L_COMMIT ‖ sessionId ‖ offerBody) == commitment (constant-time)?
-   parse; validate lengths; peer idPub != own idPub, peer userId != own userId
-   identity policy (§12) on (idPub_D, userId_D) — already bound by the QR
-   commitment, so it runs here, before any key material is spent
-                                   any failure → ABORT, fail
+                                   no → ABORT(2), fail
    (ct, ss_kem) = ML-KEM-1024.Encaps(ek_D)
    ss_x = X25519(xsk_S, xpk_D)           reject all-zero
-   TH, keys (§10); sig_S, mac_S
-S → D  ACCEPT
-D: ss_kem = Decaps(dk_D, ct); ss_x = X25519(xsk_D, xpk_S); TH, keys
+   TH1, stage-1 keys (§10); TH_S, sig_S, mac_S; sealed_S
+S → D  ACCEPT = ct ‖ sealed_S
+D: ss_kem = Decaps(dk_D, ct); ss_x = X25519(xsk_D, xpk_S); TH1, keys
+   open sealed_S (tag valid?); parse idBlock_S strictly
    mac_S valid (constant-time)?  sig_S valid under idPub_S?
-   identity policy (§12)?          any failure → ABORT, fail
-D → S  FINISH
-S: mac_D valid?  sig_D valid under idPub_D (committed in the QR)?
+   idPub_S != own idPub, userId_S != own userId; identity policy (§12)?
                                    any failure → ABORT, fail
+   TH_D, sig_D, mac_D; sealed_D; stage-2 keys, SAS
+D → S  FINISH = sealed_D
+S: open sealed_D (aad = TH_S); parse idBlock_D strictly
+   mac_D valid?  sig_D valid under idPub_D?
+   idPub_D != own idPub, userId_D != own userId; identity policy (§12)?
+                                   any failure → ABORT, fail
+   stage-2 keys, SAS
 Both: show peer name + SAS; wait for the local user.
    local confirm → send CONFIRM(HMAC(K_confirm_self, L_CONFIRMED))
    local reject  → send ABORT(1), fail
@@ -284,30 +301,46 @@ violation (abort). Messages are processed strictly one at a time.
 
 ## 10. Key schedule
 
+Stage 1 — the handshake, before either identity is known:
+
 ```
-TH  = SHA-256( L_TRANSCRIPT ‖ lp32(qrBytes_i) ‖ lp32(helloBody)
-               ‖ lp32(offerBody) ‖ lp32(acceptUnsigned) )
+TH1 = SHA-256( L_TRANSCRIPT ‖ lp32(qrBytes_i) ‖ lp32(helloBody)
+               ‖ lp32(offerBody) ‖ lp32(ct) )
+IKM = ss_kem[32] ‖ ss_x[32] ‖ nonce_S[32] ‖ nonce_D[32]
+PRK1    = HKDF-Extract( salt = TH1, IKM )
+K_enc_S = HKDF-Expand(PRK1, L_ENC_S, 32)      K_enc_D = HKDF-Expand(PRK1, L_ENC_D, 32)
+K_mac_S = HKDF-Expand(PRK1, L_MAC_S, 32)      K_mac_D = HKDF-Expand(PRK1, L_MAC_D, 32)
 ```
 `qrBytes_i` is the exact 85-byte QR of the frame named in HELLO (the
 displayer rebuilds it from `(sessionId, commitment, i, frameKey_i)`);
 bodies are exactly as sent, without the type byte.
 
-```
-IKM = ss_kem[32] ‖ ss_x[32] ‖ nonce_S[32] ‖ nonce_D[32]
-PRK = HKDF-Extract( salt = TH, IKM )
-K_mac_S     = HKDF-Expand(PRK, L_MAC_S, 32)
-K_mac_D     = HKDF-Expand(PRK, L_MAC_D, 32)
-K_confirm_S = HKDF-Expand(PRK, L_CONFIRM_S, 32)
-K_confirm_D = HKDF-Expand(PRK, L_CONFIRM_D, 32)
-sasBytes    = HKDF-Expand(PRK, L_SAS, 8)
-PSK         = HKDF-Expand(PRK, L_PSK, 32)
+Identities — each side signs and MACs a transcript that chains everything
+before it plus its own identity block (SIGMA-I):
 
-mac_S = HMAC-SHA256(K_mac_S, TH)          sig_S = Ed25519(idPriv_S, L_SIG_S ‖ TH)
-mac_D = HMAC-SHA256(K_mac_D, TH)          sig_D = Ed25519(idPriv_D, L_SIG_D ‖ TH)
+```
+TH_S  = SHA-256( L_TH_S ‖ TH1 ‖ lp32(idBlock_S) )
+sig_S = Ed25519(idPriv_S, L_SIG_S ‖ TH_S)      mac_S = HMAC-SHA256(K_mac_S, TH_S)
+TH_D  = SHA-256( L_TH_D ‖ TH_S ‖ lp32(idBlock_D) )
+sig_D = Ed25519(idPriv_D, L_SIG_D ‖ TH_D)      mac_D = HMAC-SHA256(K_mac_D, TH_D)
+```
+
+Stage 2 — the final keys, bound to the whole transcript including both
+identities:
+
+```
+PRK2        = HKDF-Extract( salt = TH_D, IKM = PRK1 )
+K_confirm_S = HKDF-Expand(PRK2, L_CONFIRM_S, 32)
+K_confirm_D = HKDF-Expand(PRK2, L_CONFIRM_D, 32)
+sasBytes    = HKDF-Expand(PRK2, L_SAS, 8)
+PSK         = HKDF-Expand(PRK2, L_PSK, 32)
 confirm_S = HMAC-SHA256(K_confirm_S, L_CONFIRMED)
 confirm_D = HMAC-SHA256(K_confirm_D, L_CONFIRMED)
 SAS = decimal( u64be(sasBytes) mod 1 000 000 ), zero-padded to 6 digits
 ```
+
+PRK1, the stage-1 keys, TH values and PRK2 are zeroized once the PSK is
+handed over (or on any failure).
 
 ## 11. State machines and resource hygiene (informative)
 

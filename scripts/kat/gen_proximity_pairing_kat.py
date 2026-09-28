@@ -2,9 +2,12 @@
 """Reference vectors for proximity pairing v1 (QR + BLE, hybrid ML-KEM-1024).
 
 Independent implementation of docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md
-sections 5, 6, 7, 8 and 10 using only hashlib/hmac. The ML-KEM-1024 and X25519
-shared secrets and all public keys are fixed byte strings here: this file pins
-everything the protocol derives from them, not the KEM itself.
+sections 5, 6, 7, 8 and 10: hashlib/hmac for the hashes and HKDF, and the
+`cryptography` package for AES-256-GCM and Ed25519 (RFC 8032, deterministic).
+The ML-KEM-1024 and X25519 shared secrets and the ephemeral public keys are
+fixed byte strings here: this file pins everything the protocol derives from
+them, not the KEM itself. The identity keys are real Ed25519 keys from fixed
+seeds, so the signatures in the vector verify.
 
 Writes QAudionEngine/Tests/QAudionEngineTests/Proximity/Resources/
 proximity-pairing-kat.json (consumed by ProximityPairingKatTests.swift).
@@ -17,11 +20,21 @@ import json
 import os
 import struct
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+ZERO_NONCE = bytes(12)
+
 L = {
     "commit": b"qaudion-prox-v1/commit",
     "frame": b"qaudion-prox-v1/frame",
     "hello": b"qaudion-prox-v1/hello",
     "transcript": b"qaudion-prox-v1/transcript",
+    "th_s": b"qaudion-prox-v1/transcript-scanner",
+    "th_d": b"qaudion-prox-v1/transcript-displayer",
+    "enc_s": b"qaudion-prox-v1/enc-scanner",
+    "enc_d": b"qaudion-prox-v1/enc-displayer",
     "mac_s": b"qaudion-prox-v1/mac-scanner",
     "mac_d": b"qaudion-prox-v1/mac-displayer",
     "confirm_s": b"qaudion-prox-v1/confirm-scanner",
@@ -131,6 +144,19 @@ INVALID_USER_IDS = [
 ]
 
 
+def aes_gcm_seal(key: bytes, aad: bytes, plaintext: bytes) -> bytes:
+    """AES-256-GCM, 12-byte all-zero nonce (each key seals exactly one message),
+    16-byte tag appended: returns ciphertext || tag."""
+    assert len(key) == 32
+    return AESGCM(key).encrypt(ZERO_NONCE, plaintext, aad)
+
+
+def id_block(idpub: bytes, encpub: bytes, user_id: str) -> bytes:
+    u = user_id.encode("utf-8")
+    assert valid_user_id(user_id)
+    return idpub + encpub + u16be(len(u)) + u
+
+
 def main() -> None:
     for u in VALID_USER_IDS:
         assert valid_user_id(u), u
@@ -141,26 +167,32 @@ def main() -> None:
     session_id = bytes(range(0x40, 0x50))
     frame_index = 7
 
+    # Displayer: ephemeral keys (fixed synthetic bytes) + a REAL Ed25519
+    # identity from a fixed seed (RFC 8032 signing is deterministic).
     ek_d = filler("ek-d", 1568)
     xpk_d = filler("xpk-d", 32)
     nonce_d = filler("nonce-d", 32)
-    idpub_d = filler("idpub-d", 32)
+    seed_d = filler("idseed-d", 32)
+    sk_d = Ed25519PrivateKey.from_private_bytes(seed_d)
+    idpub_d = sk_d.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     encpub_d = filler("encpub-d", 32)
     user_d = "utente-D.42_kat"  # every punctuation character the §8 grammar allows
-    user_d_b = user_d.encode("utf-8")
 
     xpk_s = filler("xpk-s", 32)
     nonce_s = filler("nonce-s", 32)
     ct = filler("ct", 1568)
-    idpub_s = filler("idpub-s", 32)
+    seed_s = filler("idseed-s", 32)
+    sk_s = Ed25519PrivateKey.from_private_bytes(seed_s)
+    idpub_s = sk_s.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     encpub_s = filler("encpub-s", 32)
     user_s = "user-S-42"
-    user_s_b = user_s.encode("utf-8")
 
     ss_kem = filler("ss-kem", 32)
     ss_x = filler("ss-x", 32)
 
-    offer_body = ek_d + xpk_d + nonce_d + idpub_d + encpub_d + u16be(len(user_d_b)) + user_d_b
+    # §8 OFFER: ephemeral keys only — no identity on the air in clear.
+    offer_body = ek_d + xpk_d + nonce_d
+    assert len(offer_body) == 1632
     commitment = sha256(L["commit"] + session_id + offer_body)
 
     frame_key_0 = hmac256(session_secret, L["frame"] + session_id + u32be(0))
@@ -174,25 +206,43 @@ def main() -> None:
     hello_body = u32be(frame_index) + xpk_s + nonce_s + tag
     assert len(hello_body) == 100
 
-    accept_unsigned = ct + idpub_s + encpub_s + u16be(len(user_s_b)) + user_s_b
-
-    th = sha256(L["transcript"] + lp32(qr_bytes) + lp32(hello_body) + lp32(offer_body) + lp32(accept_unsigned))
+    # §10 stage 1: the handshake transcript and keys, identities not yet known.
+    th1 = sha256(L["transcript"] + lp32(qr_bytes) + lp32(hello_body) + lp32(offer_body) + lp32(ct))
     ikm = ss_kem + ss_x + nonce_s + nonce_d
-    prk = hkdf_extract(th, ikm)
-    k_mac_s = hkdf_expand(prk, L["mac_s"], 32)
-    k_mac_d = hkdf_expand(prk, L["mac_d"], 32)
-    k_confirm_s = hkdf_expand(prk, L["confirm_s"], 32)
-    k_confirm_d = hkdf_expand(prk, L["confirm_d"], 32)
-    sas_bytes = hkdf_expand(prk, L["sas"], 8)
-    psk = hkdf_expand(prk, L["psk"], 32)
+    prk1 = hkdf_extract(th1, ikm)
+    k_enc_s = hkdf_expand(prk1, L["enc_s"], 32)
+    k_enc_d = hkdf_expand(prk1, L["enc_d"], 32)
+    k_mac_s = hkdf_expand(prk1, L["mac_s"], 32)
+    k_mac_d = hkdf_expand(prk1, L["mac_d"], 32)
 
-    # Layout-only signatures: the bytes need not verify, the vector pins the
-    # sig-before-mac trailer order and the exact message lengths.
-    sig_s = filler("sig-s", 64)
-    sig_d = filler("sig-d", 64)
-    mac_s = hmac256(k_mac_s, th)
-    mac_d = hmac256(k_mac_d, th)
-    assert valid_user_id(user_d) and valid_user_id(user_s)
+    # Scanner identity, signed and MACed over the chained transcript, sealed.
+    id_s = id_block(idpub_s, encpub_s, user_s)
+    th_s = sha256(L["th_s"] + th1 + lp32(id_s))
+    sig_s = sk_s.sign(L["sig_s"] + th_s)
+    mac_s = hmac256(k_mac_s, th_s)
+    sealed_s = aes_gcm_seal(k_enc_s, th1, id_s + sig_s + mac_s)
+    accept_body = ct + sealed_s
+    assert len(accept_body) == 1568 + len(id_s) + 64 + 32 + 16
+
+    # Displayer identity, chained onto the scanner's transcript, sealed.
+    id_d = id_block(idpub_d, encpub_d, user_d)
+    th_d = sha256(L["th_d"] + th_s + lp32(id_d))
+    sig_d = sk_d.sign(L["sig_d"] + th_d)
+    mac_d = hmac256(k_mac_d, th_d)
+    sealed_d = aes_gcm_seal(k_enc_d, th_s, id_d + sig_d + mac_d)
+    finish_body = sealed_d
+    assert len(finish_body) == len(id_d) + 64 + 32 + 16
+
+    # §10 stage 2: final keys bound to the whole transcript, identities included.
+    prk2 = hkdf_extract(th_d, prk1)
+    k_confirm_s = hkdf_expand(prk2, L["confirm_s"], 32)
+    k_confirm_d = hkdf_expand(prk2, L["confirm_d"], 32)
+    sas_bytes = hkdf_expand(prk2, L["sas"], 8)
+    psk = hkdf_expand(prk2, L["psk"], 32)
+
+    # The signatures really verify (the Swift/Kotlin ports check them too).
+    sk_s.public_key().verify(sig_s, L["sig_s"] + th_s)
+    sk_d.public_key().verify(sig_d, L["sig_d"] + th_d)
 
     vec = {
         "description": "Proximity pairing v1 reference vectors "
@@ -205,12 +255,14 @@ def main() -> None:
             "displayerMlKemPublicKey": ek_d.hex(),
             "displayerEphemeralX25519": xpk_d.hex(),
             "displayerNonce": nonce_d.hex(),
+            "displayerSigningSeed": seed_d.hex(),
             "displayerSigningPublicKey": idpub_d.hex(),
             "displayerEncryptionPublicKey": encpub_d.hex(),
             "displayerUserId": user_d,
             "scannerEphemeralX25519": xpk_s.hex(),
             "scannerNonce": nonce_s.hex(),
             "mlKemCiphertext": ct.hex(),
+            "scannerSigningSeed": seed_s.hex(),
             "scannerSigningPublicKey": idpub_s.hex(),
             "scannerEncryptionPublicKey": encpub_s.hex(),
             "scannerUserId": user_s,
@@ -228,28 +280,38 @@ def main() -> None:
             "helloTag": tag.hex(),
             "helloBody": hello_body.hex(),
             "helloMessage": (bytes([MSG_HELLO]) + hello_body).hex(),
-            "acceptUnsignedBody": accept_unsigned.hex(),
-            "transcriptHash": th.hex(),
-            "prk": prk.hex(),
+            "transcriptHash": th1.hex(),
+            "prk": prk1.hex(),
+            "encKeyScanner": k_enc_s.hex(),
+            "encKeyDisplayer": k_enc_d.hex(),
             "macKeyScanner": k_mac_s.hex(),
             "macKeyDisplayer": k_mac_d.hex(),
+            "scannerIdBlock": id_s.hex(),
+            "scannerTranscriptHash": th_s.hex(),
+            "signaturePayloadScanner": (L["sig_s"] + th_s).hex(),
+            "signatureScanner": sig_s.hex(),
+            "macScanner": mac_s.hex(),
+            "sealedScanner": sealed_s.hex(),
+            "acceptBody": accept_body.hex(),
+            "acceptMessage": (bytes([MSG_ACCEPT]) + accept_body).hex(),
+            "displayerIdBlock": id_d.hex(),
+            "displayerTranscriptHash": th_d.hex(),
+            "signaturePayloadDisplayer": (L["sig_d"] + th_d).hex(),
+            "signatureDisplayer": sig_d.hex(),
+            "macDisplayer": mac_d.hex(),
+            "sealedDisplayer": sealed_d.hex(),
+            "finishBody": finish_body.hex(),
+            "finishMessage": (bytes([MSG_FINISH]) + finish_body).hex(),
+            "finalPrk": prk2.hex(),
             "confirmKeyScanner": k_confirm_s.hex(),
             "confirmKeyDisplayer": k_confirm_d.hex(),
             "sasBytes": sas_bytes.hex(),
             "sas": sas_from_bytes(sas_bytes),
             "psk": psk.hex(),
             "pskFingerprint": sha256(psk).hex(),
-            "macScanner": hmac256(k_mac_s, th).hex(),
-            "macDisplayer": hmac256(k_mac_d, th).hex(),
             "confirmMacScanner": hmac256(k_confirm_s, L["confirmed"]).hex(),
             "confirmMacDisplayer": hmac256(k_confirm_d, L["confirmed"]).hex(),
-            "signaturePayloadScanner": (L["sig_s"] + th).hex(),
-            "signaturePayloadDisplayer": (L["sig_d"] + th).hex(),
             "confirmMessageScanner": (bytes([MSG_CONFIRM]) + hmac256(k_confirm_s, L["confirmed"])).hex(),
-            "layoutSignatureScanner": sig_s.hex(),
-            "layoutSignatureDisplayer": sig_d.hex(),
-            "acceptMessage": (bytes([MSG_ACCEPT]) + accept_unsigned + sig_s + mac_s).hex(),
-            "finishMessage": (bytes([MSG_FINISH]) + sig_d + mac_d).hex(),
             "abortMessageUserRejected": bytes([MSG_ABORT, 0x01]).hex(),
             "busyMessage": bytes([MSG_BUSY]).hex(),
         },
@@ -283,7 +345,7 @@ def main() -> None:
         json.dump(vec, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     print(f"wrote {out}")
-    print(f"sas={vec['expected']['sas']} th={th.hex()[:16]}… psk_fp={sha256(psk).hex()[:16]}…")
+    print(f"sas={vec['expected']['sas']} th1={th1.hex()[:16]}… psk_fp={sha256(psk).hex()[:16]}…")
 
 
 if __name__ == "__main__":
