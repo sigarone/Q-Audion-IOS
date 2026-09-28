@@ -170,7 +170,12 @@ final class RingSignalingRegistryTests: XCTestCase {
         reg.latch("fresh", mode: 1, native: true, kill: false)
         reg.markAccepted("fresh", nowMs: 0)
 
-        let farFuture: Int64 = RingSignalingRegistry.ttlMs + 1_000
+        // `latch` stamps wall-clock time, so the sweep clock must be
+        // relative to the entry's own stamp, not to 0.
+        guard let latchedAtMs = reg.entry("stale")?.latchedAtMs else {
+            return XCTFail("latch must create the entry")
+        }
+        let farFuture: Int64 = latchedAtMs + RingSignalingRegistry.ttlMs + 1_000
         reg.sweep(nowMs: farFuture)
 
         XCTAssertNil(reg.entry("stale"), "an unaccepted entry past its TTL must be swept")
@@ -180,7 +185,10 @@ final class RingSignalingRegistryTests: XCTestCase {
     func testSweepKeepsEntriesWithinTtl() {
         let reg = RingSignalingRegistry.shared
         reg.latch("recent", mode: 1, native: true, kill: false)
-        reg.sweep(nowMs: RingSignalingRegistry.ttlMs - 1)
+        guard let latchedAtMs = reg.entry("recent")?.latchedAtMs else {
+            return XCTFail("latch must create the entry")
+        }
+        reg.sweep(nowMs: latchedAtMs + RingSignalingRegistry.ttlMs - 1)
         XCTAssertNotNil(reg.entry("recent"))
     }
 }
