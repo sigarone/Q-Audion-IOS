@@ -154,6 +154,61 @@ final class NativeAudioSdpPolicyTests: XCTestCase {
     /// a payload-type-bearing line just because it also starts with `a=` and
     /// is followed by digits elsewhere in the line (`payloadTypeReferencedBy`
     /// only recognizes the `a=rtpmap:`/`a=fmtp:`/`a=rtcp-fb:` prefixes).
+    /// Review hardening — a non-conformant section whose Opus rtpmap is not
+    /// listed on its own m= line must never be "repaired" into an m= line
+    /// naming a pt the offerer did not list, nor have its other codecs
+    /// stripped (that could leave an m=audio with no usable codec).
+    func test_enabled_opusRtpmapMissingFromMline_isNotStrippedOrRewritten() {
+        let sdp = [
+            "v=0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 63 13",
+            "a=rtpmap:111 opus/48000/2",
+            "a=rtpmap:63 red/48000/2",
+            "a=fmtp:63 111/111",
+        ].joined(separator: "\r\n") + "\r\n"
+        let out = NativeAudioSdpPolicy.apply(sdp, nativeSrtpEnabled: true)
+        let lines = out.components(separatedBy: "\r\n")
+        XCTAssertTrue(lines.contains("m=audio 9 UDP/TLS/RTP/SAVPF 63 13"))
+        XCTAssertTrue(lines.contains("a=rtpmap:63 red/48000/2"))
+        XCTAssertEqual(NativeAudioSdpPolicy.apply(out, nativeSrtpEnabled: true), out)
+    }
+
+    /// Review — a realistic libwebrtc offer (G722/PCMU/PCMA/CN/two
+    /// telephone-event rates) keeps only Opus, and every non-codec line
+    /// (mid, extmap, rtcp-mux, ssrc) plus the data-channel section survives.
+    func test_enabled_realisticOffer_keepsOnlyOpusAndAllNonCodecLines() {
+        let sdp = [
+            "v=0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111 63 9 0 8 13 110 126",
+            "a=mid:0",
+            "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+            "a=rtcp-mux",
+            "a=rtpmap:111 opus/48000/2",
+            "a=rtcp-fb:111 transport-cc",
+            "a=fmtp:111 minptime=10;useinbandfec=1",
+            "a=rtpmap:63 red/48000/2",
+            "a=fmtp:63 111/111",
+            "a=rtpmap:9 G722/8000",
+            "a=rtpmap:0 PCMU/8000",
+            "a=rtpmap:8 PCMA/8000",
+            "a=rtpmap:13 CN/8000",
+            "a=rtpmap:110 telephone-event/48000",
+            "a=rtpmap:126 telephone-event/8000",
+            "a=ssrc:1 cname:x",
+            "m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+            "a=mid:1",
+        ].joined(separator: "\r\n") + "\r\n"
+        let out = NativeAudioSdpPolicy.apply(sdp, nativeSrtpEnabled: true)
+        let audio = audioSection(out)
+        XCTAssertEqual(audio.first, "m=audio 9 UDP/TLS/RTP/SAVPF 111")
+        XCTAssertEqual(audio.filter { $0.hasPrefix("a=rtpmap:") }, ["a=rtpmap:111 opus/48000/2"])
+        for kept in ["a=mid:0", "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level", "a=rtcp-mux", "a=ssrc:1 cname:x"] {
+            XCTAssertTrue(audio.contains(kept), "\(kept) must survive: \(audio)")
+        }
+        XCTAssertTrue(out.components(separatedBy: "\r\n").contains("m=application 9 UDP/DTLS/SCTP webrtc-datachannel"))
+        XCTAssertEqual(NativeAudioSdpPolicy.apply(out, nativeSrtpEnabled: true), out)
+    }
+
     func test_enabled_neverMistakesPtimeForAPayloadTypeLine() {
         let out = NativeAudioSdpPolicy.apply(typicalSdp, nativeSrtpEnabled: true)
         let audio = audioSection(out)

@@ -206,6 +206,22 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         // trial merges into the SAME init string instead of a competing call
         // silently overwriting this one (`RTCInitFieldTrialDictionary` replaces
         // the entire global init string each call, per its own source above).
+        //
+        // Review note (verified against the same pinned sources): on THIS
+        // app's factory path the trial is belt-and-braces, not the switch.
+        // `RTCPeerConnectionFactory(audioDeviceModuleType:bypassVoiceProcessing:
+        // encoderFactory:decoderFactory:audioProcessingModule:)` (below) ends in
+        // `initWithNativeAudioEncoderFactory:...audioDeviceModuleType:...`,
+        // which installs `webrtc::CreateNetworkMonitorFactory()` (the
+        // NWPathMonitor-backed monitor) UNCONDITIONALLY; only the
+        // `initWithNativeDependencies:` path consults this trial (through the
+        // env's DeprecatedGlobalFieldTrials, i.e. this global string). So
+        // libwebrtc already gets interface-change signals here; the trial keeps
+        // that true if the factory is ever built through the other initializer.
+        // Safe to repeat on a wedge-recovery rebuild: at this commit
+        // `InitFieldTrialsFromString` copies the string into persistent,
+        // mutex-guarded storage, so no live reader is left pointing at the
+        // buffer the ObjC wrapper frees on a second call.
         RTCInitFieldTrialDictionary(["WebRTC-Network-UseNWPathMonitor": "Enabled"])
 
         // RTCInitializeSSL is idempotent — safe to call once on first use.

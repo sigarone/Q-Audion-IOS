@@ -130,10 +130,22 @@ enum NativeAudioSdpPolicy {
                 closeSection()
                 inAudio = true; section += 1
                 sectionOpusPts = opusPtsBySection[section] ?? []
-                sectionNonOpusPts = Set(allPtsBySection[section] ?? []).subtracting(sectionOpusPts)
+                let mlinePts = allPtsBySection[section] ?? []
+                sectionNonOpusPts = Set(mlinePts).subtracting(sectionOpusPts)
                 inOpusAudio = !sectionOpusPts.isEmpty
                 nackSeenForPt.removeAll()
                 sawFmtpForPt.removeAll()
+                // Review hardening — strip only when the m= line itself lists
+                // at least one of the section's Opus pts. A non-conformant
+                // section whose Opus rtpmap is not on its m= line is left
+                // exactly as it came (never "repaired" into an m= line that
+                // names a pt the offerer did not): stripping there could
+                // leave an m=audio with no usable codec at all.
+                if inOpusAudio, !mlinePts.contains(where: { sectionOpusPts.contains($0) }) {
+                    sectionNonOpusPts = []
+                    out.append(line)
+                    continue
+                }
                 if inOpusAudio {
                     // N3 — rewrite the m=audio line itself to list ONLY the
                     // Opus payload type(s), same as Android's own
@@ -205,7 +217,11 @@ enum NativeAudioSdpPolicy {
         let tokens = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         guard tokens.count > 3 else { return line }
         let head = tokens[0...2].joined(separator: " ")
-        let ordered = opusPts.sorted { (Int($0) ?? .max) < (Int($1) ?? .max) }
+        // Review hardening — only pts the m= line already lists (never add
+        // one), numerically ordered like Android's rewrite.
+        let listed = Set(tokens[3...]).intersection(opusPts)
+        guard !listed.isEmpty else { return line }
+        let ordered = listed.sorted { (Int($0) ?? .max) < (Int($1) ?? .max) }
         return head + " " + ordered.joined(separator: " ")
     }
 

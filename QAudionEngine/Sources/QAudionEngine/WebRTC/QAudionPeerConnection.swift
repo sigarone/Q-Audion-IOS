@@ -1030,12 +1030,19 @@ public final class QAudionPeerConnection: NSObject {
         for encoding in params.encodings {
             encoding.minBitrateBps = bps
             encoding.maxBitrateBps = bps
-            // N5 — DSCP-marking priority hint for the native audio stream;
-            // `bitratePriority` (WebRTC's OWN internal bandwidth-allocation
-            // weight between encodings) is a different property and is left
-            // exactly as it was, per the owner's constraint.
-            encoding.networkPriority = .high
         }
+        // N5 — DSCP-marking priority hint for the native audio stream;
+        // `bitratePriority` (WebRTC's OWN internal bandwidth-allocation
+        // weight between encodings) is a different property and is left
+        // exactly as it was, per the owner's constraint.
+        // Review hardening: encodings[0] ONLY. libwebrtc treats
+        // networkPriority as a per-SENDER value (`pc/rtp_sender.cc`
+        // `PerSenderRtpEncodingParameterHasValue`): a non-default value on
+        // any other index makes `SetParameters` reject the WHOLE update —
+        // which would silently drop the 32 kbps min=max clamp set in the
+        // same call. An audio sender has one encoding today; this keeps the
+        // clamp safe even if that ever changes.
+        params.encodings[0].networkPriority = .high
         sender.parameters = params
         print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender bitrate pinned min=max=\(AudioSdpPolicy.maxAverageBitrateBps) networkPriority=high")
         return true
