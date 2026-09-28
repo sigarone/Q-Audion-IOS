@@ -109,7 +109,17 @@ public final class RingSignalingRegistry: @unchecked Sendable {
 
     /// Fires (off the lock) after a `call_answer` send is recorded via
     /// `noteAnswerSent`. AppState wires this to `releaseHeldAcceptIfDue`.
-    public var onAnswerSent: ((String) -> Void)?
+    ///
+    /// Review fix: guarded by `lock` like the rest of the table — AppState
+    /// (re)assigns it on the main actor at every `call_incoming`, while
+    /// `noteAnswerSent` reads it from whatever thread `sendCallAnswer` runs
+    /// on; an unguarded closure property read concurrently with a write is
+    /// a torn two-word value.
+    private var _onAnswerSent: ((String) -> Void)?
+    public var onAnswerSent: ((String) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onAnswerSent }
+        set { lock.lock(); _onAnswerSent = newValue; lock.unlock() }
+    }
 
     private init() {}
 
@@ -230,9 +240,10 @@ public final class RingSignalingRegistry: @unchecked Sendable {
             e.answerSent = true
             entries[id] = e
         }
+        let callback = _onAnswerSent
         lock.unlock()
         if shouldFireCallback {
-            onAnswerSent?(id)
+            callback?(id)
         }
     }
 

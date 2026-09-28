@@ -5701,9 +5701,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true {
             lock.withLock { heldAcceptByCall[cid] = .json(wire) }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT held (json) callId=\(cid.prefix(8))…")
+            await releaseIfHoldLifted(cid)
             return
         }
         try await sendOpaqueRaw(wire)
+    }
+
+    /// Review fix — closes the check-then-store race of the two gates above:
+    /// the app may lift the hold (ACCEPT released after its own call_answer,
+    /// or a `mode == 0` latch) on another thread BETWEEN the
+    /// `shouldHoldResponderAccept` read and the `heldAcceptByCall` store; its
+    /// `releaseHeldAccept` then found nothing and nobody would ever send this
+    /// ACCEPT (caller without a key, silent call). Re-reading the gate after
+    /// the store and releasing here makes that interleaving harmless;
+    /// `releaseHeldAccept`'s locked take-and-clear guarantees a single send
+    /// if both sides race.
+    private func releaseIfHoldLifted(_ cid: String) async {
+        guard shouldHoldResponderAccept?(cid) != true else { return }
+        _ = await releaseHeldAccept(callId: cid)
     }
 
     /// Same gate as `emitJsonAccept`, for the legacy QUAD binary ACCEPT
@@ -5713,6 +5728,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true {
             lock.withLock { heldAcceptByCall[cid] = .quad(accept) }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT held (quad) callId=\(cid.prefix(8))…")
+            await releaseIfHoldLifted(cid)
             return
         }
         try await sendOpaqueMessage(accept)
