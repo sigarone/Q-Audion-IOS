@@ -33,6 +33,30 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// since `QAudionApp`'s `RTLog` isn't reachable from this module.
     public var onNativeAudioLifecycleEvent: ((_ kind: String, _ code: Int32?) -> Void)?
 
+    /// I5 (webrtc-plan.md v2 §3.3, 2026-09-29) — self-reported native
+    /// diagnostic lines, forwarded to app-layer telemetry the same way
+    /// `onNativeAudioLifecycleEvent` is (this module cannot reach `RTLog`
+    /// directly, see that property's own kdoc). Mirrors Android's identical
+    /// filter (`setInjectableLogger` → `Timber.w` → `webrtc.selfreport`,
+    /// plan §3.2 A4): any `RTCCallbackLogger` line starting with the fixed
+    /// `"Q-AUDION "` prefix is passed through here VERBATIM — never matched
+    /// by substring like the lifecycle branches in `handleNativeLogLine`
+    /// below, because the whole point of this prefix (native-side, P4b/P5/P8
+    /// authors' convention) is that the app does not need to know every
+    /// individual line shape in advance to surface it.
+    ///
+    /// Safety: the P8 patch's own "Safety" note states `BuildInfo()` and
+    /// every other qaudion_tuning diagnostic are "ids/booleans/small
+    /// integers only, safe for telemetry" — but this closure forwards
+    /// whatever the native side ever prefixes this way, present or future,
+    /// so a caller wiring this to a real sink should still run it through
+    /// this app's existing `LogRedactor`/`KeyMaterialScrubber` (defence in
+    /// depth, same discipline `QAudionPeerConnectionFactoryTests`/
+    /// W-KEYLOGGATE already hold every OTHER native log line to) rather than
+    /// trusting the prefix alone. No sink is wired from THIS module — see
+    /// this task's own report for the residual app-layer wiring.
+    public var onQaudionSelfReportLine: ((String) -> Void)?
+
     /// W-RXFALLBACKINJECT (2026-09-10) — process-lifetime, attached as
     /// `renderPreProcessingDelegate` in `buildFactory()` below. Unlike
     /// `NativeAudioCaptureTap` (a fresh per-call instance on the strictly
@@ -159,70 +183,61 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// own, driven by track add/remove, which is untouched by this change.
     private func buildFactory()
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
-        // N2 (network-resilience-max, this task) — WebRTC-Network-UseNWPathMonitor,
-        // MUST run before any other WebRTC call (`RTCInitFieldTrialDictionary`'s own
-        // header doc: "Must be called before any other call into WebRTC"), hence
-        // ahead of `RTCInitializeSSL()` below, not just ahead of the factory
-        // constructor.
+        // N2 (network-resilience-max) / I3 (webrtc-plan.md v2 §3.3, M150
+        // migration, 2026-09-29) — WebRTC-Network-UseNWPathMonitor, MUST run
+        // before any other WebRTC call (`RTCPeerConnectionFactory
+        // .configureFieldTrials:`'s own header doc: "Must be called before
+        // initializing the factory"), hence ahead of `RTCInitializeSSL()`
+        // below, not just ahead of the factory constructor.
         //
-        // Verified, not guessed, against the EXACT pinned source this app's own
-        // `WebRTC` binaryTarget is built from (`Package.swift`'s own comment:
-        // "same WebRTC source commit (webrtc-sdk/webrtc df1011beabae = m144_release
-        // tip when the previous binary was built)"):
-        //  - the trial name is REGISTERED at that exact commit —
-        //    `experiments/field_trials.py` @ df1011beabae:
-        //    `FieldTrial('WebRTC-Network-UseNWPathMonitor', 42221045, date(2024, 4, 1))`
-        //    (fetched via `raw.githubusercontent.com/webrtc-sdk/webrtc/df1011beabae/
-        //    experiments/field_trials.py` — this box has no local toolchain to unzip
-        //    the xcframework itself, so the pinned SOURCE commit is the verification
-        //    this task's own instructions call for).
-        //  - the ObjC surface has a FIRST-CLASS constant for exactly this trial —
-        //    `sdk/objc/api/peerconnection/RTCFieldTrials.h/.mm` @ the same commit:
-        //    `RTCFieldTrialUseNWPathMonitor` = `@"WebRTC-Network-UseNWPathMonitor"`,
-        //    `RTCFieldTrialEnabledValue` = `@"Enabled"` — this is not a speculative
-        //    trial name, it is the one case the SDK itself names a constant for.
-        //  - `RTCInitFieldTrialDictionary(NSDictionary<NSString*,NSString*>*)`
-        //    (same file) builds the native init string as `"<key>/<value>/"` per
-        //    entry, i.e. exactly `"WebRTC-Network-UseNWPathMonitor/Enabled/"` for a
-        //    one-entry dictionary — matching this task's own spec string.
-        //  - literal strings are used here rather than the bridged Swift constant
-        //    names (`RTCFieldTrialUseNWPathMonitor`/`RTCFieldTrialEnabledValue`):
-        //    this box cannot compile Swift to confirm the ObjC-to-Swift import
-        //    renames those global `NSString *const` symbols to, and a wrong guess
-        //    there would fail the build outright, whereas the literal string is
-        //    exactly the byte value both constants hold, verified above.
+        // I3 — migrated from `RTCInitFieldTrialDictionary` (deprecated,
+        // `RTC_OBJC_DEPRECATED("Pass field trials when building
+        // PeerConnectionFactory")`, `TODO: bugs.webrtc.org/42220378 - Delete
+        // after January 1, 2026`) to `+[RTCPeerConnectionFactory
+        // configureFieldTrials:]`, the very replacement that TODO names.
+        // Verified present (not guessed) at BOTH ends of this app's M150
+        // migration — this call therefore compiles against today's linked
+        // binary unchanged AND survives the binary swap with no second edit:
+        //  - today's pin, `webrtc-sdk/webrtc@df1011beabae` (`Package.swift`'s
+        //    WebRTC binaryTarget comment): `sdk/objc/api/peerconnection/
+        //    RTCPeerConnectionFactory.h` already declares
+        //    `+ (void)configureFieldTrials:(nullable NSString *)fieldTrials;`
+        //    at this exact commit (fetched via
+        //    `raw.githubusercontent.com/webrtc-sdk/webrtc/df1011beabae/...`).
+        //  - the M150 pin this task's plan targets,
+        //    `webrtc-sdk/webrtc@ba469aa2093ba950066258ca0a59a6fbd1295582`: the
+        //    same header, same selector, unchanged signature.
         //
-        // Residual, disclosed deviation: `RTCInitFieldTrialDictionary` itself is
-        // marked `RTC_OBJC_DEPRECATED("Pass field trials when building
-        // PeerConnectionFactory")` with a `TODO: bugs.webrtc.org/42220378 - Delete
-        // after January 1, 2026` in that same pinned header — today is 2026-09-28,
-        // past that TODO date, but the symbol is still declared (not removed) in
-        // the exact binary this app links, so it still works; it will need
-        // migrating to the newer "pass field trials at factory construction" form
-        // whenever this app's WebRTC binary is next rebuilt past whatever revision
-        // actually deletes it. See this task's report for the full citation trail.
+        // Trial name/value verified the same way the dictionary form was:
+        // `experiments/field_trials.py` @ df1011beabae registers
+        // `FieldTrial('WebRTC-Network-UseNWPathMonitor', 42221045, date(2024,
+        // 4, 1))`, and `RTCFieldTrials.h/.mm` (same commit) names first-class
+        // ObjC constants for exactly this trial/value pair — not a
+        // speculative string. Literal strings are used rather than the
+        // bridged Swift constant names for the same reason as before: no
+        // Swift compiler in this environment to confirm the ObjC->Swift
+        // import rename, and the literal is byte-identical to both
+        // constants' values either way.
         //
-        // A dictionary (not a single hardcoded call) so a future SECOND field
-        // trial merges into the SAME init string instead of a competing call
-        // silently overwriting this one (`RTCInitFieldTrialDictionary` replaces
-        // the entire global init string each call, per its own source above).
+        // `configureFieldTrials:` takes ONE joined `"Key/Value/Key/Value/"`
+        // string (not a dictionary) — the dictionary here exists only so a
+        // future SECOND trial merges into that SAME string instead of a
+        // second call overwriting this one; the join is the same
+        // `"<key>/<value>/"` per-entry shape the OLD dictionary-taking API
+        // built internally, so the resulting init string is byte-identical
+        // to what shipped before this migration.
         //
-        // Review note (verified against the same pinned sources): on THIS
-        // app's factory path the trial is belt-and-braces, not the switch.
-        // `RTCPeerConnectionFactory(audioDeviceModuleType:bypassVoiceProcessing:
-        // encoderFactory:decoderFactory:audioProcessingModule:)` (below) ends in
-        // `initWithNativeAudioEncoderFactory:...audioDeviceModuleType:...`,
-        // which installs `webrtc::CreateNetworkMonitorFactory()` (the
-        // NWPathMonitor-backed monitor) UNCONDITIONALLY; only the
-        // `initWithNativeDependencies:` path consults this trial (through the
-        // env's DeprecatedGlobalFieldTrials, i.e. this global string). So
-        // libwebrtc already gets interface-change signals here; the trial keeps
-        // that true if the factory is ever built through the other initializer.
-        // Safe to repeat on a wedge-recovery rebuild: at this commit
-        // `InitFieldTrialsFromString` copies the string into persistent,
-        // mutex-guarded storage, so no live reader is left pointing at the
-        // buffer the ObjC wrapper frees on a second call.
-        RTCInitFieldTrialDictionary(["WebRTC-Network-UseNWPathMonitor": "Enabled"])
+        // Review note (verified against the same pinned sources, unchanged
+        // by this migration): on THIS app's factory path the trial is
+        // belt-and-braces, not the switch — see the git history on this
+        // comment for the `initWithNativeAudioEncoderFactory:` vs
+        // `initWithNativeDependencies:` analysis; nothing about which
+        // initializer libwebrtc uses changed with this call-site migration.
+        // Safe to repeat on a wedge-recovery rebuild: `InitFieldTrialsFromString`
+        // copies the string into persistent, mutex-guarded storage.
+        let fieldTrials: [String: String] = ["WebRTC-Network-UseNWPathMonitor": "Enabled"]
+        let fieldTrialString = fieldTrials.map { "\($0.key)/\($0.value)/" }.joined()
+        RTCPeerConnectionFactory.configureFieldTrials(fieldTrialString)
 
         // RTCInitializeSSL is idempotent — safe to call once on first use.
         RTCInitializeSSL()
@@ -367,6 +382,15 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// read/call, same pattern every other live-setter closure in this
     /// codebase already relies on being safe for).
     private func handleNativeLogLine(_ message: String) {
+        // I5 (2026-09-29) — checked FIRST and unconditionally returns: a
+        // self-reported native line is routed to telemetry only, never also
+        // matched against the lifecycle substring checks below (none of
+        // those substrings currently start with "Q-AUDION ", but a future
+        // native message that happened to could otherwise double-report).
+        if message.hasPrefix("Q-AUDION ") {
+            onQaudionSelfReportLine?(message)
+            return
+        }
         // W-AUNITTRACE follow-up (2026-09-10) — the first live test with this
         // bridge found the callee's side of a dead-TX call 2 emits NONE of
         // the four original signals at all (no init/started/fail) despite
@@ -476,15 +500,29 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///   report for which ones could not be grep-verified against the
     ///   bundled `WebRTC.xcframework` on this box, which has no local
     ///   toolchain to unzip/inspect it):
-    ///   - `cryptoOptions` — GCM cipher suites on (AES-GCM, matching the
+    ///   - `cryptoOptions` — GCM cipher suites ENABLED (AES-GCM, matching the
     ///     native `RTCFrameCryptor`'s own `.aesGcm` algorithm one layer up),
     ///     the legacy 32-byte-tag AES_128_CM_HMAC_SHA1_32 cipher OFF (no
     ///     legacy peer to interop with on this brand-new path), encrypted
     ///     RTP header extensions ON (header extensions otherwise travel in
-    ///     the clear even on an SRTP-GCM call), SFrame frame-encryption
-    ///     requirement OFF (this app's own native `RTCFrameCryptor` is the
-    ///     frame-encryption layer, not WebRTC's built-in SFrame transform —
-    ///     requiring the latter would be a second, unused encryption gate).
+    ///     the clear even on a GCM-cipher SRTP session), SFrame
+    ///     frame-encryption requirement OFF (this app's own native
+    ///     `RTCFrameCryptor` is the frame-encryption layer, not WebRTC's
+    ///     built-in SFrame transform — requiring the latter would be a
+    ///     second, unused encryption gate).
+    ///
+    ///     I2 comment fix (webrtc-plan.md v2 §3.3, 2026-09-29) — this used to
+    ///     call this "an SRTP-GCM call" outright, which overstated what the
+    ///     4-arg `RTCCryptoOptions` init used at M144 actually guarantees:
+    ///     *enabling* GCM is not *preferring* it, and M144's init has no
+    ///     preference-order argument at all — SHA1_80 wins the negotiation
+    ///     whenever it does (same gap Android's own CryptoOptions comment
+    ///     named, `PeerConnectionHolder.kt:3662-3672`). M150's 6-arg
+    ///     designated initializer (`RTCCryptoOptions.h:60-73`) adds
+    ///     `srtpPreferGcmCryptoSuites`, set `true` below once this app links
+    ///     that binary — see this init call's own doc for the exact
+    ///     6-argument form. Until then, "GCM enabled, preference undefined"
+    ///     is the accurate description of what this configuration does.
     ///   - `tcpCandidatePolicy = .disabled` — TCP candidates add head-of-line
     ///     blocking on top of an already-encrypted, already-lossy-tolerant
     ///     RTP stream; UDP (host/srflx/relay) is sufficient and this app's

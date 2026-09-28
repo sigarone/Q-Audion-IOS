@@ -126,9 +126,14 @@ final class IceTerminationPolicyTests: XCTestCase {
         )
     }
 
-    // `.closed` / DTLS failure: no restart can heal it — never degraded, even
-    // with a relay leg. The pre-existing "dead transport must not wedge the
-    // call UI" protection survives on that edge.
+    // `.closed`, or a DTLS failure while ICE is ALSO down (i.e. neither of
+    // the new W-M150DTLSDEGRADE / W-ICEGRACEDEGRADE inputs is set): no
+    // restart or relay handoff can be justified from this input alone — ends
+    // immediately, even with a relay leg. The pre-existing "dead transport
+    // must not wedge the call UI" protection survives on that edge. A DTLS
+    // failure WITH a healthy ICE is a DIFFERENT input
+    // (`dtlsFailedWithHealthyIce: true`) covered by its own tests below —
+    // this one is deliberately the "neither flag set" case.
     func testClosedOrDtlsFailureIsNeverDegraded() {
         XCTAssertEqual(
             iceTerminationAction(callIsLive: true, iceIsTerminal: true,
@@ -177,5 +182,66 @@ final class IceTerminationPolicyTests: XCTestCase {
         XCTAssertFalse(IceTerminationPolicy.relayPathAvailable(callEstablished: false, relayLegBound: true))
         XCTAssertFalse(IceTerminationPolicy.relayPathAvailable(callEstablished: true, relayLegBound: false))
         XCTAssertFalse(IceTerminationPolicy.relayPathAvailable(callEstablished: false, relayLegBound: false))
+    }
+
+    // MARK: - W-M150DTLSDEGRADE (2026-09-29) — DTLS failed, ICE healthy
+
+    // THE case this input exists for: a DTLS failure (e.g. a peer that
+    // cannot meet the now-unconditional PQC requirement) while ICE itself
+    // stayed connected. With a relay leg, §3.1's policy is to fall over to
+    // it, not end the call — no ICE restart involved either way.
+    func testDtlsFailedWithHealthyIceAndRelayDegrades() {
+        XCTAssertEqual(
+            iceTerminationAction(callIsLive: true, iceIsTerminal: true,
+                                 iceRestartable: false, dtlsFailedWithHealthyIce: true,
+                                 relayPathAvailable: true, degradeEnabled: true),
+            .degradeToRelay
+        )
+    }
+
+    // Same edge, no relay leg to fall back to: still ends the call — a
+    // healthy-ICE DTLS failure is not "fixed" just because a restart isn't
+    // needed; it still needs SOMEWHERE for the call to keep living.
+    func testDtlsFailedWithHealthyIceButNoRelayStillEndsImmediately() {
+        XCTAssertEqual(
+            iceTerminationAction(callIsLive: true, iceIsTerminal: true,
+                                 iceRestartable: false, dtlsFailedWithHealthyIce: true,
+                                 relayPathAvailable: false, degradeEnabled: true),
+            .endImmediately
+        )
+    }
+
+    // The global rollback switch also covers this new edge — flipping it off
+    // is still a complete revert to the pre-2026-09-01 terminal contract.
+    func testDtlsFailedWithHealthyIceWithSwitchOffEndsImmediately() {
+        XCTAssertEqual(
+            iceTerminationAction(callIsLive: true, iceIsTerminal: true,
+                                 iceRestartable: false, dtlsFailedWithHealthyIce: true,
+                                 relayPathAvailable: true, degradeEnabled: false),
+            .endImmediately
+        )
+    }
+
+    // `dtlsFailedWithHealthyIce` and `iceRestartable` are independent inputs
+    // that both authorize a degrade on their own — neither is required
+    // alongside the other, and setting both is not double-counted into
+    // anything other than the same `.degradeToRelay`.
+    func testDtlsFailedWithHealthyIceAndIceRestartableBothSetStillJustDegrades() {
+        XCTAssertEqual(
+            iceTerminationAction(callIsLive: true, iceIsTerminal: true,
+                                 iceRestartable: true, dtlsFailedWithHealthyIce: true,
+                                 relayPathAvailable: true, degradeEnabled: true),
+            .degradeToRelay
+        )
+    }
+
+    // No live call: still a no-op with the new input set too.
+    func testNoLiveCallIsNoopWithDtlsFailedWithHealthyIce() {
+        XCTAssertEqual(
+            iceTerminationAction(callIsLive: false, iceIsTerminal: true,
+                                 dtlsFailedWithHealthyIce: true, relayPathAvailable: true,
+                                 degradeEnabled: true),
+            .none
+        )
     }
 }

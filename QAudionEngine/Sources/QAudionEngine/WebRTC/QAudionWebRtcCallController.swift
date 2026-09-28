@@ -5118,6 +5118,44 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Android (missing onConnectionChange). Transition to `.failed` on
     /// `.failed` here too, independent of the ICE path, so a DTLS-only
     /// failure is not silently unobserved.
+    ///
+    /// I6 (webrtc-plan.md v2 §3.1/§3.3, 2026-09-29) — a DTLS failure while
+    /// ICE stayed healthy (`.connected`/`.completed`) is no longer treated
+    /// the same as a genuinely dead transport. Requiring PQC unconditionally
+    /// on every call (`QaudionRuntimeTuning.requireDtlsPqc`, called once
+    /// M150 ships — see that file) means a peer that cannot meet it WILL
+    /// fail DTLS with perfectly healthy ICE candidates; an ICE restart
+    /// cannot fix a cipher/version mismatch, so this app now recognizes that
+    /// specific shape and falls over to the sealed WS relay instead of
+    /// ending the call — exactly the "peer needs to upgrade the app,
+    /// meanwhile keep the call up on the relay" policy §3.1 describes,
+    /// short of the hard `FORCE_P2P` mode this app does not yet expose.
+    /// Three things happen here, on THIS instant, not deferred to any
+    /// watchdog:
+    ///   1. `armSrtpFallbackIfNeeded()` — same call the ICE `.failed`/
+    ///      `.disconnected` branch below already makes; a no-op unless this
+    ///      call actually negotiated native audio SRTP.
+    ///   2. `iceGoodSinceMs = nil` — the same "video send is no longer
+    ///      confirmed healthy" signal the ICE-bad branch sets, so
+    ///      `isVideoSendConfirmedHealthy()` stops reporting healthy and the
+    ///      video WS-relay leg picks the frame back up on its own gate. ICE
+    ///      itself never changed state, so nothing else keyed off
+    ///      `lastIceConnectionState`/`iceGoodSinceMs` would otherwise notice
+    ///      this edge at all.
+    ///   3. A DISTINCT failure reason string, `"DTLS failed, ICE healthy"`
+    ///      — not `"DTLS/connection failed"` — so `AppState`'s
+    ///      `onStateChange` handler (both the caller- and callee-side
+    ///      wiring) can route this edge through
+    ///      `handleIceTermination(dtlsFailedIceHealthy: true)` instead of
+    ///      the historically-terminal generic reason. See
+    ///      `IceTerminationPolicy`'s `dtlsFailedWithHealthyIce` input for the
+    ///      actual degrade-vs-end decision (pure, tested independently).
+    ///
+    /// Deliberately does NOT call `armIceRecoveryWatchdogIfNeeded()` (this
+    /// handler never did) and does NOT touch `lastIceConnectionState` or
+    /// `iceBadStateEnteredAtMs` — ICE is fine, there is nothing to restart,
+    /// and N7's recovery-duration telemetry must not see a "recovery" that
+    /// never actually left the ICE-good state.
     public func peerConnection(_ pc: QAudionPeerConnection,
                                didChangeConnectionState s: RTCPeerConnectionState) {
         let stateName: String
@@ -5134,7 +5172,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Numeric for the same redactor reason as the ICE branch above.
         log?("dtls state=\(s.rawValue)")
         if s == .failed {
-            state = .failed("DTLS/connection failed")
+            let iceHealthy = lastIceConnectionState == .connected || lastIceConnectionState == .completed
+            if iceHealthy {
+                log?("dtls failed_ice_healthy=1")
+                armSrtpFallbackIfNeeded()
+                iceGoodSinceMs = nil
+                state = .failed("DTLS failed, ICE healthy")
+            } else {
+                state = .failed("DTLS/connection failed")
+            }
         }
     }
 

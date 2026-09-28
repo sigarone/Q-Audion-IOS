@@ -17402,9 +17402,21 @@ final class AppState: ObservableObject {
                         // `onIceConnectionState` hook below and restartable
                         // there) and a DTLS/connection failure that no
                         // restart can heal. Only the first may degrade.
+                        //
+                        // W-M150DTLSDEGRADE (2026-09-29) — a THIRD reason,
+                        // "DTLS failed, ICE healthy"
+                        // (`QAudionWebRtcCallController
+                        // .didChangeConnectionState`'s own I6 doc), also
+                        // degrades: a peer that cannot meet the now-
+                        // unconditional PQC requirement fails DTLS with
+                        // perfectly healthy ICE, and no restart could fix
+                        // that anyway. See `IceTerminationPolicy`'s
+                        // `dtlsFailedWithHealthyIce` input.
                         let restartable = (reason == "ICE failed")
+                        let dtlsFailedIceHealthy = (reason == "DTLS failed, ICE healthy")
                         Task { @MainActor [weak self] in
-                            self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable)
+                            self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable,
+                                                       dtlsFailedIceHealthy: dtlsFailedIceHealthy)
                         }
                     case .disconnected:
                         // W-ICEGRACE — recoverable, not terminal (see
@@ -17702,7 +17714,8 @@ final class AppState: ObservableObject {
     /// call to the relay instead of ending it. See `IceTerminationPolicy`
     /// for the evidence and the kill switch.
     @MainActor
-    private func handleIceTermination(iceIsTerminal: Bool, iceRestartable: Bool = false) {
+    private func handleIceTermination(iceIsTerminal: Bool, iceRestartable: Bool = false,
+                                       dtlsFailedIceHealthy: Bool = false) {
         // F-1 (2nd-pass regression): C-3 made `isInCall` stay false until
         // the call is ANSWERED. So an ICE / connection failure DURING
         // setup (outgoing `.connecting`, incoming `.ringing`) — i.e. the
@@ -17720,6 +17733,7 @@ final class AppState: ObservableObject {
             callIsLive: callIsLive,
             iceIsTerminal: iceIsTerminal,
             iceRestartable: iceRestartable,
+            dtlsFailedWithHealthyIce: dtlsFailedIceHealthy,
             relayPathAvailable: relayPathAvailableForIceDegrade()
         ) {
         case .none:
@@ -17732,8 +17746,13 @@ final class AppState: ObservableObject {
             // a relay leg: the decision is made, a still-pending grace has
             // nothing left to decide (a later `.disconnected` after the
             // next restart arms a fresh one, and its expiry re-evaluates).
+            //
+            // W-M150DTLSDEGRADE (2026-09-29) — edge 4 distinguishes "DTLS
+            // failed, ICE healthy" from edge 1 ("ICE `.failed`") in the
+            // diagnostic `degradeCallTransportToRelay` logs; both take the
+            // exact same action (nothing torn down, relay already routing).
             cancelIceDisconnectGrace()
-            degradeCallTransportToRelay(edge: 1)
+            degradeCallTransportToRelay(edge: dtlsFailedIceHealthy ? 4 : 1)
         case .endAfterGrace:
             // Already counting down from an earlier `.disconnected` edge —
             // don't restart the window (a flapping ICE would otherwise keep
@@ -17815,7 +17834,9 @@ final class AppState: ObservableObject {
     ///     hook and `onActiveCandidatePairType` overwrite it the moment ICE
     ///     recovers, so the chip flips back on its own.
     /// Idempotent. `edge`: 1 = ICE `.failed`, 2 = base grace expiry, 3 =
-    /// extended grace expiry. `ws`: signalling socket state at that instant
+    /// extended grace expiry, 4 = DTLS failed while ICE stayed healthy
+    /// (W-M150DTLSDEGRADE, 2026-09-29 — no ICE restart involved on this
+    /// edge, unlike 1). `ws`: signalling socket state at that instant
     /// (0 disconnected · 1 connecting · 2 connected · 3 authenticated) —
     /// diagnostic only, deliberately not a gate (see `IceTerminationPolicy`).
     @MainActor
@@ -25720,9 +25741,15 @@ extension AppState {
                 // caller wiring in startCall: ICE `.failed` ("ICE failed")
                 // is restartable and may degrade; a DTLS/connection failure
                 // is not.
+                //
+                // W-M150DTLSDEGRADE (2026-09-29) — callee-side mirror of the
+                // same caller-side addition: "DTLS failed, ICE healthy" also
+                // degrades. See the caller-side wiring's own comment for why.
                 let restartable = (reason == "ICE failed")
+                let dtlsFailedIceHealthy = (reason == "DTLS failed, ICE healthy")
                 Task { @MainActor [weak self] in
-                    self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable)
+                    self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable,
+                                               dtlsFailedIceHealthy: dtlsFailedIceHealthy)
                 }
             case .disconnected:
                 // W-ICEGRACE — recoverable, not terminal (callee-side mirror

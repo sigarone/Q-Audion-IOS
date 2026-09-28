@@ -41,7 +41,16 @@ public enum PlpPolicy {
     /// standing LBRR budget is cheap insurance against the first loss after a
     /// long clean stretch (the report that would raise the knob arrives only
     /// AFTER that loss is already audible).
-    public static let minPct = 5
+    ///
+    /// W-M150FECALIGN (2026-09-29, webrtc-plan.md v2 §3.1) — raised 5→10 to
+    /// match the aligned FEC floor now shared with the native path
+    /// (`calls.opus_min_loss_pct`, `QaudionRuntimeTuning.setMinPacketLossPercent`)
+    /// and the desktop/Android custom-path twins. See `minPct(for:
+    /// routeTier:)` below: this used to be the value `.relay` raised ABOVE;
+    /// now that the unconditional floor is itself 10, that overload's own
+    /// value is unchanged (still 10) but no longer raises anything — see its
+    /// kdoc.
+    public static let minPct = 10
 
     /// Ceiling: past ~40 the encoder spends so much of the fixed CBR budget
     /// on redundancy that quality degrades more than the loss it insures
@@ -102,9 +111,17 @@ public enum PlpPolicy {
     }
 
     /// The floor `next(...)` will never decay below, and the coercion bound
-    /// applied to `currentPct` on entry. `.relay` raises it above the
-    /// unconditional `minPct` — see the route-tier overload's kdoc for why;
-    /// `.direct`/`.unknown` keep today's floor unchanged.
+    /// applied to `currentPct` on entry.
+    ///
+    /// W-M150FECALIGN (2026-09-29) — before the FEC-floor alignment above,
+    /// `.relay` raised this floor ABOVE the unconditional `minPct` (10 vs 5).
+    /// Now that the unconditional floor is itself 10, `.relay` returns the
+    /// SAME value — kept as its own literal (not `minPct`) rather than
+    /// collapsed into the `.direct`/`.unknown` case, so the two can be
+    /// retuned independently again later (e.g. if the unconditional floor
+    /// ever moves without the relay-specific one following) without this
+    /// function's call sites changing. `.direct`/`.unknown` keep today's
+    /// floor unchanged.
     public static func minPct(for routeTier: RouteTier) -> Int {
         switch routeTier {
         case .relay:            return 10
