@@ -1303,6 +1303,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// otherwise default `.all`.
     public var iceTransportPolicyOverride: RTCIceTransportPolicy?
 
+    /// D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) — remote
+    /// kill switch getter for the P2P-probe ICE restart, wired by AppState
+    /// the same way `iceTransportPolicyOverride` is (this engine target
+    /// cannot import `FeatureFlags`, which lives in the app target — see
+    /// that property's own wiring sites in `AppState.swift`). AppState sets
+    /// this to a closure that reads `FeatureFlags.bool("calls.p2p_probe_kill",
+    /// false)` via `MainActor.assumeIsolated` (guarded by `Thread.isMainThread`
+    /// — same idiom as `CallsGate.bypassEchoDuckEnabled()`), right alongside
+    /// its `TransportGate.forcesRelay` wiring. Deliberately a plain
+    /// (non-`@MainActor`) closure type: this controller is `@unchecked
+    /// Sendable`, NOT `@MainActor`, and `evaluateP2pProbeTick` calls this
+    /// synchronously from a `Timer` on `RunLoop.main` — which genuinely IS
+    /// the main thread at call time, hence `assumeIsolated` rather than an
+    /// `await` hop. Read LIVE on every `P2pProbeDecisions` tick — unlike the
+    /// native-SRTP kill switch (snapshotted once per call at
+    /// `logNativeSrtpSnapshot`) this one re-invokes the closure every tick,
+    /// since the probe only ever fires minutes into an already-connected
+    /// call and a flag flip should take effect immediately. `nil` (no
+    /// AppState wiring — e.g. a unit test constructing the controller
+    /// directly) resolves to `false`, same fail-open-to-"probe active"
+    /// default as the flag's own compiled default.
+    public var p2pProbeKillSwitchProvider: (() -> Bool)?
+
     /// SFrame video sealer factory — DI seam retained for backwards
     /// compatibility with AppState wiring. As of W539 it is NO LONGER
     /// consulted by the default video pipeline pick: cross-platform
@@ -1577,6 +1600,48 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// manca" item 5: "eventi di ICE restart con il tempo di ripristino")
     /// exists for every call, not only a native-SRTP one.
     private var iceBadStateEnteredAtMs: Int64?
+
+    // MARK: - D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) —
+    // P2P-probe ICE restart. See `P2pProbeDecisions` for the pure gating
+    // logic these fields feed, ported from Android's `P2pProbeGate` /
+    // `PeerConnectionHolder.kt`.
+
+    /// Monotonic ms timestamp the selected pair was last (re)classified as
+    /// `.relay` by `resolveAndApplyRouteTier`'s dwell commit, or `nil` while
+    /// it is not currently relay. Feeds `P2pProbeDecisions.Input
+    /// .relayPairSinceMs`; reset to `nil` the moment the pair leaves relay
+    /// so a later re-entry starts a fresh 8s window instead of reusing a
+    /// stale one — mirrors Android's `relayPairSinceMs` exactly.
+    private var relayPairSinceMs: Int64?
+
+    /// True once the peer has sent at least one host/srflx/prflx (i.e.
+    /// non-relay) ICE candidate this call. Set once in `handleRemoteIce`;
+    /// never cleared mid-call. Mirrors Android's
+    /// `peerSentNonRelayCandidateThisCall`.
+    private var peerSentNonRelayCandidateThisCall: Bool = false
+
+    /// Monotonic ms timestamp of the most recent ICE DISCONNECTED/FAILED
+    /// transition this call, or `nil` if none occurred yet. Unlike
+    /// `iceBadStateEnteredAtMs` this is NEVER cleared on recovery — D6 needs
+    /// to know how long ago the last rocky patch was, even after ICE has
+    /// since reconnected. Mirrors Android's `lastIceBadAtMs`.
+    private var lastIceBadAtMs: Int64?
+
+    /// True once this call has attempted its single P2P-probe restart,
+    /// regardless of outcome. D6 is single-shot per call.
+    private var p2pProbeAttempted: Bool = false
+
+    /// The watcher started on CONNECTED/COMPLETED that evaluates
+    /// `P2pProbeDecisions` every `p2pProbePollIntervalSec` until it fires
+    /// once. Mirrors Android's `p2pProbeJob`.
+    private var p2pProbeTimer: Timer?
+
+    private static let p2pProbePollIntervalSec: TimeInterval = 1.0
+
+    /// How long `launchP2pProbeResultTelemetry` waits after firing the probe
+    /// before classifying the outcome. Generous relative to a clean ICE
+    /// restart's measured ~7s convergence (see `RestartIceDecisions`'s kdoc).
+    private static let p2pProbeResultSettleSec: TimeInterval = 12.0
 
     private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
@@ -2616,6 +2681,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private var remoteDescriptionApplied = false
 
     public func handleRemoteIce(candidate: String, sdpMid: String?, sdpMLineIndex: Int32) {
+        // D6 — the peer proved it can offer a non-relay path; `P2pProbeDecisions`
+        // refuses to fire without this, since a relay-only peer can never pair
+        // directly no matter how many times we probe. Same substring check as
+        // Android's `peerSentNonRelayCandidateThisCall` counterpart.
+        if !peerSentNonRelayCandidateThisCall,
+           candidate.contains(" typ host") || candidate.contains(" typ srflx") || candidate.contains(" typ prflx") {
+            peerSentNonRelayCandidateThisCall = true
+        }
         let queued: Int? = pendingIceLock.withLock {
             guard peerConnection != nil, remoteDescriptionApplied else {
                 pendingRemoteIceQueue.append((candidate, sdpMid, sdpMLineIndex))
@@ -2697,6 +2770,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         restartPathMonitor = nil
         iceRecoveryWatchdogTask?.cancel()
         iceRecoveryWatchdogTask = nil
+        // D6 — same early-teardown-race reasoning as the watchdog above:
+        // startP2pProbeWatch() can have armed this during a setup that then
+        // failed before `peerConnection` was ever assigned.
+        p2pProbeTimer?.invalidate()
+        p2pProbeTimer = nil
         // W-CAPTURELIVE-SIGNAL — invalidate any in-flight native-mic liveness
         // check. The check's Task retains `self` across waits of up to two
         // minutes, and without this bump an old controller's check could open
@@ -3500,6 +3578,103 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             restartIceDebounceLock.withLock { iceRestartGateUntil = parkUntil }
         }
         log?("restart_ice sent=\(sent ? 1 : 0) reason=\(reason)")
+    }
+
+    /// D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) — watches
+    /// `P2pProbeDecisions` every `p2pProbePollIntervalSec` while ICE stays
+    /// CONNECTED/COMPLETED, and fires ONE probing `restartIce` the moment
+    /// all of its preconditions hold. Started from the same CONNECTED/
+    /// COMPLETED branch as `startVideoStatsTelemetry`; idempotent —
+    /// re-entry invalidates the previous timer, and the gate's own
+    /// `p2pProbeAttempted` latch means a call that already probed just
+    /// stops on the first tick every time this is re-armed by a later
+    /// CONNECTED/COMPLETED flap.
+    ///
+    /// This does NOT implement its own ICE-restart mechanics — it only
+    /// decides *when* to call the existing, already-shipped `restartIce`
+    /// (the same offerer-side fresh-offer path a network-change handoff
+    /// uses), so DTLS/SRTP, FrameCryptor keys, the DataChannel and
+    /// `AudioSdpPolicy` are untouched by this feature, exactly like every
+    /// other `restartIce` caller.
+    private func startP2pProbeWatch() {
+        if p2pProbeAttempted { return }
+        p2pProbeTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.p2pProbePollIntervalSec, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            self.evaluateP2pProbeTick(timer: t)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        p2pProbeTimer = timer
+    }
+
+    private func evaluateP2pProbeTick(timer: Timer) {
+        guard lastIceConnectionState == .connected || lastIceConnectionState == .completed else {
+            timer.invalidate()
+            return
+        }
+        if p2pProbeAttempted || intentionalShutdown {
+            timer.invalidate()
+            return
+        }
+        let nowMs = Self.nowMs()
+        let renegotiating: Bool = restartIceDebounceLock.withLock {
+            if let gate = iceRestartGateUntil, Date() < gate { return true }
+            return false
+        }
+        // D6 — iOS has no ICE-layer FORCE_WS equivalent to Android's
+        // `TransportPreferences.Mode.FORCE_WS`: the sealed-frame WS-relay
+        // bypass is architecturally separate from the RTCPeerConnection
+        // this gate restarts (see `P2pProbeDecisions.Input`'s kdoc), so this
+        // is always `false` here.
+        let input = P2pProbeDecisions.Input(
+            isInitiator: isInitiator,
+            pairKind: _routeTierDwell.committed,
+            relayPairSinceMs: relayPairSinceMs,
+            nowMs: nowMs,
+            peerSentNonRelayCandidate: peerSentNonRelayCandidateThisCall,
+            lastDisconnectOrFailedAtMs: lastIceBadAtMs,
+            transportForcesTurn: iceTransportPolicyOverride == .relay,
+            transportForcesWs: false,
+            renegotiationInProgress: renegotiating,
+            callActive: !intentionalShutdown,
+            alreadyProbedThisCall: p2pProbeAttempted,
+            killSwitchActive: p2pProbeKillSwitchProvider?() ?? false
+        )
+        guard P2pProbeDecisions.shouldProbe(input) else { return }
+        p2pProbeAttempted = true
+        timer.invalidate()
+        let startMs = nowMs
+        log?("w-p2pprobe start")
+        Task { [weak self] in
+            await self?.restartIce(reason: "p2p-probe")
+            await self?.launchP2pProbeResultTelemetry(startMs: startMs)
+        }
+    }
+
+    /// D6 — logs the probe's outcome without ever acting on it: the gate
+    /// must never itself cause a downgrade, so this is pure observation.
+    /// Waits a fixed, generous settle budget (`p2pProbeResultSettleSec`) for
+    /// the restart to converge and `resolveAndApplyRouteTier` (already
+    /// triggered again by the restart's own CONNECTED transition) to
+    /// produce a fresh classification, then reports:
+    ///   - `result=direct` — the restart moved the call off the relay pair;
+    ///   - `result=relay`  — ICE reconnected but the pair is still relay
+    ///     (not a failure — a single attempt is intentional; see
+    ///     `P2pProbeDecisions`'s kdoc for why NAT-symmetric peers should not
+    ///     be retried);
+    ///   - `result=failed` — ICE never made it back to CONNECTED/COMPLETED
+    ///     in the settle budget.
+    /// No IPs, no full ids — only candidate-pair TYPE and elapsed ms, per
+    /// this task's own privacy rule.
+    private func launchP2pProbeResultTelemetry(startMs: Int64) async {
+        try? await Task.sleep(nanoseconds: UInt64(Self.p2pProbeResultSettleSec * 1_000_000_000))
+        let elapsed = Self.nowMs() - startMs
+        guard lastIceConnectionState == .connected || lastIceConnectionState == .completed else {
+            log?("w-p2pprobe result=failed ms=\(elapsed)")
+            return
+        }
+        let label = _routeTierDwell.committed == .relay ? "relay" : "direct"
+        log?("w-p2pprobe result=\(label) ms=\(elapsed)")
     }
 
     /// W-OFFERGLARE — apply an incoming restart-offer `call_offer` for
@@ -4864,6 +5039,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // Start outbound/inbound video RTP telemetry once media can flow.
             startVideoStatsTelemetry()
             resolveAndApplyRouteTier()
+            // D6 — (re-)arm the P2P-probe watcher on every CONNECTED/COMPLETED
+            // entry, same trigger point as startVideoStatsTelemetry() above.
+            // startP2pProbeWatch() is itself the single-shot gate (via
+            // p2pProbeAttempted) and no-ops instantly once this call has
+            // already spent its one probe.
+            startP2pProbeWatch()
             // W-SILENTPATHDEATH — ICE genuinely recovered: stand the
             // recovery watchdog down. Mirrors Android's loop `continue`ing
             // past `self.first { !isBad(it) }`.
@@ -4892,6 +5073,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         case .failed, .disconnected:
             if s == .failed { state = .failed("ICE failed") }
             else { state = .disconnected; stopVideoStatsTelemetry() }
+            // D6 — unlike `iceBadStateEnteredAtMs` below (cleared on
+            // recovery), this stamp is never cleared: `P2pProbeDecisions`
+            // needs to know how long ago the LAST rocky patch was, even
+            // after ICE has since reconnected. Mirrors Android's
+            // `lastIceBadAtMs`, set on every FAILED/DISCONNECTED transition.
+            lastIceBadAtMs = Self.nowMs()
             // W-SILENTPATHDEATH — arm (or leave running) the recovery
             // watchdog. `.closed` is deliberately excluded — that is a
             // terminal, intentional teardown (closeSynchronously already
@@ -5120,6 +5307,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // and changes nothing observable yet.
             guard self._routeTierDwell.observe(tier) else { return }
             let committed = self._routeTierDwell.committed
+            // D6 — stamp/clear the "since relay" anchor on every commit, not
+            // just the first one: a call that goes relay -> direct -> relay
+            // again (a mid-call route flap) must re-arm the 8s window from
+            // the SECOND entry, not the first. Mirrors Android's
+            // `resolveSelectedPairKind` stamp exactly.
+            self.relayPairSinceMs = committed == .relay ? Self.nowMs() : nil
             print("[WebRtcCallController] W-ROUTECLAMP: route tier -> \(committed) (local=\(localType) remote=\(remoteType))")
             // Numeric tail for the redactor, same reason as the ICE/DTLS
             // state lines above (relay=1/direct=0, never the word itself).
