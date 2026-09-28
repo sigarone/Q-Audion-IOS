@@ -14239,7 +14239,17 @@ final class AppState: ObservableObject {
                     installAudioMedia()
                 }
                 // W-GRPDIAG-4 — see persistMessagePsk doc above.
-                self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
+                //
+                // W-MEDIAATACCEPT (option b) — D2/I12: msg-PSK persistence is
+                // one of the explicitly-deferred handshake side effects — a
+                // call nobody answered (or answered on a DIFFERENT device,
+                // §0 D2 "multi-dispositivo") must not persist a `call-<id>`
+                // msg-PSK the caller will never derive the same way. Runs
+                // immediately for `mode == 0`/no plan/already-released, same
+                // as today.
+                self.runOrDeferUntilAccepted(cidLower) { [weak self] in
+                    self?.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
+                }
                 // Cold-start answer race — the relay session key is now live, so
                 // engine + integration + contactId are all ready. If the user
                 // already answered during the PushKit cold-start gap, replay it.
@@ -14278,7 +14288,20 @@ final class AppState: ObservableObject {
                 setPskName: { [weak self] in self?.pskName = $0 },
                 setPskMethod: { [weak self] in self?.pskMethod = $0 },
                 setPskFingerprint: { [weak self] in self?.pskFingerprint = $0 },
-                onSessionEstablished: { [weak self] peerId in self?.handleCallSessionEstablished(peerId: peerId) }
+                // W-MEDIAATACCEPT (option b) — D2/I12: `handleCallSessionEstablished`
+                // starts the re-key scheduler, the VOICE_KEY announce loop, and
+                // auto voice-learning (I14: none of those may start during
+                // RING). `CallSessionKeyBroker` is itself `@MainActor`, so
+                // `registerPqcSessionKey` below (same synchronous call stack)
+                // invokes this on the main actor — safe to touch
+                // `pendingAcceptGatedActions` here with no extra hop.
+                onSessionEstablished: { [weak self] peerId in
+                    guard let self = self else { return }
+                    let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+                    self.runOrDeferUntilAccepted(cid) { [weak self] in
+                        self?.handleCallSessionEstablished(peerId: peerId)
+                    }
+                }
             )
                 CallSessionKeyBroker.shared.registerPqcSessionKey(
                     sharedSecret, for: peerId)
@@ -14453,17 +14476,34 @@ final class AppState: ObservableObject {
                     bootstrap()
                     return
                 }
-                if self.identityUnverifiedCallIds.contains(cid) {
-                    self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
-                } else {
-                    bootstrap()
+                // W-MEDIAATACCEPT (option b) — D2/I12: discharge the ACCEPT
+                // gate first, the identity gate second (spec §4.5 — "si
+                // scarica prima questo gate, poi quello d'identità"). A call
+                // still ringing under mode==1 defers the whole
+                // identity-gated-or-not decision; the identity gate is
+                // re-evaluated (possibly already resolved by then) only once
+                // the ACCEPT actually releases.
+                let identityGated: () -> Void = {
+                    if self.identityUnverifiedCallIds.contains(cid) {
+                        self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
+                    } else {
+                        bootstrap()
+                    }
                 }
+                self.runOrDeferUntilAccepted(cid, action: identityGated)
             }
         }
         // W-KCMAC (ship step 5) — responder leg. See `handleKcMacReady`'s doc.
         integration.onKcMacReady = { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.handleKcMacReady(event)
+                guard let self = self else { return }
+                // W-MEDIAATACCEPT (option b) — D2/I12: the wire kc_mac
+                // exchange (send + its 5s deadline) is a network-visible
+                // handshake-completion side effect — deferred like the
+                // others while mode==1 holds this call's ACCEPT.
+                self.runOrDeferUntilAccepted(event.callId) { [weak self] in
+                    self?.handleKcMacReady(event)
+                }
             }
         }
         // Pre-negotiation hooks — same shape the caller-side block in
@@ -25416,6 +25456,18 @@ extension AppState {
                     RingSignalingRegistry.shared.setMediaPlane(planId, .ready)
                     let ms = plan.acceptedAtMs.map { Self.nowMsForTelemetry() - $0 } ?? -1
                     RTLog.info("call", "ringsig built=1 ms=\(ms) ready=0 why=0")
+                    // W-MEDIAATACCEPT (option b) — §4.4/§4.6 (gate 5): a
+                    // `didActivate` that arrived while this call's PC was
+                    // still `.building` was deferred (`audioIO defer=1
+                    // gate=5`, CallService.startAudioIOIfReady) — nothing
+                    // else re-invokes `startAudioIOIfReady()` once the plane
+                    // reaches `.ready`, so without this call a native call
+                    // whose PC won the didActivate race would stay silent
+                    // (no mic, no speaker) for its entire duration. Mirrors
+                    // the identical call already made on the 2s-SDP-wait and
+                    // 8s-watchdog failure paths below — this is the missing
+                    // SUCCESS-path counterpart.
+                    self.callService.resumeAudioIOAfterMediaPlane()
                 }
             } catch {
                 // W-DCSTUCK-DIAG (2026-08-13): was print()-only, sitting one
@@ -25452,6 +25504,12 @@ extension AppState {
                     RingSignalingRegistry.shared.markReleased(planId)
                     _ = await self.responderCallIntegration?.releaseHeldAccept(callId: planId)
                     RTLog.info("call", "ringsig release=1 why=3 ms=0")
+                    // W-MEDIAATACCEPT (option b) — §4.4 (I3/gate 5): the
+                    // build failed — unblock a `didActivate` deferred at
+                    // gate 5 the same way the 2s/8s failure paths do, so a
+                    // failed native build falls back to the custom (sealed)
+                    // audio path instead of staying silent forever.
+                    self.callService.resumeAudioIOAfterMediaPlane()
                 }
             }
         }
@@ -25524,6 +25582,12 @@ extension AppState {
                 Task { try? await calling.sendCallAnswer(recipientId: peer, sdp: "") }
             }
             self.releaseHeldAcceptIfDue(cid, why: 3)
+            // W-MEDIAATACCEPT (option b) — §4.4 (I3/gate 5): same reasoning
+            // as the 2s-SDP-wait timeout above — a `didActivate` deferred at
+            // gate 5 must be unblocked on EVERY path that marks `.failed`,
+            // not only the SDP-never-arrived one, or a native build that
+            // hangs past the 8s watchdog leaves the call permanently silent.
+            self.callService.resumeAudioIOAfterMediaPlane()
         }
         ringMediaPlaneTimers[cid, default: []].append(watchdog)
         buildIncomingWebRtcMediaPlane(
@@ -25565,6 +25629,33 @@ extension AppState {
         guard let actions = pendingAcceptGatedActions[cid] else { return }
         pendingAcceptGatedActions[cid] = nil
         for action in actions { action() }
+    }
+
+    /// W-MEDIAATACCEPT (option b) — D2/I12: the single gate every callee-side
+    /// handshake-completion side effect (msg-PSK persistence, v4/v5 ratchet
+    /// bootstrap, `kc_mac`, `handleCallSessionEstablished`'s rekey/VOICE_KEY/
+    /// voice-learning) must go through. `callId == nil`/empty, no latched
+    /// `RingSignalingRegistry` entry (legacy `call_offer` outside any tracked
+    /// call), `mode == 0` (legacy), or an already-released ACCEPT (mid-call
+    /// re-key, or a `mode == 1` call whose ACCEPT already went out) all run
+    /// `action` immediately — identical to today's behavior. Only a `mode ==
+    /// 1` call still holding its ACCEPT defers: `action` is queued in
+    /// `pendingAcceptGatedActions` and runs later, from
+    /// `drainAcceptGatedActions` right after `releaseHeldAcceptIfDue` — or
+    /// never, if `wipeRingState` discards the queue first (call ended while
+    /// still ringing, D2: no persistent state may change for a call nobody
+    /// answered).
+    ///
+    /// Must be called on `@MainActor` (touches `pendingAcceptGatedActions`
+    /// with no separate lock, same as every other access to it).
+    func runOrDeferUntilAccepted(_ callId: String?, action: @escaping () -> Void) {
+        guard let cid = callId?.lowercased(), !cid.isEmpty,
+              let plan = RingSignalingRegistry.shared.entry(cid),
+              plan.mode == 1, !plan.acceptReleased else {
+            action()
+            return
+        }
+        pendingAcceptGatedActions[cid, default: []].append(action)
     }
 
     /// W-MEDIAATACCEPT (option b) — §4.10/I13: the single chokepoint for
