@@ -361,6 +361,16 @@ final class CallService: @unchecked Sendable {
     /// (`CallViewModel.publishNetworkStats`, CallViewModel.kt:1963-1976).
     private var lastThroughputSample: (atSec: Double, tx: Int64, rx: Int64)?
 
+    /// N7 (network-resilience-max, this task) — the previous heartbeat
+    /// tick's CUMULATIVE counters, so each new tick can compute this
+    /// interval's DELTA via `NativeAudioHeartbeatDeltas.compute(previous:
+    /// current:)`. Same "keep the previous sample, diff against it" shape
+    /// as `lastThroughputSample` right above, deliberately kept as its own
+    /// property rather than folded into that tuple: this one only advances
+    /// every 5th throughput sample (the heartbeat's own cadence,
+    /// `srtpHbSampleCounter % 5 == 0`), not every sample.
+    private var lastNativeAudioIntervalCounters: NativeAudioHeartbeatDeltas.IntervalCounters?
+
     /// Live wire throughput in kbps, last computed by [sampleWireThroughput].
     /// `nil` ⇒ "—". Written on the main actor by the sampler only.
     public private(set) var wireTxKbps: Double?
@@ -476,6 +486,21 @@ final class CallService: @unchecked Sendable {
             let outPorts = outSess.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
             let outVol = Int(outSess.outputVolume * 100)
             var line = "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)"
+            // N7 (network-resilience-max, this task) — candidate-pair
+            // `currentRoundTripTime`, the SAME measurement this call already
+            // received as `rttMs` (`QAudionWebRtcCallController
+            // .pollMediaRttOnce`'s own doc: "Sample the selected candidate
+            // pair's currentRoundTripTime"). Reused here rather than
+            // re-fetched — no extra stats round trip, no addresses. Key is
+            // `rtt` (not `crtt`): verified against this repo's own redactor
+            // (`scripts/ship-ios-logs.py`) that `crtt` fails its "reads like
+            // a word" lexical check (4 letters, zero vowels) and DROPS THE
+            // WHOLE LINE, whereas bare `rtt` is already-recognized
+            // vocabulary there (confirmed via direct `redact_body()`
+            // round-trip, not assumed).
+            if let rttMs {
+                line += " rtt=\(Int(rttMs.rounded()))"
+            }
             // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
             // (no second timer) with the wider stats snapshot, ONLY on a
             // call that actually negotiated native SRTP: every field below
@@ -522,6 +547,64 @@ final class CallService: @unchecked Sendable {
                 for fmtpToken in FmtpLogTokens.tokens(stats.codecSdpFmtpLine) {
                     line += " \(fmtpToken)"
                 }
+                // N7 (network-resilience-max, this task) — per-heartbeat
+                // INTERVAL deltas (not cumulative) of the counters this
+                // exact heartbeat already reads a cumulative snapshot for.
+                // `NativeAudioHeartbeatDeltas.compute` is the pure, unit-
+                // tested seam (`NativeAudioHeartbeatDeltasTests`); this call
+                // site only keeps the "previous tick" state, same shape as
+                // `lastThroughputSample`'s own dtSec-based kbps computation
+                // just above in this same method.
+                let currentCounters = NativeAudioHeartbeatDeltas.IntervalCounters(
+                    jitterBufferDelaySec: stats.inboundJitterBufferDelaySec,
+                    jitterBufferTargetDelaySec: stats.inboundJitterBufferTargetDelaySec,
+                    jitterBufferEmittedCount: stats.inboundJitterBufferEmittedCount,
+                    concealedSamples: stats.inboundConcealedSamples,
+                    fecPacketsReceived: stats.inboundFecPacketsReceived,
+                    fecPacketsDiscarded: stats.inboundFecPacketsDiscarded,
+                    nackCount: stats.inboundNackCount,
+                    retransmittedPacketsSent: stats.outboundRetransmittedPacketsSent)
+                let deltas = NativeAudioHeartbeatDeltas.compute(
+                    previous: lastNativeAudioIntervalCounters, current: currentCounters)
+                lastNativeAudioIntervalCounters = currentCounters
+                // Log keys below were each verified individually against
+                // this repo's own redactor (`scripts/ship-ios-logs.py`,
+                // direct `redact_body()` round-trip, not assumed) — the
+                // OBVIOUS abbreviations (`jbms`, `jbtgt`, `concl`, `fecrx`,
+                // `fecdisc`, `rflost`, `rrtt`, `relproto`, `nettype`) each
+                // either fail its "reads like a word" lexical check outright
+                // (a short vowel-less/low-vowel-density blob is treated as
+                // "not a word", which DROPS THE WHOLE LINE, not just that
+                // token) or push the line's unrecognized-word budget over
+                // its cap in combination with `restart_ice`'s own leading
+                // word — same failure class as this file's sibling
+                // `restart_ice relay=1` rename right above. Every key here
+                // is instead built from words ALREADY in that script's own
+                // recognized vocabulary (`jitter`, `target`, `ms`, `fec`,
+                // `recv`, `drop`, `nack`, `remote`, `loss`, `rtt`, `relay`,
+                // `network`, `type`, `plc` — this last one, Packet Loss
+                // Concealment, doubling as the concealed-samples counter's
+                // name), so the line ships whole instead of collapsing to
+                // an empty attribute summary.
+                line += " jitter_ms=\(deltas.jitterBufferDelayMsAvg)"
+                line += " target_ms=\(deltas.jitterBufferTargetDelayMsAvg)"
+                line += " plc=\(deltas.concealedSamplesDelta)"
+                line += " fec_recv=\(deltas.fecPacketsReceivedDelta)"
+                line += " fec_drop=\(deltas.fecPacketsDiscardedDelta)"
+                line += " nack=\(deltas.nackCountDelta)"
+                // Instantaneous (report-snapshot) fields, never delta'd — see
+                // `NativeAudioSrtpStatsSnapshot`'s own field docs for why.
+                // `fractionLost` is 0.0...1.0 -> milli-units, same convention
+                // `milli(_:)` above already uses for the audio-level fields.
+                line += " remote_loss=\(milli(stats.remoteInboundFractionLost))"
+                let remoteRttMs = stats.remoteInboundRoundTripTimeSec < 0
+                    ? -1 : Int((stats.remoteInboundRoundTripTimeSec * 1000).rounded())
+                line += " remote_rtt=\(remoteRttMs)"
+                // Numeric-encoded, never the raw platform string (see
+                // `NativeAudioHeartbeatDeltas.relayProtocolCode`/
+                // `.networkTypeCode`'s own docs) — no addresses either way.
+                line += " relay=\(NativeAudioHeartbeatDeltas.relayProtocolCode(stats.localCandidateRelayProtocol))"
+                line += " network_type=\(NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType))"
             }
             RTLog.info("call", line)
         }
@@ -3819,6 +3902,9 @@ final class CallService: @unchecked Sendable {
         wireTxBytes = 0
         wireRxBytes = 0
         lastThroughputSample = nil
+        // N7 (network-resilience-max) — never let a second call's first
+        // heartbeat diff against the PREVIOUS call's last cumulative sample.
+        lastNativeAudioIntervalCounters = nil
         wireTxKbps = nil
         wireRxKbps = nil
         mediaRttMs = nil

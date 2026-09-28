@@ -784,6 +784,74 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         public var codecChannels: Int?
         public var codecSdpFmtpLine: String?
 
+        // N7 (network-resilience-max, this task) — the additional raw stats
+        // the heartbeat's new INTERVAL-delta fields (`CallService`'s
+        // `jitter_ms`/`target_ms`/`plc`/`fec_recv`/`fec_drop`/`nack` log
+        // keys — see `NativeAudioHeartbeatDeltas`) and instantaneous fields
+        // (`remote_loss`/`remote_rtt`/`relay`/`network_type`) are computed/
+        // read from. `-1`/`nil` = "no such row this report", same convention
+        // as every field above.
+
+        /// `inbound-rtp` (kind=audio) `jitterBufferDelay` — cumulative
+        /// seconds. A SEPARATE copy of the same value the class's own
+        /// pre-existing (lock-guarded) `mediaJitterBufferDelaySec` property
+        /// already carries — duplicated here, from the SAME parsing pass in
+        /// `pollMediaRttOnce()`, so `CallService`'s heartbeat (which only
+        /// reads this snapshot via `getNativeAudioSrtpStats`, not the
+        /// controller's other properties directly) has everything the N7
+        /// interval-delta computation needs in ONE place, with no new
+        /// cross-target closure to wire.
+        public var inboundJitterBufferDelaySec: Double = -1
+        /// `inbound-rtp` (kind=audio) `jitterBufferEmittedCount` — cumulative.
+        /// Same duplication rationale as `inboundJitterBufferDelaySec` above,
+        /// paired with it for the interval-averaging math
+        /// (`NativeAudioHeartbeatDeltas.compute`).
+        public var inboundJitterBufferEmittedCount: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `jitterBufferTargetDelay` — cumulative
+        /// seconds, pairs with `inboundJitterBufferEmittedCount` the SAME way
+        /// `inboundJitterBufferDelaySec` does; NetEQ's TARGET rather than the
+        /// delay actually experienced.
+        public var inboundJitterBufferTargetDelaySec: Double = -1
+        /// `inbound-rtp` (kind=audio) `concealedSamples` — cumulative. A
+        /// SEPARATE copy of the same value the class's own pre-existing
+        /// `audioRtpConcealedSamples` property already carries, duplicated
+        /// here for the same "one self-contained snapshot" reason as
+        /// `inboundJitterBufferDelaySec` above.
+        public var inboundConcealedSamples: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `fecPacketsReceived` — cumulative.
+        public var inboundFecPacketsReceived: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `fecPacketsDiscarded` — cumulative.
+        public var inboundFecPacketsDiscarded: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `nackCount` — cumulative count of NACK
+        /// feedback packets THIS receiver has sent for the inbound stream
+        /// (RFC 4585 generic NACK, the same mechanism ``NativeAudioSdpPolicy``
+        /// negotiates `a=rtcp-fb:<pt> nack` for).
+        public var inboundNackCount: Int64 = -1
+        /// `remote-inbound-rtp` (kind=audio) `fractionLost` — the PEER's most
+        /// recently reported RTCP receiver-report fraction lost for OUR
+        /// outbound audio, 0.0...1.0. Instantaneous (a report field, not a
+        /// running sum) — read as-is each heartbeat, never delta'd.
+        public var remoteInboundFractionLost: Double = -1
+        /// `remote-inbound-rtp` (kind=audio) `roundTripTime` — the peer's own
+        /// RTCP-measured RTT for our outbound audio, seconds. Instantaneous,
+        /// same as `remoteInboundFractionLost` above.
+        public var remoteInboundRoundTripTimeSec: Double = -1
+        /// `local-candidate` row (of the selected/fallback pair already
+        /// resolved for `mediaRttMs`) `relayProtocol` — "udp"/"tcp"/"tls",
+        /// only present when that candidate's own `candidateType == "relay"`.
+        /// Never logged as this raw string (see
+        /// `NativeAudioHeartbeatDeltas.relayProtocolCode`) — no addresses,
+        /// hostnames or other identifying data are carried by this field
+        /// regardless, but the numeric-only heartbeat-line discipline this
+        /// file already follows for every enum-shaped value applies here too.
+        public var localCandidateRelayProtocol: String?
+        /// `local-candidate` row `networkType` —
+        /// "wifi"/"ethernet"/"cellular"/"vpn"/"loopback"/"unknown", best-effort
+        /// (requires an entitlement Apple does not guarantee is always
+        /// granted). Same "never logged as a raw string" note as
+        /// `localCandidateRelayProtocol` above.
+        public var localCandidateNetworkType: String?
+
         public init() {}
     }
 
@@ -868,12 +936,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     snapshot.inboundRemovedSamplesForAcceleration =
                         (s.values["removedSamplesForAcceleration"] as? NSNumber)?.int64Value ?? -1
                     audioCodecId = s.values["codecId"] as? String
+                    // N7 (network-resilience-max, this task) — see
+                    // `NativeAudioSrtpStatsSnapshot`'s own field docs. The
+                    // first three duplicate `jbDelaySec`/`jbEmitted`/
+                    // `audioConcealedSamples` (already computed a few lines
+                    // up in this same pass) into the snapshot so
+                    // `CallService`'s heartbeat has them without a new
+                    // closure — see those fields' own kdoc for why.
+                    snapshot.inboundJitterBufferDelaySec = jbDelaySec
+                    snapshot.inboundJitterBufferEmittedCount = jbEmitted
+                    snapshot.inboundConcealedSamples = audioConcealedSamples
+                    snapshot.inboundJitterBufferTargetDelaySec =
+                        (s.values["jitterBufferTargetDelay"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.inboundFecPacketsReceived =
+                        (s.values["fecPacketsReceived"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundFecPacketsDiscarded =
+                        (s.values["fecPacketsDiscarded"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundNackCount = (s.values["nackCount"] as? NSNumber)?.int64Value ?? -1
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                     audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
                     snapshot.outboundRetransmittedPacketsSent =
                         (s.values["retransmittedPacketsSent"] as? NSNumber)?.int64Value ?? -1
+                }
+                // N7 — the PEER's RTCP receiver-report view of OUR outbound
+                // audio: fractionLost/roundTripTime. Instantaneous per report,
+                // never delta'd (see the snapshot field docs).
+                if s.type == "remote-inbound-rtp", (s.values["kind"] as? String) == "audio" {
+                    snapshot.remoteInboundFractionLost =
+                        (s.values["fractionLost"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.remoteInboundRoundTripTimeSec =
+                        (s.values["roundTripTime"] as? NSNumber)?.doubleValue ?? -1
                 }
                 if s.type == "media-source", (s.values["kind"] as? String) == "audio" {
                     snapshot.mediaSourceAudioLevel = (s.values["audioLevel"] as? NSNumber)?.doubleValue ?? -1
@@ -944,6 +1038,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             if let localCandidateId, let localStats = report.statistics[localCandidateId] {
                 snapshot.localCandidateType = localStats.values["candidateType"] as? String
                 snapshot.localCandidateProtocol = localStats.values["protocol"] as? String
+                // N7 — relayProtocol only populated by libwebrtc when
+                // candidateType=="relay"; networkType is best-effort (needs
+                // an entitlement). Neither is an address/hostname.
+                snapshot.localCandidateRelayProtocol = localStats.values["relayProtocol"] as? String
+                snapshot.localCandidateNetworkType = localStats.values["networkType"] as? String
             }
             if let remoteCandidateId, let remoteStats = report.statistics[remoteCandidateId] {
                 snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
@@ -1401,6 +1500,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// outage and not yet recovered — the "never double-engage" guard
     /// `SrtpFallbackDecisions` checks.
     private var srtpFallbackEngaged: Bool = false
+    /// N7 (network-resilience-max, this task) — monotonic ms timestamp the
+    /// fallback actually ENGAGED (distinct from `iceBadSinceMs`, which marks
+    /// when ICE first went bad — the fallback engages
+    /// `SrtpFallbackDecisions.fallbackEngageDebounceMs` later, see
+    /// `armSrtpFallbackIfNeeded`). Feeds the `duration_ms=` field on the
+    /// `audiosrtp_fallback recover=1` line. `nil` when not currently engaged.
+    private var srtpFallbackEngagedAtMs: Int64?
     /// Debounce task for the fallback engage decision. Cancelled on genuine
     /// ICE recovery (mirrors `iceRecoveryWatchdogTask`'s own cancel-on-heal
     /// discipline) so a self-healed blip never fires the engage callback
@@ -1424,6 +1530,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// deliberately ungated, so a caller reading this after a bad-ICE edge
     /// falls back to the WS-relay safety net on the very next frame.
     private var iceGoodSinceMs: Int64?
+
+    /// N7 (network-resilience-max, this task) — monotonic ms timestamp the
+    /// CURRENT bad-ICE streak started (`.failed`/`.disconnected`), or `nil`
+    /// when ICE is not currently bad. Distinct from `iceBadSinceMs` above:
+    /// that one is gated on `peerConnection?.usingNativeAudioSrtp == true`
+    /// (only armed for the SRTP-fallback decision) and reset differently;
+    /// this one is unconditional, for every call, so the "ICE restart
+    /// recovered after Nms" telemetry (`resilience-assessment.md` §4, "Cosa
+    /// manca" item 5: "eventi di ICE restart con il tempo di ripristino")
+    /// exists for every call, not only a native-SRTP one.
+    private var iceBadStateEnteredAtMs: Int64?
 
     private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
@@ -2966,6 +3083,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if engage {
                     self.srtpFallbackTask = nil
                     self.srtpFallbackEngaged = true
+                    // N7 (network-resilience-max, this task) — engage
+                    // instant, so `disarmSrtpFallbackIfRecovered` can log
+                    // how long the fallback actually stayed engaged.
+                    self.srtpFallbackEngagedAtMs = Self.nowMs()
                     self.log?("audiosrtp_fallback engage=1")
                     self.onAudioSrtpFallbackEngage?()
                     return
@@ -2996,7 +3117,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceBad: false
         ) else { return }
         srtpFallbackEngaged = false
-        log?("audiosrtp_fallback recover=1")
+        // N7 (network-resilience-max, this task) — W-SRTPFALLBACK
+        // activation+duration telemetry (`resilience-assessment.md` §4,
+        // "Cosa manca" item 5: "attivazione e durata di W-SRTPFALLBACK").
+        // `engagedAt` should always be set here (recovery only reaches this
+        // line when `fallbackEngaged` was true, and engaging always sets
+        // it first) — the `if let` is defensive, never a silent bug mask:
+        // an absent timestamp simply omits `duration_ms=` rather than
+        // logging a fabricated one.
+        if let engagedAt = srtpFallbackEngagedAtMs {
+            let durationMs = Self.nowMs() - engagedAt
+            log?("audiosrtp_fallback recover=1 duration_ms=\(durationMs)")
+            srtpFallbackEngagedAtMs = nil
+        } else {
+            log?("audiosrtp_fallback recover=1")
+        }
         onAudioSrtpFallbackRecover?()
     }
 
@@ -3173,6 +3308,58 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return
         }
         onRestartAttemptStarted?()
+
+        // N6 (network-resilience-max, this task) — re-evaluate relay
+        // reachability + the WSS-TURN bridge on EVERY ICE restart, proactive
+        // (W-PROACTIVEHANDOFF, a real interface change) or reactive (the
+        // ICE-failed-recovery watchdog above) — both trigger paths funnel
+        // through this one method, already single-flighted by the
+        // debounce/gate check just above (this point in the method is only
+        // ever reached once per genuine restart attempt).
+        //
+        // `fetchIceServers()` already IS this exact re-evaluation — re-probe
+        // every relay's UDP STUN RTT, reorder by latency, and conditionally
+        // insert the WSS-bridge ICE server when (and only when) the probe
+        // round came back empty (W-RELAYGATE's own "no positive evidence
+        // direct UDP works" gate) — reused here rather than re-implemented,
+        // so a network that STARTED blocking UDP mid-call (the exact
+        // corporate-firewall scenario the bridge exists for) gets the bridge
+        // candidate applied to the LIVE PeerConnection via `setConfiguration`
+        // (`QAudionPeerConnection.updateIceServers`) before the restart
+        // offer / local re-gather below, instead of only at the NEXT call.
+        // `wssTurnBridge`'s own stop()-then-replace inside `fetchIceServers`
+        // is this work's single-flight: only one bridge instance is ever
+        // live at a time, whichever call (initial setup or this one) last
+        // decided one was needed.
+        //
+        // Never blocks the main thread: `restartIce` is already `async`, and
+        // every `await` inside `fetchIceServers` (the STUN RTT probe, the
+        // WSS handshake) is itself off-main-thread network I/O — the same
+        // guarantee call SETUP already relies on for this identical call.
+        //
+        // An empty result (no `relayProvider`, or an explicit
+        // `iceServerOverride`) is left alone — `updateIceServers` is only
+        // called with a genuinely refreshed, non-empty list, so a call using
+        // a manual TURN override can never have its override silently
+        // replaced with nothing.
+        //
+        // Log key deliberately `relay=1` (not the more descriptive
+        // `ice_servers_refreshed=1`): verified against this repo's own
+        // redactor (`scripts/ship-ios-logs.py`) that the longer key's
+        // unrecognized word parts ("servers", "refreshed") push this line
+        // over `MAX_UNKNOWN_WORDS` together with "restart_ice"'s own
+        // "restart" and drop the WHOLE line; "relay"/"count" are both
+        // already-recognized vocabulary in that script (confirmed via
+        // direct `redact_body()` round-trip, not assumed), so this shape
+        // ships intact.
+        if let liveConnection = peerConnection {
+            let refreshedServers = await fetchIceServers()
+            if !refreshedServers.isEmpty {
+                liveConnection.updateIceServers(refreshedServers)
+                log?("restart_ice relay=1 count=\(refreshedServers.count) reason=\(reason)")
+            }
+        }
+
         // W-RESPONDERREQFIRST (2026-08-30) — the RESPONDER asks the
         // offering leg to drive the fresh offer (`restart_ice_request`)
         // whenever the peer negotiated `restart-ice-req-v1`, instead of
@@ -4573,6 +4760,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-VIDEOSENDGATE — start (or leave running) the good-ICE
             // streak `isVideoSendConfirmedHealthy` debounces against.
             if iceGoodSinceMs == nil { iceGoodSinceMs = Self.nowMs() }
+            // N7 (network-resilience-max, this task) — the "end, with
+            // recovery ms" half of the ICE-restart telemetry the assessment
+            // flagged as missing. Only logged when this really WAS a
+            // recovery from a bad streak (`iceBadStateEnteredAtMs != nil`) —
+            // a plain first-ever `.connected` on a healthy call logs
+            // nothing here (the existing `ice state=\(s.rawValue)` line
+            // above already covers that).
+            if let badSince = iceBadStateEnteredAtMs {
+                let recoveryMs = Self.nowMs() - badSince
+                log?("ice_recovery recovered=1 recovery_ms=\(recoveryMs)")
+                iceBadStateEnteredAtMs = nil
+            }
         case .failed, .disconnected:
             if s == .failed { state = .failed("ICE failed") }
             else { state = .disconnected; stopVideoStatsTelemetry() }
@@ -4587,6 +4786,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-VIDEOSENDGATE — ungated: the video WS-relay send leg must
             // resume on the very next frame, not after any debounce.
             iceGoodSinceMs = nil
+            // N7 — first bad transition of this streak only (mirrors the
+            // `iceGoodSinceMs == nil` guard above, inverted): a second
+            // `.disconnected`/`.failed` flip-flop within the SAME streak
+            // must not push the clock forward and understate recovery time.
+            if iceBadStateEnteredAtMs == nil { iceBadStateEnteredAtMs = Self.nowMs() }
         case .closed:
             state = .disconnected
             stopVideoStatsTelemetry()
@@ -4594,6 +4798,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             srtpFallbackTask?.cancel()
             srtpFallbackTask = nil
             iceGoodSinceMs = nil
+            // N7 — a terminal teardown is not a "recovery"; never log one
+            // for a call that just hung up while ICE happened to be bad.
+            iceBadStateEnteredAtMs = nil
         default:
             break
         }
