@@ -339,7 +339,9 @@ Before showing the SAS each side evaluates the peer identity:
 - otherwise, the address book holds an identity key for `userId` and it
   equals neither presented key (`ContactsStore.pubkey` may hold either the
   X25519 key from an identity-QR scan or the Ed25519 key a call filled in)
-  → **accept with warning**;
+  → **accept with warning**. Best effort only: `encPub` is signed into the
+  transcript but its private key is never proven, so a match is not proof of
+  identity — only the Ed25519 checks (pins, server set) are;
 - otherwise → accept.
 
 Server check (informative, host-supplied): while the SAS is on screen the

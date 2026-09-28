@@ -213,14 +213,22 @@ public final class ProximityDisplayerSession {
         }
     }
 
+    /// The frame after `index`, or nil when `index` is the last one a u32 can
+    /// carry — the session is then replaced instead of wrapping to 0 (a
+    /// wrapped index would re-issue frame keys the displayer already showed).
+    nonisolated static func nextFrameIndex(after index: UInt32) -> UInt32? {
+        guard index < UInt32.max else { return nil }
+        return index + 1
+    }
+
     private func rotateFrame() {
         guard case .showing = state, lockedLink == nil else { return }
-        guard currentFrameIndex < UInt32.max else {
+        guard let next = ProximityDisplayerSession.nextFrameIndex(after: currentFrameIndex) else {
             regenerateSession()
             return
         }
         do {
-            try showFrame(currentFrameIndex + 1)
+            try showFrame(next)
         } catch let error as ProximityPairingError {
             fail(error)
         } catch {

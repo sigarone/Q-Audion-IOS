@@ -481,14 +481,16 @@ final class ProximityPairingViewDriver: ObservableObject {
         serverCheckTimer?.cancel()
         serverCheckTimer = nil
         serverCheckTask = nil
-        if published.isEmpty {
-            serverCheck = .unknown
-        } else if published.contains(presented) {
-            serverCheck = .confirmed
-        } else {
-            serverCheck = .mismatch
-        }
+        serverCheck = ProximityPairingViewDriver.serverVerdict(published: published, presented: presented)
         refreshConfirmation()
+    }
+
+    /// Empty set (offline, nothing published) → `.unknown`; the presented
+    /// key among the published ones → `.confirmed`; otherwise `.mismatch`.
+    nonisolated static func serverVerdict(published: Set<Data>, presented: Data) -> ServerCheck {
+        if published.isEmpty { return .unknown }
+        if published.contains(Data(presented)) { return .confirmed }
+        return .mismatch
     }
 
     private func serverCheckTimedOut(epoch expected: UInt64) {
@@ -608,7 +610,7 @@ final class ProximityPairingViewDriver: ObservableObject {
     /// the error until the user taps "Nuovo codice" — so an attacker relaying
     /// the exchange never gets a new code handed to it without a person
     /// deciding to try again.
-    private static func restartsOnItsOwn(_ error: ProximityPairingError) -> Bool {
+    nonisolated static func restartsOnItsOwn(_ error: ProximityPairingError) -> Bool {
         switch error {
         case .expiredQrCode, .timeout, .transportFailed, .sessionBusy:
             return true

@@ -25,8 +25,11 @@ struct ProximityPairingDisplaySheet: View {
                     }
                 }
         }
-        // The rotating code is only meant for the phone physically in front of
-        // this one: keep it out of screenshots, recordings and AirPlay mirrors.
+        // Defense in depth only. `ScreenshotLockService` blanks its own secure
+        // layer in a capture, not a sibling view like the QR, so the real
+        // protection is in the engine driver: the code is hidden and the
+        // session stopped while the screen is recorded, mirrored or shared,
+        // and a screenshot replaces the session (spec §6).
         .onAppear { ScreenshotLockService.lock() }
         .onDisappear { ScreenshotLockService.unlock() }
     }
