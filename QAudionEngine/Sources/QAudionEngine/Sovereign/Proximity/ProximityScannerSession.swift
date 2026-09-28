@@ -183,18 +183,20 @@ public final class ProximityScannerSession {
             guard let source = newLink else { return }
             self?.serialize { [weak self] in self?.handleMessage(message, from: source) }
         }
-        newLink.onClosed = { [weak self, weak newLink] (_: ProximityPairingError?) in
+        newLink.onClosed = { [weak self, weak newLink] (error: ProximityPairingError?) in
             guard let source = newLink else { return }
-            self?.serialize { [weak self] in self?.handleClosed(source) }
+            self?.serialize { [weak self] in self?.handleClosed(source, error: error) }
         }
     }
 
-    private func handleClosed(_ source: ProximityPairingLink) {
+    private func handleClosed(_ source: ProximityPairingLink, error: ProximityPairingError?) {
         guard let current = link, current === source else { return }
         link = nil
         detachAndClose(source)
         // No-op once completed: the displayer closing after COMPLETE is expected.
-        fail(.transportFailed("link closed"), sendAbort: false)
+        // A transport-reported cause (e.g. a framing violation) is kept.
+        let reason: ProximityPairingError = error ?? ProximityPairingError.transportFailed("link closed")
+        fail(reason, sendAbort: false)
     }
 
     // MARK: - Messages
@@ -372,7 +374,7 @@ public final class ProximityScannerSession {
     }
 
     private func complete() {
-        guard let peerIdentity = peer, let psk = keys?.psk, psk.count == ProximityPairing.pskBytes else {
+        guard let peerIdentity = peer, var psk = keys?.psk, psk.count == ProximityPairing.pskBytes else {
             fail(.cryptoFailure("completion"))
             return
         }
@@ -382,6 +384,10 @@ public final class ProximityScannerSession {
                                             identityWarning: warning)
         cancelAllTimers()
         wipeSecrets()
+        // `psk` shared its buffer with `keys.psk`, so the scrub above hit a
+        // copy-on-write copy; this one hits the original (the result owns its
+        // own copy, made by ProximityPairingResult.init).
+        CryptoConstants.zeroize(&psk)
         graceTimer = schedule(.completionGrace, after: ProximityPairing.completionLinkGrace)
         setState(.completed(result))
     }
