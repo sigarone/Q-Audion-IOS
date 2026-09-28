@@ -295,7 +295,9 @@ public enum ProximityPairingCrypto {
         let key: Curve25519.Signing.PrivateKey
         let signature: Data
         do {
-            key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(signingPrivateKey))
+            // No `Data(...)` copy: the init reads any ContiguousBytes (slices
+            // included), so no extra, unzeroized copy of the key is made.
+            key = try Curve25519.Signing.PrivateKey(rawRepresentation: signingPrivateKey)
             signature = try key.signature(for: Data(payload))
         } catch {
             throw ProximityPairingError.cryptoFailure("Ed25519 sign")

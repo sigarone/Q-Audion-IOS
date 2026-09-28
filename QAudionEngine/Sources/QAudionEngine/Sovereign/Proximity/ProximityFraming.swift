@@ -101,7 +101,7 @@ public struct ProximityReassembler {
     /// carries LAST, otherwise nil.
     public mutating func append(_ fragment: Data) throws -> Data? {
         do {
-            return try consume(fragment)
+            return try ingest(fragment)
         } catch {
             reset()
             throw error
@@ -115,7 +115,7 @@ public struct ProximityReassembler {
         inMessage = false
     }
 
-    private mutating func consume(_ fragment: Data) throws -> Data? {
+    private mutating func ingest(_ fragment: Data) throws -> Data? {
         let frame: Data = Data(fragment)
         let headerBytes: Int = ProximityFraming.headerBytes
         guard frame.count >= headerBytes else {
