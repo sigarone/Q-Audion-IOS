@@ -27,17 +27,30 @@ import Foundation
 ///    retransmission machinery a shot at the frame first when the round
 ///    trip is short enough, at zero steady-state bitrate cost (RFC 4585 —
 ///    NACK is a control-channel feedback message, not media).
+///  - N3 (network-resilience-max, this task) — every OTHER payload type is
+///    stripped from the `m=audio` section entirely: the `m=audio` line's own
+///    payload-type list is rewritten to carry only the Opus pt(s), and every
+///    `a=rtpmap:`/`a=fmtp:`/`a=rtcp-fb:` line for a non-Opus pt in that
+///    section is dropped. In practice this is RED, CN (comfort noise) and
+///    telephone-event (DTMF) — parity with Android's own
+///    `NativeAudioSdpPolicy.kt:35-39` (verified against that file, this
+///    exact commit's sibling), which already does this for the SAME reason
+///    given there: RED specifically DOUBLES the wire bitrate (current frame +
+///    previous frame in every packet), which would blow the 32 kbps ceiling
+///    `AudioSdpPolicy` exists to hold; CN/DTMF have no place on a CBR,
+///    no-DTX, frame-encrypted profile. Today's iOS-iOS calls never actually
+///    negotiate RED (only payload 111/Opus shows up in the field per the
+///    resilience assessment's own log read), so this is a protection against
+///    a FUTURE peer/offer advertising it, not a fix for an observed bug —
+///    exactly like Android's own doc frames it ("today RED is not negotiated
+///    ... but this protects the 32 kbps rule even so").
 ///
-/// Deliberately NOT done here (spec section D lists these too, but see
-/// this task's own report for why they are out of scope for this pass):
-/// removing RED/CN/telephone-event from the `m=audio` line (payload-type
-/// bookkeeping the rest of `QAudionPeerConnection` was not audited for
-/// interaction with here), and any `RTCRtpEncodingParameters.networkPriority`
-/// / DSCP-marking change (this vendored WebRTC.xcframework build's public
-/// surface for that is unverified — see `VideoBandwidthCap.swift`'s own
-/// "unverified" note for the sibling case, same discipline followed here:
-/// no local toolchain to unzip/grep the framework's real headers, and no
-/// compiler in this environment to catch a wrong guess before it ships).
+/// Deliberately NOT done here (spec section D lists this too, but see this
+/// task's own report for why it lives elsewhere): any
+/// `RTCRtpEncodingParameters.networkPriority` / DSCP-marking change — that
+/// is applied where this app's 32 kbps encoder clamp itself is applied
+/// (`QAudionPeerConnection.swift`), not in SDP text, since `networkPriority`
+/// is a sender-parameter API, not an SDP attribute.
 ///
 /// Pure string transformation, same discipline as ``AudioSdpPolicy`` — no
 /// WebRTC/Foundation UI types beyond `String` — so it is unit-testable
@@ -57,30 +70,33 @@ enum NativeAudioSdpPolicy {
         let hadTrailingNewline = !lines.isEmpty && lines.last!.isEmpty
         if hadTrailingNewline { lines.removeLast() }
 
-        // Pass 1 — which Opus payload types exist IN EACH m=audio section
-        // (by ordinal). Scoped per section, unlike a single SDP-wide set:
-        // two DIFFERENT m=audio sections can carry two DIFFERENT Opus
-        // payload-type numbers (this app negotiates more than one audio
-        // profile on some calls), and a pt from section 0 must never be
-        // treated as present in section 1 — that would synthesize a
-        // phantom `a=fmtp`/`a=rtcp-fb` line for a payload type the section
-        // never declared.
-        var ptsBySection: [Int: Set<String>] = [:]
+        // Pass 1 — per m=audio section (by ordinal): every payload type
+        // listed on the m= line itself (`allPtsBySection`), and which of
+        // those are Opus (`opusPtsBySection`, by rtpmap). Scoped per
+        // section, unlike SDP-wide sets: two DIFFERENT m=audio sections can
+        // carry two DIFFERENT Opus payload-type numbers (this app
+        // negotiates more than one audio profile on some calls), and a pt
+        // from section 0 must never be treated as present in section 1 —
+        // that would synthesize a phantom line, or strip the wrong pt, for
+        // a payload type the section never declared.
+        var allPtsBySection: [Int: [String]] = [:]
+        var opusPtsBySection: [Int: Set<String>] = [:]
         var inAudio = false
         var section = -1
         for line in lines {
             if line.hasPrefix("m=audio") {
                 inAudio = true; section += 1
+                allPtsBySection[section] = matchAudioMlinePayloadTypes(line)
             } else if line.hasPrefix("m=") {
                 inAudio = false; section += 1
             } else if inAudio, let pt = matchOpusPayloadType(line) {
-                ptsBySection[section, default: []].insert(pt)
+                opusPtsBySection[section, default: []].insert(pt)
             }
         }
-        if ptsBySection.isEmpty { return sdp }
+        if opusPtsBySection.values.allSatisfy({ $0.isEmpty }) { return sdp }
 
         var out: [String] = []
-        out.reserveCapacity(lines.count + ptsBySection.count * 2)
+        out.reserveCapacity(lines.count + opusPtsBySection.count * 2)
         inAudio = false
         section = -1
         var inOpusAudio = false
@@ -89,6 +105,10 @@ enum NativeAudioSdpPolicy {
         // genuinely missing (idempotency).
         var nackSeenForPt = Set<String>()
         var sectionOpusPts: Set<String> = []
+        // N3 — every OTHER payload type declared on this section's m=audio
+        // line (RED/CN/telephone-event/etc.): their rtpmap/fmtp/rtcp-fb
+        // lines are dropped below.
+        var sectionNonOpusPts: Set<String> = []
         var sawFmtpForPt = Set<String>()
 
         func closeSection() {
@@ -109,18 +129,54 @@ enum NativeAudioSdpPolicy {
             if line.hasPrefix("m=audio") {
                 closeSection()
                 inAudio = true; section += 1
-                sectionOpusPts = ptsBySection[section] ?? []
+                sectionOpusPts = opusPtsBySection[section] ?? []
+                let mlinePts = allPtsBySection[section] ?? []
+                sectionNonOpusPts = Set(mlinePts).subtracting(sectionOpusPts)
                 inOpusAudio = !sectionOpusPts.isEmpty
                 nackSeenForPt.removeAll()
                 sawFmtpForPt.removeAll()
+                // Review hardening — strip only when the m= line itself lists
+                // at least one of the section's Opus pts. A non-conformant
+                // section whose Opus rtpmap is not on its m= line is left
+                // exactly as it came (never "repaired" into an m= line that
+                // names a pt the offerer did not): stripping there could
+                // leave an m=audio with no usable codec at all.
+                if inOpusAudio, !mlinePts.contains(where: { sectionOpusPts.contains($0) }) {
+                    sectionNonOpusPts = []
+                    out.append(line)
+                    continue
+                }
+                if inOpusAudio {
+                    // N3 — rewrite the m=audio line itself to list ONLY the
+                    // Opus payload type(s), same as Android's own
+                    // `NativeAudioSdpPolicy.apply` (`MLINE_AUDIO` rewrite).
+                    // A section with no Opus at all (`inOpusAudio == false`)
+                    // falls through to the plain `out.append(line)` below,
+                    // untouched — nothing here applies to it.
+                    out.append(rewriteAudioMline(line, keepingOnlyPts: sectionOpusPts))
+                    continue
+                }
             } else if line.hasPrefix("m=") {
                 closeSection()
                 inAudio = false; section += 1
                 inOpusAudio = false
                 sectionOpusPts = []
+                sectionNonOpusPts = []
             }
 
             if inAudio, inOpusAudio {
+                // N3 — drop every line that belongs EXCLUSIVELY to a
+                // non-Opus payload type in this section (RED/CN/
+                // telephone-event/legacy codecs). Checked before the
+                // Opus-specific fmtp/rtcp-fb rewrites below so a non-Opus
+                // pt can never accidentally match one of those (payload
+                // type numbers are disjoint by construction — a pt is
+                // either in `sectionOpusPts` or `sectionNonOpusPts`, never
+                // both — but this ordering keeps the two concerns
+                // independent regardless).
+                if let pt = payloadTypeReferencedBy(line), sectionNonOpusPts.contains(pt) {
+                    continue
+                }
                 if let pt = sectionOpusPts.first(where: { line.hasPrefix("a=fmtp:\($0) ") }) {
                     sawFmtpForPt.insert(pt)
                     out.append(rewriteFmtp(line, payloadType: pt))
@@ -139,6 +195,48 @@ enum NativeAudioSdpPolicy {
         closeSection()
         let joined = out.joined(separator: "\r\n")
         return hadTrailingNewline ? joined + "\r\n" : joined
+    }
+
+    /// N3 — the payload-type list from an `m=audio <port> <proto> <pt>...`
+    /// line, in the order it appears. Plain whitespace tokenizing (not a
+    /// regex with capture groups — Swift's `NSRegularExpression` groups are
+    /// more ceremony than this needs): the first 3 tokens are `m=audio`,
+    /// port and proto; everything after is a payload type.
+    private static func matchAudioMlinePayloadTypes(_ line: String) -> [String] {
+        let tokens = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard tokens.count > 3 else { return [] }
+        return Array(tokens[3...])
+    }
+
+    /// N3 — rewrites an `m=audio` line's payload-type list to contain only
+    /// `opusPts`, numerically sorted (matches Android's own
+    /// `orderedPts.sortedBy { it.toIntOrNull() ... }` — payload-type numbers
+    /// sort numerically, not lexically: "9" < "111"). Port and proto (the
+    /// first two tokens after `m=audio`) are preserved byte-for-byte.
+    private static func rewriteAudioMline(_ line: String, keepingOnlyPts opusPts: Set<String>) -> String {
+        let tokens = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard tokens.count > 3 else { return line }
+        let head = tokens[0...2].joined(separator: " ")
+        // Review hardening — only pts the m= line already lists (never add
+        // one), numerically ordered like Android's rewrite.
+        let listed = Set(tokens[3...]).intersection(opusPts)
+        guard !listed.isEmpty else { return line }
+        let ordered = listed.sorted { (Int($0) ?? .max) < (Int($1) ?? .max) }
+        return head + " " + ordered.joined(separator: " ")
+    }
+
+    /// N3 — the payload type an `a=rtpmap:`/`a=fmtp:`/`a=rtcp-fb:` line
+    /// refers to (the digits immediately after the colon), or `nil` for any
+    /// other line shape (including a bare `a=ptime:`/`a=maxptime:` line,
+    /// which carries no payload type at all and must never be treated as
+    /// one just because it also starts with `a=` and contains digits).
+    private static func payloadTypeReferencedBy(_ line: String) -> String? {
+        for prefix in ["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"] {
+            guard line.hasPrefix(prefix) else { continue }
+            let digits = line.dropFirst(prefix.count).prefix { $0.isNumber }
+            return digits.isEmpty ? nil : String(digits)
+        }
+        return nil
     }
 
     private static let monoFullbandParams =

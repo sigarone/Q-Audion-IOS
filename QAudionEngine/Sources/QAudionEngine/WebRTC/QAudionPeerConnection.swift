@@ -217,6 +217,17 @@ public final class QAudionPeerConnection: NSObject {
     /// RTCConfiguration extras and manual audio mode for this PeerConnection's
     /// whole life, whatever the Settings toggle does meanwhile.
     public let nativeSrtpEnabledForThisCall: Bool
+    /// N6 (network-resilience-max, this task) — the transport policy this
+    /// connection was built with (`.all` for a normal call, `.relay` for a
+    /// forced-TURN call via `TransportGate`). Stored so ``updateIceServers(_:)``
+    /// can rebuild an equivalent `RTCConfiguration` for a live
+    /// `setConfiguration` call without silently reverting a forced-relay call
+    /// back to `.all` — `QAudionPeerConnectionFactory.defaultConfiguration`
+    /// itself always returns `.all` and relies on the caller (this `init`) to
+    /// override it, so anything that rebuilds a configuration after `init`
+    /// must repeat that same override from the ORIGINAL value, not the
+    /// default.
+    private let iceTransportPolicy: RTCIceTransportPolicy
     /// W-ADMMANUAL (2026-09-26) — the `NativeAudioSessionGate` token this
     /// PeerConnection armed manual audio mode with (0 = it did not arm).
     /// `close()` disables the unit and disarms with it, so a replaced
@@ -448,6 +459,7 @@ public final class QAudionPeerConnection: NSObject {
         self.factory = factory
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
+        self.iceTransportPolicy = iceTransportPolicy
         // W-NATIVESRTPSNAPSHOT — the call start already took the KEYED
         // snapshot (AppState: startCall with the OFFER's call id, call_incoming
         // and the incoming OFFER with theirs) before any PeerConnection is
@@ -985,6 +997,31 @@ public final class QAudionPeerConnection: NSObject {
     /// vendored `WebRTC.xcframework` build (no local toolchain to unzip/
     /// inspect it — see this task's own report). No-op if `sender` has no
     /// encodings yet.
+    ///
+    /// N5 (network-resilience-max, this task) — also sets
+    /// `encoding.networkPriority = .high` here, alongside the min/max
+    /// bitrate clamp this method already applies at every one of its call
+    /// sites (`QAudionWebRtcCallController`'s activate-native-audio-srtp
+    /// paths) — the owner's own spec text: "applied where the 32 kbps clamp
+    /// is applied". `bitratePriority` (a separate, unrelated `Double`
+    /// property on the SAME type) is deliberately left untouched, exactly as
+    /// the owner's constraint requires.
+    ///
+    /// API verified, not guessed, against this exact pinned commit's real
+    /// header (`sdk/objc/api/peerconnection/RTCRtpEncodingParameters.h` @
+    /// webrtc-sdk/webrtc df1011beabae — the same commit
+    /// `QAudionPeerConnectionFactory`'s N2 doc cites for the field-trial
+    /// verification): `@property(nonatomic, assign) RTCPriority
+    /// networkPriority;` — `RTCPriority` is `{VeryLow, Low, Medium, High}`
+    /// (`RTCRtpParameters.h`, same commit). For this DSCP marking to have any
+    /// effect at all, `RTCConfiguration.enableDscp` must also be `true` — set
+    /// unconditionally on the native-SRTP branch by
+    /// `QAudionPeerConnectionFactory.defaultConfiguration` (see that file's
+    /// own N5 doc); this method does not touch `RTCConfiguration` itself, so
+    /// it relies on the PeerConnection having already been built with that
+    /// flag set, which every call site that calls this method's PeerConnection
+    /// always is (native audio srtp is only ever activated on a PeerConnection
+    /// built via `defaultConfiguration(nativeSrtpEnabledLocally: true)`).
     @discardableResult
     public func applyNativeAudioSenderBitrateCap(on sender: RTCRtpSender) -> Bool {
         let params = sender.parameters
@@ -994,8 +1031,20 @@ public final class QAudionPeerConnection: NSObject {
             encoding.minBitrateBps = bps
             encoding.maxBitrateBps = bps
         }
+        // N5 — DSCP-marking priority hint for the native audio stream;
+        // `bitratePriority` (WebRTC's OWN internal bandwidth-allocation
+        // weight between encodings) is a different property and is left
+        // exactly as it was, per the owner's constraint.
+        // Review hardening: encodings[0] ONLY. libwebrtc treats
+        // networkPriority as a per-SENDER value (`pc/rtp_sender.cc`
+        // `PerSenderRtpEncodingParameterHasValue`): a non-default value on
+        // any other index makes `SetParameters` reject the WHOLE update —
+        // which would silently drop the 32 kbps min=max clamp set in the
+        // same call. An audio sender has one encoding today; this keeps the
+        // clamp safe even if that ever changes.
+        params.encodings[0].networkPriority = .high
         sender.parameters = params
-        print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender bitrate pinned min=max=\(AudioSdpPolicy.maxAverageBitrateBps)")
+        print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender bitrate pinned min=max=\(AudioSdpPolicy.maxAverageBitrateBps) networkPriority=high")
         return true
     }
 
@@ -1667,6 +1716,43 @@ public final class QAudionPeerConnection: NSObject {
         guard let pc = peerConnection else { return }
         pc.restartIce()
         print("[WebRTC] primeIceRestart: local ICE re-gather kicked (no SDP sent)")
+    }
+
+    /// N6 (network-resilience-max, this task) — re-applies the ICE server
+    /// list on the LIVE `RTCPeerConnection`, for the "re-probe relays / add
+    /// the WSS bridge mid-call" ICE-restart path
+    /// (`QAudionWebRtcCallController.restartIce`): a relay set decided again
+    /// after a network change (or an ICE-failed-recovery escalation) must
+    /// reach the PeerConnection BEFORE the restart offer/local re-gather that
+    /// follows, or the fresh gather still only sees the STALE server list
+    /// from `init`.
+    ///
+    /// Rebuilds the WHOLE configuration via
+    /// `QAudionPeerConnectionFactory.defaultConfiguration` (same helper
+    /// `init` itself uses) with this connection's OWN `nativeSrtpEnabledForThisCall`
+    /// and `iceTransportPolicy` — never a bare `RTCConfiguration()` with only
+    /// `iceServers` set — so a native-SRTP or forced-relay call can never
+    /// have its cryptoOptions/tcpCandidatePolicy/jitter-buffer/DSCP fields or
+    /// its `.relay` transport policy silently reset to the SDK defaults by a
+    /// mid-call refresh. Only `iceServers` actually differs from what `init`
+    /// applied.
+    ///
+    /// API verified against this exact pinned commit's real header
+    /// (`sdk/objc/api/peerconnection/RTCPeerConnection.h` @ webrtc-sdk/webrtc
+    /// df1011beabae): `- (BOOL)setConfiguration:(RTCConfiguration *)configuration;`
+    /// — a long-standing, standard WebRTC ObjC API. Returns `false` (does
+    /// nothing else) when there is no live PeerConnection to update, e.g. a
+    /// restart racing a hangup.
+    @discardableResult
+    public func updateIceServers(_ iceServers: [RTCIceServer]) -> Bool {
+        guard let pc = peerConnection else { return false }
+        let config = QAudionPeerConnectionFactory.defaultConfiguration(
+            iceServers: iceServers,
+            nativeSrtpEnabledLocally: nativeSrtpEnabledForThisCall)
+        config.iceTransportPolicy = iceTransportPolicy
+        let applied = pc.setConfiguration(config)
+        print("[WebRTC] updateIceServers: setConfiguration applied=\(applied) serverCount=\(iceServers.count)")
+        return applied
     }
 
     // MARK: - Offer / Answer

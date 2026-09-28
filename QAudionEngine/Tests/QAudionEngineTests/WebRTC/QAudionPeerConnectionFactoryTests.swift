@@ -76,12 +76,31 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
 
     /// W-NATIVESRTPGATE — with the flag true, every best-practice parameter
     /// this task adds must actually be set.
+    ///
+    /// N1 (network-resilience-max) — 17, not the old 50: ~1s of buffering
+    /// headroom at 60ms ptime (matching Riferimento A's own 1s cap), down
+    /// from ~3s. See `defaultConfiguration`'s own doc for the full rationale.
     func testDefaultConfigurationWithNativeSrtpEnabled_appliesTheBestPracticeParameters() {
         let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: true)
         XCTAssertNotNil(cfg.cryptoOptions)
         XCTAssertEqual(cfg.tcpCandidatePolicy, .disabled)
-        XCTAssertEqual(cfg.audioJitterBufferMaxPackets, 50)
+        XCTAssertEqual(cfg.audioJitterBufferMaxPackets, 17)
         XCTAssertFalse(cfg.audioJitterBufferFastAccelerate)
+        // N5 (network-resilience-max) — the DSCP master switch that
+        // `RTCRtpEncodingParameters.networkPriority` (set on the native audio
+        // sender, `QAudionPeerConnectionTests`) requires to have any effect.
+        XCTAssertTrue(cfg.enableDscp)
+    }
+
+    /// N1 (network-resilience-max) — the disabled path (every ordinary call)
+    /// must keep the SDK's own default jitter-buffer cap untouched: this
+    /// task's 17-packet cap is scoped to the native-SRTP branch only, same
+    /// discipline as every other field `testDefaultConfigurationWithNativeSrtpDisabled_leavesTheNativeSrtpFieldsAtSdkDefaults`
+    /// already pins.
+    func testDefaultConfigurationWithNativeSrtpDisabled_enableDscpStaysAtSdkDefault() {
+        let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: false)
+        let sdkDefault = RTCConfiguration()
+        XCTAssertEqual(cfg.enableDscp, sdkDefault.enableDscp)
     }
 
     func testIceServerConversionFromRelayServers() {

@@ -9396,7 +9396,7 @@ final class AppState: ObservableObject {
                 await provider.invalidate()
                 guard let bundle = await provider.currentOrRefresh() else {
                     // A failed refetch is not evidence that anything left.
-                    RTLog.info("call", "relaysupdated refetch=0")
+                    RTLog.info("call", "relay fleet=1 refetch=0")
                     return
                 }
                 let hosts = RelayFleetReselection.relayHosts(
@@ -9406,10 +9406,12 @@ final class AppState: ObservableObject {
                 guard RelayFleetReselection.shouldRestartIce(
                     selectedRelayAddress: inUse, freshRelayHosts: hosts
                 ) else {
-                    RTLog.info("call", "relaysupdated acted=0 fresh=\(hosts.count)")
+                    RTLog.info("call", "relay fleet=1 acted=0 fresh=\(hosts.count)")
                     return
                 }
-                RTLog.info("call", "relaysupdated acted=1 gone=\(inUse ?? "-")")
+                // Never log the relay address itself (it is an IP): only that the
+                // in-use relay left the fleet. The old line shipped `gone=<address>`.
+                RTLog.info("call", "relay fleet=1 acted=1 changed=\(inUse == nil ? 0 : 1)")
                 await ctrl.restartIce(reason: "relay-fleet-changed")
                 #endif
             }
