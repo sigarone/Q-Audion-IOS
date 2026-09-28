@@ -1233,4 +1233,251 @@ final class ProximityPairingSessionTests: XCTestCase {
         rig.hub.pump()
         assertScannerViolation(rig, scanner)
     }
+
+    // MARK: Scripted displayer — the scanner's checks on FINISH
+
+    private func runScriptedDisplayer(scannerUserId: String = "scanner-user") throws -> ProxScriptedRun {
+        let hub = ProximityTestHub()
+        let scheduler = ProximityManualScheduler()
+        let scripted: ProxScriptedDisplayer = try ProxScriptedDisplayer(hub: hub)
+        let identity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: scannerUserId)
+        let box = ProximitySessionRig.PolicyBox()
+        let transport = ProximityFakeScannerTransport(hub: hub, target: scripted.transport)
+        let scanner = ProximityScannerSession(
+            payload: scripted.payload, identity: identity, transport: transport, scheduler: scheduler,
+            identityPolicy: { (peer: ProximityPeerIdentity) -> ProximityIdentityDecision in
+                box.seen.append(peer)
+                return box.decision
+            })
+        scanner.start()
+        hub.pump()          // connect; HELLO reaches the script
+        scripted.sendOffer()
+        hub.pump()          // OFFER reaches the scanner; its ACCEPT reaches the script
+        XCTAssertEqual(scanner.state, .exchanging)
+        try scripted.absorbAccept()
+        return ProxScriptedRun(hub: hub, displayer: scripted, scanner: scanner,
+                               scannerIdentity: identity, policy: box)
+    }
+
+    /// The scanner failed with `error` (or, with `kind`, an error of that kind),
+    /// sent the matching ABORT, and never ran its identity policy.
+    private func assertScriptedScannerFailed(_ run: ProxScriptedRun, kind: String,
+                                             abort: ProximityPairing.AbortReason,
+                                             policyRan: Bool = false,
+                                             file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(proxSessionKind(scannerError(run.scanner.state)), kind, file: file, line: line)
+        XCTAssertEqual(run.displayer.received.last, ProximityMessage.abort(reason: abort.rawValue).encoded(),
+                       file: file, line: line)
+        XCTAssertEqual(run.policy.seen.isEmpty, !policyRan, file: file, line: line)
+        XCTAssertNil(scannerResult(run.scanner.state), file: file, line: line)
+    }
+
+    func testScriptedDisplayerControlReachesConfirmation() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        XCTAssertEqual(run.displayer.scannerIdentity, run.scannerIdentity.publicIdentity)
+        let displayerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-displayer")
+        let built = try run.displayer.finish(identity: displayerIdentity.publicIdentity,
+                                             signingPrivateKey: displayerIdentity.signingPrivateKey)
+        XCTAssertTrue(run.policy.seen.isEmpty)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        let waiting: ProxSessionAwaiting = try XCTUnwrap(scannerAwaiting(run.scanner.state))
+        XCTAssertEqual(waiting.peer, displayerIdentity.publicIdentity)
+        XCTAssertEqual(waiting.sas, try run.displayer.sas(displayerTranscriptHash: built.displayerTranscriptHash))
+        XCTAssertEqual(run.policy.seen, [displayerIdentity.publicIdentity])
+    }
+
+    func testScannerRejectsItsOwnIdentityInFinish() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        let built = try run.displayer.finish(identity: run.scannerIdentity.publicIdentity,
+                                             signingPrivateKey: run.scannerIdentity.signingPrivateKey)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        assertScriptedScannerFailed(run, kind: "identityRejected", abort: .identityRejected)
+    }
+
+    func testScannerRejectsItsOwnUserIdUnderAnotherKeyInFinish() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer(scannerUserId: "same-user")
+        let impostor: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "same-user")
+        let built = try run.displayer.finish(identity: impostor.publicIdentity,
+                                             signingPrivateKey: impostor.signingPrivateKey)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        assertScriptedScannerFailed(run, kind: "identityRejected", abort: .identityRejected)
+    }
+
+    func testScannerPolicyRejectionOnFinish() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        run.policy.decision = .reject("blocked")
+        let displayerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-displayer")
+        let built = try run.displayer.finish(identity: displayerIdentity.publicIdentity,
+                                             signingPrivateKey: displayerIdentity.signingPrivateKey)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        XCTAssertEqual(run.scanner.state, .failed(.identityRejected("blocked")))
+        assertScriptedScannerFailed(run, kind: "identityRejected", abort: .identityRejected, policyRan: true)
+        XCTAssertEqual(run.policy.seen, [displayerIdentity.publicIdentity])
+    }
+
+    func testFinishWithMalformedPlaintextIsViolation() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        let displayerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-displayer")
+        let built = try run.displayer.finish(identity: displayerIdentity.publicIdentity,
+                                             signingPrivateKey: displayerIdentity.signingPrivateKey,
+                                             fault: .trailingPlaintextByte)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        assertScriptedScannerFailed(run, kind: "protocolViolation", abort: .protocolViolation)
+    }
+
+    func testFinishMacUnderScannerKeyIsRejected() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        let displayerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-displayer")
+        let built = try run.displayer.finish(identity: displayerIdentity.publicIdentity,
+                                             signingPrivateKey: displayerIdentity.signingPrivateKey,
+                                             fault: .macUnderScannerKey)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        XCTAssertEqual(run.scanner.state, .failed(.authenticationFailed("FINISH mac")))
+        assertScriptedScannerFailed(run, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    func testFinishSignedByAnotherKeyIsRejected() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        let claimed: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-displayer")
+        let forger: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "mallory")
+        let built = try run.displayer.finish(identity: claimed.publicIdentity,
+                                             signingPrivateKey: forger.signingPrivateKey)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        XCTAssertEqual(run.scanner.state, .failed(.authenticationFailed("FINISH signature")))
+        assertScriptedScannerFailed(run, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    /// sealed_D must be bound to TH_S (aad), not merely to TH1.
+    func testFinishSealedUnderTh1IsRejected() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        let displayerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-displayer")
+        let built = try run.displayer.finish(identity: displayerIdentity.publicIdentity,
+                                             signingPrivateKey: displayerIdentity.signingPrivateKey,
+                                             fault: .sealedUnderTh1)
+        run.displayer.send(built.message)
+        run.hub.pump()
+        XCTAssertEqual(run.scanner.state, .failed(.authenticationFailed("AES-GCM open")))
+        assertScriptedScannerFailed(run, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    /// Reflection: the scanner's own sealed_S sent back as FINISH does not open.
+    func testFinishReflectingTheScannerBoxIsRejected() throws {
+        let run: ProxScriptedRun = try runScriptedDisplayer()
+        let reflected: Data = ProximityMessage.finish(ProximityMessage.Finish(sealed: run.displayer.sealedScanner)).encoded()
+        run.displayer.send(reflected)
+        run.hub.pump()
+        XCTAssertEqual(run.scanner.state, .failed(.authenticationFailed("AES-GCM open")))
+        assertScriptedScannerFailed(run, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    // MARK: Scripted scanner — the displayer's checks on ACCEPT
+
+    /// Starts the real displayer and drives a scripted scanner up to the OFFER.
+    private func runScriptedScanner() throws -> (ProximitySessionRig, ProxScriptedScanner) {
+        let rig: ProximitySessionRig = try makeRig()
+        rig.displayer.start()
+        let payload: ProximityQrPayload = try showingPayload(rig)
+        let scripted: ProxScriptedScanner = try ProxScriptedScanner(transport: rig.displayerTransport, payload: payload)
+        scripted.sendHello()
+        rig.hub.pump()
+        XCTAssertEqual(rig.displayer.state, .exchanging)
+        XCTAssertEqual(scripted.received.first?.first, ProximityPairing.MessageType.offer.rawValue)
+        return (rig, scripted)
+    }
+
+    private func assertScriptedDisplayerFailed(_ rig: ProximitySessionRig, _ scripted: ProxScriptedScanner,
+                                               kind: String, abort: ProximityPairing.AbortReason,
+                                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(proxSessionKind(displayerError(rig.displayer.state)), kind, file: file, line: line)
+        XCTAssertEqual(scripted.received.last, ProximityMessage.abort(reason: abort.rawValue).encoded(),
+                       file: file, line: line)
+        // No FINISH: the displayer's identity never left the device.
+        XCTAssertFalse(scripted.received.contains { (m: Data) -> Bool in
+            m.first == ProximityPairing.MessageType.finish.rawValue
+        }, file: file, line: line)
+        XCTAssertTrue(rig.displayerPolicy.seen.isEmpty, file: file, line: line)
+    }
+
+    func testScriptedScannerControlGetsAVerifiableFinish() throws {
+        let (rig, scripted) = try runScriptedScanner()
+        let scannerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-scanner")
+        try scripted.sendAccept(identity: scannerIdentity.publicIdentity,
+                                signingPrivateKey: scannerIdentity.signingPrivateKey)
+        rig.hub.pump()
+        let waiting: ProxSessionAwaiting = try XCTUnwrap(displayerAwaiting(rig.displayer.state))
+        XCTAssertEqual(waiting.peer, scannerIdentity.publicIdentity)
+        XCTAssertEqual(rig.displayerPolicy.seen, [scannerIdentity.publicIdentity])
+        // The FINISH the real displayer sent opens under K_enc_D / TH_S and carries its identity.
+        let opened: ProximityMessage.SealedIdentity = try scripted.openFinish()
+        XCTAssertEqual(opened.identity, rig.displayerIdentity.publicIdentity)
+        let thD: Data = ProximityPairingCrypto.identityTranscriptHash(role: .displayer,
+                                                                     previousHash: scripted.scannerTranscriptHash,
+                                                                     idBlock: opened.idBlock)
+        let payloadD: Data = ProximityPairingCrypto.signaturePayload(role: .displayer, transcriptHash: thD)
+        XCTAssertTrue(ProximityPairingCrypto.verify(signature: opened.signature, payload: payloadD,
+                                                    signingPublicKey: rig.displayerIdentity.signingPublicKey))
+        let stageOne: ProximityPairingCrypto.HandshakeKeys = try XCTUnwrap(scripted.handshakeKeys)
+        let expectedMac: Data = ProximityPairingCrypto.transcriptMac(key: stageOne.macKeyDisplayer, transcriptHash: thD)
+        XCTAssertEqual(opened.mac, expectedMac)
+        let finalKeys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                     displayerTranscriptHash: thD)
+        XCTAssertEqual(waiting.sas, finalKeys.sas)
+    }
+
+    func testDisplayerRejectsAcceptMacUnderDisplayerKey() throws {
+        let (rig, scripted) = try runScriptedScanner()
+        let scannerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-scanner")
+        try scripted.sendAccept(identity: scannerIdentity.publicIdentity,
+                                signingPrivateKey: scannerIdentity.signingPrivateKey,
+                                fault: .macUnderDisplayerKey)
+        rig.hub.pump()
+        XCTAssertEqual(rig.displayer.state, .failed(.authenticationFailed("ACCEPT mac")))
+        assertScriptedDisplayerFailed(rig, scripted, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    func testDisplayerRejectsAcceptSignedByAnotherKey() throws {
+        let (rig, scripted) = try runScriptedScanner()
+        let claimed: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-scanner")
+        let forger: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "mallory")
+        try scripted.sendAccept(identity: claimed.publicIdentity, signingPrivateKey: forger.signingPrivateKey)
+        rig.hub.pump()
+        XCTAssertEqual(rig.displayer.state, .failed(.authenticationFailed("ACCEPT signature")))
+        assertScriptedDisplayerFailed(rig, scripted, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    func testDisplayerRejectsAcceptSealedUnderTheWrongKey() throws {
+        let (rig, scripted) = try runScriptedScanner()
+        let scannerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-scanner")
+        try scripted.sendAccept(identity: scannerIdentity.publicIdentity,
+                                signingPrivateKey: scannerIdentity.signingPrivateKey,
+                                fault: .sealedUnderDisplayerKey)
+        rig.hub.pump()
+        XCTAssertEqual(rig.displayer.state, .failed(.authenticationFailed("AES-GCM open")))
+        assertScriptedDisplayerFailed(rig, scripted, kind: "authenticationFailed", abort: .authenticationFailed)
+    }
+
+    func testDisplayerRejectsAcceptWithMalformedPlaintext() throws {
+        let (rig, scripted) = try runScriptedScanner()
+        let scannerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "scripted-scanner")
+        try scripted.sendAccept(identity: scannerIdentity.publicIdentity,
+                                signingPrivateKey: scannerIdentity.signingPrivateKey,
+                                fault: .trailingPlaintextByte)
+        rig.hub.pump()
+        assertScriptedDisplayerFailed(rig, scripted, kind: "protocolViolation", abort: .protocolViolation)
+    }
+
+    func testDisplayerRejectsItsOwnIdentityInAccept() throws {
+        let (rig, scripted) = try runScriptedScanner()
+        try scripted.sendAccept(identity: rig.displayerIdentity.publicIdentity,
+                                signingPrivateKey: rig.displayerIdentity.signingPrivateKey)
+        rig.hub.pump()
+        assertScriptedDisplayerFailed(rig, scripted, kind: "identityRejected", abort: .identityRejected)
+    }
 }
