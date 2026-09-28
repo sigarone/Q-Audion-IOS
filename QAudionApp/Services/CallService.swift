@@ -799,24 +799,24 @@ final class CallService: @unchecked Sendable {
     /// reset path already funnels through `endCall()`, so this one wire-up
     /// covers all of them.
     public var onCallTeardownChokepoint: ((String?) -> Void)?
-    /// W-MEDIAATACCEPT (option b) — §10 (I9), PARTIALLY WIRED. Spec asks
-    /// `endCall()` to reset the native-SRTP crash streak only when this
-    /// call actually reached "media" phase (`reachedMediaThisCall`), not on
-    /// every clean end — a call that only rang/built its PC and was
+    /// W-MEDIAATACCEPT (option b) — §10 (I9), NOW FULLY WIRED (G6). Spec
+    /// asks `endCall()` to reset the native-SRTP crash streak only when
+    /// this call actually reached "media" phase (`reachedMediaThisCall`),
+    /// not on every clean end — a call that only rang/built its PC and was
     /// cancelled proves nothing about the native path. `noteMediaReached()`
-    /// exists and is wired for the CUSTOM (sealed-audio) decode path
-    /// (`noteRealInboundDecode()`, below) but deliberately NOT yet for
-    /// native audio-srtp — that needs `QAudionPeerConnection
-    /// .onNativeAudioFrameCryptorStateChange` (`"audiosrtp cryptor
-    /// role=receiver state=ok"`, currently unwired by any caller anywhere
-    /// in the app) plumbed through from AppState's controller setup, which
-    /// this task did not verify end-to-end without a compiler. Wiring only
-    /// the custom-path half and gating the reset on it would SILENTLY STOP
-    /// resetting the streak for every native-SRTP call (the majority case
-    /// this streak exists for) — worse than not gating at all. So `endCall`
-    /// below keeps the ORIGINAL unconditional reset for now; flip it to
-    /// also require `reachedMediaThisCall` once the native-path signal is
-    /// wired and verified on-device.
+    /// is wired from TWO independent signals now:
+    ///  - the CUSTOM (sealed-audio) decode path (`noteRealInboundDecode()`,
+    ///    below);
+    ///  - the NATIVE audio-srtp path, via `AppState.bridgeControllerLogLine`
+    ///    watching for `QAudionPeerConnection
+    ///    .onNativeAudioFrameCryptorStateChange`'s `"audiosrtp cryptor
+    ///    role=rx state=ok"` line (the same string-based `controller.log`
+    ///    hook every call site already wires, extended rather than adding
+    ///    the new typed hook the spec proposes — see that method's own doc
+    ///    for why).
+    /// `endCall` below now requires this flag, matching spec §10's "la
+    /// serie si azzera solo alla chiusura pulita di una chiamata che ha
+    /// raggiunto media" exactly, for both audio paths.
     private var reachedMediaThisCall: Bool = false
     /// Marks that this call reached real bidirectional audio on the CUSTOM
     /// (sealed-audio) path. See the type-level note above for why the
@@ -2587,15 +2587,15 @@ final class CallService: @unchecked Sendable {
             // same set `ended` already covers) — a stale end for a call
             // that was never native, or belongs to someone else, resets
             // nothing.
-            // W-MEDIAATACCEPT (option b) — §10 (I9) asks this to also
-            // require `reachedMediaThisCall`, but that flag is only wired
-            // for the CUSTOM decode path today (see its doc) — gating here
-            // would silently stop resetting the streak for every native-
-            // SRTP call, the opposite of this task's intent. Left
-            // unconditional (original, pre-this-task behavior) until the
-            // native-path signal is wired; `reachedMediaThisCall` is
-            // tracked regardless so that follow-up is a one-line change.
-            if nativeSnapshot, snapshotEnd.ended {
+            // W-MEDIAATACCEPT (option b) — §10 (I9/G6): now also requires
+            // `reachedMediaThisCall` — the native-path signal is wired (see
+            // that property's doc), so a call that only rang/built its PC
+            // and was cancelled/failed before real audio flowed no longer
+            // resets the streak; only a call that demonstrably reached
+            // media does.
+            if CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+                nativeSnapshot: nativeSnapshot, ended: snapshotEnd.ended, reachedMedia: reachedMediaThisCall
+            ) {
                 CallCapabilities.resetNativeSrtpCrashStreak()
             }
         }

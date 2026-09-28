@@ -52,4 +52,21 @@ public enum CrashGuardDecisions {
             return false
         }
     }
+
+    /// W-MEDIAATACCEPT (option b) — §10 (G6): `CallService.endCall()`'s gate
+    /// for resetting the native-SRTP consecutive-crash streak — "la serie si
+    /// azzera solo alla chiusura pulita di una chiamata che ha raggiunto
+    /// media" (only a call that both was native AND demonstrably reached
+    /// real media, ending cleanly, breaks the streak). All three are
+    /// required: `nativeSnapshot` (this call's own latched native-SRTP
+    /// decision), `ended` (this teardown actually owned/ended that
+    /// snapshot — a stale end for a call that belongs to someone else
+    /// proves nothing), and `reachedMedia`
+    /// (`CallService.noteMediaReached()` fired — real bidirectional audio,
+    /// not merely a built PeerConnection, was observed this call).
+    public static func shouldResetCrashStreakAtCallEnd(
+        nativeSnapshot: Bool, ended: Bool, reachedMedia: Bool
+    ) -> Bool {
+        nativeSnapshot && ended && reachedMedia
+    }
 }

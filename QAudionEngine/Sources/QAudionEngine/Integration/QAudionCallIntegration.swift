@@ -5800,8 +5800,26 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // W-MEDIAATACCEPT (option b) — I11: the responder branch of this
         // replay is subject to the SAME hold gate as every other ACCEPT
         // emission point. The caller's own OFFER replay is never held.
+        //
+        // G5 fix (adversarial review of 7825c191) — `emitJsonAccept`'s hold
+        // gate is `if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true`:
+        // an EMPTY `callId` makes that condition false regardless of what
+        // the gate closure would have said, so it falls straight through to
+        // `sendOpaqueRaw(wire)` — i.e. an unknown call id used to BYPASS
+        // I11's hold entirely instead of defaulting to the safe side.
+        // `snapshot.responderCallId` is expected to already be set by this
+        // point for every real responder handshake (see
+        // `pendingResponderCallId`'s own doc), so this should be dead code
+        // in practice — but "should never happen" is exactly the case a
+        // fail-CLOSED default exists for: hold (do not send) rather than
+        // risk disclosing this device's ACCEPT, and therefore its
+        // media-plane readiness, for a call this replay cannot identify.
         if !snapshot.isCaller {
-            try? await emitJsonAccept(callId: snapshot.responderCallId ?? "", wire: wire, sendOpaqueRaw: sender)
+            guard let responderCallId = snapshot.responderCallId, !responderCallId.isEmpty else {
+                print("[QAudionCallIntegration] W-MEDIAATACCEPT W531 replay(ACCEPT) held — unknown responderCallId, failing closed")
+                return
+            }
+            try? await emitJsonAccept(callId: responderCallId, wire: wire, sendOpaqueRaw: sender)
             let logLine: String = "[QAudionCallIntegration] W531: replaying " + role + " on WS reconnect"
             print(logLine)
             return

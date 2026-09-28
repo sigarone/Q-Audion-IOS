@@ -50,4 +50,28 @@ final class CrashGuardDecisionsTests: XCTestCase {
     func testUnrecognizedPhaseValueDoesNotCount() {
         XCTAssertFalse(CrashGuardDecisions.countsTowardStreak(context: context(phase: "bogus")))
     }
+
+    // MARK: - shouldResetCrashStreakAtCallEnd (G6)
+
+    func testResetRequiresAllThreeConditions() {
+        XCTAssertTrue(CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+            nativeSnapshot: true, ended: true, reachedMedia: true))
+    }
+
+    func testResetSkippedWhenNotNative() {
+        XCTAssertFalse(CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+            nativeSnapshot: false, ended: true, reachedMedia: true))
+    }
+
+    func testResetSkippedWhenTeardownDidNotOwnTheSnapshot() {
+        XCTAssertFalse(CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+            nativeSnapshot: true, ended: false, reachedMedia: true))
+    }
+
+    func testResetSkippedWhenMediaNeverReached() {
+        // A call that only rang/built its PC and was cancelled proves
+        // nothing about the native path — must NOT reset the streak.
+        XCTAssertFalse(CrashGuardDecisions.shouldResetCrashStreakAtCallEnd(
+            nativeSnapshot: true, ended: true, reachedMedia: false))
+    }
 }
