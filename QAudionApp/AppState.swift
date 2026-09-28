@@ -12906,14 +12906,19 @@ final class AppState: ObservableObject {
         // false in practice today (nobody sets a non-zero role yet — see
         // `AndroidHandshakeBundle.pskRoles`'s doc) until step 7 ships role
         // advertisement for real.
-        let expectedButMissing = state.peerAdvertisedRoles.contains(1) && !mixRoles.contains(.nfc)
+        // Role 3 (QR + Bluetooth proximity) is presence evidence exactly like
+        // role 1 (NFC) — see `selectedIsNfc` above.
+        let peerAdvertisesPresenceRole: Bool = state.peerAdvertisedRoles.contains(where: { (role: Int) -> Bool in
+            return PskAdvertV3.isPresenceRole(role)
+        })
+        let expectedButMissing = peerAdvertisesPresenceRole && !mixRoles.contains(.nfc)
         // W-NFCCOMMON — the independent "NFC in comune" fact: true whenever the peer's
         // OFFER/ACCEPT advert shows a mutual NFC-tier fingerprint, regardless of whether
         // THIS call's mixRoles/decide() verdict actually used it. Same underlying set as
         // expectedButMissing above, without the `!mixRoles.contains(.nfc)` restriction —
         // when NFC WAS mixed (S2), this is trivially also true, which is correct: the
         // trust bar's "NFC ✓" chip should light in that case too, same as before.
-        let mutualNfcInCommon = state.peerAdvertisedRoles.contains(1)
+        let mutualNfcInCommon = peerAdvertisesPresenceRole
         // W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a pre-shared key of ANY
         // origin was mixed into this call", independent of `assurance`'s single-select
         // verdict: shows in EVERY state a PSK was mixed, including warning states.

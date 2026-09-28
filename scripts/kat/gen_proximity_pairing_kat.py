@@ -33,7 +33,15 @@ L = {
     "confirmed": b"qaudion-prox-v1/user-confirmed",
 }
 
-MSG_HELLO, MSG_OFFER, MSG_ACCEPT, MSG_FINISH, MSG_CONFIRM = 1, 2, 3, 4, 5
+MSG_HELLO, MSG_OFFER, MSG_ACCEPT, MSG_FINISH, MSG_CONFIRM, MSG_ABORT, MSG_BUSY = 1, 2, 3, 4, 5, 6, 7
+
+# Spec §8 userId grammar: 1..256 bytes, each in [A-Za-z0-9._-].
+USER_ID_ALPHABET = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+
+
+def valid_user_id(u: str) -> bool:
+    b = u.encode("utf-8")
+    return 1 <= len(b) <= 256 and all(c in USER_ID_ALPHABET for c in b)
 
 
 def sha256(b: bytes) -> bytes:
@@ -99,7 +107,36 @@ def sas_from_bytes(b: bytes) -> str:
     return "%06d" % (struct.unpack(">Q", b)[0] % 1_000_000)
 
 
+VALID_USER_IDS = [
+    "a",
+    "user-S-42",
+    "66666666-6666-6666-6666-666666666666",
+    "A.b_c-9",
+    "x" * 256,
+]
+
+INVALID_USER_IDS = [
+    "",
+    " alice",
+    "alice ",
+    "ali ce",
+    "alice\u00a0",
+    "alice\u200b",
+    "alice\n",
+    "ali|ce",
+    "ali:ce",
+    "ali/ce",
+    "ünï",
+    "x" * 257,
+]
+
+
 def main() -> None:
+    for u in VALID_USER_IDS:
+        assert valid_user_id(u), u
+    for u in INVALID_USER_IDS:
+        assert not valid_user_id(u), repr(u)
+
     session_secret = bytes(range(0x00, 0x20))
     session_id = bytes(range(0x40, 0x50))
     frame_index = 7
@@ -109,7 +146,7 @@ def main() -> None:
     nonce_d = filler("nonce-d", 32)
     idpub_d = filler("idpub-d", 32)
     encpub_d = filler("encpub-d", 32)
-    user_d = "utente-D-ünïcöde"  # exercises multi-byte UTF-8
+    user_d = "utente-D.42_kat"  # every punctuation character the §8 grammar allows
     user_d_b = user_d.encode("utf-8")
 
     xpk_s = filler("xpk-s", 32)
@@ -148,6 +185,14 @@ def main() -> None:
     k_confirm_d = hkdf_expand(prk, L["confirm_d"], 32)
     sas_bytes = hkdf_expand(prk, L["sas"], 8)
     psk = hkdf_expand(prk, L["psk"], 32)
+
+    # Layout-only signatures: the bytes need not verify, the vector pins the
+    # sig-before-mac trailer order and the exact message lengths.
+    sig_s = filler("sig-s", 64)
+    sig_d = filler("sig-d", 64)
+    mac_s = hmac256(k_mac_s, th)
+    mac_d = hmac256(k_mac_d, th)
+    assert valid_user_id(user_d) and valid_user_id(user_s)
 
     vec = {
         "description": "Proximity pairing v1 reference vectors "
@@ -201,6 +246,16 @@ def main() -> None:
             "signaturePayloadScanner": (L["sig_s"] + th).hex(),
             "signaturePayloadDisplayer": (L["sig_d"] + th).hex(),
             "confirmMessageScanner": (bytes([MSG_CONFIRM]) + hmac256(k_confirm_s, L["confirmed"])).hex(),
+            "layoutSignatureScanner": sig_s.hex(),
+            "layoutSignatureDisplayer": sig_d.hex(),
+            "acceptMessage": (bytes([MSG_ACCEPT]) + accept_unsigned + sig_s + mac_s).hex(),
+            "finishMessage": (bytes([MSG_FINISH]) + sig_d + mac_d).hex(),
+            "abortMessageUserRejected": bytes([MSG_ABORT, 0x01]).hex(),
+            "busyMessage": bytes([MSG_BUSY]).hex(),
+        },
+        "userIds": {
+            "valid": [u for u in VALID_USER_IDS],
+            "invalid": [u for u in INVALID_USER_IDS],
         },
         "sas": [
             {"bytes": "0000000000000000", "sas": "000000"},

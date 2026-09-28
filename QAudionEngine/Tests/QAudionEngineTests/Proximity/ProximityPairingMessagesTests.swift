@@ -48,7 +48,7 @@ final class ProximityPairingMessagesTests: XCTestCase {
         return ProximityMessage.Offer(mlKemPublicKey: filled(ProximityPairing.mlKemPublicKeyBytes, 0x11),
                                       displayerEphemeralX25519: filled(32, 0x22),
                                       displayerNonce: filled(32, 0x33),
-                                      identity: try identity(userId: "displayer-ü", seed: 0x44))
+                                      identity: try identity(userId: "displayer-u.1", seed: 0x44))
     }
 
     private static func sampleAccept() throws -> ProximityMessage.Accept {
@@ -159,7 +159,7 @@ final class ProximityPairingMessagesTests: XCTestCase {
     func testOfferRoundTrip() throws {
         let offer: ProximityMessage.Offer = try ProximityPairingMessagesTests.sampleOffer()
         let encoded: Data = ProximityMessage.offer(offer).encoded()
-        let userIdCount: Int = Data("displayer-ü".utf8).count
+        let userIdCount: Int = Data("displayer-u.1".utf8).count
         let expectedCount: Int = 1 + 1568 + 32 * 4 + 2 + userIdCount
         XCTAssertEqual(encoded.count, expectedCount)
         XCTAssertEqual(try ProximityMessage.decode(encoded), .offer(offer))
@@ -265,6 +265,66 @@ final class ProximityPairingMessagesTests: XCTestCase {
         XCTAssertEqual(decoded.encoded(), confirmMessage)
     }
 
+    func testKatFullAcceptFinishAbortBusyLayouts() throws {
+        let kat: [String: Any] = try loadExpected()
+        let acceptMessage: Data = try katHex(kat, "acceptMessage")
+        let decodedAccept: ProximityMessage = try ProximityMessage.decode(acceptMessage)
+        guard case .accept(let accept) = decodedAccept else {
+            XCTFail("not an ACCEPT")
+            return
+        }
+        XCTAssertEqual(accept.mlKemCiphertext, try katHex(kat, "mlKemCiphertext"))
+        XCTAssertEqual(accept.identity.userId, try katString(kat, "scannerUserId"))
+        XCTAssertEqual(accept.signature, try katHex(kat, "layoutSignatureScanner"))
+        XCTAssertEqual(accept.mac, try katHex(kat, "macScanner"))
+        XCTAssertEqual(decodedAccept.encoded(), acceptMessage)
+
+        let finishMessage: Data = try katHex(kat, "finishMessage")
+        let decodedFinish: ProximityMessage = try ProximityMessage.decode(finishMessage)
+        guard case .finish(let finish) = decodedFinish else {
+            XCTFail("not a FINISH")
+            return
+        }
+        XCTAssertEqual(finish.signature, try katHex(kat, "layoutSignatureDisplayer"))
+        XCTAssertEqual(finish.mac, try katHex(kat, "macDisplayer"))
+        XCTAssertEqual(decodedFinish.encoded(), finishMessage)
+
+        let abortMessage: Data = try katHex(kat, "abortMessageUserRejected")
+        XCTAssertEqual(try ProximityMessage.decode(abortMessage),
+                       .abort(reason: ProximityPairing.AbortReason.userRejected.rawValue))
+        XCTAssertEqual(ProximityMessage.abort(reason: 1).encoded(), abortMessage)
+        let busyMessage: Data = try katHex(kat, "busyMessage")
+        XCTAssertEqual(try ProximityMessage.decode(busyMessage), .busy)
+        XCTAssertEqual(ProximityMessage.busy.encoded(), busyMessage)
+    }
+
+    func testKatUserIdGrammar() throws {
+        guard let url = Bundle.module.url(forResource: "proximity-pairing-kat", withExtension: "json") else {
+            throw MessagesKatError(message: "proximity-pairing-kat.json not found")
+        }
+        let raw: Data = try Data(contentsOf: url)
+        let root: [String: Any]? = try JSONSerialization.jsonObject(with: raw, options: []) as? [String: Any]
+        guard let userIds = root?["userIds"] as? [String: Any],
+              let valid = userIds["valid"] as? [String],
+              let invalid = userIds["invalid"] as? [String] else {
+            throw MessagesKatError(message: "missing userIds vectors")
+        }
+        XCTAssertFalse(valid.isEmpty)
+        XCTAssertFalse(invalid.isEmpty)
+        for userId in valid {
+            XCTAssertTrue(ProximityPairing.isValidUserId(userId), userId)
+            XCTAssertNoThrow(try ProximityPeerIdentity(userId: userId,
+                                                       signingPublicKey: ProximityPairingMessagesTests.filled(32, 1),
+                                                       encryptionPublicKey: ProximityPairingMessagesTests.filled(32, 2)))
+        }
+        for userId in invalid {
+            XCTAssertFalse(ProximityPairing.isValidUserId(userId), userId.debugDescription)
+            XCTAssertThrowsError(try ProximityPeerIdentity(userId: userId,
+                                                           signingPublicKey: ProximityPairingMessagesTests.filled(32, 1),
+                                                           encryptionPublicKey: ProximityPairingMessagesTests.filled(32, 2)))
+        }
+    }
+
     // MARK: - Rejections
 
     func testRejectsEmptyAndUnknownTypes() {
@@ -307,6 +367,14 @@ final class ProximityPairingMessagesTests: XCTestCase {
         // Invalid UTF-8.
         assertRejected(message(0x02, offerBody(lengthField: 2, userId: Data([0xC3, 0x28]))))
         assertRejected(message(0x02, offerBody(lengthField: 1, userId: Data([0xFF]))))
+        // Valid UTF-8 outside the §8 grammar: padding, NBSP, zero-width, separators.
+        let outsideGrammar: [Data] = [Data(" abc".utf8), Data("abc ".utf8), Data("a\u{00A0}b".utf8),
+                                      Data("a\u{200B}b".utf8), Data("a|b".utf8), Data("a:b".utf8),
+                                      Data("\u{00FC}".utf8), Data([0x61, 0x00])]
+        for userId in outsideGrammar {
+            let n: UInt16 = UInt16(userId.count)
+            assertRejected(message(0x02, offerBody(lengthField: n, userId: userId)))
+        }
         // Fixed part only.
         assertRejected(message(0x02, ProximityPairingMessagesTests.filled(1568 + 128 + 2, 0)))
     }

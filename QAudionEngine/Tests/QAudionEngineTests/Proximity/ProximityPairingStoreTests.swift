@@ -225,6 +225,53 @@ final class ProximityPairingStoreTests: XCTestCase {
         XCTAssertEqual(decision, .reject(ProximityPairingStoreTests.selfMessage))
     }
 
+    // MARK: - identityDecision against the address-book key
+
+    func testAddressBookKeyMatchingEitherPresentedKeyIsAccepted() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        XCTAssertEqual(ProximityPairingStore.identityDecision(peer: peer, local: local, pinnedSigningKeys: [],
+                                                              contactIdentityKey: peer.encryptionPublicKey),
+                       .accept)
+        XCTAssertEqual(ProximityPairingStore.identityDecision(peer: peer, local: local, pinnedSigningKeys: [],
+                                                              contactIdentityKey: peer.signingPublicKey),
+                       .accept)
+    }
+
+    func testAddressBookKeyMatchingNeitherPresentedKeyWarns() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        let otherKey: Data = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let decision = ProximityPairingStore.identityDecision(peer: peer, local: local, pinnedSigningKeys: [],
+                                                              contactIdentityKey: otherKey)
+        guard case .acceptWithWarning(let message) = decision else {
+            XCTFail("a different address-book key must warn")
+            return
+        }
+        XCTAssertFalse(message.isEmpty)
+    }
+
+    func testPinMatchStillChecksTheAddressBookKey() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        let otherKey: Data = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let decision = ProximityPairingStore.identityDecision(peer: peer, local: local,
+                                                              pinnedSigningKeys: [peer.signingPublicKey],
+                                                              contactIdentityKey: otherKey)
+        guard case .acceptWithWarning = decision else {
+            XCTFail("a matching pin must not hide a different address-book key")
+            return
+        }
+    }
+
+    func testEmptyAddressBookKeyIsIgnored() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        XCTAssertEqual(ProximityPairingStore.identityDecision(peer: peer, local: local, pinnedSigningKeys: [],
+                                                              contactIdentityKey: Data()),
+                       .accept)
+    }
+
     /// The self check runs before the pin lookup, so this path never reaches
     /// the Keychain.
     func testDefaultPolicyRejectsSelfWithoutKeychain() throws {

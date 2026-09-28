@@ -28,9 +28,11 @@ Attacker capabilities considered:
 |---|---|---|
 | A1 | Passive BLE eavesdropper, even one who ALSO photographed the QR | Learns nothing about the PSK: secrecy comes from ML-KEM-1024 + X25519 ephemeral keys that never leave the devices, not from anything in the QR. |
 | A2 | Active BLE attacker in radio range, without the QR | Cannot produce a valid HELLO (needs the per-frame `frameKey`), cannot substitute the displayer's keys (QR commitment), cannot forge ACCEPT/FINISH (Ed25519 + HKDF-keyed MACs over the full transcript). Can only cause a DoS. |
-| A3 | Remote attacker holding a photo / screenshot / forwarded image of the QR | The QR rotates every 2 s and a frame is accepted for 8 s only; the displayer screen is screenshot-protected; completing the exchange needs a BLE radio within range of the displayer. A stale image is useless. |
-| A4 | Real-time relay: live video of the displayer's screen + an attacker radio near the displayer | **Not preventable by any BLE-only protocol** (BLE has no physical-layer distance bounding; the attacker's radio can terminate the protocol itself, so round-trip timing proves nothing). Detected by the human step: both screens show the peer's name and the same 6-digit SAS, both users must confirm, and the session is single-use — if the attacker wins the race, the legitimate scanner gets "busy" and the displayer shows a name/code the person in front of them does not see. |
-| A5 | Someone presenting a known contact's userId with a different identity key | The identity key the contact already has pinned (`PeerIdentityPinStore`) is compared; a mismatch is shown as a red warning on the confirmation screen. |
+| A3 | Remote attacker holding a photo / screenshot / forwarded image of the QR | The QR rotates every 2 s and a frame is accepted for 8 s (real time, sleep included) only; a screenshot replaces the whole session at once; while the screen is recorded, mirrored or shared the code is not shown and no session runs; completing the exchange needs a BLE radio within range of the displayer. A stale image is useless. |
+| A4 | Real-time relay: live video of the displayer's screen + an attacker radio near the displayer | **Not preventable by any BLE-only protocol** (BLE has no physical-layer distance bounding; the attacker's radio can terminate the protocol itself, so round-trip timing proves nothing). Detected by the human step: both screens show the peer's name and the same 6-digit SAS, both users must confirm, and the session is single-use. If the attacker wins the race, the displayer shows a name/code the person in front of it does not see, and the legitimate scanner shows no code at all — it gets BUSY, or, if the attacker also advertises the session UUID from closer by (it is broadcast in the clear) and captures the scanner's connection, it shows only a connection error or times out. **The rule both users follow is therefore: confirm only when BOTH screens show the same code at the same time.** A failed check or a refusal never puts a fresh code up by itself (§11). |
+| A5 | Someone presenting a known contact's userId with a different identity key | The presented Ed25519 key is compared with every key the contact has pinned (`PeerIdentityPinStore`, legacy and per-device) and the presented keys with the identity key the address book holds; any mismatch is a red warning on the confirmation screen. Independently, the claimed account's server-published identity keys are fetched and the confirmation screen says whether the phone proved one of them (§12). A completion never rewrites a known contact. |
+| A6 | Passive observer of the BLE exchange | Learns no key material (A1) but does learn both account ids and both long-term public keys, plus Ed25519 signatures over the transcript — a transferable proof that these two accounts paired at that time. v1 has no identity hiding; a SIGMA-I style encryption of ACCEPT/FINISH identities under a first-stage key is the candidate v1.1 change and must be decided before the Android port. |
+| A7 | Any radio in range | Can always deny service (jam, squat on the advertised session UUID, win the connection race). BLE gives range, not exclusivity. It cannot complete a pairing without the live QR, and cannot learn or influence the PSK. |
 
 Properties: mutual authentication of long-term Ed25519 identity keys, key
 confirmation, transcript binding (incl. the QR bytes), forward secrecy
@@ -137,8 +139,24 @@ carries `(sessionId, commitment, i, frameKey_i)`. The displayer records the
 monotonic time each frame was first shown and accepts frame `i` only while
 `now − shownAt(i) ≤ 8 s`.
 
-The QR is displayed only while the session is waiting. The screen MUST be
-screenshot/recording protected (iOS: `ScreenshotLockService`).
+The QR is displayed only while the session is waiting, and only while the
+app is in the foreground with a screen that is not being captured:
+
+- screen recorded, mirrored (AirPlay/cable) or shared (iOS
+  `UIScreen.isCaptured`): the displayer stops its session and hides the code
+  until the capture ends, then starts a fresh session. (iOS
+  `ScreenshotLockService` only blanks its own secure layer in a capture, not a
+  sibling view, so it is not relied on for this.)
+- screenshot taken (`userDidTakeScreenshotNotification`): the whole session
+  (sessionId, secrets, frame keys) is replaced at once.
+- app to the background (screen locked, app switched): any live pairing on
+  either side is cancelled; the displayer starts a fresh session on return.
+  The screen does not auto-lock while the pairing screen is open.
+- freshness uses a monotonic clock that keeps counting while the device
+  sleeps (Darwin `CLOCK_MONOTONIC`, Android `SystemClock.elapsedRealtime`).
+- the one-time OS Bluetooth permission prompt is answered BEFORE a code is
+  shown (displayer) and, where possible, when the QR scanner opens
+  (scanner), so its time never counts against a frame's 8 s window.
 
 ## 7. BLE profile and framing
 
@@ -195,7 +213,12 @@ A reassembled message is `u8(type) ‖ body`.
 `idPub` = Ed25519 identity public key (the key call handshakes are signed
 with); `encPub` = X25519 identity public key (the contact key shown in the
 identity QR); `userId` = the server account id. Parsers MUST check exact
-lengths, `1 ≤ n ≤ 256`, valid UTF-8, and no trailing bytes.
+lengths, `1 ≤ n ≤ 256`, and no trailing bytes, and MUST reject any userId
+byte outside `[A-Za-z0-9._-]` (server ids are UUIDs). The grammar leaves no
+way to write "the same id" as different bytes — no padding, NBSP,
+zero-width or bidi characters, no `|` (the pin store's account separator) —
+so the name shown for a userId and every exact-match lookup (pins, contacts,
+self check) always agree. The KAT (§15) lists valid and invalid ids.
 
 The **ACCEPT unsigned part** is `ct ‖ idPub_S ‖ encPub_S ‖ u16be(n) ‖ userId_S`.
 
@@ -313,7 +336,18 @@ Before showing the SAS each side evaluates the peer identity:
   per-contact pin and/or the per-device ones) and the presented Ed25519 key
   equals none of them → **accept with warning** (red banner on the
   confirmation screen; the user decides in person);
+- otherwise, the address book holds an identity key for `userId` and it
+  equals neither presented key (`ContactsStore.pubkey` may hold either the
+  X25519 key from an identity-QR scan or the Ed25519 key a call filled in)
+  → **accept with warning**;
 - otherwise → accept.
+
+Server check (informative, host-supplied): while the SAS is on screen the
+app fetches the Ed25519 identity keys the claimed account published
+(`GET /api/v1/users/{id}/identity-key?all=1`). The presented `idPub` in that
+set → "account verified"; a non-empty set without it → red warning; empty /
+offline / no answer within 5 s → "could not verify". "Confirm" waits for the
+answer (at most 5 s).
 
 Nothing writes pins (the call handshake owns pinning). On completion:
 
@@ -329,7 +363,10 @@ Nothing writes pins (the call handshake owns pinning). On completion:
   "`3` proximity" must land in all four together with the Android port. No
   wire change depends on it — receivers already recover the role by walking
   all 256 values;
-- the app adds the peer as a contact (userId + encPub) if missing.
+- the app adds the peer as a contact (userId + encPub) **only if missing**,
+  marked verified only when the server check confirmed the account; a known
+  contact's stored key, name and verified state are never changed by a
+  pairing.
 
 ## 13. Android port notes (informative)
 
@@ -366,5 +403,8 @@ only NFC peer that exists. The upgrade has to ship on both sides together:
 generated by `scripts/kat/gen_proximity_pairing_kat.py` (an independent
 hashlib/hmac reference implementation of §5, §6, §8 and §10). ML-KEM and
 X25519 shared secrets are fixed inputs in the vector; everything derived
-from them is checked byte-for-byte. Regenerate with
+from them is checked byte-for-byte. The vector also pins the full wire
+layout of ACCEPT and FINISH (with layout-only signature bytes: sig before
+mac), ABORT and BUSY, and lists valid and invalid userIds for the §8
+grammar. Regenerate with
 `python3 scripts/kat/gen_proximity_pairing_kat.py`.

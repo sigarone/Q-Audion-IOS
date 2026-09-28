@@ -37,6 +37,25 @@ public enum ProximityPairing {
     public static let sasBytes: Int = 8
     public static let sasDigits: Int = 6
     public static let maxUserIdBytes: Int = 256
+
+    /// Spec §8 userId grammar: 1...256 bytes, each one of `[A-Za-z0-9._-]`.
+    /// Server account ids are UUIDs, so this costs nothing — and it removes
+    /// every way to present "the same id" as different bytes (padding,
+    /// NBSP, zero-width or bidi characters, the pin store's `|` separator),
+    /// which would otherwise show a known contact's name on the SAS screen
+    /// while every exact-match lookup (pins, contacts, self check) missed.
+    public static func isValidUserId(_ userId: String) -> Bool {
+        let bytes: [UInt8] = Array(userId.utf8)
+        guard bytes.count >= 1, bytes.count <= maxUserIdBytes else { return false }
+        for byte in bytes {
+            let isUpper: Bool = byte >= 0x41 && byte <= 0x5A
+            let isLower: Bool = byte >= 0x61 && byte <= 0x7A
+            let isDigit: Bool = byte >= 0x30 && byte <= 0x39
+            let isPunctuation: Bool = byte == 0x2E || byte == 0x5F || byte == 0x2D
+            if !(isUpper || isLower || isDigit || isPunctuation) { return false }
+        }
+        return true
+    }
     public static let maxMessageBytes: Int = 4096
     public static let helloBodyBytes: Int = 100
 
@@ -145,6 +164,9 @@ public struct ProximityPeerIdentity: Equatable, Sendable {
         guard userIdBytes >= 1, userIdBytes <= ProximityPairing.maxUserIdBytes else {
             throw ProximityPairingError.protocolViolation("userId length")
         }
+        guard ProximityPairing.isValidUserId(userId) else {
+            throw ProximityPairingError.protocolViolation("userId charset")
+        }
         guard signingPublicKey.count == ProximityPairing.ed25519PublicKeyBytes else {
             throw ProximityPairingError.protocolViolation("signing key length")
         }
@@ -227,6 +249,33 @@ public struct ProximityPairingResult: Equatable {
         self.pskFingerprint = pskFingerprint
         self.sas = sas
         self.identityWarning = identityWarning
+    }
+}
+
+/// What a completed pairing reports to the host app, AFTER its PSK is in the
+/// vault: everything in `ProximityPairingResult` except the key. The PSK then
+/// never travels through SwiftUI closures and view state, where no copy of it
+/// could be scrubbed.
+public struct ProximityPairingSummary: Equatable, Sendable {
+    public let role: ProximityRole
+    public let peer: ProximityPeerIdentity
+    /// `lowercase_hex(SHA-256(psk))` — the fingerprint the vault entry carries.
+    public let pskFingerprint: String
+    public let sas: String
+    public let identityWarning: String?
+    /// True only when the claimed account's server-published identity keys
+    /// contained the Ed25519 key the peer's phone proved (spec §12). False
+    /// when the keys differed, the check could not run, or it timed out:
+    /// then the userId is only the peer's own claim.
+    public let serverIdentityConfirmed: Bool
+
+    public init(_ result: ProximityPairingResult, serverIdentityConfirmed: Bool = false) {
+        self.role = result.role
+        self.peer = result.peer
+        self.pskFingerprint = result.pskFingerprint
+        self.sas = result.sas
+        self.identityWarning = result.identityWarning
+        self.serverIdentityConfirmed = serverIdentityConfirmed
     }
 }
 
@@ -383,8 +432,12 @@ public final class ProximityMainScheduler: ProximityScheduler {
 
     public init() {}
 
+    /// Monotonic and, unlike `systemUptime`, still counting while the device
+    /// sleeps (Darwin's CLOCK_MONOTONIC), so a QR frame's 8 s window is 8 s
+    /// of real time even across a screen lock.
     public func now() -> TimeInterval {
-        return ProcessInfo.processInfo.systemUptime
+        let nanos: UInt64 = clock_gettime_nsec_np(CLOCK_MONOTONIC)
+        return TimeInterval(nanos) / 1_000_000_000
     }
 
     @discardableResult

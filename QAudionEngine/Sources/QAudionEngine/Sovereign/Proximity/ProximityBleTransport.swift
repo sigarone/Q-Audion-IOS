@@ -53,6 +53,68 @@ private func proximityBleUnavailableReason(_ state: CBManagerState) -> String? {
     }
 }
 
+// MARK: - Permission
+
+/// Gets the one-time system Bluetooth prompt out of the way BEFORE a code is
+/// shown or scanned: answered mid-pairing, it would eat the QR frame's 8 s
+/// window and the connect timeout, and the very first pairing would fail.
+public enum ProximityBluetoothPermission {
+
+    /// True until the user has answered the system prompt once.
+    public static var isUndetermined: Bool {
+        return CBManager.authorization == .notDetermined
+    }
+
+    /// Shows the system prompt if it was never answered and calls `completion`
+    /// (main thread) once it has been; calls it at once otherwise. Main thread only.
+    public static func requestIfNeeded(_ completion: (() -> Void)? = nil) {
+        ProximityBluetoothPermissionRequest.request(completion)
+    }
+}
+
+/// A throwaway central whose only job is to trigger the prompt and report
+/// the answer. Kept alive by `current` until then.
+private final class ProximityBluetoothPermissionRequest: NSObject, CBCentralManagerDelegate {
+
+    private static var current: ProximityBluetoothPermissionRequest?
+
+    private var manager: CBCentralManager?
+    private var completions: [() -> Void] = []
+
+    static func request(_ completion: (() -> Void)?) {
+        guard CBManager.authorization == .notDetermined else {
+            completion?()
+            return
+        }
+        let pending: ProximityBluetoothPermissionRequest
+        if let existing = current {
+            pending = existing
+        } else {
+            pending = ProximityBluetoothPermissionRequest()
+            current = pending
+            let options: [String: Any] = [CBCentralManagerOptionShowPowerAlertKey: false]
+            pending.manager = CBCentralManager(delegate: pending, queue: nil, options: options)
+        }
+        if let done = completion {
+            pending.completions.append(done)
+        }
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard central === manager, CBManager.authorization != .notDetermined else { return }
+        let waiting: [() -> Void] = completions
+        completions = []
+        central.delegate = nil
+        manager = nil
+        if ProximityBluetoothPermissionRequest.current === self {
+            ProximityBluetoothPermissionRequest.current = nil
+        }
+        for done in waiting {
+            done()
+        }
+    }
+}
+
 // MARK: - Displayer (GATT peripheral)
 
 public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerTransport, CBPeripheralManagerDelegate {
@@ -794,7 +856,7 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
             message = try reassembler.append(value)
         } catch {
             let failure: ProximityPairingError = (error as? ProximityPairingError) ?? .protocolViolation("BLE framing")
-            failLink(failure)
+            failLinkTellingDisplayer(failure)
             return
         }
         if let whole = message {
@@ -918,6 +980,32 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         guard let current = link else { return }
         link = nil
         teardown()
+        current.markDead()
+        current.fireClosed(error)
+    }
+
+    /// A framing error found here is a local failure (spec §7, §11), so the
+    /// displayer must hear ABORT(protocol violation) rather than see a bare
+    /// disconnect — which it would treat as a radio drop and answer with a
+    /// fresh code on its own. Queues the ABORT behind whatever is already in
+    /// flight, lets it drain, then reports the failure to the session.
+    private func failLinkTellingDisplayer(_ error: ProximityPairingError) {
+        guard let current = link, phase == .connected, let p = remotePeripheral else {
+            failLink(error)
+            return
+        }
+        let reason: UInt8 = ProximityPairing.AbortReason.protocolViolation.rawValue
+        let abort: Data = ProximityMessage.abort(reason: reason).encoded()
+        let maxLength: Int = p.maximumWriteValueLength(for: .withoutResponse)
+        guard let pieces = try? ProximityFraming.fragments(of: abort, maxValueLength: maxLength) else {
+            failLink(error)
+            return
+        }
+        link = nil
+        reassembler.reset()
+        outbox.append(contentsOf: pieces)
+        pumpWrites()
+        beginDrain()
         current.markDead()
         current.fireClosed(error)
     }

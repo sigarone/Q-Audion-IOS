@@ -1,5 +1,6 @@
 #if canImport(SwiftUI) && os(iOS)
 import SwiftUI
+import Combine
 import UIKit
 
 // Proximity pairing v1 — SwiftUI screens (spec §9 human step). Plain SwiftUI
@@ -7,9 +8,11 @@ import UIKit
 // tokens. All protocol and persistence work lives in ProximityPairingViewDriver
 // (ProximityPairingDriver.swift); these views only render its `phase`.
 //
-// The host is responsible for screenshot / recording protection of the
-// displayer screen (spec §6, `ScreenshotLockService`), since that service
-// lives in the app target.
+// Screen capture (recording, mirroring, sharing), screenshots and the app
+// going to the background are handled here (spec §6): the displayer stops
+// showing the code while the screen is captured, replaces the session after
+// a screenshot, and never keeps a pairing running in the background. The host
+// may still add `ScreenshotLockService` on top.
 
 /// The phone that SHOWS the rotating QR code and waits for the other phone to
 /// connect over Bluetooth. Starts on appear, cancels on disappear. After a
@@ -20,22 +23,43 @@ public struct ProximityPairingDisplayerView: View {
     /// - Parameters:
     ///   - localUserId: this account's server user id (non-empty).
     ///   - displayName: resolves a peer userId to the name shown next to the SAS.
+    ///   - serverIdentityKeys: the Ed25519 identity keys a userId's account
+    ///     published on the server (empty when unknown/offline). When given,
+    ///     the confirmation screen says whether the peer's phone proved one of
+    ///     them, and "Coincide" waits up to 5 s for the answer.
     ///   - onCompleted: fired once, only after both users confirmed AND the key
     ///     was stored in the vault.
     public init(localUserId: String,
                 displayName: @escaping (String) -> String,
-                onCompleted: @escaping (ProximityPairingResult) -> Void) {
+                serverIdentityKeys: ((String) async -> Set<Data>)? = nil,
+                onCompleted: @escaping (ProximityPairingSummary) -> Void) {
         _driver = StateObject(wrappedValue: ProximityPairingViewDriver(localUserId: localUserId,
                                                                        scanPayload: nil,
                                                                        displayName: displayName,
                                                                        onCompleted: onCompleted,
-                                                                       onRescan: nil))
+                                                                       onRescan: nil,
+                                                                       serverIdentityKeys: serverIdentityKeys))
     }
 
     public var body: some View {
         ProximityPairingPanel(driver: driver)
-            .onAppear { driver.start() }
+            .onAppear {
+                driver.screenCaptureChanged(ProximityPairingViewDriver.isScreenCaptured())
+                driver.start()
+            }
             .onDisappear { driver.stop() }
+            .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+                driver.screenCaptureChanged(ProximityPairingViewDriver.isScreenCaptured())
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
+                driver.screenshotTaken()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                driver.appDidEnterBackground()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                driver.appWillEnterForeground()
+            }
     }
 }
 
@@ -49,19 +73,24 @@ public struct ProximityPairingScannerView: View {
     public init(payload: ProximityQrPayload,
                 localUserId: String,
                 displayName: @escaping (String) -> String,
-                onCompleted: @escaping (ProximityPairingResult) -> Void,
+                serverIdentityKeys: ((String) async -> Set<Data>)? = nil,
+                onCompleted: @escaping (ProximityPairingSummary) -> Void,
                 onRescan: @escaping () -> Void) {
         _driver = StateObject(wrappedValue: ProximityPairingViewDriver(localUserId: localUserId,
                                                                        scanPayload: payload,
                                                                        displayName: displayName,
                                                                        onCompleted: onCompleted,
-                                                                       onRescan: onRescan))
+                                                                       onRescan: onRescan,
+                                                                       serverIdentityKeys: serverIdentityKeys))
     }
 
     public var body: some View {
         ProximityPairingPanel(driver: driver)
             .onAppear { driver.start() }
             .onDisappear { driver.stop() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                driver.appDidEnterBackground()
+            }
     }
 }
 
@@ -69,7 +98,7 @@ public struct ProximityPairingScannerView: View {
 
 private enum ProximityPairingCopy {
     static let displayerCaption: String =
-        "Fai inquadrare questo codice dall'altro telefono con Q-Audion (Contatti → + → Scansiona QR). "
+        "Fai inquadrare questo codice dall'altro telefono con Q-Audion (Contatti → Aggiungi contatto → Scansiona QR). "
         + "Tieni i telefoni vicini: il Bluetooth li collega da solo."
     static let preparingCode: String = "Preparazione del codice…"
     static let preparing: String = "Preparazione…"
@@ -80,6 +109,12 @@ private enum ProximityPairingCopy {
     static let newCode: String = "Nuovo codice"
     static let scanAgain: String = "Scansiona di nuovo"
     static let qrAccessibility: String = "Codice QR di associazione"
+    static let serverChecking: String = "Verifica dell'account sul server…"
+    static let serverConfirmed: String = "Account verificato: la chiave di questo telefono è quella pubblicata dall'account."
+    static let serverUnknown: String = "Impossibile verificare l'account sul server: controlla bene chi hai davanti."
+    static let serverMismatch: String =
+        "Attenzione: questo account ha pubblicato sul server chiavi diverse da quella di questo telefono. "
+        + "La persona davanti a te potrebbe non essere il titolare dell'account: conferma solo se ne sei certo."
 }
 
 // MARK: - Shared panel
@@ -183,6 +218,9 @@ private struct ProximityPairingPanel: View {
             if let warning = info.warning {
                 warningBox(warning)
             }
+            if info.serverCheck == .mismatch {
+                warningBox(ProximityPairingCopy.serverMismatch)
+            }
             Text(info.peerName)
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
@@ -197,12 +235,40 @@ private struct ProximityPairingPanel: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
                 .padding(.vertical, 8)
-            confirmationActions(info.localConfirmed)
+            serverCheckLine(info.serverCheck)
+            confirmationActions(info.localConfirmed, checking: info.serverCheck == .checking)
         }
     }
 
     @ViewBuilder
-    private func confirmationActions(_ localConfirmed: Bool) -> some View {
+    private func serverCheckLine(_ check: ProximityPairingViewDriver.ServerCheck) -> some View {
+        switch check {
+        case .checking:
+            HStack(spacing: 8) {
+                ProgressView()
+                Text(ProximityPairingCopy.serverChecking)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        case .confirmed:
+            Label(ProximityPairingCopy.serverConfirmed, systemImage: "checkmark.seal.fill")
+                .font(.footnote)
+                .foregroundStyle(.green)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        case .unknown:
+            Label(ProximityPairingCopy.serverUnknown, systemImage: "questionmark.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        case .notAvailable, .mismatch:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func confirmationActions(_ localConfirmed: Bool, checking: Bool) -> some View {
         if localConfirmed {
             HStack(spacing: 10) {
                 ProgressView()
@@ -217,10 +283,11 @@ private struct ProximityPairingPanel: View {
                         .font(.title3.weight(.semibold))
                         .padding()
                         .frame(maxWidth: 280)
-                        .background(Color.green)
+                        .background(checking ? Color.gray : Color.green)
                         .foregroundStyle(.white)
                         .clipShape(Capsule())
                 }
+                .disabled(checking)
                 Button(action: driver.reject) {
                     Label(ProximityPairingCopy.rejectTitle, systemImage: "xmark")
                         .font(.title3.weight(.semibold))

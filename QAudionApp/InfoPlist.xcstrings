@@ -260,37 +260,37 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion uses Bluetooth to pair with Q-Audion earbuds for hardware-backed key custody, to confirm that a contact you pair with in person by QR code is really next to you, and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available."
+            "value": "Q-Audion uses Bluetooth to exchange encryption keys directly with a contact's phone when you pair in person by QR code, to pair with Q-Audion earbuds for hardware-backed key custody, and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion usa il Bluetooth per abbinarsi agli auricolari Q-Audion per la custodia hardware delle chiavi, per verificare che il contatto che associ di persona con il codice QR sia davvero accanto a te e, solo quando attivi l'antenna mesh in una chat, per inoltrare messaggi cifrati ai dispositivi Q-Audion vicini quando non c'è rete disponibile."
+            "value": "Q-Audion usa il Bluetooth per scambiare le chiavi di cifratura direttamente con il telefono di un contatto quando lo associ di persona con il codice QR, per abbinarsi agli auricolari Q-Audion per la custodia hardware delle chiavi e, solo quando attivi l'antenna mesh in una chat, per inoltrare messaggi cifrati ai dispositivi Q-Audion vicini quando non c'è rete disponibile."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion usa Bluetooth para emparejarse con los auriculares Q-Audion para la custodia de claves respaldada por hardware, para confirmar que el contacto que emparejas en persona con un código QR está realmente a tu lado y, solo cuando activas la antena mesh en un chat, para retransmitir mensajes cifrados a dispositivos Q-Audion cercanos cuando no hay red disponible."
+            "value": "Q-Audion usa Bluetooth para intercambiar claves de cifrado directamente con el teléfono de un contacto cuando lo emparejas en persona con un código QR, para emparejarse con los auriculares Q-Audion para la custodia de claves respaldada por hardware y, solo cuando activas la antena mesh en un chat, para retransmitir mensajes cifrados a dispositivos Q-Audion cercanos cuando no hay red disponible."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion utilise le Bluetooth pour s'associer aux écouteurs Q-Audion afin d'assurer la conservation matérielle des clés, pour confirmer que le contact que vous associez en personne avec un code QR est bien à côté de vous et, uniquement lorsque vous activez l'antenne mesh dans une discussion, pour relayer des messages chiffrés vers des appareils Q-Audion à proximité en l'absence de réseau."
+            "value": "Q-Audion utilise le Bluetooth pour échanger des clés de chiffrement directement avec le téléphone d'un contact lorsque vous l'associez en personne avec un code QR, pour s'associer aux écouteurs Q-Audion afin d'assurer la conservation matérielle des clés et, uniquement lorsque vous activez l'antenne mesh dans une discussion, pour relayer des messages chiffrés vers des appareils Q-Audion à proximité en l'absence de réseau."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verwendet Bluetooth, um sich mit Q-Audion-Ohrhörern für die hardwaregestützte Schlüsselverwahrung zu verbinden, um zu bestätigen, dass ein Kontakt, den du persönlich per QR-Code koppelst, wirklich neben dir ist, und – nur wenn du die Mesh-Antenne in einem Chat aktivierst – um verschlüsselte Nachrichten an nahegelegene Q-Audion-Geräte weiterzuleiten, wenn kein Netzwerk verfügbar ist."
+            "value": "Q-Audion verwendet Bluetooth, um Verschlüsselungsschlüssel direkt mit dem Telefon eines Kontakts auszutauschen, wenn du ihn persönlich per QR-Code koppelst, um sich mit Q-Audion-Ohrhörern für die hardwaregestützte Schlüsselverwahrung zu verbinden, und – nur wenn du die Mesh-Antenne in einem Chat aktivierst – um verschlüsselte Nachrichten an nahegelegene Q-Audion-Geräte weiterzuleiten, wenn kein Netzwerk verfügbar ist."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O Q-Audion usa Bluetooth para parear com os fones Q-Audion para a custódia de chaves apoiada por hardware, para confirmar que o contato que você pareia pessoalmente por código QR está realmente ao seu lado e, somente quando você ativa a antena mesh em uma conversa, para retransmitir mensagens criptografadas para dispositivos Q-Audion próximos quando não há rede disponível."
+            "value": "O Q-Audion usa Bluetooth para trocar chaves de criptografia diretamente com o telefone de um contato quando você o pareia pessoalmente por código QR, para parear com os fones Q-Audion para a custódia de chaves apoiada por hardware e, somente quando você ativa a antena mesh em uma conversa, para retransmitir mensagens criptografadas para dispositivos Q-Audion próximos quando não há rede disponível."
           }
         }
       }

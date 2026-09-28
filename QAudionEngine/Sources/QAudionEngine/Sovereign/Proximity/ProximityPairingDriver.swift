@@ -23,11 +23,37 @@ import CoreImage.CIFilterBuiltins
 @MainActor
 final class ProximityPairingViewDriver: ObservableObject {
 
+    /// Whether the account the peer claims actually published the Ed25519
+    /// key its phone just proved (spec §12). Without it the userId, and so
+    /// the name on the confirmation screen, is only the peer's own claim.
+    enum ServerCheck: Equatable {
+        /// No lookup configured by the host.
+        case notAvailable
+        /// Lookup running; "Coincide" waits for it (bounded by `serverCheckTimeout`).
+        case checking
+        /// The presented key is one the account published.
+        case confirmed
+        /// The account published keys and this is none of them.
+        case mismatch
+        /// Offline, nothing published, or the lookup timed out.
+        case unknown
+    }
+
     /// What the confirmation screen shows (spec §9: peer name + SAS).
     struct Confirmation: Equatable {
         let peerName: String
         /// The 6-digit SAS grouped as "123 456".
         let groupedSas: String
+        let warning: String?
+        let localConfirmed: Bool
+        let serverCheck: ServerCheck
+    }
+
+    /// The session-provided half of a `Confirmation`, kept so the screen can
+    /// be re-rendered when the server check finishes.
+    private struct ConfirmationInputs {
+        let sas: String
+        let peer: ProximityPeerIdentity
         let warning: String?
         let localConfirmed: Bool
     }
@@ -56,9 +82,16 @@ final class ProximityPairingViewDriver: ObservableObject {
     private static let scannerExchangingText: String = "Scambio chiavi post-quantistiche…"
     private static let completedPrefix: String = "Chiave post-quantistica condivisa con "
     private static let qrUnavailableText: String = "Impossibile generare il codice QR. Riprova."
+    private static let bluetoothPermissionText: String =
+        "Consenti a Q-Audion di usare il Bluetooth: serve a verificare che l'altro telefono sia davvero qui."
+    private static let screenCapturedText: String =
+        "Lo schermo è registrato o condiviso: il codice resta nascosto finché non interrompi la registrazione "
+        + "o la condivisione."
 
     // MARK: Tuning
 
+    /// Upper bound on the server check before "Coincide" is offered anyway.
+    private static let serverCheckTimeout: TimeInterval = 5.0
     /// Displayer: delay before a retryable failure shows a fresh code.
     private static let autoRestartDelay: TimeInterval = 3.0
     /// Extra time, on top of the session's own drain grace, before a completed
@@ -72,8 +105,9 @@ final class ProximityPairingViewDriver: ObservableObject {
     private let localUserId: String
     private let scanPayload: ProximityQrPayload?
     private let displayName: (String) -> String
-    private let onCompleted: (ProximityPairingResult) -> Void
+    private let onCompleted: (ProximityPairingSummary) -> Void
     private let onRescan: (() -> Void)?
+    private let serverIdentityKeys: ((String) async -> Set<Data>)?
     private let scheduler: ProximityMainScheduler
 
     // MARK: Live objects
@@ -87,6 +121,23 @@ final class ProximityPairingViewDriver: ObservableObject {
     private var epoch: UInt64 = 0
     private var finished: Bool = false
     private var autoRestartTimer: ProximityCancellable?
+    private var serverCheck: ServerCheck = .notAvailable
+    /// The epoch whose peer the server check ran for (one lookup per session).
+    private var serverCheckEpoch: UInt64?
+    private var serverCheckTask: Task<Void, Never>?
+    private var serverCheckTimer: ProximityCancellable?
+    private var confirmationInputs: ConfirmationInputs?
+    /// The idle-timer setting found on appear, restored on disappear: a
+    /// pairing must not be suspended by auto-lock halfway through.
+    private var savedIdleTimerDisabled: Bool?
+    /// Read from the Keychain once per screen, not once per attempt: every
+    /// read materialises the whole identity blob (both private keys) in
+    /// memory Swift cannot scrub, so auto-restarts should not multiply it.
+    private var cachedIdentity: ProximityLocalIdentity?
+    /// Displayer: the screen is being recorded, mirrored or shared.
+    private var screenCaptured: Bool = false
+    /// A displayer session was stopped because the app went to the background.
+    private var suspendedInBackground: Bool = false
     private var renderedSessionId: Data = Data()
     private var renderedFrameIndex: UInt32?
     private lazy var ciContext: CIContext = CIContext()
@@ -94,13 +145,15 @@ final class ProximityPairingViewDriver: ObservableObject {
     init(localUserId: String,
          scanPayload: ProximityQrPayload?,
          displayName: @escaping (String) -> String,
-         onCompleted: @escaping (ProximityPairingResult) -> Void,
-         onRescan: (() -> Void)?) {
+         onCompleted: @escaping (ProximityPairingSummary) -> Void,
+         onRescan: (() -> Void)?,
+         serverIdentityKeys: ((String) async -> Set<Data>)?) {
         self.localUserId = localUserId
         self.scanPayload = scanPayload
         self.displayName = displayName
         self.onCompleted = onCompleted
         self.onRescan = onRescan
+        self.serverIdentityKeys = serverIdentityKeys
         self.scheduler = ProximityMainScheduler()
     }
 
@@ -114,6 +167,10 @@ final class ProximityPairingViewDriver: ObservableObject {
     /// shows a final result.
     func start() {
         isActive = true
+        if savedIdleTimerDisabled == nil {
+            savedIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
         guard case .preparing = phase else { return }
         guard displayerSession == nil, scannerSession == nil else { return }
         begin()
@@ -122,10 +179,17 @@ final class ProximityPairingViewDriver: ObservableObject {
     /// On disappear. Cancels a live pairing (the peer gets ABORT(cancelled)).
     func stop() {
         isActive = false
+        suspendedInBackground = false
+        cachedIdentity = nil
+        if let saved = savedIdleTimerDisabled {
+            UIApplication.shared.isIdleTimerDisabled = saved
+            savedIdleTimerDisabled = nil
+        }
         epoch &+= 1
         cancelAutoRestart()
         tearDownSession()
         clearCode()
+        resetServerCheck()
         switch phase {
         case .completed, .failed:
             break
@@ -136,6 +200,7 @@ final class ProximityPairingViewDriver: ObservableObject {
 
     func confirm() {
         guard case .confirming(let info) = phase, !info.localConfirmed else { return }
+        guard info.serverCheck != .checking else { return }
         displayerSession?.confirm()
         scannerSession?.confirm()
     }
@@ -158,6 +223,97 @@ final class ProximityPairingViewDriver: ObservableObject {
         }
     }
 
+    // MARK: - Screen capture and app lifecycle (spec §6)
+
+    /// True while any connected screen is being recorded, mirrored (AirPlay,
+    /// cable) or shared. `ScreenshotLockService` only blanks its own secure
+    /// layer in a capture, not a sibling view like the QR, so the displayer
+    /// has to stop showing the code itself.
+    static func isScreenCaptured() -> Bool {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            if windowScene.screen.isCaptured { return true }
+        }
+        return false
+    }
+
+    /// On appear and on `UIScreen.capturedDidChangeNotification`. Displayer
+    /// only: a recording, mirror or screen share would carry the live code to
+    /// someone who is not in the room (spec §2 A4), so the session stops
+    /// while it lasts and a fresh one starts when it ends.
+    func screenCaptureChanged(_ captured: Bool) {
+        guard isDisplayer else { return }
+        let wasCaptured: Bool = screenCaptured
+        screenCaptured = captured
+        guard isActive, captured != wasCaptured else { return }
+        if captured {
+            halt(showing: ProximityPairingViewDriver.screenCapturedText)
+            return
+        }
+        if case .failed(let text) = phase, text == ProximityPairingViewDriver.screenCapturedText {
+            begin()
+        }
+    }
+
+    /// `UIApplication.userDidTakeScreenshotNotification`: the frame on screen
+    /// now exists as an image, so the whole session (sessionId, secrets,
+    /// frame keys) is replaced at once instead of waiting for it to age out.
+    func screenshotTaken() {
+        guard isDisplayer, isActive else { return }
+        guard case .showingCode = phase else { return }
+        begin()
+    }
+
+    /// `UIApplication.didEnterBackgroundNotification`: a pairing never goes on
+    /// behind a locked screen or another app — its timers would stall and
+    /// resume with a frame that is no longer fresh. The displayer starts a new
+    /// session on return; the scanner's code was single-use.
+    func appDidEnterBackground() {
+        guard isActive else { return }
+        switch phase {
+        case .completed, .failed:
+            return
+        default:
+            break
+        }
+        guard displayerSession != nil || scannerSession != nil else { return }
+        if isDisplayer {
+            halt(showing: nil)
+            suspendedInBackground = true
+        } else {
+            halt(showing: ProximityPairingError.cancelled.userMessage)
+        }
+    }
+
+    /// `UIApplication.willEnterForegroundNotification`.
+    func appWillEnterForeground() {
+        guard suspendedInBackground else { return }
+        suspendedInBackground = false
+        guard isActive, isDisplayer else { return }
+        guard case .preparing = phase else { return }
+        begin()
+    }
+
+    /// Ends the live session (ABORT(cancelled) to a locked peer) and shows
+    /// `text` as a failure, or the neutral preparing state when nil.
+    private func halt(showing text: String?) {
+        epoch &+= 1
+        cancelAutoRestart()
+        tearDownSession()
+        clearCode()
+        if let message = text {
+            setPhase(.failed(message))
+        } else {
+            setPhase(.preparing)
+        }
+    }
+
+    private func bluetoothPermissionAnswered(epoch expected: UInt64) {
+        guard expected == epoch, isActive else { return }
+        guard case .working(let text) = phase, text == ProximityPairingViewDriver.bluetoothPermissionText else { return }
+        begin()
+    }
+
     // MARK: - Session setup
 
     private func begin() {
@@ -165,9 +321,27 @@ final class ProximityPairingViewDriver: ObservableObject {
         cancelAutoRestart()
         tearDownSession()
         clearCode()
+        resetServerCheck()
         finished = false
         setPhase(.preparing)
-        guard let identity = ProximityPairingStore.loadLocalIdentity(userId: localUserId) else {
+        if isDisplayer && screenCaptured {
+            setPhase(.failed(ProximityPairingViewDriver.screenCapturedText))
+            return
+        }
+        if ProximityBluetoothPermission.isUndetermined {
+            // Answer the one-time prompt first; its time must not count
+            // against a frame's 8 s window or the connect timeout.
+            setPhase(.working(ProximityPairingViewDriver.bluetoothPermissionText))
+            let expected: UInt64 = epoch
+            ProximityBluetoothPermission.requestIfNeeded { [weak self] in
+                self?.bluetoothPermissionAnswered(epoch: expected)
+            }
+            return
+        }
+        if cachedIdentity == nil {
+            cachedIdentity = ProximityPairingStore.loadLocalIdentity(userId: localUserId)
+        }
+        guard let identity = cachedIdentity else {
             setPhase(.failed(ProximityPairingError.identityUnavailable.userMessage))
             return
         }
@@ -229,9 +403,8 @@ final class ProximityPairingViewDriver: ObservableObject {
             setPhase(.working(ProximityPairingViewDriver.displayerExchangingText))
         case .awaitingConfirmation(sas: let sas, peer: let peer, warning: let warning, localConfirmed: let localConfirmed):
             clearCode()
-            let info: Confirmation = makeConfirmation(sas: sas, peer: peer, warning: warning,
-                                                      localConfirmed: localConfirmed)
-            setPhase(.confirming(info))
+            showConfirmation(ConfirmationInputs(sas: sas, peer: peer, warning: warning,
+                                                localConfirmed: localConfirmed))
         case .completed(let result):
             clearCode()
             finish(result)
@@ -254,9 +427,8 @@ final class ProximityPairingViewDriver: ObservableObject {
         case .exchanging:
             setPhase(.working(ProximityPairingViewDriver.scannerExchangingText))
         case .awaitingConfirmation(sas: let sas, peer: let peer, warning: let warning, localConfirmed: let localConfirmed):
-            let info: Confirmation = makeConfirmation(sas: sas, peer: peer, warning: warning,
-                                                      localConfirmed: localConfirmed)
-            setPhase(.confirming(info))
+            showConfirmation(ConfirmationInputs(sas: sas, peer: peer, warning: warning,
+                                                localConfirmed: localConfirmed))
         case .completed(let result):
             finish(result)
         case .failed(let error):
@@ -264,11 +436,84 @@ final class ProximityPairingViewDriver: ObservableObject {
         }
     }
 
-    private func makeConfirmation(sas: String, peer: ProximityPeerIdentity, warning: String?,
-                                  localConfirmed: Bool) -> Confirmation {
-        let name: String = peerName(peer.userId)
-        let grouped: String = ProximityPairingViewDriver.groupSas(sas)
-        return Confirmation(peerName: name, groupedSas: grouped, warning: warning, localConfirmed: localConfirmed)
+    private func showConfirmation(_ inputs: ConfirmationInputs) {
+        confirmationInputs = inputs
+        startServerCheckIfNeeded(inputs.peer)
+        renderConfirmation()
+    }
+
+    private func renderConfirmation() {
+        guard let inputs = confirmationInputs else { return }
+        let name: String = peerName(inputs.peer.userId)
+        let grouped: String = ProximityPairingViewDriver.groupSas(inputs.sas)
+        let info = Confirmation(peerName: name, groupedSas: grouped, warning: inputs.warning,
+                                localConfirmed: inputs.localConfirmed, serverCheck: serverCheck)
+        setPhase(.confirming(info))
+    }
+
+    // MARK: - Server check (spec §12)
+
+    /// Once per session: does the claimed account's published key set contain
+    /// the Ed25519 key this phone just proved? Runs while the users compare
+    /// the SAS; "Coincide" waits for it, at most `serverCheckTimeout`.
+    private func startServerCheckIfNeeded(_ peer: ProximityPeerIdentity) {
+        guard serverCheckEpoch != epoch else { return }
+        serverCheckEpoch = epoch
+        guard let lookup = serverIdentityKeys else {
+            serverCheck = .notAvailable
+            return
+        }
+        serverCheck = .checking
+        let expected: UInt64 = epoch
+        let userId: String = peer.userId
+        let presented: Data = Data(peer.signingPublicKey)
+        serverCheckTask = Task { [weak self] in
+            let published: Set<Data> = await lookup(userId)
+            self?.serverKeysArrived(published, presented: presented, epoch: expected)
+        }
+        serverCheckTimer = scheduler.schedule(after: ProximityPairingViewDriver.serverCheckTimeout) { [weak self] in
+            self?.serverCheckTimedOut(epoch: expected)
+        }
+    }
+
+    private func serverKeysArrived(_ published: Set<Data>, presented: Data, epoch expected: UInt64) {
+        guard expected == epoch, serverCheck == .checking else { return }
+        serverCheckTimer?.cancel()
+        serverCheckTimer = nil
+        serverCheckTask = nil
+        if published.isEmpty {
+            serverCheck = .unknown
+        } else if published.contains(presented) {
+            serverCheck = .confirmed
+        } else {
+            serverCheck = .mismatch
+        }
+        refreshConfirmation()
+    }
+
+    private func serverCheckTimedOut(epoch expected: UInt64) {
+        guard expected == epoch, serverCheck == .checking else { return }
+        serverCheckTimer = nil
+        serverCheckTask?.cancel()
+        serverCheckTask = nil
+        serverCheck = .unknown
+        refreshConfirmation()
+    }
+
+    /// Re-renders only while the confirmation screen is up.
+    private func refreshConfirmation() {
+        guard case .confirming = phase else { return }
+        renderConfirmation()
+    }
+
+    private func resetServerCheck() {
+        serverCheckTask?.cancel()
+        serverCheckTask = nil
+        serverCheckTimer?.cancel()
+        serverCheckTimer = nil
+        serverCheck = .notAvailable
+        serverCheckEpoch = nil
+        confirmationInputs = nil
     }
 
     private func peerName(_ userId: String) -> String {
@@ -292,8 +537,10 @@ final class ProximityPairingViewDriver: ObservableObject {
         }
         let name: String = peerName(result.peer.userId)
         let text: String = ProximityPairingViewDriver.completedPrefix + name
+        let serverConfirmed: Bool = serverCheck == .confirmed
         setPhase(.completed(text))
-        onCompleted(result)
+        // The PSK stops here: the host only ever sees the summary.
+        onCompleted(ProximityPairingSummary(result, serverIdentityConfirmed: serverConfirmed))
     }
 
     // MARK: - QR (displayer)

@@ -43,6 +43,14 @@ final class KeyExportPolicyTests: XCTestCase {
         XCTAssertEqual(PskAdvertV3.role(for: .kms), PskAdvertV3.roleOrdinary)
     }
 
+    func testPresenceRolesAreNfcAndProximityOnly() {
+        XCTAssertTrue(PskAdvertV3.isPresenceRole(PskAdvertV3.roleNfc))
+        XCTAssertTrue(PskAdvertV3.isPresenceRole(PskAdvertV3.roleProximity))
+        XCTAssertFalse(PskAdvertV3.isPresenceRole(PskAdvertV3.roleOrdinary))
+        XCTAssertFalse(PskAdvertV3.isPresenceRole(PskAdvertV3.roleQr))
+        XCTAssertFalse(PskAdvertV3.isPresenceRole(255))
+    }
+
     /// HKDF output of a past call's session key, scoped to one peer's chat and
     /// files. Nothing legitimate reads it off the device.
     func testCallDerivedKeyNeverLeavesTheDevice() {

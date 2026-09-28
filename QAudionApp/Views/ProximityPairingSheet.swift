@@ -2,13 +2,15 @@ import SwiftUI
 import QAudionEngine
 
 /// In-person pairing, displayer side: shows the rotating QR while the phone
-/// advertises over Bluetooth; the other phone scans it from Contacts → + →
-/// Scansiona QR. Protocol: docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md.
+/// advertises over Bluetooth; the other phone scans it from Contatti →
+/// Aggiungi contatto → Scansiona QR. Protocol: docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md.
 ///
 /// Primitives and closures only — never AppState (CLAUDE.md §16).
 struct ProximityPairingDisplaySheet: View {
     let localUserId: String?
-    let onCompleted: (ProximityPairingResult) -> Void
+    /// Published identity keys of an account (`ContactsListContainer.publishedIdentityKeys`).
+    let serverIdentityKeys: ((String) async -> Set<Data>)?
+    let onCompleted: (ProximityPairingSummary) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -35,6 +37,7 @@ struct ProximityPairingDisplaySheet: View {
             ProximityPairingDisplayerView(
                 localUserId: userId,
                 displayName: ProximityPairingNames.resolve,
+                serverIdentityKeys: serverIdentityKeys,
                 onCompleted: onCompleted
             )
         } else {
@@ -48,7 +51,8 @@ struct ProximityPairingDisplaySheet: View {
 struct ProximityPairingScanContent: View {
     let payload: ProximityQrPayload
     let localUserId: String?
-    let onCompleted: (ProximityPairingResult) -> Void
+    let serverIdentityKeys: ((String) async -> Set<Data>)?
+    let onCompleted: (ProximityPairingSummary) -> Void
     let onRescan: () -> Void
 
     var body: some View {
@@ -57,6 +61,7 @@ struct ProximityPairingScanContent: View {
                 payload: payload,
                 localUserId: userId,
                 displayName: ProximityPairingNames.resolve,
+                serverIdentityKeys: serverIdentityKeys,
                 onCompleted: onCompleted,
                 onRescan: onRescan
             )

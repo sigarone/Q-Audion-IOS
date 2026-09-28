@@ -121,6 +121,13 @@ public enum PskAdvertV3 {
     /// do not recognise the role.
     public static let roleProximity = 3
 
+    /// Roles that prove the two users met in person (NFC tap, QR + Bluetooth
+    /// proximity): the ones the S2 presence tier and the "in comune" chip
+    /// care about.
+    public static func isPresenceRole(_ role: Int) -> Bool {
+        return role == roleNfc || role == roleProximity
+    }
+
     /// The wire role for a vault entry's provenance.
     public static func role(for origin: PskOrigin) -> Int {
         switch origin {
