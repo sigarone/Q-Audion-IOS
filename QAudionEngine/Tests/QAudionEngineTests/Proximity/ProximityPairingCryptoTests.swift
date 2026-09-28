@@ -336,22 +336,43 @@ final class ProximityPairingCryptoTests: XCTestCase {
         XCTAssertTrue(ProximityPairingCrypto.helloTag(frameKey: key32, sessionId: sessionId, frameIndex: 1,
                                                       scannerEphemeralX25519: key32, scannerNonce: bytes(31, 3)).isEmpty)
 
-        XCTAssertEqual(ProximityPairingCrypto.commitment(sessionId: sessionId, offerBody: Data([1])).count, 32)
-        XCTAssertTrue(ProximityPairingCrypto.commitment(sessionId: bytes(15, 2), offerBody: Data([1])).isEmpty)
+        let offer = bytes(ProximityPairing.offerBodyBytes, 7)
+        XCTAssertEqual(ProximityPairingCrypto.commitment(sessionId: sessionId, offerBody: offer).count, 32)
+        XCTAssertTrue(ProximityPairingCrypto.commitment(sessionId: bytes(15, 2), offerBody: offer).isEmpty)
         XCTAssertTrue(ProximityPairingCrypto.commitment(sessionId: sessionId, offerBody: Data()).isEmpty)
+        XCTAssertTrue(ProximityPairingCrypto.commitment(sessionId: sessionId,
+                                                        offerBody: bytes(ProximityPairing.offerBodyBytes - 1, 7)).isEmpty)
+        // An OFFER body that still carries an identity is not committed to.
+        XCTAssertTrue(ProximityPairingCrypto.commitment(sessionId: sessionId,
+                                                        offerBody: bytes(ProximityPairing.offerBodyBytes + 75, 7)).isEmpty)
 
         let qr = bytes(85, 5)
         let hello = bytes(100, 6)
+        let ct = bytes(ProximityPairing.mlKemCiphertextBytes, 8)
         XCTAssertEqual(ProximityPairingCrypto.transcriptHash(qrBytes: qr, helloBody: hello,
-                                                             offerBody: Data([1]), acceptUnsignedBody: Data([2])).count, 32)
+                                                             offerBody: offer, mlKemCiphertext: ct).count, 32)
         XCTAssertTrue(ProximityPairingCrypto.transcriptHash(qrBytes: bytes(84, 5), helloBody: hello,
-                                                            offerBody: Data([1]), acceptUnsignedBody: Data([2])).isEmpty)
+                                                            offerBody: offer, mlKemCiphertext: ct).isEmpty)
         XCTAssertTrue(ProximityPairingCrypto.transcriptHash(qrBytes: qr, helloBody: bytes(101, 6),
-                                                            offerBody: Data([1]), acceptUnsignedBody: Data([2])).isEmpty)
+                                                            offerBody: offer, mlKemCiphertext: ct).isEmpty)
         XCTAssertTrue(ProximityPairingCrypto.transcriptHash(qrBytes: qr, helloBody: hello,
-                                                            offerBody: Data(), acceptUnsignedBody: Data([2])).isEmpty)
+                                                            offerBody: Data([1]), mlKemCiphertext: ct).isEmpty)
         XCTAssertTrue(ProximityPairingCrypto.transcriptHash(qrBytes: qr, helloBody: hello,
-                                                            offerBody: Data([1]), acceptUnsignedBody: Data()).isEmpty)
+                                                            offerBody: offer, mlKemCiphertext: Data()).isEmpty)
+        XCTAssertTrue(ProximityPairingCrypto.transcriptHash(qrBytes: qr, helloBody: hello, offerBody: offer,
+                                                            mlKemCiphertext: bytes(1567, 8)).isEmpty)
+
+        let idBlock = bytes(ProximityPairing.idBlockFixedBytes + 5, 9)
+        XCTAssertEqual(ProximityPairingCrypto.identityTranscriptHash(role: .scanner, previousHash: th,
+                                                                     idBlock: idBlock).count, 32)
+        XCTAssertTrue(ProximityPairingCrypto.identityTranscriptHash(role: .scanner, previousHash: bytes(31, 4),
+                                                                    idBlock: idBlock).isEmpty)
+        XCTAssertTrue(ProximityPairingCrypto.identityTranscriptHash(role: .displayer, previousHash: th,
+                                                                    idBlock: bytes(66, 9)).isEmpty)
+        XCTAssertTrue(ProximityPairingCrypto.identityTranscriptHash(role: .displayer, previousHash: th,
+                                                                    idBlock: bytes(66 + 257, 9)).isEmpty)
+        XCTAssertEqual(ProximityPairingCrypto.identityTranscriptHash(role: .displayer, previousHash: th,
+                                                                     idBlock: bytes(66 + 256, 9)).count, 32)
 
         XCTAssertEqual(ProximityPairingCrypto.transcriptMac(key: key32, transcriptHash: th).count, 32)
         XCTAssertTrue(ProximityPairingCrypto.transcriptMac(key: bytes(31, 3), transcriptHash: th).isEmpty)
@@ -380,46 +401,173 @@ final class ProximityPairingCryptoTests: XCTestCase {
         XCTAssertNotEqual(k0, kOtherSecret)
     }
 
+    // MARK: - Transcript hashes
+
+    func testIdentityTranscriptHashIsRoleSeparatedAndChained() {
+        let th1 = pattern(32, seed: 0x31)
+        let idBlock = pattern(ProximityPairing.idBlockFixedBytes + 9, seed: 0x32)
+        let scanner = ProximityPairingCrypto.identityTranscriptHash(role: .scanner, previousHash: th1, idBlock: idBlock)
+        let displayer = ProximityPairingCrypto.identityTranscriptHash(role: .displayer, previousHash: th1,
+                                                                      idBlock: idBlock)
+        XCTAssertEqual(scanner.count, 32)
+        XCTAssertNotEqual(scanner, displayer)
+        XCTAssertNotEqual(scanner, ProximityPairingCrypto.identityTranscriptHash(role: .scanner,
+                                                                                 previousHash: flipped(th1, at: 0),
+                                                                                 idBlock: idBlock))
+        XCTAssertNotEqual(scanner, ProximityPairingCrypto.identityTranscriptHash(role: .scanner, previousHash: th1,
+                                                                                 idBlock: flipped(idBlock, at: 70)))
+        // Chained: TH_D over TH_S differs from TH_D over TH1.
+        let thD = ProximityPairingCrypto.identityTranscriptHash(role: .displayer, previousHash: scanner,
+                                                                idBlock: idBlock)
+        XCTAssertNotEqual(thD, displayer)
+        // Exactly the spec formula: SHA-256(L_TH_S ‖ TH1 ‖ lp32(idBlock)).
+        var manual = Data("qaudion-prox-v1/transcript-scanner".utf8)
+        manual.append(th1)
+        manual.append(ProximityBytes.lp32(idBlock))
+        XCTAssertEqual(scanner, Data(SHA256.hash(data: manual)))
+    }
+
+    // MARK: - Identity sealing (AES-256-GCM, zero nonce)
+
+    func testAeadSealOpenRoundTripAndLayout() throws {
+        let key = pattern(32, seed: 0x40)
+        let aad = pattern(32, seed: 0x41)
+        let plaintext = pattern(66 + 9 + 96, seed: 0x42)
+        let sealed = try ProximityPairingCrypto.aeadSeal(plaintext, key: key, transcriptHash: aad)
+        XCTAssertEqual(sealed.count, plaintext.count + ProximityPairing.aeadTagBytes)
+        XCTAssertNotEqual(Data(sealed.prefix(plaintext.count)), plaintext)
+        XCTAssertEqual(try ProximityPairingCrypto.aeadOpen(sealed, key: key, transcriptHash: aad), plaintext)
+
+        // Deterministic (fixed zero nonce) and identical to CryptoKit with an explicit zero nonce.
+        XCTAssertEqual(try ProximityPairingCrypto.aeadSeal(plaintext, key: key, transcriptHash: aad), sealed)
+        let nonce = try AES.GCM.Nonce(data: Data(count: 12))
+        let reference = try AES.GCM.seal(plaintext, using: SymmetricKey(data: key), nonce: nonce, authenticating: aad)
+        var expected = Data(reference.ciphertext)
+        expected.append(Data(reference.tag))
+        XCTAssertEqual(sealed, expected)
+
+        // A slice with a non-zero startIndex opens the same.
+        var padded = Data([0xAB, 0xCD])
+        padded.append(sealed)
+        XCTAssertEqual(try ProximityPairingCrypto.aeadOpen(padded[2...], key: key, transcriptHash: aad), plaintext)
+    }
+
+    private func assertOpenFailsAuthentication(_ sealed: Data, key: Data, aad: Data,
+                                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try ProximityPairingCrypto.aeadOpen(sealed, key: key, transcriptHash: aad),
+                             file: file, line: line) { (error: Error) in
+            var isAuthentication: Bool = false
+            if let typed = error as? ProximityPairingError, case .authenticationFailed = typed {
+                isAuthentication = true
+            }
+            XCTAssertTrue(isAuthentication, file: file, line: line)
+        }
+    }
+
+    func testAeadOpenRejectsEveryTamper() throws {
+        let key = pattern(32, seed: 0x50)
+        let aad = pattern(32, seed: 0x51)
+        let plaintext = pattern(170, seed: 0x52)
+        let sealed = try ProximityPairingCrypto.aeadSeal(plaintext, key: key, transcriptHash: aad)
+        let positions: [Int] = [0, 85, plaintext.count - 1, plaintext.count, sealed.count - 1]
+        for position in positions {
+            assertOpenFailsAuthentication(flipped(sealed, at: position), key: key, aad: aad)
+        }
+        assertOpenFailsAuthentication(sealed, key: flipped(key, at: 0), aad: aad)
+        assertOpenFailsAuthentication(sealed, key: key, aad: flipped(aad, at: 31))
+        assertOpenFailsAuthentication(Data(sealed.prefix(sealed.count - 1)), key: key, aad: aad)
+        var extended = sealed
+        extended.append(0)
+        assertOpenFailsAuthentication(extended, key: key, aad: aad)
+        assertOpenFailsAuthentication(bytes(16, 0), key: key, aad: aad)
+        assertOpenFailsAuthentication(Data(), key: key, aad: aad)
+    }
+
+    func testAeadRejectsWrongLocalLengths() throws {
+        let key = pattern(32, seed: 0x60)
+        let aad = pattern(32, seed: 0x61)
+        let plaintext = pattern(170, seed: 0x62)
+        let sealed = try ProximityPairingCrypto.aeadSeal(plaintext, key: key, transcriptHash: aad)
+        let badKeys: [Data] = [Data(), bytes(16, 1), bytes(31, 1), bytes(33, 1)]
+        for badKey in badKeys {
+            XCTAssertThrowsError(try ProximityPairingCrypto.aeadSeal(plaintext, key: badKey, transcriptHash: aad))
+            XCTAssertThrowsError(try ProximityPairingCrypto.aeadOpen(sealed, key: badKey, transcriptHash: aad))
+        }
+        let badAads: [Data] = [Data(), bytes(31, 1), bytes(33, 1)]
+        for badAad in badAads {
+            XCTAssertThrowsError(try ProximityPairingCrypto.aeadSeal(plaintext, key: key, transcriptHash: badAad))
+            XCTAssertThrowsError(try ProximityPairingCrypto.aeadOpen(sealed, key: key, transcriptHash: badAad))
+        }
+        XCTAssertThrowsError(try ProximityPairingCrypto.aeadSeal(Data(), key: key, transcriptHash: aad))
+    }
+
     // MARK: - Key schedule
 
     private func baseScheduleInputs() -> [Data] {
         return [pattern(32, seed: 0xa0), pattern(32, seed: 0xb0), pattern(32, seed: 0xc0),
-                pattern(32, seed: 0xd0), pattern(32, seed: 0xe0)]
+                pattern(32, seed: 0xd0), pattern(32, seed: 0xe0), pattern(32, seed: 0xf0)]
     }
 
+    private func handshakeKeys(_ inputs: [Data]) throws -> ProximityPairingCrypto.HandshakeKeys {
+        return try ProximityPairingCrypto.deriveHandshakeKeys(transcriptHash: inputs[0],
+                                                              kemSharedSecret: inputs[1],
+                                                              x25519SharedSecret: inputs[2],
+                                                              scannerNonce: inputs[3],
+                                                              displayerNonce: inputs[4])
+    }
+
+    /// inputs = [TH1, ss_kem, ss_x, nonce_S, nonce_D, TH_D]; every stage-1 and stage-2 output.
     private func scheduleOutputs(_ inputs: [Data]) throws -> [Data] {
-        let keys = try ProximityPairingCrypto.deriveSessionKeys(transcriptHash: inputs[0],
-                                                                kemSharedSecret: inputs[1],
-                                                                x25519SharedSecret: inputs[2],
-                                                                scannerNonce: inputs[3],
-                                                                displayerNonce: inputs[4])
-        return [keys.macKeyScanner, keys.macKeyDisplayer, keys.confirmKeyScanner,
-                keys.confirmKeyDisplayer, keys.sasBytes, keys.psk]
+        let stageOne = try handshakeKeys(inputs)
+        let stageTwo = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                    displayerTranscriptHash: inputs[5])
+        return [stageOne.encKeyScanner, stageOne.encKeyDisplayer, stageOne.macKeyScanner,
+                stageOne.macKeyDisplayer, stageTwo.confirmKeyScanner, stageTwo.confirmKeyDisplayer,
+                stageTwo.sasBytes, stageTwo.psk]
     }
 
-    func testDeriveSessionKeysRejectsWrongLengths() {
+    func testDeriveHandshakeKeysRejectsWrongLengths() {
         let base = baseScheduleInputs()
         var slot: Int = 0
-        while slot < base.count {
+        while slot < 5 {
             let lengths: [Int] = [0, 31, 33, 64]
             for length in lengths {
                 var inputs = base
                 inputs[slot] = bytes(length, 0x11)
-                XCTAssertThrowsError(try scheduleOutputs(inputs))
+                XCTAssertThrowsError(try handshakeKeys(inputs))
             }
             slot += 1
         }
     }
 
+    func testDeriveSessionKeysRejectsWrongLengthsAndZeroizedStageOne() throws {
+        var stageOne = try handshakeKeys(baseScheduleInputs())
+        let lengths: [Int] = [0, 31, 33, 64]
+        for length in lengths {
+            XCTAssertThrowsError(try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                              displayerTranscriptHash: bytes(length, 1)))
+        }
+        XCTAssertNoThrow(try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                      displayerTranscriptHash: bytes(32, 1)))
+        stageOne.zeroize()
+        XCTAssertThrowsError(try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                          displayerTranscriptHash: bytes(32, 1)))
+    }
+
     func testDerivedOutputsArePairwiseDistinct() throws {
-        let keys = try ProximityPairingCrypto.deriveSessionKeys(transcriptHash: bytes(32, 1),
-                                                                kemSharedSecret: bytes(32, 2),
-                                                                x25519SharedSecret: bytes(32, 3),
-                                                                scannerNonce: bytes(32, 4),
-                                                                displayerNonce: bytes(32, 5))
-        let outputs: [Data] = [keys.macKeyScanner, keys.macKeyDisplayer, keys.confirmKeyScanner,
-                               keys.confirmKeyDisplayer, keys.sasBytes, keys.psk]
-        XCTAssertEqual(keys.macKeyScanner.count, 32)
+        let stageOne = try ProximityPairingCrypto.deriveHandshakeKeys(transcriptHash: bytes(32, 1),
+                                                                      kemSharedSecret: bytes(32, 2),
+                                                                      x25519SharedSecret: bytes(32, 3),
+                                                                      scannerNonce: bytes(32, 4),
+                                                                      displayerNonce: bytes(32, 5))
+        let keys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                displayerTranscriptHash: bytes(32, 6))
+        let outputs: [Data] = [stageOne.encKeyScanner, stageOne.encKeyDisplayer, stageOne.macKeyScanner,
+                               stageOne.macKeyDisplayer, stageOne.prk, keys.confirmKeyScanner,
+                               keys.confirmKeyDisplayer, keys.sasBytes, keys.psk, keys.prk]
+        XCTAssertEqual(stageOne.encKeyScanner.count, 32)
+        XCTAssertEqual(stageOne.macKeyScanner.count, 32)
+        XCTAssertEqual(stageOne.prk.count, 32)
         XCTAssertEqual(keys.sasBytes.count, 8)
         XCTAssertEqual(keys.psk.count, 32)
         XCTAssertEqual(keys.prk.count, 32)
@@ -441,6 +589,7 @@ final class ProximityPairingCryptoTests: XCTestCase {
     func testEverySingleInputByteChangesEveryOutput() throws {
         let base = baseScheduleInputs()
         let reference = try scheduleOutputs(base)
+        let stageOneOutputs: Int = 4
         var slot: Int = 0
         while slot < base.count {
             var position: Int = 0
@@ -450,7 +599,15 @@ final class ProximityPairingCryptoTests: XCTestCase {
                 let changed = try scheduleOutputs(inputs)
                 var k: Int = 0
                 while k < reference.count {
-                    if changed[k] == reference[k] {
+                    let isStageOneOutput: Bool = k < stageOneOutputs
+                    let isStageTwoInput: Bool = slot == 5
+                    if isStageOneOutput && isStageTwoInput {
+                        // TH_D feeds stage 2 only: the stage-1 keys must NOT move.
+                        if changed[k] != reference[k] {
+                            let location: String = "stage-1 output " + String(describing: k) + " moved with TH_D"
+                            XCTFail(location)
+                        }
+                    } else if changed[k] == reference[k] {
                         let location: String = "slot " + String(describing: slot) + " byte " + String(describing: position)
                         XCTFail(location)
                     }
@@ -462,15 +619,17 @@ final class ProximityPairingCryptoTests: XCTestCase {
         }
     }
 
-    func testRoleMacsAreNotInterchangeable() throws {
+    func testRoleKeysAreNotInterchangeable() throws {
         let th = bytes(32, 9)
-        let keys = try ProximityPairingCrypto.deriveSessionKeys(transcriptHash: th,
-                                                                kemSharedSecret: bytes(32, 2),
-                                                                x25519SharedSecret: bytes(32, 3),
-                                                                scannerNonce: bytes(32, 4),
-                                                                displayerNonce: bytes(32, 5))
-        let macS = ProximityPairingCrypto.transcriptMac(key: keys.macKeyScanner, transcriptHash: th)
-        let macD = ProximityPairingCrypto.transcriptMac(key: keys.macKeyDisplayer, transcriptHash: th)
+        let stageOne = try ProximityPairingCrypto.deriveHandshakeKeys(transcriptHash: th,
+                                                                      kemSharedSecret: bytes(32, 2),
+                                                                      x25519SharedSecret: bytes(32, 3),
+                                                                      scannerNonce: bytes(32, 4),
+                                                                      displayerNonce: bytes(32, 5))
+        let keys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                displayerTranscriptHash: bytes(32, 10))
+        let macS = ProximityPairingCrypto.transcriptMac(key: stageOne.macKeyScanner, transcriptHash: th)
+        let macD = ProximityPairingCrypto.transcriptMac(key: stageOne.macKeyDisplayer, transcriptHash: th)
         let confirmS = ProximityPairingCrypto.confirmationMac(key: keys.confirmKeyScanner)
         let confirmD = ProximityPairingCrypto.confirmationMac(key: keys.confirmKeyDisplayer)
         XCTAssertFalse(ProximityPairingCrypto.constantTimeEquals(macS, macD))
@@ -478,7 +637,27 @@ final class ProximityPairingCryptoTests: XCTestCase {
         XCTAssertFalse(ProximityPairingCrypto.constantTimeEquals(macS, confirmS))
         let otherTh = flipped(th, at: 0)
         XCTAssertFalse(ProximityPairingCrypto.constantTimeEquals(
-            macS, ProximityPairingCrypto.transcriptMac(key: keys.macKeyScanner, transcriptHash: otherTh)))
+            macS, ProximityPairingCrypto.transcriptMac(key: stageOne.macKeyScanner, transcriptHash: otherTh)))
+
+        // A box sealed under K_enc_S does not open under K_enc_D (no reflection).
+        let plaintext = pattern(170, seed: 0x70)
+        let sealedS = try ProximityPairingCrypto.aeadSeal(plaintext, key: stageOne.encKeyScanner, transcriptHash: th)
+        XCTAssertThrowsError(try ProximityPairingCrypto.aeadOpen(sealedS, key: stageOne.encKeyDisplayer,
+                                                                 transcriptHash: th))
+    }
+
+    func testHandshakeKeysZeroizeEmptiesEveryField() throws {
+        var stageOne = try handshakeKeys(baseScheduleInputs())
+        stageOne.zeroize()
+        XCTAssertTrue(stageOne.encKeyScanner.isEmpty)
+        XCTAssertTrue(stageOne.encKeyDisplayer.isEmpty)
+        XCTAssertTrue(stageOne.macKeyScanner.isEmpty)
+        XCTAssertTrue(stageOne.macKeyDisplayer.isEmpty)
+        XCTAssertTrue(stageOne.prk.isEmpty)
+        // Zeroized keys fail closed: no MAC, no seal.
+        XCTAssertTrue(ProximityPairingCrypto.transcriptMac(key: stageOne.macKeyScanner, transcriptHash: bytes(32, 1)).isEmpty)
+        XCTAssertThrowsError(try ProximityPairingCrypto.aeadSeal(bytes(10, 1), key: stageOne.encKeyScanner,
+                                                                 transcriptHash: bytes(32, 1)))
     }
 
     func testEndToEndHybridAgreementMatchesOnBothSides() throws {
@@ -489,37 +668,55 @@ final class ProximityPairingCryptoTests: XCTestCase {
         let xS = Curve25519.KeyAgreement.PrivateKey()
         let nonceS = try ProximityPairingCrypto.randomBytes(32)
         let nonceD = try ProximityPairingCrypto.randomBytes(32)
-        let th = try ProximityPairingCrypto.randomBytes(32)
+        let th1 = try ProximityPairingCrypto.randomBytes(32)
+        let thD = try ProximityPairingCrypto.randomBytes(32)
 
         let enc = try ProximityPairingCrypto.kemEncapsulate(publicKey: kem.publicKey)
         let ssXScanner = try ProximityPairingCrypto.x25519SharedSecret(privateKey: xS,
                                                                        peerPublicKey: xD.publicKey.rawRepresentation)
-        var scannerKeys = try ProximityPairingCrypto.deriveSessionKeys(transcriptHash: th,
-                                                                       kemSharedSecret: enc.sharedSecret,
-                                                                       x25519SharedSecret: ssXScanner,
-                                                                       scannerNonce: nonceS,
-                                                                       displayerNonce: nonceD)
+        var scannerStageOne = try ProximityPairingCrypto.deriveHandshakeKeys(transcriptHash: th1,
+                                                                             kemSharedSecret: enc.sharedSecret,
+                                                                             x25519SharedSecret: ssXScanner,
+                                                                             scannerNonce: nonceS,
+                                                                             displayerNonce: nonceD)
 
         let ssKemDisplayer = try ProximityPairingCrypto.kemDecapsulate(ciphertext: enc.ciphertext,
                                                                        secretKey: kem.secretKey)
         let ssXDisplayer = try ProximityPairingCrypto.x25519SharedSecret(privateKey: xD,
                                                                          peerPublicKey: xS.publicKey.rawRepresentation)
-        var displayerKeys = try ProximityPairingCrypto.deriveSessionKeys(transcriptHash: th,
-                                                                         kemSharedSecret: ssKemDisplayer,
-                                                                         x25519SharedSecret: ssXDisplayer,
-                                                                         scannerNonce: nonceS,
-                                                                         displayerNonce: nonceD)
+        var displayerStageOne = try ProximityPairingCrypto.deriveHandshakeKeys(transcriptHash: th1,
+                                                                               kemSharedSecret: ssKemDisplayer,
+                                                                               x25519SharedSecret: ssXDisplayer,
+                                                                               scannerNonce: nonceS,
+                                                                               displayerNonce: nonceD)
 
+        // The scanner's sealed box opens on the displayer's side.
+        let plaintext = pattern(170, seed: 0x33)
+        let sealed = try ProximityPairingCrypto.aeadSeal(plaintext, key: scannerStageOne.encKeyScanner,
+                                                         transcriptHash: th1)
+        XCTAssertEqual(try ProximityPairingCrypto.aeadOpen(sealed, key: displayerStageOne.encKeyScanner,
+                                                           transcriptHash: th1), plaintext)
+
+        var scannerKeys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: scannerStageOne,
+                                                                       displayerTranscriptHash: thD)
+        var displayerKeys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: displayerStageOne,
+                                                                         displayerTranscriptHash: thD)
         XCTAssertEqual(scannerKeys.psk, displayerKeys.psk)
         XCTAssertEqual(scannerKeys.sas, displayerKeys.sas)
-        let macS = ProximityPairingCrypto.transcriptMac(key: scannerKeys.macKeyScanner, transcriptHash: th)
-        let expected = ProximityPairingCrypto.transcriptMac(key: displayerKeys.macKeyScanner, transcriptHash: th)
-        XCTAssertTrue(ProximityPairingCrypto.constantTimeEquals(macS, expected))
+        XCTAssertEqual(scannerKeys.confirmKeyScanner, displayerKeys.confirmKeyScanner)
 
+        // A different TH_D (e.g. another identity in FINISH) gives different final keys.
+        let otherKeys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: scannerStageOne,
+                                                                     displayerTranscriptHash: flipped(thD, at: 5))
+        XCTAssertNotEqual(otherKeys.psk, scannerKeys.psk)
+
+        scannerStageOne.zeroize()
+        displayerStageOne.zeroize()
         scannerKeys.zeroize()
         displayerKeys.zeroize()
         XCTAssertTrue(scannerKeys.psk.isEmpty)
-        XCTAssertTrue(displayerKeys.macKeyScanner.isEmpty)
+        XCTAssertTrue(displayerKeys.confirmKeyScanner.isEmpty)
+        XCTAssertTrue(scannerStageOne.encKeyScanner.isEmpty)
     }
 }
 

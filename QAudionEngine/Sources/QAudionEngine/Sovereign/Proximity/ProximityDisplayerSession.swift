@@ -4,6 +4,11 @@ import CryptoKit
 /// The phone that SHOWS the QR code (spec §6, §9, §11): GATT peripheral,
 /// ML-KEM-1024 key owner, receives HELLO / ACCEPT / CONFIRM.
 ///
+/// SIGMA-I (spec §10): the QR and the OFFER carry only ephemeral keys. This
+/// side learns the scanner's identity by opening sealed_S in ACCEPT, and
+/// reveals its own only inside sealed_D (FINISH), after the scanner has
+/// proven it holds the keys derived from this session's shared secret.
+///
 /// Threading: every entry point (public methods, link / transport callbacks,
 /// timers) runs on the main actor and is funnelled through `serialize`, so
 /// protocol messages are processed strictly one at a time and a state-change
@@ -63,6 +68,9 @@ public final class ProximityDisplayerSession {
     private var helloBody: Data = Data()
     private var scannerEphemeral: Data = Data()
     private var scannerNonce: Data = Data()
+    /// Stage-1 keys: derived and consumed while processing ACCEPT.
+    private var handshakeKeys: ProximityPairingCrypto.HandshakeKeys?
+    /// Stage-2 keys: derived once FINISH is built.
     private var keys: ProximityPairingCrypto.SessionKeys?
     private var peer: ProximityPeerIdentity?
     private var warning: String?
@@ -171,10 +179,11 @@ public final class ProximityDisplayerSession {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         ephemeralKey = ephemeral
         displayerNonce = try ProximityPairingCrypto.randomBytes(ProximityPairing.nonceBytes)
+        // Ephemeral keys only: the QR commits to them, and our identity goes
+        // out later, sealed, in FINISH (spec §6, §8).
         let offer = ProximityMessage.Offer(mlKemPublicKey: keyPair.publicKey,
                                            displayerEphemeralX25519: ephemeral.publicKey.rawRepresentation,
-                                           displayerNonce: displayerNonce,
-                                           identity: identity.publicIdentity)
+                                           displayerNonce: displayerNonce)
         offerBody = ProximityMessage.offerBody(offer)
         commitment = ProximityPairingCrypto.commitment(sessionId: sessionId, offerBody: offerBody)
         guard commitment.count == ProximityPairing.commitmentBytes else {
@@ -440,7 +449,7 @@ public final class ProximityDisplayerSession {
         case .abort(reason: let reason):
             fail(.peerAborted(reason), sendAbort: false)
         case .accept(let accept):
-            guard case .exchanging = state, keys == nil else {
+            guard case .exchanging = state, handshakeKeys == nil, keys == nil else {
                 fail(.protocolViolation("unexpected ACCEPT"))
                 return
             }
@@ -458,17 +467,11 @@ public final class ProximityDisplayerSession {
 
     private func handleAccept(_ accept: ProximityMessage.Accept) {
         do {
-            let transcript: Data = try verifyAccept(accept)
-            let sigPayload: Data = ProximityPairingCrypto.signaturePayload(role: .displayer, transcriptHash: transcript)
-            let signature: Data = try ProximityPairingCrypto.sign(sigPayload,
-                                                                  signingPrivateKey: identity.signingPrivateKey)
-            let macKey: Data = keys?.macKeyDisplayer ?? Data()
-            let mac: Data = ProximityPairingCrypto.transcriptMac(key: macKey, transcriptHash: transcript)
-            guard mac.count == ProximityPairing.macBytes, let peerIdentity = peer else {
+            let finish: ProximityMessage.Finish = try processAccept(accept)
+            guard let peerIdentity = peer else {
                 throw ProximityPairingError.cryptoFailure("FINISH")
             }
-            let finish = ProximityMessage.finish(ProximityMessage.Finish(signature: signature, mac: mac))
-            lockedLink?.send(finish.encoded())
+            lockedLink?.send(ProximityMessage.finish(finish).encoded())
             handshakeTimer?.cancel()
             handshakeTimer = nil
             confirmationTimer = schedule(.confirmation, after: ProximityPairing.userConfirmationTimeout)
@@ -480,9 +483,42 @@ public final class ProximityDisplayerSession {
         }
     }
 
-    /// Decapsulates, derives keys, verifies mac_S and sig_S, runs the identity
-    /// checks. On success stores keys / peer / SAS and returns TH.
-    private func verifyAccept(_ accept: ProximityMessage.Accept) throws -> Data {
+    /// Spec §9, displayer on ACCEPT: decapsulate, X25519, TH1, stage-1 keys;
+    /// open sealed_S and verify the scanner's identity; self check and
+    /// identity policy; seal our own identity into FINISH; stage 2 and SAS.
+    /// On success stores keys / peer / warning / SAS and returns FINISH; every
+    /// stage-1 value is zeroized by then.
+    private func processAccept(_ accept: ProximityMessage.Accept) throws -> ProximityMessage.Finish {
+        var th1: Data = try deriveHandshake(accept)
+        defer { CryptoConstants.zeroize(&th1) }
+        let opened: ProximityMessage.SealedIdentity = try openScannerIdentity(accept.sealed, transcriptHash: th1)
+        var thS: Data = ProximityPairingCrypto.identityTranscriptHash(role: .scanner, previousHash: th1,
+                                                                      idBlock: opened.idBlock)
+        defer { CryptoConstants.zeroize(&thS) }
+        try verifyScannerProof(opened, scannerTranscriptHash: thS)
+        let decidedWarning: String? = try evaluatePeer(opened.identity)
+
+        let idBlock: Data = ProximityMessage.idBlock(identity.publicIdentity)
+        var thD: Data = ProximityPairingCrypto.identityTranscriptHash(role: .displayer, previousHash: thS,
+                                                                      idBlock: idBlock)
+        defer { CryptoConstants.zeroize(&thD) }
+        let sealed: Data = try sealDisplayerIdentity(idBlock: idBlock, scannerTranscriptHash: thS,
+                                                     displayerTranscriptHash: thD)
+        try deriveFinalKeys(displayerTranscriptHash: thD)
+        let finalSas: String = keys?.sas ?? ""
+        guard finalSas.count == ProximityPairing.sasDigits else {
+            throw ProximityPairingError.cryptoFailure("SAS")
+        }
+        sas = finalSas
+        warning = decidedWarning
+        peer = opened.identity
+        return ProximityMessage.Finish(sealed: sealed)
+    }
+
+    /// Decapsulates, runs X25519, computes TH1 and the stage-1 keys. The ML-KEM
+    /// secret key and the X25519 private key are single-use and dropped here.
+    /// Returns TH1.
+    private func deriveHandshake(_ accept: ProximityMessage.Accept) throws -> Data {
         guard let ephemeral = ephemeralKey else {
             throw ProximityPairingError.cryptoFailure("ephemeral key")
         }
@@ -496,47 +532,94 @@ public final class ProximityDisplayerSession {
                                                                                peerPublicKey: scannerEphemeral)
         defer { CryptoConstants.zeroize(&x25519Secret) }
 
-        let acceptUnsigned: Data = ProximityMessage.acceptUnsignedBody(mlKemCiphertext: accept.mlKemCiphertext,
-                                                                       identity: accept.identity)
-        let transcript: Data = ProximityPairingCrypto.transcriptHash(qrBytes: qrBytes, helloBody: helloBody,
-                                                                     offerBody: offerBody,
-                                                                     acceptUnsignedBody: acceptUnsigned)
+        let th1: Data = ProximityPairingCrypto.transcriptHash(qrBytes: qrBytes, helloBody: helloBody,
+                                                              offerBody: offerBody,
+                                                              mlKemCiphertext: accept.mlKemCiphertext)
         CryptoConstants.zeroize(&qrBytes)
         qrBytes = Data()
-        keys = try ProximityPairingCrypto.deriveSessionKeys(transcriptHash: transcript,
-                                                            kemSharedSecret: kemSecret,
-                                                            x25519SharedSecret: x25519Secret,
-                                                            scannerNonce: scannerNonce,
-                                                            displayerNonce: displayerNonce)
+        handshakeKeys = try ProximityPairingCrypto.deriveHandshakeKeys(transcriptHash: th1,
+                                                                      kemSharedSecret: kemSecret,
+                                                                      x25519SharedSecret: x25519Secret,
+                                                                      scannerNonce: scannerNonce,
+                                                                      displayerNonce: displayerNonce)
+        return th1
+    }
 
-        let macKey: Data = keys?.macKeyScanner ?? Data()
-        let expectedMac: Data = ProximityPairingCrypto.transcriptMac(key: macKey, transcriptHash: transcript)
-        guard ProximityPairingCrypto.constantTimeEquals(expectedMac, accept.mac) else {
+    /// Opens sealed_S (K_enc_S, aad TH1) — a tag failure is an authentication
+    /// failure — and parses its plaintext strictly (exactly 66 + n + 96 bytes).
+    private func openScannerIdentity(_ sealed: Data, transcriptHash th1: Data) throws -> ProximityMessage.SealedIdentity {
+        let plaintext: Data = try ProximityPairingCrypto.aeadOpen(sealed,
+                                                                  key: handshakeKeys?.encKeyScanner ?? Data(),
+                                                                  transcriptHash: th1)
+        return try ProximityMessage.decodeSealedPlaintext(plaintext)
+    }
+
+    /// mac_S = HMAC(K_mac_S, TH_S) (constant time), then sig_S over
+    /// `L_SIG_S ‖ TH_S` under the idPub_S the box carried.
+    private func verifyScannerProof(_ opened: ProximityMessage.SealedIdentity, scannerTranscriptHash thS: Data) throws {
+        guard thS.count == ProximityPairing.transcriptHashBytes else {
+            throw ProximityPairingError.cryptoFailure("TH_S")
+        }
+        let expectedMac: Data = ProximityPairingCrypto.transcriptMac(key: handshakeKeys?.macKeyScanner ?? Data(),
+                                                                     transcriptHash: thS)
+        guard ProximityPairingCrypto.constantTimeEquals(expectedMac, opened.mac) else {
             throw ProximityPairingError.authenticationFailed("ACCEPT mac")
         }
-        let sigPayload: Data = ProximityPairingCrypto.signaturePayload(role: .scanner, transcriptHash: transcript)
-        guard ProximityPairingCrypto.verify(signature: accept.signature, payload: sigPayload,
-                                            signingPublicKey: accept.identity.signingPublicKey) else {
+        let sigPayload: Data = ProximityPairingCrypto.signaturePayload(role: .scanner, transcriptHash: thS)
+        guard ProximityPairingCrypto.verify(signature: opened.signature, payload: sigPayload,
+                                            signingPublicKey: opened.identity.signingPublicKey) else {
             throw ProximityPairingError.authenticationFailed("ACCEPT signature")
         }
-        let candidate: ProximityPeerIdentity = accept.identity
+    }
+
+    /// Spec §12: never pair with ourselves (same Ed25519 key or same userId),
+    /// then the host's identity policy. Returns the warning to show (nil for a
+    /// plain accept); throws `.identityRejected` otherwise.
+    private func evaluatePeer(_ candidate: ProximityPeerIdentity) throws -> String? {
         if candidate.signingPublicKey == identity.signingPublicKey || candidate.userId == identity.userId {
             throw ProximityPairingError.identityRejected("Non puoi associare il telefono con se stesso.")
         }
         switch identityPolicy(candidate) {
         case .accept:
-            warning = nil
+            return nil
         case .acceptWithWarning(let message):
-            warning = message
+            return message
         case .reject(let message):
             throw ProximityPairingError.identityRejected(message)
         }
-        peer = candidate
-        sas = keys?.sas ?? ""
-        guard sas.count == ProximityPairing.sasDigits else {
-            throw ProximityPairingError.cryptoFailure("SAS")
+    }
+
+    /// `sealed_D = Seal(K_enc_D, aad = TH_S, idBlock_D ‖ sig_D ‖ mac_D)` with
+    /// sig_D over `L_SIG_D ‖ TH_D` and mac_D = HMAC(K_mac_D, TH_D).
+    private func sealDisplayerIdentity(idBlock: Data, scannerTranscriptHash thS: Data,
+                                       displayerTranscriptHash thD: Data) throws -> Data {
+        guard thD.count == ProximityPairing.transcriptHashBytes else {
+            throw ProximityPairingError.cryptoFailure("TH_D")
         }
-        return transcript
+        let sigPayload: Data = ProximityPairingCrypto.signaturePayload(role: .displayer, transcriptHash: thD)
+        let signature: Data = try ProximityPairingCrypto.sign(sigPayload, signingPrivateKey: identity.signingPrivateKey)
+        let mac: Data = ProximityPairingCrypto.transcriptMac(key: handshakeKeys?.macKeyDisplayer ?? Data(),
+                                                             transcriptHash: thD)
+        guard mac.count == ProximityPairing.macBytes else {
+            throw ProximityPairingError.cryptoFailure("FINISH mac")
+        }
+        let plaintext: Data = ProximityMessage.sealedPlaintext(idBlock: idBlock, signature: signature, mac: mac)
+        return try ProximityPairingCrypto.aeadSeal(plaintext, key: handshakeKeys?.encKeyDisplayer ?? Data(),
+                                                   transcriptHash: thS)
+    }
+
+    /// Stage 2 (PRK2 from TH_D and PRK1), then scrub every stage-1 key.
+    /// The `if let` copy of the stage-1 keys ends with its scope, so the scrub
+    /// below hits the live buffers, not a copy-on-write duplicate.
+    private func deriveFinalKeys(displayerTranscriptHash: Data) throws {
+        if let stageOne = handshakeKeys {
+            keys = try ProximityPairingCrypto.deriveSessionKeys(handshakeKeys: stageOne,
+                                                                displayerTranscriptHash: displayerTranscriptHash)
+        } else {
+            throw ProximityPairingError.cryptoFailure("stage-1 keys")
+        }
+        handshakeKeys?.zeroize()
+        handshakeKeys = nil
     }
 
     // MARK: - Confirmation (spec §9)
@@ -699,6 +782,8 @@ public final class ProximityDisplayerSession {
         CryptoConstants.zeroize(&qrBytes)
         keys?.zeroize()
         keys = nil
+        handshakeKeys?.zeroize()
+        handshakeKeys = nil
         ephemeralKey = nil
         sessionSecret = Data()
         kemSecretKey = Data()

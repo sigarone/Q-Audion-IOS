@@ -130,6 +130,263 @@ private final class ProximitySessionRig {
     }
 }
 
+// MARK: - Scripted peers
+//
+// A real peer never sends a sealed box that opens but whose contents are
+// wrong (bad MAC, foreign signature, own identity, malformed plaintext), so
+// the checks after the AEAD are reached only by a hand-driven peer built from
+// the same primitives. Each scripted peer also has a positive control test,
+// so a failure in the negative tests cannot come from a broken script.
+
+/// Plays the displayer against a real `ProximityScannerSession`: answers
+/// HELLO with a real OFFER, recovers the stage-1 keys from the ACCEPT, then
+/// sends whatever FINISH a test builds.
+private final class ProxScriptedDisplayer {
+
+    enum FinishFault {
+        case valid
+        case trailingPlaintextByte
+        case macUnderScannerKey
+        case sealedUnderTh1
+    }
+
+    let transport: ProximityFakeDisplayerTransport
+    let payload: ProximityQrPayload
+    private let kem: ProximityPairingCrypto.KemKeyPair
+    private let ephemeral: Curve25519.KeyAgreement.PrivateKey
+    private let nonce: Data
+    private let offerBody: Data
+
+    private(set) var link: ProximityFakeLink?
+    private(set) var received: [Data] = []
+    private(set) var handshakeKeys: ProximityPairingCrypto.HandshakeKeys?
+    private(set) var th1: Data = Data()
+    private(set) var scannerTranscriptHash: Data = Data()
+    private(set) var sealedScanner: Data = Data()
+    private(set) var scannerIdentity: ProximityPeerIdentity?
+
+    init(hub: ProximityTestHub) throws {
+        let sessionId: Data = try ProximityPairingCrypto.randomBytes(ProximityPairing.sessionIdBytes)
+        let secret: Data = try ProximityPairingCrypto.randomBytes(ProximityPairing.sessionSecretBytes)
+        let kemPair: ProximityPairingCrypto.KemKeyPair = try ProximityPairingCrypto.kemGenerateKeyPair()
+        let xKey = Curve25519.KeyAgreement.PrivateKey()
+        let nonceD: Data = try ProximityPairingCrypto.randomBytes(ProximityPairing.nonceBytes)
+        let offer = ProximityMessage.Offer(mlKemPublicKey: kemPair.publicKey,
+                                           displayerEphemeralX25519: xKey.publicKey.rawRepresentation,
+                                           displayerNonce: nonceD)
+        let body: Data = ProximityMessage.offerBody(offer)
+        let commitment: Data = ProximityPairingCrypto.commitment(sessionId: sessionId, offerBody: body)
+        let frameKey: Data = ProximityPairingCrypto.frameKey(sessionSecret: secret, sessionId: sessionId,
+                                                             frameIndex: 0)
+        self.payload = try ProximityQrPayload(sessionId: sessionId, commitment: commitment,
+                                              frameIndex: 0, frameKey: frameKey)
+        self.kem = kemPair
+        self.ephemeral = xKey
+        self.nonce = nonceD
+        self.offerBody = body
+        self.transport = ProximityFakeDisplayerTransport(hub: hub)
+        transport.startAdvertising(serviceId: sessionId)
+        transport.onIncomingLink = { [weak self] (incoming: ProximityPairingLink) in
+            guard let end = incoming as? ProximityFakeLink else { return }
+            self?.attach(end)
+        }
+    }
+
+    private func attach(_ end: ProximityFakeLink) {
+        link = end
+        end.onMessage = { [weak self] (message: Data) in
+            self?.received.append(Data(message))
+        }
+    }
+
+    func sendOffer() {
+        var message = Data([ProximityPairing.MessageType.offer.rawValue])
+        message.append(offerBody)
+        link?.send(message)
+    }
+
+    func send(_ message: Data) {
+        link?.send(message)
+    }
+
+    /// Decapsulates the scanner's ACCEPT and opens sealed_S, as the real displayer does.
+    func absorbAccept() throws {
+        guard received.count >= 2 else {
+            throw ProximityPairingError.protocolViolation("no ACCEPT yet")
+        }
+        let decodedHello: ProximityMessage = try ProximityMessage.decode(received[0])
+        let decodedAccept: ProximityMessage = try ProximityMessage.decode(received[1])
+        guard case .hello(let hello) = decodedHello, case .accept(let accept) = decodedAccept else {
+            throw ProximityPairingError.protocolViolation("expected HELLO then ACCEPT")
+        }
+        let kemSecret: Data = try ProximityPairingCrypto.kemDecapsulate(ciphertext: accept.mlKemCiphertext,
+                                                                        secretKey: kem.secretKey)
+        let xSecret: Data = try ProximityPairingCrypto.x25519SharedSecret(privateKey: ephemeral,
+                                                                          peerPublicKey: hello.scannerEphemeralX25519)
+        let transcript: Data = ProximityPairingCrypto.transcriptHash(qrBytes: payload.encodedBytes,
+                                                                    helloBody: ProximityMessage.helloBody(hello),
+                                                                    offerBody: offerBody,
+                                                                    mlKemCiphertext: accept.mlKemCiphertext)
+        let keys: ProximityPairingCrypto.HandshakeKeys = try ProximityPairingCrypto.deriveHandshakeKeys(
+            transcriptHash: transcript, kemSharedSecret: kemSecret, x25519SharedSecret: xSecret,
+            scannerNonce: hello.scannerNonce, displayerNonce: nonce)
+        let plaintext: Data = try ProximityPairingCrypto.aeadOpen(accept.sealed, key: keys.encKeyScanner,
+                                                                  transcriptHash: transcript)
+        let opened: ProximityMessage.SealedIdentity = try ProximityMessage.decodeSealedPlaintext(plaintext)
+        th1 = transcript
+        handshakeKeys = keys
+        scannerTranscriptHash = ProximityPairingCrypto.identityTranscriptHash(role: .scanner,
+                                                                             previousHash: transcript,
+                                                                             idBlock: opened.idBlock)
+        sealedScanner = accept.sealed
+        scannerIdentity = opened.identity
+    }
+
+    /// A FINISH presenting `identity`, signed with `signingPrivateKey`, with an
+    /// optional deliberate fault. Returns the message and the TH_D it signed.
+    func finish(identity: ProximityPeerIdentity, signingPrivateKey: Data,
+                fault: FinishFault = .valid) throws -> (message: Data, displayerTranscriptHash: Data) {
+        guard let keys = handshakeKeys else {
+            throw ProximityPairingError.protocolViolation("no stage-1 keys")
+        }
+        let idBlock: Data = ProximityMessage.idBlock(identity)
+        let thD: Data = ProximityPairingCrypto.identityTranscriptHash(role: .displayer,
+                                                                     previousHash: scannerTranscriptHash,
+                                                                     idBlock: idBlock)
+        let sigPayload: Data = ProximityPairingCrypto.signaturePayload(role: .displayer, transcriptHash: thD)
+        let signature: Data = try ProximityPairingCrypto.sign(sigPayload, signingPrivateKey: signingPrivateKey)
+        let macKey: Data = fault == .macUnderScannerKey ? keys.macKeyScanner : keys.macKeyDisplayer
+        let mac: Data = ProximityPairingCrypto.transcriptMac(key: macKey, transcriptHash: thD)
+        var plaintext: Data = ProximityMessage.sealedPlaintext(idBlock: idBlock, signature: signature, mac: mac)
+        if fault == .trailingPlaintextByte {
+            plaintext.append(0x00)
+        }
+        let aad: Data = fault == .sealedUnderTh1 ? th1 : scannerTranscriptHash
+        let sealed: Data = try ProximityPairingCrypto.aeadSeal(plaintext, key: keys.encKeyDisplayer,
+                                                              transcriptHash: aad)
+        let message: Data = ProximityMessage.finish(ProximityMessage.Finish(sealed: sealed)).encoded()
+        return (message: message, displayerTranscriptHash: thD)
+    }
+
+    /// The SAS the real displayer would show for a FINISH built over `thD`.
+    func sas(displayerTranscriptHash thD: Data) throws -> String {
+        guard let keys = handshakeKeys else {
+            throw ProximityPairingError.protocolViolation("no stage-1 keys")
+        }
+        let finalKeys: ProximityPairingCrypto.SessionKeys = try ProximityPairingCrypto.deriveSessionKeys(
+            handshakeKeys: keys, displayerTranscriptHash: thD)
+        return finalKeys.sas
+    }
+}
+
+/// Plays the scanner against a real `ProximityDisplayerSession`: connects as
+/// a central, sends a valid HELLO for the QR it was given, then whatever
+/// ACCEPT a test builds.
+private final class ProxScriptedScanner {
+
+    enum AcceptFault {
+        case valid
+        case trailingPlaintextByte
+        case macUnderDisplayerKey
+        case sealedUnderDisplayerKey
+    }
+
+    let link: ProximityFakeLink
+    private let payload: ProximityQrPayload
+    private let ephemeral: Curve25519.KeyAgreement.PrivateKey = Curve25519.KeyAgreement.PrivateKey()
+    private let nonce: Data
+    private var helloBody: Data = Data()
+
+    private(set) var received: [Data] = []
+    private(set) var handshakeKeys: ProximityPairingCrypto.HandshakeKeys?
+    private(set) var scannerTranscriptHash: Data = Data()
+
+    init(transport: ProximityFakeDisplayerTransport, payload: ProximityQrPayload) throws {
+        self.payload = payload
+        self.nonce = try ProximityPairingCrypto.randomBytes(ProximityPairing.nonceBytes)
+        self.link = transport.connectCentral()
+        link.onMessage = { [weak self] (message: Data) in
+            self?.received.append(Data(message))
+        }
+    }
+
+    func sendHello() {
+        let xpk: Data = ephemeral.publicKey.rawRepresentation
+        let tag: Data = ProximityPairingCrypto.helloTag(frameKey: payload.frameKey, sessionId: payload.sessionId,
+                                                        frameIndex: payload.frameIndex,
+                                                        scannerEphemeralX25519: xpk, scannerNonce: nonce)
+        let hello = ProximityMessage.Hello(frameIndex: payload.frameIndex, scannerEphemeralX25519: xpk,
+                                           scannerNonce: nonce, tag: tag)
+        helloBody = ProximityMessage.helloBody(hello)
+        link.send(ProximityMessage.hello(hello).encoded())
+    }
+
+    /// Answers the OFFER with an ACCEPT presenting `identity`, signed with
+    /// `signingPrivateKey`, with an optional deliberate fault.
+    func sendAccept(identity: ProximityPeerIdentity, signingPrivateKey: Data,
+                    fault: AcceptFault = .valid) throws {
+        guard let offerMessage = received.first else {
+            throw ProximityPairingError.protocolViolation("no OFFER yet")
+        }
+        let decoded: ProximityMessage = try ProximityMessage.decode(offerMessage)
+        guard case .offer(let offer) = decoded else {
+            throw ProximityPairingError.protocolViolation("expected OFFER")
+        }
+        let encapsulated: (ciphertext: Data, sharedSecret: Data) =
+            try ProximityPairingCrypto.kemEncapsulate(publicKey: offer.mlKemPublicKey)
+        let xSecret: Data = try ProximityPairingCrypto.x25519SharedSecret(privateKey: ephemeral,
+                                                                          peerPublicKey: offer.displayerEphemeralX25519)
+        let transcript: Data = ProximityPairingCrypto.transcriptHash(qrBytes: payload.encodedBytes,
+                                                                    helloBody: helloBody,
+                                                                    offerBody: ProximityMessage.offerBody(offer),
+                                                                    mlKemCiphertext: encapsulated.ciphertext)
+        let keys: ProximityPairingCrypto.HandshakeKeys = try ProximityPairingCrypto.deriveHandshakeKeys(
+            transcriptHash: transcript, kemSharedSecret: encapsulated.sharedSecret, x25519SharedSecret: xSecret,
+            scannerNonce: nonce, displayerNonce: offer.displayerNonce)
+        let idBlock: Data = ProximityMessage.idBlock(identity)
+        let thS: Data = ProximityPairingCrypto.identityTranscriptHash(role: .scanner, previousHash: transcript,
+                                                                     idBlock: idBlock)
+        let sigPayload: Data = ProximityPairingCrypto.signaturePayload(role: .scanner, transcriptHash: thS)
+        let signature: Data = try ProximityPairingCrypto.sign(sigPayload, signingPrivateKey: signingPrivateKey)
+        let macKey: Data = fault == .macUnderDisplayerKey ? keys.macKeyDisplayer : keys.macKeyScanner
+        let mac: Data = ProximityPairingCrypto.transcriptMac(key: macKey, transcriptHash: thS)
+        var plaintext: Data = ProximityMessage.sealedPlaintext(idBlock: idBlock, signature: signature, mac: mac)
+        if fault == .trailingPlaintextByte {
+            plaintext.append(0x00)
+        }
+        let encKey: Data = fault == .sealedUnderDisplayerKey ? keys.encKeyDisplayer : keys.encKeyScanner
+        let sealed: Data = try ProximityPairingCrypto.aeadSeal(plaintext, key: encKey, transcriptHash: transcript)
+        handshakeKeys = keys
+        scannerTranscriptHash = thS
+        let accept = ProximityMessage.Accept(mlKemCiphertext: encapsulated.ciphertext, sealed: sealed)
+        link.send(ProximityMessage.accept(accept).encoded())
+    }
+
+    /// Opens the displayer's FINISH the way the real scanner does.
+    func openFinish() throws -> ProximityMessage.SealedIdentity {
+        guard let keys = handshakeKeys, received.count >= 2 else {
+            throw ProximityPairingError.protocolViolation("no FINISH yet")
+        }
+        let decoded: ProximityMessage = try ProximityMessage.decode(received[1])
+        guard case .finish(let finish) = decoded else {
+            throw ProximityPairingError.protocolViolation("expected FINISH")
+        }
+        let plaintext: Data = try ProximityPairingCrypto.aeadOpen(finish.sealed, key: keys.encKeyDisplayer,
+                                                                  transcriptHash: scannerTranscriptHash)
+        return try ProximityMessage.decodeSealedPlaintext(plaintext)
+    }
+}
+
+/// A real scanner session driven against `ProxScriptedDisplayer`, stopped
+/// right after its ACCEPT was absorbed.
+private struct ProxScriptedRun {
+    let hub: ProximityTestHub
+    let displayer: ProxScriptedDisplayer
+    let scanner: ProximityScannerSession
+    let scannerIdentity: ProximityLocalIdentity
+    let policy: ProximitySessionRig.PolicyBox
+}
+
 // MARK: - Tests
 
 @MainActor
@@ -497,19 +754,28 @@ final class ProximityPairingSessionTests: XCTestCase {
         assertNeitherCompleted(rig, scanner)
     }
 
-    func testOfferIdentitySwappedFailsCommitment() throws {
+    func testOfferCarryingAnIdentityIsRejected() throws {
+        // The pre-SIGMA OFFER appended the displayer's idBlock; the strict
+        // 1632-byte OFFER turns that into a protocol violation.
         let other: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "mallory")
-        let signingKeyOffset: Int = 1 + 1568 + 32 + 32
+        let appended: Data = ProximityMessage.idBlock(other.publicIdentity)
         let filter = proxSessionTamper(type: 0x02) { (m: Data) -> Data in
-            proxSessionReplace(m, at: signingKeyOffset, with: other.signingPublicKey)
+            var grown: Data = Data(m)
+            grown.append(appended)
+            return grown
         }
         let (rig, scanner) = try runTampered(toScanner: filter)
-        XCTAssertEqual(proxSessionKind(scannerError(scanner.state)), "authenticationFailed")
-        XCTAssertEqual(rig.displayer.state, .failed(.peerAborted(ProximityPairing.AbortReason.authenticationFailed.rawValue)))
-        assertNeitherCompleted(rig, scanner)
+        assertScannerViolation(rig, scanner)
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty)
     }
 
-    // MARK: Tamper matrix — ACCEPT
+    func testTruncatedOfferIsRejected() throws {
+        let filter = proxSessionTamper(type: 0x02) { (m: Data) -> Data in Data(m.prefix(m.count - 1)) }
+        let (rig, scanner) = try runTampered(toScanner: filter)
+        assertScannerViolation(rig, scanner)
+    }
+
+    // MARK: Tamper matrix — ACCEPT (ct ‖ sealed_S)
 
     private func assertDisplayerRejectsAccept(file: StaticString = #filePath, line: UInt = #line,
                                               _ transform: @escaping (Data) -> Data) throws {
@@ -518,22 +784,32 @@ final class ProximityPairingSessionTests: XCTestCase {
                        file: file, line: line)
         XCTAssertEqual(scanner.state, .failed(.peerAborted(ProximityPairing.AbortReason.authenticationFailed.rawValue)),
                        file: file, line: line)
+        // The displayer never saw an identity it could judge.
+        XCTAssertTrue(rig.displayerPolicy.seen.isEmpty, file: file, line: line)
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty, file: file, line: line)
         assertNeitherCompleted(rig, scanner, file: file, line: line)
     }
 
+    /// ML-KEM implicit rejection: other shared secret, other K_enc_S, sealed_S does not open.
     func testAcceptCiphertextFlipIsRejected() throws {
         try assertDisplayerRejectsAccept { (m: Data) -> Data in proxSessionFlip(m, at: 100) }
     }
 
-    func testAcceptMacFlipIsRejected() throws {
+    func testAcceptSealedTagFlipIsRejected() throws {
         try assertDisplayerRejectsAccept { (m: Data) -> Data in proxSessionFlip(m, at: m.count - 1) }
     }
 
-    func testAcceptSignatureFlipIsRejected() throws {
+    /// Inside the sealed sig_S / mac_S region.
+    func testAcceptSealedTrailerFlipIsRejected() throws {
         try assertDisplayerRejectsAccept { (m: Data) -> Data in proxSessionFlip(m, at: m.count - 40) }
     }
 
-    func testAcceptSigningKeyReplacedIsRejected() throws {
+    func testAcceptSealedFirstByteFlipIsRejected() throws {
+        try assertDisplayerRejectsAccept { (m: Data) -> Data in proxSessionFlip(m, at: 1 + 1568) }
+    }
+
+    /// Where idPub_S sits inside the box: substituting it still has to beat the tag.
+    func testAcceptSealedSigningKeyRegionReplacedIsRejected() throws {
         let other: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "mallory")
         let replacement: Data = other.signingPublicKey
         try assertDisplayerRejectsAccept { (m: Data) -> Data in
@@ -541,22 +817,39 @@ final class ProximityPairingSessionTests: XCTestCase {
         }
     }
 
-    // MARK: Tamper matrix — FINISH and CONFIRM
-
-    func testFinishMacFlipIsRejected() throws {
-        let filter = proxSessionTamper(type: 0x04) { (m: Data) -> Data in proxSessionFlip(m, at: m.count - 1) }
-        let (rig, scanner) = try runTampered(toScanner: filter)
-        XCTAssertEqual(proxSessionKind(scannerError(scanner.state)), "authenticationFailed")
-        XCTAssertEqual(rig.displayer.state, .failed(.peerAborted(ProximityPairing.AbortReason.authenticationFailed.rawValue)))
-        assertNeitherCompleted(rig, scanner)
+    /// Still a length a box can have, so it reaches (and fails) the AEAD.
+    func testAcceptSealedTruncatedByOneByteIsRejected() throws {
+        try assertDisplayerRejectsAccept { (m: Data) -> Data in Data(m.prefix(m.count - 1)) }
     }
 
-    func testFinishSignatureFlipIsRejected() throws {
-        let filter = proxSessionTamper(type: 0x04) { (m: Data) -> Data in proxSessionFlip(m, at: 5) }
-        let (rig, scanner) = try runTampered(toScanner: filter)
-        XCTAssertEqual(proxSessionKind(scannerError(scanner.state)), "authenticationFailed")
-        XCTAssertEqual(rig.displayer.state, .failed(.peerAborted(ProximityPairing.AbortReason.authenticationFailed.rawValue)))
-        assertNeitherCompleted(rig, scanner)
+    // MARK: Tamper matrix — FINISH (sealed_D) and CONFIRM
+
+    private func assertScannerRejectsFinish(file: StaticString = #filePath, line: UInt = #line,
+                                            _ transform: @escaping (Data) -> Data) throws {
+        let (rig, scanner) = try runTampered(toScanner: proxSessionTamper(type: 0x04, transform))
+        XCTAssertEqual(proxSessionKind(scannerError(scanner.state)), "authenticationFailed", file: file, line: line)
+        XCTAssertEqual(rig.displayer.state,
+                       .failed(.peerAborted(ProximityPairing.AbortReason.authenticationFailed.rawValue)),
+                       file: file, line: line)
+        // The scanner never learned who the displayer is.
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty, file: file, line: line)
+        assertNeitherCompleted(rig, scanner, file: file, line: line)
+    }
+
+    func testFinishSealedTagFlipIsRejected() throws {
+        try assertScannerRejectsFinish { (m: Data) -> Data in proxSessionFlip(m, at: m.count - 1) }
+    }
+
+    func testFinishSealedCiphertextFlipIsRejected() throws {
+        try assertScannerRejectsFinish { (m: Data) -> Data in proxSessionFlip(m, at: 5) }
+    }
+
+    func testFinishSealedFirstByteFlipIsRejected() throws {
+        try assertScannerRejectsFinish { (m: Data) -> Data in proxSessionFlip(m, at: 1) }
+    }
+
+    func testFinishSealedTruncatedByOneByteIsRejected() throws {
+        try assertScannerRejectsFinish { (m: Data) -> Data in Data(m.prefix(m.count - 1)) }
     }
 
     func testWrongConfirmFromScannerIsRejected() throws {
@@ -735,6 +1028,10 @@ final class ProximityPairingSessionTests: XCTestCase {
         XCTAssertEqual(rig.displayer.state, .failed(.identityRejected("blocked")))
         XCTAssertEqual(scanner.state, .failed(.peerAborted(ProximityPairing.AbortReason.identityRejected.rawValue)))
         XCTAssertEqual(rig.displayerPolicy.seen, [rig.scannerIdentity.publicIdentity])
+        // The displayer refused before sealing its own identity: the scanner never saw it.
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty)
+        let toScanner: [Data] = rig.displayerTransport.displayerEnds[0].sent
+        XCTAssertFalse(toScanner.contains { (m: Data) -> Bool in m.first == ProximityPairing.MessageType.finish.rawValue })
     }
 
     func testScannerPolicyRejects() throws {
@@ -742,9 +1039,81 @@ final class ProximityPairingSessionTests: XCTestCase {
         rig.scannerPolicy.decision = .reject("blocked")
         let (scanner, _) = try runHandshake(rig)
         XCTAssertEqual(scanner.state, .failed(.identityRejected("blocked")))
+        // The displayer had already sent FINISH and was waiting for its user;
+        // the scanner's ABORT(identity rejected) ends it there.
         XCTAssertEqual(rig.displayer.state, .failed(.peerAborted(ProximityPairing.AbortReason.identityRejected.rawValue)))
         XCTAssertEqual(rig.scannerPolicy.seen, [rig.displayerIdentity.publicIdentity])
-        XCTAssertTrue(rig.displayerPolicy.seen.isEmpty)
+        // SIGMA-I order: the displayer judged the scanner first, on ACCEPT.
+        XCTAssertEqual(rig.displayerPolicy.seen, [rig.scannerIdentity.publicIdentity])
+        assertNeitherCompleted(rig, scanner)
+    }
+
+    /// Spec §9: the scanner's identity policy runs on FINISH, not on OFFER —
+    /// before FINISH it does not know who the displayer is.
+    func testScannerPolicyRunsOnlyOnFinish() throws {
+        let rig: ProximitySessionRig = try makeRig()
+        rig.displayerTransport.toScannerFilter = proxSessionDrop(type: ProximityPairing.MessageType.finish.rawValue)
+        let (scanner, _) = try runHandshake(rig)
+        XCTAssertNotNil(displayerAwaiting(rig.displayer.state))
+        XCTAssertEqual(scanner.state, .exchanging)
+        XCTAssertEqual(rig.displayerPolicy.seen, [rig.scannerIdentity.publicIdentity])
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty)
+        // No FINISH ever arrives: the scanner times out and stores nothing.
+        rig.scheduler.advance(by: ProximityPairing.handshakeTimeout)
+        rig.hub.pump()
+        XCTAssertTrue(proxSessionIsTimeout(scannerError(scanner.state)))
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty)
+        assertNeitherCompleted(rig, scanner)
+    }
+
+    /// SIGMA-I: no identity (Ed25519 key, X25519 key or userId) of either side
+    /// appears in clear in any message on the link.
+    func testNoIdentityTravelsInClear() throws {
+        let rig: ProximitySessionRig = try makeRig()
+        let (scanner, scannerTransport) = try runHandshake(rig)
+        rig.displayer.confirm()
+        scanner.confirm()
+        rig.hub.pump()
+        XCTAssertNotNil(scannerResult(scanner.state))
+
+        let toScanner: [Data] = rig.displayerTransport.displayerEnds[0].sent
+        let scannerEnd: ProximityFakeLink = try XCTUnwrap(scannerTransport.link)
+        let toDisplayer: [Data] = scannerEnd.sent
+        let offer: Data = try XCTUnwrap(toScanner.first(where: { (m: Data) -> Bool in
+            m.first == ProximityPairing.MessageType.offer.rawValue
+        }))
+        XCTAssertEqual(offer.count, 1 + ProximityPairing.offerBodyBytes)
+
+        let d: ProximityPeerIdentity = rig.displayerIdentity.publicIdentity
+        let s: ProximityPeerIdentity = rig.scannerIdentity.publicIdentity
+        let needles: [Data] = [d.signingPublicKey, d.encryptionPublicKey, Data(d.userId.utf8),
+                               s.signingPublicKey, s.encryptionPublicKey, Data(s.userId.utf8)]
+        XCTAssertGreaterThanOrEqual(toScanner.count + toDisplayer.count, 6)
+        for message in toScanner + toDisplayer {
+            for needle in needles {
+                XCTAssertNil(message.range(of: needle))
+            }
+        }
+    }
+
+    func testEveryPairingAgreesOnSasAndPskAndNoTwoShareAPsk() throws {
+        var psks: [Data] = []
+        var round: Int = 0
+        while round < 3 {
+            let rig: ProximitySessionRig = try makeRig()
+            let (scanner, _) = try runHandshake(rig)
+            rig.displayer.confirm()
+            scanner.confirm()
+            rig.hub.pump()
+            let dResult: ProximityPairingResult = try XCTUnwrap(displayerResult(rig.displayer.state))
+            let sResult: ProximityPairingResult = try XCTUnwrap(scannerResult(scanner.state))
+            XCTAssertEqual(dResult.sas, sResult.sas)
+            XCTAssertEqual(dResult.psk, sResult.psk)
+            XCTAssertEqual(dResult.pskFingerprint, sResult.pskFingerprint)
+            XCTAssertFalse(psks.contains(dResult.psk))
+            psks.append(dResult.psk)
+            round += 1
+        }
     }
 
     func testWarningSurfacesInStateAndResult() throws {
@@ -761,12 +1130,18 @@ final class ProximityPairingSessionTests: XCTestCase {
         XCTAssertEqual(scannerResult(scanner.state)?.identityWarning, "scanner warning")
     }
 
+    /// Under SIGMA-I the displayer opens the scanner's identity first (ACCEPT),
+    /// so it is the one that refuses a self pairing. The scanner's own self
+    /// check (on FINISH) is covered by the scripted-displayer tests below.
     func testSelfPairingIsRejected() throws {
         let same: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "same-user")
         let rig: ProximitySessionRig = try makeRig(displayer: same, scanner: same)
         let (scanner, _) = try runHandshake(rig)
-        XCTAssertEqual(proxSessionKind(scannerError(scanner.state)), "identityRejected")
-        XCTAssertEqual(rig.displayer.state, .failed(.peerAborted(ProximityPairing.AbortReason.identityRejected.rawValue)))
+        XCTAssertEqual(proxSessionKind(displayerError(rig.displayer.state)), "identityRejected")
+        XCTAssertEqual(scanner.state, .failed(.peerAborted(ProximityPairing.AbortReason.identityRejected.rawValue)))
+        // The self check runs before the host policy, on both sides.
+        XCTAssertTrue(rig.displayerPolicy.seen.isEmpty)
+        XCTAssertTrue(rig.scannerPolicy.seen.isEmpty)
         assertNeitherCompleted(rig, scanner)
     }
 
@@ -775,7 +1150,9 @@ final class ProximityPairingSessionTests: XCTestCase {
         let scannerIdentity: ProximityLocalIdentity = try ProximityTestIdentities.make(userId: "same-user")
         let rig: ProximitySessionRig = try makeRig(displayer: displayerIdentity, scanner: scannerIdentity)
         let (scanner, _) = try runHandshake(rig)
-        XCTAssertEqual(proxSessionKind(scannerError(scanner.state)), "identityRejected")
+        XCTAssertEqual(proxSessionKind(displayerError(rig.displayer.state)), "identityRejected")
+        XCTAssertEqual(scanner.state, .failed(.peerAborted(ProximityPairing.AbortReason.identityRejected.rawValue)))
+        XCTAssertTrue(rig.displayerPolicy.seen.isEmpty)
         assertNeitherCompleted(rig, scanner)
     }
 
@@ -797,9 +1174,9 @@ final class ProximityPairingSessionTests: XCTestCase {
         assertNeitherCompleted(rig, scanner, file: file, line: line)
     }
 
+    /// A FINISH that decodes (a sealed-box length) but was never sealed by anyone.
     private func finishBytes() -> Data {
-        let finish = ProximityMessage.Finish(signature: Data(repeating: 1, count: 64),
-                                             mac: Data(repeating: 2, count: 32))
+        let finish = ProximityMessage.Finish(sealed: Data(repeating: 1, count: ProximityMessage.minSealedBytes + 11))
         return ProximityMessage.finish(finish).encoded()
     }
 
