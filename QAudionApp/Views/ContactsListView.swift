@@ -254,6 +254,8 @@ struct ContactsListView: View {
     @State private var showingQrScanner: Bool = false
     @State private var showingMyIdentity: Bool = false
     @State private var showingNfcPair: Bool = false
+    /// In-person QR + Bluetooth pairing, displayer side.
+    @State private var showingProximityPair: Bool = false
     @State private var showingPhonebookImport: Bool = false
     @State private var lastScanResult: ScanResultBanner?
     @State private var showingGroupCallPicker: Bool = false
@@ -314,6 +316,12 @@ struct ContactsListView: View {
                     Button("Mostra la mia identità", systemImage: "qrcode") {
                         showingMyIdentity = true
                     }
+                    // QR + Bluetooth proximity pairing (hybrid ML-KEM-1024):
+                    // this phone shows the code, the other scans it with
+                    // "Scansiona QR" above. Not capability-gated.
+                    Button("Associa di persona (QR + Bluetooth)", systemImage: "person.2.wave.2") {
+                        showingProximityPair = true
+                    }
                     // Entitlements Task 5 — Capability.nfc. A `Menu`
                     // row can't render the dim+lock-badge visual treatment
                     // `GatedActionButton` gives an icon button, so this
@@ -372,6 +380,10 @@ struct ContactsListView: View {
         .sheet(isPresented: $showingMyIdentity) {
             MyIdentityQrSheet(appState: appState)
         }
+        .sheet(isPresented: $showingProximityPair) {
+            ProximityPairingDisplaySheet(localUserId: appState.currentUserId,
+                                         onCompleted: { result in handleProximityPaired(result) })
+        }
         .sheet(isPresented: $showingNfcPair) {
             NavigationStack {
                 NfcExchangeView()
@@ -427,7 +439,25 @@ struct ContactsListView: View {
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     if lastScanResult != nil { lastScanResult = nil }
                 }
-            })
+            },
+            proximityLocalUserId: appState.currentUserId,
+            onProximityCompleted: { result in handleProximityPaired(result) })
+        }
+    }
+
+    /// In-person QR + Bluetooth pairing finished on both phones and its key is
+    /// already stored (`ProximityPairingStore.persist`). Make sure the peer is a
+    /// verified contact — the same path an identity-QR scan takes.
+    private func handleProximityPaired(_ result: ProximityPairingResult) {
+        let identity = IdentityQrCode.Identity(userId: result.peer.userId,
+                                               pubkey: result.peer.encryptionPublicKey)
+        let added: Bool = container.addScannedContact(.identity(identity))
+        let name: String = DisplayName.forUser(result.peer.userId)
+        let title: String = added ? "Associato di persona" : "Chiave salvata, contatto non aggiunto"
+        lastScanResult = ScanResultBanner(title: title, detail: name, isError: !added)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if lastScanResult != nil { lastScanResult = nil }
         }
     }
 

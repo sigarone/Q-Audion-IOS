@@ -30,6 +30,11 @@ import Foundation
 public enum PskOrigin: String {
     /// Derived from an NFC tap with another device. Never leaves.
     case nfc = "nfc"
+    /// Derived from a QR + Bluetooth LE proximity ceremony (hybrid ML-KEM-1024,
+    /// both users confirmed the SAS in person —
+    /// docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md). Same presence-evidence
+    /// argument as `.nfc`, so it never leaves either.
+    case proximity = "proximity"
     /// Scanned from a QR code shown by another device.
     case qr = "qr"
     /// Typed or pasted by the user.
@@ -64,7 +69,7 @@ public enum PskOrigin: String {
     /// decision here rather than inheriting "exportable" by silence.
     public var isExportable: Bool {
         switch self {
-        case .nfc, .callDerived, .deviceInternal, .identityKey:
+        case .nfc, .proximity, .callDerived, .deviceInternal, .identityKey:
             return false
         case .qr, .manual, .kms:
             // Transferable by design: a QR or manual key was carried in from
@@ -93,6 +98,8 @@ public enum PskOrigin: String {
     public static func inferred(fromAccountName name: String) -> PskOrigin {
         // `NfcExchangeView.persistPsk` names its entries "nfc-<peerIdPub[0..16]>".
         if name.hasPrefix("nfc-") { return .nfc }
+        // `ProximityPairingStore.persist` names its entries "prox-<peerIdPub[0..16]>".
+        if name.hasPrefix("prox-") { return .proximity }
         // `DeviceKeyManager` (`__device.*`) plus the KMS bookkeeping sidecars
         // (`__kmsname.*`, `__kms.active_epoch.*`). Nothing under this prefix is
         // a shared secret and nothing under it should ever be handed out.

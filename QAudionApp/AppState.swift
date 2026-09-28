@@ -12196,6 +12196,8 @@ final class AppState: ObservableObject {
             switch vault.origin(name: name) {
             case .nfc:
                 method = "NFC"
+            case .proximity:
+                method = "QR+BLE"
             case .qr, .manual, .kms, .callDerived, .deviceInternal, .identityKey:
                 switch vault.getKeyClass(name: name) {
                 case .hwOnly: method = "HW"
@@ -12856,7 +12858,13 @@ final class AppState: ObservableObject {
         // notion `sigOk`'s own verdict is anchored to elsewhere in
         // `QAudionCallIntegration`. See `AssuranceState.resolveNfcMixInputs`
         // for the pure decision logic (unit-tested).
-        let selectedIsNfc = AppState.resolvePskDisplayMeta(fingerprint: state.selectedFp).method == "NFC"
+        // A QR + Bluetooth proximity key (`PskOrigin.proximity`, method "QR+BLE")
+        // is presence evidence of the same kind as an NFC tap — both users
+        // confirmed the SAS in person — so it feeds the same S2 tier and the same
+        // captured-identity binding check (`resolveNfcPeerIdentityKey` reads the
+        // shared presence-identity vault field both ceremonies write).
+        let selectedMethod: String? = AppState.resolvePskDisplayMeta(fingerprint: state.selectedFp).method
+        let selectedIsNfc: Bool = (selectedMethod == "NFC") || (selectedMethod == "QR+BLE")
         // W-NFCIDBIND (2026-07-29) — the identity captured AT THE TAP, read
         // from the vault's dedicated sidecar field, NOT derived from the
         // fingerprint (which is SHA-256(psk), never an identity key — see

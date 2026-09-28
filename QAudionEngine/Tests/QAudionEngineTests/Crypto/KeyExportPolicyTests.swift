@@ -20,6 +20,29 @@ final class KeyExportPolicyTests: XCTestCase {
         XCTAssertFalse(PskOrigin.nfc.isExportable)
     }
 
+    /// A QR + Bluetooth proximity key is presence evidence exactly like an NFC
+    /// key: a copy on a second phone would claim a meeting that phone never had.
+    func testProximityKeyNeverLeavesTheDevice() {
+        XCTAssertFalse(PskOrigin.proximity.isExportable)
+    }
+
+    func testProximityNamesAreRecognisedFromTheAccountNameAlone() {
+        // The exact shape `ProximityPairingStore.persist` writes.
+        XCTAssertEqual(PskOrigin.inferred(fromAccountName: "prox-a3f7c29184be0d12"), .proximity)
+        XCTAssertEqual(PskOrigin.inferred(fromAccountName: "proxy-office"), .manual)
+    }
+
+    func testProximityKeyIsACallPskCandidateWithItsOwnWireRole() {
+        XCTAssertTrue(PskAdvertising.isEligibleMatchCandidate(origin: .proximity))
+        XCTAssertEqual(PskAdvertV3.role(for: .proximity), PskAdvertV3.roleProximity)
+        XCTAssertEqual(PskAdvertV3.roleProximity, 3)
+        // Existing origins keep the exact roles they had on the wire before.
+        XCTAssertEqual(PskAdvertV3.role(for: .nfc), PskAdvertV3.roleNfc)
+        XCTAssertEqual(PskAdvertV3.role(for: .qr), PskAdvertV3.roleOrdinary)
+        XCTAssertEqual(PskAdvertV3.role(for: .manual), PskAdvertV3.roleOrdinary)
+        XCTAssertEqual(PskAdvertV3.role(for: .kms), PskAdvertV3.roleOrdinary)
+    }
+
     /// HKDF output of a past call's session key, scoped to one peer's chat and
     /// files. Nothing legitimate reads it off the device.
     func testCallDerivedKeyNeverLeavesTheDevice() {
@@ -128,6 +151,7 @@ final class KeyExportPolicyTests: XCTestCase {
     /// heuristic, or worse to `.manual`.
     func testRawValuesAreFrozenStorageFormat() {
         XCTAssertEqual(PskOrigin.nfc.rawValue, "nfc")
+        XCTAssertEqual(PskOrigin.proximity.rawValue, "proximity")
         XCTAssertEqual(PskOrigin.qr.rawValue, "qr")
         XCTAssertEqual(PskOrigin.manual.rawValue, "manual")
         XCTAssertEqual(PskOrigin.kms.rawValue, "kms")

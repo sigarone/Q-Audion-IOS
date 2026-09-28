@@ -116,6 +116,19 @@ public enum PskAdvertV3 {
     public static let roleOrdinary = 0
     public static let roleNfc = 1
     public static let roleQr = 2
+    /// QR + Bluetooth LE proximity ceremony (`PskOrigin.proximity`). Older builds
+    /// still match the secret — the receiver walks all 256 role values — they just
+    /// do not recognise the role.
+    public static let roleProximity = 3
+
+    /// The wire role for a vault entry's provenance.
+    public static func role(for origin: PskOrigin) -> Int {
+        switch origin {
+        case .nfc: return roleNfc
+        case .proximity: return roleProximity
+        case .qr, .manual, .kms, .callDerived, .deviceInternal, .identityKey: return roleOrdinary
+        }
+    }
 
     /// ASCII "qa-psk-advert-v3" — exactly 16 bytes, so the preimage needs no separator.
     private static let domainTag = Data("qa-psk-advert-v3".utf8)
