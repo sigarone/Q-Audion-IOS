@@ -389,7 +389,11 @@ public final class ProximityMainScheduler: ProximityScheduler {
 
     @discardableResult
     public func schedule(after delay: TimeInterval, _ action: @escaping @MainActor () -> Void) -> ProximityCancellable {
-        let nanos: UInt64 = UInt64(max(0, delay) * 1_000_000_000)
+        // UInt64(_:) traps on NaN/inf/overflow. Every in-tree delay is a
+        // small constant, but clamp anyway so a bad value degrades to
+        // "fire soon" / "fire in an hour" instead of crashing the app.
+        let bounded: TimeInterval = delay.isFinite ? min(max(0, delay), 3600) : 0
+        let nanos: UInt64 = UInt64(bounded * 1_000_000_000)
         let task = Task { @MainActor in
             try? await Task.sleep(nanoseconds: nanos)
             if Task.isCancelled { return }

@@ -66,14 +66,29 @@ public enum ProximityPairingStore {
     public static func identityDecision(peer: ProximityPeerIdentity,
                                         local: ProximityLocalIdentity,
                                         pinnedSigningKey: Data?) -> ProximityIdentityDecision {
+        let pinned: [Data] = pinnedSigningKey.map { (key: Data) -> [Data] in [key] } ?? []
         return decide(peer: peer,
                       localUserId: local.userId,
                       localSigningKey: local.signingPublicKey,
-                      pinnedSigningKey: pinnedSigningKey)
+                      pinnedSigningKeys: pinned)
     }
 
-    /// The production policy handed to the sessions: `identityDecision` with the
-    /// pin read from `PeerIdentityPinStore().pinnedKey(contactId: peer.userId)`.
+    /// Same decision against every key the contact has pinned (legacy and
+    /// per-device, `PeerIdentityPinStore.allPinnedKeys`): no pins → `.accept`;
+    /// the presented key equals ANY of them → `.accept` (one of the peer's
+    /// known devices); otherwise → `.acceptWithWarning`.
+    public static func identityDecision(peer: ProximityPeerIdentity,
+                                        local: ProximityLocalIdentity,
+                                        pinnedSigningKeys: [Data]) -> ProximityIdentityDecision {
+        return decide(peer: peer,
+                      localUserId: local.userId,
+                      localSigningKey: local.signingPublicKey,
+                      pinnedSigningKeys: pinnedSigningKeys)
+    }
+
+    /// The production policy handed to the sessions: `identityDecision` with
+    /// every pin read from `PeerIdentityPinStore().allPinnedKeys(contactId: peer.userId)`
+    /// (the legacy pin AND the per-device ones — D11 keeps most pins per device).
     ///
     /// The returned closure captures only the local userId and Ed25519 PUBLIC
     /// key, never the private seed, and checks for self-pairing before it
@@ -88,11 +103,11 @@ public enum ProximityPairingStore {
             if selfPairing {
                 return ProximityIdentityDecision.reject(ProximityPairingStore.selfPairingMessage)
             }
-            let pinned: Data? = PeerIdentityPinStore().pinnedKey(contactId: peer.userId)
+            let pinned: [Data] = PeerIdentityPinStore().allPinnedKeys(contactId: peer.userId)
             return ProximityPairingStore.decide(peer: peer,
                                                 localUserId: localUserId,
                                                 localSigningKey: localSigningKey,
-                                                pinnedSigningKey: pinned)
+                                                pinnedSigningKeys: pinned)
         }
         return policy
     }
@@ -185,14 +200,16 @@ public enum ProximityPairingStore {
     private static func decide(peer: ProximityPeerIdentity,
                                localUserId: String,
                                localSigningKey: Data,
-                               pinnedSigningKey: Data?) -> ProximityIdentityDecision {
+                               pinnedSigningKeys: [Data]) -> ProximityIdentityDecision {
         if isSelf(peer: peer, localUserId: localUserId, localSigningKey: localSigningKey) {
             return .reject(selfPairingMessage)
         }
-        guard let pinned = pinnedSigningKey else { return .accept }
-        let pinnedKey: Data = Data(pinned)
+        if pinnedSigningKeys.isEmpty { return .accept }
         let presentedKey: Data = Data(peer.signingPublicKey)
-        if pinnedKey == presentedKey { return .accept }
+        for pinned in pinnedSigningKeys {
+            let pinnedKey: Data = Data(pinned)
+            if pinnedKey == presentedKey { return .accept }
+        }
         return .acceptWithWarning(pinMismatchWarning)
     }
 

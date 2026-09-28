@@ -186,6 +186,45 @@ final class ProximityPairingStoreTests: XCTestCase {
         }
     }
 
+    // MARK: - identityDecision against every pinned key (D11 per-device pins)
+
+    func testKeyMatchingAnyPinnedDeviceIsAccepted() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        let otherDevice: Data = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let decision = ProximityPairingStore.identityDecision(peer: peer, local: local,
+                                                              pinnedSigningKeys: [otherDevice, peer.signingPublicKey])
+        XCTAssertEqual(decision, .accept)
+    }
+
+    func testKeyMatchingNoPinnedDeviceWarns() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        let deviceA: Data = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let deviceB: Data = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let decision = ProximityPairingStore.identityDecision(peer: peer, local: local,
+                                                              pinnedSigningKeys: [deviceA, deviceB])
+        guard case .acceptWithWarning = decision else {
+            XCTFail("a key none of the peer's devices pinned must warn")
+            return
+        }
+    }
+
+    func testEmptyPinSetIsAccepted() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob")
+        let decision = ProximityPairingStore.identityDecision(peer: peer, local: local, pinnedSigningKeys: [])
+        XCTAssertEqual(decision, .accept)
+    }
+
+    func testSelfWinsOverAMatchingPinSet() throws {
+        let local = try makeLocal(userId: "alice")
+        let peer = try makePeer(userId: "bob", signingPublicKey: local.signingPublicKey)
+        let decision = ProximityPairingStore.identityDecision(peer: peer, local: local,
+                                                              pinnedSigningKeys: [local.signingPublicKey])
+        XCTAssertEqual(decision, .reject(ProximityPairingStoreTests.selfMessage))
+    }
+
     /// The self check runs before the pin lookup, so this path never reaches
     /// the Keychain.
     func testDefaultPolicyRejectsSelfWithoutKeychain() throws {

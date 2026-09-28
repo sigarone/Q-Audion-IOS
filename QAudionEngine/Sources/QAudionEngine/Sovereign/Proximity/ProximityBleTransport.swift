@@ -66,6 +66,10 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
         case published
     }
 
+    /// How long `shutdown()` keeps a GATT service that still had links, so
+    /// the last notification can leave the queue.
+    private static let drainGrace: TimeInterval = 0.5
+
     /// Created lazily by the first `startAdvertising`, so constructing the
     /// transport never triggers the Bluetooth permission prompt.
     private var manager: CBPeripheralManager?
@@ -156,7 +160,23 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
             m.delegate = nil
             if m.state == .poweredOn {
                 m.stopAdvertising()
-                m.removeAllServices()
+                if snapshot.isEmpty {
+                    m.removeAllServices()
+                } else {
+                    // A notification `updateValue` already accepted — in
+                    // practice the ABORT or BUSY a session sends right before
+                    // shutting down — can be dropped if the service goes away
+                    // at once. Nothing is advertised or reported any more;
+                    // the closure owns the manager until the service is
+                    // removed.
+                    let retired: CBPeripheralManager = m
+                    let delay: TimeInterval = ProximityBleDisplayerTransport.drainGrace
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        if retired.state == .poweredOn {
+                            retired.removeAllServices()
+                        }
+                    }
+                }
             }
         }
         manager = nil
@@ -489,7 +509,18 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         case discoveringCharacteristics
         case subscribing
         case connected
+        /// The client let go of the link while a write was still queued or
+        /// in flight — in practice the ABORT a failing session sends right
+        /// before it closes. The connection stays up, silently, until those
+        /// writes are answered or `drainGrace` passes; then `teardown()`.
+        /// Without this, `cancelPeripheralConnection` right after
+        /// `writeValue` routinely drops the write and the other phone only
+        /// learns "connection lost" instead of why the pairing ended.
+        case draining
     }
+
+    /// Upper bound on how long `draining` keeps the connection.
+    private static let drainGrace: TimeInterval = 0.5
 
     /// Created lazily by the first `connect`, then reused.
     private var manager: CBCentralManager?
@@ -570,8 +601,16 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
     public func cancel() {
         cancelGeneration &+= 1
         pendingCompletion = nil
+        // A failing session closes its link (which starts the drain) and then
+        // cancels the transport: let the drain finish on its own.
+        if phase == .draining { return }
+        let drain: Bool = link != nil && hasQueuedWrites
         dropLinkSilently()
-        teardown()
+        if drain {
+            beginDrain()
+        } else {
+            teardown()
+        }
     }
 
     // MARK: Link plumbing (called by ProximityBleScannerLink)
@@ -595,7 +634,11 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
     fileprivate func linkClose(_ sender: ProximityBleScannerLink) {
         guard sender === link else { return }
         link = nil
-        teardown()
+        if hasQueuedWrites {
+            beginDrain()
+        } else {
+            teardown()
+        }
     }
 
     // MARK: CBCentralManagerDelegate
@@ -605,6 +648,10 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         let state: CBManagerState = central.state
         if state == .poweredOn {
             if phase == .waitingForPower { beginScan() }
+            return
+        }
+        if phase == .draining {
+            if state != .unknown { teardown() }
             return
         }
         if phase == .connected {
@@ -714,9 +761,17 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic,
                            error: Error?) {
-        guard peripheral === self.remotePeripheral, phase == .connected, writeInFlight,
+        guard peripheral === self.remotePeripheral, phase == .connected || phase == .draining, writeInFlight,
               characteristic.uuid == ProximityBleUUIDs.toDisplayerCharacteristic else { return }
         writeInFlight = false
+        if phase == .draining {
+            if error != nil || outbox.isEmpty {
+                teardown()
+            } else {
+                pumpWrites()
+            }
+            return
+        }
         if error != nil {
             failLink(.transportFailed("write failed"))
             return
@@ -765,7 +820,7 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
     }
 
     private func pumpWrites() {
-        guard !writeInFlight, phase == .connected, !outbox.isEmpty,
+        guard !writeInFlight, phase == .connected || phase == .draining, !outbox.isEmpty,
               let p = remotePeripheral, let characteristic = writeCharacteristic else { return }
         let next: Data = outbox.removeFirst()
         writeInFlight = true
@@ -792,6 +847,29 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         phase = .idle
     }
 
+    private var hasQueuedWrites: Bool {
+        return phase == .connected && (writeInFlight || !outbox.isEmpty)
+    }
+
+    /// Keeps the connection up until the queued writes are answered (see
+    /// `didWriteValueFor`) or `drainGrace` passes. Nothing is reported to
+    /// anyone from here on.
+    private func beginDrain() {
+        phase = .draining
+        timeoutItem?.cancel()
+        let attemptId: Int = attempt
+        // Strong capture on purpose: the client usually drops its last
+        // reference to this transport right after letting go of the link,
+        // and the queued write must still go out. `teardown()` clears
+        // `timeoutItem`, which breaks the cycle.
+        let item = DispatchWorkItem {
+            guard self.attempt == attemptId, self.phase == .draining else { return }
+            self.teardown()
+        }
+        timeoutItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + ProximityBleScannerTransport.drainGrace, execute: item)
+    }
+
     private func dropLinkSilently() {
         if let current = link {
             current.detach()
@@ -801,6 +879,11 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
 
     /// Delegate-context failure: to the link once connected, else to the pending completion.
     private func fail(_ error: ProximityPairingError) {
+        if phase == .draining {
+            // Nobody is listening any more: just let the radio go.
+            teardown()
+            return
+        }
         if phase == .connected {
             failLink(error)
         } else {

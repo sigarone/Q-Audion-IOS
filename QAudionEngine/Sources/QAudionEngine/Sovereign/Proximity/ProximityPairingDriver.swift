@@ -238,7 +238,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         case .failed(let error):
             clearCode()
             setPhase(.failed(error.userMessage))
-            if error.isRetryable && isActive {
+            if ProximityPairingViewDriver.restartsOnItsOwn(error) && isActive {
                 scheduleAutoRestart()
             }
         }
@@ -353,6 +353,29 @@ final class ProximityPairingViewDriver: ObservableObject {
     }
 
     // MARK: - Timers and teardown
+
+    /// Only failures that say nothing about who was on the other end put a
+    /// fresh code back on screen by themselves: the code aged out, the radio
+    /// dropped, or another phone got to it first. A failed security check, a
+    /// "codes don't match" from either side, or any other refusal stays on
+    /// the error until the user taps "Nuovo codice" — so an attacker relaying
+    /// the exchange never gets a new code handed to it without a person
+    /// deciding to try again.
+    private static func restartsOnItsOwn(_ error: ProximityPairingError) -> Bool {
+        switch error {
+        case .expiredQrCode, .timeout, .transportFailed, .sessionBusy:
+            return true
+        case .peerAborted(let raw):
+            switch ProximityPairing.AbortReason(rawValue: raw) {
+            case .frameExpired?, .timeout?:
+                return true
+            default:
+                return false
+            }
+        default:
+            return false
+        }
+    }
 
     private func scheduleAutoRestart() {
         autoRestartTimer?.cancel()

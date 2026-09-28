@@ -116,7 +116,9 @@ Decoders MUST be strict: scheme `qaudion` and host `pair` (ASCII
 case-insensitive), exactly one path segment, no query, no fragment, only the
 base64url alphabet `[A-Za-z0-9_-]`, no padding, exactly 114 characters,
 decoding to exactly 85 bytes, version `0x01`. Anything else is rejected.
-Leading/trailing whitespace of the scanned string is trimmed first.
+Leading/trailing whitespace and newlines (Unicode `White_Space`, i.e.
+Foundation's `.whitespacesAndNewlines`) of the scanned string are trimmed
+first; nothing inside the string is.
 
 ## 6. Displayer session setup and frame rotation
 
@@ -155,7 +157,8 @@ Each ATT value (a write or a notification) is one fragment:
 fragment = u8(flags) ‖ u8(seq) ‖ payload      (payload ≥ 1 byte)
 flags    : 0x01 FIRST, 0x02 LAST, all other bits MUST be 0
 seq      : 0 on the FIRST fragment of a message, +1 for each following
-           fragment of that message; > 255 fragments is an error
+           fragment of that message; a message spans at most 256
+           fragments (seq 0…255) — a 257th fragment is an error
 ```
 
 Fragment size = `ATT_MTU − 3` (iOS: `maximumWriteValueLength(for:
@@ -168,6 +171,12 @@ framing error aborts the pairing.
 
 Writes are sent one at a time, the next after the previous write's response.
 Notifications are queued and resumed on "ready to update subscribers".
+
+Closing never cuts off the last message: a scanner that closes with a write
+still queued or unanswered (typically ABORT) keeps the connection until that
+write is answered or 0.5 s pass, and a displayer that shuts down after
+sending keeps its GATT service (not the advertisement) for 0.5 s. Nothing is
+delivered to the closed session during that time.
 
 ## 8. Messages
 
@@ -216,7 +225,10 @@ D: frame i known and fresh (§6)?  tag valid (constant-time)?
            rotating/hide the QR; any other central gets BUSY
 D → S  OFFER
 S: SHA-256(L_COMMIT ‖ sessionId ‖ offerBody) == commitment (constant-time)?
-   parse; validate lengths; peer idPub != own idPub
+   parse; validate lengths; peer idPub != own idPub, peer userId != own userId
+   identity policy (§12) on (idPub_D, userId_D) — already bound by the QR
+   commitment, so it runs here, before any key material is spent
+                                   any failure → ABORT, fail
    (ct, ss_kem) = ML-KEM-1024.Encaps(ek_D)
    ss_x = X25519(xsk_S, xpk_D)           reject all-zero
    TH, keys (§10); sig_S, mac_S
@@ -226,7 +238,7 @@ D: ss_kem = Decaps(dk_D, ct); ss_x = X25519(xsk_D, xpk_S); TH, keys
    identity policy (§12)?          any failure → ABORT, fail
 D → S  FINISH
 S: mac_D valid?  sig_D valid under idPub_D (committed in the QR)?
-   identity policy?                any failure → ABORT, fail
+                                   any failure → ABORT, fail
 Both: show peer name + SAS; wait for the local user.
    local confirm → send CONFIRM(HMAC(K_confirm_self, L_CONFIRMED))
    local reject  → send ABORT(1), fail
@@ -234,6 +246,15 @@ Both: show peer name + SAS; wait for the local user.
 Both confirmed and the peer's CONFIRM verified → COMPLETE → persist.
 Close the link 1 s after completing (lets the last CONFIRM drain).
 ```
+
+Completion is per side and can be asymmetric: the side whose user confirms
+LAST completes as soon as its own CONFIRM is sent, while the other side
+completes only when that CONFIRM arrives. If the link drops in between, one
+side stores the PSK and the other times out and stores nothing. That is safe
+— a PSK is only ever mixed into a call when BOTH sides advertise the same
+fingerprint (mutual selection), so an orphan entry is never used and a fresh
+pairing simply adds a new one — but the failed side's UI must never claim
+the pairing succeeded.
 
 Ordering rules: a message not valid in the current state is a protocol
 violation (abort). Messages are processed strictly one at a time.
@@ -269,17 +290,28 @@ SAS = decimal( u64be(sasBytes) mod 1 000 000 ), zero-padded to 6 digits
 
 Displayer: `idle → showing(frame) → exchanging → awaitingConfirmation →
 completed | failed`. Scanner: `idle → connecting → exchanging →
-awaitingConfirmation → completed | failed`. Every failure path sends ABORT
-when a link exists, closes it, and zeroizes `sessionSecret`, `dk_D`, shared
-secrets and derived keys (the PSK is handed only to the completion result).
-Nothing is persisted on any path other than `completed`.
+awaitingConfirmation → completed | failed`. Every LOCAL failure (a check
+that failed here, a local timeout, the user rejecting or cancelling) sends
+ABORT on the locked link before closing it; a failure the peer caused (an
+ABORT or BUSY received, the link dropping) sends nothing back. Every failure
+closes the link and zeroizes `sessionSecret`, `dk_D`, shared secrets and
+derived keys (the PSK is handed only to the completion result). Nothing is
+persisted on any path other than `completed`.
+
+A failure that says nothing about who is on the other end (QR frame expired,
+timeout, radio dropped, BUSY) may put a fresh code on screen by itself. Any
+other failure — a MAC/signature/commitment check, a "codes don't match"
+from either user, an identity rejection — stays on the error until the user
+explicitly asks for a new code, so a relaying attacker is never handed a new
+attempt without a person deciding to try again.
 
 ## 12. Identity policy and persistence
 
 Before showing the SAS each side evaluates the peer identity:
 - same Ed25519 key or same userId as the local identity → **reject**;
-- a pin exists for `userId` in `PeerIdentityPinStore` and differs from the
-  presented Ed25519 key → **accept with warning** (red banner on the
+- `PeerIdentityPinStore` holds one or more pins for `userId` (the legacy
+  per-contact pin and/or the per-device ones) and the presented Ed25519 key
+  equals none of them → **accept with warning** (red banner on the
   confirmation screen; the user decides in person);
 - otherwise → accept.
 
