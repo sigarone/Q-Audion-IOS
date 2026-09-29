@@ -1621,6 +1621,18 @@
         }
       }
     },
+    "group_call.video_publish_failed_toast": {
+      "extractionState": "manual",
+      "comment": "Snackbar — one-shot toast shown when turning on the camera during a group call fails (e.g. a transceiver/SFU publish error)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile attivare il video"
+          }
+        }
+      }
+    },
     "account_settings.profile_updated": {
       "extractionState": "manual",
       "comment": "Snackbar — shown after successfully saving profile changes (display name, status, phone)",

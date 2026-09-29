@@ -73,6 +73,46 @@ final class GroupVideoQualityCompositionTests: XCTestCase {
         XCTAssertLessThan(medium.maxBitrate, high.maxBitrate)
     }
 
+    // MARK: - W-GRPVIDEOPRIO (2026-09-29) regression lock — the pinned
+    // fork's simulcast path (`Utils+VideoEncodings.computeVideoEncodings` /
+    // `Dimensions.computeSimulcastPresets`) applies this encoding's
+    // `bitratePriority`/`networkPriority` to the TOP simulcast layer
+    // (`encodings[2]`), but WebRTC only allows a non-default value on
+    // `encodings[0]` — any non-default priority here makes EVERY group
+    // video publish at that quality tier fail with LiveKit error 201
+    // ("Failed to add transceiver"), which is exactly the 2026-09-29 "iOS
+    // never publishes group video" regression. `.medium`/`.high` used to
+    // set `.medium`/`.high` (2.0x/4.0x, non-default); this must never
+    // regress back to that. `nil` is the only value proven safe against
+    // this fork bug, matching Android (which sets no priority at all for
+    // group video and never hit this).
+
+    func testVideoEncoding_neverSetsBitrateOrNetworkPriority() {
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let encoding = LiveKitGroupCallRoom.videoEncoding(for: quality)
+            XCTAssertNil(
+                encoding.bitratePriority,
+                "a non-default bitratePriority lands on the fork's top simulcast layer, not encodings[0], and WebRTC rejects that (LiveKit error 201) — quality=\(quality)"
+            )
+            XCTAssertNil(
+                encoding.networkPriority,
+                "same fork bug as bitratePriority above — quality=\(quality)"
+            )
+        }
+    }
+
+    func testDefaultVideoPublishOptions_neverSetsBitrateOrNetworkPriority() {
+        // Same lock as testVideoEncoding_neverSetsBitrateOrNetworkPriority,
+        // through the actual RoomOptions-facing entry point group calls
+        // publish with (`defaultVideoPublishOptions(for:)` wraps
+        // `videoEncoding(for:)` — must not reintroduce priority on top of it).
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let options = LiveKitGroupCallRoom.defaultVideoPublishOptions(for: quality)
+            XCTAssertNil(options.encoding?.bitratePriority, "quality=\(quality)")
+            XCTAssertNil(options.encoding?.networkPriority, "quality=\(quality)")
+        }
+    }
+
     // MARK: - W-GRPVP8SIMULCAST (2026-08-27) — group-call video publish
     // must force VP8 with simulcast on, unconditionally, on every device.
     // Mobile hardware H265 encoders are commonly single-instance per chip

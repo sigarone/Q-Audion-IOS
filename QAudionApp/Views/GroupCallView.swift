@@ -390,6 +390,15 @@ struct GroupCallView: View {
             snackbar?.show(.init(text: text, severity: .info))
             viewModel.muteRequestToastText = nil
         }
+        // W-GRPVIDEOFAIL (2026-09-29) — same one-shot toast plumbing as
+        // muteRequestToastText just above, for a failed video turn-on.
+        // `.warning` (not `.info`): this reports something the user's tap
+        // actually failed to do, not an informational event from a peer.
+        .onChange(of: viewModel.videoPublishFailedToastText) { text in
+            guard let text else { return }
+            snackbar?.show(.init(text: text, severity: .warning))
+            viewModel.videoPublishFailedToastText = nil
+        }
         // Badge upkeep — mirrors `ChatListScreen`'s reactive unread badge,
         // driven off the SAME `GroupMessageStore.didChangeNotification` the
         // list screen and `GroupChatScreen` both already observe. Fires
@@ -1179,6 +1188,13 @@ class GroupCallViewModel: ObservableObject {
     /// `.onChange` and pushes it through that snackbar itself, then
     /// clears it back to nil (see that call site's kdoc).
     @Published var muteRequestToastText: String? = nil
+    /// W-GRPVIDEOFAIL (2026-09-29): resolved toast text for a failed
+    /// `toggleVideo()` turn-on, or nil. Same one-shot pattern as
+    /// `muteRequestToastText` above (this `ObservableObject` has no reach
+    /// into the environment-provided `QAudionSnackbarHostState` either) —
+    /// see `toggleVideo()` for when this is set and this view's `.onChange`
+    /// for where it's consumed and cleared.
+    @Published var videoPublishFailedToastText: String? = nil
     /// In-call chat panel — the persisted-group id (DASHED UUID, server wire
     /// form) this ACTIVE call is associated with, or "" for an ad-hoc group
     /// call started from the contact picker with no persisted group behind
@@ -1712,7 +1728,22 @@ class GroupCallViewModel: ObservableObject {
         // never moves it. The old optimistic write could also be left stranded
         // by a camera that stopped publishing for a reason other than this call.
         let target = !isVideoEnabled
-        Task { _ = await controller.setVideoEnabled(target) }
+        Task {
+            let ok = await controller.setVideoEnabled(target)
+            // W-GRPVIDEOFAIL (2026-09-29): a failed turn-ON used to leave the
+            // button silently back at "off" with no explanation (the button
+            // itself already renders the right state via `isVideoEnabled`
+            // above — this only adds the missing explanation). Turning OFF
+            // is not toasted: it practically never fails and, unlike
+            // turning on, leaves nothing worse than the camera still running.
+            if !ok, target {
+                self.videoPublishFailedToastText = String(
+                    localized: "group_call.video_publish_failed_toast",
+                    defaultValue: "Impossibile attivare il video",
+                    comment: "Snackbar — one-shot toast shown when turning on the camera during a group call fails (e.g. a transceiver/SFU publish error)"
+                )
+            }
+        }
     }
 
     /// W-GRPSCREENSHARE: toggle screen sharing. Unlike `toggleVideo()`, this

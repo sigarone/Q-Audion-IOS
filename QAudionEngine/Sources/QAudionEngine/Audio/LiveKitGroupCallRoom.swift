@@ -616,18 +616,18 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // `GroupCallRoom.ts`) now forces VP8, unconditionally, for every
         // group-call video publish; H265 stays for 1:1 calls, where a
         // single encode stream is always enough.
-        // W-GRPQUALITY (2026-08-26) — the FIRST real per-track bandwidth
-        // priority wiring for group calls: `VideoEncoding.bitratePriority`/
-        // `.networkPriority` (verified against the pinned fork's real
-        // source, `Types/Options/VideoEncoding.swift`/`Priority.swift` at
-        // tag 2.16.0, same audit discipline as the H265 codec note above)
-        // are the actual WebRTC/DSCP bandwidth-allocation levers this
-        // encoding carries — `preferredCallQuality` (persisted since the
-        // Settings screen shipped, never read by ANY production path
-        // before this) now actually reaches them. `maxBitrate`/`maxFps`
-        // are LiveKit's own official preset scale
+        // W-GRPQUALITY (2026-08-26) — `preferredCallQuality` (persisted
+        // since the Settings screen shipped, never read by ANY production
+        // path before this) now actually reaches the publish encoding via
+        // `maxBitrate`/`maxFps`, LiveKit's own official preset scale
         // (`VideoParameters.presetH360_169`/`presetH540_169`/
-        // `presetH720_169`), not invented numbers.
+        // `presetH720_169`), not invented numbers. This originally ALSO
+        // wired `VideoEncoding.bitratePriority`/`.networkPriority` per tier
+        // — REVERTED by W-GRPVIDEOPRIO (2026-09-29, see `videoEncoding
+        // (for:)`'s own doc below): the pinned fork applies this encoding's
+        // priority to the wrong simulcast layer, and WebRTC then rejects
+        // the whole publish for any tier above `.low`. `maxBitrate`/
+        // `maxFps` are unaffected and still the levers this setting drives.
         // W-SIMULCASTPIN (2026-08-26, P2 audit item 5) — `simulcast` was the
         // one field on this initializer left unset, riding the pinned
         // fork's SDK default rather than a code-level statement of intent.
@@ -712,14 +712,36 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         attachStatsReporting(to: room.localParticipant.firstAudioTrack)
         if wantsVideo {
             if await ensureCameraAuthorized() {
-                // preferredCodec: .vp8 is set globally via RoomOptions.
-                // defaultVideoPublishOptions above (see its comment for why)
-                // — no per-call override needed here.
-                _ = try await room.localParticipant.setCamera(enabled: true)
-                // I8 FIX: truncate identity like every other identity print in this file.
-                print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
-                onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
-                attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
+                do {
+                    // preferredCodec: .vp8 is set globally via RoomOptions.
+                    // defaultVideoPublishOptions above (see its comment for why)
+                    // — no per-call override needed here.
+                    _ = try await room.localParticipant.setCamera(enabled: true)
+                    // I8 FIX: truncate identity like every other identity print in this file.
+                    print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
+                    onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
+                    attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
+                } catch {
+                    // W-GRPVIDEOFAIL (2026-09-29) — a video-publish failure
+                    // here used to propagate OUT of `connect()` (this method
+                    // is `throws`), which its caller (`GroupCallController.
+                    // handleSfuToken`) treats as a total SFU-connect failure:
+                    // it disconnects `room` — including the mic track
+                    // published a few lines above — and falls back to the
+                    // WS-relay mesh entirely. For a video-invite call that
+                    // looks exactly like "iOS never joined the call", when
+                    // really only the CAMERA publish failed (the 2026-09-29
+                    // group-video regression this fix's sibling change
+                    // addresses was one concrete cause, but this catch is
+                    // deliberately generic — any future `setCamera` failure
+                    // must degrade the same way). Mirror the camera-
+                    // permission-denied branch below: log + telemetry +
+                    // onError, keep the call running audio-only instead of
+                    // tearing down a connection whose mic already works.
+                    print("[GroupCallController] setCamera(true) failed during connect(), continuing audio-only: \(error)")
+                    emitTelemetry("call.media.camera_publish_failed")
+                    onError?(error)
+                }
             } else {
                 // Graceful audio-only fallback: mic is already published
                 // above, we simply never publish a camera track. No throw —
@@ -735,14 +757,10 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// LiveKit's OWN preset bitrate/fps scale
     /// (`VideoParameters.presetH360_169`/`presetH540_169`/`presetH720_169`,
     /// verified against the pinned fork's real source at tag 2.16.0) rather
-    /// than inventing new numbers, plus a matching `Priority` for both
-    /// `bitratePriority` (WebRTC's internal bandwidth allocation between
-    /// streams) and `networkPriority` (DSCP marking, only takes effect if
-    /// `ConnectOptions.isDscpEnabled` — inert but harmless otherwise) — the
-    /// actual per-track bandwidth priority lever this item wires. `.medium`
-    /// (today's persisted default) reproduces the encoding this file
-    /// already shipped before this change (`presetH540_169`'s
-    /// 800kbps/25fps was NOT what shipped before — see note below).
+    /// than inventing new numbers. `.medium` (today's persisted default)
+    /// reproduces the encoding this file already shipped before this change
+    /// (`presetH540_169`'s 800kbps/25fps was NOT what shipped before — see
+    /// note below).
     ///
     /// Note: before this change, `VideoPublishOptions` never set `encoding`
     /// at all (SDK default: `nil`), which lets the SDK derive it from the
@@ -751,23 +769,50 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// 800kbps/25fps ceiling is a reasonable mid-point that does not
     /// regress typical camera output, and now actually RESPONDS to the
     /// setting instead of ignoring it entirely.
+    ///
+    /// W-GRPVIDEOPRIO (2026-09-29, REVERTS the `bitratePriority`/
+    /// `networkPriority` half of W-GRPQUALITY) — `.medium`/`.high` used to
+    /// pass `bitratePriority: .medium/.high` (2.0x/4.0x — anything above
+    /// `.low`'s 1.0x, which the SDK docs confirm IS WebRTC's own unset
+    /// default; see `Priority.toBitratePriority()`'s kdoc in the pinned
+    /// fork). That is the direct cause of the 2026-09-29 "iOS never
+    /// publishes group video" regression: `Utils+VideoEncodings.
+    /// computeVideoEncodings` (the fork's simulcast path, always taken here
+    /// since `defaultVideoPublishOptions` below forces `simulcast: true`)
+    /// applies the ONE top-level `encoding` this function returns only to
+    /// the highest-resolution simulcast layer (`Dimensions.
+    /// computeSimulcastPresets`'s `baseParameters`, landed at `encodings[2]`
+    /// — `Dimensions.encodings(from:)` orders RTP encodings low→high,
+    /// `VideoQuality.RIDs = ["q","h","f"]`), so any non-default priority
+    /// ends up on `encodings[2]`, never `encodings[0]`. WebRTC only allows a
+    /// non-default `bitratePriority`/`networkPriority` on `encodings[0]`
+    /// (`pc/rtp_sender.cc`'s `UNSUPPORTED_PARAMETER` check, surfaced here as
+    /// `RTCPeerConnection.addTransceiver` throwing `WebRTC error(Failed to
+    /// add transceiver)`, LiveKit error code 201) — `.low` (numerically
+    /// equal to the default) happened to slip past that check, so only
+    /// `.medium`/`.high` ever failed, and ONLY for group video (1:1 calls
+    /// don't go through this SDK/fork at all). Android sets no priority for
+    /// group video and has never hit this. Fixing it for real belongs in
+    /// the fork (apply the priority to `encodings[0]`, or only when
+    /// simulcast is off) — out of scope for this app-level fix — so this
+    /// reverts to Android's proven-safe behavior instead: no
+    /// `bitratePriority`/`networkPriority` at any quality tier. The
+    /// bitrate/fps ceiling below (the tier's actual, load-bearing lever)
+    /// is untouched.
     static func videoEncoding(for quality: CallsSettingsViewModel.CallQuality) -> VideoEncoding {
         switch quality {
         case .low:
             return VideoEncoding(
                 maxBitrate: VideoParameters.presetH360_169.encoding.maxBitrate,
-                maxFps: VideoParameters.presetH360_169.encoding.maxFps,
-                bitratePriority: .low, networkPriority: .low)
+                maxFps: VideoParameters.presetH360_169.encoding.maxFps)
         case .medium:
             return VideoEncoding(
                 maxBitrate: VideoParameters.presetH540_169.encoding.maxBitrate,
-                maxFps: VideoParameters.presetH540_169.encoding.maxFps,
-                bitratePriority: .medium, networkPriority: .medium)
+                maxFps: VideoParameters.presetH540_169.encoding.maxFps)
         case .high:
             return VideoEncoding(
                 maxBitrate: VideoParameters.presetH720_169.encoding.maxBitrate,
-                maxFps: VideoParameters.presetH720_169.encoding.maxFps,
-                bitratePriority: .high, networkPriority: .high)
+                maxFps: VideoParameters.presetH720_169.encoding.maxFps)
         }
     }
 
