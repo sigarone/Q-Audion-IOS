@@ -1351,6 +1351,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// restores "AES256 senza compromessi" without another release.
     public var dtlsPqcRequiredProvider: (() -> Bool)?
 
+    /// TRACK B (2026-09-29, "phone always DTLS server when answering") —
+    /// remote kill switch for forcing OUR OWN answer's DTLS role to
+    /// `passive` (server) on the first negotiation of a call, when the
+    /// remote offer carried `a=setup:actpass`. Same indirection reason as
+    /// `dtlsPqcRequiredProvider` right above (QAudionEngine cannot import
+    /// `FeatureFlags`): AppState sets this to a closure that reads
+    /// `FeatureFlags.bool("calls.dtls_answer_passive_kill", false)`, wired
+    /// right alongside `dtlsPqcRequiredProvider` at every call-setup site.
+    ///
+    /// Read ONCE, synchronously, at `QAudionPeerConnection.init` (forwarded
+    /// through as an init parameter, same as `dtlsPqcRequiredProvider` — a
+    /// fresh `QAudionPeerConnection` per call makes "once at init" the same
+    /// as "once per call"). `nil` (no AppState wiring, e.g. a unit test
+    /// constructing the controller directly) resolves to `false` — the fix
+    /// stays ACTIVE, matching the flag's own compiled default (`absent`/
+    /// `false` = fix active; `true` = revert to libwebrtc's stock `active`
+    /// answerer default). See
+    /// `forcePassiveRoleForFreshAnswer`'s kdoc in `QAudionPeerConnection.swift`
+    /// for the full BoringSSL/SDP-munging rationale.
+    public var dtlsAnswerPassiveKillSwitchProvider: (() -> Bool)?
+
     /// SFrame video sealer factory — DI seam retained for backwards
     /// compatibility with AppState wiring. As of W539 it is NO LONGER
     /// consulted by the default video pipeline pick: cross-platform
@@ -1826,7 +1847,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self,
-            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider)
+            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
+            dtlsAnswerPassiveKillSwitchProvider: dtlsAnswerPassiveKillSwitchProvider)
         // Bug-C guard: same race, closed a moment later — pc was just built
         // synchronously (no further suspension since the check above), but a
         // teardown could still have landed on another thread. Dispose rather
@@ -1984,7 +2006,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self,
-            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider)
+            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
+            dtlsAnswerPassiveKillSwitchProvider: dtlsAnswerPassiveKillSwitchProvider)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()
@@ -2131,7 +2154,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self,
-            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider)
+            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
+            dtlsAnswerPassiveKillSwitchProvider: dtlsAnswerPassiveKillSwitchProvider)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()

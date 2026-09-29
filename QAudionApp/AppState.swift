@@ -7459,6 +7459,14 @@ final class AppState: ObservableObject {
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
         }
+        // TRACK B (2026-09-29, "phone always DTLS server when answering") —
+        // wire the DTLS-answer-passive remote kill switch; see
+        // `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc (QAudionEngine
+        // cannot import FeatureFlags directly).
+        controller.dtlsAnswerPassiveKillSwitchProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+        }
         controller.sframeVideoSealerFactory = { keyProvider in
             SFrameVideoSealer.forRotatingKey(keyProvider)
         }
@@ -17210,6 +17218,13 @@ final class AppState: ObservableObject {
                     guard Thread.isMainThread else { return false }
                     return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
                 }
+                // TRACK B (2026-09-29) — wire the DTLS-answer-passive remote
+                // kill switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own
+                // kdoc (QAudionEngine cannot import FeatureFlags directly).
+                controller.dtlsAnswerPassiveKillSwitchProvider = {
+                    guard Thread.isMainThread else { return false }
+                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+                }
                 // Commit 77583315 parity — wire the rotating-key SFrame
                 // sealer factory. The factory is consulted by
                 // `ensureVideoSealer()` at video-pipeline pickup time;
@@ -25557,6 +25572,13 @@ extension AppState {
         controller.dtlsPqcRequiredProvider = {
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
+        }
+        // TRACK B (2026-09-29) — wire the DTLS-answer-passive remote kill
+        // switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc
+        // (QAudionEngine cannot import FeatureFlags directly).
+        controller.dtlsAnswerPassiveKillSwitchProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
         }
         // Commit 77583315 parity — DI the rotating-key SFrame sealer
         // factory on the responder side too. Without this, two
