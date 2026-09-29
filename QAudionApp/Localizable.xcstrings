@@ -31715,6 +31715,168 @@
           }
         }
       }
+    },
+    "proximity.outcome.existing_contact": {
+      "extractionState": "manual",
+      "comment": "In-person (QR + Bluetooth) pairing outcome — the peer was already a known contact, so only its call key was saved; the contact's own key/verified badge is unchanged. %@ in the detail line is their display name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave aggiunta a un contatto esistente"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key added to an existing contact"
+          }
+        }
+      }
+    },
+    "proximity.outcome.not_added": {
+      "extractionState": "manual",
+      "comment": "In-person pairing outcome — the call key was saved but the peer could not be added as a contact (e.g. the scanned code resolved to the user's own account)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave salvata, contatto non aggiunto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key saved, contact not added"
+          }
+        }
+      }
+    },
+    "proximity.outcome.new_verified": {
+      "extractionState": "manual",
+      "comment": "In-person pairing outcome — a brand-new contact was added and the server confirmed the claimed account published the key just proved over Bluetooth",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuovo contatto aggiunto e verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New contact added and verified"
+          }
+        }
+      }
+    },
+    "proximity.outcome.saved_unverified": {
+      "extractionState": "manual",
+      "comment": "In-person pairing outcome — the 6-digit code was confirmed on both phones and a new contact was added, but the account-ownership check against the server could not run (offline, timeout, or the account published no keys)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave salvata, verifica server non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key saved, server verification unavailable"
+          }
+        }
+      }
+    },
+    "proximity.entry.menu_title_new": {
+      "extractionState": "manual",
+      "comment": "Contacts '+' menu row for in-person pairing, with a one-time 'New' marker shown until the user opens the screen once after the update that added this row's feedback (verified badge, explanation, telemetry)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associa di persona (QR + Bluetooth) · Novità"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pair in person (QR + Bluetooth) · New"
+          }
+        }
+      }
+    },
+    "proximity.howitworks.title": {
+      "extractionState": "manual",
+      "comment": "Title of the in-person (QR + Bluetooth) pairing explanation sheet, and the info button that reopens it",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Come funziona"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How it works"
+          }
+        }
+      }
+    },
+    "proximity.howitworks.body": {
+      "extractionState": "manual",
+      "comment": "Body text of the in-person (QR + Bluetooth) pairing explanation sheet, plain language, one blank line between each of the 6 points: (1) show/scan the QR, (2) phones connect over Bluetooth by themselves, (3) compare the 6 digits out loud, (4) why the 6 digits matter (catch a man-in-the-middle), (5) the crypto used and that nothing leaves the phones unencrypted, (6) what the resulting key protects",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'altro telefono mostra o scansiona il codice QR.\n\nI telefoni si collegano da soli via Bluetooth: non c'è nulla da configurare.\n\nLeggete ad alta voce le 6 cifre mostrate su entrambi gli schermi: devono coincidere.\n\nLe 6 cifre servono a scoprire chi provasse a mettersi in mezzo allo scambio — se non coincidono, annullate.\n\nLo scambio usa crittografia post-quantistica ibrida (ML-KEM-1024 + X25519): nulla lascia i due telefoni in chiaro.\n\nLa chiave così creata resta sui vostri telefoni e protegge le chiamate tra voi da questo momento in poi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other phone shows or scans the QR code.\n\nThe phones connect to each other over Bluetooth by themselves — nothing to set up.\n\nRead the 6 digits shown on both screens out loud: they must match.\n\nThe 6 digits catch anyone trying to sit in the middle of the exchange — if they don't match, cancel.\n\nThe exchange uses hybrid post-quantum encryption (ML-KEM-1024 + X25519): nothing ever leaves the two phones unencrypted.\n\nThe key this creates stays on your phones and protects your calls with each other from now on."
+          }
+        }
+      }
+    },
+    "contact_detail.proximity_verified": {
+      "extractionState": "manual",
+      "comment": "Security-log row for a contact — an in-person QR + Bluetooth pairing completed and the server confirmed the claimed account owns the key just proved. The date/time is shown separately by the row's own timestamp column.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificato di persona · QR + Bluetooth"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified in person · QR + Bluetooth"
+          }
+        }
+      }
+    },
+    "contact_detail.proximity_saved": {
+      "extractionState": "manual",
+      "comment": "Security-log row for a contact — an in-person QR + Bluetooth pairing's 6-digit code was confirmed on both phones, but the check that confirms the claimed account owns the key could not run against the server, so this is deliberately NOT worded as 'verificato'.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave di persona salvata · QR + Bluetooth"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key saved in person · QR + Bluetooth"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

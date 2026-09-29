@@ -121,7 +121,19 @@ final class ContactsListContainer: ObservableObject {
     @discardableResult
     /// `verified: false` is for callers whose in-person evidence does not
     /// bind the userId (an in-person pairing whose server check failed).
-    func addScannedContact(_ decoded: QrPayloadRouter.Decoded, verified: Bool = true) -> Bool {
+    ///
+    /// - Parameters:
+    ///   - proximityPairedAtMs: non-nil ONLY from the in-person (QR +
+    ///     Bluetooth) pairing flow — epoch ms the SAS ceremony completed.
+    ///     nil (the default) for an ordinary static-identity-QR scan, which
+    ///     is not that ceremony. When nil, any prior in-person record this
+    ///     contact already had is preserved, never cleared, by this call.
+    ///   - proximityServerConfirmed: whether the server confirmed the
+    ///     claimed account published the proved key (spec §12). Meaningless
+    ///     when `proximityPairedAtMs` is nil.
+    func addScannedContact(_ decoded: QrPayloadRouter.Decoded, verified: Bool = true,
+                           proximityPairedAtMs: Int64? = nil,
+                           proximityServerConfirmed: Bool? = nil) -> Bool {
         let userId: String
         let displayName: String
         let pubkey: Data
@@ -202,7 +214,13 @@ final class ContactsListContainer: ObservableObject {
             presenceFloor: existing?.presenceFloor,
             phoneNumber: existing?.phoneNumber,
             extension: existing?.`extension`,
-            avatarVersion: existing?.avatarVersion
+            avatarVersion: existing?.avatarVersion,
+            // W-PAIRFB — only the in-person (QR + Bluetooth) pairing flow
+            // passes a non-nil `proximityPairedAtMs`; an ordinary static-
+            // identity-QR re-scan must not wipe a prior in-person record.
+            proximityPairedAtMs: proximityPairedAtMs ?? existing?.proximityPairedAtMs,
+            proximityServerConfirmed: proximityPairedAtMs != nil
+                ? proximityServerConfirmed : existing?.proximityServerConfirmed
         )
         store.upsert(contact)
         // W77: kick off the pairwise PSK handshake so future chats with
@@ -228,10 +246,22 @@ final class ContactsListContainer: ObservableObject {
         return await provider.kmsClient.fetchUserIdentityKeySet(userId: userId)
     }
 
-    struct ProximityOutcome: Equatable {
+    struct ProximityOutcome: Equatable, Identifiable {
+        /// Distinguishes the four ways an in-person pairing can end, for the
+        /// telemetry `outcome` attribute (`ProximityPairingTelemetry`) and
+        /// for the final-screen icon/tone — never for the user-facing text,
+        /// which is `title`/`detail` below.
+        enum Kind: String, Equatable {
+            case newContactVerified = "new_contact"
+            case existingContact = "existing_contact"
+            case savedUnverified = "saved_unverified"
+            case notAdded = "not_added"
+        }
+        let id = UUID()
         let title: String
         let detail: String
         let isError: Bool
+        let kind: Kind
     }
 
     /// Records a completed in-person pairing (its key is already in the
@@ -241,20 +271,57 @@ final class ContactsListContainer: ObservableObject {
     /// from here — spec §12, "adds the peer as a contact if missing"; a
     /// different stored key was already flagged on the confirmation screen.
     /// A new contact is marked verified only when the server confirmed that
-    /// the claimed account published that key.
+    /// the claimed account published that key — this call never upgrades
+    /// trust beyond that: a SAS-confirmed pairing whose server check could
+    /// not run is reported (and persisted) as "saved", never "verified".
+    ///
+    /// Either way, `proximityPairedAtMs`/`proximityServerConfirmed` are
+    /// persisted (see `ContactsStore.setProximityPairing` / the
+    /// `addScannedContact` call below) so `ContactDetailScreen` can show a
+    /// "Verificato di persona" / "Chiave di persona salvata" row with a
+    /// date — W-PAIRFB, the audit gap this fixes.
+    @discardableResult
     func recordProximityPairing(_ result: ProximityPairingSummary) -> ProximityOutcome {
         let peerUserId: String = result.peer.userId
         let alreadyKnown: Bool = store.load().contains(where: { (row: ContactsStore.StoredContact) -> Bool in
             return row.userId == peerUserId
         })
         let name: String = DisplayName.forUser(peerUserId)
+        let pairedAtMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
+        let outcome: ProximityOutcome
         if alreadyKnown {
-            return ProximityOutcome(title: "Chiave di persona salvata", detail: name, isError: false)
+            store.setProximityPairing(userId: peerUserId, pairedAtMs: pairedAtMs,
+                                      serverConfirmed: result.serverIdentityConfirmed)
+            let title = String(localized: "proximity.outcome.existing_contact",
+                defaultValue: "Chiave aggiunta a un contatto esistente",
+                comment: "In-person (QR + Bluetooth) pairing outcome — the peer was already a known contact, so only its call key was saved; the contact's own key/verified badge is unchanged. %@ in the detail line is their display name.")
+            outcome = ProximityOutcome(title: title, detail: name, isError: false, kind: .existingContact)
+        } else {
+            let identity = IdentityQrCode.Identity(userId: peerUserId, pubkey: result.peer.encryptionPublicKey)
+            let added: Bool = addScannedContact(.identity(identity), verified: result.serverIdentityConfirmed,
+                                                proximityPairedAtMs: pairedAtMs,
+                                                proximityServerConfirmed: result.serverIdentityConfirmed)
+            if !added {
+                let title = String(localized: "proximity.outcome.not_added",
+                    defaultValue: "Chiave salvata, contatto non aggiunto",
+                    comment: "In-person pairing outcome — the call key was saved but the peer could not be added as a contact (e.g. the scanned code resolved to the user's own account)")
+                outcome = ProximityOutcome(title: title, detail: name, isError: true, kind: .notAdded)
+            } else if result.serverIdentityConfirmed {
+                let title = String(localized: "proximity.outcome.new_verified",
+                    defaultValue: "Nuovo contatto aggiunto e verificato",
+                    comment: "In-person pairing outcome — a brand-new contact was added and the server confirmed the claimed account published the key just proved over Bluetooth")
+                outcome = ProximityOutcome(title: title, detail: name, isError: false, kind: .newContactVerified)
+            } else {
+                let title = String(localized: "proximity.outcome.saved_unverified",
+                    defaultValue: "Chiave salvata, verifica server non disponibile",
+                    comment: "In-person pairing outcome — the 6-digit code was confirmed on both phones and a new contact was added, but the account-ownership check against the server could not run (offline, timeout, or the account published no keys)")
+                outcome = ProximityOutcome(title: title, detail: name, isError: false, kind: .savedUnverified)
+            }
         }
-        let identity = IdentityQrCode.Identity(userId: peerUserId, pubkey: result.peer.encryptionPublicKey)
-        let added: Bool = addScannedContact(.identity(identity), verified: result.serverIdentityConfirmed)
-        let title: String = added ? "Associato di persona" : "Chiave salvata, contatto non aggiunto"
-        return ProximityOutcome(title: title, detail: name, isError: !added)
+        ProximityPairingTelemetry.emitCompleted(outcome: outcome.kind,
+                                                serverCheck: result.serverCheckOutcome,
+                                                elapsedMs: result.elapsedMs)
+        return outcome
     }
 
     func refresh() {
@@ -297,6 +364,9 @@ struct ContactsListView: View {
     @State private var showingNfcPair: Bool = false
     /// In-person QR + Bluetooth pairing, displayer side.
     @State private var showingProximityPair: Bool = false
+    /// W-PAIRFB — the in-person pairing final outcome, presented as its own
+    /// clear screen (`ProximityOutcomeResultSheet`).
+    @State private var proximityOutcome: ContactsListContainer.ProximityOutcome?
     @State private var showingPhonebookImport: Bool = false
     @State private var lastScanResult: ScanResultBanner?
     @State private var showingGroupCallPicker: Bool = false
@@ -360,7 +430,7 @@ struct ContactsListView: View {
                     // QR + Bluetooth proximity pairing (hybrid ML-KEM-1024):
                     // this phone shows the code, the other scans it with
                     // "Scansiona QR" above. Not capability-gated.
-                    Button("Associa di persona (QR + Bluetooth)", systemImage: "person.2.wave.2") {
+                    Button(ProximityEntryPointHint.menuTitle, systemImage: "person.2.wave.2") {
                         showingProximityPair = true
                     }
                     // Entitlements Task 5 — Capability.nfc. A `Menu`
@@ -490,23 +560,24 @@ struct ContactsListView: View {
             },
             onProximityCompleted: { result in handleProximityPaired(result) })
         }
+        .sheet(item: $proximityOutcome) { outcome in
+            ProximityOutcomeResultSheet(outcome: outcome) { proximityOutcome = nil }
+        }
     }
 
     /// In-person QR + Bluetooth pairing finished on both phones and its key is
     /// already stored (`ProximityPairingStore.persist`). The container adds the
-    /// peer only if missing (`recordProximityPairing`); this view reports it.
+    /// peer only if missing (`recordProximityPairing`); this view reports it
+    /// via a clear final screen (`ProximityOutcomeResultSheet`) distinguishing
+    /// the three ways it can end, rather than the transient banner this used
+    /// (audit finding — easy to miss, no way to tell "verified" from "saved").
     private func handleProximityPaired(_ result: ProximityPairingSummary) {
         let outcome: ContactsListContainer.ProximityOutcome = container.recordProximityPairing(result)
-        // Close whichever sheet ran the pairing so the outcome banner below
-        // is actually visible (it renders under an open sheet otherwise).
+        // Close whichever sheet ran the pairing so the outcome screen below
+        // is actually visible (it presents under an open sheet otherwise).
         showingProximityPair = false
         showingQrScanner = false
-        lastScanResult = ScanResultBanner(title: outcome.title, detail: outcome.detail, isError: outcome.isError)
-        let visibleNanos: UInt64 = outcome.isError ? 8_000_000_000 : 4_000_000_000
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: visibleNanos)
-            if lastScanResult != nil { lastScanResult = nil }
-        }
+        proximityOutcome = outcome
     }
 
     private func scanResultBannerView(_ banner: ScanResultBanner) -> some View {

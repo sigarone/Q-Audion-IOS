@@ -15844,7 +15844,11 @@ final class AppState: ObservableObject {
                 // E2EE avatar transport (2026-07-30) — same reasoning as
                 // presenceAuth/phoneNumber above: this rewrite touches
                 // ONLY displayName.
-                avatarVersion: c.avatarVersion)
+                avatarVersion: c.avatarVersion,
+                // W-PAIRFB — same reasoning: a display-name migration pass
+                // must not wipe the in-person pairing history either.
+                proximityPairedAtMs: c.proximityPairedAtMs,
+                proximityServerConfirmed: c.proximityServerConfirmed)
             migrated = true
         }
         if migrated { store.save(contacts) }

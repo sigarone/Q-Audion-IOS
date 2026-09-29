@@ -108,6 +108,9 @@ final class ProximityPairingViewDriver: ObservableObject {
     private let onCompleted: (ProximityPairingSummary) -> Void
     private let onRescan: (() -> Void)?
     private let serverIdentityKeys: ((String) async -> Set<Data>)?
+    /// Privacy-safe lifecycle telemetry (spec/UX gap — never affects the
+    /// protocol). Optional so every existing call site keeps compiling.
+    private let onTelemetryEvent: ((ProximityPairingTelemetryEvent) -> Void)?
     private let scheduler: ProximityMainScheduler
 
     // MARK: Live objects
@@ -141,19 +144,28 @@ final class ProximityPairingViewDriver: ObservableObject {
     private var renderedSessionId: Data = Data()
     private var renderedFrameIndex: UInt32?
     private lazy var ciContext: CIContext = CIContext()
+    /// Set once per screen visit, in `start()`. Feeds
+    /// `ProximityPairingSummary.elapsedMs` (telemetry only).
+    private var screenOpenedAt: Date?
+    /// The last non-terminal stage the state machine reported — used as the
+    /// `stage` of a `failed`/`cancelled` telemetry event, since neither the
+    /// `.failed` session state nor `stop()` itself carries one.
+    private var lastStage: ProximityPairingTelemetryEvent.Stage = .preparing
 
     init(localUserId: String,
          scanPayload: ProximityQrPayload?,
          displayName: @escaping (String) -> String,
          onCompleted: @escaping (ProximityPairingSummary) -> Void,
          onRescan: (() -> Void)?,
-         serverIdentityKeys: ((String) async -> Set<Data>)?) {
+         serverIdentityKeys: ((String) async -> Set<Data>)?,
+         onTelemetryEvent: ((ProximityPairingTelemetryEvent) -> Void)? = nil) {
         self.localUserId = localUserId
         self.scanPayload = scanPayload
         self.displayName = displayName
         self.onCompleted = onCompleted
         self.onRescan = onRescan
         self.serverIdentityKeys = serverIdentityKeys
+        self.onTelemetryEvent = onTelemetryEvent
         self.scheduler = ProximityMainScheduler()
     }
 
@@ -173,6 +185,9 @@ final class ProximityPairingViewDriver: ObservableObject {
         }
         guard case .preparing = phase else { return }
         guard displayerSession == nil, scannerSession == nil else { return }
+        screenOpenedAt = Date()
+        lastStage = .preparing
+        onTelemetryEvent?(.started(role: isDisplayer ? .displayer : .scanner))
         begin()
     }
 
@@ -184,6 +199,16 @@ final class ProximityPairingViewDriver: ObservableObject {
         if let saved = savedIdleTimerDisabled {
             UIApplication.shared.isIdleTimerDisabled = saved
             savedIdleTimerDisabled = nil
+        }
+        // Only a genuinely mid-flight attempt counts as "cancelled" — a
+        // screen opened and immediately closed before the first code/frame
+        // (still `.preparing`) has nothing to report, and a terminal phase
+        // (below) is its own, already-reported outcome.
+        switch phase {
+        case .showingCode, .working, .confirming:
+            onTelemetryEvent?(.cancelled(stage: lastStage))
+        default:
+            break
         }
         epoch &+= 1
         cancelAutoRestart()
@@ -247,6 +272,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         screenCaptured = captured
         guard isActive, captured != wasCaptured else { return }
         if captured {
+            onTelemetryEvent?(.failed(cause: .screenCaptured, stage: lastStage))
             halt(showing: ProximityPairingViewDriver.screenCapturedText)
             return
         }
@@ -278,9 +304,13 @@ final class ProximityPairingViewDriver: ObservableObject {
         }
         guard displayerSession != nil || scannerSession != nil else { return }
         if isDisplayer {
+            onTelemetryEvent?(.cancelled(stage: lastStage))
             halt(showing: nil)
             suspendedInBackground = true
         } else {
+            // No dedicated FailureCause for "backgrounded" — folds to
+            // .other, same as FailureCause(.cancelled) would.
+            onTelemetryEvent?(.failed(cause: .other, stage: lastStage))
             halt(showing: ProximityPairingError.cancelled.userMessage)
         }
     }
@@ -394,14 +424,18 @@ final class ProximityPairingViewDriver: ObservableObject {
         guard stateEpoch == epoch else { return }
         switch state {
         case .idle:
+            lastStage = .preparing
             clearCode()
             setPhase(.preparing)
         case .showing(let payload):
+            lastStage = .showingCode
             showCode(payload)
         case .exchanging:
+            lastStage = .exchanging
             clearCode()
             setPhase(.working(ProximityPairingViewDriver.displayerExchangingText))
         case .awaitingConfirmation(sas: let sas, peer: let peer, warning: let warning, localConfirmed: let localConfirmed):
+            lastStage = .confirming
             clearCode()
             showConfirmation(ConfirmationInputs(sas: sas, peer: peer, warning: warning,
                                                 localConfirmed: localConfirmed))
@@ -411,6 +445,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         case .failed(let error):
             clearCode()
             setPhase(.failed(error.userMessage))
+            onTelemetryEvent?(.failed(cause: .init(error), stage: lastStage))
             if ProximityPairingViewDriver.restartsOnItsOwn(error) && isActive {
                 scheduleAutoRestart()
             }
@@ -421,18 +456,23 @@ final class ProximityPairingViewDriver: ObservableObject {
         guard stateEpoch == epoch else { return }
         switch state {
         case .idle:
+            lastStage = .preparing
             setPhase(.preparing)
         case .connecting:
+            lastStage = .connecting
             setPhase(.working(ProximityPairingViewDriver.scannerConnectingText))
         case .exchanging:
+            lastStage = .exchanging
             setPhase(.working(ProximityPairingViewDriver.scannerExchangingText))
         case .awaitingConfirmation(sas: let sas, peer: let peer, warning: let warning, localConfirmed: let localConfirmed):
+            lastStage = .confirming
             showConfirmation(ConfirmationInputs(sas: sas, peer: peer, warning: warning,
                                                 localConfirmed: localConfirmed))
         case .completed(let result):
             finish(result)
         case .failed(let error):
             setPhase(.failed(error.userMessage))
+            onTelemetryEvent?(.failed(cause: .init(error), stage: lastStage))
         }
     }
 
@@ -535,14 +575,28 @@ final class ProximityPairingViewDriver: ObservableObject {
             try ProximityPairingStore.persist(result, vault: SovereignKeyVault())
         } catch {
             setPhase(.failed(ProximityPairingError.cryptoFailure("persist").userMessage))
+            onTelemetryEvent?(.failed(cause: .cryptoFailure, stage: lastStage))
             return
         }
         let name: String = peerName(result.peer.userId)
         let text: String = ProximityPairingViewDriver.completedPrefix + name
-        let serverConfirmed: Bool = serverCheck == .confirmed
+        let outcome: ProximityServerCheckOutcome = ProximityPairingViewDriver.telemetryOutcome(for: serverCheck)
+        let elapsedMs: Int = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
         setPhase(.completed(text))
         // The PSK stops here: the host only ever sees the summary.
-        onCompleted(ProximityPairingSummary(result, serverIdentityConfirmed: serverConfirmed))
+        onCompleted(ProximityPairingSummary(result, serverCheckOutcome: outcome, elapsedMs: elapsedMs))
+    }
+
+    /// Maps the confirmation screen's five-way `ServerCheck` down to the
+    /// three-way telemetry/UI outcome — `.checking` cannot actually reach
+    /// here (`confirm()` blocks while checking), included only so the switch
+    /// stays exhaustive if that ever changes.
+    private static func telemetryOutcome(for check: ServerCheck) -> ProximityServerCheckOutcome {
+        switch check {
+        case .confirmed: return .confirmed
+        case .mismatch: return .mismatch
+        case .notAvailable, .unknown, .checking: return .unavailable
+        }
     }
 
     // MARK: - QR (displayer)
@@ -580,6 +634,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         tearDownSession()
         clearCode()
         setPhase(.failed(ProximityPairingViewDriver.qrUnavailableText))
+        onTelemetryEvent?(.failed(cause: .qrRenderFailed, stage: lastStage))
     }
 
     private static func renderQr(_ text: String, context: CIContext) -> UIImage? {

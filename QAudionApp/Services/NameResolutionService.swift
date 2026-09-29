@@ -516,7 +516,11 @@ final class NameResolutionService: @unchecked Sendable {
                 // every resolved call/message, so omitting this would
                 // wipe a peer's cached-avatar version on the very next
                 // routine name resolution.
-                avatarVersion: s.avatarVersion
+                avatarVersion: s.avatarVersion,
+                // W-PAIRFB — same reasoning: a name resolution pass must
+                // never silently wipe the in-person pairing history.
+                proximityPairedAtMs: s.proximityPairedAtMs,
+                proximityServerConfirmed: s.proximityServerConfirmed
             ))
         } else {
             contactsStore.upsert(ContactsStore.StoredContact(

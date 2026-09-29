@@ -29,16 +29,21 @@ public struct ProximityPairingDisplayerView: View {
     ///     them, and "Coincide" waits up to 5 s for the answer.
     ///   - onCompleted: fired once, only after both users confirmed AND the key
     ///     was stored in the vault.
+    ///   - onTelemetryEvent: privacy-safe lifecycle events (started/failed/
+    ///     cancelled) for the host's telemetry pipeline — no ids, keys, SAS
+    ///     digits or names, ever (see `ProximityPairingTelemetryEvent`).
     public init(localUserId: String,
                 displayName: @escaping (String) -> String,
                 serverIdentityKeys: ((String) async -> Set<Data>)? = nil,
-                onCompleted: @escaping (ProximityPairingSummary) -> Void) {
+                onCompleted: @escaping (ProximityPairingSummary) -> Void,
+                onTelemetryEvent: ((ProximityPairingTelemetryEvent) -> Void)? = nil) {
         _driver = StateObject(wrappedValue: ProximityPairingViewDriver(localUserId: localUserId,
                                                                        scanPayload: nil,
                                                                        displayName: displayName,
                                                                        onCompleted: onCompleted,
                                                                        onRescan: nil,
-                                                                       serverIdentityKeys: serverIdentityKeys))
+                                                                       serverIdentityKeys: serverIdentityKeys,
+                                                                       onTelemetryEvent: onTelemetryEvent))
     }
 
     public var body: some View {
@@ -75,13 +80,15 @@ public struct ProximityPairingScannerView: View {
                 displayName: @escaping (String) -> String,
                 serverIdentityKeys: ((String) async -> Set<Data>)? = nil,
                 onCompleted: @escaping (ProximityPairingSummary) -> Void,
-                onRescan: @escaping () -> Void) {
+                onRescan: @escaping () -> Void,
+                onTelemetryEvent: ((ProximityPairingTelemetryEvent) -> Void)? = nil) {
         _driver = StateObject(wrappedValue: ProximityPairingViewDriver(localUserId: localUserId,
                                                                        scanPayload: payload,
                                                                        displayName: displayName,
                                                                        onCompleted: onCompleted,
                                                                        onRescan: onRescan,
-                                                                       serverIdentityKeys: serverIdentityKeys))
+                                                                       serverIdentityKeys: serverIdentityKeys,
+                                                                       onTelemetryEvent: onTelemetryEvent))
     }
 
     public var body: some View {
