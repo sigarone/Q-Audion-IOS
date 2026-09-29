@@ -205,6 +205,10 @@ final class AdaptiveOpusComplexityPolicyTests: XCTestCase {
     func testDriverDropsImmediatelyEvenMidClimb() {
         var nowMs: Int64 = 0
         let driver = ComplexityHysteresisDriver(initial: 5, ladder: [5, 6, 8, 10], nowMs: { nowMs })
+        // The first update at a better target only starts the hold clock
+        // (same contract as the climb test above); one full interval later
+        // the driver has climbed one rung.
+        XCTAssertEqual(driver.update(target: 10), 5)
         nowMs += AdaptiveComplexityHysteresis.stepIntervalMs
         XCTAssertEqual(driver.update(target: 10), 6)
         // Thermal got worse again before the next climb — must drop at once.
