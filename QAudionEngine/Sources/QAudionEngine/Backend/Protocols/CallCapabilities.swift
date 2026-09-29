@@ -454,7 +454,28 @@ public enum CallCapabilities {
     /// the tag can't appear in the agreed set if iOS never offers it), which
     /// is exactly what isolates the two hypotheses. Not a verdict either way;
     /// a controlled test. Revert to `true` once this comparison is done.
-    public static let audioSrtpSendEnabled: Bool = false
+    ///
+    /// FLIPPED TO `true` PERMANENTLY, 2026-09-29/30 (W-SRTPALWAYSON, owner
+    /// decision) — after release 2 (M150) was verified on real calls: DTLS
+    /// 1.3 (`TLS_AES_256_GCM_SHA384`), SRTP `AEAD_AES_256_GCM`,
+    /// `X25519MLKEM768`, callee always the DTLS server, 0 handshake
+    /// failures, P2P host/host, the 60 ms / 32 kbps profile, FEC floor 10,
+    /// 0 crashes, the owner asked for this to become "the default setting
+    /// to use always in all software, removing the option to set it
+    /// manually everywhere, to prepare the store release." This is that
+    /// change: the compiled default flips to `true` and STAYS there — no
+    /// more flips expected, no more A/B comparison — and the runtime
+    /// override that used to let a Settings toggle disagree with this
+    /// constant has been retired from the UI (`CallsSettingsScreen`, see
+    /// its own history). Two levers remain, both deliberate: the remote
+    /// `calls.native_srtp_kill` field-trial switch (per call, fleet-wide,
+    /// see `FeatureFlags.swift`) and the local crash-streak safety net
+    /// (per device, automatic — see
+    /// ``registerNativeSrtpCrashAndMaybeAutoReset()``). Capability
+    /// negotiation is untouched: a peer on an older build that never
+    /// advertises ``audioSrtpV1`` still falls back to the custom
+    /// sealed-audio path automatically (symmetric intersection, unchanged).
+    public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform
     /// matrix audit — GAP-1/GAP-2). Mirrors Android `UPGRADE_INTENT_RECV_V1`
@@ -802,21 +823,26 @@ public enum CallCapabilities {
     /// advertises ``audioSrtpV1``, read by
     /// ``applyAdvertisementGates(to:earbudActive:sovereignOnly:earbudPaired:)``
     /// on every call. `nil` (the default) means "follow
-    /// ``audioSrtpSendEnabled`` as compiled," exactly today's behavior.
+    /// ``audioSrtpSendEnabled`` as compiled" — with that constant now
+    /// permanently `true` (W-SRTPALWAYSON), `nil` means simply "on."
     /// `true`/`false` forces the advertisement on/off for every call from
     /// this device until changed again.
     ///
-    /// W-NATIVESRTPPERSIST (this task) — this in-memory var is now seeded
-    /// once, at app launch (`QAudionApp.init()`), from
-    /// ``loadPersistedAudioSrtpOverride()``, and every WRITE to it from the
-    /// Settings toggle also calls ``savePersistedAudioSrtpOverride(_:)`` —
-    /// see `CallsSettingsScreen`. So the value survives a restart, matching
-    /// Android's `AudioCodecPreferences` persistence, while every EXISTING
-    /// read site here still just reads this plain static var and needs no
-    /// change. Exposed unconditionally in Settings > Chiamate (not `#if
-    /// DEBUG`-gated): this build reaches testers ONLY via TestFlight, which
-    /// builds Release — a `#if DEBUG` gate would make the control
-    /// unreachable in the exact build this exists to test with.
+    /// W-SRTPALWAYSON (2026-09-29/30) — the Settings > Chiamate toggle that
+    /// used to be the only thing writing `true`/`false` here is REMOVED
+    /// (`CallsSettingsScreen`, see its own history): there is no more
+    /// user-facing, manual way to set this var. The one remaining writer is
+    /// the local crash-streak safety net
+    /// (``registerNativeSrtpCrashAndMaybeAutoReset()``), which can still
+    /// force it to `false` — automatically, per device, never per a human
+    /// choice — after two consecutive native-SRTP call crashes. That writer
+    /// still persists through ``savePersistedAudioSrtpOverride(_:)`` (a
+    /// device that trips it stays off across a restart), and
+    /// `QAudionApp.init()` still seeds this var from
+    /// ``loadPersistedAudioSrtpOverride()`` at launch — but ONLY after
+    /// ``migrateAwayFromManualAudioSrtpOverrideIfNeeded()`` has discarded
+    /// whatever the now-removed toggle last left there, so a pre-update
+    /// manual "OFF" can never survive into this always-on build.
     public static var audioSrtpDebugOverride: Bool?
 
     /// W-NATIVESRTPGATE (this task) — "native SRTP enabled locally", the ONE
@@ -1015,23 +1041,27 @@ public enum CallCapabilities {
         return true
     }
 
-    // MARK: - W-NATIVESRTPPERSIST (this task) — persisted override + crash guard
+    // MARK: - W-NATIVESRTPPERSIST — persisted override + crash guard
     //
-    // `audioSrtpDebugOverride` itself stays a plain in-memory static var (every
-    // existing read site — ``liveNativeSrtpEnabled``, the Settings binding —
-    // is untouched); these are the load/save/guard functions layered on top,
-    // called ONLY from app-launch/Settings-write call sites (`QAudionApp.init()`,
-    // `CallsSettingsScreen`), never from a hot media-path read.
+    // `audioSrtpDebugOverride` itself stays a plain in-memory static var
+    // (every existing read site — ``liveNativeSrtpEnabled`` — is untouched);
+    // these are the load/save/guard functions layered on top. W-SRTPALWAYSON
+    // (2026-09-29/30) retired the Settings-write call site
+    // (`CallsSettingsScreen`'s toggle): the only remaining caller is
+    // `QAudionApp.init()` at launch (read) and the crash-streak safety net
+    // below (write), never a hot media-path read.
 
     private static let persistedOverrideKey = "qaudion.calls.nativeSrtpOverride.v1"
     private static let nativeCrashStreakKey = "qaudion.calls.nativeSrtpCrashStreak"
 
     /// The persisted override, or `nil` if the key was never written (first
-    /// run, or a `reset` — see ``savePersistedAudioSrtpOverride(_:)``). Read
-    /// ONCE, at app launch, into ``audioSrtpDebugOverride`` — see
+    /// run, after ``migrateAwayFromManualAudioSrtpOverrideIfNeeded()`` has
+    /// run, or an explicit clear — see ``savePersistedAudioSrtpOverride(_:)``).
+    /// Read ONCE, at app launch, into ``audioSrtpDebugOverride`` — see
     /// `QAudionApp.init()`. Absent key -> `nil` -> the compiled default
-    /// (``audioSrtpSendEnabled``, OFF), exactly today's fresh-install
-    /// behavior; there is no migration to run.
+    /// (``audioSrtpSendEnabled``, now permanently ON, W-SRTPALWAYSON); a
+    /// non-nil value at this point can only be a `false` the crash-streak
+    /// safety net persisted on a prior launch.
     public static func loadPersistedAudioSrtpOverride() -> Bool? {
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: persistedOverrideKey) != nil else { return nil }
@@ -1039,9 +1069,11 @@ public enum CallCapabilities {
     }
 
     /// Persist (`true`/`false`) or clear (`nil`, "follow the compiled
-    /// default") the override. Call from the Settings toggle write path
-    /// only — this does NOT itself update ``audioSrtpDebugOverride``; the
-    /// caller does both (see `CallsSettingsScreen`'s binding).
+    /// default") the override. W-SRTPALWAYSON (2026-09-29/30) — the
+    /// Settings toggle that used to be this function's only caller is gone;
+    /// the sole remaining caller is the crash-streak safety net below
+    /// (``registerNativeSrtpCrashAndMaybeAutoReset()``). This does NOT
+    /// itself update ``audioSrtpDebugOverride``; the caller does both.
     public static func savePersistedAudioSrtpOverride(_ value: Bool?) {
         let defaults = UserDefaults.standard
         if let value = value {
@@ -1049,6 +1081,46 @@ public enum CallCapabilities {
         } else {
             defaults.removeObject(forKey: persistedOverrideKey)
         }
+    }
+
+    // MARK: - W-SRTPALWAYSON (2026-09-29/30) — migration away from the toggle
+    //
+    // Owner decision, taken after live M150 verification (DTLS 1.3 /
+    // TLS_AES_256_GCM_SHA384, SRTP AEAD_AES_256_GCM, X25519MLKEM768, 0
+    // handshake failures, 0 crashes): native SRTP audio becomes the
+    // unconditional compiled default (`audioSrtpSendEnabled == true`) on
+    // every build, and the "Audio SRTP standard (WebRTC)" toggle
+    // (`CallsSettingsScreen`) is removed — nobody can turn this off locally
+    // by hand anymore, only the remote `calls.native_srtp_kill` switch
+    // (per-call) or the crash-streak safety net above (per-device,
+    // automatic) can still disable it.
+
+    private static let manualOverrideMigratedKey = "qaudion.calls.nativeSrtpOverride.manualMigrated.v1"
+
+    /// One-time migration for an install updating from before this change.
+    /// `persistedOverrideKey` used to hold whatever the removed toggle was
+    /// last set to (`true`, `false`, or never written) — a value that must
+    /// not keep deciding anything once the control that set it no longer
+    /// exists, per the owner decision above. The FIRST launch after this
+    /// update deletes whatever is sitting there, unconditionally, then
+    /// never touches it again (guarded by `manualOverrideMigratedKey`) —
+    /// so it can never come back and clobber a `false` the crash-streak
+    /// safety net legitimately persists there on some LATER launch. Call
+    /// once, at app launch (`QAudionApp.init()`), BEFORE seeding
+    /// ``audioSrtpDebugOverride`` from ``loadPersistedAudioSrtpOverride()``.
+    public static func migrateAwayFromManualAudioSrtpOverrideIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: manualOverrideMigratedKey) else { return }
+        defaults.removeObject(forKey: persistedOverrideKey)
+        defaults.set(true, forKey: manualOverrideMigratedKey)
+    }
+
+    /// Test-only: clears the "already migrated" bit so
+    /// ``migrateAwayFromManualAudioSrtpOverrideIfNeeded()`` can be exercised
+    /// repeatedly across test runs that share the same
+    /// `UserDefaults.standard` process.
+    static func resetManualOverrideMigrationFlagForTesting() {
+        UserDefaults.standard.removeObject(forKey: manualOverrideMigratedKey)
     }
 
     /// Consecutive-native-crash counter (0 between streaks). Exposed for
@@ -1074,6 +1146,13 @@ public enum CallCapabilities {
     /// breadcrumb call-context says a native-SRTP call was in progress —
     /// see ``CrashBreadcrumbs/lastCallContext()``. Returns whether the
     /// auto-reset fired (2nd consecutive crash), so the caller can log it.
+    ///
+    /// W-SRTPALWAYSON (2026-09-29/30) — with the Settings toggle removed,
+    /// this is the only remaining LOCAL way native SRTP ever turns off, and
+    /// it is deliberately automatic rather than a preference: there is no
+    /// UI left to turn it back on for a device that trips this, by design
+    /// (the owner decision retired every manual control, not just the one
+    /// this replaces).
     @discardableResult
     public static func registerNativeSrtpCrashAndMaybeAutoReset() -> Bool {
         let next = nativeSrtpCrashStreak() + 1

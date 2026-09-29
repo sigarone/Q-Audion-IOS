@@ -86,6 +86,27 @@ final class CallCapabilitiesAudioSrtpEarbudInvariantTests: XCTestCase {
         XCTAssertEqual(CallCapabilities.audioSrtpV1, "audio-srtp-v1")
     }
 
+    // MARK: - W-SRTPALWAYSON (2026-09-29/30) — the compiled default is pinned
+
+    /// Unlike every other assertion in this file, this ONE intentionally
+    /// pins the flag's value. The class doc above describes
+    /// `audioSrtpSendEnabled` as "an internal test kill switch" that could
+    /// reasonably be `true` or `false` on any given day of rollout — that
+    /// was true through 2026-09-10's back-and-forth (see the flag's own
+    /// kdoc history) but stopped being true on 2026-09-29/30: the owner,
+    /// after M150's live verification, asked for native SRTP audio to
+    /// become the permanent default with the manual toggle removed
+    /// entirely. Replaces "toggle can be either state, don't pin it" with
+    /// "always on unless the remote/crash-streak safety nets say
+    /// otherwise" — a future accidental flip back to `false` here must fail
+    /// CI, not slip through as if it were still just a rollout switch.
+    func test_audioSrtpSendEnabled_isPermanentlyOn_perTheOwnerDecision() {
+        XCTAssertTrue(
+            CallCapabilities.audioSrtpSendEnabled,
+            "native SRTP audio is the unconditional default on every build (W-SRTPALWAYSON) -- only calls.native_srtp_kill (remote, per call) or the crash-streak safety net (local, automatic, per device) may still disable it"
+        )
+    }
+
     // MARK: - W-AUDIOSRTPDEBUGTOGGLE
 
     /// `audioSrtpDebugOverride` is shared mutable state (a `static var`,

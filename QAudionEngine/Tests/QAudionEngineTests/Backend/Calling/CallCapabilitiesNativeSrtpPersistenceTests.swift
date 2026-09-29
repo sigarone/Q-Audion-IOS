@@ -1,14 +1,17 @@
 import XCTest
 @testable import QAudionEngine
 
-/// W-NATIVESRTPPERSIST (this task) — the persisted native-SRTP override
+/// W-NATIVESRTPPERSIST — the persisted native-SRTP override
 /// (``CallCapabilities/loadPersistedAudioSrtpOverride()`` /
 /// ``CallCapabilities/savePersistedAudioSrtpOverride(_:)``) and the
 /// consecutive-native-crash auto-reset guard
 /// (``CallCapabilities/registerNativeSrtpCrashAndMaybeAutoReset()``).
 /// Mirrors Android's `NativeSrtpPreferenceTest` (three-state read/write +
 /// removal-on-reset) plus the owner-recommended crash-streak behavior from
-/// spec section B.
+/// spec section B. W-SRTPALWAYSON (2026-09-29/30) added the migration
+/// section at the bottom — the Settings toggle that used to be the OTHER
+/// caller of `savePersistedAudioSrtpOverride` is gone, and an install
+/// updating from before that change must not keep whatever it last chose.
 final class CallCapabilitiesNativeSrtpPersistenceTests: XCTestCase {
 
     override func setUp() {
@@ -26,6 +29,7 @@ final class CallCapabilitiesNativeSrtpPersistenceTests: XCTestCase {
         CallCapabilities.resetNativeSrtpCrashStreak()
         CallCapabilities.audioSrtpDebugOverride = nil
         CallCapabilities.endNativeSrtpCallSnapshot()
+        CallCapabilities.resetManualOverrideMigrationFlagForTesting()
     }
 
     // MARK: - Three-state persistence
@@ -123,5 +127,37 @@ final class CallCapabilitiesNativeSrtpPersistenceTests: XCTestCase {
         XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
         XCTAssertFalse(CallCapabilities.forceNativeSrtpCallSnapshotOff(callId: "call-aaa"))
         XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
+    }
+
+    // MARK: - W-SRTPALWAYSON (2026-09-29/30) — migration away from the toggle
+
+    /// An install updating from before the toggle's removal may still have
+    /// its last manual choice sitting in the persisted slot. The migration
+    /// must discard it unconditionally, whatever it was — a pre-update
+    /// manual "OFF" must never keep native SRTP off after this update.
+    func test_migration_discardsAPreExistingManualValue_regardlessOfWhatItWas() {
+        CallCapabilities.savePersistedAudioSrtpOverride(false) // pre-update manual choice
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride(),
+                     "a pre-existing manual toggle value must not survive the migration")
+    }
+
+    func test_migration_runsOnlyOnce_andNeverClobbersALaterCrashStreakValue() {
+        CallCapabilities.savePersistedAudioSrtpOverride(true) // pre-update manual choice
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride())
+
+        // Simulate the crash-streak safety net legitimately persisting a
+        // fresh `false` on a LATER launch, after the migration already ran
+        // once. A second migration call must be a no-op.
+        CallCapabilities.savePersistedAudioSrtpOverride(false)
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertEqual(CallCapabilities.loadPersistedAudioSrtpOverride(), false,
+                       "the migration must run only once -- it must never wipe a value the crash-streak safety net persists afterward")
+    }
+
+    func test_migration_withNothingPersisted_isANoOp() {
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride())
     }
 }
