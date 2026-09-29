@@ -628,6 +628,13 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         // are LiveKit's own official preset scale
         // (`VideoParameters.presetH360_169`/`presetH540_169`/
         // `presetH720_169`), not invented numbers.
+        // REVERTED by W-GRPVIDEOPUBFIX (2026-09-29): this priority wiring is
+        // exactly what broke `setVideoEnabled`/initial camera publish for
+        // every quality tier (WebRTC only allows a non-default priority on
+        // `encodings[0]`; with simulcast this `encoding` lands on the TOP
+        // layer instead — see `videoEncoding(for:)`'s current kdoc for the
+        // full, fork-source-verified chain). `bitratePriority`/
+        // `networkPriority` are gone again; `maxBitrate`/`maxFps` stay.
         // W-SIMULCASTPIN (2026-08-26, P2 audit item 5) — `simulcast` was the
         // one field on this initializer left unset, riding the pinned
         // fork's SDK default rather than a code-level statement of intent.
@@ -715,11 +722,51 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
                 // preferredCodec: .vp8 is set globally via RoomOptions.
                 // defaultVideoPublishOptions above (see its comment for why)
                 // — no per-call override needed here.
-                _ = try await room.localParticipant.setCamera(enabled: true)
-                // I8 FIX: truncate identity like every other identity print in this file.
-                print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
-                onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
-                attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
+                //
+                // W-GRPVIDEOPUBFIX (2026-09-29): this USED TO be a bare
+                // `try await` — any `setCamera` failure (e.g. the
+                // `AddTransceiver`/"Failed to add transceiver" bug this
+                // change fixes at the source in `videoEncoding(for:)` above,
+                // or any other future publish failure) propagated straight
+                // out of `connect()`, which `GroupCallController
+                // .handleSfuToken`'s `catch` treats exactly like a total SFU
+                // connect failure: it disconnects the room (tearing down the
+                // mic track this method ALREADY published above) and falls
+                // back to the WS-relay mesh. For a video-call invite that
+                // looked like "iOS never joins the call" even though the SFU
+                // connection and mic publish had both already succeeded.
+                // `do`/`catch` here so a camera-only failure degrades to
+                // audio-only instead: the room stays connected, the mic
+                // track already published above is untouched, and the
+                // failure is only reported (once) rather than escalated.
+                // `videoPublishFailureAction(for:)` is the pure, SDK-
+                // independent decision extracted below so this behavior is
+                // unit-testable without a live LiveKit `Room` (same
+                // discipline as `videoEncoding(for:)`/
+                // `defaultVideoPublishOptions(for:)` above).
+                do {
+                    _ = try await room.localParticipant.setCamera(enabled: true)
+                    // I8 FIX: truncate identity like every other identity print in this file.
+                    print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
+                    onLocalVideoTrack?(room.localParticipant.firstCameraVideoTrack)
+                    attachStatsReporting(to: room.localParticipant.firstCameraVideoTrack)
+                } catch {
+                    let action = Self.videoPublishFailureAction(for: error)
+                    switch action {
+                    case .degradeToAudioOnly(let code):
+                        // Privacy: local print keeps the existing convention
+                        // of interpolating the SDK error (a protocol/codec
+                        // failure description, never key material/IPs/ids —
+                        // same class of content `setVideoEnabled`'s own
+                        // catch below already prints). The TELEMETRY event
+                        // carries ONLY the numeric error code, never the
+                        // free-text description, so nothing device/network-
+                        // specific can ever reach it.
+                        print("[GroupCallController] group video_publish_failed code=\(code) — continuing audio-only: \(error)")
+                        emitTelemetry("call.media.video_publish_failed", ["code": code])
+                        onError?(VideoPublishError.failed(code: code))
+                    }
+                }
             } else {
                 // Graceful audio-only fallback: mic is already published
                 // above, we simply never publish a camera track. No throw —
@@ -731,43 +778,85 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
         }
     }
 
+    /// W-GRPVIDEOPUBFIX (2026-09-29) — user-facing counterpart of
+    /// `CameraPermissionError`: a camera track publish (initial `connect()`
+    /// publish OR a later `setVideoEnabled(true)` toggle,
+    /// `GroupCallController.setVideoEnabled`) failed at the SDK/WebRTC level
+    /// rather than being denied by OS permission. `code` is
+    /// `(underlyingError as NSError).code` — e.g. LiveKit's
+    /// `io.livekit.swift-sdk` domain `Code=201` for the `AddTransceiver`
+    /// failure this fix addresses — kept numeric-only so this type itself
+    /// never carries a free-text description into any logging/telemetry
+    /// path a caller might build off it.
+    public enum VideoPublishError: Error, Equatable {
+        case failed(code: Int)
+    }
+
+    /// W-GRPVIDEOPUBFIX — pure decision for what a failed camera-track
+    /// publish should do, extracted so `connect()`'s catch block above (and
+    /// any future call site) is unit-testable without a live LiveKit `Room`
+    /// (no fake/protocol exists for `Room`/`LocalParticipant` in this
+    /// codebase — this is the "small seam" instead, same independent-of-
+    /// the-SDK-type discipline as `videoEncoding(for:)` above). Always
+    /// `.degradeToAudioOnly` today — there is no camera-publish failure this
+    /// class currently treats as fatal to the call — but kept as an enum
+    /// (not a bare bool) so a future genuinely-fatal case has somewhere to
+    /// go without changing every call site's shape.
+    enum VideoPublishFailureAction: Equatable {
+        case degradeToAudioOnly(telemetryCode: Int)
+    }
+
+    static func videoPublishFailureAction(for error: Error) -> VideoPublishFailureAction {
+        .degradeToAudioOnly(telemetryCode: (error as NSError).code)
+    }
+
     /// W-GRPQUALITY (2026-08-26) — maps `preferredCallQuality` onto
     /// LiveKit's OWN preset bitrate/fps scale
     /// (`VideoParameters.presetH360_169`/`presetH540_169`/`presetH720_169`,
     /// verified against the pinned fork's real source at tag 2.16.0) rather
-    /// than inventing new numbers, plus a matching `Priority` for both
-    /// `bitratePriority` (WebRTC's internal bandwidth allocation between
-    /// streams) and `networkPriority` (DSCP marking, only takes effect if
-    /// `ConnectOptions.isDscpEnabled` — inert but harmless otherwise) — the
-    /// actual per-track bandwidth priority lever this item wires. `.medium`
-    /// (today's persisted default) reproduces the encoding this file
-    /// already shipped before this change (`presetH540_169`'s
-    /// 800kbps/25fps was NOT what shipped before — see note below).
+    /// than inventing new numbers. `.medium` (today's persisted default)
+    /// reproduces the encoding this file already shipped before this change
+    /// (`presetH540_169`'s 800kbps/25fps was NOT what shipped before — see
+    /// note below).
     ///
-    /// Note: before this change, `VideoPublishOptions` never set `encoding`
-    /// at all (SDK default: `nil`), which lets the SDK derive it from the
-    /// camera's OWN captured dimensions/fps at publish time — there was no
-    /// single "before" bitrate to preserve exactly. `.medium`'s
-    /// 800kbps/25fps ceiling is a reasonable mid-point that does not
-    /// regress typical camera output, and now actually RESPONDS to the
-    /// setting instead of ignoring it entirely.
+    /// W-GRPVIDEOPUBFIX (2026-09-29): NO LONGER sets `bitratePriority`/
+    /// `networkPriority` — verified against the pinned fork's real source
+    /// (`Utils+VideoEncodings.swift`'s `computeSimulcastPresets`/`clamp`,
+    /// `Dimensions.swift`'s `encodings(from:)`, `RTC.swift`'s
+    /// `createRtpEncodingParameters`): with `simulcast: true`, this
+    /// `encoding` becomes ONLY the TOP simulcast layer's parameters (RID
+    /// "f", last in `VideoQuality.RIDs = ["q","h","f"]`) — the lower "q"/"h"
+    /// layers are independently-clamped presets that keep the SDK's own
+    /// default (nil) priority. WebRTC's `RTCRtpSender::SetParameters`
+    /// (verified against the underlying m144 source: `pc/rtp_sender.cc`'s
+    /// encoding-parameter validation, `pc/peer_connection.cc`'s
+    /// `AddTransceiver`) only allows a NON-default `bitratePriority`/
+    /// `networkPriority` on `encodings[0]` — here that is the "q" (lowest)
+    /// layer, not "f". A non-default priority landing on any layer OTHER
+    /// than `encodings[0]` makes `AddTransceiver` reject the whole publish
+    /// with `Failed to add transceiver` (`UNSUPPORTED_PARAMETER`) — this is
+    /// what broke `setVideoEnabled(true)`/initial camera publish for every
+    /// quality tier once W-GRPQUALITY started setting these fields. Simplest
+    /// correct fix (mirrors Android, which never sets a per-track priority
+    /// for group video either): stop setting them. Bandwidth allocation
+    /// between simulcast layers still happens — it just uses the SDK's own
+    /// default WebRTC priority for every layer, same as before W-GRPQUALITY
+    /// existed. `VideoEncoding(maxBitrate:maxFps:)`'s convenience init
+    /// leaves both `nil` (see that initializer).
     static func videoEncoding(for quality: CallsSettingsViewModel.CallQuality) -> VideoEncoding {
         switch quality {
         case .low:
             return VideoEncoding(
                 maxBitrate: VideoParameters.presetH360_169.encoding.maxBitrate,
-                maxFps: VideoParameters.presetH360_169.encoding.maxFps,
-                bitratePriority: .low, networkPriority: .low)
+                maxFps: VideoParameters.presetH360_169.encoding.maxFps)
         case .medium:
             return VideoEncoding(
                 maxBitrate: VideoParameters.presetH540_169.encoding.maxBitrate,
-                maxFps: VideoParameters.presetH540_169.encoding.maxFps,
-                bitratePriority: .medium, networkPriority: .medium)
+                maxFps: VideoParameters.presetH540_169.encoding.maxFps)
         case .high:
             return VideoEncoding(
                 maxBitrate: VideoParameters.presetH720_169.encoding.maxBitrate,
-                maxFps: VideoParameters.presetH720_169.encoding.maxFps,
-                bitratePriority: .high, networkPriority: .high)
+                maxFps: VideoParameters.presetH720_169.encoding.maxFps)
         }
     }
 
@@ -1592,6 +1681,14 @@ extension LiveKitGroupCallRoom: TrackDelegate {
 /// reply and falls back to the existing WS-relay mesh path.
 public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     public enum LiveKitUnavailableError: Error { case notAvailable }
+    /// W-GRPVIDEOPUBFIX — stub counterpart of the real class's same-named
+    /// type (see this stub's own doc comment above), so `GroupCallController`
+    /// (which has no `#if canImport(LiveKit)` split of its own) can
+    /// reference `LiveKitGroupCallRoom.VideoPublishError` unconditionally.
+    /// Never constructed here: this stub's `connect`/`setCameraEnabled`
+    /// always throw `LiveKitUnavailableError` before any camera-specific
+    /// failure could occur.
+    public enum VideoPublishError: Error, Equatable { case failed(code: Int) }
 
     public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?

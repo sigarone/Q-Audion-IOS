@@ -1371,7 +1371,18 @@ public final class GroupCallController: @unchecked Sendable {
             try await room.setCameraEnabled(enabled)
             return true
         } catch {
+            // W-GRPVIDEOPUBFIX (2026-09-29): used to only print — the user
+            // just saw the video button silently fail to move (`GroupCallView
+            // .toggleVideo()` renders off `selfVideoTrack`, so a failed
+            // publish simply never flips it, with no explanation). Route
+            // through the SAME `onSfuError` channel — and the SAME
+            // `VideoPublishError` case — the initial `connect()`-time camera
+            // publish failure now uses (`LiveKitGroupCallRoom.connect()`'s
+            // catch block), wrapping the numeric code only (never the raw
+            // error's free-text description) so both failure points surface
+            // one identical, privacy-safe user-facing message.
             print("[GroupCallController] setVideoEnabled(\(enabled)) failed: \(error)")
+            onSfuError?(LiveKitGroupCallRoom.VideoPublishError.failed(code: (error as NSError).code))
             return false
         }
     }

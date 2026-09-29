@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import QAudionEngine
 
 /// W-GRPQUALITY (2026-08-26) — pure logic behind wiring the previously
@@ -124,5 +125,91 @@ final class GroupVideoQualityCompositionTests: XCTestCase {
             XCTAssertEqual(options.encoding?.maxBitrate, standaloneEncoding.maxBitrate, "quality=\(quality)")
             XCTAssertEqual(options.encoding?.maxFps, standaloneEncoding.maxFps, "quality=\(quality)")
         }
+    }
+
+    // MARK: - W-GRPVIDEOPUBFIX (2026-09-29) — `videoEncoding(for:)` must NOT
+    // set a non-default `bitratePriority`/`networkPriority` for ANY quality
+    // level any more. Root cause of "setVideoEnabled(true) failed ... WebRTC
+    // error(Failed to add transceiver)": verified against the pinned fork's
+    // real source (`Utils+VideoEncodings.swift`'s `computeSimulcastPresets`/
+    // `clamp`, `Dimensions.swift`'s `encodings(from:)` — RIDs
+    // `["q","h","f"]`, so with `simulcast: true` this `encoding` becomes
+    // ONLY the LAST/top "f" layer, `RTC.swift`'s
+    // `createRtpEncodingParameters`), a non-default priority anywhere other
+    // than `encodings[0]` (here, the lowest "q" layer, which keeps the
+    // SDK's own nil/default priority via the untouched static presets) makes
+    // WebRTC's `RTCRtpSender` reject the whole `AddTransceiver` call. Same
+    // discipline as `testDefaultVideoPublishOptions_declaresNoBackupCodec`
+    // above — a straight property assertion, no live Room/SDK needed.
+
+    func testVideoEncoding_setsNoNonDefaultPriority_forAnyQualityLevel() {
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let encoding = LiveKitGroupCallRoom.videoEncoding(for: quality)
+            XCTAssertNil(encoding.bitratePriority, "quality=\(quality)")
+            XCTAssertNil(encoding.networkPriority, "quality=\(quality)")
+        }
+    }
+
+    func testDefaultVideoPublishOptions_encodingSetsNoNonDefaultPriority_forAnyQualityLevel() {
+        // Same property, reached through the actual publish-options
+        // construction `connect()` feeds `RoomOptions` — the call site that
+        // was really broken, not just the standalone `videoEncoding(for:)`
+        // helper.
+        for quality: CallsSettingsViewModel.CallQuality in [.low, .medium, .high] {
+            let options = LiveKitGroupCallRoom.defaultVideoPublishOptions(for: quality)
+            XCTAssertNil(options.encoding?.bitratePriority, "quality=\(quality)")
+            XCTAssertNil(options.encoding?.networkPriority, "quality=\(quality)")
+        }
+    }
+
+    // MARK: - W-GRPVIDEOPUBFIX — `connect()`'s camera-publish failure
+    // handling. No fake/protocol exists for LiveKit's `Room`/
+    // `LocalParticipant` in this codebase (both are concrete SDK types,
+    // and `connect()` needs a live SFU token to reach the camera-publish
+    // step at all), so — same discipline as `videoEncoding(for:)` /
+    // `defaultVideoPublishOptions(for:)` above — the decision `connect()`'s
+    // catch block now delegates to is extracted into the pure,
+    // SDK-independent `videoPublishFailureAction(for:)` and pinned here
+    // directly. This is the "small seam" the task allows in place of a
+    // Room fake: it proves the POLICY (never throw, always degrade to
+    // audio-only, carry only the numeric error code) without needing a
+    // live Room to drive `connect()` end-to-end. The "does not throw" /
+    // "keeps mic published" halves of the behavior follow directly from
+    // `connect()`'s `do`/`catch` no longer having a bare `try` on the
+    // camera publish (see that method's own kdoc) — not independently
+    // re-provable without a live SFU connection.
+
+    func testVideoPublishFailureAction_neverThrows_alwaysDegradesToAudioOnly() {
+        struct DummyPublishError: Error {}
+        let action = LiveKitGroupCallRoom.videoPublishFailureAction(for: DummyPublishError())
+        switch action {
+        case .degradeToAudioOnly:
+            break // the only case that exists today — see the enum's own kdoc
+        }
+    }
+
+    func testVideoPublishFailureAction_carriesOnlyTheNumericErrorCode() {
+        // Privacy: telemetry built from this action's payload must never be
+        // able to carry more than a bare error code (no free-text
+        // description, no association with key material/IPs/ids).
+        let nsError = NSError(domain: "io.livekit.swift-sdk", code: 201, userInfo: [
+            NSLocalizedDescriptionKey: "WebRTC error(Failed to add transceiver)"
+        ])
+        guard case let .degradeToAudioOnly(code) = LiveKitGroupCallRoom.videoPublishFailureAction(for: nsError) else {
+            return XCTFail("expected .degradeToAudioOnly")
+        }
+        XCTAssertEqual(code, 201)
+    }
+
+    func testVideoPublishError_isDistinctFromCameraPermissionError() {
+        // `onError`'s two "video didn't publish" cases must stay
+        // distinguishable by type — `GroupCallView`'s toast wiring filters
+        // on `VideoPublishError` specifically so a permission denial (which
+        // has no UI consumer yet, unrelated to this fix) does not also
+        // start firing the "camera failed" toast as a side effect.
+        let cameraError: Error = LiveKitGroupCallRoom.CameraPermissionError.denied
+        let publishError: Error = LiveKitGroupCallRoom.VideoPublishError.failed(code: 1)
+        XCTAssertFalse(cameraError is LiveKitGroupCallRoom.VideoPublishError)
+        XCTAssertFalse(publishError is LiveKitGroupCallRoom.CameraPermissionError)
     }
 }
