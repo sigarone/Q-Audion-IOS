@@ -331,14 +331,25 @@ RE_SECRET_KV = re.compile(
     # is only 10 chars, below every blob threshold, so it used to ship).
     r"pin|otp|passcode|passphrase|pwd|ufrag)\b\s*[=:]\s*\S+")
 RE_MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
-RE_IPV6 = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")
+RE_IPV6 = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}(?:[0-9a-fA-F]{1,4}|x)\b")
 # compressed IPv6 (contains '::'): 2001:db8::1, fe80::1, ::1, 2001:db8:: -- the
 # full-form rule above cannot match these (W-KVPRECISION hardening 2026-09-21).
 RE_IPV6_COMPRESSED = re.compile(
     r"(?<![\w:])(?:"
     r"(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?"
     r"|::[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})(?![\w:])")
-RE_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# I8 FIX (2026-09-29, group video-publish investigation): the pinned WebRTC
+# binary's OWN `IPAddress::ToSensitiveString()` (compiled into release
+# builds) already partially masks these same addresses before a line ever
+# reaches this shipper -- only the LAST IPv4 octet, replaced with a literal
+# `x` (e.g. a real `turn_port.cc` TURN-server line ships `a.b.c.x`, three
+# real octets still in the clear; confirmed against a real collected phone
+# log). Since that trailing `x` is not a digit, the original all-digit
+# last-octet requirement never matched it, so those three octets would have
+# shipped untouched if this unstructured trace-line shape ever reached the
+# positive allow-list gate below. Accepting `x` as the last octet closes
+# that the same way LogRedactor.swift's mirror of this regex now does.
+RE_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}(?:\d{1,3}|x)\b")
 RE_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 RE_PHONE = re.compile(r"(?<!\d)\+?\d[\d\s().\-/]{6,}\d(?!\d)")
 # JWT / dotted-token: 2+ base64url segments joined by dots.

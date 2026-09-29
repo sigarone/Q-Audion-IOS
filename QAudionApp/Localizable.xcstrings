@@ -1621,6 +1621,24 @@
         }
       }
     },
+    "group_call.video_publish_failed_toast": {
+      "extractionState": "manual",
+      "comment": "Snackbar — one-shot toast shown when publishing/toggling the local camera in a group call fails at the SDK level; the call itself continues audio-only",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile attivare la videocamera per questa chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't turn on the camera for this call."
+          }
+        }
+      }
+    },
     "account_settings.profile_updated": {
       "extractionState": "manual",
       "comment": "Snackbar — shown after successfully saving profile changes (display name, status, phone)",

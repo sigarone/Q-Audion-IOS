@@ -666,6 +666,62 @@ check(not bad, "W-MEDIAATACCEPT: with no unknown-word allowance a vocabulary wor
       "the ringsig telemetry lines is missing: %r" % (bad,))
 
 # ---------------------------------------------------------------------------
+# I8 FIX (2026-09-29, group video-publish investigation): the pinned WebRTC
+# binary's OWN release-build `IPAddress::ToSensitiveString()` already
+# partially masks candidate/TURN-server addresses before a line ever reaches
+# this shipper -- only the LAST IPv4 octet, replaced with a literal `x`
+# (`a.b.c.x`; confirmed against a real collected phone log's
+# `turn_port.cc` TURN-server lines, both a private LAN prefix and a public
+# TURN-server prefix -- reproduced below with RFC 5737 documentation-range
+# addresses, never the real ones from that log, per this repo's no-real-
+# IPs-in-a-public-repo rule). RE_IPV4 now accepts that literal `x` as the last
+# octet so the address is matched and fully redacted AS an IPv4 address
+# (`[REDACTED:ipv4]`) instead of only incidentally losing its digits to the
+# unrelated phone-number heuristic (RE_PHONE), which is what the pre-fix
+# script did here -- correct by accident, not by design, and only for the
+# digit run itself (the old output left a stray trailing literal `.x`).
+# Mirrors the same fix in LogRedactor.swift's `ipv4AddressRegex`/
+# `ipv6AddressRegex` (the on-device path, where the exact same shape WAS a
+# real exposure: no coincidental phone-number rule there).
+# ---------------------------------------------------------------------------
+check("[REDACTED:ipv4]" in red("state=active from 192.168.1.x role=caller"),
+      "I8: WebRTC-partial-masked private IPv4 (a.b.c.x) not recognized as an IPv4 address")
+check("192.168.1" not in red("state=active from 192.168.1.x role=caller"),
+      "I8: WebRTC-partial-masked private IPv4 (a.b.c.x) left real octets exposed")
+check("[REDACTED:ipv4]" in red("state=active srflx 203.0.113.x role=caller"),
+      "I8: WebRTC-partial-masked public/TURN IPv4 (a.b.c.x) not recognized as an IPv4 address")
+check("203.0.113" not in red("state=active srflx 203.0.113.x role=caller"),
+      "I8: WebRTC-partial-masked public/TURN IPv4 (a.b.c.x) left real octets exposed")
+# regression guard: a genuine fully-numeric IPv4 must still be masked exactly
+# as before -- this fix only ADDS the 'x' alternative, never narrows the
+# all-digit case.
+check("10.0.0.1" not in red("state=active from 10.0.0.1 role=caller"),
+      "I8: fully-numeric IPv4 masking regressed")
+check("[REDACTED:ipv4]" in red("state=active from 10.0.0.1 role=caller"),
+      "I8: fully-numeric IPv4 no longer labelled ipv4")
+# regression guard: hex/base64/uuid masking is untouched by the IPv4/IPv6
+# regex change (different, unrelated rules).
+check("deadbeefcafebabe0123456789abcdef" not in
+      red("state=active token=deadbeefcafebabe0123456789abcdef role=caller"),
+      "I8: unrelated hex-blob masking regressed")
+check("550e8400-e29b-41d4-a716-446655440000" not in
+      red("state=active callid=550e8400-e29b-41d4-a716-446655440000", "stdout"),
+      "I8: unrelated UUID masking regressed")
+# CamelCase-shaped free words stay fully subject to THIS script's own
+# paranoid free-word gate -- deliberately NOT loosened here the way
+# LogRedactor.swift's on-device egress redactor now is for the identical
+# shape (see that file's `codeIdentifierRegex` kdoc). That change is scoped
+# to the on-device bug-report/telemetry path, where a Swift/ObjC symbol name
+# has real diagnostic value and never left the device before this; this
+# shipper's mandate is the stricter "provably safe or dropped" gate for the
+# queryable Loki backend (its own `camel_blocks` fuzz family already
+# exercises this family, see test_ship_redactor_fuzz.py).
+check("BCryptoGroupCallManager" not in red("state=active BCryptoGroupCallManager role=caller"),
+      "I8: CamelCase-shaped free word unexpectedly started shipping verbatim through ship-ios-logs.py "
+      "-- this script's free-word gate must stay strict; only LogRedactor.swift's on-device egress "
+      "path is meant to carve out an exception for this shape")
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)

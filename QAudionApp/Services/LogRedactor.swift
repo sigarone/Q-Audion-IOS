@@ -91,10 +91,29 @@ enum LogRedactor {
     /// Deliberately over-inclusive (any hex run that merely looks like an
     /// IPv6 address is masked too) — for a redactor, over-redaction is the
     /// safe failure mode.
+    ///
+    /// I8 FIX (2026-09-29, group video-publish investigation): the pinned
+    /// WebRTC binary itself ALREADY partially redacts these same candidate/
+    /// TURN-server addresses before a line ever reaches this file — release
+    /// builds compile `rtc::IPAddress::ToSensitiveString()` in, which masks
+    /// only the LAST IPv4 octet with a literal `x` (e.g. a real
+    /// `connection.cc`/`turn_port.cc` line ships an address shaped like
+    /// `a.b.c.x`, three real octets still in the clear) and the equivalent
+    /// partial form for IPv6. Confirmed against a real collected phone log
+    /// (`turn_port.cc` TURN-server lines): because that trailing `x` is not
+    /// a digit, the ORIGINAL `\d{1,3}`-only last-octet/hextet requirement
+    /// below never matched it, so those three real octets shipped
+    /// untouched in the exported/uploaded log blob — only a fully-numeric
+    /// address (already the exception, not the rule, for these specific
+    /// trace lines in a release build) was ever fully masked. Both regexes
+    /// now also accept that literal `x` as the last group so libwebrtc's
+    /// OWN partial mask no longer defeats this one — the whole address,
+    /// including the octets/hextets libwebrtc left in the clear, collapses
+    /// to `<ip>` either way.
     private static let ipv4AddressRegex = try! NSRegularExpression(
-        pattern: #"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"#)
+        pattern: #"\b(?:\d{1,3}\.){3}(?:\d{1,3}|x)(?::\d{1,5})?\b"#)
     private static let ipv6AddressRegex = try! NSRegularExpression(
-        pattern: #"(\[[0-9a-fA-F:]{2,45}\](?::\d{1,5})?)|(\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b)"#)
+        pattern: #"(\[[0-9a-fA-Fx:]{2,45}\](?::\d{1,5})?)|(\b(?:[0-9a-fA-F]{1,4}:){2,7}(?:[0-9a-fA-F]{1,4}|x)\b(?:/\d{1,3})?)"#)
 
     /// I2 — mask IPv4/IPv6 addresses (and a trailing `:port`) to `<ip>`.
     /// Applied BEFORE the secret/blob rules in both `redact()` and
@@ -141,6 +160,17 @@ enum LogRedactor {
     //       reference. Stashing them BEFORE any scrub is what makes the
     //       keyfp= form survive (the residual sweep would otherwise eat a
     //       run that includes the '=' separator).
+    //   1c. STASH letters-only Swift/ObjC identifier-shaped runs (I8 FIX,
+    //       2026-09-29 -- e.g. `BCryptoGroupCallManager`,
+    //       `performAcceptIncomingGroupCall`) so the blob/residual sweeps
+    //       below cannot destroy them -- see `codeIdentifierRegex`'s own
+    //       doc comment for why this shape essentially never matches an
+    //       encoded secret. Skipped when the candidate is directly glued
+    //       (no separator) to a `+`/`/`/`=`/`-` -- see `blobAdjacentChars`'s
+    //       doc comment: that shape means the "identifier" is actually a
+    //       substring of a longer secret-charset run, and stashing it would
+    //       fragment that run below the length rules' thresholds instead of
+    //       protecting a real prose identifier.
     //   2.  Redact dot-delimited JWTs (3 base64url segments) explicitly --
     //       the '.' fragments each segment below the blob/residual bars,
     //       so a JWT is invisible to length-only rules.
@@ -153,7 +183,7 @@ enum LogRedactor {
     //       (charset incl '-') gets redacted. Runs BEFORE restore so the
     //       sentinels (which the U+0001 bytes break into short tokens)
     //       survive.
-    //   5.  RESTORE stashed UUIDs + fingerprints.
+    //   5.  RESTORE stashed UUIDs + fingerprints + code identifiers.
     private static let uuidRegex = try! NSRegularExpression(
         pattern: #"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"#)
     // Labelled short-hex fingerprint (8-16 hex) preceded by a known label.
@@ -161,6 +191,76 @@ enum LogRedactor {
     // residual sweep can touch the fingerprint regardless of separator.
     private static let fingerprintRegex = try! NSRegularExpression(
         pattern: #"(?i)\b(keyfp|selectedpskfingerprint|short8|h8|fp)([\s:=]+)([0-9a-fA-F]{8,16})\b"#)
+    // I8 FIX (2026-09-29) -- TWO-LAYER check, not a shape regex alone (a
+    // shape-only version of this was measured, against 500k random base52
+    // strings -- the exact encoding scripts/ship-ios-logs.py's own
+    // red-team fixtures target -- at a 2.7% full-match false-positive
+    // rate: too high for a fail-closed security sweep). Layer 1
+    // (`codeIdentifierRegex`): letters-only CamelCase/lowerCamelCase
+    // candidate shape -- an optional lowercase lead word (covers an
+    // `iPhone`-style single-letter lead too), then 2+ "words" of 1-3
+    // uppercase letters (covers this codebase's own short prefixes --
+    // BCrypto, QAudion -- without opening the door to a long ALL-CAPS run)
+    // followed by >= 2 lowercase letters, then an optional trailing
+    // acronym. NO digits and NO base64/hex punctuation are in the
+    // character class at all, so a hex/base64/UUID/JWT run can never match
+    // this regex regardless of shape. Layer 2 (`isLikelyCodeIdentifier`,
+    // below): every "word" the candidate splits into must ALSO look
+    // English-derived -- the SAME vowel/consonant-run/tripled-letter
+    // discipline scripts/ship-ios-logs.py's own already-fuzzed free-word
+    // gate uses (see that script's "FREE-WORD PLAUSIBILITY" comment).
+    // Measured together against the same 500k-case corpus: ~0.09%
+    // full-match false positives, ~0.002% substring false positives inside
+    // a realistic 24-60-char encoded-secret length -- confirmed against
+    // both `BCryptoGroupCallManager` and `performAcceptIncomingGroupCall`.
+    private static let codeIdentifierRegex = try! NSRegularExpression(
+        pattern: #"\b[a-z]*(?:[A-Z]{1,3}[a-z]{2,}){2,}[A-Z]{0,3}\b"#)
+    // Splits an already-matched candidate into its constituent "words" for
+    // the per-word plausibility check below (e.g. "BCryptoGroupCallManager"
+    // -> ["B","Crypto","Group","Call","Manager"]).
+    private static let identifierWordSplitRegex = try! NSRegularExpression(
+        pattern: #"[A-Z][a-z]*|^[a-z]+"#)
+
+    /// I8 FIX -- does `word` look like an English-derived identifier
+    /// fragment rather than a random letter run? 'y' counts as a vowel
+    /// (covers ordinary words like "crypto"/"sync"). A 1-character word
+    /// (a lone acronym initial, or an `iPhone`-style lead) is always
+    /// neutral/plausible -- there is no vowel/consonant shape to judge.
+    private static func isPlausibleIdentifierWord(_ word: Substring, maxLength: Int = 12) -> Bool {
+        let lower = Array(word.lowercased())
+        guard lower.count >= 2 else { return true }
+        guard lower.count <= maxLength else { return false }
+        let vowels: Set<Character> = ["a", "e", "i", "o", "u", "y"]
+        guard lower.contains(where: { vowels.contains($0) }) else { return false }
+        var consonantRun = 0
+        var vowelRun = 0
+        for ch in lower {
+            if vowels.contains(ch) {
+                vowelRun += 1; consonantRun = 0
+            } else {
+                consonantRun += 1; vowelRun = 0
+            }
+            if consonantRun >= 3 || vowelRun >= 3 { return false }
+        }
+        for i in 0..<(lower.count - 2) {
+            if lower[i] == lower[i + 1] && lower[i + 1] == lower[i + 2] { return false }
+        }
+        return true
+    }
+
+    /// I8 FIX -- layer 2 of the check above: every word `candidate` splits
+    /// into must be individually plausible.
+    private static func isLikelyCodeIdentifier(_ candidate: Substring) -> Bool {
+        let s = String(candidate)
+        let ns = s as NSString
+        let words = identifierWordSplitRegex.matches(
+            in: s, options: [], range: NSRange(location: 0, length: ns.length))
+        guard !words.isEmpty else { return false }
+        return words.allSatisfy { m in
+            guard let r = Range(m.range, in: s) else { return false }
+            return isPlausibleIdentifierWord(s[r])
+        }
+    }
     // Dot-delimited JWT: three base64url segments. Caught explicitly because
     // '.' fragments each segment below the length bars of the blob/residual
     // rules (the classic base64url fail-open).
@@ -193,6 +293,9 @@ enum LogRedactor {
         work = LogRedactor.stashMatches(of: uuidRegex, in: work, stash: &stash)
         // --- 1b. stash labelled short-hex fingerprints ---
         work = LogRedactor.stashMatches(of: fingerprintRegex, in: work, stash: &stash)
+        // --- 1c. I8 FIX: stash letters-only code-identifier-shaped runs
+        //         that ALSO pass the per-word plausibility check ---
+        work = LogRedactor.stashCodeIdentifiers(in: work, stash: &stash)
 
         // --- 2. dot-delimited JWT scrub ---
         let fullJwt = NSRange(work.startIndex..<work.endIndex, in: work)
@@ -213,7 +316,7 @@ enum LogRedactor {
         work = residualRegex.stringByReplacingMatches(
             in: work, options: [], range: full3, withTemplate: redactPlaceholder)
 
-        // --- 5. restore stashed UUIDs + fingerprints ---
+        // --- 5. restore stashed UUIDs + fingerprints + code identifiers ---
         if !stash.isEmpty {
             for (i, u) in stash.enumerated() {
                 work = work.replacingOccurrences(
@@ -242,6 +345,72 @@ enum LogRedactor {
         var lastEnd = text.startIndex
         for m in matches {
             guard let r = Range(m.range, in: text) else { continue }
+            out.append(contentsOf: text[lastEnd..<r.lowerBound])
+            let idx: Int = stash.count
+            stash.append(String(text[r]))
+            out.append("\u{0001}K")
+            out.append(String(idx))
+            out.append("\u{0001}")
+            lastEnd = r.upperBound
+        }
+        out.append(contentsOf: text[lastEnd..<text.endIndex])
+        return out
+    }
+
+    /// ADVERSARIAL REVIEW FIX (2026-09-29, follow-up to I8) -- a
+    /// code-identifier candidate immediately touching one of the
+    /// secret-blob charset's own separator characters (`+ / = -`, the
+    /// non-alnum members of `blobWithHyphen`/`residualRegex`'s character
+    /// class) on either side is NOT a standalone Swift/ObjC identifier --
+    /// it is a substring of a LONGER base64/base64url/hex-with-hyphen run
+    /// that merely happens to look CamelCase in the middle (`\b` fires at
+    /// `+`/`/`/`=`/`-` because none of them are `\w`, so `codeIdentifierRegex`
+    /// can match right up against one even though the surrounding run is
+    /// one continuous token with no real word/prose boundary there --
+    /// digits can't do this, a letter-digit transition is `\w`-`\w`, no
+    /// `\b`, so this is specific to those four separator characters).
+    /// Stashing that middle chunk BEFORE the JWT/secret-keyword/blob/
+    /// residual scrubs below run splits what would have been one
+    /// contiguous >=20/24-char secret run into shorter pieces that can
+    /// each fall under those length thresholds -- restoring the "identifier"
+    /// verbatim at the end and leaking every fragment around it too, not
+    /// just the one word. Confirmed against the pinned pre-fix behavior:
+    /// `relay candidate blob 7f3ac9012+XyzAbcDef+91beffcafe...==` fully
+    /// redacted before this file's I8 change, leaked `7f3ac9012+XyzAbcDef`
+    /// in the clear after it, with only the guard below closing that back
+    /// up. A real prose identifier is never written glued to `+`/`/`/`=`/`-`
+    /// this way, so the guard costs no genuine diagnostic value.
+    private static let blobAdjacentChars: Set<Character> = ["+", "/", "=", "-"]
+
+    /// I8 FIX -- same sentinel-stashing shape as `stashMatches` above, but
+    /// for `codeIdentifierRegex` candidates specifically: each candidate is
+    /// ALSO run through `isLikelyCodeIdentifier` (the per-word plausibility
+    /// layer) AND the blob-adjacency guard above before being stashed. A
+    /// candidate that fails either check is left exactly as-is in the
+    /// output (not stashed, not otherwise modified) so it falls through to
+    /// the JWT/secret/blob/residual rules below like any other text --
+    /// this function only ever REMOVES work from those rules, never adds
+    /// any.
+    private static func stashCodeIdentifiers(in text: String, stash: inout [String]) -> String {
+        let ns = text as NSString
+        let matches = codeIdentifierRegex.matches(
+            in: text, options: [],
+            range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return text }
+        var out: String = ""
+        out.reserveCapacity(text.count)
+        var lastEnd = text.startIndex
+        for m in matches {
+            guard let r = Range(m.range, in: text) else { continue }
+            guard isLikelyCodeIdentifier(text[r]) else { continue }
+            if r.lowerBound > text.startIndex,
+               blobAdjacentChars.contains(text[text.index(before: r.lowerBound)]) {
+                continue
+            }
+            if r.upperBound < text.endIndex,
+               blobAdjacentChars.contains(text[r.upperBound]) {
+                continue
+            }
             out.append(contentsOf: text[lastEnd..<r.lowerBound])
             let idx: Int = stash.count
             stash.append(String(text[r]))

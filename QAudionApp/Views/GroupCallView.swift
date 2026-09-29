@@ -390,6 +390,15 @@ struct GroupCallView: View {
             snackbar?.show(.init(text: text, severity: .info))
             viewModel.muteRequestToastText = nil
         }
+        // W-GRPVIDEOPUBFIX — same one-shot snackbar idiom as
+        // `muteRequestToastText` above, `.error` severity (see
+        // `videoPublishErrorToastText`'s kdoc for the two failure points
+        // that set it).
+        .onChange(of: viewModel.videoPublishErrorToastText) { text in
+            guard let text else { return }
+            snackbar?.show(.init(text: text, severity: .error))
+            viewModel.videoPublishErrorToastText = nil
+        }
         // Badge upkeep — mirrors `ChatListScreen`'s reactive unread badge,
         // driven off the SAME `GroupMessageStore.didChangeNotification` the
         // list screen and `GroupChatScreen` both already observe. Fires
@@ -1179,6 +1188,18 @@ class GroupCallViewModel: ObservableObject {
     /// `.onChange` and pushes it through that snackbar itself, then
     /// clears it back to nil (see that call site's kdoc).
     @Published var muteRequestToastText: String? = nil
+    /// W-GRPVIDEOPUBFIX (2026-09-29): one-shot toast for a camera-track
+    /// publish failure — either the initial `connect()`-time publish
+    /// (`LiveKitGroupCallRoom.connect()`'s catch, forwarded through
+    /// `onError` -> `GroupCallController.onSfuError`) or a later
+    /// `toggleVideo()` (`GroupCallController.setVideoEnabled`'s catch,
+    /// same channel). Both failure points now surface through this SAME
+    /// property/message instead of only printing, so the user sees SOME
+    /// explanation instead of the video button silently staying off (see
+    /// `toggleVideo()`'s kdoc). Same one-shot set-then-clear idiom as
+    /// `muteRequestToastText` above; `.error` severity distinguishes it
+    /// from that `.info` toast.
+    @Published var videoPublishErrorToastText: String? = nil
     /// In-call chat panel — the persisted-group id (DASHED UUID, server wire
     /// form) this ACTIVE call is associated with, or "" for an ad-hoc group
     /// call started from the contact picker with no persisted group behind
@@ -1595,6 +1616,23 @@ class GroupCallViewModel: ObservableObject {
                     let displayName = self.participants.first(where: { $0.id == requesterId })?.displayName
                         ?? DisplayName.forUser(requesterId)
                     self.muteRequestToastText = String(localized: "group_call.mute_request_toast", defaultValue: "\(displayName) ti ha silenziato", comment: "Snackbar — one-shot toast shown when another participant force-mutes you in a group call; %@ is the requester's display name")
+                }
+            }
+            // W-GRPVIDEOPUBFIX (2026-09-29): `onSfuError` already fires for
+            // several unrelated SFU-level errors (camera-permission denial,
+            // SFU connect failure, mid-call SFU disconnect) that either have
+            // no UI consumer yet or are already reflected through `callState`
+            // — deliberately narrow this to ONLY the camera-track-publish
+            // case (see `LiveKitGroupCallRoom.VideoPublishError`'s kdoc) so
+            // this toast does not start firing for those other, out-of-scope
+            // error paths as a side effect.
+            controller.onSfuError = { [weak self] error in
+                guard error is LiveKitGroupCallRoom.VideoPublishError else { return }
+                DispatchQueue.main.async {
+                    self?.videoPublishErrorToastText = String(
+                        localized: "group_call.video_publish_failed_toast",
+                        defaultValue: "Non è stato possibile attivare la videocamera per questa chiamata.",
+                        comment: "Snackbar — one-shot toast shown when publishing/toggling the local camera in a group call fails at the SDK level; the call itself continues audio-only")
                 }
             }
         } else {
