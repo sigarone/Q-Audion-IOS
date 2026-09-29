@@ -115,6 +115,15 @@ final class AdaptiveOpusComplexityPolicyTests: XCTestCase {
         XCTAssertEqual(AdaptiveOpusDecoderComplexityPolicy.ladder(for: .capable), [5, 6, 7])
     }
 
+    // MARK: - ThermalTier(from:) — the one ProcessInfo.ThermalState mapping
+
+    func testThermalStateMapsToTheMatchingTier() {
+        XCTAssertEqual(ThermalTier(from: .nominal), .nominalOrFair)
+        XCTAssertEqual(ThermalTier(from: .fair), .nominalOrFair)
+        XCTAssertEqual(ThermalTier(from: .serious), .serious)
+        XCTAssertEqual(ThermalTier(from: .critical), .critical)
+    }
+
     // MARK: - Hysteresis (shared rule)
 
     func testDropsImmediatelyToAWorseTargetRegardlessOfElapsedTime() {

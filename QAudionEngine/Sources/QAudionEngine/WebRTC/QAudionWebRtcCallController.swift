@@ -1326,6 +1326,31 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// default as the flag's own compiled default.
     public var p2pProbeKillSwitchProvider: (() -> Bool)?
 
+    /// I2/I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) — remote
+    /// gate for `QaudionRuntimeTuning.requireDtlsPqc()`. Same indirection
+    /// reason as `p2pProbeKillSwitchProvider` right above (QAudionEngine
+    /// cannot import `FeatureFlags`): AppState sets this to a closure that
+    /// reads `FeatureFlags.bool("calls.dtls_pqc_required", false)`, wired
+    /// right alongside `p2pProbeKillSwitchProvider` at every call-setup site.
+    ///
+    /// Read ONCE, synchronously, at `QAudionPeerConnection.init` (forwarded
+    /// through as an init parameter — unlike the P2P-probe provider this
+    /// cannot be read later, `requireDtlsPqc()` has to run before the
+    /// native-SRTP transceiver is pre-attached). `nil` (no AppState wiring,
+    /// e.g. a unit test constructing the controller directly) resolves to
+    /// `false` — PQC stays OPTIONAL, matching the flag's own compiled
+    /// default and Android's `NativeAudioTuning` gate. Owner rationale
+    /// (2026-09-29): requiring PQC unconditionally makes every call fail
+    /// closed against a peer whose DTLS stack does not offer
+    /// X25519MLKEM768 (e.g. a desktop peer on a Chromium build that lacks
+    /// it yet) — that peer's DTLS fails while ICE stays healthy, which
+    /// `didChangeConnectionState`'s I6 branch then correctly routes to the
+    /// sealed WS relay instead of ending the call, but for a fleet that is
+    /// not yet PQC-uniform that is strictly worse than just not requiring
+    /// it. Flipping the remote flag to `true` once the fleet is ready
+    /// restores "AES256 senza compromessi" without another release.
+    public var dtlsPqcRequiredProvider: (() -> Bool)?
+
     /// SFrame video sealer factory — DI seam retained for backwards
     /// compatibility with AppState wiring. As of W539 it is NO LONGER
     /// consulted by the default video pipeline pick: cross-platform
@@ -1800,7 +1825,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
-            delegate: self)
+            delegate: self,
+            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider)
         // Bug-C guard: same race, closed a moment later — pc was just built
         // synchronously (no further suspension since the check above), but a
         // teardown could still have landed on another thread. Dispose rather
@@ -1957,7 +1983,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
-            delegate: self)
+            delegate: self,
+            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()
@@ -2103,7 +2130,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
-            delegate: self)
+            delegate: self,
+            dtlsPqcRequiredProvider: dtlsPqcRequiredProvider)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()

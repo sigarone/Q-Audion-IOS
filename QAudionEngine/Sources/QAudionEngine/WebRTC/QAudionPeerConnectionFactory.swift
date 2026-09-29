@@ -513,16 +513,19 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///
     ///     I2 comment fix (webrtc-plan.md v2 §3.3, 2026-09-29) — this used to
     ///     call this "an SRTP-GCM call" outright, which overstated what the
-    ///     4-arg `RTCCryptoOptions` init used at M144 actually guarantees:
+    ///     4-arg `RTCCryptoOptions` init at M144 actually guaranteed:
     ///     *enabling* GCM is not *preferring* it, and M144's init has no
-    ///     preference-order argument at all — SHA1_80 wins the negotiation
-    ///     whenever it does (same gap Android's own CryptoOptions comment
-    ///     named, `PeerConnectionHolder.kt:3662-3672`). M150's 6-arg
-    ///     designated initializer (`RTCCryptoOptions.h:60-73`) adds
-    ///     `srtpPreferGcmCryptoSuites`, set `true` below once this app links
-    ///     that binary — see this init call's own doc for the exact
-    ///     6-argument form. Until then, "GCM enabled, preference undefined"
-    ///     is the accurate description of what this configuration does.
+    ///     preference-order argument at all — SHA1_80 could win the
+    ///     negotiation (same gap Android's own CryptoOptions comment named,
+    ///     `PeerConnectionHolder.kt:3662-3672`). The init call below now
+    ///     passes M150's 6-arg designated initializer
+    ///     (`RTCCryptoOptions.h:60-73`), `srtpPreferGcmCryptoSuites: true`
+    ///     included — that line is source-complete already (I2), it simply
+    ///     does not COMPILE until this app links the M150 WebRTC.xcframework
+    ///     (M144's `RTCCryptoOptions` has no matching overload — see that
+    ///     call's own doc for the full citation). Once it does, "an SRTP-GCM
+    ///     call" is accurate again; until then this app still links M144, so
+    ///     this whole `if nativeSrtpEnabledLocally` block does not build.
     ///   - `tcpCandidatePolicy = .disabled` — TCP candidates add head-of-line
     ///     blocking on top of an already-encrypted, already-lossy-tolerant
     ///     RTP stream; UDP (host/srflx/relay) is sufficient and this app's
@@ -610,9 +613,48 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         // Trickle ICE: candidates flow as they're discovered, no pre-gather wait.
         config.iceTransportPolicy = .all
         if nativeSrtpEnabledLocally {
+            // I2 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) — M150's
+            // RTCCryptoOptions designated initializer takes SIX arguments
+            // (`RTCCryptoOptions.h:60-73` at both the M150 target pin,
+            // ba469aa2093ba950066258ca0a59a6fbd1295582, and confirmed absent
+            // at today's M144 pin, df1011beabae, which has only the 4-arg
+            // form below as `init` is `NS_UNAVAILABLE` on both — there is no
+            // fallback overload to keep this compiling against today's
+            // binary). WITHOUT this change the app does not compile once the
+            // M150 xcframework lands (plan's own words: "senza questa
+            // modifica non compila").
+            //
+            // Two arguments added vs. the pre-M150 call:
+            //   - `srtpPreferGcmCryptoSuites: true` — GCM was already
+            //     ENABLED below (was, and stays, `true`), but M144's 4-arg
+            //     init has no preference-order argument at all, so enabling
+            //     GCM never guaranteed it would WIN the negotiation over
+            //     SRTP_AES128_CM_SHA1_80 (see the comment fix above this
+            //     function, and Android's identical gap,
+            //     `PeerConnectionHolder.kt:3662-3672`, "GCM instead of
+            //     AES-CM. With M144 vince SHA1_80"). `true` here is what
+            //     actually makes this "AES256 senza compromessi" (owner,
+            //     2026-09-29): GCM is listed FIRST in the cipher preference
+            //     order, so it is selected whenever both peers support it.
+            //   - `srtpEnableAes128Sha1_80CryptoCipher: false` — matches the
+            //     plan's own I2 snippet exactly. Off for the same reason the
+            //     128-bit-tag SHA1_32 cipher right below already is: no
+            //     legacy peer to interop with on this brand-new native-SRTP
+            //     path, and the owner's explicit instruction is AES-256
+            //     without compromise — a build that requires PQC on DTLS
+            //     (`QaudionRuntimeTuning.requireDtlsPqc`) and then quietly
+            //     allowed a non-GCM SRTP cipher would be exactly that kind
+            //     of compromise. A peer that cannot negotiate GCM fails this
+            //     step the same way a peer that cannot negotiate PQC fails
+            //     DTLS — and I6's DTLS-failed-ICE-healthy relay fallback
+            //     (`QAudionWebRtcCallController.didChangeConnectionState`)
+            //     is the intended landing place for that peer, not a
+            //     silently weaker SRTP cipher here.
             config.cryptoOptions = RTCCryptoOptions(
                 srtpEnableGcmCryptoSuites: true,
+                srtpPreferGcmCryptoSuites: true,
                 srtpEnableAes128Sha1_32CryptoCipher: false,
+                srtpEnableAes128Sha1_80CryptoCipher: false,
                 srtpEnableEncryptedRtpHeaderExtensions: true,
                 sframeRequireFrameEncryption: false)
             config.tcpCandidatePolicy = .disabled

@@ -210,6 +210,31 @@ public final class QAudionPeerConnection: NSObject {
     /// raise/restore pairing (only one 1:1 call runs at a time today, but the
     /// guard costs nothing and keeps the pairing self-contained per instance).
     private var didRaiseDebugLogLevelForSession = false
+    /// I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) —
+    /// M150-DEPENDENT: the observer that keeps this call's native Opus
+    /// encoder/decoder complexity (`QaudionRuntimeTuning`) tracking the
+    /// device's thermal/power state for as long as this PeerConnection
+    /// lives. `nil` unless this call actually armed native audio SRTP (see
+    /// `init`'s gated block) — the P8 knobs only govern the NATIVE libwebrtc
+    /// Opus encoder, which only carries real audio on this path (the legacy
+    /// sealed-DataChannel path uses the CUSTOM `OpusCodec`, tuned separately
+    /// via that class's own `setComplexity`). Torn down in `close()`, same
+    /// lifetime discipline as `didRaiseDebugLogLevelForSession` above.
+    private var runtimeTuningThermalObserver: NSObjectProtocol?
+    private var runtimeTuningPowerObserver: NSObjectProtocol?
+    /// Two independent hysteresis drivers — encoder and decoder tables have
+    /// different ladders (`AdaptiveOpusComplexityPolicy` vs
+    /// `AdaptiveOpusDecoderComplexityPolicy`) — so one driver cannot serve
+    /// both.
+    private var encoderComplexityDriver: ComplexityHysteresisDriver?
+    private var decoderComplexityDriver: ComplexityHysteresisDriver?
+    /// Guards the two drivers above: `NotificationCenter.default
+    /// .addObserver(forName:object:queue:nil)` runs its block on whatever
+    /// thread POSTS the notification (no guaranteed queue), so the thermal
+    /// and power-state observers could in principle fire concurrently on two
+    /// different threads. Same `NSLock` discipline this class already uses
+    /// for `manualAudioToken` right above.
+    private let runtimeTuningLock = NSLock()
     /// W-NATIVESRTPSNAPSHOT (2026-09-26) — this call's native-SRTP decision,
     /// latched ONCE at `init` from `CallCapabilities.latchNativeSrtpCallSnapshot()`
     /// (the same snapshot `localCaps`, `negotiationLocal()` and the audio-unit
@@ -455,7 +480,8 @@ public final class QAudionPeerConnection: NSObject {
                 audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
                 iceServers: [RTCIceServer],
                 iceTransportPolicy: RTCIceTransportPolicy = .all,
-                delegate: Delegate?) {
+                delegate: Delegate?,
+                dtlsPqcRequiredProvider: (() -> Bool)? = nil) {
         self.factory = factory
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
@@ -515,6 +541,98 @@ public final class QAudionPeerConnection: NSObject {
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
         if nativeSrtpEnabledLocally {
+            // I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) —
+            // M150-DEPENDENT: apply this call's OPENING runtime tuning to the
+            // NATIVE Opus encoder/decoder before any audio can flow on the
+            // transceiver pre-attached below, then arm an observer that keeps
+            // it current for the rest of the call. All four native calls go
+            // through `QaudionRuntimeTuning` (the one P8 adapter file); none
+            // of this compiles against today's linked M144 binary (P8 does
+            // not exist there) — see that file's own doc.
+            //
+            //   - FEC floor: the plan's aligned constant (10%, §3.1) — same
+            //     floor `PlpPolicy.minPct` now uses on the custom path.
+            //   - Encoder/decoder complexity: the adaptive target for this
+            //     device/thermal state RIGHT NOW (`AdaptiveOpusComplexityPolicy`
+            //     / `AdaptiveOpusDecoderComplexityPolicy` — see those types'
+            //     own doc for the full table and the owner's "spinta al
+            //     massimo dove c'è potenza a sufficienza, in modo adattivo,
+            //     non farci limitare da telefoni obsoleti" instruction,
+            //     2026-09-29).
+            //   - `requireDtlsPqc()` — gated by the `calls.dtls_pqc_required`
+            //     remote flag (default false), via `dtlsPqcRequiredProvider`
+            //     (see that property's kdoc on `QAudionWebRtcCallController`
+            //     for why the indirection exists and why the default stayed
+            //     off, 2026-09-29 revision — originally "AES256 senza
+            //     compromessi" unconditional, but that fails every call
+            //     closed against a peer whose DTLS stack does not yet offer
+            //     X25519MLKEM768, e.g. a desktop peer on a Chromium build
+            //     that lacks it). On a `true` read, a peer that cannot meet
+            //     it fails DTLS while ICE stays healthy, which
+            //     `QAudionWebRtcCallController.didChangeConnectionState`'s I6
+            //     branch routes to the sealed WS relay instead of ending the
+            //     call.
+            //
+            // The thermal/power observer mirrors `LiveKitGroupCallRoom`'s own
+            // `thermalObserver` pattern (same file, group-call path) — a
+            // `ProcessInfo.thermalStateDidChangeNotification` /
+            // `NSProcessInfo.powerStateDidChangeNotification` pair, each
+            // re-deriving the device hint and re-applying through the same
+            // two `ComplexityHysteresisDriver`s so a mid-call thermal/power
+            // change is not only caught at `init`. Both observers and both
+            // drivers are torn down in `close()`.
+            let deviceHint = DeviceCapabilityHint(
+                isOldDevice: QaudionDeviceClass.isA11OrEarlier(),
+                isLowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+            let initialThermalTier = ThermalTier(from: ProcessInfo.processInfo.thermalState)
+            let nowMsClock: () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
+            let encDriver = ComplexityHysteresisDriver(
+                initial: AdaptiveOpusComplexityPolicy.target(thermalTier: initialThermalTier, device: deviceHint),
+                ladder: AdaptiveOpusComplexityPolicy.ladder(for: deviceHint),
+                nowMs: nowMsClock)
+            let decDriver = ComplexityHysteresisDriver(
+                initial: AdaptiveOpusDecoderComplexityPolicy.target(thermalTier: initialThermalTier, device: deviceHint),
+                ladder: AdaptiveOpusDecoderComplexityPolicy.ladder(for: deviceHint),
+                nowMs: nowMsClock)
+            encoderComplexityDriver = encDriver
+            decoderComplexityDriver = decDriver
+            // Reuses `PlpPolicy.minPct` (10, since the FEC-floor alignment —
+            // see that property's own kdoc) rather than a second literal:
+            // the native and custom paths share the exact same floor value
+            // by design (plan §3.1), so there is one source of truth for it.
+            QaudionRuntimeTuning.setMinPacketLossPercent(PlpPolicy.minPct)
+            QaudionRuntimeTuning.setEncoderComplexity(encDriver.currentComplexity)
+            QaudionRuntimeTuning.setDecoderComplexity(decDriver.currentComplexity)
+            if dtlsPqcRequiredProvider?() ?? false {
+                QaudionRuntimeTuning.requireDtlsPqc()
+            }
+
+            let reapply: () -> Void = { [weak self] in
+                guard let self else { return }
+                let hint = DeviceCapabilityHint(
+                    isOldDevice: QaudionDeviceClass.isA11OrEarlier(),
+                    isLowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+                let tier = ThermalTier(from: ProcessInfo.processInfo.thermalState)
+                self.runtimeTuningLock.lock()
+                let newEnc = self.encoderComplexityDriver?.update(
+                    target: AdaptiveOpusComplexityPolicy.target(thermalTier: tier, device: hint))
+                let newDec = self.decoderComplexityDriver?.update(
+                    target: AdaptiveOpusDecoderComplexityPolicy.target(thermalTier: tier, device: hint))
+                self.runtimeTuningLock.unlock()
+                // The native P8 setters are their own safe point (process-
+                // wide, lock-free, range-checked natively) — called OUTSIDE
+                // the lock above on purpose, so a slow native call can never
+                // hold this Swift-side lock.
+                if let newEnc { QaudionRuntimeTuning.setEncoderComplexity(newEnc) }
+                if let newDec { QaudionRuntimeTuning.setDecoderComplexity(newDec) }
+            }
+            runtimeTuningThermalObserver = NotificationCenter.default.addObserver(
+                forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: nil
+            ) { _ in reapply() }
+            runtimeTuningPowerObserver = NotificationCenter.default.addObserver(
+                forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: nil
+            ) { _ in reapply() }
+
             // W-ADMMANUAL (2026-09-26) — replaces W-ADMNOMANUAL's "nothing to
             // arm". Manual audio mode BEFORE the mic track is added and before
             // any SDP is applied: in automatic mode WebRTC's audio module
@@ -2016,6 +2134,23 @@ public final class QAudionPeerConnection: NSObject {
             QAudionPeerConnectionFactory.shared.restoreDefaultDebugLogLevel()
             didRaiseDebugLogLevelForSession = false
         }
+        // I4 (2026-09-29) — tear down this call's runtime-tuning observers.
+        // No corresponding native "un-set" for the P8 complexity/FEC values
+        // themselves (they are process-wide and simply get re-applied at the
+        // top of the NEXT call's `init`); only the NOTIFICATION subscriptions
+        // and the per-call hysteresis state are this instance's own to free.
+        if let observer = runtimeTuningThermalObserver {
+            NotificationCenter.default.removeObserver(observer)
+            runtimeTuningThermalObserver = nil
+        }
+        if let observer = runtimeTuningPowerObserver {
+            NotificationCenter.default.removeObserver(observer)
+            runtimeTuningPowerObserver = nil
+        }
+        runtimeTuningLock.lock()
+        encoderComplexityDriver = nil
+        decoderComplexityDriver = nil
+        runtimeTuningLock.unlock()
         // W-ADMMANUAL (2026-09-26) — backstop for every teardown path that
         // reaches close() without going through CallService first (provider
         // reset, glare/duplicate-OFFER replacement, deinit): WebRTC's unit is

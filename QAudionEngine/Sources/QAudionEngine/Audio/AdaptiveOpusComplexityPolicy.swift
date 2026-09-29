@@ -34,6 +34,25 @@ public enum ThermalTier: Equatable, Sendable {
     case emergencyOrWorse
 }
 
+extension ThermalTier {
+    /// I4 (2026-09-29) — the one place that maps a live
+    /// `ProcessInfo.ThermalState` read to this policy's own tier enum, so
+    /// every caller (there is exactly one today,
+    /// `QAudionPeerConnection.init`'s native-SRTP block and its thermal
+    /// observer) uses the identical mapping `@unknown default` included.
+    /// Still Foundation-only, no UIKit/WebRTC — this stays Group A pure
+    /// logic even though its only caller today is the M150-dependent P8
+    /// wiring.
+    public init(from thermalState: ProcessInfo.ThermalState) {
+        switch thermalState {
+        case .nominal, .fair: self = .nominalOrFair
+        case .serious:        self = .serious
+        case .critical:       self = .critical
+        @unknown default:     self = .emergencyOrWorse
+        }
+    }
+}
+
 /// The two device-level (not moment-to-moment thermal) signals the plan's
 /// table keys off. Doesn't read anything itself — see `QaudionDeviceClass`
 /// for the real `isOldDevice` detector and `ProcessInfo.processInfo

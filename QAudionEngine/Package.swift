@@ -359,6 +359,21 @@ let package = Package(
         // Mach-O slice for derived_key / "slat << " / raw_key: 0 hits). Rollback: the
         // previous release webrtc-ios-aes256-m144-native-pli (sha256 dbaefe2aff6eabff...
         // 95701b9) is untouched.
+        //
+        // I1 (webrtc-plan.md v2 §3.3, 2026-09-29) — ============ M150 SWAP POINT ============
+        // This is the ONE place `url`/`checksum` change when the M150 GitHub
+        // Actions build (sigarone/webrtc-aes256-build, branch m150-hardening,
+        // per this task's own instructions) finishes tonight. Left UNCHANGED
+        // here deliberately — the new artifact does not exist yet (this
+        // task's own instructions: "the new binaries do not exist yet") — so
+        // this app still links the M144 build above and I2's 6-arg
+        // `RTCCryptoOptions`/I4's P8 calls do NOT compile until the
+        // orchestrator fills in the M150 url+checksum on this exact
+        // `.binaryTarget` below (name stays "WebRTC" — every call site above
+        // references the module by that name, not the binary's URL). The old
+        // M144 nokeylog release referenced below stays as the documented
+        // rollback, same discipline every prior swap on this line used.
+        // ======================================================================
         .binaryTarget(
             name: "WebRTC",
             url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144-native-pli-nokeylog/WebRTC.xcframework.zip",

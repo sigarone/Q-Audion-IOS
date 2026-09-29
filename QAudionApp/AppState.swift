@@ -5242,6 +5242,17 @@ final class AppState: ObservableObject {
                 RTLog.info("call", "aunit \(kind)=1")
             }
         }
+        // I5 (webrtc-plan.md v2 §3.3, 2026-09-29) — forward native "Q-AUDION "
+        // self-report lines (build info / cipher names only, per the P8
+        // patch's own "Safety" note) into the same RTLog "call" stream every
+        // other native diagnostic reaches Loki through. `onQaudionSelfReportLine`'s
+        // own kdoc is explicit that this module forwards the prefix VERBATIM
+        // and a real sink must not trust it alone — so this runs the line
+        // through the same `LogRedactor.redact` every other egress line gets
+        // (defence in depth) before it ever reaches RTLog/Loki.
+        QAudionPeerConnectionFactory.shared.onQaudionSelfReportLine = { line in
+            RTLog.info("call", LogRedactor.redact(line))
+        }
         // W-AUNITCALLDIDINIT (2026-09-10) — see `aunitEventsSeenThisCall`'s
         // own kdoc. `started` is the definitive "the real native VoIP audio
         // unit actually came up" signal (WebRTC's own "Voice-Processing I/O
@@ -7439,6 +7450,14 @@ final class AppState: ObservableObject {
             // happen) fails open to the flag's own compiled default.
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
+        }
+        // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
+        // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc (QAudionEngine
+        // cannot import FeatureFlags directly). Off-main fails closed to the
+        // flag's own compiled default (false, optional PQC).
+        controller.dtlsPqcRequiredProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
         }
         controller.sframeVideoSealerFactory = { keyProvider in
             SFrameVideoSealer.forRotatingKey(keyProvider)
@@ -17184,6 +17203,13 @@ final class AppState: ObservableObject {
                     guard Thread.isMainThread else { return false }
                     return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
                 }
+                // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
+                // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc
+                // (QAudionEngine cannot import FeatureFlags directly).
+                controller.dtlsPqcRequiredProvider = {
+                    guard Thread.isMainThread else { return false }
+                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
+                }
                 // Commit 77583315 parity — wire the rotating-key SFrame
                 // sealer factory. The factory is consulted by
                 // `ensureVideoSealer()` at video-pipeline pickup time;
@@ -25524,6 +25550,13 @@ extension AppState {
         controller.p2pProbeKillSwitchProvider = {
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
+        }
+        // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
+        // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc (QAudionEngine
+        // cannot import FeatureFlags directly).
+        controller.dtlsPqcRequiredProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
         }
         // Commit 77583315 parity — DI the rotating-key SFrame sealer
         // factory on the responder side too. Without this, two
