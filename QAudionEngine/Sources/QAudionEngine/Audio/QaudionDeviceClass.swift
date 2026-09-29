@@ -42,10 +42,12 @@ public enum QaudionDeviceClass {
     static func currentMachineIdentifier() -> String? {
         var systemInfo = utsname()
         guard uname(&systemInfo) == 0 else { return nil }
-        return withUnsafePointer(to: &systemInfo.machine) { ptr -> String in
-            ptr.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: systemInfo.machine)) {
-                String(cString: $0)
-            }
+        // Copy the fixed-size tuple first: reading `systemInfo.machine` inside
+        // a `withUnsafePointer(to: &systemInfo.machine)` closure is an
+        // overlapping access (Swift exclusivity error in the engine test build).
+        let machine = systemInfo.machine
+        return withUnsafeBytes(of: machine) { raw -> String in
+            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
         }
     }
 
