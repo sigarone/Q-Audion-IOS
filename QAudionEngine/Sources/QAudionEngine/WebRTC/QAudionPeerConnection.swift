@@ -210,6 +210,31 @@ public final class QAudionPeerConnection: NSObject {
     /// raise/restore pairing (only one 1:1 call runs at a time today, but the
     /// guard costs nothing and keeps the pairing self-contained per instance).
     private var didRaiseDebugLogLevelForSession = false
+    /// I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) —
+    /// M150-DEPENDENT: the observer that keeps this call's native Opus
+    /// encoder/decoder complexity (`QaudionRuntimeTuning`) tracking the
+    /// device's thermal/power state for as long as this PeerConnection
+    /// lives. `nil` unless this call actually armed native audio SRTP (see
+    /// `init`'s gated block) — the P8 knobs only govern the NATIVE libwebrtc
+    /// Opus encoder, which only carries real audio on this path (the legacy
+    /// sealed-DataChannel path uses the CUSTOM `OpusCodec`, tuned separately
+    /// via that class's own `setComplexity`). Torn down in `close()`, same
+    /// lifetime discipline as `didRaiseDebugLogLevelForSession` above.
+    private var runtimeTuningThermalObserver: NSObjectProtocol?
+    private var runtimeTuningPowerObserver: NSObjectProtocol?
+    /// Two independent hysteresis drivers — encoder and decoder tables have
+    /// different ladders (`AdaptiveOpusComplexityPolicy` vs
+    /// `AdaptiveOpusDecoderComplexityPolicy`) — so one driver cannot serve
+    /// both.
+    private var encoderComplexityDriver: ComplexityHysteresisDriver?
+    private var decoderComplexityDriver: ComplexityHysteresisDriver?
+    /// Guards the two drivers above: `NotificationCenter.default
+    /// .addObserver(forName:object:queue:nil)` runs its block on whatever
+    /// thread POSTS the notification (no guaranteed queue), so the thermal
+    /// and power-state observers could in principle fire concurrently on two
+    /// different threads. Same `NSLock` discipline this class already uses
+    /// for `manualAudioToken` right above.
+    private let runtimeTuningLock = NSLock()
     /// W-NATIVESRTPSNAPSHOT (2026-09-26) — this call's native-SRTP decision,
     /// latched ONCE at `init` from `CallCapabilities.latchNativeSrtpCallSnapshot()`
     /// (the same snapshot `localCaps`, `negotiationLocal()` and the audio-unit
@@ -228,6 +253,11 @@ public final class QAudionPeerConnection: NSObject {
     /// must repeat that same override from the ORIGINAL value, not the
     /// default.
     private let iceTransportPolicy: RTCIceTransportPolicy
+    /// TRACK B (2026-09-29) — resolved once at `init` from
+    /// `dtlsAnswerPassiveKillSwitchProvider`; `false` (the default) keeps the
+    /// fresh-answer DTLS-server fix active, `true` reverts to libwebrtc's
+    /// stock `active` answerer default. See `forcePassiveRoleForFreshAnswer`.
+    private let dtlsAnswerPassiveKillSwitchActive: Bool
     /// W-ADMMANUAL (2026-09-26) — the `NativeAudioSessionGate` token this
     /// PeerConnection armed manual audio mode with (0 = it did not arm).
     /// `close()` disables the unit and disarms with it, so a replaced
@@ -455,11 +485,19 @@ public final class QAudionPeerConnection: NSObject {
                 audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
                 iceServers: [RTCIceServer],
                 iceTransportPolicy: RTCIceTransportPolicy = .all,
-                delegate: Delegate?) {
+                delegate: Delegate?,
+                dtlsPqcRequiredProvider: (() -> Bool)? = nil,
+                dtlsAnswerPassiveKillSwitchProvider: (() -> Bool)? = nil) {
         self.factory = factory
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
         self.iceTransportPolicy = iceTransportPolicy
+        // TRACK B (2026-09-29) — resolved ONCE per PeerConnection (i.e. once
+        // per call, same lifetime argument as dtlsPqcRequiredProvider just
+        // above); see forcePassiveRoleForFreshAnswer's kdoc and
+        // QAudionWebRtcCallController.dtlsAnswerPassiveKillSwitchProvider's
+        // own kdoc for the full rationale.
+        self.dtlsAnswerPassiveKillSwitchActive = dtlsAnswerPassiveKillSwitchProvider?() ?? false
         // W-NATIVESRTPSNAPSHOT — the call start already took the KEYED
         // snapshot (AppState: startCall with the OFFER's call id, call_incoming
         // and the incoming OFFER with theirs) before any PeerConnection is
@@ -515,6 +553,98 @@ public final class QAudionPeerConnection: NSObject {
         // runs and every call's SDP is byte-for-byte what it was before —
         // no m=audio SEND_RECV line, no behavior change.
         if nativeSrtpEnabledLocally {
+            // I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) —
+            // M150-DEPENDENT: apply this call's OPENING runtime tuning to the
+            // NATIVE Opus encoder/decoder before any audio can flow on the
+            // transceiver pre-attached below, then arm an observer that keeps
+            // it current for the rest of the call. All four native calls go
+            // through `QaudionRuntimeTuning` (the one P8 adapter file); none
+            // of this compiles against today's linked M144 binary (P8 does
+            // not exist there) — see that file's own doc.
+            //
+            //   - FEC floor: the plan's aligned constant (10%, §3.1) — same
+            //     floor `PlpPolicy.minPct` now uses on the custom path.
+            //   - Encoder/decoder complexity: the adaptive target for this
+            //     device/thermal state RIGHT NOW (`AdaptiveOpusComplexityPolicy`
+            //     / `AdaptiveOpusDecoderComplexityPolicy` — see those types'
+            //     own doc for the full table and the owner's "spinta al
+            //     massimo dove c'è potenza a sufficienza, in modo adattivo,
+            //     non farci limitare da telefoni obsoleti" instruction,
+            //     2026-09-29).
+            //   - `requireDtlsPqc()` — gated by the `calls.dtls_pqc_required`
+            //     remote flag (default false), via `dtlsPqcRequiredProvider`
+            //     (see that property's kdoc on `QAudionWebRtcCallController`
+            //     for why the indirection exists and why the default stayed
+            //     off, 2026-09-29 revision — originally "AES256 senza
+            //     compromessi" unconditional, but that fails every call
+            //     closed against a peer whose DTLS stack does not yet offer
+            //     X25519MLKEM768, e.g. a desktop peer on a Chromium build
+            //     that lacks it). On a `true` read, a peer that cannot meet
+            //     it fails DTLS while ICE stays healthy, which
+            //     `QAudionWebRtcCallController.didChangeConnectionState`'s I6
+            //     branch routes to the sealed WS relay instead of ending the
+            //     call.
+            //
+            // The thermal/power observer mirrors `LiveKitGroupCallRoom`'s own
+            // `thermalObserver` pattern (same file, group-call path) — a
+            // `ProcessInfo.thermalStateDidChangeNotification` /
+            // `NSProcessInfo.powerStateDidChangeNotification` pair, each
+            // re-deriving the device hint and re-applying through the same
+            // two `ComplexityHysteresisDriver`s so a mid-call thermal/power
+            // change is not only caught at `init`. Both observers and both
+            // drivers are torn down in `close()`.
+            let deviceHint = DeviceCapabilityHint(
+                isOldDevice: QaudionDeviceClass.isA11OrEarlier(),
+                isLowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+            let initialThermalTier = ThermalTier(from: ProcessInfo.processInfo.thermalState)
+            let nowMsClock: () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
+            let encDriver = ComplexityHysteresisDriver(
+                initial: AdaptiveOpusComplexityPolicy.target(thermalTier: initialThermalTier, device: deviceHint),
+                ladder: AdaptiveOpusComplexityPolicy.ladder(for: deviceHint),
+                nowMs: nowMsClock)
+            let decDriver = ComplexityHysteresisDriver(
+                initial: AdaptiveOpusDecoderComplexityPolicy.target(thermalTier: initialThermalTier, device: deviceHint),
+                ladder: AdaptiveOpusDecoderComplexityPolicy.ladder(for: deviceHint),
+                nowMs: nowMsClock)
+            encoderComplexityDriver = encDriver
+            decoderComplexityDriver = decDriver
+            // Reuses `PlpPolicy.minPct` (10, since the FEC-floor alignment —
+            // see that property's own kdoc) rather than a second literal:
+            // the native and custom paths share the exact same floor value
+            // by design (plan §3.1), so there is one source of truth for it.
+            QaudionRuntimeTuning.setMinPacketLossPercent(PlpPolicy.minPct)
+            QaudionRuntimeTuning.setEncoderComplexity(encDriver.currentComplexity)
+            QaudionRuntimeTuning.setDecoderComplexity(decDriver.currentComplexity)
+            if dtlsPqcRequiredProvider?() ?? false {
+                QaudionRuntimeTuning.requireDtlsPqc()
+            }
+
+            let reapply: () -> Void = { [weak self] in
+                guard let self else { return }
+                let hint = DeviceCapabilityHint(
+                    isOldDevice: QaudionDeviceClass.isA11OrEarlier(),
+                    isLowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+                let tier = ThermalTier(from: ProcessInfo.processInfo.thermalState)
+                self.runtimeTuningLock.lock()
+                let newEnc = self.encoderComplexityDriver?.update(
+                    target: AdaptiveOpusComplexityPolicy.target(thermalTier: tier, device: hint))
+                let newDec = self.decoderComplexityDriver?.update(
+                    target: AdaptiveOpusDecoderComplexityPolicy.target(thermalTier: tier, device: hint))
+                self.runtimeTuningLock.unlock()
+                // The native P8 setters are their own safe point (process-
+                // wide, lock-free, range-checked natively) — called OUTSIDE
+                // the lock above on purpose, so a slow native call can never
+                // hold this Swift-side lock.
+                if let newEnc { QaudionRuntimeTuning.setEncoderComplexity(newEnc) }
+                if let newDec { QaudionRuntimeTuning.setDecoderComplexity(newDec) }
+            }
+            runtimeTuningThermalObserver = NotificationCenter.default.addObserver(
+                forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: nil
+            ) { _ in reapply() }
+            runtimeTuningPowerObserver = NotificationCenter.default.addObserver(
+                forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: nil
+            ) { _ in reapply() }
+
             // W-ADMMANUAL (2026-09-26) — replaces W-ADMNOMANUAL's "nothing to
             // arm". Manual audio mode BEFORE the mic track is added and before
             // any SDP is applied: in automatic mode WebRTC's audio module
@@ -1886,6 +2016,11 @@ public final class QAudionPeerConnection: NSObject {
         // negotiation of the call (no established role yet) — the pin is then
         // a no-op.
         let establishedLocalSdp = pc.localDescription?.sdp
+        // TRACK B (2026-09-29) — the remote OFFER text, snapshotted now for
+        // the same reason `establishedLocalSdp` is: `forcePassiveRoleForFreshAnswer`
+        // below needs it, off the callback path — same idiom as the
+        // responder-side pin just above.
+        let remoteOfferSdpForDtlsRole = pc.remoteDescription?.sdp
         let constraints = RTCMediaConstraints(
             mandatoryConstraints: ["OfferToReceiveAudio": "true",
                                      "OfferToReceiveVideo": hasVideo ? "true" : "false"],
@@ -1898,6 +2033,23 @@ public final class QAudionPeerConnection: NSObject {
                 completion(.failure(WebRTCError.sdpFailed("answer returned nil"))); return
             }
             let pinnedSdpText = pinOwnAnswerToEstablishedDtlsRole(answerSdp: sdp.sdp, establishedLocalSdp: establishedLocalSdp)
+            // TRACK B (2026-09-29, "phone always DTLS server when
+            // answering") — only on the VERY FIRST negotiation of the call
+            // (establishedLocalSdp == nil); pinOwnAnswerToEstablishedDtlsRole
+            // above is already a no-op in that case, so there is no double
+            // application / ordering hazard. On a renegotiation
+            // (establishedLocalSdp != nil) the pin above already preserves
+            // whatever role this fix committed at the first answer, so this
+            // is intentionally NOT re-applied there.
+            let roleForcedText: String
+            if establishedLocalSdp == nil {
+                roleForcedText = forcePassiveRoleForFreshAnswer(
+                    answerSdp: pinnedSdpText,
+                    remoteOfferSdp: remoteOfferSdpForDtlsRole,
+                    killSwitchActive: self?.dtlsAnswerPassiveKillSwitchActive ?? false)
+            } else {
+                roleForcedText = pinnedSdpText
+            }
             // IOS-C4b / W-SRTPPTIME — same policy as createOffer, applied
             // AFTER the DTLS-role pin (pure string transforms on disjoint
             // attribute sets — order between them does not matter, but
@@ -1905,7 +2057,7 @@ public final class QAudionPeerConnection: NSObject {
             // UNCONDITIONAL — see createOffer's own W-NATIVESRTPGATE-2 note.
             // W-NATIVEAUDIOQUALITY (this task) — see createOffer's own note;
             // same additive, native-SRTP-only layer, applied last.
-            let baseMungedText = AudioSdpPolicy.apply(pinnedSdpText)
+            let baseMungedText = AudioSdpPolicy.apply(roleForcedText)
             let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let pinnedSdp = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
@@ -2016,6 +2168,23 @@ public final class QAudionPeerConnection: NSObject {
             QAudionPeerConnectionFactory.shared.restoreDefaultDebugLogLevel()
             didRaiseDebugLogLevelForSession = false
         }
+        // I4 (2026-09-29) — tear down this call's runtime-tuning observers.
+        // No corresponding native "un-set" for the P8 complexity/FEC values
+        // themselves (they are process-wide and simply get re-applied at the
+        // top of the NEXT call's `init`); only the NOTIFICATION subscriptions
+        // and the per-call hysteresis state are this instance's own to free.
+        if let observer = runtimeTuningThermalObserver {
+            NotificationCenter.default.removeObserver(observer)
+            runtimeTuningThermalObserver = nil
+        }
+        if let observer = runtimeTuningPowerObserver {
+            NotificationCenter.default.removeObserver(observer)
+            runtimeTuningPowerObserver = nil
+        }
+        runtimeTuningLock.lock()
+        encoderComplexityDriver = nil
+        decoderComplexityDriver = nil
+        runtimeTuningLock.unlock()
         // W-ADMMANUAL (2026-09-26) — backstop for every teardown path that
         // reaches close() without going through CallService first (provider
         // reset, glare/duplicate-OFFER replacement, deinit): WebRTC's unit is
@@ -2476,6 +2645,96 @@ func pinOwnAnswerToEstablishedDtlsRole(answerSdp: String, establishedLocalSdp: S
         options: [],
         range: NSRange(location: 0, length: answerNS.length),
         withTemplate: "a=setup:\(ownRole)")
+}
+
+/// TRACK B (2026-09-29, "phone always DTLS server when answering") — force
+/// OUR OWN answer's DTLS role to `passive` (server) on the VERY FIRST
+/// negotiation of a call (`createAnswer`, guarded there on
+/// `establishedLocalSdp == nil` — this is NOT the renegotiation path above),
+/// when the remote OFFER carried `a=setup:actpass` — the only value RFC
+/// 8842/RFC 5763 lets an offerer send (libwebrtc's own
+/// `JsepTransport::NegotiateDtlsRole` hard-rejects any offer whose local
+/// connection role is not `actpass` before this code ever runs, so the check
+/// below is defensive, not load-bearing).
+///
+/// Why: in TLS 1.3 the DTLS *server* picks the cipher. M150's BoringSSL
+/// `ssl_compliance_policy_cnsa_202407` scorer (server-side only) always
+/// prefers TLS_AES_256_GCM_SHA384 when the client offers it, which every
+/// DTLS client does. libwebrtc's default answerer role is `active` (DTLS
+/// client) — `p2p/base/transport_description_factory.cc`'s
+/// `options.prefer_passive_role` defaults to `false` and is only ever
+/// flipped for an ALREADY-established session, never for a fresh answer.
+/// Left alone, a call where a desktop client OFFERS and this phone ANSWERS
+/// makes the DESKTOP the DTLS server; if that desktop build has no
+/// AES-256-GCM fast path wired in yet it can end up on ChaCha20, and this
+/// fleet's fail-closed handshake-policy check then aborts the call instead
+/// of retrying. Forcing the ANSWERING phone to always be the DTLS server
+/// removes the asymmetry: phone<->phone, either side answering becomes the
+/// server (harmless — both run the identical policy); phone<->pre-M150
+/// peer, the DTLS handshake already fails by design regardless of role, so
+/// this change cannot make that case any worse.
+///
+/// SDP-munging note: rewriting the LOCAL answer's `a=setup` before
+/// `setLocalDescription` is classified by libwebrtc M150's own
+/// `pc/sdp_munging_detector.cc` as `SdpMungingType::kDtlsSetup`. That type is
+/// NOT in the always-rejected set (`kNumberOfContents` / `kSframe` /
+/// `kDataChannelSctpInit` / `kCryptex`) and is allowed by default — only
+/// blocked if the embedder enables `WebRTC-NoSdpMangleReject` naming this
+/// type, or `WebRTC-NoSdpMangleAllowForTesting` without naming it, neither
+/// of which any P1-P8 build patch touches. Verified against the pinned M150
+/// source (`pc/sdp_offer_answer.cc`'s `SetLocalDescription`,
+/// `pc/sdp_munging_detector.cc`), not just plan notes. Same global
+/// multiline regex-replace technique `pinOwnAnswerToEstablishedDtlsRole`
+/// above already ships in production for the renegotiation case — this
+/// function is its "first negotiation" twin, so every m= section (and a
+/// BUNDLE's single shared line) flips consistently.
+///
+/// Only ever touches an `active` line — an answer that is already `passive`
+/// or that somehow still carries `actpass` (forbidden in an answer by RFC
+/// 8842 §5.5 either way) is left alone rather than "fixed up", so this
+/// function can never itself introduce an invalid `actpass` answer.
+///
+/// `killSwitchActive` mirrors the server-driven remote flag
+/// `calls.dtls_answer_passive_kill` — see
+/// `QAudionWebRtcCallController.dtlsAnswerPassiveKillSwitchProvider` — the
+/// same fail-open shape as the P2P-probe kill switch: `false` (the default)
+/// keeps this fix active, `true` reverts to libwebrtc's stock `active`
+/// answerer default. Taking it as a parameter (rather than reading a global)
+/// keeps this a pure, directly unit-testable function.
+func forcePassiveRoleForFreshAnswer(
+    answerSdp: String,
+    remoteOfferSdp: String?,
+    killSwitchActive: Bool
+) -> String {
+    if killSwitchActive { return answerSdp }
+    guard let remoteOfferSdp = remoteOfferSdp,
+          let actpassRegex = try? NSRegularExpression(
+            pattern: "^a=setup:actpass\\b",
+            options: [.anchorsMatchLines])
+    else {
+        return answerSdp
+    }
+    let offerNS = remoteOfferSdp as NSString
+    let offerIsActpass = actpassRegex.firstMatch(
+        in: remoteOfferSdp,
+        range: NSRange(location: 0, length: offerNS.length)) != nil
+    guard offerIsActpass,
+          let activeRegex = try? NSRegularExpression(
+            pattern: "^a=setup:active\\b",
+            options: [.anchorsMatchLines])
+    else {
+        return answerSdp
+    }
+    let answerNS = answerSdp as NSString
+    let answerHasActive = activeRegex.firstMatch(
+        in: answerSdp,
+        range: NSRange(location: 0, length: answerNS.length)) != nil
+    guard answerHasActive else { return answerSdp }
+    return activeRegex.stringByReplacingMatches(
+        in: answerSdp,
+        options: [],
+        range: NSRange(location: 0, length: answerNS.length),
+        withTemplate: "a=setup:passive")
 }
 
 /// BUG3 DIAG (2026-07-11) — log the actual H265 `a=fmtp` line(s) an SDP

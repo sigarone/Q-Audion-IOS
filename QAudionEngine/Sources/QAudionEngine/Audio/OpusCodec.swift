@@ -117,8 +117,16 @@ public final class OpusCodec {
             // In-band FEC: encoder embeds redundancy in subsequent frames so
             // the decoder can reconstruct a lost frame from the next one.
             // Required for parity with Android (FEC on by default there).
-            // 10 % PLR hint lets the encoder calibrate FEC overhead (~+5 %
-            // effective bitrate) without exceeding the CBR budget.
+            //
+            // W-M150FECALIGN (2026-09-29) — comment fix (plan §3.4 flagged
+            // this exact spot as stale): this used to say "10% PLR hint",
+            // which was already wrong the day W523 raised the STARTING hint
+            // below from 10 to 30. This 30% is only the value the encoder is
+            // created with, before any real loss data exists; `PlpPolicy`
+            // (see that file) takes over within the call's first few `PLP:`
+            // reports via `setPacketLossPct`, and its floor is now 10 (was
+            // 5) — matching this starting hint's own history and the
+            // aligned native/custom/desktop FEC floor (plan §3.1).
             opus_helper_set_inband_fec(enc, Int32(1))
             // W523: PLR raised 10→30 % to match Android. The crackling
             // heard on iPad↔iPhone v1.0.521 was the encoder under-budgeting
@@ -521,6 +529,25 @@ public final class OpusCodec {
     public func setPacketLossPct(_ plp: Int) {
         guard let enc = encoder else { return }
         opus_helper_set_packet_loss_perc(enc, Int32(plp))
+    }
+
+    /// W-M150FECALIGN (2026-09-29, plan §3.1 "Complessità dell'encoder" /
+    /// I7) — update the CUSTOM path's encoder complexity mid-call, same knob
+    /// `init`/`reconfigure` set at construction (`opus_helper_set_complexity`,
+    /// `opus_helpers.h:18`). Mirrors Android's `OpusCodec.setComplexity(Int)`
+    /// (`CallAudioBridge.kt:1276` drives it with
+    /// `min(cp.opusComplexity, policy.current())`); the iOS equivalent is
+    /// `CallService`/`AdaptiveOpusComplexityPolicy` — see that policy's own
+    /// doc. Clamped to Opus's own valid range (0...10) here, the same
+    /// defence-in-depth the native P8 setter applies to its own callers
+    /// (`QaudionRuntimeTuning.setEncoderComplexity`), so a caller passing an
+    /// already-out-of-range value cannot reach a bad libopus CTL. Safe to
+    /// call at any time; no-op if the encoder was not created.
+    public func setComplexity(_ complexity: Int) {
+        guard let enc = encoder else { return }
+        let clamped = min(max(complexity, 0), 10)
+        opus_helper_set_complexity(enc, Int32(clamped))
+        config.complexity = clamped
     }
 
     // MARK: - Fallback (if C library returns errors)

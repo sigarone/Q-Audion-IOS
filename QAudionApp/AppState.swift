@@ -5242,6 +5242,17 @@ final class AppState: ObservableObject {
                 RTLog.info("call", "aunit \(kind)=1")
             }
         }
+        // I5 (webrtc-plan.md v2 §3.3, 2026-09-29) — forward native "Q-AUDION "
+        // self-report lines (build info / cipher names only, per the P8
+        // patch's own "Safety" note) into the same RTLog "call" stream every
+        // other native diagnostic reaches Loki through. `onQaudionSelfReportLine`'s
+        // own kdoc is explicit that this module forwards the prefix VERBATIM
+        // and a real sink must not trust it alone — so this runs the line
+        // through the same `LogRedactor.redact` every other egress line gets
+        // (defence in depth) before it ever reaches RTLog/Loki.
+        QAudionPeerConnectionFactory.shared.onQaudionSelfReportLine = { line in
+            RTLog.info("call", LogRedactor.redact(line))
+        }
         // W-AUNITCALLDIDINIT (2026-09-10) — see `aunitEventsSeenThisCall`'s
         // own kdoc. `started` is the definitive "the real native VoIP audio
         // unit actually came up" signal (WebRTC's own "Voice-Processing I/O
@@ -7439,6 +7450,22 @@ final class AppState: ObservableObject {
             // happen) fails open to the flag's own compiled default.
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
+        }
+        // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
+        // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc (QAudionEngine
+        // cannot import FeatureFlags directly). Off-main fails closed to the
+        // flag's own compiled default (false, optional PQC).
+        controller.dtlsPqcRequiredProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
+        }
+        // TRACK B (2026-09-29, "phone always DTLS server when answering") —
+        // wire the DTLS-answer-passive remote kill switch; see
+        // `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc (QAudionEngine
+        // cannot import FeatureFlags directly).
+        controller.dtlsAnswerPassiveKillSwitchProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
         }
         controller.sframeVideoSealerFactory = { keyProvider in
             SFrameVideoSealer.forRotatingKey(keyProvider)
@@ -17184,6 +17211,20 @@ final class AppState: ObservableObject {
                     guard Thread.isMainThread else { return false }
                     return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
                 }
+                // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
+                // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc
+                // (QAudionEngine cannot import FeatureFlags directly).
+                controller.dtlsPqcRequiredProvider = {
+                    guard Thread.isMainThread else { return false }
+                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
+                }
+                // TRACK B (2026-09-29) — wire the DTLS-answer-passive remote
+                // kill switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own
+                // kdoc (QAudionEngine cannot import FeatureFlags directly).
+                controller.dtlsAnswerPassiveKillSwitchProvider = {
+                    guard Thread.isMainThread else { return false }
+                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+                }
                 // Commit 77583315 parity — wire the rotating-key SFrame
                 // sealer factory. The factory is consulted by
                 // `ensureVideoSealer()` at video-pipeline pickup time;
@@ -17402,9 +17443,21 @@ final class AppState: ObservableObject {
                         // `onIceConnectionState` hook below and restartable
                         // there) and a DTLS/connection failure that no
                         // restart can heal. Only the first may degrade.
+                        //
+                        // W-M150DTLSDEGRADE (2026-09-29) — a THIRD reason,
+                        // "DTLS failed, ICE healthy"
+                        // (`QAudionWebRtcCallController
+                        // .didChangeConnectionState`'s own I6 doc), also
+                        // degrades: a peer that cannot meet the now-
+                        // unconditional PQC requirement fails DTLS with
+                        // perfectly healthy ICE, and no restart could fix
+                        // that anyway. See `IceTerminationPolicy`'s
+                        // `dtlsFailedWithHealthyIce` input.
                         let restartable = (reason == "ICE failed")
+                        let dtlsFailedIceHealthy = (reason == "DTLS failed, ICE healthy")
                         Task { @MainActor [weak self] in
-                            self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable)
+                            self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable,
+                                                       dtlsFailedIceHealthy: dtlsFailedIceHealthy)
                         }
                     case .disconnected:
                         // W-ICEGRACE — recoverable, not terminal (see
@@ -17702,7 +17755,8 @@ final class AppState: ObservableObject {
     /// call to the relay instead of ending it. See `IceTerminationPolicy`
     /// for the evidence and the kill switch.
     @MainActor
-    private func handleIceTermination(iceIsTerminal: Bool, iceRestartable: Bool = false) {
+    private func handleIceTermination(iceIsTerminal: Bool, iceRestartable: Bool = false,
+                                       dtlsFailedIceHealthy: Bool = false) {
         // F-1 (2nd-pass regression): C-3 made `isInCall` stay false until
         // the call is ANSWERED. So an ICE / connection failure DURING
         // setup (outgoing `.connecting`, incoming `.ringing`) — i.e. the
@@ -17720,6 +17774,7 @@ final class AppState: ObservableObject {
             callIsLive: callIsLive,
             iceIsTerminal: iceIsTerminal,
             iceRestartable: iceRestartable,
+            dtlsFailedWithHealthyIce: dtlsFailedIceHealthy,
             relayPathAvailable: relayPathAvailableForIceDegrade()
         ) {
         case .none:
@@ -17732,8 +17787,13 @@ final class AppState: ObservableObject {
             // a relay leg: the decision is made, a still-pending grace has
             // nothing left to decide (a later `.disconnected` after the
             // next restart arms a fresh one, and its expiry re-evaluates).
+            //
+            // W-M150DTLSDEGRADE (2026-09-29) — edge 4 distinguishes "DTLS
+            // failed, ICE healthy" from edge 1 ("ICE `.failed`") in the
+            // diagnostic `degradeCallTransportToRelay` logs; both take the
+            // exact same action (nothing torn down, relay already routing).
             cancelIceDisconnectGrace()
-            degradeCallTransportToRelay(edge: 1)
+            degradeCallTransportToRelay(edge: dtlsFailedIceHealthy ? 4 : 1)
         case .endAfterGrace:
             // Already counting down from an earlier `.disconnected` edge —
             // don't restart the window (a flapping ICE would otherwise keep
@@ -17815,7 +17875,9 @@ final class AppState: ObservableObject {
     ///     hook and `onActiveCandidatePairType` overwrite it the moment ICE
     ///     recovers, so the chip flips back on its own.
     /// Idempotent. `edge`: 1 = ICE `.failed`, 2 = base grace expiry, 3 =
-    /// extended grace expiry. `ws`: signalling socket state at that instant
+    /// extended grace expiry, 4 = DTLS failed while ICE stayed healthy
+    /// (W-M150DTLSDEGRADE, 2026-09-29 — no ICE restart involved on this
+    /// edge, unlike 1). `ws`: signalling socket state at that instant
     /// (0 disconnected · 1 connecting · 2 connected · 3 authenticated) —
     /// diagnostic only, deliberately not a gate (see `IceTerminationPolicy`).
     @MainActor
@@ -25504,6 +25566,20 @@ extension AppState {
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
         }
+        // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
+        // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc (QAudionEngine
+        // cannot import FeatureFlags directly).
+        controller.dtlsPqcRequiredProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
+        }
+        // TRACK B (2026-09-29) — wire the DTLS-answer-passive remote kill
+        // switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc
+        // (QAudionEngine cannot import FeatureFlags directly).
+        controller.dtlsAnswerPassiveKillSwitchProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+        }
         // Commit 77583315 parity — DI the rotating-key SFrame sealer
         // factory on the responder side too. Without this, two
         // updated peers would still pick `.legacy` because the
@@ -25720,9 +25796,15 @@ extension AppState {
                 // caller wiring in startCall: ICE `.failed` ("ICE failed")
                 // is restartable and may degrade; a DTLS/connection failure
                 // is not.
+                //
+                // W-M150DTLSDEGRADE (2026-09-29) — callee-side mirror of the
+                // same caller-side addition: "DTLS failed, ICE healthy" also
+                // degrades. See the caller-side wiring's own comment for why.
                 let restartable = (reason == "ICE failed")
+                let dtlsFailedIceHealthy = (reason == "DTLS failed, ICE healthy")
                 Task { @MainActor [weak self] in
-                    self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable)
+                    self?.handleIceTermination(iceIsTerminal: true, iceRestartable: restartable,
+                                               dtlsFailedIceHealthy: dtlsFailedIceHealthy)
                 }
             case .disconnected:
                 // W-ICEGRACE — recoverable, not terminal (callee-side mirror

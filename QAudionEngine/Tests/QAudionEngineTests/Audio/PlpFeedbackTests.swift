@@ -153,7 +153,12 @@ final class PlpPolicyTests: XCTestCase {
 
     // MARK: - W-PLPBWTIER (2026-08-26) — route-tier-aware floor
 
-    func testMinPctForRouteTier_relayRaisesTheFloor_directAndUnknownDoNot() {
+    /// W-M150FECALIGN (2026-09-29) — renamed from
+    /// `..._relayRaisesTheFloor_directAndUnknownDoNot`: since the
+    /// unconditional floor (`PlpPolicy.minPct`) itself moved to 10, `.relay`
+    /// no longer raises anything above it — all three tiers agree today. See
+    /// `minPct(for: routeTier:)`'s own kdoc.
+    func testMinPctForRouteTier_allTiersAgreeAfterTheFecFloorAlignment() {
         XCTAssertEqual(PlpPolicy.minPct(for: .relay), 10)
         XCTAssertEqual(PlpPolicy.minPct(for: .direct), PlpPolicy.minPct)
         XCTAssertEqual(PlpPolicy.minPct(for: .unknown), PlpPolicy.minPct)
@@ -173,18 +178,18 @@ final class PlpPolicyTests: XCTestCase {
         }
     }
 
-    /// The whole point: on a relay call, a clean report (0% loss) must not
-    /// decay below the RAISED floor (10), even where the base policy would
-    /// happily decay to its own lower floor (5) on the same input. Starts
-    /// one decayStepPct (2) above the RAISED floor: a plain decay step
-    /// (currentPct - 2) would undershoot BOTH floors here (6 - 2 = 4), so
-    /// this isolates the clamp itself rather than the ordinary decay-step
-    /// arithmetic (which a much larger starting value, and its own bare
-    /// decayStepPct subtraction, already covers elsewhere in this file).
-    func testRelayTier_neverDecaysBelowTheRaisedFloor() {
-        let next = PlpPolicy.next(currentPct: 6, observedLossPct: 0, routeTier: .relay)
+    /// W-M150FECALIGN (2026-09-29) — renamed from
+    /// `testRelayTier_neverDecaysBelowTheRaisedFloor`. That test isolated the
+    /// relay floor (10) from the base floor (5, at the time); the FEC-floor
+    /// alignment made the base floor 10 too, so there is no longer a "raised
+    /// above base" gap to isolate — both floors are the SAME value today, on
+    /// purpose (see `minPct(for: routeTier:)`'s kdoc). This still pins that a
+    /// relay call's floor is at least 10, and that the base overload landed
+    /// on the identical value on the same input (no silent divergence).
+    func testRelayTier_floorMatchesTheNowEqualBaseFloor() {
+        let next = PlpPolicy.next(currentPct: 11, observedLossPct: 0, routeTier: .relay)
         XCTAssertEqual(next, 10)
-        XCTAssertEqual(PlpPolicy.next(currentPct: 6, observedLossPct: 0), 5, "sanity: base policy floors at its own lower value on the same input")
+        XCTAssertEqual(PlpPolicy.next(currentPct: 11, observedLossPct: 0), 10, "base floor now matches the relay floor after the FEC-floor alignment")
     }
 
     /// A caller arriving with a value below the relay floor (e.g. the

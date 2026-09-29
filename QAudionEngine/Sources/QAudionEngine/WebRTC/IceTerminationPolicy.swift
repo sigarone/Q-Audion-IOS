@@ -124,16 +124,37 @@ public enum IceTerminationPolicy {
 /// A terminal-but-restartable edge with a relay leg degrades instead of
 /// ending. A non-terminal edge still arms the grace regardless of the relay
 /// — the relay question belongs to `graceExpiryAction`, see its doc.
+///
+/// W-M150DTLSDEGRADE (2026-09-29, webrtc-plan.md v2 §3.1/I6) — a THIRD
+/// defaulted input, also `false` for every pre-existing caller:
+///   - `dtlsFailedWithHealthyIce`: the transport-level DTLS handshake failed
+///     (bad cert, version/cipher mismatch, or — now that PQC is required
+///     unconditionally, see `QaudionRuntimeTuning.requireDtlsPqc` — a peer
+///     that cannot meet it) while ICE itself stayed `.connected`/`.completed`
+///     (`QAudionWebRtcCallController.didChangeConnectionState`). Before this,
+///     the doc above this function correctly said "a DTLS/connection failure
+///     ... stays terminal" — that was deliberate for a plain M144-era DTLS
+///     bug, but is now the wrong call for the specific case this app can
+///     itself provoke: requiring PQC on every call means a peer that does
+///     not support it WILL fail DTLS while its ICE candidates are perfectly
+///     fine. §3.1's policy is explicit: such a call falls over to the sealed
+///     WS relay instead of ending, with NO ICE restart (an ICE restart
+///     cannot fix a cipher/version mismatch) — i.e. exactly `.degradeToRelay`
+///     when a relay leg exists, `.endImmediately` otherwise (no relay to
+///     fall back to). Independent of `iceRestartable`: this edge never
+///     touches the ICE-restart watchdog (ICE is healthy, there is nothing to
+///     restart), so it is its own boolean rather than folded into that one.
 public func iceTerminationAction(
     callIsLive: Bool,
     iceIsTerminal: Bool,
     iceRestartable: Bool = false,
+    dtlsFailedWithHealthyIce: Bool = false,
     relayPathAvailable: Bool = false,
     degradeEnabled: Bool = IceTerminationPolicy.iceGraceDegradesToRelay
 ) -> IceTerminationAction {
     guard callIsLive else { return .none }
     if iceIsTerminal {
-        if degradeEnabled && iceRestartable && relayPathAvailable {
+        if degradeEnabled && (iceRestartable || dtlsFailedWithHealthyIce) && relayPathAvailable {
             return .degradeToRelay
         }
         return .endImmediately

@@ -359,10 +359,21 @@ let package = Package(
         // Mach-O slice for derived_key / "slat << " / raw_key: 0 hits). Rollback: the
         // previous release webrtc-ios-aes256-m144-native-pli (sha256 dbaefe2aff6eabff...
         // 95701b9) is untouched.
+        //
+        // I1 (webrtc-plan.md v2 §3.3) — M150 hardened WebRTC, 2026-09-29.
+        // sigarone/webrtc-aes256-build release webrtc-ios-m150-a256-dplc-4
+        // (run 36598552180, gates G1-G9 passed, build-provenance attested):
+        // webrtc-sdk/webrtc@ba469aa2093b, BoringSSL@f91f1447, Opus@55513e81;
+        // strict transport (DTLS 1.3 + TLS_AES_256_GCM_SHA384 only, SRTP
+        // AEAD_AES_256_GCM only, X25519MLKEM768 first), FrameCryptor
+        // AES-256 only, deep PLC + OSCE, FEC floor, P8 runtime tuning API.
+        // device arm64 + simulator arm64 only. Rollback: the M144 nokeylog
+        // release (url .../webrtc-ios-aes256-m144-native-pli-nokeylog/
+        // WebRTC.xcframework.zip, checksum 7af8d47f...a68cb).
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-aes256-m144-native-pli-nokeylog/WebRTC.xcframework.zip",
-            checksum: "7af8d47f34781d5104720faf8588162a13fe1bfabf01335fa619711c694a68cb"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-4/WebRTC.xcframework.zip",
+            checksum: "e1a2579293bd9e2ee78e3fa9fd4172b4bf379384356f037ec3796e985d51ba76"
         ),
         .target(
             name: "QAudionEngine",
