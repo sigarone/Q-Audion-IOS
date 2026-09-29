@@ -60,6 +60,20 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// reconnecting right at call start). Guarded by `callIdLock`, reset
     /// alongside `activeCallId`.
     private var _offerDispatchedCallId: String?
+    /// I1/W-ICEBEFOREANSWER (2026-09-28, TURN-stuck-on-P2P fix) — the
+    /// call_id for which `call_answer`'s own `ws.send()` has actually been
+    /// made. `sendIceCandidate`'s W-ICEBEFOREOFFER wait above only ever
+    /// looked at `_offerDispatchedCallId`, which is CALLER-only —
+    /// `bindIncomingCallId` (the callee's own bind path) never touches it —
+    /// so on the callee side every single ICE candidate always ran the full
+    /// wait, up to its whole 5 s bound, even long after the answer had
+    /// actually gone out. With option (b) (W-MEDIAATACCEPT) moving
+    /// PeerConnection creation to accept time, that stall lands right after
+    /// answer instead of during ring, which is exactly the multi-second gap
+    /// the TURN-stuck-on-P2P live test traced to the callee's candidates
+    /// never reaching the caller before its own fast-path ICE timers gave
+    /// up. Guarded by `callIdLock`, reset alongside `activeCallId`.
+    private var _answerDispatchedCallId: String?
 
     init(ws: BCryptoWebSocketClient, rest: BCryptoRestClient) { self.ws = ws; self.rest = rest }
 
@@ -226,6 +240,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
         ]
         if !capabilities.isEmpty { data["capabilities"] = capabilities }
         ws.send(type: "call_answer", data: data)
+        markAnswerDispatched(cid)
         // W-MEDIAATACCEPT (option b) — T4/I11: counts this send toward the
         // pre-accept `answer` counter (must read 0 under `mode == 1`) and,
         // once the call HAS been accepted, is the I11 release trigger for
@@ -282,9 +297,19 @@ public final class BCryptoCallingApiImpl: CallingApi {
         // — the server now also buffers a short grace window as defense in
         // depth (main.go bufferEarlyCallIce/drainEarlyCallIce), so a candidate
         // that still beats the offer past this wait is not lost either.
-        if !isOfferDispatched(cid) {
+        //
+        // I1/W-ICEBEFOREANSWER (2026-09-28, TURN-stuck-on-P2P fix) — this
+        // gate used to check ONLY `isOfferDispatched`, which is the
+        // caller-only signal. The callee never calls `sendCallOffer` at
+        // all, so every one of the callee's own candidates ran this full
+        // wait unconditionally — confirmed as the dominant cause of Android
+        // callers landing on a TURN-relayed pair against an iOS callee
+        // (candidates arriving 4.8-5.1 s late). `isAnswerDispatched` is the
+        // callee-side equivalent of the same signal; either satisfies the
+        // gate.
+        if !isOfferDispatched(cid) && !isAnswerDispatched(cid) {
             let deadline = Date().addingTimeInterval(5)
-            while !isOfferDispatched(cid) && Date() < deadline {
+            while !isOfferDispatched(cid) && !isAnswerDispatched(cid) && Date() < deadline {
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 // The call may have ended, or a new one started, while we
                 // waited — never send a stale candidate under a call_id
@@ -926,7 +951,14 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// AppState binds the inbound call_id here so the subsequent
     /// `sendCallAnswer` / `sendIceCandidate` / `sendHangup` use it.
     public func bindIncomingCallId(_ callId: String) {
-        callIdLock.lock(); activeCallId = callId; _setupProgressed = false; callIdLock.unlock()
+        callIdLock.lock()
+        activeCallId = callId
+        _setupProgressed = false
+        // I1/W-ICEBEFOREANSWER — a fresh inbound call_id starts with no
+        // answer dispatched yet, same reset `setActiveCallId` does for the
+        // caller side's `_offerDispatchedCallId`.
+        _answerDispatchedCallId = nil
+        callIdLock.unlock()
     }
 
     /// W-SETUPRETRY (2026-08-25) — the call demonstrably progressed past
@@ -1047,7 +1079,12 @@ public final class BCryptoCallingApiImpl: CallingApi {
     private let keyframeRequestLock = NSLock()
 
     private func setActiveCallId(_ cid: String) {
-        callIdLock.lock(); activeCallId = cid; _setupProgressed = false; _offerDispatchedCallId = nil; callIdLock.unlock()
+        callIdLock.lock()
+        activeCallId = cid
+        _setupProgressed = false
+        _offerDispatchedCallId = nil
+        _answerDispatchedCallId = nil
+        callIdLock.unlock()
     }
 
     /// W-ICEBEFOREOFFER — call once call_offer's `ws.send()` has actually
@@ -1064,6 +1101,20 @@ public final class BCryptoCallingApiImpl: CallingApi {
         return _offerDispatchedCallId == callId
     }
 
+    /// I1/W-ICEBEFOREANSWER — the callee-side counterpart of
+    /// `markOfferDispatched`: call once `call_answer`'s own `ws.send()` has
+    /// actually been made for `callId`.
+    private func markAnswerDispatched(_ callId: String) {
+        callIdLock.lock(); _answerDispatchedCallId = callId; callIdLock.unlock()
+    }
+
+    /// I1/W-ICEBEFOREANSWER — `true` once `markAnswerDispatched(callId)` has
+    /// run for this exact call_id.
+    private func isAnswerDispatched(_ callId: String) -> Bool {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        return _answerDispatchedCallId == callId
+    }
+
     /// W-ACTIVECALLASSERT — clear the bound id ONLY when it names the same
     /// call (case-insensitive, same rationale as `peerCapabilities`' fold:
     /// the wire id's case has drifted before). Sync helper for the same
@@ -1075,9 +1126,16 @@ public final class BCryptoCallingApiImpl: CallingApi {
         activeCallId = nil
         _answerSent = false
         _offerDispatchedCallId = nil
+        _answerDispatchedCallId = nil
     }
 
     private func clearActiveCallId() {
-        callIdLock.lock(); activeCallId = nil; _answerSent = false; _setupProgressed = false; _offerDispatchedCallId = nil; callIdLock.unlock()
+        callIdLock.lock()
+        activeCallId = nil
+        _answerSent = false
+        _setupProgressed = false
+        _offerDispatchedCallId = nil
+        _answerDispatchedCallId = nil
+        callIdLock.unlock()
     }
 }

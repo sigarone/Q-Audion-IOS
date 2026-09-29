@@ -77,8 +77,43 @@ enum LogRedactor {
         return [secretPrefixed, longBlob]
     }()
 
+    /// I2 (2026-09-28, TURN-stuck-on-P2P fix) — the raw libwebrtc debug
+    /// lines this file's own doc comment names as flowing through the
+    /// stdout/stderr tee (`port.cc`, `connection.cc`, `turn_port.cc` — ICE
+    /// candidate/pair diagnostics, reachable whenever
+    /// `raiseDebugLogLevelForNativeSrtpSession()` is active or the callback
+    /// logger's own `.info` severity picks them up) print the candidate's
+    /// connection address and port in the clear — the same field the
+    /// Android-side privacy fix reduces to type/protocol/relay/cost only
+    /// (`PeerConnectionHolder.kt`'s `redactCandidateSdp`). `<ip>` covers a
+    /// dotted-quad optionally followed by `:port`; the second pattern covers
+    /// a bracketed or bare IPv6 address, also with an optional port.
+    /// Deliberately over-inclusive (any hex run that merely looks like an
+    /// IPv6 address is masked too) — for a redactor, over-redaction is the
+    /// safe failure mode.
+    private static let ipv4AddressRegex = try! NSRegularExpression(
+        pattern: #"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"#)
+    private static let ipv6AddressRegex = try! NSRegularExpression(
+        pattern: #"(\[[0-9a-fA-F:]{2,45}\](?::\d{1,5})?)|(\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b)"#)
+
+    /// I2 — mask IPv4/IPv6 addresses (and a trailing `:port`) to `<ip>`.
+    /// Applied BEFORE the secret/blob rules in both `redact()` and
+    /// `redactStructured()`: an address is short enough that the >=20/24-char
+    /// blob rules would usually miss it entirely.
+    private static func maskIpAddresses(_ text: String) -> String {
+        var working = text
+        let full1 = NSRange(working.startIndex..<working.endIndex, in: working)
+        working = ipv4AddressRegex.stringByReplacingMatches(
+            in: working, options: [], range: full1, withTemplate: "<ip>")
+        let full2 = NSRange(working.startIndex..<working.endIndex, in: working)
+        working = ipv6AddressRegex.stringByReplacingMatches(
+            in: working, options: [], range: full2, withTemplate: "<ip>")
+        return working
+    }
+
     static func redact(_ line: String) -> String {
         var working: String = LogRedactor.scrubKeyMaterial(line)
+        working = LogRedactor.maskIpAddresses(working)
         for rx in redactRegexes {
             let full = NSRange(working.startIndex..<working.endIndex, in: working)
             let template: String = redactPlaceholder
@@ -150,6 +185,8 @@ enum LogRedactor {
     static func redactStructured(_ line: String) -> String {
         // --- 0. W-KEYSCRUB: key bytes first, before anything can be stashed or restored ---
         var work: String = LogRedactor.scrubKeyMaterial(line)
+        // --- 0b. I2: mask IP addresses/ports before anything else touches the line ---
+        work = LogRedactor.maskIpAddresses(work)
         var stash: [String] = []
 
         // --- 1a. stash call_id UUIDs ---

@@ -7428,6 +7428,18 @@ final class AppState: ObservableObject {
             controller.iceServerOverride = [RTCIceServer(urlStrings: [customUrl.absoluteString])]
         }
         if TransportGate.forcesRelay { controller.iceTransportPolicyOverride = .relay }
+        // D6 (2026-09-28, TURN-stuck-on-P2P fix) — wire the P2P-probe remote
+        // kill switch; see `p2pProbeKillSwitchProvider`'s own kdoc for why
+        // this indirection exists (QAudionEngine cannot import FeatureFlags).
+        controller.p2pProbeKillSwitchProvider = {
+            // `FeatureFlags` is main-actor isolated; this closure is invoked
+            // from a plain (non-@MainActor) `Timer` on `RunLoop.main`, so it
+            // genuinely IS the main thread at call time — same idiom as
+            // `CallsGate.bypassEchoDuckEnabled()`. Off-main (should not
+            // happen) fails open to the flag's own compiled default.
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
+        }
         controller.sframeVideoSealerFactory = { keyProvider in
             SFrameVideoSealer.forRotatingKey(keyProvider)
         }
@@ -17165,6 +17177,13 @@ final class AppState: ObservableObject {
                     controller.iceTransportPolicyOverride = .relay
                 }
                 #endif
+                // D6 (2026-09-28, TURN-stuck-on-P2P fix) — wire the P2P-probe
+                // remote kill switch; see `p2pProbeKillSwitchProvider`'s own
+                // kdoc (QAudionEngine cannot import FeatureFlags directly).
+                controller.p2pProbeKillSwitchProvider = {
+                    guard Thread.isMainThread else { return false }
+                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
+                }
                 // Commit 77583315 parity — wire the rotating-key SFrame
                 // sealer factory. The factory is consulted by
                 // `ensureVideoSealer()` at video-pipeline pickup time;
@@ -25477,6 +25496,13 @@ extension AppState {
         }
         if TransportGate.forcesRelay {
             controller.iceTransportPolicyOverride = .relay
+        }
+        // D6 (2026-09-28, TURN-stuck-on-P2P fix) — wire the P2P-probe remote
+        // kill switch; see `p2pProbeKillSwitchProvider`'s own kdoc
+        // (QAudionEngine cannot import FeatureFlags directly).
+        controller.p2pProbeKillSwitchProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool("calls.p2p_probe_kill", false) }
         }
         // Commit 77583315 parity — DI the rotating-key SFrame sealer
         // factory on the responder side too. Without this, two
