@@ -72,12 +72,12 @@ final class P2pProbeDecisionsTests: XCTestCase {
     }
 
     func test_disconnect19sAgo_blocksTheProbe() {
-        let input = baseline(nowMs: 100_000, relayPairSinceMs: 0, lastDisconnectOrFailedAtMs: 100_000 - 19_000)
+        let input = baseline(relayPairSinceMs: 0, nowMs: 100_000, lastDisconnectOrFailedAtMs: 100_000 - 19_000)
         XCTAssertFalse(P2pProbeDecisions.shouldProbe(input))
     }
 
     func test_disconnectExactly20sAgo_noLongerBlocksTheProbe() {
-        let input = baseline(nowMs: 100_000, relayPairSinceMs: 0, lastDisconnectOrFailedAtMs: 100_000 - 20_000)
+        let input = baseline(relayPairSinceMs: 0, nowMs: 100_000, lastDisconnectOrFailedAtMs: 100_000 - 20_000)
         XCTAssertTrue(P2pProbeDecisions.shouldProbe(input))
     }
 
