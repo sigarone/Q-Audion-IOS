@@ -24939,24 +24939,32 @@ extension AppState {
 
     /// Arms the hand-over of a 1:1 call into `groupCallId`. If the group media
     /// does not come up within 30 s the group call is abandoned and the 1:1 call
-    /// stays; if only the peer never joins, the hand-over still happens (the user
-    /// asked for the group).
+    /// stays. Once it is up the 1:1 leg waits for the promoted peer to show up in
+    /// the group; if the peer has neither joined nor had its ring end after 50 s
+    /// in total (the server's ring timeout is 45 s) the hand-over still happens
+    /// (the user asked for the group).
     @MainActor
     func beginGroupPromotion(groupCallId: String, peerId: String) {
         groupPromotion = GroupPromotion(groupCallId: groupCallId, peerId: peerId)
         groupPromotionTimeout?.cancel()
-        let item = DispatchWorkItem { [weak self] in
+        let final = DispatchWorkItem { [weak self] in
+            guard let self = self, let promotion = self.groupPromotion,
+                  promotion.groupCallId == groupCallId else { return }
+            self.completeGroupPromotion()
+        }
+        let mediaCheck = DispatchWorkItem { [weak self] in
             guard let self = self, let promotion = self.groupPromotion,
                   promotion.groupCallId == groupCallId else { return }
             if promotion.mediaConnected {
-                self.completeGroupPromotion()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: final)
+                self.groupPromotionTimeout = final
             } else {
                 RTLog.warn("call", "group promotion: media not up in time - keeping the 1:1 call")
                 self.abandonGroupPromotion()
             }
         }
-        groupPromotionTimeout = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: item)
+        groupPromotionTimeout = mediaCheck
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: mediaCheck)
     }
 
     @MainActor

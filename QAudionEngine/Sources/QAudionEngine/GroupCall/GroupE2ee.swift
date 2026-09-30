@@ -236,7 +236,10 @@ public final class GroupE2eeCoordinator {
             awaitingAcks.remove(user)
             if awaitingAcks.isEmpty { switchSendIndex() }
         case .nack(_, let nackEpoch):
-            guard members.contains(user), ownKeys[nackEpoch] != nil else { return }
+            // Only the CURRENT epoch's key is ever re-sent: an older one may predate
+            // the requester's join, and a joiner must never get an epoch before its
+            // own (backward secrecy, spec 5.2).
+            guard nackEpoch == epoch, members.contains(user), ownKeys[nackEpoch] != nil else { return }
             let now = env.nowMs()
             if let last = lastResendMs["\(user)|\(nackEpoch)"], now - last < config.resendMinIntervalMs { return }
             lastResendMs["\(user)|\(nackEpoch)"] = now

@@ -1,0 +1,148 @@
+import XCTest
+@testable import QAudionEngine
+
+/// The WebSocket side of a group call (spec section 2): what the manager sends and
+/// how it routes `group_call_update`, `group_call_ended` and `group_call_media_*`.
+final class GroupCallManagerTests: XCTestCase {
+
+    private let callId = ControllerHarness.callId
+
+    private func makeManager() -> (BCryptoGroupCallManager, () -> [(type: String, data: [String: Any])]) {
+        let ws = BCryptoWebSocketClient(config: BackendConfig(serverUrl: "https://example.invalid"))
+        let manager = BCryptoGroupCallManager(ws: ws, selfUserId: "user-self", nameResolver: { $0 })
+        let box = LockedBox<[(type: String, data: [String: Any])]>([])
+        manager.sendOverride = { type, data in box.mutate { $0.append((type, data)) } }
+        return (manager, { box.value })
+    }
+
+    // MARK: outbound
+
+    func testCreateSendsNoCapabilityFieldsAndTheGroupContext() {
+        let (manager, sent) = makeManager()
+        let id = manager.createGroupCall(recipients: ["user-b"], callType: "video", groupId: "g", groupName: "n",
+                                         promotedFromCallId: "p")
+        XCTAssertNotNil(id)
+        let message = sent().first
+        XCTAssertEqual(message?.type, "group_call_create")
+        let data = message?.data ?? [:]
+        XCTAssertEqual(data["call_id"] as? String, id)
+        XCTAssertEqual(data["recipients"] as? [String], ["user-b"])
+        XCTAssertEqual(data["call_type"] as? String, "video")
+        XCTAssertEqual(data["promoted_from_call_id"] as? String, "p")
+        XCTAssertNil(data["supports_group_sender_keys"], "v2 has no capability negotiation")
+        XCTAssertNil(data["supports_raw_key_aes256"])
+        XCTAssertEqual(manager.state, .creating)
+    }
+
+    func testMediaJoinRejoinAndDeclineMessages() {
+        let (manager, sent) = makeManager()
+        manager.requestMediaJoin(callId: callId)
+        manager.requestMediaRejoin(callId: callId, reason: String(repeating: "x", count: 40))
+        manager.declineGroupCall(callId: callId)
+        XCTAssertEqual(sent().map { $0.type }, ["group_call_media_join", "group_call_media_rejoin", "group_call_decline"])
+        XCTAssertEqual(sent()[0].data["call_id"] as? String, callId)
+        XCTAssertEqual((sent()[1].data["reason"] as? String)?.count, 24, "the rejoin reason is a short code, never free text")
+        XCTAssertEqual(sent()[2].data["call_id"] as? String, callId)
+    }
+
+    // MARK: group_call_update
+
+    func testUpdateBuildsTheRosterEpochAndNotifies() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        let updates = LockedBox<[GroupCallWire.Update]>([])
+        manager.onGroupUpdate = { update in updates.mutate { $0.append(update) } }
+        let roster = LockedBox<[String]>([])
+        manager.onParticipantsChanged = { list in roster.mutate { $0 = list.map { $0.id } } }
+        manager.handleGroupCallUpdate(data: [
+            "call_id": callId, "participants": ["user-self", "user-b"], "sender_key_epoch": 7,
+            "media": ["node_id": "node-a", "pseudonyms": ["user-self": GroupCallFixtures.pseudoA, "user-b": GroupCallFixtures.pseudoB]],
+        ])
+        XCTAssertEqual(manager.state, .active)
+        XCTAssertEqual(manager.senderKeyEpoch, 7)
+        XCTAssertEqual(roster.value, ["user-self", "user-b"])
+        XCTAssertEqual(updates.value.first?.pseudonyms["user-b"], GroupCallFixtures.pseudoB)
+        XCTAssertEqual(updates.value.first?.nodeId, "node-a")
+    }
+
+    func testUpdateOfAnotherCallIsDropped() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        let updates = LockedBox(0)
+        manager.onGroupUpdate = { _ in updates.mutate { $0 += 1 } }
+        manager.handleGroupCallUpdate(data: ["call_id": "other", "participants": ["user-b"], "sender_key_epoch": 1])
+        XCTAssertEqual(updates.value, 0)
+        XCTAssertEqual(manager.state, .creating)
+    }
+
+    // MARK: group_call_ended
+
+    func testEndedForTheActiveCallEndsItAndReportsTheReason() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        let ended = LockedBox<[String]>([])
+        manager.onActiveCallEnded = { id, reason in ended.mutate { $0 = [id, reason] } }
+        manager.onRingEnded = { _, _ in XCTFail("an active call is not a ring") }
+        manager.handleGroupCallEnded(data: ["call_id": callId, "reason": "ended"])
+        XCTAssertEqual(ended.value, [callId, "ended"])
+        XCTAssertEqual(manager.state, .ended)
+        XCTAssertNil(manager.callId)
+    }
+
+    func testEndedForACallWeNeverJoinedIsARingGoingAway() {
+        let (manager, _) = makeManager()
+        let ring = LockedBox<[String]>([])
+        manager.onRingEnded = { id, reason in ring.mutate { $0 = [id, reason] } }
+        manager.onActiveCallEnded = { _, _ in XCTFail("not the active call") }
+        manager.handleGroupCallEnded(data: ["call_id": "ringing-call", "reason": "ring_timeout"])
+        XCTAssertEqual(ring.value, ["ringing-call", "ring_timeout"])
+    }
+
+    // MARK: group_call_media_*
+
+    func testMediaReadyOnlyForTheActiveCallAndOnlyWhenWellFormed() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        let seen = LockedBox(0)
+        manager.onMediaReady = { _ in seen.mutate { $0 += 1 } }
+        var good = GroupCallFixtures.readyDictionary()
+        good["call_id"] = callId
+        manager.handleMediaReady(data: good)
+        XCTAssertEqual(seen.value, 1)
+        // Another call, a plain ws:// url and a pseudonym that is not 128-bit hex are all refused.
+        var other = good; other["call_id"] = "other"
+        var insecure = good; insecure["ws_url"] = "ws://media.example.invalid/janus"
+        var weak = good; weak["pseudonym"] = "short"
+        manager.handleMediaReady(data: other)
+        manager.handleMediaReady(data: insecure)
+        manager.handleMediaReady(data: weak)
+        XCTAssertEqual(seen.value, 1)
+    }
+
+    func testMediaUnavailableAndMovedAreRoutedByCallId() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        let events = LockedBox<[String]>([])
+        manager.onMediaUnavailable = { id, reason in events.mutate { $0.append("unavailable:\(id.prefix(4)):\(reason)") } }
+        manager.onMediaMoved = { id, node in events.mutate { $0.append("moved:\(id.prefix(4)):\(node)") } }
+        manager.handleMediaUnavailable(data: ["call_id": callId, "reason": "full"])
+        manager.handleMediaUnavailable(data: ["call_id": "other", "reason": "full"])
+        manager.handleMediaMoved(data: ["call_id": callId, "node_id": "node-b"])
+        manager.handleMediaMoved(data: ["call_id": "other", "node_id": "node-b"])
+        XCTAssertEqual(events.value, ["unavailable:1111:full", "moved:1111:node-b"])
+    }
+
+    // MARK: speaking
+
+    func testSetSpeakingMarksParticipantsAndNotifiesOnlyOnChange() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        manager.handleGroupCallUpdate(data: ["call_id": callId, "participants": ["user-self", "user-b"], "sender_key_epoch": 1])
+        let notifications = LockedBox(0)
+        manager.onParticipantsChanged = { _ in notifications.mutate { $0 += 1 } }
+        manager.setSpeaking(["user-b"])
+        manager.setSpeaking(["user-b"])
+        XCTAssertEqual(notifications.value, 1)
+        XCTAssertTrue(manager.participants.first { $0.id == "user-b" }?.isSpeaking ?? false)
+    }
+}

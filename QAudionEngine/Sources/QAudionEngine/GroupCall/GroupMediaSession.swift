@@ -134,6 +134,8 @@ public final class GroupMediaSession: @unchecked Sendable {
         public var reconnectBackoffSeconds: [Double] = [0.5, 1, 2, 4]
         /// "DTLS/ICE not connected within 10 s of a restart -> rejoin" (§4.7).
         public var restartWatchdogSeconds: Double = 10
+        /// How long the first connect of the publisher may take before a rejoin.
+        public var startWatchdogSeconds: Double = 15
         public var statsIntervalSeconds: Double = 1
         public var transportCheckAttempts = 12
         public var transportCheckIntervalMs: UInt64 = 250
@@ -239,6 +241,9 @@ public final class GroupMediaSession: @unchecked Sendable {
             adoptPublishers(joined.publishers)
             setState(.active)
             startStatsLoop()
+            // A first connect that never completes is a broken path just like a
+            // restart that never completes (spec 4.7): ask for a rejoin.
+            armRestartWatchdog(seconds: config.startWatchdogSeconds)
         } catch {
             close()
             throw error
@@ -752,8 +757,8 @@ public final class GroupMediaSession: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func armRestartWatchdog() {
-        let seconds = config.restartWatchdogSeconds
+    private func armRestartWatchdog(seconds: Double? = nil) {
+        let seconds = seconds ?? config.restartWatchdogSeconds
         let task = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             if Task.isCancelled { return }

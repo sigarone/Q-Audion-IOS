@@ -457,6 +457,19 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         XCTAssertTrue(env.sent.isEmpty)
     }
 
+    func testANackForAnOlderEpochIsNeverAnsweredEvenIfTheKeyIsStillInTheRing() {
+        // Backward secrecy: a member (say one that joined at epoch 4) asks for the key of
+        // epoch 3, which we still hold in the ring - it must not get it.
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onRoster(epoch: 4, members: [selfUser, userB, userC], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onEnvelope(.nack(callId: call, epoch: 3), from: userC)
+        XCTAssertTrue(env.sent.isEmpty, "only the current epoch's key is re-sent")
+        coordinator.onEnvelope(.nack(callId: call, epoch: 4), from: userC)
+        XCTAssertEqual(env.parsedSent().map { $0.envelope.epoch }, [4])
+    }
+
     // MARK: lifecycle
 
     func testAMemberWhoLeftIsForgottenAndNoLongerAwaited() {

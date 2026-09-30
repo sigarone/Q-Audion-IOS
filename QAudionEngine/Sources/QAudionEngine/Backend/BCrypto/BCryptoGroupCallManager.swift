@@ -399,15 +399,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     // MARK: - WebSocket Handlers
-    // Message names + shapes VERIFIED against the LIVE
-    // `cmd/bcrypto-lite/main.go` handlers (2026-07-13) — NOT the dead
-    // `internal/signaling/messages.go` island (zero importers, unreachable
-    // from main.go). The previous version of this file was built against
-    // that dead protocol (`group_call_state`, `group_call_receive`,
-    // `invite_user_ids`, per-target `forward{target_id,data}`) and its
-    // "current vs legacy-alias" framing was backwards: the real server only
-    // ever speaks `group_call_invite` / `group_call_update` / `group_call_frame`
-    // / `group_call_ended`, so those are now the ONLY handlers registered.
+    // Group calls v2 (spec section 2): the server speaks `group_call_invite`,
+    // `group_call_update`, `group_call_ended`, `group_call_media_ready`,
+    // `group_call_media_unavailable`, `group_call_media_moved` and the tier-1
+    // `*_recv` messages below; those are the ONLY handlers registered. The media
+    // relay (`group_call_forward` / `group_call_frame`) and the LiveKit token
+    // messages no longer exist.
 
     private func registerHandlers() {
         // W-GRPRING - `group_call_invite` wire: {call_id, creator_id,
@@ -442,36 +439,19 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         // For the active call this ends it; for any other call id it is a ring
         // we never joined going away (the caller dismisses it).
         ws.registerHandler(type: "group_call_ended") { [weak self] _, data in
-            guard let self = self else { return }
-            let endedId = data["call_id"] as? String ?? ""
-            let reason = (data["reason"] as? String) ?? "ended"
-            if let active = self.callId, endedId.isEmpty || endedId == active {
-                self.endLocally()
-                self.onActiveCallEnded?(active, reason)
-            } else if !endedId.isEmpty {
-                self.onRingEnded?(endedId, reason)
-            }
+            self?.handleGroupCallEnded(data: data)
         }
-
         // Spec 2.3. Only accepted for the call we are in.
         ws.registerHandler(type: "group_call_media_ready") { [weak self] _, data in
-            guard let self = self, let ready = GroupCallWire.MediaReady.parse(data) else {
-                print("[BCryptoGroupCallManager] group_call_media_ready UNPARSEABLE (refused)")
-                return
-            }
-            guard ready.callId == self.callId else { return }
-            self.onMediaReady?(ready)
+            self?.handleMediaReady(data: data)
         }
         // Spec 2.4. There is NO relay fallback: the controller shows an error.
         ws.registerHandler(type: "group_call_media_unavailable") { [weak self] _, data in
-            guard let self = self, let cid = data["call_id"] as? String, cid == self.callId else { return }
-            let reason = GroupCallWire.UnavailableReason(wire: (data["reason"] as? String) ?? "")
-            self.onMediaUnavailable?(cid, reason)
+            self?.handleMediaUnavailable(data: data)
         }
         // Spec 2.5: {call_id, node_id}.
         ws.registerHandler(type: "group_call_media_moved") { [weak self] _, data in
-            guard let self = self, let cid = data["call_id"] as? String, cid == self.callId else { return }
-            self.onMediaMoved?(cid, (data["node_id"] as? String) ?? "")
+            self?.handleMediaMoved(data: data)
         }
 
         // ─── Tier-1 call features (2026-07-16 wire contract) ───────────
@@ -513,13 +493,43 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         }
     }
 
+    func handleGroupCallEnded(data: [String: Any]) {
+        let endedId = data["call_id"] as? String ?? ""
+        let reason = (data["reason"] as? String) ?? "ended"
+        if let active = callId, endedId.isEmpty || endedId == active {
+            endLocally()
+            onActiveCallEnded?(active, reason)
+        } else if !endedId.isEmpty {
+            onRingEnded?(endedId, reason)
+        }
+    }
+
+    func handleMediaReady(data: [String: Any]) {
+        guard let ready = GroupCallWire.MediaReady.parse(data) else {
+            print("[BCryptoGroupCallManager] group_call_media_ready UNPARSEABLE (refused)")
+            return
+        }
+        guard ready.callId == callId else { return }
+        onMediaReady?(ready)
+    }
+
+    func handleMediaUnavailable(data: [String: Any]) {
+        guard let cid = data["call_id"] as? String, cid == callId else { return }
+        onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: (data["reason"] as? String) ?? ""))
+    }
+
+    func handleMediaMoved(data: [String: Any]) {
+        guard let cid = data["call_id"] as? String, cid == callId else { return }
+        onMediaMoved?(cid, (data["node_id"] as? String) ?? "")
+    }
+
     /// Applies a `group_call_update` (spec 2.1): the roster (tiles), the epoch
     /// and, once the room exists, the node and the pseudonym map. Fires
     /// `onGroupUpdate` for the E2EE state machine and the media layer.
     ///
     /// W-GRPUPDATEDIAG: every branch leaves a line, so a join whose roster
     /// never arrives can be told apart from one that arrived and was refused.
-    private func handleGroupCallUpdate(data: [String: Any]) {
+    func handleGroupCallUpdate(data: [String: Any]) {
         guard let update = GroupCallWire.Update.parse(data) else {
             let hasCallId = data["call_id"] != nil
             let hasParticipants = data["participants"] != nil

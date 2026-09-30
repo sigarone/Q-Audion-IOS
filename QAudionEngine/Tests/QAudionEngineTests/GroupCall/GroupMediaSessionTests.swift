@@ -510,6 +510,34 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    func testAFirstConnectThatNeverCompletesAsksForARejoin() async throws {
+        var config = GroupMediaSession.Config()
+        config.startWatchdogSeconds = 0.2
+        config.statsIntervalSeconds = 0.05
+        config.debounceMs = 10
+        let h = SessionHarness(config: config)
+        try await h.session.start(publishVideo: true)
+        // The publisher PC never reports `connected`.
+        let ok = await h.waitUntil { h.rejoinReasons().contains("ice_restart_timeout") }
+        XCTAssertTrue(ok)
+        h.session.close()
+    }
+
+    func testAPublisherThatConnectsInTimeNeverTripsTheStartWatchdog() async throws {
+        var config = GroupMediaSession.Config()
+        config.startWatchdogSeconds = 0.2
+        config.statsIntervalSeconds = 0.05
+        config.transportCheckAttempts = 3
+        config.transportCheckIntervalMs = 10
+        config.debounceMs = 10
+        let h = SessionHarness(config: config)
+        try await h.session.start(publishVideo: true)
+        h.publisher.onState?(.connected)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertFalse(h.rejoinReasons().contains("ice_restart_timeout"))
+        h.session.close()
+    }
+
     func testReconnectingInTimeCancelsTheDisconnectWatchdog() async throws {
         let h = SessionHarness()
         try await h.session.start(publishVideo: true)
