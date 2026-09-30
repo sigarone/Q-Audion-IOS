@@ -585,8 +585,8 @@ public final class QAudionPeerConnection: NSObject {
             //     branch routes to the sealed WS relay instead of ending the
             //     call.
             //
-            // The thermal/power observer mirrors `LiveKitGroupCallRoom`'s own
-            // `thermalObserver` pattern (same file, group-call path) — a
+            // The thermal/power observer mirrors `GroupNativeTuning`'s own
+            // observer pattern (group-call path) — a
             // `ProcessInfo.thermalStateDidChangeNotification` /
             // `NSProcessInfo.powerStateDidChangeNotification` pair, each
             // re-deriving the device hint and re-applying through the same

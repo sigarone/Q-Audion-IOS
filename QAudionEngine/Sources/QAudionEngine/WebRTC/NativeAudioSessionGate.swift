@@ -229,7 +229,7 @@ public enum NativeAudioSessionGate {
     /// pre-attached on a native call), so no audio stream ever starts on it
     /// and WebRTC's audio device module never initializes, whatever the
     /// manual flag says; the custom path configures `AVAudioSession` itself
-    /// and never reads it; group calls use LiveKit's own, separately prefixed
+    /// and never reads it; group calls (v2) use the same arm on the shared
     /// audio session. Switching it back to `false` is what would NOT be
     /// inert: with a unit object still alive (PeerConnection teardown has no
     /// completion signal) `canPlayOrRecord` would flip to `true` and restart

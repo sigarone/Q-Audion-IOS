@@ -1708,6 +1708,13 @@ final class AppState: ObservableObject {
     /// then clears it back to nil.
     @Published var peerVideoPauseToastText: String? = nil
 
+    /// Group calls v2 — one-shot toast for a FATAL media error (call full, no
+    /// media server, transport policy refused, media lost, ...). The controller
+    /// ends the call right after reporting it, which dismisses the group call
+    /// cover, so the text is shown by `ContentView` (same shape as
+    /// `peerVideoPauseToastText`).
+    @Published var groupCallFatalErrorToastText: String? = nil
+
     /// W-VIDPARITY — re-entrancy guard for `promoteReceiveOnlyToCamera`: a
     /// fast double tap on "Attiva video" must not start two competing
     /// video pipelines.
@@ -4113,7 +4120,7 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 await MainActor.run {
                     // Group calls: no local media change — a group call's
-                    // audio+video belong to the LiveKit SFU room, never to
+                    // audio+video belong to the group media session (Janus), never to
                     // the legacy 1:1 CallService/VideoCallPipeline stack
                     // (W-GRPVPIO-CRASH, same fork as onAudioSessionActivated/
                     // Deactivated below). Acknowledged regardless (the Task
@@ -4189,11 +4196,11 @@ final class AppState: ObservableObject {
                     // WHICH call (1:1 or group) CallKit is reporting — unlike
                     // onAnswerCall/onEndCall above, this callback carries no uuid
                     // to fork on. A group call owns its own audio entirely through
-                    // LiveKit's SFU room (LiveKitGroupCallRoom.connect()), which
+                    // the group media session's own audio unit (GroupAudioUnitDriver), which
                     // configures the SAME physical VoiceProcessingIO hardware unit
                     // independently. Unconditionally starting CallService's
                     // legacy 1:1 AudioCapture/AudioProcessingPipeline here as well
-                    // raced LiveKit's own engine setup and crashed both test
+                    // raced the group audio unit's setup and crashed both test
                     // devices (EXC_CRASH/SIGABRT in AVAudioEngineGraph::_Connect
                     // inside -[AVAudioIONode setVoiceProcessingEnabled:error:],
                     // call 3d8324ec, 2026-07-17 10:08-10:09 UTC — Apple crash
@@ -4212,7 +4219,7 @@ final class AppState: ObservableObject {
                         // shared session, which on iPhone routes group-call
                         // playback to the EARPIECE (iPad has no receiver —
                         // hence "iPad hears, iPhone silent" on one build).
-                        // LiveKit owns the group call's audio ENGINE, but the
+                        // WebRTC's audio unit owns the group call's audio ENGINE, but the
                         // output ROUTE is ours to keep on the loudspeaker
                         // (no-op unless currently on the receiver).
                         self.routeGroupCallAudioToSpeaker()
@@ -4265,7 +4272,7 @@ final class AppState: ObservableObject {
                         }
                     }
                     // W-GRPVPIO-CRASH — same fork as onAudioSessionActivated:
-                    // a group call's audio is LiveKit's to manage, never
+                    // a group call's audio is the group audio unit's to manage, never
                     // CallService's.
                     guard self.groupCallKitId == nil else { return }
                     if self.selfManagedAudioSession {
@@ -4291,6 +4298,15 @@ final class AppState: ObservableObject {
                 Task { @MainActor in
                     guard let self = self else { return }
                     RTLog.warn("call", "providerDidReset — tearing down call resources")
+                    // Group calls v2: a system reset also ends a live group call — its
+                    // two PeerConnections would otherwise keep the mic open with nothing
+                    // left to close them (`leave()` -> idle -> the CallKit id is cleared).
+                    self.groupPromotion = nil
+                    self.groupPromotionTimeout?.cancel()
+                    self.groupPromotionTimeout = nil
+                    if case .idle = self.groupCallControllerState {} else {
+                        self.groupCallController?.leave()
+                    }
                     self.videoPipeline?.stop()
                     self.videoPipeline = nil
                     self.videoNackCache = nil
@@ -4307,7 +4323,7 @@ final class AppState: ObservableObject {
                     // PC synchronously, then fires call_hangup at the peer —
                     // instead of inventing a new teardown path. Scoped to the
                     // 1:1 controller only; see CallKitProviderResetPolicy kdoc
-                    // for why a group call's LiveKit room is out of scope here.
+                    // for why a group call's media session is out of scope here.
                     #if canImport(WebRTC)
                     if case .closeAndNotifyPeer = CallKitProviderResetPolicy.peerConnectionAction(
                         hasActivePeerConnection: self.webRtcController != nil,
@@ -5186,7 +5202,7 @@ final class AppState: ObservableObject {
             return self.callState == .active || self.callState == .encrypted
         }
         // W-GRPVPIO-CRASH-3 — a group call owns the VP-IO hardware unit via
-        // LiveKit; every 1:1 audio-engine start must refuse to run so a
+        // WebRTC's audio unit; every legacy 1:1 audio-engine start must refuse to run so a
         // stray/redelivered 1:1 signaling message can't crash the process
         // (see CallService.isGroupCallActive kdoc). `groupCallKitId` is
         // non-nil for the whole ring→active→end lifetime of a group call.
@@ -5195,7 +5211,7 @@ final class AppState: ObservableObject {
             // Cover BOTH signals: `groupCallKitId` (set for the CallKit ring
             // lifetime) AND the controller being non-idle (covers
             // callKitFreeMode + the connecting window before/without a
-            // CallKit id). Either being live means LiveKit owns VP-IO.
+            // CallKit id). Either being live means the group call owns VP-IO.
             if self.groupCallKitId != nil { return true }
             if case .idle = self.groupCallControllerState { return false }
             return true
@@ -5867,6 +5883,13 @@ final class AppState: ObservableObject {
             groupController.onMediaConnected = { [weak self] in
                 viewModelMediaHook?()
                 DispatchQueue.main.async { self?.groupMediaConnected() }
+            }
+            let viewModelErrorHook = groupController.onMediaError
+            groupController.onMediaError = { [weak self] error in
+                viewModelErrorHook?(error)
+                guard error.isFatal else { return }
+                let text = GroupCallViewModel.toastText(for: error)
+                DispatchQueue.main.async { self?.groupCallFatalErrorToastText = text }
             }
             let viewModelParticipantsHook = groupController.onParticipantsChanged
             groupController.onParticipantsChanged = { [weak self] list in
@@ -9341,7 +9364,7 @@ final class AppState: ObservableObject {
                 // never reach CallService: handleCallAnswered() →
                 // startAudioIOIfReady() (and its 1s W574b fallback) call
                 // straight into the legacy AudioProcessingPipeline's
-                // `setVoiceProcessingEnabled(true)`, racing LiveKit's own
+                // `setVoiceProcessingEnabled(true)`, racing the group audio unit's own
                 // VP-IO unit on the SAME hardware — exactly the
                 // AVAudioEngineGraph::_Connect EXC_CRASH/SIGABRT root-caused
                 // live via App Store Connect crash logs (crashPointId
@@ -14426,7 +14449,7 @@ final class AppState: ObservableObject {
     /// root cause of the deterministic sender_key_init nack loop against iOS
     /// documented in the W-GRPDIAG-4 investigation (Android/Desktop send v3,
     /// iOS's vault has no matching "call-<epoch>" entry, v3 open fails,
-    /// LiveKit reports MISSING_KEY, iOS nacks — every retry, since resending
+    /// the frame cryptor reports MISSING_KEY, iOS nacks — every retry, since resending
     /// identical correct bytes cannot fix a receive-side PSK that was never
     /// persisted). Call this once the 1:1 handshake's session key is final.
     private func persistMessagePsk(sessionKey: Data, callId: String, peerContactId: String) {
@@ -20473,7 +20496,7 @@ extension AppState {
     /// participant grid — yet nothing ever routed their playback off the
     /// session default. `CallKitProvider` (CXStartCallAction / didActivate)
     /// installs `.playAndRecord`/`.voiceChat` WITHOUT `.defaultToSpeaker`,
-    /// so on iPhone the LiveKit room's decoded remote audio played through
+    /// so on iPhone the group call's decoded remote audio played through
     /// the EARPIECE: server telemetry showed the leg decoding thousands of
     /// frames while the user heard nothing. iPad has no receiver port, so
     /// the identical build sounded fine there — exactly the reported
@@ -20483,7 +20506,7 @@ extension AppState {
     /// iPad/simulator). Idempotent — safe to re-assert from every hook that
     /// can stomp the route: the group `.active` transition, CallKit's
     /// `didActivate` (which re-installs plain `.voiceChat` mid-call), and
-    /// each remote-audio-track subscribe (LiveKit's engine start applies
+    /// each remote-audio-track subscribe (the audio unit's start applies
     /// its own session config AFTER `.active` fired).
     func routeGroupCallAudioToSpeaker() {
         let session = AVAudioSession.sharedInstance()

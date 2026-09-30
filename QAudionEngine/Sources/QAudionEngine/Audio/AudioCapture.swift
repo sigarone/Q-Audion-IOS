@@ -992,7 +992,7 @@ public final class AudioCapture {
 
     /// W-GRPVPIO-CRASH-4 — set by the 1:1 CallService on ITS capture instance
     /// (never on the group-call controller's own capture). When it returns
-    /// true, a LiveKit group call currently owns the hardware VP-IO audio
+    /// true, a group call currently owns the hardware VP-IO audio
     /// unit, and this 1:1 engine MUST NOT start: `enableVoiceProcessing` →
     /// `setVoiceProcessingEnabled(true)` would make AVFAudio raise an
     /// Objective-C `NSException` from `AVAudioEngineGraph::_Connect` (the
@@ -1013,7 +1013,7 @@ public final class AudioCapture {
         // interruption resume, starve watchdog) that funnels through start(),
         // not just the CallService entry points the v807 guard covered.
         if isGroupCallActive?() == true {
-            print("[AudioCapture] start SKIPPED — group call owns VP-IO (LiveKit); refusing 1:1 engine to avoid setVoiceProcessingEnabled SIGABRT")
+            print("[AudioCapture] start SKIPPED — group call owns VP-IO; refusing 1:1 engine to avoid setVoiceProcessingEnabled SIGABRT")
             return
         }
         // W475 — start each capture session with an empty re-chunk

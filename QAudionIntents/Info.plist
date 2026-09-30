@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<!-- Must match the parent app's CFBundleVersion, same convention as
-	     QAudionPacketTunnel/QAudionBroadcastExtension's own Info.plist —
+	     QAudionPacketTunnel's own Info.plist —
 	     Apple validation rejects an archive where extension and host
 	     disagree. Placeholder in git: ios-testflight.yml's version-bump
 	     step plutil-replaces it on every tag build (INTENTS_PLIST block). -->

@@ -19,20 +19,24 @@ import QAudionEngine
 ///     exist for groups). Per-member identity trust below reuses the
 ///     SAME persistent safety-number state machine `ContactDetailScreen`
 ///     already tracks per contact — no new verification concept invented.
-///   - No transport/SFU-node section: this app build has no
-///     client-visible SFU node identifier for group calls today (the
-///     only node id that ever reaches the client is the transient
-///     `nodeId` argument of `BCryptoGroupCallManager.onSfuTokenReceived`,
-///     which is consumed internally by `GroupCallController` and never
-///     surfaced to any `@Published` UI state) — so the section is
-///     omitted entirely rather than showing a fabricated value.
+///   - No transport/media-node section: the media node id only lives
+///     inside the engine's media hand-out (`GroupCallController` uses it
+///     for telemetry and never surfaces it to any `@Published` UI state) —
+///     so the section is omitted entirely rather than showing a
+///     fabricated value.
 ///   - Overview section replaces the 1:1 "Handshake"/"Cifra e chiave"
-///     pair with group-call constants: every group call bootstraps
-///     member keys via ML-KEM-1024 (`KmsPreBootstrap`, W-GRPCALL gap-A2
-///     port) and rides the AES-256-GCM LiveKit media path (video via
-///     `LiveKitVideoFrameCryptor.derivedKeyBytes == 32`; the 2026-07-15/16
-///     AES-256 LiveKit-parity fix), plus the live server-canonical
-///     sender-key epoch (`BCryptoGroupCallManager.senderKeyEpoch`).
+///     pair with the group-call v2 model, a constant of the wire contract:
+///       * transport: DTLS 1.3 with the hybrid X25519MLKEM768 key
+///         exchange, SRTP AEAD_AES_256_GCM — checked by the client once the
+///         connection is up (a media path that does not match is refused
+///         and the call ends);
+///       * content E2EE, per sender and per epoch: a fresh random 32-byte
+///         key, AES-256-GCM through the native FrameCryptor;
+///       * key delivery: over the pairwise sealed control channel between
+///         the members, so the media server only ever relays ciphertext
+///         and never sees a key;
+///     plus the live server-canonical epoch
+///     (`BCryptoGroupCallManager.senderKeyEpoch`).
 ///
 /// Does not modify `InCallScreen` in any way — a parallel, self-contained
 /// view that reuses the same ambient design tokens and the same
@@ -140,26 +144,33 @@ struct GroupSecuritySheet: View {
 
     // MARK: - Overview
 
-    /// CIFRA MEDIA / HANDSHAKE are group-call constants (see the type doc
-    /// comment for the source facts backing each string) — not per-call
-    /// conditionals, because there is currently no capability-negotiation
-    /// path for group-call media the way `CallCapabilities.Negotiated`
-    /// exists for 1:1 (group calls have exactly one wire contract today).
-    /// EPOCA / PARTECIPANTI are live values from the current call.
+    /// The cipher / handshake / SRTP rows and the note under them are
+    /// group-call constants (see the type doc comment for the facts behind
+    /// each string) — not per-call conditionals, because group calls have
+    /// exactly one wire contract (v2) and the client refuses a media path
+    /// that does not match it. EPOCA / PARTECIPANTI are live values from the
+    /// current call.
     private var overviewBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             // W-L10N-BATCH1 (2026-09-08) — infoRow's `label:` (first
             // positional arg) is a plain String, not LocalizedStringKey
             // (see its signature below), so these literal row-name
             // labels don't auto-localize. `value:` arguments are left
-            // untouched: "AES-256-GCM"/"ML-KEM-1024 + X25519" are
-            // never-translate protocol tokens, and EPOCA/PARTECIPANTI's
-            // values are live call state (\(epoch)/\(participants.count)),
-            // not fixed copy.
-            infoRow(String(localized: "group_security.overview.media_cipher_label", defaultValue: "CIFRA MEDIA", comment: "Group call security sheet — overview row label for the media encryption cipher"), "AES-256-GCM")
-            infoRow(String(localized: "group_security.overview.handshake_label", defaultValue: "HANDSHAKE", comment: "Group call security sheet — overview row label for the key-exchange handshake"), "ML-KEM-1024 + X25519")
+            // untouched: "AES-256-GCM"/"DTLS 1.3 + X25519MLKEM768"/
+            // "AEAD_AES_256_GCM" are never-translate protocol tokens (so
+            // is the "SRTP" label), and EPOCA/PARTECIPANTI's values are
+            // live call state (\(epoch)/\(participants.count)), not fixed
+            // copy.
+            infoRow(String(localized: "group_security.overview.media_cipher_label", defaultValue: "CIFRA MEDIA", comment: "Group call security sheet — overview row label for the media encryption cipher"), "AES-256-GCM (E2EE)")
+            infoRow(String(localized: "group_security.overview.handshake_label", defaultValue: "HANDSHAKE", comment: "Group call security sheet — overview row label for the key-exchange handshake"), "DTLS 1.3 + X25519MLKEM768")
+            infoRow("SRTP", "AEAD_AES_256_GCM")
             infoRow(String(localized: "group_security.overview.epoch_label", defaultValue: "EPOCA", comment: "Group call security sheet — overview row label for the current sender-key epoch number"), "\(epoch)")
             infoRow(String(localized: "group_security.overview.participants_label", defaultValue: "PARTECIPANTI", comment: "Group call security sheet — overview row label for the participant count"), "\(participants.count)")
+            Text(String(localized: "group_security.overview.note", defaultValue: "Il trasporto è protetto da DTLS 1.3 con scambio di chiavi ibrido post-quantistico (X25519MLKEM768) e SRTP AEAD_AES_256_GCM, verificato dal tuo dispositivo dopo la connessione. Il contenuto è cifrato end-to-end da ogni mittente, per epoca, con una chiave casuale di 32 byte (AES-256-GCM). Le chiavi viaggiano solo sul canale di controllo sigillato tra i singoli partecipanti: il server media non le vede mai.", comment: "Group call security sheet — overview note describing the group call v2 encryption model (transport, per-sender content E2EE, key delivery)"))
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
         }
     }
 

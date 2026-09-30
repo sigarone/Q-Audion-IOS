@@ -24,13 +24,13 @@ import Foundation
 /// until the process happened to exit.
 ///
 /// Deliberately scoped to the 1:1 `QAudionWebRtcCallController` only. A
-/// group call's media is a separately-owned LiveKit room
-/// (`LiveKitGroupCallRoom`/`GroupCallController`), not this PeerConnection —
+/// group call's media is a separately-owned media session
+/// (`GroupCallController`), not this PeerConnection —
 /// folding that in here would touch the adaptiveStream/dynacast-adjacent
 /// group call stack the audit already flags as unsafe to change without a
 /// live-verified reason (see `reference_ios_stability_audit_2026_09_01`).
 /// That gap (does a system-level provider reset also need to disconnect an
-/// active LiveKit room?) is untouched by this fix and reported separately.
+/// active group media session?) is handled by `AppState` (the group controller leaves).
 public enum CallKitProviderResetPolicy {
 
     // MARK: - Kill switch (compile-time)

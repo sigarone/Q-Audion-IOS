@@ -70,8 +70,8 @@ struct GroupCallView: View {
                         // count during the genuine window between screen
                         // presentation and the roster's first
                         // `group_call_update` WS reply, which is a SEPARATE
-                        // signal from LiveKit's own room-connect — see
-                        // `onParticipantsChanged`/`mergeSfuOnlyParticipants`.
+                        // signal from the media connect — see
+                        // `onParticipantsChanged`.
                         // Say so instead of showing a number that reads as
                         // "the room is empty" when it's actually just not
                         // loaded yet.
@@ -87,13 +87,13 @@ struct GroupCallView: View {
                             .foregroundColor(Color(red: 0, green: 0.9, blue: 0.47))
                     }
                     // Item 5 (2026-07-16 wire contract) — pure client-side
-                    // layout toggle, no wire message at all (LiveKit's own
-                    // native active-speaker detection, wired through
+                    // layout toggle, no wire message at all (the engine's
+                    // active-speaker detection, wired through
                     // `GroupCallController.onActiveSpeakersChanged`). Placed
                     // in the header rather than the already-crowded control
                     // bar below; icon shows the CURRENT layout, same
                     // current-state-not-destination convention as every
-                    // control-bar toggle (mute/video/screen-share) below.
+                    // control-bar toggle (mute/video) below.
                     Button {
                         viewModel.toggleLayoutMode()
                     } label: {
@@ -120,40 +120,18 @@ struct GroupCallView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
 
-                // W-RAWKEY256 (2026-07-20) — real, live production incident:
-                // the SFU frame-crypto key derivation migrated from legacy
-                // UTF8(base64(SK_0))->PBKDF2->AES-128-GCM to raw-32-byte-
-                // SK_0->PBKDF2->AES-256-GCM (iOS commit 1f48275, v1.0.816).
-                // A build on one side of that migration paired with a build
-                // on the other side derives DIFFERENT keys from the SAME
-                // SK_0 — 100% silent decrypt failure for that pair
-                // specifically, no error surfaced to either side (confirmed
-                // via Loki: 2x v1.0.816 + 2x v1.0.810 in the same SFU
-                // key-install exchange). Non-blocking advisory, same
-                // "signal, don't block" posture as `identityChangeBanner`
-                // on the 1:1 screen (`InCallScreen.swift`) — the call itself
-                // is never gated on this.
-                if !outdatedMembers.isEmpty {
-                    outdatedMembersBanner
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 10)
-                }
-
                 // W-GRPSCREENSHARE: spotlight tile for whichever remote
                 // participant is currently sharing their screen — rendered
                 // full-width, ABOVE the regular participant grid, so a
                 // shared screen reads with visual priority over the small
                 // per-participant tiles (mirrors the common Meet/Zoom
                 // pattern: shared content dominates, faces stay small).
-                // Simple, documented policy (no Android UI reference existed
-                // yet to mirror at the time this was written — see this
-                // file's own header for the recon note): if more than one
-                // participant is somehow sharing at once, this shows
-                // whichever one appears FIRST in `participants` — the
-                // control bar toggle only ever lets ONE local share exist at
-                // a time, and the server-side call model doesn't otherwise
+                // Simple policy: if more than one participant is somehow
+                // sharing at once, this shows whichever one appears FIRST in
+                // `participants` — the server-side call model doesn't
                 // arbitrate concurrent shares, so ties are not expected in
-                // practice.
+                // practice. Only remote shares are rendered: sharing the
+                // screen from iOS is not offered in group calls.
                 if let sharer = viewModel.participants.first(where: { $0.screenShareTrack != nil }),
                    let screenTrack = sharer.screenShareTrack {
                     VStack(alignment: .leading, spacing: 6) {
@@ -190,7 +168,7 @@ struct GroupCallView: View {
                 // screen-share spotlight above — same "fixed panel above
                 // the flexible grid" placement; the tile's own rendering
                 // is untouched. See `GroupCallViewModel.currentSpeakerId`'s
-                // kdoc for the SFU-vs-mesh source.
+                // kdoc for where the speaker comes from.
                 if viewModel.layoutMode == .speaker,
                    let speakerId = viewModel.currentSpeakerId,
                    let speaker = viewModel.participants.first(where: { $0.id == speakerId }) {
@@ -300,7 +278,7 @@ struct GroupCallView: View {
 
                 // Control bar — responsive sizing (2026-07-20, live 5-way
                 // call 694147de): the old fixed `HStack(spacing: 32)` of
-                // 56pt circles needed ~584pt for the full 7-button SFU row
+                // 56pt circles needed ~584pt for the full 7-button row
                 // — wider than ANY iPhone in portrait (390-430pt logical),
                 // so the row overflowed the screen on BOTH sides (the mute
                 // and end-call buttons landed fully OFF-SCREEN) and
@@ -312,7 +290,9 @@ struct GroupCallView: View {
                 // the original 56pt/32pt so any screen that already fit
                 // (iPad, landscape) renders exactly as before.
                 GeometryReader { controlGeo in
-                    let buttonCount = CGFloat(viewModel.isSfuActive ? 7 : 5)
+                    // mute, camera (once the media link exists), hand,
+                    // reaction, chat, end.
+                    let buttonCount = CGFloat(viewModel.isMediaReady ? 6 : 5)
                     // max(0, …) guards the zero-size first layout pass a
                     // GeometryReader can report — a negative frame dimension
                     // is a SwiftUI runtime error, not just a visual glitch.
@@ -392,8 +372,8 @@ struct GroupCallView: View {
         }
         // W-GRPVIDEOPUBFIX — same one-shot snackbar idiom as
         // `muteRequestToastText` above, `.error` severity (see
-        // `videoPublishErrorToastText`'s kdoc for the two failure points
-        // that set it).
+        // `videoPublishErrorToastText`'s kdoc for what sets it — a refused
+        // camera; the call itself continues audio-only).
         .onChange(of: viewModel.videoPublishErrorToastText) { text in
             guard let text else { return }
             snackbar?.show(.init(text: text, severity: .error))
@@ -444,14 +424,12 @@ struct GroupCallView: View {
             }
             .accessibilityLabel(viewModel.isMuted ? "Riattiva microfono" : "Disattiva microfono")
 
-            // W-GRPVIDEO: camera on/off. Only shown once the call is
-            // actually riding the LiveKit SFU (isUsingSfu) — the
-            // WS-relay mesh fallback path has no video pipeline, so
-            // there is nothing to toggle. Works whether the call
-            // started as audio or video: publishing a fresh camera
-            // track mid-call is a supported LiveKit path (see
-            // GroupCallController.setVideoEnabled kdoc).
-            if viewModel.isSfuActive {
+            // W-GRPVIDEO: camera on/off. Shown once the call has a media
+            // link (`isMediaReady`) — before that there is no publisher to
+            // toggle. Works whether the call started as audio or video:
+            // switching the camera on mid-call needs no renegotiation (see
+            // `GroupCallController.setVideoEnabled`'s kdoc).
+            if viewModel.isMediaReady {
                 Button {
                     viewModel.toggleVideo()
                 } label: {
@@ -465,40 +443,12 @@ struct GroupCallView: View {
                 .accessibilityLabel(viewModel.isVideoEnabled ? "Disattiva video" : "Attiva video")
             }
 
-            // W-GRPSCREENSHARE: screen-share on/off. Same SFU-only
-            // gating as the camera toggle above — screen share, like
-            // camera, only exists over the LiveKit SFU transport.
-            // Tapping this calls straight into `GroupCallController.
-            // setScreenShareEnabled`, which itself calls LiveKit's
-            // own `LocalParticipant.setScreenShare(enabled:)` — that
-            // SDK call is what shows the SYSTEM broadcast picker
-            // (`RPSystemBroadcastPickerView`, via `BroadcastManager.
-            // shared.requestActivation()`) when starting; there is no
-            // custom in-app permission flow to build here (see
-            // `LiveKitGroupCallRoom.setScreenShareEnabled`'s kdoc for
-            // the verified source trail).
-            if viewModel.isSfuActive {
-                Button {
-                    viewModel.toggleScreenShare()
-                } label: {
-                    Image(systemName: viewModel.isScreenSharing
-                          ? "rectangle.on.rectangle.circle.fill"
-                          : "rectangle.on.rectangle")
-                        .font(.title2)
-                        .foregroundColor(.white)
-                        .frame(width: buttonSize, height: buttonSize)
-                        .background(viewModel.isScreenSharing ? Color.blue.opacity(0.35) : Color.white.opacity(0.15))
-                        .clipShape(Circle())
-                }
-                .accessibilityLabel(viewModel.isScreenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
-            }
-
             // Item 1 (2026-07-16 wire contract) — raise/lower
             // hand, state-dependent background color exactly like
             // the mute button above (`Color.red.opacity(0.3)`
             // muted / `Color.white.opacity(0.15)` unmuted) — same
             // pattern, orange being the raised-hand's own semantic
-            // (distinct from mute's red / screen-share's blue)
+            // (distinct from mute's red)
             // since it's not an error/alert state.
             Button {
                 viewModel.toggleHandRaised()
@@ -764,9 +714,9 @@ struct GroupCallView: View {
     /// header comment for the full 1:1 pattern). Always visible, never
     /// covers the participant grid; tapping the shield opens
     /// `GroupSecuritySheet`. Chips shown are group-call constants (every
-    /// group call bootstraps via ML-KEM-1024 and rides the AES-256-GCM
-    /// LiveKit media path — see `GroupSecuritySheet.overviewBody` for the
-    /// full, sourced detail) rather than per-call conditionals like the
+    /// group call runs over DTLS 1.3 with the hybrid X25519MLKEM768 and
+    /// carries AES-256-GCM content E2EE — see `GroupSecuritySheet.
+    /// overviewBody`) rather than per-call conditionals like the
     /// 1:1 bar's `sasVerified`/`pqcActive` (group calls have no in-call
     /// SAS ceremony of their own).
     private var groupTrustBar: some View {
@@ -824,71 +774,6 @@ struct GroupCallView: View {
                 .stroke(color.opacity(0.4), lineWidth: 1)
         )
     }
-
-    // MARK: - W-RAWKEY256: version-skew advisory (2026-07-20)
-
-    /// Real roster members (never self — the server always lists the
-    /// sender of its own `supports_raw_key_aes256: true` create/join, but
-    /// excluded here defensively anyway, same belt-and-suspenders posture
-    /// as `ParticipantTile`'s `isSelf` mute-menu gate) missing from the
-    /// server's `raw_key_capable` broadcast — i.e. still on the legacy
-    /// AES-128 key-derivation build. See the banner's kdoc at its call
-    /// site in `body` for the full incident this closes.
-    private var outdatedMembers: [GroupCallViewModel.ParticipantUI] {
-        viewModel.participants.filter { !$0.isRawKeyCapable && $0.id != viewModel.selfUserId }
-    }
-
-    /// Non-blocking version-skew advisory — mirrors `InCallScreen.
-    /// identityChangeBanner`'s exact content shape (warning icon + all-caps
-    /// title + description sentence) for this screen's analogous "signal,
-    /// don't block" situation, but reuses THIS screen's own `groupTrustBar`
-    /// fill/stroke chrome (`scheme.surfaceVariant` background, tinted
-    /// stroke) rather than `identityChangeBanner`'s `scheme.surfaceVariant`
-    /// solid fill, since that reads correctly against this screen's fixed
-    /// dark backdrop the same way `groupTrustBar` already does immediately
-    /// above it.
-    private var outdatedMembersBanner: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.shield.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(extras.warning)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("AGGIORNAMENTO RICHIESTO")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(0.6)
-                    .foregroundStyle(extras.warning)
-                Text(outdatedMembersMessage)
-                    .qaudionStyle(type.labelMedium)
-                    .foregroundStyle(Color.white.opacity(0.85))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(scheme.surfaceVariant.opacity(0.55))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(extras.warning.opacity(0.55), lineWidth: 1)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Avviso: \(outdatedMembersMessage)")
-    }
-
-    /// Names every affected member — never a raw id (`displayName` is
-    /// already resolved through the manager's own rubrica chain, same
-    /// discipline as every other name shown on this screen). Singular vs
-    /// plural Italian verb agreement, matching this screen's own register
-    /// ("Chiamata di gruppo" / "partecipanti" elsewhere in `body`).
-    private var outdatedMembersMessage: String {
-        let names = outdatedMembers.map(\.displayName)
-        if names.count == 1 {
-            return "\(names[0]) deve aggiornare l'app per la chiamata audio/video con te."
-        }
-        return "\(names.joined(separator: ", ")) devono aggiornare l'app per la chiamata audio/video con te."
-    }
 }
 
 struct ParticipantTile: View {
@@ -932,7 +817,7 @@ struct ParticipantTile: View {
         VStack(spacing: 8) {
             ZStack {
                 if let track = participant.videoTrack {
-                    GroupCallVideoView(track: track)
+                    GroupCallVideoView(track: track, mirrored: isSelf)
                         .aspectRatio(1, contentMode: .fill)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 } else {
@@ -1078,16 +963,16 @@ class GroupCallViewModel: ObservableObject {
         var displayName: String
         var isMuted: Bool = false
         var isSpeaking: Bool = false
-        /// W-GRPVIDEO: type-erased `RemoteVideoTrack` (see
-        /// `LiveKitGroupCallRoom`'s doc comment for why) — nil until the
-        /// SFU subscribes this participant's camera; cleared again on
-        /// participant departure. Rendered via `GroupCallVideoView`.
+        /// W-GRPVIDEO: type-erased WebRTC video track (the app layer never
+        /// imports the WebRTC module) — nil until the engine delivers this
+        /// participant's camera; cleared again when the stream goes away or
+        /// the participant leaves. Rendered via `GroupCallVideoView`.
         var videoTrack: AnyObject? = nil
-        /// W-GRPSCREENSHARE: type-erased `RemoteVideoTrack` for this
-        /// participant's SCREEN-SHARE publication — kept SEPARATE from
+        /// W-GRPSCREENSHARE: type-erased WebRTC video track for this
+        /// participant's SCREEN-SHARE stream — kept SEPARATE from
         /// `videoTrack` (camera) since a participant can publish both at
         /// once (see `GroupCallController.onRemoteScreenShareTrack`'s
-        /// kdoc). Nil until subscribed / after unsubscribe.
+        /// kdoc). Nil until delivered / after the share stops.
         var screenShareTrack: AnyObject? = nil
         /// Tier-1 (item 3, 2026-07-16 wire contract) — mirrors
         /// `GroupCallController.raisedHands` for this participant; seeded/
@@ -1099,19 +984,13 @@ class GroupCallViewModel: ObservableObject {
         /// participant who joins/reconnects mid-call won't see who
         /// currently has a hand raised.
         var handRaised: Bool = false
-        /// W-RAWKEY256 (2026-07-20) — passthrough of `BCryptoGroupCallManager.
-        /// Participant.isRawKeyCapable`. Defaults `true` for the same reason
-        /// that field does (see its kdoc): a tile synthesized with no real
-        /// WS-roster signal yet (SFU-only ghost in `mergeSfuOnlyParticipants`,
-        /// previews) must stay silent rather than spuriously warning.
-        var isRawKeyCapable: Bool = true
     }
 
     @Published var participants: [ParticipantUI] = []
     @Published var callState: BCryptoGroupCallManager.State = .idle
     @Published var isMuted = false
     @Published var elapsedTime = "0:00"
-    /// W-GRPVIDEO: our own camera preview (type-erased `LocalVideoTrack`),
+    /// W-GRPVIDEO: our own camera preview (type-erased WebRTC video track),
     /// nil when off. W-GRPSELFGRID (2026-07-20): `GroupCallView.body` no
     /// longer renders this directly (the removed self-preview PiP) — the
     /// same track is now also written into `participants[selfIdx].videoTrack`
@@ -1125,7 +1004,7 @@ class GroupCallViewModel: ObservableObject {
     /// seeded from the call's `callType` on the `.active` transition
     /// (`GroupCallController.wantsVideo`, surfaced via `callWantsVideo`),
     /// then flipped by `toggleVideo()`.
-    /// W-GRPCAMSRC (2026-07-24) — DERIVED from the camera track LiveKit is
+    /// W-GRPCAMSRC (2026-07-24) — DERIVED from the camera track the engine is
     /// actually publishing for us, never from "was this call created as a video
     /// call". It used to be seeded on `.active` from `controller.callWantsVideo`
     /// and thereafter moved only by our own button, so joining a video-typed
@@ -1134,23 +1013,15 @@ class GroupCallViewModel: ObservableObject {
     /// defect fixed the same day (W-CAMBTNSRC).
     ///
     /// `selfVideoTrack` is written by `controller.onLocalVideoTrack`, which
-    /// LiveKit feeds from `room.localParticipant.firstCameraVideoTrack` — nil
-    /// exactly when the camera is off. Deriving costs one lag: the button
-    /// follows the track landing rather than the tap. That is the point.
+    /// the engine fires with the track once capture runs and with nil when it
+    /// stops — nil exactly when the camera is off. Deriving costs one lag: the
+    /// button follows the track landing rather than the tap. That is the point.
     var isVideoEnabled: Bool { selfVideoTrack != nil }
-    /// W-GRPVIDEO: whether the call is riding the LiveKit SFU right now —
-    /// gates the camera-toggle button (the WS-relay mesh fallback has no
-    /// video pipeline).
-    @Published var isSfuActive = false
-    /// W-GRPSCREENSHARE: whether OUR OWN screen share is actually live right
-    /// now. Deliberately NOT flipped optimistically by `toggleScreenShare()`
-    /// — the real transition is asynchronous (system broadcast picker +
-    /// the user actually starting the recording, both outside this app's
-    /// control) and this is driven authoritatively by
-    /// `GroupCallController.onLocalScreenShareChanged`. See that property's
-    /// kdoc chain down to `LiveKitGroupCallRoom.setScreenShareEnabled` for
-    /// the full mechanism.
-    @Published var isScreenSharing = false
+    /// Whether the call has a media link (`GroupCallController.hasMediaLink`,
+    /// connecting or connected): gates the camera button, since there is no
+    /// publisher to toggle before it. Refreshed on every manager state change,
+    /// on every roster update and from `controller.onMediaConnected`.
+    @Published var isMediaReady = false
     /// Tier-1 (2026-07-16 wire contract) — mirrors `GroupCallController.
     /// reactionEvents` 1:1 (bound via `onReactionEventsChanged` in `init`
     /// below). `GroupCallController` already only ever hands back
@@ -1171,9 +1042,8 @@ class GroupCallViewModel: ObservableObject {
         case speaker
     }
     /// Item 5: passthrough of `GroupCallController.onActiveSpeakersChanged`
-    /// (LiveKit's own native active-speaker detection) — only ever set
-    /// while riding the SFU; see `currentSpeakerId`'s kdoc for the mesh
-    /// fallback.
+    /// (user ids, loudest first, computed by the engine from decoded audio
+    /// levels) — see `currentSpeakerId`'s kdoc for the roster fallback.
     @Published var activeSpeakerId: String? = nil
     /// 2026-07-17 — the FULL currently-speaking set (identities.first alone,
     /// stored above as [activeSpeakerId], is only ever used for the single
@@ -1188,16 +1058,14 @@ class GroupCallViewModel: ObservableObject {
     /// `.onChange` and pushes it through that snackbar itself, then
     /// clears it back to nil (see that call site's kdoc).
     @Published var muteRequestToastText: String? = nil
-    /// W-GRPVIDEOPUBFIX (2026-09-29): one-shot toast for a camera-track
-    /// publish failure — either the initial `connect()`-time publish
-    /// (`LiveKitGroupCallRoom.connect()`'s catch, forwarded through
-    /// `onError` -> `GroupCallController.onSfuError`) or a later
-    /// `toggleVideo()` (`GroupCallController.setVideoEnabled`'s catch,
-    /// same channel). Both failure points now surface through this SAME
-    /// property/message instead of only printing, so the user sees SOME
-    /// explanation instead of the video button silently staying off (see
-    /// `toggleVideo()`'s kdoc). Same one-shot set-then-clear idiom as
-    /// `muteRequestToastText` above; `.error` severity distinguishes it
+    /// W-GRPVIDEOPUBFIX (2026-09-29): one-shot toast for a camera problem
+    /// (`GroupCallMediaError.cameraPermissionDenied` / `.cameraUnavailable`,
+    /// reported by `GroupCallController.setVideoEnabled` through
+    /// `onMediaError`, whether from `toggleVideo()` or from the initial
+    /// video-call publish), so the user sees SOME explanation instead of the
+    /// video button silently staying off (see `toggleVideo()`'s kdoc). The
+    /// call itself continues audio-only. Same one-shot set-then-clear idiom
+    /// as `muteRequestToastText` above; `.error` severity distinguishes it
     /// from that `.info` toast.
     @Published var videoPublishErrorToastText: String? = nil
     /// In-call chat panel — the persisted-group id (DASHED UUID, server wire
@@ -1240,17 +1108,12 @@ class GroupCallViewModel: ObservableObject {
     /// raised-hand/reaction state alongside everyone else's.
     var selfUserId: String { manager.selfUserId }
     /// Item 5: which participant is currently "the speaker" for layout
-    /// purposes. Over the LiveKit SFU this is `activeSpeakerId` (LiveKit's
-    /// own native active-speaker detection). On the WS-relay mesh
-    /// fallback (no SFU room, so that callback never fires) this instead
-    /// reuses each participant's pre-existing `isSpeaking` flag — already
-    /// driven by `BCryptoGroupCallManager`'s own 500ms-decay speaking
-    /// heuristic (the SAME flag that already rings a tile's border) — per
-    /// the wire contract's explicit "reuse the existing heuristic, no new
-    /// mesh plumbing" instruction.
+    /// purposes: the loudest user of `GroupCallController.
+    /// onActiveSpeakersChanged` (engine-side, from decoded audio levels), or
+    /// — when the engine reports nobody — the first roster entry whose
+    /// `isSpeaking` flag is set (the flag that already rings a tile's border).
     var currentSpeakerId: String? {
-        if isSfuActive { return activeSpeakerId }
-        return participants.first(where: { $0.isSpeaking })?.id
+        activeSpeakerId ?? participants.first(where: { $0.isSpeaking })?.id
     }
     /// Item 3: the freshest still-live reaction for one participant, or
     /// nil if none is currently displayed.
@@ -1265,13 +1128,9 @@ class GroupCallViewModel: ObservableObject {
     /// `gridPages`/`currentGridPage` pagination state already tracks
     /// exactly this, no new visibility plumbing needed on that side. Fans
     /// each participant out to `GroupCallController.
-    /// setRemoteVideoRenderPriority` (a no-op unless the call is actually
-    /// on the LiveKit SFU — see that method's kdoc), skipping our own
-    /// entry (no remote publication exists for the local tile). Only
-    /// closes the "which layer" half of the SFU-video gap; `adaptiveStream`/
-    /// `dynacast` themselves stay off (see `LiveKitGroupCallRoom.
-    /// RoomOptions`'s W-GRPADAPTIVEDEADLOCK kdoc) — full re-enablement of
-    /// those needs live-device verification this pass didn't have.
+    /// setRemoteVideoRenderPriority` (which picks the simulcast substream and
+    /// the subscription of that tile, spec §4.6), skipping our own entry (no
+    /// remote publication exists for the local tile).
     func updateVideoViewport(visible: Set<String>, spotlight: String?) {
         guard let controller else { return }
         for participant in participants where participant.id != selfUserId {
@@ -1287,47 +1146,10 @@ class GroupCallViewModel: ObservableObject {
         }
     }
 
-    /// W-GRPSFUGHOST: append a synthesized tile for any `sfuPresentIdentities`
-    /// entry missing from `participants` — called both right after a
-    /// `group_call_update` roster rebuild (`onParticipants`) and immediately
-    /// on a fresh `Room.participantDidConnect` (`onSfuParticipant`), so
-    /// neither path can leave a real SFU room member without a tile for
-    /// longer than one runloop turn. MainActor-only (both call sites already
-    /// hop via `DispatchQueue.main.async`), so no locking needed here —
-    /// mirrors every other mutation of `participants` in this class.
-    private func mergeSfuOnlyParticipants() {
-        let known = Set(participants.map(\.id))
-        // W-GRPSFUGHOST follow-up (2026-09-30): the synthesis decision
-        // itself now lives in `GroupCallRosterReconciliation` (unit-tested
-        // there) — this method's own job is just to apply it and append
-        // the tile. `quarantinedIdentities` is what stops a roster-then-
-        // LiveKit departure (server already dropped them) from being
-        // resurrected off a `sfuPresentIdentities` entry LiveKit hasn't
-        // caught up on yet.
-        let toSynthesize = GroupCallRosterReconciliation.identitiesToSynthesize(
-            sfuPresentIdentities: sfuPresentIdentities,
-            knownParticipantIds: known,
-            quarantined: quarantinedIdentities,
-            selfUserId: selfUserId
-        )
-        for identity in toSynthesize {
-            print("[GroupCallViewModel][telemetry] SFU-only participant identity=\(identity.prefix(8)) has no WS-roster tile — synthesizing one from LiveKit presence")
-            participants.append(ParticipantUI(
-                id: identity,
-                displayName: DisplayName.forUser(identity),
-                videoTrack: pendingVideoTracks.removeValue(forKey: identity),
-                screenShareTrack: pendingScreenShareTracks.removeValue(forKey: identity),
-                handRaised: raisedHandsCache.contains(identity)
-            ))
-        }
-    }
-
     private let manager: BCryptoGroupCallManager
-    /// W367: optional GroupCallController (W354/W358/W366) bound to
-    /// the audio pipeline. When set, mute toggles and end-call route
-    /// through the controller so capture/playback start/stop in
-    /// lockstep with call state. Falls back to direct manager calls
-    /// if nil (legacy preview path).
+    /// The `GroupCallController` that owns the media path. When set, mute
+    /// toggles, camera and end-call route through it; falls back to direct
+    /// manager calls if nil (legacy preview path).
     private let controller: GroupCallController?
     private var startTime = Date()
     private var timer: Timer?
@@ -1337,62 +1159,21 @@ class GroupCallViewModel: ObservableObject {
     /// `[Participant]` list from the manager, not the controller's
     /// separate raised-hand set, so this cache bridges the two).
     private var raisedHandsCache: Set<String> = []
-    /// W-GRPCALL-DIAG follow-up (was diagnostic-only since 2026-07-15,
-    /// incident 419eb1dc — see the `onRemoteVideoTrack`/
-    /// `onRemoteScreenShareTrack` kdoc below): `manager.onParticipantsChanged`
-    /// (WS control-plane roster) and `room.onRemoteVideoTrack`/
-    /// `onRemoteScreenShareTrack` (LiveKit SFU data-plane track-subscribe)
-    /// are two INDEPENDENT event streams over two different transports —
-    /// there is no ordering guarantee between them. In a bigger call
-    /// (roster broadcast fan-out takes longer with more members) the SFU
-    /// can subscribe a remote track for an identity before this device's
-    /// WS roster lists that participant yet; that used to just drop the
-    /// track on the floor forever (only the roster-rebuild's
-    /// `existingTracks` dictionary carries a track forward, and a track
-    /// that was never attached in the first place isn't in it). These two
-    /// caches hold a track that arrived with no matching tile YET, so the
-    /// very next roster rebuild in `onParticipants` below can attach it
-    /// instead of silently losing it.
+    /// Roster/track race: `manager.onParticipantsChanged` (WS control-plane
+    /// roster) and `controller.onRemoteVideoTrack`/`onRemoteScreenShareTrack`
+    /// (media plane, over Janus) are two INDEPENDENT event streams over two
+    /// different transports — there is no ordering guarantee between them. In
+    /// a bigger call (roster broadcast fan-out takes longer with more
+    /// members) the media layer can deliver a remote track for a user before
+    /// this device's roster lists that participant yet; that used to just drop
+    /// the track on the floor forever (only the roster-rebuild's
+    /// `existingTracks` dictionary carries a track forward, and a track that
+    /// was never attached in the first place isn't in it). These two caches
+    /// hold a track that arrived with no matching tile YET, so the very next
+    /// roster rebuild in `onParticipants` below can attach it instead of
+    /// silently losing it. A nil track (stream gone) removes the entry.
     private var pendingVideoTracks: [String: AnyObject] = [:]
     private var pendingScreenShareTracks: [String: AnyObject] = [:]
-    /// W-GRPSFUGHOST (2026-07-20, live 3-way call DC7D18B9): identities
-    /// LiveKit itself has told us are actual room members
-    /// (`Room.participantDidConnect`, via `onSfuParticipant(_, true)`),
-    /// independent of whether the WS-signaling roster
-    /// (`manager.onParticipantsChanged`, fed by `group_call_update`) has
-    /// ever listed them. These two rosters are two INDEPENDENT sources of
-    /// truth — before this fix `participants` (tile existence) was driven
-    /// 100% by the WS roster, with the SFU-native signal used only to
-    /// attach/detach tracks onto an ALREADY-existing tile. Live-repro: the
-    /// server reaps a participant from `GroupCall.Participants` after an
-    /// ungraceful-disconnect grace window (commit 5a3b2e1) even while that
-    /// participant's LiveKit session — and its WS opaque-message
-    /// ctrl-channel — stays fully alive; a peer stuck in exactly that state
-    /// was invisible in the grid forever (both iPhones exchanged
-    /// sender-key rotates with a Desktop peer neither ever rendered a tile
-    /// for), because no `group_call_update` was ever coming to introduce
-    /// one. `mergeSfuOnlyParticipants` keeps any identity in this set
-    /// present in `participants` even across a roster rebuild that still
-    /// doesn't mention them — the next roster update that DOES include them
-    /// simply supersedes the synthesized entry (same id, so `list.map`'s
-    /// own entry wins the position; the merge only appends what's missing).
-    private var sfuPresentIdentities: Set<String> = []
-    /// W-GRPSFUGHOST follow-up (2026-09-30): the identity set from the LAST
-    /// WS-roster (`group_call_update`) broadcast, kept independent of
-    /// `participants` itself (which also carries synthesized ghost tiles)
-    /// so `GroupCallRosterReconciliation.shouldRemoveTileOnDisconnect` can
-    /// tell "the roster still claims this identity" apart from "this tile
-    /// only ever existed because LiveKit told us about it". Reset on
-    /// `.ended` alongside `sfuPresentIdentities` — see that reset's kdoc.
-    private var wsRosterIds: Set<String> = []
-    /// W-GRPSFUGHOST follow-up (2026-09-30): identities the WS roster has
-    /// explicitly stopped listing while LiveKit's `sfuPresentIdentities`
-    /// still claims them present (the roster-then-LiveKit ordering — see
-    /// `GroupCallRosterReconciliation`'s kdoc). `mergeSfuOnlyParticipants`
-    /// must not resurrect a tile for anyone in this set off the stale
-    /// `sfuPresentIdentities` entry; only a FRESH LiveKit connect for that
-    /// identity (`onSfuParticipant(_, true)`) clears it again.
-    private var quarantinedIdentities: Set<String> = []
 
     init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
@@ -1410,11 +1191,21 @@ class GroupCallViewModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.callState = state
-                if state == .active {
-                    self.isSfuActive = controller?.isUsingSfu ?? false
-                    // W-GRPCAMSRC — `isVideoEnabled` is derived from
-                    // `selfVideoTrack` now; nothing to seed. `callWantsVideo`
-                    // only ever said what the call was CREATED as.
+                // W-GRPCAMSRC — `isVideoEnabled` is derived from
+                // `selfVideoTrack` now; nothing to seed. `callWantsVideo`
+                // only ever said what the call was CREATED as.
+                if state == .ended {
+                    self.isMediaReady = false
+                    // This ViewModel is long-lived across calls (same
+                    // rationale as `activeGroupId` below): a track cached for
+                    // a user of THIS call must not attach to a later call.
+                    self.pendingVideoTracks.removeAll()
+                    self.pendingScreenShareTracks.removeAll()
+                } else {
+                    // The camera button follows the media link, which
+                    // appears after the call state does; `onMediaConnected`
+                    // (below) covers the connect itself.
+                    self.isMediaReady = controller?.hasMediaLink ?? false
                 }
             }
             if state == .active { self?.startTimer() }
@@ -1424,25 +1215,6 @@ class GroupCallViewModel: ObservableObject {
                 // binding so a subsequent, different call (this ViewModel
                 // is long-lived across calls) doesn't leak the old one.
                 self?.activeGroupId = ""
-                // W-GRPSFUGHOST: when WE hang up, LiveKit does not fire a
-                // per-remote `participantDidDisconnect` for everyone else
-                // still in the room (only OUR OWN room teardown runs) — so
-                // without this, `sfuPresentIdentities` would carry stale
-                // identities from THIS call into the next one, and
-                // `mergeSfuOnlyParticipants` could synthesize a ghost tile
-                // for someone who isn't even in the new call. This
-                // ViewModel is long-lived across calls (same rationale as
-                // `activeGroupId` above), so this state must be reset
-                // explicitly rather than relying on per-departure cleanup.
-                self?.sfuPresentIdentities.removeAll()
-                // W-GRPSFUGHOST follow-up (2026-09-30): same long-lived-
-                // ViewModel rationale as `sfuPresentIdentities` above — a
-                // stale `wsRosterIds`/`quarantinedIdentities` from THIS
-                // call must not leak into the next one (a departure
-                // quarantined here could otherwise permanently block a
-                // same-identity ghost tile in a brand-new call).
-                self?.wsRosterIds.removeAll()
-                self?.quarantinedIdentities.removeAll()
             }
         }
         let onParticipants: ([BCryptoGroupCallManager.Participant]) -> Void = { [weak self] list in
@@ -1457,15 +1229,19 @@ class GroupCallViewModel: ObservableObject {
                 // W-GRPSCREENSHARE: same preserve-across-refresh rationale as
                 // `existingTracks` above, for the separate screen-share slot.
                 let existingScreenShareTracks = Dictionary(uniqueKeysWithValues: self.participants.map { ($0.id, $0.screenShareTrack) })
+                // The server's roster is authoritative: qjanus removes a ghost
+                // (a member whose signaling is gone) from the Janus room
+                // itself, so `participants` is exactly this list — no tile is
+                // ever synthesized from the media plane.
                 self.participants = list.map { entry in
-                    // Roster/SFU race fix (see `pendingVideoTracks`' kdoc):
+                    // Roster/track race fix (see `pendingVideoTracks`' kdoc):
                     // a track that arrived before this identity had a tile
                     // gets attached NOW, on the roster refresh that finally
                     // introduces that tile, instead of staying lost.
                     //
                     // W-GRPSELFGRID (2026-07-20): the self entry never goes
                     // through `pendingVideoTracks` (that dictionary is only
-                    // ever written by `onRemoteVideoTrack`, which LiveKit
+                    // ever written by `onRemoteVideoTrack`, which the engine
                     // never fires for our own identity) — fall back to
                     // `self.selfVideoTrack` directly for `entry.id ==
                     // selfUserId` so a roster broadcast introducing this
@@ -1485,36 +1261,9 @@ class GroupCallViewModel: ObservableObject {
                                   isMuted: entry.isMuted, isSpeaking: entry.isSpeaking,
                                   videoTrack: video,
                                   screenShareTrack: screenShare,
-                                  handRaised: self.raisedHandsCache.contains(entry.id),
-                                  isRawKeyCapable: entry.isRawKeyCapable)
+                                  handRaised: self.raisedHandsCache.contains(entry.id))
                 }
-                // W-GRPSFUGHOST follow-up (2026-09-30): update the
-                // roster-then-LiveKit quarantine BEFORE re-merging below —
-                // any identity this fresh roster just stopped listing,
-                // while LiveKit still claims them present, must not be
-                // resurrected by `mergeSfuOnlyParticipants` off the stale
-                // `sfuPresentIdentities` entry (see
-                // `GroupCallRosterReconciliation`'s kdoc). `wsRosterIds`
-                // itself is what `onSfuParticipant`'s disconnect handler
-                // uses to decide whether a departure is a real tile removal
-                // or just a stale-track clear.
-                let newRosterIds = Set(list.map(\.id))
-                self.quarantinedIdentities = GroupCallRosterReconciliation.quarantineAfterRosterUpdate(
-                    currentQuarantine: self.quarantinedIdentities,
-                    sfuPresentIdentities: self.sfuPresentIdentities,
-                    newRosterIds: newRosterIds,
-                    selfUserId: self.selfUserId
-                )
-                self.wsRosterIds = newRosterIds
-                // W-GRPSFUGHOST: a stale/incomplete WS roster (see
-                // `sfuPresentIdentities`' kdoc) must not erase a tile for
-                // someone LiveKit itself confirms is still in the room —
-                // `list.map` above is a full REPLACE keyed only off the
-                // server's `participants` array, so without this a synthesized
-                // tile added by `onSfuParticipant` would vanish again on the
-                // very next unrelated roster broadcast (e.g. a THIRD member
-                // joining/leaving) if the server still hasn't reconciled.
-                self.mergeSfuOnlyParticipants()
+                self.refreshMediaReady()
             }
         }
         if let controller = controller {
@@ -1524,28 +1273,26 @@ class GroupCallViewModel: ObservableObject {
             // passthrough instead of overwriting them directly.
             controller.onManagerStateChanged = onState
             controller.onParticipantsChanged = onParticipants
-            // W-GRPVIDEO: bind the LiveKit track callbacks here (rather
-            // than in AppState) — this ViewModel is the SFU render-target,
-            // and `onRemoteVideoTrack`/`onLocalVideoTrack`/`onSfuParticipant`
-            // are single-slot closures on the controller just like the two
-            // above, so the same "bind once, here" pattern applies.
+            // W-GRPVIDEO: bind the media track callbacks here (rather than in
+            // AppState) — this ViewModel is the render target, and
+            // `onRemoteVideoTrack`/`onLocalVideoTrack` are single-slot
+            // closures on the controller just like the two above, so the same
+            // "bind once, here" pattern applies. A nil track means the
+            // stream went away.
             controller.onRemoteVideoTrack = { [weak self] identity, track in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): the
-                    // final hop of hypothesis B (tile-binding) — proves
-                    // WHICH tile (by participant id) a remote track was
-                    // actually bound to, or that no matching tile existed
-                    // yet (roster hadn't caught up with the SFU subscribe).
                     guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else {
-                        // Roster/SFU race (see `pendingVideoTracks`'s kdoc):
+                        // Roster/track race (see `pendingVideoTracks`'s kdoc):
                         // hold the track instead of dropping it — the next
-                        // `onParticipants` roster refresh will attach it.
-                        print("[GroupCallController][telemetry] remote video track for identity=\(identity.prefix(8)) has NO matching participant tile yet (roster/SFU race) — cached pending roster catch-up")
+                        // `onParticipants` roster refresh will attach it (a
+                        // nil track removes the cached entry).
+                        print("[GroupCallController][telemetry] remote video track for identity=\(identity.prefix(8)) has NO matching participant tile yet (roster race) — cached pending roster catch-up")
                         self.pendingVideoTracks[identity] = track
                         return
                     }
-                    print("[GroupCallController][telemetry] remote video track bound to tile identity=\(identity.prefix(8))")
+                    let verb = track == nil ? "cleared from" : "bound to"
+                    print("[GroupCallController][telemetry] remote video track \(verb) tile identity=\(identity.prefix(8))")
                     self.participants[idx].videoTrack = track
                 }
             }
@@ -1570,82 +1317,23 @@ class GroupCallViewModel: ObservableObject {
                     }
                 }
             }
-            controller.onSfuParticipant = { [weak self] identity, present in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    guard present else {
-                        // A participant can leave before the roster/SFU race
-                        // above ever resolved for them — drop any pending track
-                        // too, so it can't get misattached to a later identity.
-                        self.sfuPresentIdentities.remove(identity)
-                        // W-GRPSFUGHOST follow-up (2026-09-30): this identity
-                        // is no longer "quarantined" once LiveKit itself
-                        // confirms the departure — keeps the set bounded and
-                        // matches `quarantineAfterRosterUpdate`'s own kdoc
-                        // ("cleared by a fresh LiveKit connect", the mirror
-                        // event of this one).
-                        self.quarantinedIdentities.remove(identity)
-                        self.pendingVideoTracks.removeValue(forKey: identity)
-                        self.pendingScreenShareTracks.removeValue(forKey: identity)
-                        // FIX (W-GRPSFUGHOST "KNOWN RESIDUAL", 2026-09-30):
-                        // used to only clear tracks, never the tile itself —
-                        // a tile that exists ONLY because
-                        // `mergeSfuOnlyParticipants` synthesized it (the WS
-                        // roster never listed this identity, or just
-                        // stopped) had no other event left to remove it;
-                        // when that identity was also the LAST participant,
-                        // no further roster broadcast ever arrived and the
-                        // ghost tile stayed forever. `wsRosterIds` (the last
-                        // roster snapshot) is what tells the two cases
-                        // apart — see `GroupCallRosterReconciliation.
-                        // shouldRemoveTileOnDisconnect`'s kdoc.
-                        if GroupCallRosterReconciliation.shouldRemoveTileOnDisconnect(
-                            identity: identity, wsRosterIds: self.wsRosterIds
-                        ) {
-                            self.participants.removeAll { $0.id == identity }
-                        } else {
-                            guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
-                            self.participants[idx].videoTrack = nil
-                            self.participants[idx].screenShareTrack = nil
-                        }
-                        return
-                    }
-                    // W-GRPSFUGHOST: see `sfuPresentIdentities`'/
-                    // `mergeSfuOnlyParticipants`'s kdoc — this is the
-                    // ground-truth "LiveKit says this identity is really in
-                    // the room" signal, tracked independently of whatever the
-                    // WS-signaling roster currently believes.
-                    self.sfuPresentIdentities.insert(identity)
-                    // W-GRPSFUGHOST follow-up (2026-09-30): a FRESH LiveKit
-                    // connect is the only thing allowed to clear a
-                    // roster-then-LiveKit quarantine (see
-                    // `GroupCallRosterReconciliation.
-                    // quarantineAfterRosterUpdate`'s kdoc) — without this,
-                    // a participant who left and rejoined while the roster
-                    // was still catching up on the first departure could
-                    // stay permanently quarantined.
-                    self.quarantinedIdentities.remove(identity)
-                    self.mergeSfuOnlyParticipants()
-                }
-            }
             // W-GRPSCREENSHARE: same "bind once, here" pattern as
             // `onRemoteVideoTrack`/`onLocalVideoTrack` above — see
-            // `GroupCallController.onRemoteScreenShareTrack`'s kdoc.
+            // `GroupCallController.onRemoteScreenShareTrack`'s kdoc. Only a
+            // REMOTE share is rendered (spotlight in `GroupCallView.body`);
+            // sharing the screen from iOS is not offered in group calls.
             controller.onRemoteScreenShareTrack = { [weak self] identity, track in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else {
-                        // Same roster/SFU race as `onRemoteVideoTrack` above —
+                        // Same roster/track race as `onRemoteVideoTrack` above —
                         // cache it for the next roster refresh instead of
-                        // dropping it.
+                        // dropping it (a nil track removes the cached entry).
                         self.pendingScreenShareTracks[identity] = track
                         return
                     }
                     self.participants[idx].screenShareTrack = track
                 }
-            }
-            controller.onLocalScreenShareChanged = { [weak self] active in
-                DispatchQueue.main.async { self?.isScreenSharing = active }
             }
             // Tier-1 (2026-07-16 wire contract) — reactions/raised-hand/
             // active-speaker/mute-request data-layer passthroughs. Same
@@ -1672,8 +1360,8 @@ class GroupCallViewModel: ObservableObject {
             controller.onMuteRequested = { [weak self] requesterId in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    // Item 4(a): the REAL mute (legacy WS-relay gate +
-                    // SFU mic toggle) is already applied by
+                    // Item 4(a): the REAL mute (the mic switch on the media
+                    // link) is already applied by
                     // `GroupCallController.handleMuteRequest` before this
                     // callback fires — see that method's kdoc. Here we
                     // only need item 4(b): "update local mute-button UI
@@ -1698,22 +1386,22 @@ class GroupCallViewModel: ObservableObject {
                     self.muteRequestToastText = String(localized: "group_call.mute_request_toast", defaultValue: "\(displayName) ti ha silenziato", comment: "Snackbar — one-shot toast shown when another participant force-mutes you in a group call; %@ is the requester's display name")
                 }
             }
-            // W-GRPVIDEOPUBFIX (2026-09-29): `onSfuError` already fires for
-            // several unrelated SFU-level errors (camera-permission denial,
-            // SFU connect failure, mid-call SFU disconnect) that either have
-            // no UI consumer yet or are already reflected through `callState`
-            // — deliberately narrow this to ONLY the camera-track-publish
-            // case (see `LiveKitGroupCallRoom.VideoPublishError`'s kdoc) so
-            // this toast does not start firing for those other, out-of-scope
-            // error paths as a side effect.
-            controller.onSfuError = { [weak self] error in
-                guard error is LiveKitGroupCallRoom.VideoPublishError else { return }
+            // Media errors (spec §2.4 / §8). A camera problem is a soft toast
+            // (W-GRPVIDEOPUBFIX: the call continues audio-only). Every other
+            // error is fatal: the engine ends the call right after reporting it,
+            // which takes this screen down, so `AppState` shows THAT toast from
+            // `ContentView` (it outlives the call cover).
+            controller.onMediaError = { [weak self] error in
+                guard !error.isFatal else { return }
                 DispatchQueue.main.async {
-                    self?.videoPublishErrorToastText = String(
-                        localized: "group_call.video_publish_failed_toast",
-                        defaultValue: "Non è stato possibile attivare la videocamera per questa chiamata.",
-                        comment: "Snackbar — one-shot toast shown when publishing/toggling the local camera in a group call fails at the SDK level; the call itself continues audio-only")
+                    self?.videoPublishErrorToastText = GroupCallViewModel.toastText(for: error)
                 }
+            }
+            // The media path is up (fires on every (re)connect): the camera
+            // can be switched now. Single slot — `AppState` wraps it after this
+            // view model is built and keeps calling it.
+            controller.onMediaConnected = { [weak self] in
+                DispatchQueue.main.async { self?.refreshMediaReady() }
             }
         } else {
             manager.onStateChanged = onState
@@ -1739,41 +1427,83 @@ class GroupCallViewModel: ObservableObject {
         if stateSnapshot != .idle {
             onState(stateSnapshot)
         }
-        // W-GRPSFUGHOST follow-up (2026-07-20): same snapshot-at-bind
-        // rationale as `participantsSnapshot`/`stateSnapshot` above, but for
-        // the INDEPENDENT SFU-presence source `sfuPresentIdentities` tracks
-        // (see that property's kdoc) — `onSfuParticipant` above only ever
-        // observes FUTURE LiveKit connect/disconnect events, so a remote
-        // participant already connected to the SFU room before THIS
-        // (re)bind (e.g. a mid-call socket rebuild that reconstructs this
-        // ViewModel — `GroupCallController.rebind(manager:)`'s kdoc) would
-        // otherwise never get a tile via that path either.
-        if let controller = controller {
-            let sfuSnapshot = controller.sfuConnectedIdentities
-            if !sfuSnapshot.isEmpty {
-                sfuPresentIdentities.formUnion(sfuSnapshot)
-                mergeSfuOnlyParticipants()
-            }
+        // W-GRPSTALEMGR follow-up: same snapshot-at-bind rationale for the
+        // media link — one that already exists when this view model is
+        // (re)bound (a mid-call socket rebuild, see `GroupCallController.
+        // rebind(manager:)`) would otherwise not show the camera button
+        // until the next event.
+        isMediaReady = controller?.hasMediaLink ?? false
+    }
+
+    /// Re-reads whether the controller has a media link (the camera button's
+    /// gate). Main thread only, like every other mutation of published state.
+    private func refreshMediaReady() {
+        isMediaReady = controller?.hasMediaLink ?? false
+    }
+
+    /// The Italian toast text of a media error. Camera problems (shown by this
+    /// view model) and the fatal errors (shown by `AppState`, see
+    /// `groupCallFatalErrorToastText`) share this one mapping.
+    static func toastText(for error: GroupCallMediaError) -> String {
+        switch error {
+        case .cameraPermissionDenied:
+            return String(
+                localized: "group_call.camera_permission_denied_toast",
+                defaultValue: "Consenti l'accesso alla videocamera in Impostazioni per attivare il video.",
+                comment: "Snackbar — one-shot toast shown when the user turns the camera on in a group call but the app has no camera permission; the call itself continues audio-only")
+        case .cameraUnavailable:
+            return String(
+                localized: "group_call.video_publish_failed_toast",
+                defaultValue: "Non è stato possibile attivare la videocamera per questa chiamata.",
+                comment: "Snackbar — one-shot toast shown when publishing/toggling the local camera in a group call fails at the SDK level; the call itself continues audio-only")
+        case .full:
+            return String(
+                localized: "group_call.media_error.full",
+                defaultValue: "La chiamata è piena.",
+                comment: "Snackbar — the group call has reached its participant limit; shown when the media server refuses to admit us, the call is then ended")
+        case .noNode:
+            return String(
+                localized: "group_call.media_error.no_node",
+                defaultValue: "Nessun server media disponibile.",
+                comment: "Snackbar — no media server could be assigned to the group call, the call is then ended")
+        case .roomCreateFailed:
+            return String(
+                localized: "group_call.media_error.room_create_failed",
+                defaultValue: "Impossibile creare la stanza media della chiamata.",
+                comment: "Snackbar — the media server could not create the room for the group call, the call is then ended")
+        case .notMember:
+            return String(
+                localized: "group_call.media_error.not_member",
+                defaultValue: "Non risulti tra i partecipanti di questa chiamata.",
+                comment: "Snackbar — the server says we are not a participant of the group call we tried to reach media for, the call is then ended")
+        case .transportPolicy:
+            return String(
+                localized: "group_call.media_error.transport_policy",
+                defaultValue: "Connessione non sicura rifiutata: la chiamata è stata terminata.",
+                comment: "Snackbar — the media connection did not meet the required security level (DTLS pin or transport policy) and was refused; the call is ended")
+        case .mediaLost:
+            return String(
+                localized: "group_call.media_error.media_lost",
+                defaultValue: "Connessione media persa: la chiamata è stata terminata.",
+                comment: "Snackbar — the media connection of the group call was lost and could not be recovered; the call is ended")
+        case .other:
+            return String(
+                localized: "group_call.media_error.other",
+                defaultValue: "Errore di connessione media: la chiamata è stata terminata.",
+                comment: "Snackbar — generic fatal media error of a group call; the call is ended")
         }
     }
 
     func toggleMute() {
         isMuted = manager.toggleMute()
-        // W367: also flip the controller's mute so the audio pipeline
-        // gates outgoing PCM frames (without this, mute is UI-only and
-        // audio still streams to peers).
+        // The roster flag above is what the OTHER participants see; the real
+        // mic switch is the controller's (it gates the published audio track).
         controller?.setMuted(isMuted)
-        // W-GRPMUTEFIX (item 6, 2026-07-16 wire contract): the two calls
-        // above only ever gated the LEGACY WS-relay-mesh pipeline —
-        // pressing this SAME button during an actual LiveKit-SFU call (the
-        // default/production transport) did NOT silence the outbound
-        // LiveKit audio track. `setMicrophoneEnabled` is a real no-op
-        // (returns false) when the call isn't riding the SFU, so firing it
-        // unconditionally (rather than branching on `isSfuActive`) is safe
-        // — this makes the action itself SFU-aware instead of gating the
-        // button's visibility (see `GroupCallController.
-        // setMicrophoneEnabled`'s kdoc for the bug this closes). Same
-        // unwrap-and-fire idiom as `toggleScreenShare` below.
+        // W-GRPMUTEFIX (item 6, 2026-07-16 wire contract): the button must
+        // silence the outbound track, not just the roster badge.
+        // `setMicrophoneEnabled` is the async form of the same switch and a
+        // no-op (returns false) without a live media link, so firing it
+        // unconditionally is safe.
         if let controller = controller {
             let micEnabled = !isMuted
             Task {
@@ -1786,7 +1516,7 @@ class GroupCallViewModel: ObservableObject {
     /// own group-call reaction. The controller (not the manager directly)
     /// owns the optimistic local render — see `GroupCallController.
     /// sendReaction`'s kdoc — so route through it, same unwrap-and-fire
-    /// idiom as `toggleScreenShare` below. No-op with no controller bound
+    /// idiom as `toggleMute` above. No-op with no controller bound
     /// (legacy preview path has no group-call features to show).
     func sendReaction(emoji: String) {
         controller?.sendReaction(emoji: emoji)
@@ -1820,9 +1550,9 @@ class GroupCallViewModel: ObservableObject {
         layoutMode = layoutMode == .gallery ? .speaker : .gallery
     }
 
-    /// W-GRPVIDEO: flip the local camera. Optimistic UI update (mirrors
-    /// `toggleMute`'s pattern of flipping first) — reverted if the async
-    /// LiveKit call actually fails.
+    /// W-GRPVIDEO: flip the local camera. The button follows `selfVideoTrack`
+    /// (see `isVideoEnabled`), so a refused camera surfaces only through
+    /// `controller.onMediaError` (-> `videoPublishErrorToastText`).
     func toggleVideo() {
         // W-GRPCAMSRC — no optimistic flip and no rollback any more: the button
         // renders `selfVideoTrack != nil`, so a failed `setVideoEnabled` simply
@@ -1842,29 +1572,12 @@ class GroupCallViewModel: ObservableObject {
             return
         }
         // W-GRPVIDEOTELEM (2026-09-30): the only record that the tap itself
-        // happened — `GroupCallController.setVideoEnabled` and
-        // `LiveKitGroupCallRoom.setCameraEnabled` each report how the
-        // attempt ended (published/no_room/perm_denied/failed), but none of
-        // them fire at all if this `Task` never runs, so without this
-        // "tap" line a dropped tap is indistinguishable from one the user
-        // never made.
+        // happened — `GroupCallController.setVideoEnabled` reports how the
+        // attempt ended (`onMediaError` for a refused camera), but nothing
+        // fires at all if this `Task` never runs, so without this "tap" line
+        // a dropped tap is indistinguishable from one the user never made.
         RTLog.info("call", "call.media.video_toggle stage=tap code=0 target=\(target ? 1 : 0)")
         Task { _ = await controller.setVideoEnabled(target) }
-    }
-
-    /// W-GRPSCREENSHARE: toggle screen sharing. Unlike `toggleVideo()`, this
-    /// does NOT optimistically flip `isScreenSharing` first — the real
-    /// transition is asynchronous and outside this call's control (system
-    /// broadcast picker, then the user actually starting the recording), so
-    /// flipping the UI here would show "sharing" the instant the button is
-    /// tapped even though nothing has started yet. `isScreenSharing` is
-    /// driven authoritatively by `onLocalScreenShareChanged` (wired above).
-    func toggleScreenShare() {
-        guard let controller = controller else { return }
-        let target = !isScreenSharing
-        Task {
-            _ = await controller.setScreenShareEnabled(target)
-        }
     }
 
     func endCall() {

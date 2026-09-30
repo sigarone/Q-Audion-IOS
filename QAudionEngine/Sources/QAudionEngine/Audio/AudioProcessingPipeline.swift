@@ -623,7 +623,7 @@ public final class AudioProcessingPipeline {
             if #available(iOS 13.0, *) {
                 // W-GRPVPIO-CRASH-5 — setVoiceProcessingEnabled(true) internally
                 // reconnects the engine graph and, when the hardware VP-IO unit
-                // is already owned by another engine (a concurrent LiveKit group
+                // is already owned by another engine (a concurrent group
                 // call), AVFAudio raises an Objective-C NSException from
                 // AVAudioEngineGraph::_Connect. Swift's `try` CANNOT catch an
                 // ObjC exception, so it SIGABRTs (crashPointId

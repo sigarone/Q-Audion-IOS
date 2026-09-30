@@ -7,7 +7,7 @@ import SwiftUI
 /// the production call lifecycle.
 ///
 /// Fase 2 — the "Group" preview section (mocked `GroupCallScreen`) was
-/// removed: it predated the LiveKit SFU work and had been superseded
+/// removed: it predated the group-call media work and had been superseded
 /// by the real, live `GroupCallView` (`ContentView`'s group-call cover)
 /// for a while, making the mock the only remaining reference to a dead
 /// type. Group-call design QA now happens against the live screen.

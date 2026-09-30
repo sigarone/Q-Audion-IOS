@@ -279,6 +279,14 @@ struct ContentView: View {
             snackbarHost.show(.init(text: text, severity: .info))
             appState.peerVideoPauseToastText = nil
         }
+        // Group calls v2 — a fatal media error ends the call (and its cover); this is
+        // why. Wired here, not on `GroupCallView`, so it still shows after the
+        // cover is gone.
+        .onChange(of: appState.groupCallFatalErrorToastText) { text in
+            guard let text else { return }
+            snackbarHost.show(.init(text: text, severity: .error))
+            appState.groupCallFatalErrorToastText = nil
+        }
     }
 
     /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1

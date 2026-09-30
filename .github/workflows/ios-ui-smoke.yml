@@ -27,8 +27,10 @@
 #     from the same local project.yml copy (VPN tunnel isn't exercised by
 #     the onboarding screen; NetworkExtension.framework SDK linkage stays).
 # Still unverified end-to-end as of this commit -- next run tests whether
-# QAudionBroadcastExtension (pure Swift, no native cross-compile) and the
-# simulator boot/install/Maestro steps below all hold up.
+# the app's extensions (pure Swift, no native cross-compile; the
+# ReplayKit QAudionBroadcastExtension that this originally named was removed
+# in group calls v2) and the simulator boot/install/Maestro steps below all
+# hold up.
 #
 # Requires Maestro flow(s) under apps/qaudion-ios/maestro/ -- see
 # smoke-launch.yaml for the first one (cold launch -> onboarding welcome

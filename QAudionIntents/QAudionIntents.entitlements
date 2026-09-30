@@ -4,9 +4,9 @@
 <dict>
 	<!-- App Group shared with the main QAudionApp target, dedicated to the
 	     Siri messaging bridge (SiriMessageBridgeStore.swift). Deliberately
-	     SEPARATE from the vpn/broadcast groups (this project's per-feature
+	     SEPARATE from the vpn group (this project's per-feature
 	     App Group convention, see QAudionPacketTunnel/
-	     QAudionBroadcastExtension .entitlements) and carries NO ratchet/
+	     QAudionPacketTunnel.entitlements) and carries NO ratchet/
 	     session material — see that file's own security-design doc comment
 	     and docs/superpowers/plans/2026-09-06-carplay-state-of-the-art.md
 	     (S2). NOT used by S1 (INStartCallIntent) at all. -->
