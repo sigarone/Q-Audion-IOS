@@ -79,10 +79,12 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
 - 4.4 Both PCs: bundle max-bundle, rtcp-mux require, continual gathering. **DTLS pin**: the
   remote `a=fingerprint` in qjanus' SDP MUST equal `dtls_fingerprint`, else both PCs are closed
   (`group.dtls_pin_mismatch`). SDP rules: only `mid`, `rid`, `repaired-rid` and transport-wide-cc
-  extmaps survive (allow-list; Janus 1.4.2 has no Cryptex), Opus fmtp `minptime=60;useinbandfec=1;
+  extmaps survive (allow-list; Janus 1.4.2 has no Cryptex), on the REMOTE descriptions as well as
+  the local ones (section 12.4), Opus fmtp `minptime=60;useinbandfec=1;
   usedtx=0;cbr=1;stereo=0;maxaveragebitrate=32000` and `ptime:60` (the 1:1 audio profile: 60 ms /
-  32 kbps CBR, FEC floor 10 %, no RED, no DTX). Video: VP8 simulcast 3 encodings `l/m/h` =
-  320x180@15 150 kbps, 640x360@20 450 kbps, 1280x720@25 1200 kbps.
+  32 kbps CBR, FEC floor 10 %, no RED, no DTX). Video: VP8 ONLY (section 12.8: every other video
+  codec and its RTX is removed from every local and remote description), simulcast 3 encodings
+  `l/m/h` = 320x180@15 150 kbps, 640x360@20 450 kbps, 1280x720@25 1200 kbps.
 - 4.5 Transport self-check on every PC after `connected`: `tlsVersion` = `FEFC`, `dtlsCipher` =
   `TLS_AES_256_GCM_SHA384`, `srtpCipher` = `AEAD_AES_256_GCM` (or the `SRTP_`-prefixed spelling);
   anything else closes the PC (`group.transport_policy_violation`).
@@ -102,8 +104,9 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
 - Keys: on each epoch E every member M generates a FRESH random 32-byte key `K[M,E]` (CSPRNG, no
   derivation from previous keys) and sends it to every other current member over the pairwise
   sealed control channel (`opaque_message` wrapper `{"qa_grpcall_ctrl":1,"cmid","blob"}`):
-  `{"qa_grp":2,"t":"media_key","g":<call_id>,"e":E,"k":E mod 16,"key":<b64 32 bytes>}`,
-  `media_key_nack` (`{g,e}`, "please resend") and `media_key_ack` (`{g,e}`).
+  `{"qa_grp":2,"t":"media_key","g":<call_id>,"e":E,"k":E mod 16,"p":<sender's own pseudonym>,
+  "key":<b64 32 bytes>}` (section 12.5), `media_key_nack` (`{g,e}`, "please resend") and
+  `media_key_ack` (`{g,e}`).
 - Frame crypto: native FrameCryptor, AES-GCM, HKDF (`aes_key = HKDF-SHA256(K, salt=empty,
   info=128 x 0x00, L=32)`), `sharedKey=false`, participantId = pseudonym, ring 16, no ratchet,
   `discardFrameWhenCryptorNotReady=true`. Unencrypted header bytes: Opus 1, VP8 10 (key frame) /
@@ -111,6 +114,8 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
 - Switch-over: receivers install `K[M,E]` at index E%16 as soon as it arrives; sender M switches its
   send index to E%16 when all members acked or after 1500 ms, then forces a video key frame;
   a receiver that sees MISSING_KEY for (M,E) sends `media_key_nack` (max 4, every 2 s).
+- Retirement (section 12.6): 10 s after a sender's newest key arrived, the receiver overwrites that
+  sender's older ring slots with random bytes; the sender wipes its own older keys the same way.
 
 ## 7. Telemetry (ids only: call id 8 chars, pseudonym 8 chars)
 
@@ -126,6 +131,57 @@ e2ee" and a kicked / removed token), 436 id exists. 426 / 433 -> one automatic
 `group_call_media_join`, then an error; 432 -> the `full` error; 436 -> error; 428 on a subscribe is
 not an error at all (see deviation 1); 8 s request timeout -> one retry, then a rejoin.
 
+## 12. Security amendments after the Opus review (normative)
+
+Background fact: in M150 a `RTCFrameCryptor` that is disabled PASSES FRAMES THROUGH IN CLEAR (send
+and receive), cryptors are created disabled, and releasing one leaves its transformer attached.
+Therefore:
+
+- **12.1 Never disable a live cryptor (H1/H2).** Receivers: every remote track ALWAYS has an
+  enabled cryptor; an unmapped / inactive / unknown mid is bound to a sentinel participant id that
+  has no key (frames are dropped), never `enabled = false`; when a mid moves to another publisher
+  the new binding is attached first (`GroupFrameCryptorHub.attachReceiver`: the replaced cryptor is
+  only released, and if the new one cannot be created the old one stays). Unmapped remote audio
+  tracks are also disabled (second guard). Publishers: teardown order = disable tracks -> detach
+  the tracks from the senders (`sender.track = nil`) -> close the PeerConnection -> only then
+  release the cryptors (`GroupPublisherPeer.close()`, once per wrapper). The hub has no "detach"
+  that flips `enabled`: `releaseSenders` / `releaseReceivers` / `releaseAll` / `dispose` only forget.
+- **12.2 Token bound to pseudonym (H3).** `join_token` = `<pseudonym>:<32 lowercase hex random>`;
+  qjanus refuses a publisher join whose `id` is missing or differs from the prefix (error 433); the
+  server issues and `allowed`-adds tokens in this format. The client passes the token through
+  opaquely (it only requires it to be non-empty).
+- **12.3 Control channel (H4).** For `qa_grpcall_ctrl` blobs accept ONLY v5 CONTROL frames (0xE6)
+  and the `qa_kms` pre-bootstrap; reject v4 / v3 / v2 / v1 message-crypto formats and any
+  PSK-candidate fallback for these envelopes.
+- **12.4 Remote SDP (M1).** The header-extension allow-list (mid, rid, repaired-rid,
+  transport-wide-cc) is applied to REMOTE descriptions too (answer / offer from qjanus) before
+  `setRemoteDescription` (`GroupSdpRules.mungeRemote`); the DTLS pin is checked on the raw SDP first.
+- **12.5 Pseudonym binding (M2).** `media_key` carries `"p":"<sender's own pseudonym>"` (required,
+  32 lowercase hex); the receiver refuses the key (no install, no ack) unless `p` equals the
+  pseudonym the roster (`group_call_update.media.pseudonyms`) assigns to the authenticated sender
+  user. A key held until the roster knows its sender is checked then.
+  `media_key_nack` / `media_key_ack` are unchanged.
+- **12.6 Periodic rekey + slot retirement (M4, L4).** The server bumps `sender_key_epoch` every 30
+  minutes even without roster changes (broadcast as for a roster change; clients rotate exactly as
+  on a join / leave, no client change). 10 s after a sender switched to epoch E, receivers
+  overwrite that sender's other ring slots with random bytes (retire), and the sender wipes its
+  older keys.
+- **12.7 Nacks (L6/L7).** Answer at most 4 nacks per requester per epoch (all clients). If an
+  envelope arrives for an epoch newer than ours, await the roster update before answering nacks for
+  it (see iOS deviation 18).
+- **12.8 Video codec (L8).** Group PCs offer / accept VP8 only (strip other video codecs + their
+  RTX) on all clients: `GroupSdpRules.keepOnlyVp8Video`, applied to local and remote descriptions.
+  An m-line without any VP8 (Janus' rejected `m=video 0 ... 0`) is left alone.
+- **12.9 Fail closed on cryptor creation (L9).** Creating a sender cryptor on a sender without a
+  track (or any cryptor creation failure, sender or receiver, sentinel included) is an error that
+  aborts the negotiation (`GroupPeerError.cryptorFailed`), never a silent no-op.
+- **12.10 qjanus build (L10).** `#error` if `HAVE_SRTP_AESGCM` is undefined (qjanus repository).
+- **12.11 Key wiping (L5).** Zero key bytes when retired / replaced where the language allows. iOS:
+  the coordinator's key stores (`ownKeys`, `installed`, pending) hold `GroupKeyBuffer`s (one
+  allocation, `memset_s` on wipe / release); keys of a departed member, keys that fell out of the
+  ring, expired pending keys and every key at `stop()` are wiped. The `Data` copies handed to the
+  native key provider and to the wire envelope are transient.
+
 ## iOS implementation map
 
 | Concern | Where |
@@ -134,7 +190,7 @@ not an error at all (see deviation 1); 8 s request timeout -> one retry, then a 
 | Janus JSON / session / VideoRoom | `GroupCall/JanusWire.swift`, `JanusClient.swift`, `URLSessionJanusSocket.swift`, `VideoRoomClient.swift` |
 | Serialized renegotiation, pin, self-check, layers, ICE restart | `GroupCall/GroupMediaSession.swift`, `GroupSerialQueue.swift`, `GroupSdpRules.swift`, `GroupTransportPolicy.swift`, `GroupLayerPolicy.swift`, `GroupNetworkPathWatcher.swift` |
 | PeerConnections on the shared factory | `GroupCall/GroupPeerConnections.swift`, `WebRtcGroupMediaBackend.swift` |
-| E2EE v2 | `GroupCall/GroupE2ee.swift` (envelopes + epoch coordinator), `GroupFrameCryptorHub.swift` |
+| E2EE v2 | `GroupCall/GroupE2ee.swift` (envelopes, epoch coordinator, `GroupControlChannelPolicy`), `GroupKeyBuffer.swift` (zeroable key storage), `GroupFrameCryptorHub.swift` |
 | Call controller, recovery ladder | `GroupCall/GroupCallController.swift`, `GroupMediaRecoveryPolicy.swift` |
 | Audio unit / CallKit path | `GroupCall/GroupAudioUnitDriver.swift`, `NativeAudioSessionGate`, `QAudionApp/AppState.swift` (`startGroupCallAudioPath`) |
 | Telemetry | `GroupCall/GroupTelemetry.swift` |
@@ -167,7 +223,8 @@ not an error at all (see deviation 1); 8 s request timeout -> one retry, then a 
    audio session is then activated by the app, `.selfManaged`).
 7. **Nack hardening (section 5.4).** `media_key_nack` is answered only for the CURRENT epoch: the
    ring still holds up to 15 older keys of ours, and re-sending one to a member that joined later
-   would break the "a joiner never gets a key before its own epoch" rule.
+   would break the "a joiner never gets a key before its own epoch" rule. Since section 12.7 at
+   most 4 nacks per requester and epoch are answered.
 8. **First-connect watchdog (section 4.7).** The spec only names "not connected within 10 s of a
    restart"; a publisher PC that never reaches `connected` after the very first connect asks for a
    rejoin after 15 s as well.
@@ -188,8 +245,9 @@ not an error at all (see deviation 1); 8 s request timeout -> one retry, then a 
     FrameCryptor before the answer exists; a receiver that is not a known, enabled publisher stream
     (a removed stream, or one a node injected without a mapping) is bound to a participant id nobody
     holds a key for, so whatever arrives on it is discarded instead of being played in the clear.
-    Dropping the subscriber on its own (a refused join) only detaches the receiver cryptors: the
-    publisher's sender cryptors keep running.
+    Dropping the subscriber on its own (a refused join) only releases the receiver cryptors: the
+    publisher's sender cryptors keep running. No cryptor is ever DISABLED while its PeerConnection is
+    alive (section 12.1).
 14. **Audio session of a group call CallKit does not track.** The audio unit driver asks the app for a
     session if none was activated 2 s after the call began (a foreground accept that fell back to the
     direct path, a cold start), never enables a unit the 1:1 leg still holds, takes the unit over
@@ -201,3 +259,15 @@ not an error at all (see deviation 1); 8 s request timeout -> one retry, then a 
     the trailer, and the key-ring scenarios (wrap at epoch 17, missing key vs decrypt failure,
     per-participant rings) driven through the real `GroupE2eeCoordinator`. The frame crypto itself is
     the native FrameCryptor on iOS; the vectors run through the Swift port of the same layout.
+16. **Group control channel accepts v5 CONTROL frames only (section 12.3).** The `qa_grpcall_ctrl`
+    receive path in `AppState` refuses every blob that is not a v5 (0xE6) frame before any key is
+    tried: the v4 chat-session branch, the v3 / v2 message-crypto branches and the PSK-candidate
+    sweeps of the pre-v2 channel (`groupCtrlPskCandidates`) are deleted. The `qa_kms` pre-bootstrap
+    envelope is the one other route and keeps its own self-authenticating decode. The decision is
+    `GroupControlChannelPolicy` (pure, `GroupE2eeHardeningTests`).
+17. **Retirement clock (section 12.6).** The receiver cannot see when a sender switched, so the 10 s
+    run from the arrival of the sender's newest key (the sender switches within 1.5 s of sending it,
+    or on the last ack). A newer key restarts the clock; the newest key is never overwritten.
+18. **Nack ahead of the roster (section 12.7).** A nack for an epoch newer than ours is not
+    answered: the roster update that follows distributes our key of that epoch to every member, the
+    requester included, which is the answer; nothing is queued.
