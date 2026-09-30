@@ -13151,164 +13151,47 @@ final class AppState: ObservableObject {
             return
         }
 
-        // Path C — W-GRPSENDERKEY group-call control envelope. Wire shape
-        // `{"qa_grpcall_ctrl":1,"cmid":"...","blob":"<base64 1:1-ratchet
-        // wire>"}` — a distinct top-level key from every other opaque_message
-        // consumer above AND from chat's own `qa_grp:1` (which rides the
-        // regular msg_send channel via `handleIncomingMessage`, not
-        // opaque_message). Decrypted inline via the SAME shared
-        // `Self.sharedV4Ratchet`/`Self.ratchet` instances chat uses (not a
-        // separate MessageRatchet — see GroupCallController.swift's
-        // "Control-envelope transport" comment for why that was a bug).
+        // Path C — group-call control envelope (W-GRPSENDERKEY). Wire shape
+        // `{"qa_grpcall_ctrl":1,"cmid":"...","blob":"<base64 v5 CONTROL frame>"}` —
+        // a distinct top-level key from every other opaque_message consumer above
+        // AND from chat's own `qa_grp:1` (which rides the regular msg_send channel
+        // via `handleIncomingMessage`, not opaque_message). Decrypted inline via
+        // the SAME shared `Self.sharedV4Ratchet` instance chat uses (not a separate
+        // MessageRatchet — see GroupCallController.swift's "Control-envelope
+        // transport" comment for why that was a bug).
+        //
+        // Group calls v2 (spec §12.3): this channel accepts ONLY a v5 CONTROL
+        // frame (0xE6); the `qa_kms` pre-bootstrap (Path D above) is the only other
+        // way a group-call control envelope arrives. The v4 / v3 / v2 / v1
+        // message-crypto formats and the PSK-candidate sweeps of the pre-v2 channel
+        // are gone: a blob in any of them is refused here, never tried against a
+        // stored key, because group control is service traffic and must never be
+        // opened with chat-class chain state or a contact PSK.
         if let obj = try? JSONSerialization.jsonObject(with: Data(blobStr.utf8)) as? [String: Any],
            (obj["qa_grpcall_ctrl"] as? NSNumber)?.intValue == 1,
            let cmid = obj["cmid"] as? String,
            let blobB64 = obj["blob"] as? String,
            let wire = Data(base64Encoded: blobB64) {
-            let selfId = currentUserId ?? ""
-            let json: String?
-            // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): this is the
-            // receive-side mirror of `onSendControlEnvelope`'s new logging
-            // above — a decrypt failure HERE means the sender's envelope
-            // (which the sender-side log confirms was actually shipped)
-            // never reaches `GroupCallController.onGroupCallControlEnvelope`
-            // at all, silently, with no prior trace anywhere. Distinguishing
-            // "sent OK but couldn't be opened here" from "never sent" is
-            // exactly the missing piece the 2026-07-15 recon flagged as an
-            // unresolved residual for the S26<->iOS leg of this incident.
-            // W-GRPCTRL-PARITY (2026-07-20, call FB75E465): version-triage
-            // exactly like Desktop's `handleGroupCtrlOpaque` — v4 by magic;
-            // v3/v2 parse the epoch tag FROM THE WIRE and look the PSK up BY
-            // NAME (with the contact-bound ladder as fallback for
-            // sender-local names like `auto:*` and for legacy 'v1'-epoch
-            // wires from not-yet-updated iOS peers). The old code force-
-            // opened every non-v4 wire with the hardcoded session epoch 'v1'
-            // + the PSK ladder: an epoch-named wire (what Desktop/Android
-            // actually send — e.g. Desktop's "v2 AEAD epoch=auto:…" seal to
-            // this exact iPhone in call FB75E465) failed in silence
-            // (epochMismatch / wrong AAD, logged only as v1_decrypt_failed).
-            switch MessageWireFormat.detect(wire) {
-            case .v5:
-                // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — CONTROL-first, tried before v4,
-                // mirroring the send-side ladder in `onSendControlEnvelope` above. Routes by PEER
-                // id against the one wired epoch (``MessageRatchet/v5ControlRoutingEpoch``) — the
-                // opaque frame carries no epoch hint, same constraint v4 already has.
-                json = Self.sharedV4Ratchet.decryptV5Routed(
-                    epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: wire)
-                    .flatMap { String(data: $0, encoding: .utf8) }
-                if json == nil {
-                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v5ctrl_decrypt_failed")
-                }
-            case .v4:
-                json = Self.sharedV4Ratchet.decryptV4Routed(peerId: senderId, frame: wire)
-                    .flatMap { String(data: $0, encoding: .utf8) }
-                if json == nil {
-                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v4_decrypt_failed")
-                }
-            case .v3:
-                // Wire layout (MessageRatchet spec §2): magic(1) |
-                // epoch_len(1) | epoch(L) | … — parse only the epoch here,
-                // the ratchet re-validates the full frame.
-                let base = wire.startIndex
-                let epochLen = wire.count >= 2 ? Int(wire[base + 1]) : 0
-                if epochLen >= 1, wire.count >= 2 + epochLen,
-                   let epochTag = String(data: wire.subdata(in: (base + 2)..<(base + 2 + epochLen)), encoding: .utf8) {
-                    // W-GRPCTRLPSKSWEEP — TRY each candidate; a single best
-                    // guess never matched Desktop. See groupCtrlPskCandidates.
-                    // W-GRPCTRLPSKSWEEP2 (2026-07-28) — the earlier sweep here
-                    // was INERT and this is why. It called `ensureSession`,
-                    // which is snapshot-first: once a snapshot exists for
-                    // (epochTag, sender) it returns THAT and ignores pskRoot,
-                    // so all N candidates collapsed onto one cached session and
-                    // re-ran the identical decrypt N times (measured live:
-                    // `tried=68/68`, 0 successes). Worse, `ensureSession`
-                    // PERSISTS on a miss, so iOS's very first Desktop envelope
-                    // — which fell through to the wrong `auto:` root — wrote a
-                    // poisoned session into the Keychain permanently: 43
-                    // failures, 0 successes, ever.
-                    //
-                    // Correct order: try the ESTABLISHED session first (the
-                    // normal path, and the only one that carries chain state
-                    // forward), then genuinely distinct roots derived WITHOUT
-                    // touching the vault. `decrypt` persists whichever session
-                    // actually opens the frame, so a winning candidate becomes
-                    // the established session from then on and the poisoned
-                    // snapshot is replaced rather than worked around.
-                    let aadV3 = MessageRatchet.buildMessageAD(
-                        senderId: senderId, recipientId: selfId, clientMsgId: cmid)
-                    var opened: String?
-                    var attempted = 0
-                    if let stored = Self.ratchet.existingSession(
-                        epochId: epochTag, peerId: senderId) {
-                        attempted += 1
-                        opened = Self.ratchet.decrypt(session: stored, wire: wire, aad: aadV3)
-                            .flatMap { String(data: $0, encoding: .utf8) }
-                    }
-                    let candidates = opened == nil
-                        ? Self.groupCtrlPskCandidates(epochTag: epochTag, sender: senderId)
-                        : []
-                    if opened == nil {
-                        for psk in candidates {
-                            guard let session = try? Self.ratchet.deriveSessionUnpersisted(
-                                epochId: epochTag, selfId: selfId, peerId: senderId,
-                                pskRoot: psk) else { continue }
-                            attempted += 1
-                            if let plain = Self.ratchet.decrypt(session: session, wire: wire, aad: aadV3)
-                                .flatMap({ String(data: $0, encoding: .utf8) }) {
-                                opened = plain
-                                break
-                            }
-                        }
-                    }
-                    json = opened
-                    if json == nil {
-                        let reason = candidates.isEmpty ? "v3_no_psk_for_epoch"
-                            : (attempted == 0 ? "v3_ensure_session_failed" : "v3_decrypt_failed")
-                        print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(reason) epoch=\(epochTag.prefix(16)) tried=\(attempted)/\(candidates.count)")
-                    }
-                } else {
-                    json = nil
-                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v3_wire_malformed len=\(wire.count)")
-                }
-            case .v2:
-                // v2 (0xE2 epoch-routed) — sealed with the CHANNEL AAD
-                // `grpcall-ctrl:<sender>:<recipient>`, NOT chat's `msg:`
-                // AAD (Android `sendControlEnvelope` / Desktop's v2 open
-                // branch — and our own send side above).
-                let aad = Data("grpcall-ctrl:\(senderId):\(selfId)".utf8)
-                if let parsed = try? MessageCryptoV2.parse(wire) {
-                    // W-GRPCTRLPSKSWEEP — TRY each candidate (see the v3 branch
-                    // above and groupCtrlPskCandidates for why one guess never
-                    // matched Desktop). This is the branch Desktop actually
-                    // uses: its transport tag on the wire is `v2:auto:...`.
-                    let candidates = Self.groupCtrlPskCandidates(epochTag: parsed.epoch, sender: senderId)
-                    var opened: String?
-                    for psk in candidates {
-                        if let plain = MessageCryptoV2.openWithPsk(parsed: parsed, psk: psk, aad: aad)
-                            .flatMap({ String(data: $0, encoding: .utf8) }) {
-                            opened = plain
-                            break
-                        }
-                    }
-                    json = opened
-                    if json == nil {
-                        let reason = candidates.isEmpty ? "v2_no_psk_for_epoch" : "v2_decrypt_failed"
-                        print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(reason) epoch=\(parsed.epoch.prefix(16)) tried=\(candidates.count)")
-                    }
-                } else {
-                    json = nil
-                    print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v2_wire_malformed len=\(wire.count)")
-                }
-            case .v1:
-                // No group-ctrl sender emits the magic-less legacy v1 wire
-                // on this channel (Android seals v2+, Desktop v2+, iOS
-                // v2/v4) — log rather than guess at a PSK/AAD pair.
-                json = nil
-                print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=unsupported_legacy_v1_wire len=\(wire.count)")
+            guard GroupControlChannelPolicy.accepts(wire: wire) else {
+                print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(GroupControlChannelPolicy.rejectionReason(for: wire)) len=\(wire.count)")
+                return
             }
+            // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): this is the
+            // receive-side mirror of `onSendControlEnvelope`'s logging above — a
+            // decrypt failure HERE means the sender's envelope (which the sender-side
+            // log confirms was actually shipped) never reaches
+            // `GroupCallController.onGroupCallControlEnvelope` at all, silently.
+            // Q-Audion Dual-Channel Ratchet v5 (2026-09-16) — routes by PEER id
+            // against the one wired epoch (``MessageRatchet/v5ControlRoutingEpoch``):
+            // the opaque frame carries no epoch hint.
+            let json = Self.sharedV4Ratchet.decryptV5Routed(
+                epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: wire)
+                .flatMap { String(data: $0, encoding: .utf8) }
             if let json = json {
                 print("[GroupCallController][telemetry] ctrl envelope RECEIVED+decrypted sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)), forwarding to GroupCallController")
                 groupCallController?.onGroupCallControlEnvelope(json: json, fromUserId: senderId)
+            } else {
+                print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=v5ctrl_decrypt_failed")
             }
             return
         }
@@ -25717,49 +25600,6 @@ extension AppState {
             }
         }
         return resolveGroupCtrlPsk(peer: sender)
-    }
-
-    /// W-GRPCTRLPSKSWEEP (2026-07-28) — every PSK worth TRYING for a
-    /// `qa_grpcall_ctrl` envelope, best guess first, mirroring Android's
-    /// `MessageCrypto.tryAllPsks` fallthrough.
-    ///
-    /// [lookupGroupCtrlPskByEpoch] returns a single best guess, and both call
-    /// sites used to attempt exactly ONE decrypt with it. That is three
-    /// candidates in total (`call-<tag>`, `<tag>`, one contact-bound key), and
-    /// Desktop matches none of them: it seals with
-    /// `vault.forContactWithMeta(peer)` and puts THAT key's own name on the
-    /// wire as the epoch tag (live value observed: `9d8f98fe`). So iOS never
-    /// installed Desktop's sender key even once. Server-side corpus over three
-    /// days: `ctrl envelope RECEIVED+decrypted sender=81ad802f` = 0 against
-    /// `RECEIVE FAILED sender=81ad802f` = 41. In a live call Desktop's audio
-    /// then arrived ~100% concealed (in_concealed_samples 13 200 -> 213 840 in
-    /// ~5 s) and its video never rendered, while Android's tracks in the SAME
-    /// call were fine — exactly the asymmetry reported as "on iOS I don't see
-    /// Desktop, the others do".
-    ///
-    /// Trying rather than guessing is safe and bounded: AEAD authenticates, so
-    /// a wrong key fails the tag and can never yield a forged plaintext; the
-    /// extra work is at most one open() per stored PSK and is paid ONLY when
-    /// the targeted lookup already missed. Deduped so the common case still
-    /// costs a single attempt.
-    static func groupCtrlPskCandidates(epochTag: String, sender: String) -> [Data] {
-        let vault = SovereignKeyVault()
-        var out: [Data] = []
-        var seen = Set<Data>()
-        func add(_ d: Data?) {
-            guard let d, !d.isEmpty, !seen.contains(d) else { return }
-            seen.insert(d)
-            out.append(d)
-        }
-        let targetName = epochTag.hasPrefix("call-") ? epochTag : "call-\(epochTag)"
-        for name in [targetName, epochTag] {
-            add((try? vault.loadPsk(name: name)) ?? nil)
-        }
-        add(resolveGroupCtrlPsk(peer: sender))
-        for name in vault.listPskNames() {
-            add((try? vault.loadPsk(name: name)) ?? nil)
-        }
-        return out
     }
 
     /// Decrypt a v3.1 wire blob. Bootstraps the per-peer session from
