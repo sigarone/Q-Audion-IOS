@@ -44,6 +44,12 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   current node failed.
 - `group_call_decline` (C->S) `{call_id}`; server ring timeout 45 s per invitee, after which the
   invitee devices get `group_call_ended {reason:"ring_timeout"}`.
+- `group_call_media_refresh` (C->S) `{call_id}` -> `group_call_media_token` (S->C) `{call_id,
+  session_token, ttl_s:600}` (spec section 11): Janus re-validates the signed session token on EVERY
+  request, keepalive included, so a client with a Janus session asks for a fresh one every 300 s and
+  once more before it reconnects the media WebSocket; the newest token is used for every later
+  request. A requester that is no longer a member gets `group_call_media_unavailable
+  {reason:"not_member"}`, which ends the media.
 
 ## 4. Client Janus protocol
 
@@ -51,10 +57,12 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   token, keepalive every 25 s, random 128-bit transaction per request, 8 s timeout per request.
 - 4.2 Publisher handle: `join {ptype:"publisher", room, id:pseudonym, display:pseudonym,
   token:join_token}`; create the publisher PC, attach FrameCryptors to every sender BEFORE the
-  offer, then `publish {audio, video, e2ee:true, rid_order:"lmh", descriptions}` with the offer
-  (`rid_order` because our SDP lists the rids l, m, h ascending: without it Janus assumes
-  highest-first and substream 0 would be the highest layer; the ICE-restart `configure` carries
-  it too).
+  offer, then `publish {audio, video, descriptions}` with the offer JSEP `{type:"offer", sdp,
+  e2ee:true, rid_order:"lmh"}` (spec section 11: both flags live on the JSEP object, never in the
+  request body; `rid_order` because our SDP lists the rids l, m, h ascending: without it Janus
+  assumes highest-first and substream 0 would be the highest layer; the ICE-restart offer of
+  `configure {restart:true}` carries both too). A sender or receiver whose FrameCryptor cannot be
+  attached refuses the negotiation (nothing is sent or rendered in the clear).
 - 4.3 Subscriber handle (multistream): `join {ptype:"subscriber", room, private_id, streams}` (only
   the private id, no token), Janus offers, the client answers (`start`); `subscribe` /
   `unsubscribe` renegotiate (`updated` + a new offer; a removed mid stays in the SDP as
@@ -165,3 +173,18 @@ not an error at all (see deviation 1); 8 s request timeout -> one retry, then a 
 11. **VP8 encoder wrapping.** The 1:1 encoder factory wrapped every encoder in
    `KeyframeForcingVideoEncoder`; native builders (VP8 / VP9 / AV1, libvpx simulcast) cannot be
    wrapped, so those three are now returned unwrapped (H.265, the 1:1 codec, is unchanged).
+12. **A vanished feed among several (Janus 428).** Janus refuses the WHOLE `subscribe` / subscriber
+    `join` when any feed in it is gone. iOS then retries the feeds one at a time and sets aside only
+    the ones that really vanished (until their next `publishers` event), instead of treating the
+    whole batch as unavailable, which would have silenced every other publisher of the room.
+13. **Receivers without a publisher stream.** Every audio / video receiver of the subscriber PC gets a
+    FrameCryptor before the answer exists; a receiver that is not a known, enabled publisher stream
+    (a removed stream, or one a node injected without a mapping) is bound to a participant id nobody
+    holds a key for, so whatever arrives on it is discarded instead of being played in the clear.
+    Dropping the subscriber on its own (a refused join) only detaches the receiver cryptors: the
+    publisher's sender cryptors keep running.
+14. **Audio session of a group call CallKit does not track.** The audio unit driver asks the app for a
+    session if none was activated 2 s after the call began (a foreground accept that fell back to the
+    direct path, a cold start), never enables a unit the 1:1 leg still holds, takes the unit over
+    when the 1:1 leg ends by ANY path, and the app pays the matching deactivation of its own
+    self-activation when such a group call ends.

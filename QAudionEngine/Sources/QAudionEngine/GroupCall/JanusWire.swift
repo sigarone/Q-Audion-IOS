@@ -9,13 +9,27 @@ import Foundation
 public struct JanusJsep: Equatable, Sendable {
     public let type: String
     public let sdp: String
+    /// `e2ee:true` marks the SDP as end-to-end encrypted. It lives on the JSEP
+    /// object, never in the request body (spec §11); the room's `require_e2ee`
+    /// refuses a publisher whose offer does not carry it.
+    public let e2ee: Bool
+    /// `rid_order` ("lmh") tells Janus the order our SDP lists the simulcast rids
+    /// in (ascending): without it Janus assumes highest-first (spec §11).
+    public let ridOrder: String?
 
-    public init(type: String, sdp: String) {
+    public init(type: String, sdp: String, e2ee: Bool = false, ridOrder: String? = nil) {
         self.type = type
         self.sdp = sdp
+        self.e2ee = e2ee
+        self.ridOrder = ridOrder
     }
 
-    var dictionary: [String: Any] { ["type": type, "sdp": sdp] }
+    var dictionary: [String: Any] {
+        var out: [String: Any] = ["type": type, "sdp": sdp]
+        if e2ee { out["e2ee"] = true }
+        if let ridOrder = ridOrder { out["rid_order"] = ridOrder }
+        return out
+    }
 }
 
 public struct JanusMessage: @unchecked Sendable {

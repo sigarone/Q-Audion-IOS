@@ -90,6 +90,9 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     public var onMediaUnavailable: ((_ callId: String, _ reason: GroupCallWire.UnavailableReason) -> Void)?
     /// `group_call_media_moved` (spec §2.5): the room moved to another node.
     public var onMediaMoved: ((_ callId: String, _ nodeId: String) -> Void)?
+    /// `group_call_media_token` (spec §11): a fresh Janus session token, the answer
+    /// to `requestMediaRefresh`.
+    public var onMediaToken: ((GroupCallWire.MediaToken) -> Void)?
     /// `group_call_ended` for a call that is NOT the active one, i.e. a ring we
     /// never joined (creator ended, ring timeout, declined on another device).
     public var onRingEnded: ((_ callId: String, _ reason: String) -> Void)?
@@ -345,6 +348,16 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         send(type: "group_call_media_rejoin", data: ["call_id": callId, "reason": String(reason.prefix(24))])
     }
 
+    /// `group_call_media_refresh` (spec §11): Janus re-validates its signed session
+    /// token on EVERY request and the token expires after 600 s, so a client with a
+    /// Janus session asks for a fresh one every 300 s (and before it reconnects the
+    /// media WebSocket). The answer is `group_call_media_token`, or
+    /// `group_call_media_unavailable {reason: "not_member"}` when we are no longer a
+    /// member of the call.
+    public func requestMediaRefresh(callId: String) {
+        send(type: "group_call_media_refresh", data: ["call_id": callId])
+    }
+
     /// Tier-1: group-call BROADCAST reaction (Template B, mirrors
     /// `group_typing`'s two-phase lock-then-network send). No-op outside an
     /// active call. Server does not
@@ -471,6 +484,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         ws.registerHandler(type: "group_call_media_moved") { [weak self] _, data in
             self?.handleMediaMoved(data: data)
         }
+        // Spec 11: {call_id, session_token, ttl_s}, the answer to a refresh.
+        ws.registerHandler(type: "group_call_media_token") { [weak self] _, data in
+            self?.handleMediaToken(data: data)
+        }
 
         // ─── Tier-1 call features (2026-07-16 wire contract) ───────────
 
@@ -534,6 +551,15 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     func handleMediaUnavailable(data: [String: Any]) {
         guard let cid = data["call_id"] as? String, cid == callId else { return }
         onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: (data["reason"] as? String) ?? ""))
+    }
+
+    func handleMediaToken(data: [String: Any]) {
+        guard let token = GroupCallWire.MediaToken.parse(data) else {
+            print("[BCryptoGroupCallManager] group_call_media_token UNPARSEABLE (refused)")
+            return
+        }
+        guard token.callId == callId else { return }
+        onMediaToken?(token)
     }
 
     func handleMediaMoved(data: [String: Any]) {

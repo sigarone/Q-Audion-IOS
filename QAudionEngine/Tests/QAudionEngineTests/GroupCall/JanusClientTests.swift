@@ -24,6 +24,10 @@ final class JanusWireTests: XCTestCase {
 
     func testMessageWithAndWithoutJsep() {
         let jsep = JanusJsep(type: "offer", sdp: "v=0")
+        XCTAssertEqual(jsep.dictionary.keys.sorted(), ["sdp", "type"], "no flag unless asked for")
+        let flagged = JanusJsep(type: "offer", sdp: "v=0", e2ee: true, ridOrder: "lmh")
+        XCTAssertEqual(flagged.dictionary["e2ee"] as? Bool, true)
+        XCTAssertEqual(flagged.dictionary["rid_order"] as? String, "lmh")
         let with = JanusWire.message(sessionId: 1, handleId: 2, body: ["request": "publish"], jsep: jsep, token: "t")
         XCTAssertEqual((with["jsep"] as? [String: Any])?["type"] as? String, "offer")
         XCTAssertEqual((with["jsep"] as? [String: Any])?["sdp"] as? String, "v=0")
@@ -55,6 +59,7 @@ final class JanusWireTests: XCTestCase {
         XCTAssertEqual(message.sender, 7)
         XCTAssertEqual(message.pluginData?["videoroom"] as? String, "joined")
         XCTAssertEqual(message.jsep, JanusJsep(type: "answer", sdp: "v=0"))
+        XCTAssertEqual(message.jsep?.e2ee, false, "an incoming JSEP carries no flags of ours")
     }
 
     func testParseErrors() throws {
@@ -164,6 +169,29 @@ final class JanusClientTests: XCTestCase {
         let handle = try await client.attach()
         XCTAssertGreaterThan(handle, 2000)
         XCTAssertEqual(server.requests.compactMap { $0["token"] as? String }, ["tok", "tok"])
+        client.close()
+    }
+
+    func testTheNewestTokenIsUsedForEveryLaterRequestKeepaliveIncluded() async throws {
+        let server = FakeJanusServer()
+        let token = JanusSessionToken("first")
+        var config = JanusClient.Config()
+        config.requestTimeoutSeconds = 0.4
+        config.keepaliveIntervalSeconds = 0.1
+        let client = JanusClient(config: config, makeSocket: { server }, token: { token.value })
+        _ = try await client.connect()
+        let handle = try await client.attach()
+        token.update("second")
+        _ = try await client.send(handle: handle, body: ["request": "join", "ptype": "publisher", "room": "r", "id": "me"])
+        client.trickle(handle: handle, candidate: nil)
+        try await Task.sleep(nanoseconds: 450_000_000)
+        let byKind = Dictionary(grouping: server.requests, by: { $0["janus"] as? String ?? "" })
+        XCTAssertEqual(byKind["create"]?.compactMap { $0["token"] as? String }, ["first"])
+        XCTAssertEqual(byKind["message"]?.compactMap { $0["token"] as? String }, ["second"])
+        XCTAssertEqual(byKind["trickle"]?.compactMap { $0["token"] as? String }, ["second"])
+        let keepalives = byKind["keepalive"]?.compactMap { $0["token"] as? String } ?? []
+        XCTAssertGreaterThanOrEqual(keepalives.count, 2)
+        XCTAssertEqual(keepalives.last, "second", "Janus re-validates the token on every request, keepalive included")
         client.close()
     }
 

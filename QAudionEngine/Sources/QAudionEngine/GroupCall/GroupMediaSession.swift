@@ -128,6 +128,11 @@ public final class GroupMediaSession: @unchecked Sendable {
         /// Decoded audio level per publisher pseudonym, every stats tick.
         case audioLevels([String: Double])
         case telemetry(GroupTelemetryEvent)
+        /// The Janus session token must be refreshed (spec §11): the controller
+        /// sends `group_call_media_refresh`, the answer swaps the token in. Every
+        /// `tokenRefreshSeconds` while the session is up ("periodic"), and once
+        /// before the media WebSocket is reconnected ("ws_reconnect").
+        case tokenRefresh(String)
     }
 
     public struct Config: Sendable {
@@ -137,6 +142,9 @@ public final class GroupMediaSession: @unchecked Sendable {
         /// How long the first connect of the publisher may take before a rejoin.
         public var startWatchdogSeconds: Double = 15
         public var statsIntervalSeconds: Double = 1
+        /// Janus re-validates the signed session token on EVERY request and it
+        /// lives 600 s: ask for a fresh one every 300 s (spec §11).
+        public var tokenRefreshSeconds: Double = 300
         public var transportCheckAttempts = 12
         public var transportCheckIntervalMs: UInt64 = 250
         public var debounceMs: UInt64 = GroupSerialQueue.defaultDebounceMs
@@ -186,6 +194,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     private var lastStats: [String: GroupInboundVideoStat] = [:]
     private var pcStates: [GroupTelemetry.PcRole: GroupPcState] = [:]
     private var statsTask: Task<Void, Never>?
+    private var tokenRefreshTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var disconnectTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -220,6 +229,9 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     /// Connects, joins, publishes. Throws `JanusClientError` or `Failure`.
     public func start(publishVideo: Bool) async throws {
+        // A session closed before it started (the call ended while the link was
+        // being built) must not connect: `JanusClient.connect` reopens a closed client.
+        guard !isClosed else { throw JanusClientError.closed }
         setState(.connecting)
         janus.onEvent = { [weak self] message in self?.handle(message) }
         janus.onTransportClosed = { [weak self] error in self?.transportClosed(error) }
@@ -245,6 +257,7 @@ public final class GroupMediaSession: @unchecked Sendable {
             adoptPublishers(joined.publishers)
             setState(.active)
             startStatsLoop()
+            startTokenRefreshLoop()
             // A first connect that never completes is a broken path just like a
             // restart that never completes (spec 4.7): ask for a rejoin.
             armRestartWatchdog(seconds: config.startWatchdogSeconds)
@@ -313,8 +326,9 @@ public final class GroupMediaSession: @unchecked Sendable {
         }
         closed = true
         state = .closed
-        let tasks = [statsTask, watchdogTask, disconnectTask, reconnectTask]
+        let tasks = [statsTask, tokenRefreshTask, watchdogTask, disconnectTask, reconnectTask]
         statsTask = nil
+        tokenRefreshTask = nil
         watchdogTask = nil
         disconnectTask = nil
         reconnectTask = nil
@@ -466,12 +480,43 @@ public final class GroupMediaSession: @unchecked Sendable {
             // "No such feed": the publisher stopped (or has not started) publishing
             // between its `publishers` entry and our request. Wait for its next
             // `publishers` event instead of tearing the whole media path down.
-            lock.lock()
-            for key in toAdd { unavailableFeeds.insert(Self.target(from: key).feed) }
-            lock.unlock()
+            let feeds = Set(toAdd.map { Self.target(from: $0).feed })
+            if feeds.count <= 1 {
+                lock.lock()
+                for feed in feeds { unavailableFeeds.insert(feed) }
+                lock.unlock()
+            } else {
+                await subscribeFeedByFeed(toAdd, privateId: privateIdValue)
+            }
+            if !toRemove.isEmpty { scheduleReconcile() }
         } catch {
             handleRequestError(error, context: "subscribe")
         }
+    }
+
+    /// Janus refuses the WHOLE `subscribe` / subscriber `join` when any feed of it
+    /// is gone (428). Marking the entire batch unavailable would silence every
+    /// publisher of the room until each of them publishes again, so the feeds are
+    /// retried one at a time and only the ones that really vanished are set aside
+    /// until their next `publishers` event.
+    private func subscribeFeedByFeed(_ keys: Set<String>, privateId: Int64) async {
+        var byFeed: [String: Set<String>] = [:]
+        for key in keys { byFeed[Self.target(from: key).feed, default: []].insert(key) }
+        for feed in byFeed.keys.sorted() {
+            if isClosed { return }
+            guard let feedKeys = byFeed[feed] else { continue }
+            do {
+                try await subscribe(targets: feedKeys, privateId: privateId)
+            } catch JanusClientError.plugin(let code, _) where code == 428 {
+                lock.lock()
+                unavailableFeeds.insert(feed)
+                lock.unlock()
+            } catch {
+                handleRequestError(error, context: "subscribe")
+                return
+            }
+        }
+        await applyDesiredLayers()
     }
 
     private static func target(from key: String) -> VideoRoomSubscribeTarget {
@@ -660,6 +705,24 @@ public final class GroupMediaSession: @unchecked Sendable {
         lock.lock()
         statsTask?.cancel()
         statsTask = task
+        lock.unlock()
+    }
+
+    /// Spec §11: "while a client has a Janus session for a call it sends
+    /// `group_call_media_refresh` every 300 s".
+    private func startTokenRefreshLoop() {
+        let interval = config.tokenRefreshSeconds
+        let task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if Task.isCancelled { return }
+                guard let self = self, !self.isClosed else { return }
+                self.emit(.tokenRefresh("periodic"))
+            }
+        }
+        lock.lock()
+        tokenRefreshTask?.cancel()
+        tokenRefreshTask = task
         lock.unlock()
     }
 
@@ -945,6 +1008,10 @@ public final class GroupMediaSession: @unchecked Sendable {
         reconnectTask = task
         lock.unlock()
         setState(.reconnecting)
+        // Spec §11: a fresh token BEFORE the reconnect. The answer swaps it in
+        // while the backoff runs, so a reclaim that finds the old token expired
+        // (403) is retried with the new one.
+        emit(.tokenRefresh("ws_reconnect"))
     }
 
     // MARK: - Errors

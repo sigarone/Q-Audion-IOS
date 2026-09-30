@@ -8,6 +8,9 @@ public enum GroupPeerError: Error, Equatable, Sendable {
     case factoryRefused
     case sdpFailed(String)
     case transceiverFailed
+    /// The frame cryptor of a sender / receiver could not be attached: the
+    /// stream would travel or render in the clear, so the negotiation is refused.
+    case cryptorFailed
 }
 
 /// Group calls v2 (spec §4.4) — the plumbing both PeerConnections share: the
@@ -45,6 +48,9 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
     /// binds the node to its published certificate and `GroupTransportPolicy`
     /// checks version / cipher / SRTP profile after connect.
     func makePeerConnection() throws -> RTCPeerConnection {
+        // A wrapper closed before it started (the session was torn down while the
+        // start was in flight) must never build a PeerConnection nobody closes.
+        guard !isClosed else { throw GroupPeerError.notStarted }
         let configuration = QAudionPeerConnectionFactory.defaultConfiguration(
             iceServers: iceServers, nativeSrtpEnabledLocally: true)
         configuration.iceTransportPolicy = .all
@@ -53,6 +59,11 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
             throw GroupPeerError.factoryRefused
         }
         stateLock.lock()
+        if closed {
+            stateLock.unlock()
+            pc.close()
+            throw GroupPeerError.notStarted
+        }
         peerConnection = pc
         stateLock.unlock()
         return pc
@@ -264,6 +275,10 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
 
     public func start() async throws {
         let pc = try makePeerConnection()
+        // Sender ids are the (fixed) track ids: entries left by a previous
+        // publisher PeerConnection of this call must not make `attachSender`
+        // believe a sender of THIS one already has its cryptor.
+        hub.detachSenders()
         tuning = GroupNativeTuning()
 
         // Audio.
@@ -276,7 +291,8 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         guard let audioTransceiver = pc.addTransceiver(with: audio, init: audioInit) else { throw GroupPeerError.transceiverFailed }
         restrictHeaderExtensions(audioTransceiver)
         applyAudioSenderProfile(audioTransceiver.sender)
-        hub.attachSender(audioTransceiver.sender, participantId: selfPseudonym)
+        // Fail closed: a sender without its cryptor would publish in the clear.
+        guard hub.attachSender(audioTransceiver.sender, participantId: selfPseudonym) else { throw GroupPeerError.cryptorFailed }
         audioTrack = audio
 
         // Video: always present (a camera toggle is a `configure`, never a
@@ -299,7 +315,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         }
         guard let videoTransceiver = pc.addTransceiver(with: video, init: videoInit) else { throw GroupPeerError.transceiverFailed }
         restrictHeaderExtensions(videoTransceiver)
-        hub.attachSender(videoTransceiver.sender, participantId: selfPseudonym)
+        guard hub.attachSender(videoTransceiver.sender, participantId: selfPseudonym) else { throw GroupPeerError.cryptorFailed }
         videoSource = source
         videoTrack = video
         videoSender = videoTransceiver.sender
@@ -322,7 +338,8 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         stopCapturer()
         tuning?.stop()
         tuning = nil
-        hub.detachAll()
+        // Only OUR sender cryptors: the receivers belong to the subscriber.
+        hub.detachSenders()
         closePeerConnection()
         videoTrack = nil
         audioTrack = nil
@@ -462,6 +479,10 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
 
     public func start() async throws {
         _ = try makePeerConnection()
+        // Receiver ids can repeat across PeerConnections: entries of a previous
+        // subscriber must not make `attachReceiver` believe a receiver of THIS one
+        // already has its cryptor.
+        hub.detachReceivers()
     }
 
     public func acceptOffer(_ sdp: String, streams: [VideoRoomStream]) async throws -> String {
@@ -470,7 +491,7 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
         stateLock.lock()
         streamsByMid = Dictionary(streams.filter { $0.feedId != nil }.map { ($0.mid, $0) }, uniquingKeysWith: { _, new in new })
         stateLock.unlock()
-        prepareTransceivers(of: pc)
+        try prepareTransceivers(of: pc)
         let answer = try await createAnswer(RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         let munged = GroupSdpRules.mungeLocal(answer.sdp, role: .subscriberAnswer)
         try await setLocal(RTCSessionDescription(type: .answer, sdp: munged))
@@ -479,8 +500,11 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
 
     /// After every remote offer: restrict extensions of new transceivers, bind
     /// cryptors to the right publisher, report tracks that appeared, moved or
-    /// went away.
-    private func prepareTransceivers(of pc: RTCPeerConnection) {
+    /// went away. Fail closed (spec §4.3 / §5.3): every audio / video receiver
+    /// gets a cryptor before the answer exists, and a receiver that is not a
+    /// known, enabled publisher stream gets one bound to an id nobody holds a
+    /// key for, so whatever arrives on it is discarded, never played in the clear.
+    private func prepareTransceivers(of pc: RTCPeerConnection) throws {
         stateLock.lock()
         let byMid = streamsByMid
         stateLock.unlock()
@@ -493,15 +517,15 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
                 restrictedMids.insert(mid)
                 restrictHeaderExtensions(transceiver)
             }
-            guard let stream = byMid[mid], let feed = stream.feedId, !stream.disabled,
-                  transceiver.mediaType == .audio || transceiver.mediaType == .video else {
+            guard transceiver.mediaType == .audio || transceiver.mediaType == .video else { continue }
+            guard let stream = byMid[mid], let feed = stream.feedId, !stream.disabled else {
+                hub.attachReceiver(transceiver.receiver, participantId: GroupFrameCryptorHub.unboundParticipantId)
                 if let old = reported.removeValue(forKey: mid) {
-                    hub.detachReceiver(receiverId: transceiver.receiver.receiverId)
                     onRemoteTrack?(RemoteTrack(feedId: old.feedId, mid: mid, kind: old.kind, isScreenShare: old.screen, track: nil))
                 }
                 continue
             }
-            hub.attachReceiver(transceiver.receiver, participantId: feed)
+            guard hub.attachReceiver(transceiver.receiver, participantId: feed) else { throw GroupPeerError.cryptorFailed }
             let kind: TrackKind = transceiver.mediaType == .video ? .video : .audio
             let screen = stream.isScreenShare
             let signature = "\(feed)|\(screen)"
@@ -559,7 +583,9 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
         }
         reported.removeAll()
         onRemoteTrack = nil
-        hub.detachAll()
+        // Only the receiver cryptors: our own senders belong to the publisher,
+        // which keeps running when just the subscriber is dropped.
+        hub.detachReceivers()
         closePeerConnection()
     }
 }

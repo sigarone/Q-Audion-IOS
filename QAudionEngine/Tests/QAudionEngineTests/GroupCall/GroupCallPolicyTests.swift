@@ -165,6 +165,25 @@ final class GroupPublishPolicyTests: XCTestCase {
 
 final class GroupAudioUnitDecisionsTests: XCTestCase {
 
+    func testTheActivationWatchdogOnlyAsksForASessionOnAnOwnedUnitThatNeverHeardOfOne() {
+        typealias D = GroupAudioUnitDecisions
+        XCTAssertTrue(D.watchdogNeedsActivation(begun: true, ownsArm: true, sessionActive: false, alreadyRequested: false))
+        XCTAssertFalse(D.watchdogNeedsActivation(begun: true, ownsArm: true, sessionActive: true, alreadyRequested: false),
+                       "an activation arrived")
+        XCTAssertFalse(D.watchdogNeedsActivation(begun: true, ownsArm: false, sessionActive: false, alreadyRequested: false),
+                       "a shared unit belongs to the 1:1 leg, whose session is up")
+        XCTAssertFalse(D.watchdogNeedsActivation(begun: true, ownsArm: true, sessionActive: false, alreadyRequested: true),
+                       "asked once already")
+        XCTAssertFalse(D.watchdogNeedsActivation(begun: false, ownsArm: true, sessionActive: false, alreadyRequested: false),
+                       "the call already ended")
+        XCTAssertEqual(D.activationWatchdogSeconds, 2.0)
+    }
+
+    func testAnActivationNeverSwitchesOnAUnitTheOneToOneLegStillHolds() {
+        XCTAssertTrue(GroupAudioUnitDecisions.unitMayBeEnabled(ownsArm: true))
+        XCTAssertFalse(GroupAudioUnitDecisions.unitMayBeEnabled(ownsArm: false))
+    }
+
     func testNothingHappensBeforeTheGroupAudioBegan() {
         XCTAssertEqual(GroupAudioUnitDecisions.action(begun: false, source: .callKit, callKitAlreadySeen: false), .ignore)
     }

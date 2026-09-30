@@ -1601,6 +1601,9 @@ final class AppState: ObservableObject {
     var groupPromotionTimeout: DispatchWorkItem?
     /// The call id `startGroupCallAudioPath` already ran for (idempotency).
     var groupAudioPathCallId: String?
+    /// The app itself activated the shared audio session for the live group call
+    /// (`activateGroupCallAudioSessionSelfManaged`): its end owes a deactivation.
+    var groupSelfActivatedAudio = false
 
     /// W-GRPRING — call_ids already accepted or rejected. Guards against a
     /// re-ring when the push and the WS invite race (deliberately NO
@@ -5858,11 +5861,25 @@ final class AppState: ObservableObject {
                     // started): clear the CallKit call we reported for it, else
                     // the system call UI would stay up forever.
                     if s == .idle {
+                        // Group calls v2: nothing left to hand over (the call never
+                        // got up, or it ended first): its timers must not act on the
+                        // 1:1 call, and the audio path re-runs for a rejoin of the
+                        // same call id.
+                        self.groupPromotion = nil
+                        self.groupPromotionTimeout?.cancel()
+                        self.groupPromotionTimeout = nil
+                        self.groupAudioPathCallId = nil
                         self.clearGroupCallKitCall(reason: .remoteEnded)
+                        // A group call CallKit did not track paid its own session
+                        // activation and owes the matching deactivation.
+                        self.balanceGroupSelfManagedActivation()
                         // W-GRPSPKR — drop the loudspeaker lock so the NEXT
                         // (1:1) call starts on the earpiece as always —
-                        // mirrors endCall()'s identical reset.
-                        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+                        // mirrors endCall()'s identical reset. Not while a 1:1 call
+                        // is still live (an abandoned hand-over): its route stays.
+                        if !self.isInCall {
+                            try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+                        }
                     }
                 }
             }
@@ -19539,6 +19556,17 @@ extension AppState {
         incomingCallRingVisible = false
         guard !isEndingCall else { return }
         isEndingCall = true
+        // Group calls v2 — however the 1:1 leg ends (the hand-over itself, the peer
+        // hanging up, media dead, End on its CallKit entry): a pending hand-over is
+        // moot, and a live group call that shared the 1:1's audio unit must take it
+        // over (the 1:1 PeerConnection releases it during this teardown). A strict
+        // no-op without a live group call.
+        defer {
+            groupPromotion = nil
+            groupPromotionTimeout?.cancel()
+            groupPromotionTimeout = nil
+            groupCallController?.oneToOneEnded()
+        }
         // W-STALESEALER — no bump needed here: `callService.endCall()` below
         // (reached unconditionally further down this function) already bumps
         // `CallService.currentCallGeneration()` itself, unconditionally, on
@@ -24896,7 +24924,23 @@ extension AppState {
     func activateGroupCallAudioSessionSelfManaged() {
         #if canImport(CallKit) && os(iOS)
         guard let provider = callKit as? CallKitProvider else { return }
+        // Only a call CallKit does not track owes its own deactivation: a tracked one
+        // is balanced by its `reportCallEnded` (which also drains any extra count).
+        if groupCallKitId == nil { groupSelfActivatedAudio = true }
         Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: nil) }
+        #endif
+    }
+
+    /// The group call ended: if the app itself activated the shared session for a
+    /// call CallKit does not track (no entry to report ended), pay the matching
+    /// deactivation. A call CallKit tracked is balanced by its own `reportCallEnded`.
+    @MainActor
+    fileprivate func balanceGroupSelfManagedActivation() {
+        let selfActivated = groupSelfActivatedAudio
+        groupSelfActivatedAudio = false
+        #if canImport(CallKit) && os(iOS)
+        guard selfActivated, let provider = callKit as? CallKitProvider else { return }
+        provider.balanceSelfManagedGroupActivation()
         #endif
     }
 
@@ -24990,8 +25034,8 @@ extension AppState {
         groupPromotionTimeout?.cancel()
         groupPromotionTimeout = nil
         RTLog.info("call", "group promotion: hand-over complete - ending the 1:1 leg")
+        // `endCall()` itself tells the group audio unit to take over (below).
         endCall()
-        groupCallController?.oneToOneEnded()
     }
 
     /// The group call could not be set up: it is dropped, the 1:1 call goes on.

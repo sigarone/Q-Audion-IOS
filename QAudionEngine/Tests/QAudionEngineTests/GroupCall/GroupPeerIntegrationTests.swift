@@ -89,5 +89,71 @@ final class GroupPeerIntegrationTests: XCTestCase {
         XCTAssertTrue(observed == nil || GroupTransportPolicy.evaluate(observed!) != .ok)
         subscriber.close()
     }
+
+    /// The Janus-style offer of a fresh publisher wrapper (audio mid 0, video mid 1).
+    private func janusStyleOffer(_ factory: RTCPeerConnectionFactory) async throws -> String {
+        let source = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
+                                        selfPseudonym: GroupCallFixtures.pseudoB)
+        try await source.start()
+        let publisherOffer = try await source.createOffer(iceRestart: false)
+        source.close()
+        return GroupSdpRules.lines(of: publisherOffer)
+            .filter { !$0.hasPrefix("a=rid:") && !$0.hasPrefix("a=simulcast:") && !$0.contains("rtp-stream-id") }
+            .joined(separator: "\r\n") + "\r\n"
+    }
+
+    func testAReceiverThatIsNotAKnownEnabledStreamGetsACryptorBoundToNobody() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let janusOffer = try await janusStyleOffer(factory)
+        let hub = fixtureHub(factory)
+        let subscriber = GroupSubscriberPeer(factory: factory, iceServers: [], cryptors: hub)
+        let tracks = LockedBox<[String]>([])
+        subscriber.onRemoteTrack = { remote in
+            tracks.mutate { $0.append("\(remote.kind == .audio ? "audio" : "video"):\(remote.track != nil)") }
+        }
+        try await subscriber.start()
+        // The audio stream is a known publisher stream; the video m-line is a
+        // stream Janus flags as removed (a node could just as well inject an
+        // unmapped one): it must not render or play unprotected.
+        let streams = [
+            VideoRoomStream(type: "audio", mid: "0", feedId: GroupCallFixtures.pseudoB, feedMid: "0"),
+            VideoRoomStream(type: "video", mid: "1", feedId: GroupCallFixtures.pseudoB, feedMid: "1", disabled: true),
+        ]
+        _ = try await subscriber.acceptOffer(janusOffer, streams: streams)
+        XCTAssertEqual(Set(hub.attachedReceiverParticipants), [GroupCallFixtures.pseudoB, GroupFrameCryptorHub.unboundParticipantId])
+        XCTAssertEqual(tracks.value, ["audio:true"], "the removed video stream must not be reported")
+        subscriber.close()
+        XCTAssertEqual(hub.attachedReceiverParticipants, [])
+    }
+
+    func testDroppingTheSubscriberAloneKeepsThePublishersSenderCryptors() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let hub = fixtureHub(factory)
+        let publisher = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: hub,
+                                           selfPseudonym: GroupCallFixtures.pseudoA)
+        try await publisher.start()
+        XCTAssertEqual(hub.attachedSenderCount, 2, "audio + video sender cryptors")
+        let subscriber = GroupSubscriberPeer(factory: factory, iceServers: [], cryptors: hub)
+        try await subscriber.start()
+        // A refused subscriber join drops just the subscriber: a disabled sender
+        // cryptor would silently discard our own published media.
+        subscriber.close()
+        XCTAssertEqual(hub.attachedSenderCount, 2)
+        publisher.close()
+        XCTAssertEqual(hub.attachedSenderCount, 0)
+    }
+
+    func testAWrapperClosedBeforeItStartedNeverBuildsAPeerConnection() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let publisher = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
+                                           selfPseudonym: GroupCallFixtures.pseudoA)
+        publisher.close()
+        do {
+            try await publisher.start()
+            XCTFail("a closed wrapper must refuse to start")
+        } catch {
+            XCTAssertEqual(error as? GroupPeerError, .notStarted)
+        }
+    }
 }
 #endif

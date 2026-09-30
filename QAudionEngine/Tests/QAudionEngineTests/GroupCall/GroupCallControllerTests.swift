@@ -49,6 +49,7 @@ final class FakeMediaLink: GroupMediaLink, @unchecked Sendable {
     func setActiveLayers(_ count: Int) { record("layers=\(count)") }
     func requestPublisherKeyFrame() async { record("keyframe") }
     func networkPathChanged(reason: String) async { record("path=\(reason)") }
+    func updateSessionToken(_ token: String) { record("token=\(token)") }
     func close() { record("close") }
 
     /// Emits a session event as the real session would.
@@ -511,6 +512,36 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertTrue(failed)
         XCTAssertEqual(h.errors, [.other("janus_436")])
         XCTAssertEqual(h.controller.state, .idle)
+    }
+
+    func testARefreshRequestOfTheSessionIsSentToTheServer() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.tokenRefresh("periodic"))
+        link.emit(.tokenRefresh("ws_reconnect"))
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_refresh" }.count, 2)
+        let refresh = h.sent.first { $0.type == "group_call_media_refresh" }
+        XCTAssertEqual(refresh?.data["call_id"] as? String, ControllerHarness.callId)
+        h.controller.leave()
+    }
+
+    func testTheFreshTokenReachesTheLiveLinkOnlyForThisCall() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        h.manager.onMediaToken?(GroupCallWire.MediaToken(callId: ControllerHarness.callId, sessionToken: "fresh-1", ttlSeconds: 600))
+        h.manager.onMediaToken?(GroupCallWire.MediaToken(callId: "another-call", sessionToken: "fresh-2", ttlSeconds: 600))
+        XCTAssertEqual(link.calls.filter { $0.hasPrefix("token=") }, ["token=fresh-1"])
+        h.controller.leave()
+    }
+
+    func testNotAMemberAnymoreAnswersTheRefreshWithAnErrorAndEndsTheMedia() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.tokenRefresh("periodic"))
+        h.manager.onMediaUnavailable?(ControllerHarness.callId, .notMember)
+        let ended = await h.waitUntil { h.errors.contains(.notMember) }
+        XCTAssertTrue(ended, "the refusal ends the media like any other one")
+        XCTAssertTrue(link.calls.contains("close"))
     }
 
     func testMediaMovedRequestsANewJoin() async {

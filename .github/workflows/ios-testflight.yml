@@ -1017,7 +1017,7 @@ jobs:
             echo "::error::TestFlight-only surface compiled into the store binary (itms-beta / testflight.apple.com string found) — QAUDION_DEV_TOOLS must be OFF for a tag build"
             exit 1
           fi
-          echo "store-readiness gates: privacy manifests present (x4), no TestFlight strings in binary"
+          echo "store-readiness gates: privacy manifests present (x3), no TestFlight strings in binary"
 
           rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
           zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload

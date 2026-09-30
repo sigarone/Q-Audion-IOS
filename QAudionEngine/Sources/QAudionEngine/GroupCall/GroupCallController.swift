@@ -201,6 +201,7 @@ public final class GroupCallController: @unchecked Sendable {
         old.onMediaReady = nil
         old.onMediaUnavailable = nil
         old.onMediaMoved = nil
+        old.onMediaToken = nil
         old.onActiveCallEnded = nil
         old.onGroupCallReactionReceived = nil
         old.onGroupCallRaiseHandReceived = nil
@@ -624,6 +625,7 @@ public final class GroupCallController: @unchecked Sendable {
         manager.onMediaMoved = { [weak self] callId, _ in
             self?.handleTrigger(.mediaMoved, forCall: callId)
         }
+        manager.onMediaToken = { [weak self] token in self?.handleMediaToken(token) }
         manager.onActiveCallEnded = { [weak self] callId, reason in
             self?.onCallEnded?(callId, reason)
         }
@@ -809,6 +811,21 @@ public final class GroupCallController: @unchecked Sendable {
         }
     }
 
+    /// `group_call_media_token` (spec §11): the fresh Janus session token replaces
+    /// the old one for every later request of the live link. A token for another
+    /// call, or one that arrives while no link exists, changes nothing (a new
+    /// `group_call_media_ready` carries its own).
+    private func handleMediaToken(_ token: GroupCallWire.MediaToken) {
+        lock.lock()
+        guard token.callId == activeCallId else {
+            lock.unlock()
+            return
+        }
+        let current = link
+        lock.unlock()
+        current?.updateSessionToken(token.sessionToken)
+    }
+
     private func wire(link newLink: GroupMediaLink, generation: Int) {
         newLink.publisherFilter = { [weak self] pseudonym in self?.isSubscribable(pseudonym) ?? false }
         newLink.onEvent = { [weak self] event in self?.handle(event, generation: generation) }
@@ -923,6 +940,11 @@ public final class GroupCallController: @unchecked Sendable {
             handleTrigger(.needsRejoin("kicked"), forCall: cid)
         case .uplinkCongested:
             noteUplinkCongested()
+        case .tokenRefresh:
+            // Spec §11: ask for a fresh Janus session token. Answered with
+            // `group_call_media_token`, or `media_unavailable {not_member}` (which ends
+            // the media like any other refusal).
+            manager.requestMediaRefresh(callId: cid)
         case .audioLevels(let byPseudonym):
             handleAudioLevels(byPseudonym)
         case .telemetry(let telemetry):

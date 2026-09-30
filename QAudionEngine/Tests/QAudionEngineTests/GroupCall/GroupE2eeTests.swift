@@ -264,6 +264,45 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         coordinator.onRoster(epoch: 4, members: [selfUser], pseudonyms: pseudonyms)
         XCTAssertEqual(coordinator.epoch, 5)
         XCTAssertEqual(env.installs.count, 1)
+        // The stale roster (without userB) changed nothing: userB is still a member
+        // of the epoch-5 roster and gets its key re-sent on a nack.
+        env.sent.removeAll()
+        coordinator.onEnvelope(.nack(callId: call, epoch: 5), from: userB)
+        XCTAssertEqual(env.parsedSent().map { $0.user }, [userB])
+    }
+
+    func testAStaleOrFutureAckDoesNotCompleteTheSwitch() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 5, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onEnvelope(.ack(callId: call, epoch: 4), from: userB)
+        coordinator.onEnvelope(.ack(callId: call, epoch: 6), from: userB)
+        XCTAssertTrue(env.sendIndexes.isEmpty, "only an ack of the CURRENT epoch counts")
+        coordinator.onEnvelope(.ack(callId: call, epoch: 5), from: userB)
+        XCTAssertEqual(env.sendIndexes, [5])
+    }
+
+    func testALeaverGetsNoKeyOfTheNextEpochAndAJoinerOnlyKeysOfItsOwnEpochOnward() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 5, members: [selfUser, userB, userC], pseudonyms: pseudonyms)
+        // userC leaves: the new epoch's key goes to userB only, and a nack of the
+        // leaver is not answered.
+        env.sent.removeAll()
+        coordinator.onRoster(epoch: 6, members: [selfUser, userB], pseudonyms: pseudonyms)
+        XCTAssertEqual(env.parsedSent().map { $0.user }, [userB])
+        env.now += 5_000
+        coordinator.onEnvelope(.nack(callId: call, epoch: 6), from: userC)
+        coordinator.onEnvelope(.nack(callId: call, epoch: 5), from: userC)
+        XCTAssertEqual(env.parsedSent().map { $0.user }, [userB], "nothing was sent to the leaver")
+        // userC joins again at epoch 7: it gets epoch 7 and nothing older, even if it asks.
+        env.sent.removeAll()
+        coordinator.onRoster(epoch: 7, members: [selfUser, userB, userC], pseudonyms: pseudonyms)
+        env.now += 5_000
+        coordinator.onEnvelope(.nack(callId: call, epoch: 5), from: userC)
+        coordinator.onEnvelope(.nack(callId: call, epoch: 6), from: userC)
+        let toC = env.parsedSent().filter { $0.user == userC }.map { $0.envelope }
+        XCTAssertEqual(toC.count, 1)
+        guard case .mediaKey(_, let epoch, _, _)? = toC.first else { return XCTFail("expected a media key") }
+        XCTAssertEqual(epoch, 7)
     }
 
     func testTheKeyWaitsForTheMediaBlockOfTheUpdate() {
@@ -424,6 +463,23 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         env.now += 2_000
         coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
         XCTAssertEqual(env.parsedSent().count, 1)
+    }
+
+    func testTheNackBudgetOfAnOlderEpochDoesNotSilenceTheNextEpoch() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        func nacks() -> Int { env.parsedSent().filter { if case .nack = $0.envelope { return true } else { return false } }.count }
+        for _ in 0..<4 {
+            coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+            env.now += 2_000
+        }
+        XCTAssertEqual(nacks(), 4)
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        XCTAssertEqual(nacks(), 4, "the budget of epoch 3 is spent")
+        // The next epoch's key is missing too: a new budget.
+        coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        XCTAssertEqual(nacks(), 5)
     }
 
     func testMissingKeyOfOurOwnPseudonymOrAnUnknownOneNacksNobody() {

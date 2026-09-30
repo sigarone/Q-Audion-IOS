@@ -69,6 +69,16 @@ final class GroupCallWireTests: XCTestCase {
         XCTAssertFalse(GroupCallWire.UnavailableReason.full.isTransient)
     }
 
+    func testMediaTokenParsesAndRefusesMissingFields() throws {
+        let token = try XCTUnwrap(GroupCallWire.MediaToken.parse(["call_id": "c1", "session_token": "tok-2", "ttl_s": 600]))
+        XCTAssertEqual(token, GroupCallWire.MediaToken(callId: "c1", sessionToken: "tok-2", ttlSeconds: 600))
+        XCTAssertEqual(GroupCallWire.MediaToken.parse(["call_id": "c1", "session_token": "tok-2"])?.ttlSeconds, 0)
+        XCTAssertNil(GroupCallWire.MediaToken.parse(["session_token": "tok-2", "ttl_s": 600]))
+        XCTAssertNil(GroupCallWire.MediaToken.parse(["call_id": "c1", "ttl_s": 600]))
+        XCTAssertNil(GroupCallWire.MediaToken.parse(["call_id": "c1", "session_token": "", "ttl_s": 600]))
+        XCTAssertNil(GroupCallWire.MediaToken.parse(["call_id": "", "session_token": "tok-2"]))
+    }
+
     func testUpdateParsesEpochNodeAndPseudonyms() throws {
         let update = try XCTUnwrap(GroupCallWire.Update.parse([
             "call_id": "call-1",

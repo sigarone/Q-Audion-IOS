@@ -106,9 +106,21 @@ final class GroupLayerPolicyTests: XCTestCase {
         let policy = makePolicy([a])
         policy.setTile(key: a, tile: .fullscreen, visible: true)
         _ = policy.evaluate(nowMs: 0)
-        policy.onLossSample(key: a, packetsLostDelta: 1, packetsReceivedDelta: 30, nowMs: 1_000)    // 3 %
-        policy.onLossSample(key: a, packetsLostDelta: 0, packetsReceivedDelta: 30, nowMs: 5_000)    // first sample aged out
+        // 15 packets: too few to judge on their own, but 3 lost of the 35 the two
+        // samples make together would be 8.6 % if the old one were still counted.
+        policy.onLossSample(key: a, packetsLostDelta: 3, packetsReceivedDelta: 12, nowMs: 1_000)
+        policy.onLossSample(key: a, packetsLostDelta: 0, packetsReceivedDelta: 20, nowMs: 5_000)    // the first sample is older than the 2 s window
         XCTAssertTrue(policy.evaluate(nowMs: 5_000).isEmpty)
+    }
+
+    func testLossIsAccumulatedOverTheTwoSecondWindow() {
+        let policy = makePolicy([a])
+        policy.setTile(key: a, tile: .fullscreen, visible: true)
+        _ = policy.evaluate(nowMs: 0)
+        policy.onLossSample(key: a, packetsLostDelta: 2, packetsReceivedDelta: 8, nowMs: 1_000)    // 10 packets: no verdict yet
+        XCTAssertTrue(policy.evaluate(nowMs: 1_000).isEmpty)
+        policy.onLossSample(key: a, packetsLostDelta: 2, packetsReceivedDelta: 8, nowMs: 2_000)    // 4 of 20 inside the window: 20 %
+        XCTAssertEqual(policy.evaluate(nowMs: 2_000), [.configure(key: a, substream: 1, temporal: 2, from: 2, reason: "loss")])
     }
 
     func testTheLowestSubstreamNeverGoesBelowZero() {

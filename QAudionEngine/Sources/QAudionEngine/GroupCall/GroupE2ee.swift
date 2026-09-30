@@ -215,6 +215,9 @@ public final class GroupE2eeCoordinator {
             switchTimer?.cancel()
             switchTimer = nil
             awaitingAcks = []
+            // "max 4 nacks every 2 s" is per missing (member, epoch): the budget
+            // spent on an older epoch must not silence the nack for this one.
+            nackState.removeAll()
         }
         distributeOwnKeyIfNeeded()
         // Everyone still awaited left the call: nobody is left to wait for.

@@ -58,11 +58,14 @@ public final class WebRtcGroupMediaBackend: GroupMediaBackend, @unchecked Sendab
         }
         let publisher = GroupPublisherPeer(factory: factory, iceServers: iceServers,
                                            cryptors: cryptors, selfPseudonym: ready.pseudonym)
+        // Janus re-validates the signed token on every request and it expires: the
+        // link swaps in the fresh one the server sends every 300 s (spec §11).
+        let sessionToken = JanusSessionToken(ready.sessionToken)
         let janus = JanusClient(makeSocket: { URLSessionJanusSocket(url: url) },
-                                token: { ready.sessionToken })
+                                token: { sessionToken.value })
         let room = VideoRoomClient(janus: janus, room: ready.room, pseudonym: ready.pseudonym,
                                    joinToken: ready.joinToken)
-        let link = WebRtcGroupMediaLink(publisher: publisher)
+        let link = WebRtcGroupMediaLink(publisher: publisher, sessionToken: sessionToken)
         let session = GroupMediaSession(
             janus: janus, room: room, publisher: publisher,
             makeSubscriber: { [weak link] in
@@ -98,10 +101,12 @@ final class WebRtcGroupMediaLink: GroupMediaLink, @unchecked Sendable {
     }
 
     private let publisher: GroupPublisherPeer
+    private let sessionToken: JanusSessionToken
     private var session: GroupMediaSession?
 
-    init(publisher: GroupPublisherPeer) {
+    init(publisher: GroupPublisherPeer, sessionToken: JanusSessionToken) {
         self.publisher = publisher
+        self.sessionToken = sessionToken
     }
 
     func attach(session: GroupMediaSession) {
@@ -134,6 +139,7 @@ final class WebRtcGroupMediaLink: GroupMediaLink, @unchecked Sendable {
     func setActiveLayers(_ count: Int) { publisher.setActiveLayers(count) }
     func requestPublisherKeyFrame() async { await session?.requestPublisherKeyFrame() }
     func networkPathChanged(reason: String) async { await session?.networkPathChanged(reason: reason) }
+    func updateSessionToken(_ token: String) { sessionToken.update(token) }
 
     func close() {
         if let session = session {

@@ -231,6 +231,13 @@ public final class VideoRoomClient: @unchecked Sendable {
     /// The order of the simulcast rids in our SDP (`GroupPublisherPeer.simulcast`).
     static let ridOrder = "lmh"
 
+    /// Every publisher offer (publish, ICE restart) is end-to-end encrypted and
+    /// lists its rids ascending: both flags travel on the JSEP object (spec §11),
+    /// not in the request body.
+    static func offerJsep(_ sdp: String) -> JanusJsep {
+        JanusJsep(type: "offer", sdp: sdp, e2ee: true, ridOrder: ridOrder)
+    }
+
     public let janus: JanusClient
     public let room: String
     public let pseudonym: String
@@ -265,12 +272,9 @@ public final class VideoRoomClient: @unchecked Sendable {
     public func publish(handle: Int64, offer: String, audio: Bool, video: Bool,
                         descriptions: [(mid: String, description: String)]) async throws -> String {
         let reply = try await janus.send(handle: handle, body: [
-            "request": "publish", "audio": audio, "video": video, "e2ee": true,
-            // Our SDP lists the simulcast rids ascending (l, m, h): without this Janus
-            // assumes highest-first and substream 0 would be the HIGHEST layer.
-            "rid_order": Self.ridOrder,
+            "request": "publish", "audio": audio, "video": video,
             "descriptions": descriptions.map { ["mid": $0.mid, "description": $0.description] },
-        ], jsep: JanusJsep(type: "offer", sdp: offer))
+        ], jsep: Self.offerJsep(offer))
         guard let answer = reply.jsep, answer.type == "answer" else { throw JanusClientError.malformed }
         return answer.sdp
     }
@@ -287,8 +291,7 @@ public final class VideoRoomClient: @unchecked Sendable {
         var jsep: JanusJsep?
         if let offer = restartOffer {
             body["restart"] = true
-            body["rid_order"] = Self.ridOrder
-            jsep = JanusJsep(type: "offer", sdp: offer)
+            jsep = Self.offerJsep(offer)
         }
         let reply = try await janus.send(handle: handle, body: body, jsep: jsep)
         if restartOffer != nil {

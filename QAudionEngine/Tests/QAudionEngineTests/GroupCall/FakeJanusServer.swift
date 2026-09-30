@@ -24,6 +24,9 @@ final class FakeJanusServer: JanusSocket, @unchecked Sendable {
     var pluginErrors: [String: Int] = [:]
     /// Plugin error code for the next SUBSCRIBER join only (the publisher join is untouched).
     var subscriberJoinError: Int?
+    /// Feeds Janus no longer knows: a subscriber join / `subscribe` naming any of them
+    /// fails as a whole with 428 (as the real VideoRoom does), until the set changes.
+    var missingFeeds: Set<String> = []
     /// request names whose replies are swallowed (timeout tests).
     var swallow: Set<String> = []
     var swallowOnce: Set<String> = []
@@ -158,6 +161,15 @@ final class FakeJanusServer: JanusSocket, @unchecked Sendable {
         if swallow.contains(name) { return }
         if swallowOnce.remove(name) != nil { return }
         reply("ack", request)
+        let namesAMissingFeed: Bool = {
+            guard !missingFeeds.isEmpty, let streams = body["streams"] as? [[String: Any]] else { return false }
+            return streams.contains { missingFeeds.contains($0["feed"] as? String ?? "") }
+        }()
+        let isSubscriberJoin = name == "join" && (body["ptype"] as? String) == "subscriber"
+        if namesAMissingFeed && (isSubscriberJoin || name == "subscribe") {
+            event(request, handle: handle, data: ["videoroom": "event", "error_code": 428, "error": "No such feed"])
+            return
+        }
         if let code = pluginErrors.removeValue(forKey: name) {
             event(request, handle: handle, data: ["videoroom": "event", "error_code": code, "error": "scripted"])
             return

@@ -33,6 +33,31 @@ public enum JanusClientError: Error, Equatable, Sendable {
     }
 }
 
+/// The signed Janus session token of one media session. Janus re-validates it on
+/// EVERY request, keepalive included, and it expires (`ttl_s`, 600 s): the
+/// controller swaps in the fresh one it receives as `group_call_media_token`
+/// (spec §11) and `JanusClient` reads it per request. The value is a secret: it
+/// is never logged.
+public final class JanusSessionToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: String
+
+    public init(_ token: String) {
+        self.current = token
+    }
+
+    public var value: String {
+        lock.lock(); defer { lock.unlock() }
+        return current
+    }
+
+    public func update(_ token: String) {
+        lock.lock()
+        current = token
+        lock.unlock()
+    }
+}
+
 /// Janus session client (spec §4.1): one WebSocket, one session, plugin
 /// handles, transaction matching, 25 s keepalive. Everything the VideoRoom
 /// layer needs and nothing else.

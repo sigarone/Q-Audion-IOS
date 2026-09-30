@@ -113,6 +113,30 @@ public enum GroupCallWire {
         }
     }
 
+    // MARK: - group_call_media_token (S->C, spec §11)
+
+    /// The answer to `group_call_media_refresh`: a fresh Janus session token.
+    /// Janus re-validates the token on every request, so the client swaps it in
+    /// for all later requests. A secret: never printed.
+    public struct MediaToken: Equatable, Sendable {
+        public let callId: String
+        public let sessionToken: String
+        public let ttlSeconds: Int
+
+        public init(callId: String, sessionToken: String, ttlSeconds: Int) {
+            self.callId = callId
+            self.sessionToken = sessionToken
+            self.ttlSeconds = ttlSeconds
+        }
+
+        /// nil when the call id or the token is missing.
+        public static func parse(_ data: [String: Any]) -> MediaToken? {
+            guard let callId = data["call_id"] as? String, !callId.isEmpty,
+                  let token = data["session_token"] as? String, !token.isEmpty else { return nil }
+            return MediaToken(callId: callId, sessionToken: token, ttlSeconds: (data["ttl_s"] as? NSNumber)?.intValue ?? 0)
+        }
+    }
+
     // MARK: - group_call_media_unavailable (S->C, spec §2.4)
 
     public enum UnavailableReason: Equatable, Sendable {

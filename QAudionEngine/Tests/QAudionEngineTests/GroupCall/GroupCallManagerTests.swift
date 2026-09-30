@@ -34,6 +34,14 @@ final class GroupCallManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .creating)
     }
 
+    func testMediaRefreshMessage() {
+        let (manager, sent) = makeManager()
+        manager.requestMediaRefresh(callId: callId)
+        XCTAssertEqual(sent().map { $0.type }, ["group_call_media_refresh"])
+        XCTAssertEqual(sent()[0].data["call_id"] as? String, callId)
+        XCTAssertEqual(sent()[0].data.count, 1, "nothing but the call id")
+    }
+
     func testMediaJoinRejoinAndDeclineMessages() {
         let (manager, sent) = makeManager()
         manager.requestMediaJoin(callId: callId)
@@ -117,6 +125,17 @@ final class GroupCallManagerTests: XCTestCase {
         manager.handleMediaReady(data: insecure)
         manager.handleMediaReady(data: weak)
         XCTAssertEqual(seen.value, 1)
+    }
+
+    func testMediaTokenIsRoutedOnlyForTheActiveCallAndOnlyWhenWellFormed() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        let tokens = LockedBox<[String]>([])
+        manager.onMediaToken = { token in tokens.mutate { $0.append(token.sessionToken) } }
+        manager.handleMediaToken(data: ["call_id": callId, "session_token": "fresh-1", "ttl_s": 600])
+        manager.handleMediaToken(data: ["call_id": "other", "session_token": "fresh-2", "ttl_s": 600])
+        manager.handleMediaToken(data: ["call_id": callId, "ttl_s": 600])
+        XCTAssertEqual(tokens.value, ["fresh-1"])
     }
 
     func testMediaUnavailableAndMovedAreRoutedByCallId() {

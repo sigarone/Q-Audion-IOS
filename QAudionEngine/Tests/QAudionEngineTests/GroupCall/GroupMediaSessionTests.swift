@@ -197,7 +197,7 @@ final class GroupMediaSessionTests: XCTestCase {
         let h = SessionHarness()
         try await h.session.start(publishVideo: true)
         let publish = try XCTUnwrap(h.server.bodies(for: "publish").first)
-        XCTAssertEqual(publish["e2ee"] as? Bool, true)
+        XCTAssertNil(publish["e2ee"], "the flag belongs on the JSEP object, not in the body (spec 11)")
         XCTAssertEqual(publish["audio"] as? Bool, true)
         XCTAssertEqual(publish["video"] as? Bool, true)
         let descriptions = try XCTUnwrap(publish["descriptions"] as? [[String: String]])
@@ -205,13 +205,15 @@ final class GroupMediaSessionTests: XCTestCase {
         let jsep = try XCTUnwrap(h.server.jsep(for: "publish").first)
         XCTAssertEqual(jsep["type"] as? String, "offer")
         XCTAssertEqual(jsep["sdp"] as? String, h.publisher.offerSdp)
+        XCTAssertEqual(jsep["e2ee"] as? Bool, true, "spec 11: e2ee:true on the JSEP object")
         h.session.close()
     }
 
     func testPublishDeclaresTheAscendingRidOrderOfTheSimulcastLayers() async throws {
         let h = SessionHarness()
         try await h.session.start(publishVideo: true)
-        XCTAssertEqual(h.server.bodies(for: "publish").first?["rid_order"] as? String, "lmh")
+        XCTAssertEqual(h.server.jsep(for: "publish").first?["rid_order"] as? String, "lmh", "spec 11: rid_order on the publish JSEP")
+        XCTAssertNil(h.server.bodies(for: "publish").first?["rid_order"])
         h.session.close()
     }
 
@@ -716,6 +718,26 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    func testOneVanishedFeedAmongSeveralDoesNotMakeTheOthersUnavailable() async throws {
+        // Janus refuses the whole join when ANY feed of it is gone: the feeds must be
+        // retried one at a time, so only Carol (who left) is set aside and Bob is heard.
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob), FakeJanusServer.publisher(id: carol)])
+        h.server.subscriberStreams = bobStreams()
+        h.server.missingFeeds = [carol]
+        try await h.session.start(publishVideo: true)
+        let ok = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        XCTAssertTrue(ok, "Bob's subscription is answered although the batch that named Carol was refused")
+        XCTAssertTrue(h.subscriber.acceptedStreams.last?.contains(where: { $0.feedId == bob }) == true)
+        XCTAssertTrue(h.rejoinReasons().isEmpty, "a vanished feed is not a broken media path")
+        let joins = h.server.bodies(for: "join").filter { ($0["ptype"] as? String) == "subscriber" }
+        XCTAssertGreaterThanOrEqual(joins.count, 2, "the refused batch, then Bob on his own")
+        // Carol is not asked for again until a `publishers` event names her.
+        let subscribesBefore = h.server.pluginRequests.filter { $0 == "subscribe" }.count
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(h.server.pluginRequests.filter { $0 == "subscribe" }.count, subscribesBefore)
+        h.session.close()
+    }
+
     func testASubscribeErrorThatIsNotRetryableIsSurfaced() async throws {
         let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
         h.server.subscriberStreams = bobStreams()
@@ -744,7 +766,10 @@ final class GroupMediaSessionTests: XCTestCase {
         XCTAssertEqual(restart["restart"] as? Bool, true)
         let configureJsep = h.server.jsep(for: "configure")
         XCTAssertEqual(configureJsep.first?["type"] as? String, "offer", "publisher: configure restart + a new offer")
-        XCTAssertEqual(restart["rid_order"] as? String, "lmh")
+        XCTAssertEqual(configureJsep.first?["rid_order"] as? String, "lmh", "the restart offer lists the rids ascending too")
+        XCTAssertEqual(configureJsep.first?["e2ee"] as? Bool, true, "and is end-to-end encrypted like the first offer")
+        XCTAssertNil(restart["rid_order"])
+        XCTAssertNil(restart["e2ee"])
         XCTAssertEqual(h.publisher.calls.filter { $0 == "answer" }.count, 2, "the answer of the restart is applied")
         XCTAssertGreaterThanOrEqual(h.subscriber.acceptedStreams.count, 2, "subscriber: Janus' new offer is answered")
         XCTAssertTrue(h.telemetryKinds().contains(GroupTelemetry.Kind.iceRestart))
@@ -754,9 +779,21 @@ final class GroupMediaSessionTests: XCTestCase {
     func testARestartThatDoesNotReconnectAsksForARejoin() async throws {
         let h = SessionHarness()
         try await h.session.start(publishVideo: true)
-        h.publisher.onState?(.disconnected)      // never comes back
+        // `connecting` arms no disconnect timer of its own: only the restart
+        // watchdog (spec 4.7: not connected within 10 s of a restart) can fire.
+        h.publisher.onState?(.connecting)
         await h.session.networkPathChanged(reason: "ip_change")
-        let ok = await h.waitUntil { h.rejoinReasons().contains("ice_restart_timeout") || h.rejoinReasons().contains("pc_disconnected") }
+        let ok = await h.waitUntil { h.rejoinReasons().contains("ice_restart_timeout") }
+        XCTAssertTrue(ok)
+        XCTAssertFalse(h.rejoinReasons().contains("pc_disconnected"))
+        h.session.close()
+    }
+
+    func testAPeerConnectionThatStaysDisconnectedAsksForARejoin() async throws {
+        let h = SessionHarness()
+        try await h.session.start(publishVideo: true)
+        h.publisher.onState?(.disconnected)      // never comes back
+        let ok = await h.waitUntil { h.rejoinReasons().contains("pc_disconnected") }
         XCTAssertTrue(ok)
         h.session.close()
     }
@@ -803,6 +840,41 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    // MARK: session token refresh (spec 11)
+
+    private func refreshReasons(_ h: SessionHarness) -> [String] {
+        h.events.compactMap { if case .tokenRefresh(let reason) = $0 { return reason } else { return nil } }
+    }
+
+    func testTheSessionAsksForAFreshTokenOnItsRefreshInterval() async throws {
+        var config = GroupMediaSession.Config()
+        config.tokenRefreshSeconds = 0.05
+        let h = SessionHarness(config: config)
+        try await h.session.start(publishVideo: true)
+        let ok = await h.waitUntil { self.refreshReasons(h).count >= 3 }
+        XCTAssertTrue(ok, "the refresh repeats for as long as the session is up")
+        XCTAssertEqual(Set(refreshReasons(h)), ["periodic"])
+        h.session.close()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let afterClose = refreshReasons(h).count
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(refreshReasons(h).count, afterClose, "no refresh once the session is closed")
+    }
+
+    func testTheDefaultRefreshIntervalIsFiveMinutes() {
+        XCTAssertEqual(GroupMediaSession.Config().tokenRefreshSeconds, 300, "spec 11: every 300 s")
+    }
+
+    func testAFreshTokenIsRequestedBeforeTheMediaWebSocketIsReconnected() async throws {
+        let h = SessionHarness()
+        try await h.session.start(publishVideo: true)
+        XCTAssertFalse(refreshReasons(h).contains("ws_reconnect"))
+        h.server.dropConnection()
+        let ok = await h.waitUntil { self.refreshReasons(h).contains("ws_reconnect") }
+        XCTAssertTrue(ok)
+        h.session.close()
+    }
+
     // MARK: candidates and shutdown
 
     func testLocalCandidatesAreTrickledToTheirHandle() async throws {
@@ -834,10 +906,27 @@ final class GroupMediaSessionTests: XCTestCase {
     func testNothingIsEmittedAfterClose() async throws {
         let h = SessionHarness()
         try await h.session.start(publishVideo: true)
+        // `close()` clears the link's handler, so keep the one a PeerConnection
+        // delegate callback still in flight would call.
+        let lateCallback = try XCTUnwrap(h.publisher.onState)
         h.session.close()
         let before = h.events.count
-        h.publisher.onState?(.failed)
+        lateCallback(.failed)
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(h.events.count, before)
+        XCTAssertTrue(h.rejoinReasons().isEmpty)
+    }
+
+    func testASessionClosedBeforeItStartedNeverConnects() async {
+        let h = SessionHarness()
+        h.session.close()
+        do {
+            try await h.session.start(publishVideo: true)
+            XCTFail("a closed session must refuse to start")
+        } catch {
+            XCTAssertEqual(error as? JanusClientError, .closed)
+        }
+        XCTAssertTrue(h.server.requests.isEmpty, "nothing was sent to the node")
+        XCTAssertFalse(h.publisher.calls.contains("start"))
     }
 }

@@ -17,6 +17,13 @@ import WebRTC
 ///    the keys, spec §2.5): `detachAll()` drops only the cryptors.
 public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
 
+    /// participantId of the cryptor bound to a receiver whose stream is not a
+    /// known, enabled publisher stream (spec §4.3: nothing is rendered without a
+    /// cryptor). Nobody ever installs a key under it, so every frame that
+    /// arrives on such a receiver is discarded instead of being played in the
+    /// clear. Pseudonyms are 32 hex characters, so it can never collide.
+    public static let unboundParticipantId = "unbound"
+
     /// A receiver cryptor reported a missing key for this participant.
     public var onMissingKey: ((String) -> Void)?
     /// ... or a decrypt failure.
@@ -166,14 +173,44 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
         entry?.cryptor.enabled = false
     }
 
-    /// Drops every cryptor (PeerConnections are closing) but KEEPS the keys.
-    public func detachAll() {
+    /// Drops the cryptors of OUR senders (the publisher PeerConnection is
+    /// closing) but KEEPS the keys and the receiver cryptors. A disabled sender
+    /// cryptor discards every frame (`discardFrameWhenCryptorNotReady`), so this
+    /// must never run while the publisher PC is meant to keep sending.
+    public func detachSenders() {
         lock.lock()
-        let all = Array(senders.values) + receivers.values.map { $0.cryptor }
+        let all = Array(senders.values)
         senders.removeAll()
+        lock.unlock()
+        for cryptor in all { cryptor.enabled = false }
+    }
+
+    /// Drops every receiver cryptor (the subscriber PeerConnection is closing)
+    /// but KEEPS the keys and the sender cryptors: a subscriber that is dropped
+    /// on its own (a refused join) must not silence our own published media.
+    public func detachReceivers() {
+        lock.lock()
+        let all = receivers.values.map { $0.cryptor }
         receivers.removeAll()
         lock.unlock()
         for cryptor in all { cryptor.enabled = false }
+    }
+
+    /// Drops every cryptor (both PeerConnections are closing) but KEEPS the keys.
+    public func detachAll() {
+        detachSenders()
+        detachReceivers()
+    }
+
+    /// Test seams: what is attached right now.
+    var attachedSenderCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return senders.count
+    }
+
+    var attachedReceiverParticipants: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return receivers.values.map { $0.participantId }.sorted()
     }
 
     /// Final teardown.
