@@ -33,6 +33,29 @@ public enum GroupAudioUnitDecisions {
     }
 }
 
+/// What `GroupCallController` needs from the audio unit driver; tests use a fake.
+public protocol GroupAudioUnitControlling: AnyObject {
+    /// The unit cannot run because no session is active (after a 1:1 call
+    /// released it): the app layer activates one and calls `sessionActivated`.
+    var onNeedsSessionActivation: (() -> Void)? { get set }
+    func begin()
+    func sessionActivated(source: AudioSessionActivationSource)
+    func sessionDeactivated()
+    func oneToOneEnded()
+    func end()
+}
+
+/// Builds without the WebRTC module (macOS package build): no audio unit.
+public final class NoopGroupAudioUnit: GroupAudioUnitControlling {
+    public var onNeedsSessionActivation: (() -> Void)?
+    public init() {}
+    public func begin() {}
+    public func sessionActivated(source: AudioSessionActivationSource) {}
+    public func sessionDeactivated() {}
+    public func oneToOneEnded() {}
+    public func end() {}
+}
+
 #if canImport(WebRTC)
 
 /// Group calls v2 — the audio unit of a group call, on the ONE audio-session
@@ -47,7 +70,7 @@ public enum GroupAudioUnitDecisions {
 ///  * `oneToOneEnded()` re-arms and re-enables after the 1:1 call that shared
 ///    the unit tore it down;
 ///  * `end()` switches the unit off and releases the arm it owns.
-public final class GroupAudioUnitDriver: @unchecked Sendable {
+public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked Sendable {
 
     /// Numeric `admgate` lines go through `NativeAudioSessionGate.log`; this is
     /// the group-specific side channel (ids and numbers only).

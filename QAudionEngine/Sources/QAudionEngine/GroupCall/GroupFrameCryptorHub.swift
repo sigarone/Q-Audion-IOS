@@ -23,7 +23,10 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
     public var onDecryptFailure: ((String) -> Void)?
 
     public let keyProvider: RTCFrameCryptorKeyProvider
-    private let factory: RTCPeerConnectionFactory
+    /// Bound by `bind(factory:)` before the first PeerConnection exists: the key
+    /// store must be usable earlier than that (the epoch-1 key of a call can
+    /// arrive before its media session is built).
+    private var factory: RTCPeerConnectionFactory?
     private let lock = NSLock()
     private var senders: [String: RTCFrameCryptor] = [:]
     private var receivers: [String: (participantId: String, cryptor: RTCFrameCryptor)] = [:]
@@ -31,8 +34,7 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
     private var sendKeyIndex: Int32 = 0
     private var disposed = false
 
-    public init(factory: RTCPeerConnectionFactory) {
-        self.factory = factory
+    public override init() {
         self.keyProvider = RTCFrameCryptorKeyProvider(
             ratchetSalt: Data(),
             ratchetWindowSize: 0,
@@ -44,6 +46,12 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
             // swiftlint:disable:next force_unwrapping
             keyDerivationAlgorithm: RTCKeyDerivationAlgorithm(rawValue: 1)!)
         super.init()
+    }
+
+    public func bind(factory: RTCPeerConnectionFactory) {
+        lock.lock()
+        self.factory = factory
+        lock.unlock()
     }
 
     // MARK: Keys
@@ -78,6 +86,10 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
             return already
         }
         guard !constructing.contains(id) else {
+            lock.unlock()
+            return false
+        }
+        guard let factory = factory else {
             lock.unlock()
             return false
         }
@@ -122,7 +134,7 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
             existing.cryptor.enabled = false
             receivers[id] = nil
         }
-        guard !constructing.contains(id) else {
+        guard !constructing.contains(id), let factory = factory else {
             lock.unlock()
             return false
         }

@@ -238,6 +238,18 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         if changed { onParticipantsChanged?(list) }
     }
 
+    /// Test seam (`@testable`): when set, every outbound message goes here instead
+    /// of the socket.
+    var sendOverride: ((_ type: String, _ data: [String: Any]) -> Void)?
+
+    private func send(type: String, data: [String: Any]) {
+        if let hook = sendOverride {
+            hook(type, data)
+        } else {
+            ws.send(type: type, data: data)
+        }
+    }
+
     // MARK: - Actions
 
     /// Create a new group call and invite recipients.
@@ -278,7 +290,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.unlock()
         onStateChanged?(.creating)
 
-        ws.send(type: "group_call_create", data: [
+        send(type: "group_call_create", data: [
             "call_id": newCallId,
             "recipients": recipients,
             "call_type": callType,
@@ -297,40 +309,40 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.unlock()
         onStateChanged?(.creating)
 
-        ws.send(type: "group_call_join", data: ["call_id": callId])
+        send(type: "group_call_join", data: ["call_id": callId])
     }
 
     /// Leave the current group call
     public func leaveGroupCall() {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_leave", data: ["call_id": cid])
+        send(type: "group_call_leave", data: ["call_id": cid])
         endLocally()
     }
 
     /// End the group call for everyone (creator only)
     public func endGroupCall() {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_end", data: ["call_id": cid])
+        send(type: "group_call_end", data: ["call_id": cid])
         endLocally()
     }
 
     /// Decline a ringing invite (spec 2.6): the server removes us from
     /// `Invited` and dismisses the ring on our other devices.
     public func declineGroupCall(callId: String) {
-        ws.send(type: "group_call_decline", data: ["call_id": callId])
+        send(type: "group_call_decline", data: ["call_id": callId])
     }
 
     /// `group_call_media_join` (spec 2.2): ask for the Janus room hand-out.
     /// The answer is `group_call_media_ready` or `group_call_media_unavailable`.
     public func requestMediaJoin(callId: String) {
-        ws.send(type: "group_call_media_join", data: ["call_id": callId])
+        send(type: "group_call_media_join", data: ["call_id": callId])
     }
 
     /// `group_call_media_rejoin` (spec 2.5): like a media join, plus the hint
     /// that the current node / connection failed; the server re-checks health
     /// and may move the room. `reason` is a short code, never free text.
     public func requestMediaRejoin(callId: String, reason: String) {
-        ws.send(type: "group_call_media_rejoin", data: ["call_id": callId, "reason": String(reason.prefix(24))])
+        send(type: "group_call_media_rejoin", data: ["call_id": callId, "reason": String(reason.prefix(24))])
     }
 
     /// Tier-1: group-call BROADCAST reaction (Template B, mirrors
@@ -340,7 +352,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// only (see `onGroupCallReactionReceived`'s kdoc).
     public func sendGroupCallReaction(emoji: String) {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_reaction", data: [
+        send(type: "group_call_reaction", data: [
             "call_id": cid,
             "emoji": emoji
         ])
@@ -351,7 +363,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// `group_typing`). Idempotent resend is safe.
     public func sendGroupCallRaiseHand(raised: Bool) {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_raise_hand", data: [
+        send(type: "group_call_raise_hand", data: [
             "call_id": cid,
             "raised": raised
         ])
@@ -365,7 +377,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// role in group calls).
     public func sendGroupCallMuteRequest(targetId: String) {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_mute_request", data: [
+        send(type: "group_call_mute_request", data: [
             "call_id": cid,
             "target_id": targetId
         ])

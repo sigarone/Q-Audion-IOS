@@ -227,13 +227,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
         ("h", 1, 25, 1_200_000),
     ]
 
-    public enum CameraResult: Equatable, Sendable {
-        case started
-        case stopped
-        case permissionDenied
-        case noCamera
-        case notReady
-    }
+    public typealias CameraResult = GroupCameraResult
 
     private let hub: GroupFrameCryptorHub
     private let selfPseudonym: String
@@ -312,8 +306,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
     }
 
     public func close() {
-        capturer?.stopCapture()
-        capturer = nil
+        stopCapturer()
         tuning?.stop()
         tuning = nil
         hub.detachAll()
@@ -336,8 +329,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
     public func setCameraEnabled(_ enabled: Bool) async -> CameraResult {
         guard let video = videoTrack, let source = videoSource else { return .notReady }
         if !enabled {
-            capturer?.stopCapture()
-            capturer = nil
+            stopCapturer()
             video.isEnabled = false
             onLocalVideoTrack?(nil)
             return .stopped
@@ -364,6 +356,13 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
         #else
         return .noCamera
         #endif
+    }
+
+    /// Sync on purpose: inside an `async` function `stopCapture()` would bind to the
+    /// completion-handler overload the SDK imports as `async` and need an `await`.
+    private func stopCapturer() {
+        capturer?.stopCapture()
+        capturer = nil
     }
 
     /// Keeps `count` of the three simulcast encodings active (1 = l only,
