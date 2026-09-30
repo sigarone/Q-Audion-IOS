@@ -1628,6 +1628,10 @@ final class AppState: ObservableObject {
     /// `wireGroupCallManager`/`connectPersistentSocket`, mirroring how
     /// `pendingGroupCallJoinVideo` is threaded through the same latch).
     var pendingGroupCallJoinGroupId: String = ""
+    /// Spec 2.6 — declines made during a cold start, before the group manager
+    /// existed: sent once it does, so the server takes us off the invitees (and
+    /// stops ringing our other devices) instead of waiting for the ring timeout.
+    var pendingGroupCallDeclineIds: [String] = []
     /// W391: live video pipeline for the active 1:1 video call.
     /// Created in startCall(video:true), stopped in endCall. Held by
     /// AppState (not by the View) so SwiftUI re-creation doesn't tear
@@ -5919,6 +5923,12 @@ final class AppState: ObservableObject {
             groupController.onParticipantsChanged = { [weak self] list in
                 viewModelParticipantsHook?(list)
                 DispatchQueue.main.async { self?.groupRosterChangedForPromotion() }
+            }
+            // Spec 2.6 — declines latched during a cold start go out now.
+            if !self.pendingGroupCallDeclineIds.isEmpty {
+                let declined = self.pendingGroupCallDeclineIds
+                self.pendingGroupCallDeclineIds = []
+                for id in declined { groupManager.declineGroupCall(callId: id) }
             }
             // W-GRPRING cold start: the user accepted a push-woken group call
             // before this socket (and therefore the controller) existed. The
@@ -20549,6 +20559,17 @@ extension AppState {
             $0.portType == .builtInReceiver
         }
         guard onReceiver else { return }
+        // Group calls v2: the group unit runs in WebRTC's manual audio mode (the
+        // same arm as a native 1:1 call): the route is set through the gate — under
+        // RTCAudioSession's configuration lock, without the mixable option, and with
+        // WebRTC's own session configuration updated so its next reconfiguration of
+        // the session (unit enable, interruption end) keeps the loudspeaker. The
+        // group screen is hands-free: pinned, like before.
+        if NativeAudioSessionGate.isArmed {
+            NativeAudioSessionGate.applySpeakerRoute(speakerOn: true, hardOverride: true)
+            RTLog.info("call", "group-call speaker route applied via gate (was receiver)")
+            return
+        }
         do {
             #if !targetEnvironment(simulator)
             let opts: AVAudioSession.CategoryOptions = [
@@ -24282,7 +24303,13 @@ extension AppState {
         clearGroupCallKitCall(reason: .declined)
         // Spec 2.6: `group_call_decline` removes us from the invitees server-side
         // (the room stays open for everyone else).
-        groupCallManager?.declineGroupCall(callId: invite.callId)
+        if let manager = groupCallManager {
+            manager.declineGroupCall(callId: invite.callId)
+        } else {
+            // Cold start: no manager yet, the decline goes out when the socket is up.
+            pendingGroupCallDeclineIds.append(invite.callId)
+            if pendingGroupCallDeclineIds.count > 8 { pendingGroupCallDeclineIds.removeFirst() }
+        }
         print("[AppState] W-GRPRING declined group call \(invite.callId.prefix(8))…")
     }
 

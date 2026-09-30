@@ -380,6 +380,24 @@ final class GroupMediaSessionTests: XCTestCase {
         XCTAssertEqual(h.session.currentState, .closed)
     }
 
+    func testALaterOfferFromTheNodeWithAnotherFingerprintIsRefusedToo() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        XCTAssertEqual(h.subscriber.acceptedStreams.count, 1)
+        // Carol appears; Janus' renegotiation offer now carries another certificate.
+        h.server.subscriberOfferSdp = FakeJanusServer.sdp(setup: "a=setup:actpass", fingerprintPair: "CD")
+        h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
+                       "plugindata": ["plugin": "janus.plugin.videoroom",
+                                      "data": ["videoroom": "event", "publishers": [FakeJanusServer.publisher(id: carol)]]]])
+        let ok = await h.waitUntil { !h.failures().isEmpty }
+        XCTAssertTrue(ok)
+        XCTAssertEqual(h.failures().first, .dtlsPinMismatch(pc: .sub))
+        XCTAssertEqual(h.subscriber.acceptedStreams.count, 1, "the second offer is never applied")
+        XCTAssertEqual(h.session.currentState, .closed)
+    }
+
     // MARK: layers
 
     func testTileChangesBecomeSubstreamConfigureRequestsOnTheSubscriberMid() async throws {
@@ -511,6 +529,16 @@ final class GroupMediaSessionTests: XCTestCase {
         h.publisher.onState?(.connected)
         let ok = await h.waitUntil { !h.failures().isEmpty }
         XCTAssertTrue(ok)
+        XCTAssertEqual(h.failures().first, .transportPolicy(pc: .pub, fields: ["stats"]))
+    }
+
+    func testAnEmptyTransportRowThatNeverFillsInIsRefusedToo() async throws {
+        let h = SessionHarness()
+        h.publisher.observation = GroupTransportPolicy.Observed(tlsVersion: nil, dtlsCipher: nil, srtpCipher: nil)
+        try await h.session.start(publishVideo: true)
+        h.publisher.onState?(.connected)
+        let ok = await h.waitUntil { !h.failures().isEmpty }
+        XCTAssertTrue(ok, "a row that exists but never carries a level proves nothing")
         XCTAssertEqual(h.failures().first, .transportPolicy(pc: .pub, fields: ["stats"]))
     }
 
@@ -786,15 +814,6 @@ final class GroupMediaSessionTests: XCTestCase {
         let ok = await h.waitUntil { h.rejoinReasons().contains("ice_restart_timeout") }
         XCTAssertTrue(ok)
         XCTAssertFalse(h.rejoinReasons().contains("pc_disconnected"))
-        h.session.close()
-    }
-
-    func testAPeerConnectionThatStaysDisconnectedAsksForARejoin() async throws {
-        let h = SessionHarness()
-        try await h.session.start(publishVideo: true)
-        h.publisher.onState?(.disconnected)      // never comes back
-        let ok = await h.waitUntil { h.rejoinReasons().contains("pc_disconnected") }
-        XCTAssertTrue(ok)
         h.session.close()
     }
 

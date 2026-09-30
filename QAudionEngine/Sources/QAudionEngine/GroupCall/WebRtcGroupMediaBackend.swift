@@ -79,9 +79,14 @@ public final class WebRtcGroupMediaBackend: GroupMediaBackend, @unchecked Sendab
     }
 
     public func endCall() {
+        // Swap in an empty key store: the ended call's keys (32 bytes per member per
+        // epoch) must not sit in memory until the next call replaces the hub.
+        let fresh = GroupFrameCryptorHub()
         lock.lock()
         let old = hub
+        hub = fresh
         lock.unlock()
+        wireHub()
         old.dispose()
     }
 }

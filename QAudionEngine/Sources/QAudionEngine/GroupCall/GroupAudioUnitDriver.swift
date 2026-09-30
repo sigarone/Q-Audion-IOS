@@ -181,6 +181,7 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         let owns = ownsArm
         if source == .callKit { callKitSeen = true }
         sessionActive = started
+        activationRequested = false
         lock.unlock()
         if started { cancelActivationWatchdog() }
         // Shared unit (promotion overlap): the activation is recorded, the unit is
@@ -210,6 +211,9 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         lock.lock()
         sessionActive = false
         callKitSeen = false
+        // Whoever released the session re-activates it (CallKit's own `didActivate`,
+        // or the app's re-assert): the take-over must not ask for a second one.
+        activationRequested = true
         let owns = ownsArm
         let current = token
         lock.unlock()
