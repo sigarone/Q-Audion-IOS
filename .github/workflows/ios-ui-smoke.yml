@@ -30,6 +30,19 @@
 # QAudionBroadcastExtension (pure Swift, no native cross-compile) and the
 # simulator boot/install/Maestro steps below all hold up.
 #
+# NO PRODUCTION ACCOUNTS (2026-09-30): the app under test has the production
+# server (voip.bcrypto.com) hard-wired (PinnedServerHost.url) and there is no
+# staging endpoint or launch-argument override, so any flow that taps
+# "Crea account" registers a REAL account on production from the GitHub
+# runner's IP (audit log: 23 extension_registered events 2026-09-25..09-28,
+# admin panel accounts #198..#214, all inside successful runs of this
+# workflow). Therefore this workflow must never register: the flows that do
+# live in maestro/needs-non-prod-backend/ and are refused below; the former
+# "DIAGNOSTIC - raw curl to register endpoint" step (POST .../register/
+# extension on every run) and diag-register.yaml were removed. Re-enable the
+# registering flows only once the app can be pointed at a non-production
+# backend (build flag / launch argument) and this workflow sets it.
+#
 # Requires Maestro flow(s) under apps/qaudion-ios/maestro/ -- see
 # smoke-launch.yaml for the first one (cold launch -> onboarding welcome
 # screen, no login required).
@@ -40,7 +53,7 @@ on:
   workflow_dispatch:
     inputs:
       flow:
-        description: 'Maestro flow file to run (relative to maestro/). Leave empty to run all flows in the directory.'
+        description: 'Maestro flow file to run (relative to maestro/). Leave empty to run all top-level flows. Flows under needs-non-prod-backend/ are refused (they create real production accounts).'
         required: false
         default: 'smoke-launch.yaml'
       simulator_name:
@@ -231,7 +244,7 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" "$APP_PATH"
           # Verbose CFNetwork/URLSession logging -- only matters for flows
-          # that skip their own launchApp (e.g. diag-register.yaml), since
+          # that skip their own launchApp (none today), since
           # a flow's own launchApp kills+relaunches without these env vars.
           # Harmless no-op for normal flows. `simctl launch` has no `-e`
           # flag (first attempt: "Invalid device: -e") -- env vars for the
@@ -248,38 +261,6 @@ jobs:
           brew install mobile-dev-inc/tap/maestro
           maestro --version
 
-      # Diagnostic (2026-08-06) -- home-tabs-smoke.yaml's registration step
-      # fails with a generic decode error and zero matching bcrypto-lite
-      # server log entry, meaning the request never reached origin.
-      # Cert-pinning was checked and ruled out (PinnedServerHost's pins
-      # match the live chain). Hits the real endpoint from THIS runner's
-      # network path (same as the Simulator's traffic) to see the raw
-      # response -- rules in/out a Cloudflare-edge block of the runner's
-      # IP before guessing further. Remove once the root cause is fixed.
-      - name: DIAGNOSTIC - raw curl to register endpoint
-        continue-on-error: true
-        run: |
-          echo "=== GET /api/v1/health ==="
-          curl -sv -m 15 "https://voip.bcrypto.com/api/v1/health" 2>&1 | tail -40
-          echo ""
-          echo "=== POST /api/v1/auth/register/extension over HTTP/2 (body printed) ==="
-          curl -sv -m 15 -X POST "https://voip.bcrypto.com/api/v1/auth/register/extension" \
-            -H "Content-Type: application/json" \
-            -d '{"email":"ci-diag-h2-'"$(date +%s)"'@example.invalid","platform":"ios"}' \
-            -o /tmp/resp-h2.json -D /tmp/headers-h2.txt 2>&1 | tail -40
-          echo "--- h2 response headers ---"; cat /tmp/headers-h2.txt
-          echo "--- h2 response body ($(wc -c < /tmp/resp-h2.json) bytes) ---"; cat /tmp/resp-h2.json; echo
-          # HTTP/3 comparison dropped (2026-08-06, run 31090156305): this
-          # runner's curl/libcurl build has no --http3 support ("the
-          # installed libcurl version doesn't support this"), same as the
-          # local dev-box curl used to draft the attempt. The 1148 vs 727
-          # byte difference between the app's CFNetwork summary and this
-          # curl's on-disk body is most likely just a measurement-layer
-          # mismatch (CFNetwork's response_bytes counts transport/QUIC
-          # framing, not decoded HTTP body) rather than a different
-          # response -- raw-response logging added directly in
-          # BCryptoAccountApiImpl.registerExtensionOnly is the real answer.
-
       - name: Run Maestro flow(s)
         env:
           # SEC (Aikido, 2026-08-21): env, not ${{ }} spliced into the
@@ -294,10 +275,18 @@ jobs:
         run: |
           set -e
           if [ -n "$FLOW_INPUT" ]; then
+            case "$FLOW_INPUT" in
+              needs-non-prod-backend/*|*..*|/*)
+                echo "::error::flow '$FLOW_INPUT' is refused: flows in maestro/needs-non-prod-backend/ register real accounts on the PRODUCTION server (no staging backend exists for the app yet)."
+                exit 1 ;;
+            esac
             echo "Running single flow: maestro/$FLOW_INPUT"
             maestro test "maestro/$FLOW_INPUT"
           else
-            echo "Running every flow under maestro/"
+            # Top-level flows only (maestro/needs-non-prod-backend/ is not
+            # picked up: Maestro does not recurse into subdirectories
+            # without a config.yaml, which this repo does not have).
+            echo "Running every top-level flow under maestro/"
             maestro test maestro/
           fi
 

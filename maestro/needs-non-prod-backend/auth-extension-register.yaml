@@ -1,5 +1,9 @@
 appId: com.qaudion.app
 ---
+# NOT RUN BY CI: registers a real account on whatever backend the app
+# points at, which today is always PRODUCTION (see ios-ui-smoke.yml header).
+# Run by hand only against a non-production backend.
+#
 # Reusable auth flow for screen-coverage: registers a brand-new,
 # throwaway "extension-only" account (no phone/SMS -- just a random email,
 # see ExtensionOnlyRegisterScreen.swift) and completes the mandatory
