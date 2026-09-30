@@ -9,10 +9,13 @@
 #     "secret " <list> " len N" " slat << " <list> " len N" "\n derived_key " <list> " len N"   (HKDF)
 #     "raw_key " <list> " len N" " slat << " <list> " len N" "\n derived_key " <list> " len N"   (PBKDF2)
 # ("slat" is upstream's own typo of "salt"). sigarone/webrtc-aes256-build's
-# no-key-log.patch deletes both statements; once the rebuilt WebRTC.xcframework and
-# LiveKitWebRTC.xcframework are pinned in QAudionEngine/Package.swift the literals
-# are gone from the shipped app. This gate proves that on the SHIPPED artifact and
-# keeps it true if someone re-pins an older binary.
+# no-key-log.patch deletes both statements; once the rebuilt WebRTC.xcframework is
+# pinned in QAudionEngine/Package.swift the literals are gone from the shipped app.
+# (Until group calls v2 the app also shipped LiveKit's LiveKitWebRTC.xcframework,
+# which needed the same rebuild; it is no longer part of the app. The scan below is
+# binary-agnostic - every Mach-O in the bundle - so it needed no change.) This gate
+# proves that on the SHIPPED artifact and keeps it true if someone re-pins an older
+# binary or re-introduces a second WebRTC build.
 #
 # USAGE   scripts/ci/assert-no-key-logging.sh PATH [PATH...]
 #   PATH  a .app bundle (or any directory, or a single binary). Directories are
@@ -20,7 +23,7 @@
 #
 # SCOPE   EXACTLY the regular files whose first four bytes are a Mach-O magic
 #         (thin 32/64-bit, either byte order, or fat/universal). That covers the app
-#         executable, Frameworks/*.framework/<binary> (WebRTC, LiveKitWebRTC, ...),
+#         executable, Frameworks/*.framework/<binary> (WebRTC, ...),
 #         PlugIns/*.appex/<binary> and any *.dylib. Everything else (plists, assets,
 #         .strings, JSON test vectors, ...) is NOT scanned. Every scanned file is
 #         listed in the output with its counts.
@@ -35,8 +38,8 @@
 #                     it apart from the app's own JSON field names
 #                     "supports_raw_key_aes256" / "raw_key_capable".
 #   Validated on the real shipped WebRTC binaries (libjingle_peerconnection_so.so
-#   from libwebrtc-aes256.aar and from the LiveKit-prefixed AAR): each signature
-#   matches exactly once, in the log-format strings.
+#   from libwebrtc-aes256.aar and from the (Android) LiveKit-prefixed AAR): each
+#   signature matches exactly once, in the log-format strings.
 # CONTROL   'Failed to derive HkdfSha256 key from secret' (the RTC_LOG(LS_ERROR)
 #   right above the first statement, kept by the patch). Its per-file count is
 #   printed so a report shows whether the scan can see WebRTC's strings at all.
@@ -47,7 +50,7 @@
 #   anything else REPORT-ONLY (default "0"): prints the same report and GitHub
 #                 warnings, but ALWAYS exits 0 - it can never break a release.
 #   While the shipped WebRTC binaries are the old ones, a report-only run is
-#   EXPECTED to show hits in WebRTC.framework/WebRTC (and LiveKitWebRTC): that is
+#   EXPECTED to show hits in WebRTC.framework/WebRTC: that is
 #   the detector working on the real iOS binaries. Flip the flag to "1" in the same
 #   PR that pins the rebuilt binaries.
 set -u

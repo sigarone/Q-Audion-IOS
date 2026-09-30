@@ -30,7 +30,6 @@ on:
       - 'QAudionAppTests/**'
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
-      - 'QAudionBroadcastExtension/**'
       - '.github/workflows/ios-app-tests.yml'
   workflow_dispatch:
 

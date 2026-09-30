@@ -427,6 +427,40 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid)
     }
 
+    /// Group calls v2 — the end of a group call that CallKit does not track
+    /// (a foreground accept, CallKit-free mode, or a promoted group that outlived
+    /// the 1:1 CallKit call it started on). Such a call self-activated the shared
+    /// session with `reactivateAudioSessionForSelfManagedCall(uuid: nil)`, which
+    /// marks the process-wide self-activation flag, and it has no uuid to
+    /// `reportCallEnded`, so nothing ever paid the matching deactivation: the
+    /// session stayed active after the call and every later call started from a
+    /// skewed `activationCount` (W-DRAINACTIVATION class). This pays ONE balancing
+    /// deactivation, exactly what a native call's report pays, and only when the
+    /// flag says one is owed; no CXProvider report (there is no call to end).
+    public func balanceSelfManagedGroupActivation() {
+        // A fresh uuid is never native, so `consumeEndBalance` takes the
+        // process-wide test-and-clear (true once after a self-activation).
+        guard ledger.consumeEndBalance(UUID()).selfActivated else { return }
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.lockForConfiguration()
+        let countBefore = rtcSession.activationCount
+        let planned = NativeAudioUnitGateDecisions.deactivationCalls(
+            activationCount: Int(countBefore), nativeManualCall: true)
+        var done = 0
+        while rtcSession.activationCount > 0 && done < planned {
+            do {
+                try rtcSession.setActive(false)
+            } catch {
+                print("[CallKitProvider] setActive(false) fail site=groupEnd code=\((error as NSError).code)")
+                break
+            }
+            done += 1
+        }
+        let countAfter = rtcSession.activationCount
+        rtcSession.unlockForConfiguration()
+        log?("admgate grpendbal=1 before=\(countBefore) iter=\(done) after=\(countAfter)")
+    }
+
     /// W478 — answer an incoming call via the CallKit CXCallController.
     /// This path is triggered by the in-app answer button; it fires the same
     /// CXAnswerCallAction that the system UI button would fire, ensuring the

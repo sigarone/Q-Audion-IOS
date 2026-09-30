@@ -279,6 +279,14 @@ struct ContentView: View {
             snackbarHost.show(.init(text: text, severity: .info))
             appState.peerVideoPauseToastText = nil
         }
+        // Group calls v2 — a fatal media error ends the call (and its cover); this is
+        // why. Wired here, not on `GroupCallView`, so it still shows after the
+        // cover is gone.
+        .onChange(of: appState.groupCallFatalErrorToastText) { text in
+            guard let text else { return }
+            snackbarHost.show(.init(text: text, severity: .error))
+            appState.groupCallFatalErrorToastText = nil
+        }
     }
 
     /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1
@@ -287,9 +295,8 @@ struct ContentView: View {
     /// reply into) and a group-specific subtitle. The ringtone is driven by
     /// AppState (`startInAppRingtone`), exactly as for a 1:1 call.
     ///
-    /// Reject deliberately sends NOTHING on the wire: the server has no
-    /// `group_call_decline` type and the room must stay open for the other
-    /// invitees — we simply never send `group_call_join`.
+    /// Reject sends `group_call_decline` (spec 2.6) and never `group_call_join`;
+    /// the room stays open for the other invitees.
     private func incomingGroupCallScreen(
         _ invite: AppState.IncomingGroupCallInvite
     ) -> some View {

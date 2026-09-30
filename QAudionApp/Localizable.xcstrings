@@ -1639,6 +1639,150 @@
         }
       }
     },
+    "group_call.camera_permission_denied_toast": {
+      "extractionState": "manual",
+      "comment": "Snackbar — one-shot toast shown when the user turns the camera on in a group call but the app has no camera permission; the call itself continues audio-only",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenti l'accesso alla videocamera in Impostazioni per attivare il video."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow camera access in Settings to turn on video."
+          }
+        }
+      }
+    },
+    "group_call.media_error.full": {
+      "extractionState": "manual",
+      "comment": "Snackbar — the group call has reached its participant limit; shown when the media server refuses to admit us, the call is then ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiamata è piena."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This call is full."
+          }
+        }
+      }
+    },
+    "group_call.media_error.no_node": {
+      "extractionState": "manual",
+      "comment": "Snackbar — no media server could be assigned to the group call, the call is then ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun server media disponibile."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No media server available."
+          }
+        }
+      }
+    },
+    "group_call.media_error.room_create_failed": {
+      "extractionState": "manual",
+      "comment": "Snackbar — the media server could not create the room for the group call, the call is then ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile creare la stanza media della chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't set up the media room for this call."
+          }
+        }
+      }
+    },
+    "group_call.media_error.not_member": {
+      "extractionState": "manual",
+      "comment": "Snackbar — the server says we are not a participant of the group call we tried to reach media for, the call is then ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non risulti tra i partecipanti di questa chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You are not a participant of this call."
+          }
+        }
+      }
+    },
+    "group_call.media_error.transport_policy": {
+      "extractionState": "manual",
+      "comment": "Snackbar — the media connection did not meet the required security level (DTLS pin or transport policy) and was refused; the call is ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione non sicura rifiutata: la chiamata è stata terminata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Insecure connection refused: the call was ended."
+          }
+        }
+      }
+    },
+    "group_call.media_error.media_lost": {
+      "extractionState": "manual",
+      "comment": "Snackbar — the media connection of the group call was lost and could not be recovered; the call is ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione media persa: la chiamata è stata terminata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Media connection lost: the call was ended."
+          }
+        }
+      }
+    },
+    "group_call.media_error.other": {
+      "extractionState": "manual",
+      "comment": "Snackbar — generic fatal media error of a group call; the call is ended",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errore di connessione media: la chiamata è stata terminata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Media error: the call was ended."
+          }
+        }
+      }
+    },
     "account_settings.profile_updated": {
       "extractionState": "manual",
       "comment": "Snackbar — shown after successfully saving profile changes (display name, status, phone)",
@@ -4929,6 +5073,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "PARTICIPANTES"
+          }
+        }
+      }
+    },
+    "group_security.overview.note": {
+      "extractionState": "manual",
+      "comment": "Group call security sheet — overview note describing the group call v2 encryption model (transport, per-sender content E2EE, key delivery)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il trasporto è protetto da DTLS 1.3 con scambio di chiavi ibrido post-quantistico (X25519MLKEM768) e SRTP AEAD_AES_256_GCM, verificato dal tuo dispositivo dopo la connessione. Il contenuto è cifrato end-to-end da ogni mittente, per epoca, con una chiave casuale di 32 byte (AES-256-GCM). Le chiavi viaggiano solo sul canale di controllo sigillato tra i singoli partecipanti: il server media non le vede mai."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transport is protected by DTLS 1.3 with a hybrid post-quantum key exchange (X25519MLKEM768) and SRTP AEAD_AES_256_GCM, verified by your device after connecting. The content is end-to-end encrypted by each sender, per epoch, with a fresh random 32-byte key (AES-256-GCM). Keys only travel over the sealed control channel between individual participants: the media server never sees them."
           }
         }
       }

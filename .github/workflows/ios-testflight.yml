@@ -135,9 +135,10 @@ jobs:
       #   '1' = ENFORCE (current): the step fails the job, BEFORE the TestFlight upload, if
       #         any Mach-O in the app still contains the upstream WebRTC key-dump log strings,
       #         or if nothing could be scanned. Flipped on in the same PR that pinned the
-      #         rebuilt WebRTC.xcframework / LiveKitWebRTC.xcframework
-      #         (sigarone/webrtc-aes256-build, no-key-log.patch) in QAudionEngine/Package.swift
-      #         + QAudionApp/project.yml.
+      #         rebuilt WebRTC.xcframework (sigarone/webrtc-aes256-build, no-key-log.patch) in
+      #         QAudionEngine/Package.swift. (It originally also covered LiveKit's
+      #         LiveKitWebRTC.xcframework; LiveKit was removed in group calls v2 and the app now
+      #         links only this one WebRTC binary.)
       #   '0' = REPORT-ONLY: same scan, prints what it found, never fails the step or the
       #         release. Use it (one-line change) only to roll back to binaries that still
       #         carry the strings.
@@ -287,7 +288,7 @@ jobs:
       # 3c) DEV BUILD opt-in (workflow_dispatch `dev_tools=true` only --
       #     never runs on a tag push, see the `if:` guard). Injects
       #     QAUDION_DEV_TOOLS into the QAudionApp TARGET ONLY (never the
-      #     QAudionPacketTunnel / QAudionBroadcastExtension / QAudionIntents
+      #     QAudionPacketTunnel / QAudionIntents
       #     extension targets, which don't declare the flag at all) before
       #     `xcodegen generate` runs, so the generated .xcodeproj already has
       #     it. The regex isolates the "  QAudionApp:" block up to the next
@@ -451,13 +452,6 @@ jobs:
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$EXT_PLIST"
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$EXT_PLIST"
 
-          # Same rule for the broadcast (screen-share) extension — its
-          # Info.plist otherwise keeps a hardcoded placeholder version and
-          # fails the same host/extension version-match validation.
-          BCAST_PLIST="../QAudionBroadcastExtension/Info.plist"
-          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$BCAST_PLIST"
-          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$BCAST_PLIST"
-
           # And the SiriKit Intents extension — it was the one extension
           # left out, so every archive warned "CFBundleVersion of an app
           # extension (1) must match ... (<build>)" (audit FIX-15).
@@ -469,8 +463,6 @@ jobs:
           plutil -extract CFBundleVersion             raw -o - Info.plist
           echo "--- extension ---"
           plutil -extract CFBundleVersion raw -o - "$EXT_PLIST"
-          echo "--- broadcast extension ---"
-          plutil -extract CFBundleVersion raw -o - "$BCAST_PLIST"
 
           # Expose the resolved version + build number as step outputs so the
           # dSYM-archival step below can name its artifact by version
@@ -547,7 +539,7 @@ jobs:
           # immediately with:
           #   "Provisioning profile ... doesn't include the Associated
           #    Domains capability."
-          # Same class of fix as the VPN extension/broadcast extension
+          # Same class of fix as the VPN extension
           # below (same root cause: fetch-signing-files --create makes the
           # Bundle ID/profile but does not add a capability that didn't
           # exist yet) -- reusing that exact Phase 1-4 pattern here instead
@@ -727,80 +719,14 @@ jobs:
             echo "WARNING: could not resolve Extension Bundle ID resource -- archive may fail."
           fi
 
-          # ── Broadcast extension: App Groups ─────────────────────────────
-          # QAudionBroadcastExtension.entitlements (ReplayKit screen-share,
-          # feat(groups): ReplayKit broadcast extension) requires App Groups.
-          # Same class of fix as the VPN extension above: fetch-signing-files
-          # --create makes the Bundle ID but not the capability -- the profile
-          # it produces has no entitlements and xcodebuild archive rejects it.
-          # No NETWORK_EXTENSIONS needed here (broadcast, not a tunnel).
-          BCAST_BID="com.qaudion.app.broadcast"
-
-          BCAST_FETCH_TMP=$(mktemp)
-          app-store-connect fetch-signing-files "$BCAST_BID" \
-            --type IOS_APP_STORE \
-            --create \
-            --platform IOS \
-            --certificate-key "@file:$CERT_KEY_PATH" \
-            --strict-match-identifier 2>&1 | tee "$BCAST_FETCH_TMP" || true
-          BCAST_FETCH_OUT=$(cat "$BCAST_FETCH_TMP")
-          rm -f "$BCAST_FETCH_TMP"
-
-          BCAST_PLAIN=$(printf '%s\n' "$BCAST_FETCH_OUT" | sed 's/\x1b\[[0-9;]*m//g')
-
-          BCAST_BID_RES=$(printf '%s\n' "$BCAST_PLAIN" \
-            | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
-            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
-          if [ -z "$BCAST_BID_RES" ]; then
-            BCAST_BID_RES=$(printf '%s\n' "$BCAST_PLAIN" \
-              | grep -F "com.qaudion.app.broadcast" \
-              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
-          fi
-          echo "Broadcast Extension Bundle ID res-id: ${BCAST_BID_RES:-UNKNOWN}"
-
-          BCAST_PROF_RES=$(printf '%s\n' "$BCAST_PLAIN" \
-            | grep -oE 'Created Profile [A-Z0-9]{10}' \
-            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
-          if [ -z "$BCAST_PROF_RES" ]; then
-            BCAST_PROF_RES=$(printf '%s\n' "$BCAST_PLAIN" \
-              | grep -E '^- IOS_APP_STORE' \
-              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
-          fi
-          echo "Broadcast Extension Profile res-id: ${BCAST_PROF_RES:-UNKNOWN}"
-
-          if [ -n "$BCAST_BID_RES" ]; then
-            echo "Enabling APP_GROUPS on $BCAST_BID_RES..."
-            app-store-connect bundle-ids enable-capabilities \
-              "$BCAST_BID_RES" --capability "App Groups" 2>&1 \
-              && echo "  APP_GROUPS: done" \
-              || echo "  APP_GROUPS: WARN (may already be enabled)"
-
-            if [ -n "$BCAST_PROF_RES" ]; then
-              echo "Deleting stale profile $BCAST_PROF_RES (created without capabilities)..."
-              app-store-connect profiles delete "$BCAST_PROF_RES" 2>&1 \
-                && echo "  Profile deleted." \
-                || echo "  Profile delete WARN (may already be gone)"
-            fi
-
-            echo "Re-creating broadcast extension signing files with capabilities..."
-            app-store-connect fetch-signing-files "$BCAST_BID" \
-              --type IOS_APP_STORE \
-              --create \
-              --platform IOS \
-              --certificate-key "@file:$CERT_KEY_PATH" \
-              --strict-match-identifier
-          else
-            echo "WARNING: could not resolve Broadcast Extension Bundle ID resource -- archive may fail."
-          fi
-
           # ── Intents extension: App Groups (S2 added QAudionIntents.entitlements) ─
           # CarPlay/Siri state-of-the-art plan. S1 (INStartCallIntent) needed
           # no entitlements file at all -- S2 (INSendMessageIntent/
           # INSearchForMessagesIntent, SiriMessageBridgeStore.swift) added
           # QAudionIntents.entitlements declaring
           # group.com.bcrypto.qaudion.siri, so this now needs the same
-          # enable-capabilities / delete-stale-profile dance as the VPN and
-          # broadcast extensions above, not a plain profile.
+          # enable-capabilities / delete-stale-profile dance as the VPN
+          # extension above, not a plain profile.
           INTENTS_BID="com.qaudion.app.intents"
 
           INTENTS_FETCH_TMP=$(mktemp)
@@ -1070,7 +996,7 @@ jobs:
           # the failure only the artifact can prove. Same for TestFlight
           # wording: it must be compiled out of the store build.
           APP="Payload/QAudionApp.app"
-          for MANIFEST in "$APP/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionBroadcastExtension.appex/PrivacyInfo.xcprivacy"; do
+          for MANIFEST in "$APP/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"; do
             if [ ! -f "$MANIFEST" ]; then
               echo "::error::privacy manifest missing from IPA: $MANIFEST"
               exit 1
@@ -1091,7 +1017,7 @@ jobs:
             echo "::error::TestFlight-only surface compiled into the store binary (itms-beta / testflight.apple.com string found) — QAUDION_DEV_TOOLS must be OFF for a tag build"
             exit 1
           fi
-          echo "store-readiness gates: privacy manifests present (x4), no TestFlight strings in binary"
+          echo "store-readiness gates: privacy manifests present (x3), no TestFlight strings in binary"
 
           rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
           zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload

@@ -13,19 +13,21 @@
 # keygen+decap) — confirmed green via engine-tests.yml's ios-simulator-tests
 # job, which already runs the whole QAudionEngineTests target including
 # this class. What doesn't work is running it HERE, standalone, via bare
-# `swift test`: this package depends on LiveKit's binary `LiveKitWebRTC`
-# xcframework, and SwiftPM's CLI can't resolve/link binary xcframework
-# targets the way `xcodebuild -scheme ...` can — every attempt fails with
-# "no such module 'LiveKitWebRTC'" before a single test runs. Making this
-# job work would mean switching to `xcodebuild test -scheme QAudionEngine
-# -destination 'platform=iOS Simulator...'`, i.e. booting a simulator —
+# `swift test`: this package depends on a binary WebRTC xcframework (at the
+# time LiveKit's `LiveKitWebRTC`; since group calls v2 removed LiveKit, the
+# package's own `WebRTC` binaryTarget), and SwiftPM's CLI can't resolve/link
+# binary xcframework targets the way `xcodebuild -scheme ...` can — every
+# attempt failed with "no such module 'LiveKitWebRTC'" (now expected to be
+# the equivalent `WebRTC` failure, not re-verified) before a single test
+# ran. Making this job work would mean switching to `xcodebuild test
+# -scheme QAudionEngine -destination 'platform=iOS Simulator...'`, i.e. booting a simulator —
 # at which point it costs exactly what engine-tests.yml already costs, for
 # zero additional coverage (that job runs this same test class). Vectors
 # stay vendored under Tests/QAudionEngineTests/Crypto/Resources/wire_v1.0.0/
 # (bcrypto-server is private, CI can't curl it, and SPM needs the files to
 # exist on disk regardless) so engine-tests.yml's run of this class keeps
 # working. Re-enable this workflow only if it's rewritten to not need
-# LiveKitWebRTC at all (e.g. a build configuration that excludes it), not
+# the WebRTC binary at all (e.g. a build configuration that excludes it), not
 # by just re-adding the triggers.
 #
 # Scope: does not cover canonical_cbor/sealed_sender_cert_v2.json —

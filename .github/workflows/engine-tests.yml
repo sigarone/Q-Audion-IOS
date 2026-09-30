@@ -71,7 +71,9 @@ jobs:
           path: |
             ~/Library/Caches/org.swift.swiftpm
             QAudionEngine/.build
-          # Bumped to v2 2026-07-28 (LiveKit 2.13->2.15 bump) and dropped the
+          # Bumped to v2 2026-07-28 (then a LiveKit 2.13->2.15 bump; LiveKit is
+          # no longer a dependency since group calls v2, the rationale below
+          # still applies to any fork-URL swap) and dropped the
           # restore-keys prefix fallback on purpose: SPM's local checkout
           # cache is keyed by package IDENTITY (repo name), not URL. The old
           # v1- prefix fallback restored a stale checkout for the
@@ -98,20 +100,22 @@ jobs:
       # cached: ModuleCache.noindex (system frameworks -- SwiftUI, Vision,
       # CoreML, AVFoundation, ...) and Build/Intermediates.noindex/
       # SwiftExplicitPrecompiledModules (this package's own binaryTargets --
-      # WebRTC, LiveKitWebRTC, LKObjCHelpers). The latter is not optional:
-      # in every failing run's log, the LAST module line before output went
-      # silent (the OOM kill point) was always one of exactly these three --
-      # WebRTC/LiveKitWebRTC/LKObjCHelpers are the heaviest ObjC++ module
-      # builds this target does, so leaving that directory uncached would
-      # still force a cold rebuild of precisely the frameworks most
-      # implicated in the crash.
+      # WebRTC; historically also LiveKitWebRTC and LKObjCHelpers, which
+      # were dropped when group calls v2 removed LiveKit). The latter is not
+      # optional: in every failing run's log (recorded while LiveKit was
+      # still a dependency), the LAST module line before output went silent
+      # (the OOM kill point) was always one of exactly those three --
+      # WebRTC (+ the since-removed LiveKitWebRTC/LKObjCHelpers) are the
+      # heaviest ObjC++ module builds this target does, so leaving that
+      # directory uncached would still force a cold rebuild of precisely the
+      # framework most implicated in the crash.
       #
       # Root cause (2026-08-26): this job runs on macos-latest,
       # which is 3 vCPU / 7 GB RAM (confirmed against GitHub's own runner
       # spec table, not assumed) -- and until this cache existed, EVERY push
       # cold-rebuilt the explicit-module graph for the entire system-
       # framework set this target touches (SwiftUI, Vision, CoreML,
-      # AVFoundation, WebRTC, LiveKitWebRTC, ~30 frameworks total,
+      # AVFoundation, WebRTC (+ LiveKitWebRTC at the time), ~30 frameworks total,
       # confirmed by grepping a failing run's log for
       # SwiftExplicitDependencyGeneratePcm) from scratch, with xcodebuild's
       # default (unthrottled) build concurrency. That cold burst is the
@@ -261,7 +265,8 @@ jobs:
           # the very first run after adding the cache above still died at
           # the exact same point as before -jobs 2 existed -- mid explicit-
           # module precompile, immediately after WebRTC/LiveKitWebRTC/
-          # LKObjCHelpers -- just slower getting there (9m43s vs the prior
+          # LKObjCHelpers (LiveKit-era modules, since removed) -- just
+          # slower getting there (9m43s vs the prior
           # 5m36s). Expected: that run's cache was necessarily a cold MISS
           # (first run with this key), and -jobs 2 lowers peak RSS without
           # lowering the SINGLE heaviest module's own compile footprint

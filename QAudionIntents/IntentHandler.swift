@@ -23,9 +23,9 @@ import Intents
 /// and reading an opt-in, main-app-populated plaintext cache for search.
 ///
 /// This target still links no `QAudionEngine` at all — an Intents extension
-/// runs under a tight, separate memory budget from the host app, the same
-/// reason `QAudionBroadcastExtension` avoids linking the full engine
-/// product (see that target's own `project.yml` comment).
+/// runs under a tight, separate memory budget from the host app (the same
+/// reason the former ReplayKit broadcast extension, since removed in group
+/// calls v2, avoided linking the full engine product).
 final class IntentHandler: INExtension, INStartCallIntentHandling {
 
     override func handler(for intent: INIntent) -> Any {

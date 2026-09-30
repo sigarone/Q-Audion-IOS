@@ -1,9 +1,12 @@
 import Foundation
 import Combine
 
-/// Manages group call sessions using SFU (Selective Forwarding Unit) model.
-/// Each participant sends audio once → server forwards to all other participants.
-/// Max 8 participants per call. PQC encryption maintained per-pair.
+/// Group calls v2 — the WebSocket side of a group call: roster, invites,
+/// `group_call_media_*` (the Janus room hand-out) and the tier-1 features
+/// (reactions / raised hand / mute request). Media itself is NOT here: see
+/// `GroupCallController` and `GroupMediaSession`. The LiveKit token round-trip,
+/// the WS audio relay (`group_call_forward` / `group_call_frame`) and the
+/// `supports_*` capability fields are gone (spec §2).
 public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     // MARK: - Types
@@ -17,18 +20,6 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         public var displayName: String
         public var isMuted: Bool = false
         public var isSpeaking: Bool = false
-        /// W-RAWKEY256 (2026-07-20) — whether this member's build advertised
-        /// `supports_raw_key_aes256` on its own create/join (server's
-        /// `GroupCall.RawKeyCapable` map, mirrors `SenderKeysCapable` byte-
-        /// for-byte). Defaults `true` so every pre-existing call site that
-        /// constructs a bare `Participant(id:displayName:)` (previews, the
-        /// local self-seed in `createGroupCall`, an SFU-only ghost tile in
-        /// `GroupCallViewModel.mergeSfuOnlyParticipants`) stays silent by
-        /// default rather than spuriously flagging someone this manager has
-        /// no real wire signal for yet — only `handleGroupCallUpdate` below
-        /// ever sets this to `false`, from the real server-canonical
-        /// `raw_key_capable` roster.
-        public var isRawKeyCapable: Bool = true
     }
 
     /// W-GRPRING — decoded `group_call_invite` (server commit 9619df4). The
@@ -77,54 +68,36 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     private var _state: State = .idle
     private var _callId: String?
     private var _participants: [Participant] = []
-    /// W-GRPSENDERKEY — subset of `_participants` that advertised
-    /// `supports_group_sender_keys` on create/join. Mirrors the server's
-    /// `GroupCall.SenderKeysCapable` map (main.go).
-    private var _senderKeysCapable: Set<String> = []
-    /// W-RAWKEY256 — subset of `_participants` that advertised
-    /// `supports_raw_key_aes256` on create/join. Mirrors the server's
-    /// `GroupCall.RawKeyCapable` map (main.go), byte-for-byte parallel to
-    /// `_senderKeysCapable` above. PASS-THROUGH signal only — this manager
-    /// never touches actual key material; it exists so the UI layer can
-    /// warn about a version-skew pair (legacy AES-128-from-base64(SK_0) vs
-    /// current AES-256-from-raw-SK_0 key derivation) instead of the two
-    /// builds silently failing to decrypt each other's SFU media.
-    private var _rawKeyCapable: Set<String> = []
-    /// W-GRPREKEY — server-canonical epoch counter (`GroupCall.SenderKeyEpoch`),
-    /// relayed on every `group_call_update`. Bumped by the server on a real
-    /// membership departure; clients pre-set their local epoch to
-    /// `senderKeyEpoch - 1` before rekeying so all survivors converge on the
-    /// same value regardless of detection-order jitter (see GroupCallController).
+    /// Server-authoritative epoch (`group_call_update.sender_key_epoch`), shown
+    /// in the security sheet; the E2EE state machine consumes it through
+    /// `onGroupUpdate`.
     private var _senderKeyEpoch: Int64 = 1
 
     public var state: State { lock.lock(); defer { lock.unlock() }; return _state }
     public var callId: String? { lock.lock(); defer { lock.unlock() }; return _callId }
     public var participants: [Participant] { lock.lock(); defer { lock.unlock() }; return _participants }
-    public var senderKeysCapable: Set<String> { lock.lock(); defer { lock.unlock() }; return _senderKeysCapable }
-    /// W-RAWKEY256 — mirrors `senderKeysCapable` above, exact same shape.
-    public var rawKeyCapable: Set<String> { lock.lock(); defer { lock.unlock() }; return _rawKeyCapable }
     public var senderKeyEpoch: Int64 { lock.lock(); defer { lock.unlock() }; return _senderKeyEpoch }
 
     /// Callback for state changes
     public var onStateChanged: ((State) -> Void)?
     /// Callback for participant list updates
     public var onParticipantsChanged: (([Participant]) -> Void)?
-    /// Callback for incoming audio frames
-    public var onAudioFrame: ((String, Data) -> Void)?  // (senderId, frameData)
-    /// W-GRPSENDERKEY / W-GRPREKEY — fires on every `group_call_update` with
-    /// the full server-canonical tuple GroupCallController needs to bootstrap
-    /// and rekey the per-sender ratchet. `onParticipantsChanged` above only
-    /// carries the plain id list (kept for UI call sites); this callback is
-    /// the crypto-facing one.
-    public var onGroupUpdate: ((_ callId: String, _ participants: [String], _ senderKeysCapable: Set<String>, _ senderKeyEpoch: Int64) -> Void)?
-    /// W-GRPLIVEKIT — fires on `group_call_sfu_token_recv`: the server
-    /// minted a LiveKit access token for `callId`. Wire:
-    /// {call_id, node_id, url, token}.
-    public var onSfuTokenReceived: ((_ callId: String, _ nodeId: String, _ url: String, _ token: String) -> Void)?
-    /// W-GRPLIVEKIT — fires on `group_call_sfu_unavailable`: the caller
-    /// MUST soft-fall-back to the existing WS-relay group-call mesh path
-    /// (never hard-fail). Wire: {call_id, reason}.
-    public var onSfuUnavailable: ((_ callId: String, _ reason: String) -> Void)?
+    /// Every `group_call_update`: roster, epoch, node and the pseudonym map.
+    public var onGroupUpdate: ((GroupCallWire.Update) -> Void)?
+    /// `group_call_media_ready` for the active call (spec §2.3).
+    public var onMediaReady: ((GroupCallWire.MediaReady) -> Void)?
+    /// `group_call_media_unavailable` (spec §2.4): a clear error, no fallback.
+    public var onMediaUnavailable: ((_ callId: String, _ reason: GroupCallWire.UnavailableReason) -> Void)?
+    /// `group_call_media_moved` (spec §2.5): the room moved to another node.
+    public var onMediaMoved: ((_ callId: String, _ nodeId: String) -> Void)?
+    /// `group_call_media_token` (spec §11): a fresh Janus session token, the answer
+    /// to `requestMediaRefresh`.
+    public var onMediaToken: ((GroupCallWire.MediaToken) -> Void)?
+    /// `group_call_ended` for a call that is NOT the active one, i.e. a ring we
+    /// never joined (creator ended, ring timeout, declined on another device).
+    public var onRingEnded: ((_ callId: String, _ reason: String) -> Void)?
+    /// `group_call_ended` for the active call, with the server's reason.
+    public var onActiveCallEnded: ((_ callId: String, _ reason: String) -> Void)?
 
     // ─── Tier-1 call features: reactions / raise-hand / mute-request ──
     // Wire contract finalized 2026-07-16. `callId` on every one of these
@@ -268,30 +241,32 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         if changed { onParticipantsChanged?(list) }
     }
 
+    /// Test seam (`@testable`): when set, every outbound message goes here instead
+    /// of the socket.
+    var sendOverride: ((_ type: String, _ data: [String: Any]) -> Void)?
+
+    private func send(type: String, data: [String: Any]) {
+        if let hook = sendOverride {
+            hook(type, data)
+        } else {
+            ws.send(type: type, data: data)
+        }
+    }
+
     // MARK: - Actions
 
     /// Create a new group call and invite recipients.
     ///
-    /// Server contract — VERIFIED against the LIVE `cmd/bcrypto-lite/main.go`
-    /// handler (`case "group_call_create"`, commit 9619df4, 2026-07-14). Wire:
-    /// `{call_id, recipients, supports_group_sender_keys, call_type, group_id,
-    /// group_name}`. The server does NOT read a `title` or `max_participants`
-    /// field on this message (it caps every room at 8 unconditionally) —
-    /// `title` is therefore local-display-only for the creator.
-    ///
-    /// W-GRPRING (audit gap E): `call_type` / `group_id` / `group_name` are
-    /// relayed VERBATIM by the server onto every invitee's `group_call_invite`
-    /// AND onto the APNs/FCM push that wakes an app-closed invitee. The fields
-    /// are additive server-side (an omitting client yields empty strings), but
-    /// omitting them leaves the receiver unable to render the right incoming
-    /// screen — so every create site MUST populate the group context when one
-    /// exists (GroupChatScreen), and `call_type` always.
+    /// Wire: `{call_id, recipients, call_type, group_id, group_name,
+    /// promoted_from_call_id}`. `call_type` / `group_id` / `group_name` are
+    /// relayed verbatim by the server onto every invitee's `group_call_invite`
+    /// AND the push that wakes an app-closed invitee (W-GRPRING), so every
+    /// create site populates them whenever a group context exists. `title` is
+    /// local-display-only. The old `supports_group_sender_keys` /
+    /// `supports_raw_key_aes256` fields are gone: v2 has no capability
+    /// negotiation (spec section 2).
     /// - Returns: the freshly-minted call id, so the caller (GroupCallController)
-    ///   bootstraps its `GroupSession` under the SAME id actually sent to the
-    ///   server — the previous version of this method generated its own id
-    ///   internally while the controller generated a SEPARATE one for its
-    ///   room-key derivation, silently diverging (never caught: zero UI
-    ///   reachability meant this path never ran for real).
+    ///   bootstraps its E2EE state under the SAME id actually sent to the server.
     @discardableResult
     public func createGroupCall(
         recipients: [String],
@@ -299,14 +274,11 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         callType: String = "audio",
         groupId: String = "",
         groupName: String = "",
-        /// W-CALLPROMOTE — set when this call is a live promotion of a 1:1
+        /// W-CALLPROMOTE - set when this call is a live promotion of a 1:1
         /// call this client was already on. Relayed verbatim by the server
-        /// onto `group_call_invite` so THAT SAME peer's client can
-        /// recognize the invite as a continuation of the call they're
-        /// already on — purely informational, never used for join
-        /// authorization (unchanged: still the server's Invited/Participants
-        /// membership gate). Additive/optional on the wire, same posture as
-        /// `groupId`/`groupName` above.
+        /// onto `group_call_invite` so THAT SAME peer's client can recognise
+        /// the invite as a continuation of the call they are already on -
+        /// informational only, never used for join authorisation.
         promotedFromCallId: String = ""
     ) -> String? {
         guard state == .idle else { return nil }
@@ -314,25 +286,16 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.lock()
         _state = .creating
         _callId = newCallId
-        // Real userId, not a "self" placeholder — matches what the server
-        // will echo back in the first `group_call_update` once anyone joins.
+        // Real userId, not a "self" placeholder - matches what the server
+        // will echo back in the first `group_call_update`.
         _participants = [Participant(id: selfUserId, displayName: "Tu")]
-        _senderKeysCapable = [selfUserId]
-        _senderKeyEpoch = 1  // matches server's GroupCall.SenderKeyEpoch default
+        _senderKeyEpoch = 1
         lock.unlock()
         onStateChanged?(.creating)
 
-        ws.send(type: "group_call_create", data: [
+        send(type: "group_call_create", data: [
             "call_id": newCallId,
             "recipients": recipients,
-            "supports_group_sender_keys": true,
-            // W-RAWKEY256 (2026-07-20) — unconditional true, no negotiation:
-            // this build always derives the SFU media key from the raw
-            // 32-byte SK_0 (AES-256-GCM), never the legacy
-            // UTF8(base64(SK_0))->AES-128-GCM path. Mirrors
-            // `supports_group_sender_keys` exactly — server-contract field
-            // name is `supports_raw_key_aes256` (`GroupCall.RawKeyCapable`).
-            "supports_raw_key_aes256": true,
             "call_type": callType,
             "group_id": groupId,
             "group_name": groupName,
@@ -341,9 +304,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         return newCallId
     }
 
-    /// Join an existing group call. Always advertises sender-key support —
-    /// every live client on this codebase now ships GroupSession — and,
-    /// W-RAWKEY256, raw-key AES-256 support, for the same reason.
+    /// Join an existing group call.
     public func joinGroupCall(callId: String) {
         lock.lock()
         _state = .creating
@@ -351,60 +312,60 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.unlock()
         onStateChanged?(.creating)
 
-        ws.send(type: "group_call_join", data: [
-            "call_id": callId,
-            "supports_group_sender_keys": true,
-            "supports_raw_key_aes256": true
-        ])
+        send(type: "group_call_join", data: ["call_id": callId])
     }
 
     /// Leave the current group call
     public func leaveGroupCall() {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_leave", data: ["call_id": cid])
+        send(type: "group_call_leave", data: ["call_id": cid])
         endLocally()
     }
 
     /// End the group call for everyone (creator only)
     public func endGroupCall() {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_end", data: ["call_id": cid])
+        send(type: "group_call_end", data: ["call_id": cid])
         endLocally()
     }
 
-    /// Forward one encrypted audio frame — the server SFU relays it,
-    /// broadcast-once, to every OTHER participant of `callId`. There is no
-    /// per-recipient targeting on the wire (verified against the live
-    /// `case "group_call_forward"` handler in `cmd/bcrypto-lite/main.go`:
-    /// `{call_id, frame}` in, single relay to all non-sender participants
-    /// out) — encryption must therefore be per-SENDER (one ciphertext every
-    /// recipient can open), never per-recipient. `GroupCallController` seals
-    /// with the caller's own `GroupSenderKey` chain before calling this.
-    public func forwardAudioFrame(_ frameData: Data) {
-        guard let cid = callId, state == .active else { return }
-        ws.send(type: "group_call_forward", data: [
-            "call_id": cid,
-            "frame": frameData.base64EncodedString()
-        ])
+    /// Decline a ringing invite (spec 2.6): the server removes us from
+    /// `Invited` and dismisses the ring on our other devices.
+    public func declineGroupCall(callId: String) {
+        send(type: "group_call_decline", data: ["call_id": callId])
     }
 
-    /// W-GRPLIVEKIT: request a LiveKit SFU access token for `callId`. Reply
-    /// arrives asynchronously as either `group_call_sfu_token_recv`
-    /// ([onSfuTokenReceived]) or `group_call_sfu_unavailable`
-    /// ([onSfuUnavailable]) — correlated by `call_id` since the wire has no
-    /// request/response id for this pair. Wire: {call_id}.
-    public func requestSfuToken(callId: String) {
-        ws.send(type: "group_call_sfu_token", data: ["call_id": callId])
+    /// `group_call_media_join` (spec 2.2): ask for the Janus room hand-out.
+    /// The answer is `group_call_media_ready` or `group_call_media_unavailable`.
+    public func requestMediaJoin(callId: String) {
+        send(type: "group_call_media_join", data: ["call_id": callId])
+    }
+
+    /// `group_call_media_rejoin` (spec 2.5): like a media join, plus the hint
+    /// that the current node / connection failed; the server re-checks health
+    /// and may move the room. `reason` is a short code, never free text.
+    public func requestMediaRejoin(callId: String, reason: String) {
+        send(type: "group_call_media_rejoin", data: ["call_id": callId, "reason": String(reason.prefix(24))])
+    }
+
+    /// `group_call_media_refresh` (spec §11): Janus re-validates its signed session
+    /// token on EVERY request and the token expires after 600 s, so a client with a
+    /// Janus session asks for a fresh one every 300 s (and before it reconnects the
+    /// media WebSocket). The answer is `group_call_media_token`, or
+    /// `group_call_media_unavailable {reason: "not_member"}` when we are no longer a
+    /// member of the call.
+    public func requestMediaRefresh(callId: String) {
+        send(type: "group_call_media_refresh", data: ["call_id": callId])
     }
 
     /// Tier-1: group-call BROADCAST reaction (Template B, mirrors
     /// `group_typing`'s two-phase lock-then-network send). No-op outside an
-    /// active call (mirrors `forwardAudioFrame`'s guard). Server does not
+    /// active call. Server does not
     /// validate `emoji` — the fixed 6-emoji set is a CLIENT UI constraint
     /// only (see `onGroupCallReactionReceived`'s kdoc).
     public func sendGroupCallReaction(emoji: String) {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_reaction", data: [
+        send(type: "group_call_reaction", data: [
             "call_id": cid,
             "emoji": emoji
         ])
@@ -415,7 +376,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// `group_typing`). Idempotent resend is safe.
     public func sendGroupCallRaiseHand(raised: Bool) {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_raise_hand", data: [
+        send(type: "group_call_raise_hand", data: [
             "call_id": cid,
             "raised": raised
         ])
@@ -429,10 +390,28 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// role in group calls).
     public func sendGroupCallMuteRequest(targetId: String) {
         guard let cid = callId else { return }
-        ws.send(type: "group_call_mute_request", data: [
+        send(type: "group_call_mute_request", data: [
             "call_id": cid,
             "target_id": targetId
         ])
+    }
+
+    /// Idempotent form of `toggleMute`: sets the roster mute flag of our own entry and
+    /// returns it. A mute the user did not tap (a peer's mute request, CallKit) must
+    /// not flip the badge back the next time the button is used.
+    @discardableResult
+    public func setLocalMuted(_ muted: Bool) -> Bool {
+        lock.lock()
+        guard let idx = _participants.firstIndex(where: { $0.id == selfUserId }) else {
+            lock.unlock()
+            return muted
+        }
+        let changed = _participants[idx].isMuted != muted
+        _participants[idx].isMuted = muted
+        let list = _participants
+        lock.unlock()
+        if changed { onParticipantsChanged?(list) }
+        return muted
     }
 
     /// Toggle local mute state
@@ -451,45 +430,27 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     // MARK: - WebSocket Handlers
-    // Message names + shapes VERIFIED against the LIVE
-    // `cmd/bcrypto-lite/main.go` handlers (2026-07-13) — NOT the dead
-    // `internal/signaling/messages.go` island (zero importers, unreachable
-    // from main.go). The previous version of this file was built against
-    // that dead protocol (`group_call_state`, `group_call_receive`,
-    // `invite_user_ids`, per-target `forward{target_id,data}`) and its
-    // "current vs legacy-alias" framing was backwards: the real server only
-    // ever speaks `group_call_invite` / `group_call_update` / `group_call_frame`
-    // / `group_call_ended`, so those are now the ONLY handlers registered.
+    // Group calls v2 (spec section 2): the server speaks `group_call_invite`,
+    // `group_call_update`, `group_call_ended`, `group_call_media_ready`,
+    // `group_call_media_unavailable`, `group_call_media_moved` and the tier-1
+    // `*_recv` messages below; those are the ONLY handlers registered. The media
+    // relay (`group_call_forward` / `group_call_frame`) and the LiveKit token
+    // messages no longer exist.
 
     private func registerHandlers() {
-        // W-GRPRING — `group_call_invite` wire (server commit 9619df4):
-        // {call_id, creator_id, call_type, group_id, group_name}. The last
-        // three are additive: a create sent by an older client leaves them
-        // empty strings.
-        //
-        // This handler NO LONGER touches `_state`/`_callId`. The invite is a
-        // RING, not a join: the app layer surfaces an incoming-group-call
-        // screen and only `GroupCallController.join(callId:)` (on accept)
-        // moves us into the call. Setting `_state = .creating` here was a
-        // leftover of the silent auto-join: with a real accept/reject it
-        // would leave the manager stuck in `.creating` forever whenever the
-        // user rejects (nothing resets it), and the `state == .idle` guard in
-        // `createGroupCall` would then refuse EVERY future group call.
+        // W-GRPRING - `group_call_invite` wire: {call_id, creator_id,
+        // call_type, group_id, group_name, promoted_from_call_id}. The invite
+        // is a RING, not a join: this handler never touches `_state` /
+        // `_callId`. The app layer rings, and only `GroupCallController.join`
+        // (on accept) moves us into the call.
         ws.registerHandler(type: "group_call_invite") { [weak self] _, data in
             guard let self = self,
                   let callId = data["call_id"] as? String,
                   let creatorId = data["creator_id"] as? String else { return }
-            // NOTE: does NOT call joinGroupCall itself — GroupCallController
-            // .join(callId:) is the single source of truth for both the WS
-            // join AND the GroupSession crypto bootstrap (mirrors Android's
-            // `GroupCallController.join`, which ALSO owns both). Calling
-            // joinGroupCall here directly would send `group_call_join` while
-            // leaving groupState/activeCallId unset, silently disabling E2E
-            // decryption for every frame this device receives in the call.
             self.onIncomingInvite?(IncomingGroupInvite(
                 callId: callId,
                 creatorId: creatorId,
-                // The server ships only UUIDs — resolve the creator to a human
+                // The server ships only UUIDs - resolve the creator to a human
                 // name via the local rubrica, same as the participant list.
                 creatorName: self.nameResolver(creatorId),
                 callType: (data["call_type"] as? String) ?? "audio",
@@ -499,40 +460,33 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             ))
         }
 
-        // Sent on both join and leave. Wire:
-        // {call_id, participants, sender_keys_capable, sender_key_epoch,
-        // raw_key_capable}. `raw_key_capable` (W-RAWKEY256, 2026-07-20) is
-        // additive/parallel to `sender_keys_capable` — see
-        // `Participant.isRawKeyCapable`'s kdoc.
+        // Sent on every roster change and when the room appears. Wire (spec
+        // 2.1): {call_id, participants, sender_key_epoch, media?}.
         ws.registerHandler(type: "group_call_update") { [weak self] _, data in
             self?.handleGroupCallUpdate(data: data)
         }
 
-        // Sent by the SFU relay for every forwarded frame. Wire:
-        // {call_id, frame, sender}.
-        ws.registerHandler(type: "group_call_frame") { [weak self] _, data in
-            self?.handleGroupCallFrame(data: data)
+        // Wire: {call_id, reason?} - "ended" | "ring_timeout" | "declined".
+        // For the active call this ends it; for any other call id it is a ring
+        // we never joined going away (the caller dismisses it).
+        ws.registerHandler(type: "group_call_ended") { [weak self] _, data in
+            self?.handleGroupCallEnded(data: data)
         }
-
-        // Wire: {call_id}.
-        ws.registerHandler(type: "group_call_ended") { [weak self] _, _ in
-            self?.endLocally()
+        // Spec 2.3. Only accepted for the call we are in.
+        ws.registerHandler(type: "group_call_media_ready") { [weak self] _, data in
+            self?.handleMediaReady(data: data)
         }
-
-        // W-GRPLIVEKIT — SFU token round-trip. Wire: {call_id, node_id, url, token}.
-        ws.registerHandler(type: "group_call_sfu_token_recv") { [weak self] _, data in
-            guard let self = self,
-                  let cid = data["call_id"] as? String,
-                  let nodeId = data["node_id"] as? String,
-                  let url = data["url"] as? String,
-                  let token = data["token"] as? String else { return }
-            self.onSfuTokenReceived?(cid, nodeId, url, token)
+        // Spec 2.4. There is NO relay fallback: the controller shows an error.
+        ws.registerHandler(type: "group_call_media_unavailable") { [weak self] _, data in
+            self?.handleMediaUnavailable(data: data)
         }
-        // Wire: {call_id, reason}. MUST soft-fall-back, never hard-fail.
-        ws.registerHandler(type: "group_call_sfu_unavailable") { [weak self] _, data in
-            guard let self = self, let cid = data["call_id"] as? String else { return }
-            let reason = data["reason"] as? String ?? "unknown"
-            self.onSfuUnavailable?(cid, reason)
+        // Spec 2.5: {call_id, node_id}.
+        ws.registerHandler(type: "group_call_media_moved") { [weak self] _, data in
+            self?.handleMediaMoved(data: data)
+        }
+        // Spec 11: {call_id, session_token, ttl_s}, the answer to a refresh.
+        ws.registerHandler(type: "group_call_media_token") { [weak self] _, data in
+            self?.handleMediaToken(data: data)
         }
 
         // ─── Tier-1 call features (2026-07-16 wire contract) ───────────
@@ -574,106 +528,108 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         }
     }
 
-    /// W-GRPSENDERKEY / W-GRPREKEY — fires the crypto-facing
-    /// [onGroupUpdate] callback in addition to the plain-id
-    /// [onParticipantsChanged] one so GroupCallController can bootstrap new
-    /// members into the sender-key roster and rekey on departure using the
-    /// server-canonical epoch.
-    /// W-GRPUPDATEDIAG (2026-08-03): this handler had ZERO logging — a
-    /// join that never surfaced a roster looked IDENTICAL to
-    /// `group_call_update` never arriving at all, whether the real cause
-    /// was the server never delivering it (the W-GRPSTALEWS class of bug
-    /// documented server-side, cmd/bcrypto-lite/main.go's
-    /// `group_call_join` handler) or it arriving and failing this
-    /// function's own guard. Confirmed live: a join whose server log
-    /// showed `group_call_join ... stale_ws_routed_cross_node=0` (i.e.
-    /// the server believed delivery succeeded) still left the client
-    /// stuck at 0 participants until `armGroupCallJoinTimeout`'s 20s
-    /// safety net fired — with no client-side trace to say which side
-    /// actually failed. These two lines exist purely to answer that
-    /// question the next time it happens.
-    private func handleGroupCallUpdate(data: [String: Any]) {
-        guard let cid = data["call_id"] as? String,
-              let participantIds = data["participants"] as? [String] else {
-            let hasCallId = data["call_id"] != nil
-            let hasParticipants = data["participants"] != nil
-            print("[BCryptoGroupCallManager] group_call_update UNPARSEABLE hasCallId=\(hasCallId) hasParticipants=\(hasParticipants)")
+    func handleGroupCallEnded(data: [String: Any]) {
+        let endedId = data["call_id"] as? String ?? ""
+        let reason = (data["reason"] as? String) ?? "ended"
+        if let active = callId, endedId.isEmpty || endedId == active {
+            endLocally()
+            onActiveCallEnded?(active, reason)
+        } else if !endedId.isEmpty {
+            onRingEnded?(endedId, reason)
+        }
+    }
+
+    func handleMediaReady(data: [String: Any]) {
+        guard let ready = GroupCallWire.MediaReady.parse(data) else {
+            print("[BCryptoGroupCallManager] group_call_media_ready UNPARSEABLE (refused)")
             return
         }
-        print("[BCryptoGroupCallManager] group_call_update RECEIVED call=\(cid.prefix(8)) participants=\(participantIds.count)")
-        let capableIds = data["sender_keys_capable"] as? [String] ?? []
-        let epoch = (data["sender_key_epoch"] as? NSNumber)?.int64Value ?? 1
-        // W-RAWKEY256 (2026-07-20) — same `?? []` fallback idiom as
-        // `sender_keys_capable` above (mirrors it exactly): server always
-        // ships this field on every `group_call_update` broadcast, so an
-        // absent key only happens against a stale/never-updated server,
-        // same failure mode `sender_keys_capable` already accepts.
-        let rawKeyCapableIds = data["raw_key_capable"] as? [String] ?? []
-        let rawKeyCapableSet = Set(rawKeyCapableIds)
-        lock.lock()
-        _participants = participantIds.map { uid in
-            let isRawKeyCapable = rawKeyCapableSet.contains(uid)
-            if var existing = _participants.first(where: { $0.id == uid }) {
-                existing.isRawKeyCapable = isRawKeyCapable
-                return existing
-            }
-            // Server only ships UUIDs — resolve to a human name client-side
-            // via the local rubrica, falling back to the bare UUID.
-            return Participant(id: uid, displayName: nameResolver(uid), isRawKeyCapable: isRawKeyCapable)
+        guard ready.callId == callId else { return }
+        onMediaReady?(ready)
+    }
+
+    func handleMediaUnavailable(data: [String: Any]) {
+        guard let cid = data["call_id"] as? String, cid == callId else { return }
+        onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: (data["reason"] as? String) ?? ""))
+    }
+
+    func handleMediaToken(data: [String: Any]) {
+        guard let token = GroupCallWire.MediaToken.parse(data) else {
+            print("[BCryptoGroupCallManager] group_call_media_token UNPARSEABLE (refused)")
+            return
         }
-        _senderKeysCapable = Set(capableIds)
-        _rawKeyCapable = rawKeyCapableSet
-        _senderKeyEpoch = epoch
+        guard token.callId == callId else { return }
+        onMediaToken?(token)
+    }
+
+    func handleMediaMoved(data: [String: Any]) {
+        guard let cid = data["call_id"] as? String, cid == callId else { return }
+        onMediaMoved?(cid, (data["node_id"] as? String) ?? "")
+    }
+
+    /// Applies a `group_call_update` (spec 2.1): the roster (tiles), the epoch
+    /// and, once the room exists, the node and the pseudonym map. Fires
+    /// `onGroupUpdate` for the E2EE state machine and the media layer.
+    ///
+    /// W-GRPUPDATEDIAG: every branch leaves a line, so a join whose roster
+    /// never arrives can be told apart from one that arrived and was refused.
+    func handleGroupCallUpdate(data: [String: Any]) {
+        guard let update = GroupCallWire.Update.parse(data) else {
+            let hasCallId = data["call_id"] != nil
+            let hasParticipants = data["participants"] != nil
+            let hasEpoch = data["sender_key_epoch"] != nil
+            print("[BCryptoGroupCallManager] group_call_update UNPARSEABLE hasCallId=\(hasCallId) hasParticipants=\(hasParticipants) hasEpoch=\(hasEpoch)")
+            return
+        }
+        print("[BCryptoGroupCallManager] group_call_update RECEIVED call=\(update.callId.prefix(8)) participants=\(update.participants.count) epoch=\(update.epoch)")
+        lock.lock()
+        // A stale update for another call (a previous call's tail) is dropped.
+        if let active = _callId, active != update.callId {
+            lock.unlock()
+            return
+        }
+        let previous = _participants
+        _participants = update.participants.map { uid in
+            if let existing = previous.first(where: { $0.id == uid }) { return existing }
+            // Server only ships UUIDs - resolve to a human name client-side
+            // via the local rubrica, falling back to a short id.
+            return Participant(id: uid, displayName: nameResolver(uid))
+        }
+        _senderKeyEpoch = Int64(update.epoch)
         _state = .active
         let list = _participants
-        let capableSnapshot = _senderKeysCapable
         lock.unlock()
         onStateChanged?(.active)
         onParticipantsChanged?(list)
-        onGroupUpdate?(cid, participantIds, capableSnapshot, epoch)
+        onGroupUpdate?(update)
     }
 
-    /// W-GRPRING — fired on an inbound `group_call_invite`. The app layer
-    /// RINGS (accept/reject surface); it must NOT join here. Accept →
-    /// `GroupCallController.join(callId:)`; reject → do nothing (there is no
-    /// `group_call_decline` wire type: the room stays open for the others).
+    /// W-GRPRING - fired on an inbound `group_call_invite`. The app layer
+    /// RINGS (accept/reject surface); it must NOT join here. Accept ->
+    /// `GroupCallController.join(callId:)`; reject -> `declineGroupCall`.
     public var onIncomingInvite: ((IncomingGroupInvite) -> Void)?
 
-    /// Apply an inbound SFU frame to participant speaking state and surface
-    /// the encrypted audio bytes to the engine. Wire: {call_id, frame, sender}.
-    private func handleGroupCallFrame(data: [String: Any]) {
-        guard let senderId = data["sender"] as? String,
-              let frameB64 = data["frame"] as? String,
-              let frameData = Data(base64Encoded: frameB64)
-        else { return }
-        // Mark sender as speaking
+    /// Marks a participant as speaking (or not) from the receiver-side audio
+    /// level the controller computes. Replaces the old WS-frame heuristic.
+    public func setSpeaking(_ speakingIds: Set<String>) {
         lock.lock()
-        if let idx = _participants.firstIndex(where: { $0.id == senderId }) {
-            _participants[idx].isSpeaking = true
-            // Reset speaking after 500ms
-            let list = _participants
-            lock.unlock()
-            onParticipantsChanged?(list)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self = self else { return }
-                self.lock.lock()
-                if let idx = self._participants.firstIndex(where: { $0.id == senderId }) {
-                    self._participants[idx].isSpeaking = false
-                }
-                self.lock.unlock()
+        var changed = false
+        for idx in _participants.indices {
+            let speaking = speakingIds.contains(_participants[idx].id)
+            if _participants[idx].isSpeaking != speaking {
+                _participants[idx].isSpeaking = speaking
+                changed = true
             }
-        } else {
-            lock.unlock()
         }
-        onAudioFrame?(senderId, frameData)
+        let list = _participants
+        lock.unlock()
+        if changed { onParticipantsChanged?(list) }
     }
 
     private func endLocally() {
         lock.lock()
         _state = .ended
         _participants.removeAll()
-        _senderKeysCapable.removeAll()
-        _rawKeyCapable.removeAll()
         _senderKeyEpoch = 1
         _callId = nil
         lock.unlock()

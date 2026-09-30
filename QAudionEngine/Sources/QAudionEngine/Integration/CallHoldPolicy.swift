@@ -40,7 +40,7 @@ public enum CallHoldPolicy {
         }
 
         /// Group calls: no local video change here. A group call's video
-        /// belongs to the LiveKit SFU room, never to the legacy 1:1
+        /// belongs to the group media session, never to the legacy 1:1
         /// `VideoCallPipeline`. Routing a group hold through that pipeline
         /// is the exact class of bug that crashed both test devices before
         /// (W-GRPVPIO-CRASH); group calls get their own hold path later,

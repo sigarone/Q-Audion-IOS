@@ -581,9 +581,9 @@ struct GroupChatScreen: View {
     /// which is what lets the callee render a correct incoming-group-call ring.
     ///
     /// W-GRPVIDEO: `video` threads all the way to `GroupCallController.
-    /// createCall(callType:)` -> `LiveKitGroupCallRoom(video:)`, so a video
-    /// group call actually publishes the camera once the SFU token resolves
-    /// (this was audio-only, unconditionally, until this change).
+    /// createCall(callType:)` (which keeps it as `callWantsVideo`), so a
+    /// video group call actually publishes the camera once the media path is
+    /// up (this was audio-only, unconditionally, until this change).
     private func handleStartGroupCall(video: Bool) {
         let invitees = groupCallInvitees
         guard !invitees.isEmpty else {

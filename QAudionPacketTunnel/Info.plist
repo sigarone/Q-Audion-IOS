@@ -20,7 +20,7 @@
 	     rejects archives where extension and host disagree (warning at
 	     archive time, hard error at App Store / TestFlight upload).
 	     The value here is a placeholder: ios-testflight.yml's version-bump
-	     step plutil-replaces it (and the Broadcast/Intents plists) with the
+	     step plutil-replaces it (and the Intents plist) with the
 	     host's MARKETING_VERSION / build number on every tag build. -->
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.570</string>

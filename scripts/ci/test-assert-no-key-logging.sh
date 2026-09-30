@@ -32,7 +32,7 @@ mkdir -p "$T"
 CL="$T/clean/Q.app"
 macho "$CL/Q" "$APPOWN"
 macho "$CL/Frameworks/WebRTC.framework/WebRTC" "$CTRL"
-macho "$CL/Frameworks/LiveKitWebRTC.framework/LiveKitWebRTC" "$CTRL"
+macho "$CL/Frameworks/Aux.framework/Aux" "$CTRL"
 macho "$CL/Frameworks/My Fw.framework/My Fw" "other\000"
 macho "$CL/PlugIns/X.appex/X" "$APPOWN"
 printf 'plist %b' "$LEAK" > "$CL/Info.plist"
@@ -42,7 +42,7 @@ printf '{"input":"secret [1,2] len 32 slat << [] len 0 derived_key x"}' > "$CL/v
 LK="$T/leaky/Q.app"
 macho "$LK/Q" "$APPOWN"
 macho "$LK/Frameworks/WebRTC.framework/WebRTC" "$CTRL" "$LEAK"
-fat   "$LK/Frameworks/LiveKitWebRTC.framework/LiveKitWebRTC" "$CTRL" "$LEAK"
+fat   "$LK/Frameworks/Aux.framework/Aux" "$CTRL" "$LEAK"
 macho "$LK/PlugIns/X.appex/X" "$LEAK_RAW"
 
 # EMPTY bundle: no Mach-O at all
