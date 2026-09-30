@@ -41,7 +41,17 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
 - `group_call_media_moved` (S->C, all members): the room moved to another node; clients tear
   down both PCs and send `group_call_media_join` again (keys unchanged, no epoch bump).
   `group_call_media_rejoin` (C->S) `{call_id, reason}` is the same request plus a hint that the
-  current node failed.
+  current node failed. A repeated `group_call_media_join` is idempotent on the server (same room,
+  pseudonym and token), so whenever the Janus session is DEAD (WebSocket lost beyond the reclaim
+  window, PeerConnection failed, kicked, a retryable Janus error) the client sends
+  `group_call_media_rejoin`, never a plain join, or it can hit Janus 436 (the old participant is
+  still in the room); an unanswered request is asked again as the SAME kind after 10 s. The join of
+  a new call, `media_moved` (a new node) and the hourly TURN refresh stay `group_call_media_join`.
+  The server answers NOTHING to a member over its request budget (20 joins / 12 rejoins or
+  refreshes per minute): the client waits and backs off (0.5 / 1 / 2 s, three a minute), never a
+  tight retry. `join_token` (`<pseudonym>:<32 hex>`) is an opaque string to the client. A periodic
+  `group_call_update` with an unchanged roster and epoch + 1 (the 30-minute rekey) is an ordinary
+  rotation.
 - `group_call_decline` (C->S) `{call_id}`; server ring timeout 45 s per invitee, after which the
   invitee devices get `group_call_ended {reason:"ring_timeout"}`.
 - `group_call_media_refresh` (C->S) `{call_id}` -> `group_call_media_token` (S->C) `{call_id,
