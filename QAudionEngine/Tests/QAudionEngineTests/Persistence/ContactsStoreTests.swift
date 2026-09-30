@@ -444,6 +444,97 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertNil(reloaded?.presenceFloor)
     }
 
+    // MARK: - withDisplayName (AppState.refreshContactsCache field-drop fix,
+    // 2026-09-30)
+    //
+    // AppState.refreshContactsCache()'s placeholder-name migration pass used
+    // to reconstruct StoredContact by hand, listing every field by name —
+    // and silently dropped voiceVerifiedAt/callVerifiedPeerIdentityKey (both
+    // added to this struct after that call site was last updated) back to
+    // nil on every contact the pass renamed. Fixed by switching that call
+    // site to `withDisplayName(_:)`, defined right next to StoredContact,
+    // which threads every field it doesn't touch through by construction.
+    // This pins withDisplayName's own contract directly (the mechanism);
+    // `refreshContactsCache` itself lives on `AppState`, which — unlike
+    // `PeerTrustEvaluator`'s free functions — has no injection points and
+    // cannot practically be instantiated in a unit test, and QAudionApp has
+    // no wired XCTest target in this repo today regardless (see
+    // `test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil`
+    // above / QAudionAppTests/PeerTrustEvaluatorTests.swift for the same
+    // caveat), so there is no real call-path pin to add alongside this one.
+
+    func test_withDisplayName_replacesOnlyDisplayName_everyOtherFieldThreadsThrough() {
+        let auth = ContactsStore.PresenceAuth(
+            tier: .nfcPresent, keyFingerprint: "fp", peerIdentityKey: peerKeyA,
+            firstConfirmedCallId: "call-1", firstConfirmedAt: 1_000, confirmedCallCount: 1,
+            witnessTier: "secure_element"
+        )
+        let full = ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Interno 103", phoneHash: "abc",
+            avatarUrl: URL(string: "file:///avatar.jpg"), lastSeen: Date(timeIntervalSince1970: 500),
+            isVerified: true,
+            pubkey: Data(repeating: 0x11, count: 32),
+            verifiedFingerprintHex: String(repeating: "ab", count: 30),
+            verifiedAtMs: 111,
+            verificationMethod: "qr",
+            presenceAuth: auth,
+            presenceFloor: true,
+            phoneNumber: "+391234567890",
+            extension: "103",
+            avatarVersion: 7,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32),
+            proximityPairedAtMs: 333,
+            proximityServerConfirmed: true
+        )
+        let renamed = full.withDisplayName("Mario Rossi")
+        XCTAssertEqual(renamed.displayName, "Mario Rossi")
+        XCTAssertEqual(renamed.userId, full.userId)
+        XCTAssertEqual(renamed.phoneHash, full.phoneHash)
+        XCTAssertEqual(renamed.avatarUrl, full.avatarUrl)
+        XCTAssertEqual(renamed.lastSeen, full.lastSeen)
+        XCTAssertEqual(renamed.isVerified, full.isVerified)
+        XCTAssertEqual(renamed.pubkey, full.pubkey)
+        XCTAssertEqual(renamed.verifiedFingerprintHex, full.verifiedFingerprintHex)
+        XCTAssertEqual(renamed.verifiedAtMs, full.verifiedAtMs)
+        XCTAssertEqual(renamed.verificationMethod, full.verificationMethod)
+        XCTAssertEqual(renamed.presenceAuth, full.presenceAuth)
+        XCTAssertEqual(renamed.presenceFloor, full.presenceFloor)
+        XCTAssertEqual(renamed.phoneNumber, full.phoneNumber)
+        XCTAssertEqual(renamed.`extension`, full.`extension`)
+        XCTAssertEqual(renamed.avatarVersion, full.avatarVersion)
+        // The two fields this fix specifically targets — refreshContactsCache
+        // used to silently reset both of these to nil on every renamed contact.
+        XCTAssertEqual(renamed.voiceVerifiedAt, full.voiceVerifiedAt,
+                        "voiceVerifiedAt must survive a displayName-only rewrite")
+        XCTAssertEqual(renamed.callVerifiedPeerIdentityKey, full.callVerifiedPeerIdentityKey,
+                        "callVerifiedPeerIdentityKey must survive a displayName-only rewrite")
+        XCTAssertEqual(renamed.proximityPairedAtMs, full.proximityPairedAtMs)
+        XCTAssertEqual(renamed.proximityServerConfirmed, full.proximityServerConfirmed)
+    }
+
+    /// Same contract as the test above, but round-tripped through the real
+    /// store (encrypt/decrypt included) rather than asserted on the two
+    /// in-memory structs directly — same shape as
+    /// `test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil`
+    /// above but for the OPPOSITE outcome: these two fields must survive.
+    func test_withDisplayName_thenUpsert_preservesVoiceAndCallVerifiedFields() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Interno 103", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32)
+        ))
+        // Just upserted above with userId "u-1"; guaranteed present.
+        // swiftlint:disable:next force_unwrapping
+        let existing = store.load().first(where: { $0.userId == "u-1" })!
+        store.upsert(existing.withDisplayName("Mario Rossi"))
+        let reloaded = store.load().first(where: { $0.userId == "u-1" })
+        XCTAssertEqual(reloaded?.displayName, "Mario Rossi")
+        XCTAssertEqual(reloaded?.voiceVerifiedAt, 222)
+        XCTAssertEqual(reloaded?.callVerifiedPeerIdentityKey, Data(repeating: 0x22, count: 32))
+    }
+
     // MARK: - W-AUTOSAVE — insertIfAbsentOrFillBlanks
     //
     // NOTE (unverified by compilation — no Xcode/compiler available in this

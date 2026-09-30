@@ -15820,35 +15820,15 @@ final class AppState: ObservableObject {
                 ?? c.phoneNumber.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
                 ?? DisplayName.shortUserFallback(c.userId)
             guard replacement != c.displayName else { continue }
-            contacts[i] = ContactsStore.StoredContact(
-                userId: c.userId,
-                displayName: replacement,
-                phoneHash: c.phoneHash,
-                avatarUrl: c.avatarUrl,
-                lastSeen: c.lastSeen,
-                isVerified: c.isVerified,
-                pubkey: c.pubkey,
-                verifiedFingerprintHex: c.verifiedFingerprintHex,
-                verifiedAtMs: c.verifiedAtMs,
-                verificationMethod: c.verificationMethod,
-                // W-ASSURANCE/W-FLOOR — this rewrite touches ONLY
-                // displayName; every other field (including these two) must
-                // thread through unchanged, same as verifiedFingerprintHex
-                // above. Omitting them here would silently wipe a contact's
-                // NFC presence record on nothing more than a display-name
-                // migration pass.
-                presenceAuth: c.presenceAuth,
-                presenceFloor: c.presenceFloor,
-                phoneNumber: c.phoneNumber,
-                extension: c.`extension`,
-                // E2EE avatar transport (2026-07-30) — same reasoning as
-                // presenceAuth/phoneNumber above: this rewrite touches
-                // ONLY displayName.
-                avatarVersion: c.avatarVersion,
-                // W-PAIRFB — same reasoning: a display-name migration pass
-                // must not wipe the in-person pairing history either.
-                proximityPairedAtMs: c.proximityPairedAtMs,
-                proximityServerConfirmed: c.proximityServerConfirmed)
+            // This rewrite touches ONLY displayName. Previously reconstructed
+            // via a hand-written StoredContact(...) call that listed every
+            // other field by name — which silently dropped voiceVerifiedAt
+            // and callVerifiedPeerIdentityKey (added after this call site was
+            // last updated) back to nil on every contact this pass renamed.
+            // `withDisplayName` threads every field it doesn't touch through
+            // by construction, so a rename here can no longer wipe a field
+            // just because this call site forgot to list it.
+            contacts[i] = c.withDisplayName(replacement)
             migrated = true
         }
         if migrated { store.save(contacts) }
