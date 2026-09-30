@@ -180,4 +180,205 @@ final class GroupSdpRulesTests: XCTestCase {
         XCTAssertEqual(GroupSdpRules.videoMids(in: two), ["1", "2"])
         XCTAssertEqual(GroupSdpRules.videoMids(in: "v=0\r\nm=audio 9 X 111\r\na=mid:0\r\n"), [])
     }
+
+    // MARK: remote descriptions (spec 12.4)
+
+    /// What qjanus may send back: an answer that echoes the audio-level extension the
+    /// offer never had, plus a few more extensions a node could switch on.
+    private func janusAnswerWithExtensions() -> String {
+        [
+            "v=0",
+            "o=- 4611731400430051336 2 IN IP4 127.0.0.1",
+            "s=-",
+            "t=0 0",
+            "a=group:BUNDLE 0 1",
+            "a=extmap-allow-mixed",
+            fingerprintLine("AB"),
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:0",
+            "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+            "a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid",
+            "a=setup:active",
+            "a=rtpmap:111 opus/48000/2",
+            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:1",
+            "a=extmap:2 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+            "a=extmap:5 urn:3gpp:video-orientation",
+            "a=extmap:6 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+            "a=extmap:9 http://www.webrtc.org/experiments/rtp-hdrext/playout-delay",
+            "a=rtpmap:96 VP8/90000",
+            "",
+        ].joined(separator: "\r\n")
+    }
+
+    func testARemoteAnswerCarryingSsrcAudioLevelIsStrippedOfItBeforeItIsApplied() {
+        let answer = janusAnswerWithExtensions()
+        XCTAssertTrue(answer.contains("urn:ietf:params:rtp-hdrext:ssrc-audio-level"), "the fixture really carries it")
+        let applied = GroupSdpRules.mungeRemote(answer)
+        XCTAssertFalse(applied.contains("ssrc-audio-level"))
+        XCTAssertTrue(GroupSdpRules.disallowedExtensions(in: applied).isEmpty, "nothing but the allow-list is negotiated")
+        for uri in GroupSdpRules.namedRemovedExtmapUris { XCTAssertFalse(applied.contains(uri), uri) }
+        XCTAssertFalse(applied.contains("abs-send-time"))
+        XCTAssertFalse(applied.contains("playout-delay"))
+    }
+
+    func testTheAllowListStaysInTheRemoteDescriptionAndThePinStillChecksTheRawOne() {
+        let answer = janusAnswerWithExtensions()
+        let applied = GroupSdpRules.mungeRemote(answer)
+        XCTAssertTrue(applied.contains("a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid"))
+        XCTAssertTrue(applied.contains("transport-wide-cc-extensions-01"))
+        XCTAssertTrue(applied.contains("a=extmap-allow-mixed"))
+        XCTAssertEqual(GroupSdpRules.checkPin(sdp: applied, expected: pinned), .match)
+        XCTAssertEqual(GroupSdpRules.checkPin(sdp: answer, expected: pinned), .match)
+    }
+
+    func testARemoteOfferGetsTheSameExtensionTreatmentAsALocalOne() {
+        let janusOffer = janusAnswerWithExtensions().replacingOccurrences(of: "a=setup:active", with: "a=setup:actpass")
+        let remote = GroupSdpRules.mungeRemote(janusOffer)
+        let local = GroupSdpRules.mungeLocal(janusOffer, role: .subscriberAnswer)
+        XCTAssertEqual(GroupSdpRules.disallowedExtensions(in: remote), [])
+        XCTAssertEqual(GroupSdpRules.disallowedExtensions(in: local), [])
+        let extmapsOf: (String) -> [String] = { text in GroupSdpRules.lines(of: text).filter { $0.hasPrefix("a=extmap:") }.sorted() }
+        XCTAssertEqual(extmapsOf(remote), extmapsOf(local), "one allow-list for both directions")
+    }
+
+    // MARK: VP8 only (spec 12.8)
+
+    /// A browser-style video offer: VP8, VP9, H.264, AV1 with their RTX, RED and ULPFEC, in
+    /// two video sections with different payload type numbers, and a rejected third one
+    /// (Janus spells that `m=video 0 ... 0`).
+    private func multiCodecSdp() -> String {
+        [
+            "v=0",
+            "o=- 4611731400430051336 2 IN IP4 127.0.0.1",
+            "s=-",
+            "t=0 0",
+            "a=group:BUNDLE 0 1 2 3",
+            fingerprintLine("AB"),
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:0",
+            "a=rtpmap:111 opus/48000/2",
+            "m=video 9 UDP/TLS/RTP/SAVPF 96 97 98 99 100 101 102 103 104 105",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:1",
+            "a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid",
+            "a=rtcp-fb:* transport-cc",
+            "a=rtpmap:96 VP8/90000",
+            "a=rtcp-fb:96 nack",
+            "a=rtcp-fb:96 nack pli",
+            "a=rtpmap:97 rtx/90000",
+            "a=fmtp:97 apt=96",
+            "a=rtpmap:98 VP9/90000",
+            "a=fmtp:98 profile-id=0",
+            "a=rtcp-fb:98 nack",
+            "a=rtpmap:99 rtx/90000",
+            "a=fmtp:99 apt=98",
+            "a=rtpmap:100 H264/90000",
+            "a=fmtp:100 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+            "a=rtcp-fb:100 nack",
+            "a=rtpmap:101 rtx/90000",
+            "a=fmtp:101 apt=100",
+            "a=rtpmap:102 AV1/90000",
+            "a=fmtp:102 level-idx=5;profile=0;tier=0",
+            "a=rtpmap:103 rtx/90000",
+            "a=fmtp:103 apt=102",
+            "a=rtpmap:104 red/90000",
+            "a=rtpmap:105 ulpfec/90000",
+            "m=video 9 UDP/TLS/RTP/SAVPF 120 121 122",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:2",
+            "a=rtpmap:120 vp8/90000",
+            "a=rtpmap:121 rtx/90000",
+            "a=fmtp:121 apt=120",
+            "a=rtpmap:122 H265/90000",
+            "a=rtcp-fb:122 nack",
+            "m=video 0 UDP/TLS/RTP/SAVPF 0",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:3",
+            "a=inactive",
+            "",
+        ].joined(separator: "\r\n")
+    }
+
+    private func sections(of sdp: String) -> [[String]] {
+        var out: [[String]] = []
+        for line in GroupSdpRules.lines(of: sdp) {
+            if line.hasPrefix("m=") { out.append([line]) } else if !out.isEmpty { out[out.count - 1].append(line) }
+        }
+        return out
+    }
+
+    func testOnlyVp8AndItsRtxSurviveInEveryVideoSection() {
+        let out = GroupSdpRules.keepOnlyVp8Video(multiCodecSdp())
+        let parts = sections(of: out)
+        XCTAssertEqual(parts.count, 4)
+        XCTAssertEqual(parts[1][0], "m=video 9 UDP/TLS/RTP/SAVPF 96 97")
+        XCTAssertEqual(parts[2][0], "m=video 9 UDP/TLS/RTP/SAVPF 120 121", "payload types are scoped per section")
+        for kept in ["a=rtpmap:96 VP8/90000", "a=rtcp-fb:96 nack", "a=rtcp-fb:96 nack pli", "a=rtpmap:97 rtx/90000", "a=fmtp:97 apt=96",
+                     "a=rtcp-fb:* transport-cc", "a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid"] {
+            XCTAssertTrue(parts[1].contains(kept), kept)
+        }
+        for kept in ["a=rtpmap:120 vp8/90000", "a=rtpmap:121 rtx/90000", "a=fmtp:121 apt=120"] {
+            XCTAssertTrue(parts[2].contains(kept), kept)
+        }
+    }
+
+    func testNothingOfTheOtherVideoCodecsRemainsAnywhere() {
+        let out = GroupSdpRules.keepOnlyVp8Video(multiCodecSdp())
+        for gone in ["VP9", "H264", "AV1", "H265", "red/90000", "ulpfec", "apt=98", "apt=100", "apt=102",
+                     "profile-id", "level-asymmetry", "level-idx", "rtcp-fb:98", "rtcp-fb:100", "rtcp-fb:122",
+                     " 98", " 99", " 100", " 101", " 102", " 103", " 104", " 105", " 122"] {
+            XCTAssertFalse(out.contains(gone), "\(gone) must be gone")
+        }
+    }
+
+    func testARejectedVideoSectionWithoutVp8IsLeftAlone() {
+        let out = GroupSdpRules.keepOnlyVp8Video(multiCodecSdp())
+        let parts = sections(of: out)
+        XCTAssertEqual(parts[3], ["m=video 0 UDP/TLS/RTP/SAVPF 0", "c=IN IP4 0.0.0.0", "a=mid:3", "a=inactive"],
+                       "an m-line with no format at all would not parse")
+    }
+
+    func testAudioAndTheRestOfTheSdpAreUntouchedByTheVideoFilter() {
+        let original = multiCodecSdp()
+        let out = GroupSdpRules.keepOnlyVp8Video(original)
+        XCTAssertEqual(sections(of: out)[0], sections(of: original)[0])
+        XCTAssertEqual(GroupSdpRules.checkPin(sdp: out, expected: pinned), .match)
+        XCTAssertTrue(out.contains("a=group:BUNDLE 0 1 2 3"))
+    }
+
+    func testTheVideoFilterIsIdempotentAndAVp8OnlySdpIsUnchanged() {
+        let once = GroupSdpRules.keepOnlyVp8Video(multiCodecSdp())
+        XCTAssertEqual(GroupSdpRules.keepOnlyVp8Video(once), once)
+        let plain = sdp()
+        XCTAssertEqual(GroupSdpRules.keepOnlyVp8Video(plain), plain)
+    }
+
+    func testAnRtxOfAnotherCodecIsDroppedEvenWhenItsAptLineIsMissing() {
+        let text = [
+            "v=0",
+            "m=video 9 UDP/TLS/RTP/SAVPF 96 97 98",
+            "a=mid:0",
+            "a=rtpmap:96 VP8/90000",
+            "a=rtpmap:97 rtx/90000",
+            "a=rtpmap:98 H264/90000",
+            "",
+        ].joined(separator: "\r\n")
+        let out = GroupSdpRules.keepOnlyVp8Video(text)
+        XCTAssertEqual(sections(of: out)[0][0], "m=video 9 UDP/TLS/RTP/SAVPF 96", "an RTX that names no VP8 is not VP8's RTX")
+    }
+
+    func testBothDirectionsAreVp8Only() {
+        let local = GroupSdpRules.mungeLocal(multiCodecSdp(), role: .publisherOffer)
+        let remote = GroupSdpRules.mungeRemote(multiCodecSdp())
+        for out in [local, remote] {
+            XCTAssertEqual(sections(of: out)[1][0], "m=video 9 UDP/TLS/RTP/SAVPF 96 97")
+            XCTAssertFalse(out.contains("H264"))
+            XCTAssertFalse(out.contains("VP9"))
+            XCTAssertTrue(out.contains("VP8/90000"))
+        }
+    }
 }

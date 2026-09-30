@@ -14,6 +14,12 @@ import Foundation
 ///  * audio profile: identical to the 1:1 profile (60 ms / 32 kbps CBR, in-band
 ///    FEC, no DTX) — `AudioSdpPolicy` is reused verbatim, plus the explicit
 ///    `usedtx=0;stereo=0` of spec §4.4.
+///  * VP8 only (spec §12.8): every other video codec, and their RTX, is removed.
+///
+/// Both directions are filtered (spec §12.4): the local description we create AND
+/// the remote description qjanus sends (answer for the publisher, offer for the
+/// subscriber) go through the same header-extension allow-list and codec filter
+/// before they are applied, so a node cannot switch an extension or a codec on.
 public enum GroupSdpRules {
 
     // MARK: - DTLS fingerprint pin
@@ -119,6 +125,101 @@ public enum GroupSdpRules {
         }
     }
 
+    // MARK: - Video codec (spec §12.8)
+
+    /// Keeps VP8 (and the RTX of VP8) as the ONLY video payload types of every
+    /// `m=video` section: the other codecs, RED / ULPFEC and every RTX whose
+    /// `apt` is not VP8 are removed from the m-line and from their `a=rtpmap`,
+    /// `a=fmtp` and `a=rtcp-fb` lines. A section that lists no VP8 at all (Janus
+    /// spells a rejected m-line `m=video 0 ... 0`) is left alone: there is nothing
+    /// to keep, and an m-line without a single format would not parse. Idempotent.
+    public static func keepOnlyVp8Video(_ sdp: String) -> String {
+        let all = lines(of: sdp)
+        // Pass 1: the payload types to keep, per `m=video` section (by line index).
+        var keepBySection: [Int: Set<String>] = [:]
+        var sectionStart = -1
+        var inVideo = false
+        var names: [String: String] = [:]
+        var aptOf: [String: String] = [:]
+        func closeSection() {
+            guard inVideo, sectionStart >= 0 else { return }
+            var keep = Set(names.filter { $0.value == "VP8" }.map { $0.key })
+            guard !keep.isEmpty else { return }
+            for (pt, name) in names where name == "RTX" {
+                if let apt = aptOf[pt], keep.contains(apt) { keep.insert(pt) }
+            }
+            keepBySection[sectionStart] = keep
+        }
+        for (index, line) in all.enumerated() {
+            if line.hasPrefix("m=") {
+                closeSection()
+                inVideo = line.hasPrefix("m=video")
+                sectionStart = index
+                names = [:]
+                aptOf = [:]
+            } else if inVideo {
+                if let entry = rtpmapEntry(of: line) { names[entry.pt] = entry.name }
+                if let entry = fmtpApt(of: line) { aptOf[entry.pt] = entry.apt }
+            }
+        }
+        closeSection()
+        guard !keepBySection.isEmpty else { return rebuild(sdp) { _ in true } }
+
+        // Pass 2: rewrite the m-lines and drop the lines of the removed types.
+        var out: [String] = []
+        var keep: Set<String>?
+        for (index, line) in all.enumerated() {
+            if line.hasPrefix("m=") {
+                keep = keepBySection[index]
+                if let keep = keep {
+                    let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+                    if parts.count > 3 {
+                        let formats = parts[3...].filter { keep.contains($0) }
+                        out.append((Array(parts[0..<3]) + formats).joined(separator: " "))
+                        continue
+                    }
+                }
+                out.append(line)
+            } else if let keep = keep, let pt = payloadType(ofAttributeLine: line), !keep.contains(pt) {
+                continue
+            } else {
+                out.append(line)
+            }
+        }
+        return out.joined(separator: "\r\n") + "\r\n"
+    }
+
+    /// `a=rtpmap:<pt> <NAME>/<rate>[/<ch>]` -> (pt, upper-cased NAME)
+    private static func rtpmapEntry(of line: String) -> (pt: String, name: String)? {
+        guard line.hasPrefix("a=rtpmap:") else { return nil }
+        let parts = line.dropFirst("a=rtpmap:".count).split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2, let name = parts[1].split(separator: "/").first else { return nil }
+        return (pt: String(parts[0]), name: name.uppercased())
+    }
+
+    /// `a=fmtp:<pt> ...;apt=<pt>;...` -> (pt, apt)
+    private static func fmtpApt(of line: String) -> (pt: String, apt: String)? {
+        guard line.hasPrefix("a=fmtp:") else { return nil }
+        let parts = line.dropFirst("a=fmtp:".count).split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+        for piece in parts[1].split(separator: ";") {
+            let trimmed = piece.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("apt=") { return (pt: String(parts[0]), apt: String(trimmed.dropFirst("apt=".count))) }
+        }
+        return nil
+    }
+
+    /// The payload type an `a=rtpmap:` / `a=fmtp:` / `a=rtcp-fb:` line belongs to
+    /// (`a=rtcp-fb:*` applies to every type and has none).
+    private static func payloadType(ofAttributeLine line: String) -> String? {
+        for prefix in ["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"] where line.hasPrefix(prefix) {
+            guard let token = line.dropFirst(prefix.count).split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first,
+                  token != "*" else { return nil }
+            return String(token)
+        }
+        return nil
+    }
+
     // MARK: - Audio profile
 
     /// The 1:1 Opus policy (`AudioSdpPolicy`: cbr, in-band FEC, 32 kbps,
@@ -203,18 +304,23 @@ public enum GroupSdpRules {
     /// The SDP handed to `setLocalDescription`.
     public static func mungeLocal(_ sdp: String, role: Role) -> String {
         var out = stripHeaderExtensions(sdp)
+        out = keepOnlyVp8Video(out)
         out = applyAudioProfile(out)
         if role == .subscriberAnswer { out = forcePassiveSetup(inAnswer: out) }
         return out
     }
 
     /// The remote SDP handed to `setRemoteDescription`: Janus' answer or
-    /// offer, with the same audio profile applied so OUR Opus decoder/encoder
-    /// side of the negotiation is constrained even if the node's SDP carries
-    /// different defaults (`AudioSdpPolicy` is unilateral by design). The
-    /// pin check runs on the RAW sdp before this.
+    /// offer, with the SAME rules as the local side (spec §12.4 / §12.8): the
+    /// header-extension allow-list (an extension qjanus offers or echoes, e.g.
+    /// `ssrc-audio-level`, is never negotiated), VP8 only, and the audio profile
+    /// so OUR Opus decoder/encoder side of the negotiation is constrained even if
+    /// the node's SDP carries different defaults (`AudioSdpPolicy` is unilateral
+    /// by design). The pin check runs on the RAW sdp before this.
     public static func mungeRemote(_ sdp: String) -> String {
-        applyAudioProfile(sdp)
+        var out = stripHeaderExtensions(sdp)
+        out = keepOnlyVp8Video(out)
+        return applyAudioProfile(out)
     }
 
     // MARK: - m-line inspection
