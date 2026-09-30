@@ -27,6 +27,15 @@ import XCTest
 /// against that gap (a small, mechanical `project.yml` addition later)
 /// rather than left untested — this session has no macOS/Xcode/Swift
 /// toolchain available to validate either the test or a project.yml change.
+///
+/// `@MainActor` on the class (review fix, 2026-09-30): `AppState` itself
+/// is `@MainActor`, which isolates ALL of its members, including static
+/// ones — `resolveFilesServerUrl` is a `static func` on `AppState`, so
+/// it's MainActor-isolated too, and calling it from a plain synchronous
+/// `XCTestCase` method (no actor context) does not type-check. Same
+/// pattern `CapabilityGateTests`/`ContactsListContainerProximityPairingTests`
+/// already use for the identical reason.
+@MainActor
 final class AppStateFilesServerUrlTests: XCTestCase {
 
     /// The whole point of the fix: once a live provider exists, its pinned
