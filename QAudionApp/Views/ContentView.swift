@@ -362,7 +362,7 @@ struct ContentView: View {
         guard !groupId.isEmpty else { return nil }
         let hex = groupId.replacingOccurrences(of: "-", with: "").lowercased()
         guard let avatarRef = GroupRegistry.shared.entry(for: hex)?.avatarRef else { return nil }
-        return URL(string: "\(appState.serverUrl)/api/v1/files/\(avatarRef)")
+        return URL(string: "\(appState.filesServerUrl)/api/v1/files/\(avatarRef)")
     }
 
     /// "Chiamata di gruppo · <chi ha chiamato>" (video variant included).
