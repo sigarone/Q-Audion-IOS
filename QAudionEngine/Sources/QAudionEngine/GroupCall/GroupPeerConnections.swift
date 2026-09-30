@@ -12,8 +12,8 @@ public enum GroupPeerError: Error, Equatable, Sendable {
 
 /// Group calls v2 (spec §4.4) — the plumbing both PeerConnections share: the
 /// strict M150 configuration of the 1:1 native-SRTP path (GCM only, no TCP host
-/// candidates, max-bundle, rtcp-mux require, continual gathering), the DTLS
-/// PQC requirement, delegate -> `GroupPcState` / candidate callbacks, the
+/// candidates, max-bundle, rtcp-mux require, continual gathering), the
+/// delegate -> `GroupPcState` / candidate callbacks, the
 /// async SDP helpers and the `transport` stats read of the §4.5 self-check.
 ///
 /// One RTCPeerConnectionFactory for 1:1 and groups: the caller passes
@@ -37,11 +37,14 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
 
     // MARK: Construction
 
-    /// Builds the PeerConnection. `QaudionRuntimeTuning.requireDtlsPqc()` is
-    /// tighten-only for the process and the native build fails DTLS for a peer
-    /// that cannot meet it: the group path never negotiates anything weaker.
+    /// Builds the PeerConnection. `QaudionRuntimeTuning.requireDtlsPqc()` is NOT
+    /// called here: it is tighten-only for the whole process and would also turn
+    /// every later 1:1 call into a PQC-required one (the 1:1 path keeps it behind
+    /// the `calls.dtls_pqc_required` remote gate). The group level is enforced by
+    /// qjanus itself (DTLS 1.3 + X25519MLKEM768 only, fail-closed), the DTLS pin
+    /// binds the node to its published certificate and `GroupTransportPolicy`
+    /// checks version / cipher / SRTP profile after connect.
     func makePeerConnection() throws -> RTCPeerConnection {
-        QaudionRuntimeTuning.requireDtlsPqc()
         let configuration = QAudionPeerConnectionFactory.defaultConfiguration(
             iceServers: iceServers, nativeSrtpEnabledLocally: true)
         configuration.iceTransportPolicy = .all

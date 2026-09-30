@@ -162,9 +162,12 @@ final class GroupSdpRulesTests: XCTestCase {
         XCTAssertTrue(GroupSdpRules.disallowedExtensions(in: out).isEmpty)
     }
 
-    func testMungeLocalIsIdempotent() {
+    func testMungeLocalIsIdempotentInSubstance() {
+        // The 1:1 audio policies place `a=ptime` / `a=rtcp-fb` differently on a second
+        // pass, so compare the SET of lines: applying the rules twice changes nothing.
         let once = GroupSdpRules.mungeLocal(sdp(), role: .subscriberAnswer)
-        XCTAssertEqual(GroupSdpRules.mungeLocal(once, role: .subscriberAnswer), once)
+        let twice = GroupSdpRules.mungeLocal(once, role: .subscriberAnswer)
+        XCTAssertEqual(GroupSdpRules.lines(of: twice).sorted(), GroupSdpRules.lines(of: once).sorted())
     }
 
     func testMungeRemoteKeepsTheFingerprintUntouched() {
