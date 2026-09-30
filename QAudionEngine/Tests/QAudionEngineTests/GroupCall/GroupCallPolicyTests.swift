@@ -175,8 +175,8 @@ final class GroupTelemetryTests: XCTestCase {
     }
 
     func testEventShapes() {
-        XCTAssertEqual(GroupTelemetry.mediaJoin(nodeId: "aruba", ms: 812).kind, "group.media_join")
-        XCTAssertEqual(GroupTelemetry.mediaJoin(nodeId: "aruba", ms: 812).attrs["ms"] as? Int, 812)
+        XCTAssertEqual(GroupTelemetry.mediaJoin(nodeId: "node-a", ms: 812).kind, "group.media_join")
+        XCTAssertEqual(GroupTelemetry.mediaJoin(nodeId: "node-a", ms: 812).attrs["ms"] as? Int, 812)
         XCTAssertEqual(GroupTelemetry.pcState(.pub, state: "connected").attrs["pc"] as? String, "pub")
         XCTAssertEqual(GroupTelemetry.pcState(.sub, state: "failed").attrs["pc"] as? String, "sub")
         let transport = GroupTelemetry.transport(.init(tlsVersion: "FEFC", dtlsCipher: "TLS_AES_256_GCM_SHA384", srtpCipher: "AEAD_AES_256_GCM", candidateType: "relay"))

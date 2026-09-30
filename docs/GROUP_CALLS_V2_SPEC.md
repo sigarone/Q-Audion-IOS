@@ -136,10 +136,18 @@ timeout -> one retry, then a rejoin.
 5. **Group screen share from iOS is removed** (v2.0 scope): the ReplayKit broadcast extension existed
    only for LiveKit and is deleted; remote screen shares (`description:"screen"`) are rendered.
 6. **1:1 -> group hand-over (make-before-break).** The 1:1 leg stays up until the group publisher is
-   connected AND the promoted peer is in the group roster (or 30 s, then only if the media is up);
-   if the group media does not come up within 30 s the group call is abandoned and the 1:1 call
-   stays. A promoted group runs without its own CallKit entry after the 1:1 CallKit call ends (the
+   connected AND the promoted peer is in the group roster; if the group media does not come up
+   within 30 s the group call is abandoned and the 1:1 call stays. A promoted group runs without its own CallKit entry after the 1:1 CallKit call ends (the
    audio session is then activated by the app, `.selfManaged`).
-7. **VP8 encoder wrapping.** The 1:1 encoder factory wrapped every encoder in
+7. **Nack hardening (section 5.4).** `media_key_nack` is answered only for the CURRENT epoch: the
+   ring still holds up to 15 older keys of ours, and re-sending one to a member that joined later
+   would break the "a joiner never gets a key before its own epoch" rule.
+8. **First-connect watchdog (section 4.7).** The spec only names "not connected within 10 s of a
+   restart"; a publisher PC that never reaches `connected` after the very first connect asks for a
+   rejoin after 15 s as well.
+9. **1:1 -> group hand-over timing.** After the group media is up the 1:1 leg waits for the promoted
+   peer to appear in the group; if it has neither joined nor had its ring end after 50 s in total
+   (server ring timeout 45 s) the 1:1 leg ends anyway.
+10. **VP8 encoder wrapping.** The 1:1 encoder factory wrapped every encoder in
    `KeyframeForcingVideoEncoder`; native builders (VP8 / VP9 / AV1, libvpx simulcast) cannot be
    wrapped, so those three are now returned unwrapped (H.265, the 1:1 codec, is unchanged).
