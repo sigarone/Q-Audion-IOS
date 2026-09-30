@@ -194,7 +194,9 @@ struct ContactDetailScreen: View {
                             phoneNumber: existing.phoneNumber,
                             extension: draft.extensionText.isEmpty ? existing.`extension` : draft.extensionText,
                             avatarVersion: existing.avatarVersion,
-                            voiceVerifiedAt: existing.voiceVerifiedAt
+                            voiceVerifiedAt: existing.voiceVerifiedAt,
+                            proximityPairedAtMs: existing.proximityPairedAtMs,
+                            proximityServerConfirmed: existing.proximityServerConfirmed
                         )
                         store.upsert(updated)
                         snackbar?.show(.init(text: String(localized: "contact_detail.contact_updated", defaultValue: "Contatto aggiornato.", comment: "Snackbar — contact edits were saved successfully"), severity: .info))
@@ -941,7 +943,29 @@ struct ContactDetailScreen: View {
                          when: Self.formatEventDate(voiceMs),
                          summary: "Voce verificata")
             }
-            if stored?.verifiedAtMs == nil && stored?.voiceVerifiedAt == nil {
+            // W-PAIRFB (audit finding: an in-person QR + Bluetooth pairing
+            // left no trace on this contact beyond a transient toast). The
+            // wording is gated on the server check, never on the SAS
+            // ceremony alone: "verificato" only when the account's
+            // published key matched what this phone proved over Bluetooth,
+            // "salvata" otherwise — same rule `recordProximityPairing`
+            // already applies to `isVerified` itself, never upgraded here.
+            if let pairedMs = stored?.proximityPairedAtMs {
+                if stored?.proximityServerConfirmed == true {
+                    eventRow(severity: extras.success,
+                             when: Self.formatEventDate(pairedMs),
+                             summary: String(localized: "contact_detail.proximity_verified",
+                                defaultValue: "Verificato di persona · QR + Bluetooth",
+                                comment: "Security-log row for a contact — an in-person QR + Bluetooth pairing completed and the server confirmed the claimed account owns the key just proved. The date/time is shown separately by the row's own timestamp column."))
+                } else {
+                    eventRow(severity: extras.warning,
+                             when: Self.formatEventDate(pairedMs),
+                             summary: String(localized: "contact_detail.proximity_saved",
+                                defaultValue: "Chiave di persona salvata · QR + Bluetooth",
+                                comment: "Security-log row for a contact — an in-person QR + Bluetooth pairing's 6-digit code was confirmed on both phones, but the check that confirms the claimed account owns the key could not run against the server, so this is deliberately NOT worded as 'verificato'."))
+                }
+            }
+            if stored?.verifiedAtMs == nil && stored?.voiceVerifiedAt == nil && stored?.proximityPairedAtMs == nil {
                 if item.isVerified {
                     Text("Contatto verificato. Data e metodo della verifica non disponibili per questo record.")
                         .qaudionStyle(type.bodySmall)

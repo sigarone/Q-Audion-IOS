@@ -151,7 +151,13 @@ public enum PeerTrustEvaluator {
             // never touches their cached avatar. Thread through
             // unchanged so the version-dedup in AvatarAnnounceReceiver
             // doesn't spuriously re-download an already-cached avatar.
-            avatarVersion: existing.avatarVersion
+            avatarVersion: existing.avatarVersion,
+            // W-PAIRFB — a manual safety-number verify (SAS/QR/anti-replay)
+            // confirms the SAME identity an earlier in-person pairing
+            // already vouched for; it must not erase that separate
+            // historical record, same reasoning as presenceAuth above.
+            proximityPairedAtMs: existing.proximityPairedAtMs,
+            proximityServerConfirmed: existing.proximityServerConfirmed
         ))
     }
 
@@ -211,7 +217,15 @@ public enum PeerTrustEvaluator {
             // avatarUrl above: an identity-key rotation is the same
             // person with a new key, not a reason to drop their cached
             // avatar (nor its version, which travels WITH avatarUrl).
-            avatarVersion: existing.avatarVersion
+            avatarVersion: existing.avatarVersion,
+            // W-PAIRFB — explicit nil (matches the default, spelled out for
+            // clarity): an in-person pairing verified the OLD key: it must
+            // be cleared on the SAME identity-rotation edge that already
+            // clears verifiedFingerprintHex/verifiedAtMs/verificationMethod
+            // above, for the same reason — a stale "verified in person"
+            // badge for a key that no longer applies would be misleading.
+            proximityPairedAtMs: nil,
+            proximityServerConfirmed: nil
         ))
     }
 }

@@ -11,8 +11,14 @@ struct ProximityPairingDisplaySheet: View {
     /// Published identity keys of an account (`ContactsListContainer.publishedIdentityKeys`).
     let serverIdentityKeys: ((String) async -> Set<Data>)?
     let onCompleted: (ProximityPairingSummary) -> Void
+    /// Privacy-safe lifecycle telemetry — see `ProximityPairingTelemetry`.
+    var onTelemetryEvent: ((ProximityPairingTelemetryEvent) -> Void)? = ProximityPairingTelemetry.emit
 
     @Environment(\.dismiss) private var dismiss
+    /// W-PAIRFB — shown once, automatically, the first time ANY pairing
+    /// screen appears (`ProximityHowItWorks.presentOnFirstUse`); reachable
+    /// again any time via the toolbar info button.
+    @State private var showingHowItWorksAuto = false
 
     var body: some View {
         NavigationStack {
@@ -23,6 +29,12 @@ struct ProximityPairingDisplaySheet: View {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Chiudi") { dismiss() }
                     }
+                    ToolbarItem(placement: .primaryAction) {
+                        ProximityHowItWorksButton()
+                    }
+                }
+                .sheet(isPresented: $showingHowItWorksAuto) {
+                    ProximityHowItWorksSheet()
                 }
         }
         // Defense in depth only. `ScreenshotLockService` blanks its own secure
@@ -30,7 +42,14 @@ struct ProximityPairingDisplaySheet: View {
         // protection is in the engine driver: the code is hidden and the
         // session stopped while the screen is recorded, mirrored or shared,
         // and a screenshot replaces the session (spec §6).
-        .onAppear { ScreenshotLockService.lock() }
+        .onAppear {
+            ScreenshotLockService.lock()
+            ProximityEntryPointHint.markSeen()
+            if ProximityHowItWorks.presentOnFirstUse {
+                ProximityHowItWorks.markSeen()
+                showingHowItWorksAuto = true
+            }
+        }
         .onDisappear { ScreenshotLockService.unlock() }
     }
 
@@ -41,7 +60,8 @@ struct ProximityPairingDisplaySheet: View {
                 localUserId: userId,
                 displayName: ProximityPairingNames.resolve,
                 serverIdentityKeys: serverIdentityKeys,
-                onCompleted: onCompleted
+                onCompleted: onCompleted,
+                onTelemetryEvent: onTelemetryEvent
             )
         } else {
             ProximityPairingUnavailableView()
@@ -57,19 +77,45 @@ struct ProximityPairingScanContent: View {
     let serverIdentityKeys: ((String) async -> Set<Data>)?
     let onCompleted: (ProximityPairingSummary) -> Void
     let onRescan: () -> Void
+    /// Privacy-safe lifecycle telemetry — see `ProximityPairingTelemetry`.
+    var onTelemetryEvent: ((ProximityPairingTelemetryEvent) -> Void)? = ProximityPairingTelemetry.emit
+
+    /// W-PAIRFB — see `ProximityPairingDisplaySheet`'s twin state var. This
+    /// screen is hosted inside `QrScannerSheet`'s own `NavigationStack`, so
+    /// only the toolbar item + auto-presented sheet are added here; the
+    /// title/cancel button stay owned by the parent.
+    @State private var showingHowItWorksAuto = false
 
     var body: some View {
-        if let userId = localUserId, !userId.isEmpty {
-            ProximityPairingScannerView(
-                payload: payload,
-                localUserId: userId,
-                displayName: ProximityPairingNames.resolve,
-                serverIdentityKeys: serverIdentityKeys,
-                onCompleted: onCompleted,
-                onRescan: onRescan
-            )
-        } else {
-            ProximityPairingUnavailableView()
+        Group {
+            if let userId = localUserId, !userId.isEmpty {
+                ProximityPairingScannerView(
+                    payload: payload,
+                    localUserId: userId,
+                    displayName: ProximityPairingNames.resolve,
+                    serverIdentityKeys: serverIdentityKeys,
+                    onCompleted: onCompleted,
+                    onRescan: onRescan,
+                    onTelemetryEvent: onTelemetryEvent
+                )
+            } else {
+                ProximityPairingUnavailableView()
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ProximityHowItWorksButton()
+            }
+        }
+        .sheet(isPresented: $showingHowItWorksAuto) {
+            ProximityHowItWorksSheet()
+        }
+        .onAppear {
+            ProximityEntryPointHint.markSeen()
+            if ProximityHowItWorks.presentOnFirstUse {
+                ProximityHowItWorks.markSeen()
+                showingHowItWorksAuto = true
+            }
         }
     }
 }

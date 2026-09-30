@@ -114,7 +114,12 @@ final class ContactsRefreshService {
                 phoneNumber: existing?.phoneNumber,
                 extension: existing?.`extension`,
                 avatarVersion: existing?.avatarVersion,
-                voiceVerifiedAt: existing?.voiceVerifiedAt
+                voiceVerifiedAt: existing?.voiceVerifiedAt,
+                // W-PAIRFB — same reasoning as verifiedAtMs/verificationMethod
+                // above: an in-person pairing's date/outcome is a historical
+                // record, not directory-refreshable state.
+                proximityPairedAtMs: existing?.proximityPairedAtMs,
+                proximityServerConfirmed: existing?.proximityServerConfirmed
             )
         }
         for c in resolved { store.upsert(c) }

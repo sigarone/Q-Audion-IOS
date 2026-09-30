@@ -108,7 +108,9 @@ struct PhoneContactImportView: View {
                     presenceFloor: existing?.presenceFloor,
                     phoneNumber: stored.phoneNumber,
                     extension: existing?.`extension`,
-                    avatarVersion: existing?.avatarVersion
+                    avatarVersion: existing?.avatarVersion,
+                    proximityPairedAtMs: existing?.proximityPairedAtMs,
+                    proximityServerConfirmed: existing?.proximityServerConfirmed
                 )
                 store.upsert(merged)
                 selectedCandidate = nil

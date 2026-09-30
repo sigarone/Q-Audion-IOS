@@ -4,6 +4,13 @@ extension ReleaseNote {
     /// User-facing changelog. Aggiornare a ogni release con funzionalità
     /// visibili all'utente. Niente codici interni, tool o dettagli di build.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1196+", date: "2026-09-30",
+              title: "Associazione di persona più chiara",
+              bullets: [
+                "Contatti → Aggiungi contatto → \"Associa di persona (QR + Bluetooth)\" ora spiega in una schermata come funziona e perché è sicuro, prima di iniziare",
+                "Il contatto associato di persona mostra ora un promemoria \"Verificato di persona\" con la data, nella scheda del contatto",
+                "Al termine, una schermata chiara distingue: nuovo contatto verificato, chiave aggiunta a un contatto già noto, oppure chiave salvata senza verifica server",
+              ]),
         .init(id: "v1.0.957+", date: "2026-08-11",
               title: "Impostazioni più oneste, dati di chiamata reali",
               bullets: [

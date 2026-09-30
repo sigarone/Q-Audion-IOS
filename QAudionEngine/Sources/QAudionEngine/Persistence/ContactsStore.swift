@@ -165,6 +165,28 @@ public final class ContactsStore {
         /// by the next call's key rather than accumulated. `nil` until a
         /// call with this contact has verified a signature at least once.
         public let callVerifiedPeerIdentityKey: Data?
+        /// W-PAIRFB (in-person pairing feedback) — epoch ms the in-person
+        /// (QR + Bluetooth) pairing ceremony (`ProximityPairingSummary`,
+        /// docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md) last completed
+        /// with this contact, set unconditionally on completion (SAS
+        /// confirmed on both phones) regardless of whether the server
+        /// confirmed the claimed account's key. Deliberately SEPARATE from
+        /// `verifiedAtMs`/`verificationMethod` above (the SAS/manual-verify
+        /// axis `PeerTrustEvaluator` matches against the safety-number
+        /// fingerprint): this is a plain historical record — "an in-person
+        /// exchange with this contact completed on this date" — never read
+        /// by `PeerTrustEvaluator`, so a pairing whose server check could
+        /// not run never upgrades that separate trust ladder. Rendered
+        /// directly by `ContactDetailScreen`. `nil` for a contact never
+        /// paired this way (every contact before this field existed).
+        public let proximityPairedAtMs: Int64?
+        /// Whether the server confirmed the claimed account published the
+        /// key proved during the pairing at `proximityPairedAtMs` (spec
+        /// §12). Meaningless when that is `nil`. Gates the badge's wording
+        /// ("Verificato di persona" vs "Chiave di persona salvata") —
+        /// never upgrades `isVerified` itself, which keeps its own,
+        /// independently-computed value.
+        public let proximityServerConfirmed: Bool?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -178,7 +200,9 @@ public final class ContactsStore {
                     `extension`: String? = nil,
                     avatarVersion: Int? = nil,
                     voiceVerifiedAt: Int64? = nil,
-                    callVerifiedPeerIdentityKey: Data? = nil) {
+                    callVerifiedPeerIdentityKey: Data? = nil,
+                    proximityPairedAtMs: Int64? = nil,
+                    proximityServerConfirmed: Bool? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -196,6 +220,8 @@ public final class ContactsStore {
             self.avatarVersion = avatarVersion
             self.voiceVerifiedAt = voiceVerifiedAt
             self.callVerifiedPeerIdentityKey = callVerifiedPeerIdentityKey
+            self.proximityPairedAtMs = proximityPairedAtMs
+            self.proximityServerConfirmed = proximityServerConfirmed
         }
     }
 
@@ -556,7 +582,9 @@ public final class ContactsStore {
                 extension: existing.`extension` ?? extensionNumber,
                 avatarVersion: existing.avatarVersion,
                 voiceVerifiedAt: existing.voiceVerifiedAt,
-                callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
+                callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
+                proximityPairedAtMs: existing.proximityPairedAtMs,
+                proximityServerConfirmed: existing.proximityServerConfirmed
             )
             current[idx] = patched
             save(current)
@@ -613,7 +641,9 @@ public final class ContactsStore {
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
             voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
+            proximityPairedAtMs: existing.proximityPairedAtMs,
+            proximityServerConfirmed: existing.proximityServerConfirmed
         )
         save(current)
         return true
@@ -710,7 +740,9 @@ public final class ContactsStore {
             extension: existing.`extension`,
             avatarVersion: version,
             voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
+            proximityPairedAtMs: existing.proximityPairedAtMs,
+            proximityServerConfirmed: existing.proximityServerConfirmed
         )
         save(current)
         return Self.persisted(userId: userId, version: version, in: self)
@@ -743,7 +775,50 @@ public final class ContactsStore {
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
             voiceVerifiedAt: Int64(date.timeIntervalSince1970 * 1000),
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
+            proximityPairedAtMs: existing.proximityPairedAtMs,
+            proximityServerConfirmed: existing.proximityServerConfirmed
+        )
+        save(current)
+        return true
+    }
+
+    /// W-PAIRFB — the ONE write path for `proximityPairedAtMs`/
+    /// `proximityServerConfirmed` on an EXISTING row. Used when an in-person
+    /// (QR + Bluetooth) pairing completes with a contact the address book
+    /// already knows — spec §12 says that ceremony never rewrites a known
+    /// contact's key or verified badge, but recording that the exchange
+    /// happened, and when, is pure history and touches neither. No-op
+    /// (returns false) if no row exists for `userId` — same contract as
+    /// `overwriteDisplayName`/`setVoiceVerified`, this never creates a
+    /// contact (the pairing flow's OWN "add a brand-new contact" path
+    /// passes these two fields directly to its own `StoredContact` build
+    /// instead, since there is no existing row to patch).
+    @discardableResult
+    public func setProximityPairing(userId: String, pairedAtMs: Int64, serverConfirmed: Bool) -> Bool {
+        var current = load()
+        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
+        let existing = current[idx]
+        current[idx] = StoredContact(
+            userId: existing.userId,
+            displayName: existing.displayName,
+            phoneHash: existing.phoneHash,
+            avatarUrl: existing.avatarUrl,
+            lastSeen: existing.lastSeen,
+            isVerified: existing.isVerified,
+            pubkey: existing.pubkey,
+            verifiedFingerprintHex: existing.verifiedFingerprintHex,
+            verifiedAtMs: existing.verifiedAtMs,
+            verificationMethod: existing.verificationMethod,
+            presenceAuth: existing.presenceAuth,
+            presenceFloor: existing.presenceFloor,
+            phoneNumber: existing.phoneNumber,
+            extension: existing.`extension`,
+            avatarVersion: existing.avatarVersion,
+            voiceVerifiedAt: existing.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
+            proximityPairedAtMs: pairedAtMs,
+            proximityServerConfirmed: serverConfirmed
         )
         save(current)
         return true
@@ -817,7 +892,9 @@ public final class ContactsStore {
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
             voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey
+            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
+            proximityPairedAtMs: existing.proximityPairedAtMs,
+            proximityServerConfirmed: existing.proximityServerConfirmed
         )
         save(current)
         return .filled
@@ -962,7 +1039,9 @@ public final class ContactsStore {
             extension: existing.`extension`,
             avatarVersion: existing.avatarVersion,
             voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: key
+            callVerifiedPeerIdentityKey: key,
+            proximityPairedAtMs: existing.proximityPairedAtMs,
+            proximityServerConfirmed: existing.proximityServerConfirmed
         )
         upsert(updated)
         return updated
@@ -993,7 +1072,9 @@ public final class ContactsStore {
             extension: base.`extension`,
             avatarVersion: base.avatarVersion,
             voiceVerifiedAt: base.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: base.callVerifiedPeerIdentityKey
+            callVerifiedPeerIdentityKey: base.callVerifiedPeerIdentityKey,
+            proximityPairedAtMs: base.proximityPairedAtMs,
+            proximityServerConfirmed: base.proximityServerConfirmed
         )
     }
 }

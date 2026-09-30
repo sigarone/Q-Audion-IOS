@@ -1,9 +1,9 @@
 # Proximity pairing v1 — QR + Bluetooth LE, hybrid ML-KEM-1024
 
-Status: **iOS implementation in progress** (branch `claude/lucid-mccarthy-7lnmr3`).
-Android and Desktop: **not implemented** — this document is the normative spec
-for the port. Every byte, label and check below is normative unless marked
-"informative". Test vectors: §15.
+Status: **shipped on iOS and Android** (Contacts → Aggiungi contatto →
+"Associa di persona (QR + Bluetooth)"). Desktop: **not implemented** — this
+document remains the normative spec for that port. Every byte, label and
+check below is normative unless marked "informative". Test vectors: §15.
 
 ## 1. Purpose
 

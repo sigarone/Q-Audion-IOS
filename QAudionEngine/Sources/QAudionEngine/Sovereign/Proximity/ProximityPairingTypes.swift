@@ -273,6 +273,24 @@ public struct ProximityPairingResult: Equatable {
     }
 }
 
+/// Whether the claimed account's server-published identity keys contained the
+/// Ed25519 key the peer's phone proved during the pairing (spec §12) — the
+/// three-way outcome behind `ProximityPairingSummary.serverIdentityConfirmed`.
+/// Purely a UI/telemetry classification: it never feeds back into the
+/// protocol or the trust the current logic already grants (`.confirmed` is
+/// the ONLY case that counts as "verified" anywhere downstream).
+public enum ProximityServerCheckOutcome: String, Equatable, Sendable {
+    /// The presented key was one the account published.
+    case confirmed = "ok"
+    /// Offline, nothing published, the lookup timed out, or no lookup was
+    /// configured by the host — the check simply could not run.
+    case unavailable
+    /// The account published keys and this is none of them (the SAS
+    /// ceremony still completed — the user was shown the warning and chose
+    /// to confirm anyway).
+    case mismatch
+}
+
 /// What a completed pairing reports to the host app, AFTER its PSK is in the
 /// vault: everything in `ProximityPairingResult` except the key. The PSK then
 /// never travels through SwiftUI closures and view state, where no copy of it
@@ -284,20 +302,121 @@ public struct ProximityPairingSummary: Equatable, Sendable {
     public let pskFingerprint: String
     public let sas: String
     public let identityWarning: String?
+    /// The full three-way server-check result (see `ProximityServerCheckOutcome`).
+    public let serverCheckOutcome: ProximityServerCheckOutcome
+    /// Wall-clock milliseconds from the screen's `start()` to this
+    /// completion — UI/telemetry only (the `ms` attribute of the
+    /// `pairing.proximity.completed` event), never used by the protocol.
+    public let elapsedMs: Int
+
     /// True only when the claimed account's server-published identity keys
     /// contained the Ed25519 key the peer's phone proved (spec §12). False
     /// when the keys differed, the check could not run, or it timed out:
-    /// then the userId is only the peer's own claim.
-    public let serverIdentityConfirmed: Bool
+    /// then the userId is only the peer's own claim. Derived from
+    /// `serverCheckOutcome` — kept as a computed property so existing
+    /// call sites (`verified: result.serverIdentityConfirmed`) are unchanged.
+    public var serverIdentityConfirmed: Bool { serverCheckOutcome == .confirmed }
 
-    public init(_ result: ProximityPairingResult, serverIdentityConfirmed: Bool = false) {
+    public init(_ result: ProximityPairingResult,
+                serverCheckOutcome: ProximityServerCheckOutcome = .unavailable,
+                elapsedMs: Int = 0) {
         self.role = result.role
         self.peer = result.peer
         self.pskFingerprint = result.pskFingerprint
         self.sas = result.sas
         self.identityWarning = result.identityWarning
-        self.serverIdentityConfirmed = serverIdentityConfirmed
+        self.serverCheckOutcome = serverCheckOutcome
+        self.elapsedMs = elapsedMs
     }
+
+    /// Back-compat convenience for existing callers/tests that only had a
+    /// bool (pre-dates the three-way `ProximityServerCheckOutcome`).
+    public init(_ result: ProximityPairingResult, serverIdentityConfirmed: Bool) {
+        self.init(result, serverCheckOutcome: serverIdentityConfirmed ? .confirmed : .unavailable)
+    }
+}
+
+/// A lifecycle event a pairing screen (displayer or scanner) reports to the
+/// host for telemetry, so the maintainer can see on the server that a
+/// pairing happened, or why it did not (spec/UX gap — no protocol change).
+/// Deliberately carries NO ids, keys, SAS digits or names: only role/stage/
+/// cause enums and counts, so it is safe to forward as-is into a structured
+/// telemetry event's `attrs`.
+public enum ProximityPairingTelemetryEvent: Equatable, Sendable {
+    /// Where in the ceremony a `failed`/`cancelled` event happened.
+    ///
+    /// Review fix (W-PAIRFB cross-platform telemetry audit): explicit
+    /// snake_case raw value on `showingCode` — Android's
+    /// `ProximityPairingViewModel.telemetryStage` wire value for this stage
+    /// is `"showing_code"`; Swift's default synthesized raw value for this
+    /// case would have shipped the literal case name `"showingCode"`
+    /// instead, splitting the `stage` attribute's vocabulary by platform.
+    /// The other four cases already coincide with Android's strings under
+    /// default synthesis (single lowercase words), so only this one needed
+    /// an explicit override.
+    public enum Stage: String, Equatable, Sendable {
+        case preparing
+        case showingCode = "showing_code"
+        case connecting
+        case exchanging
+        case confirming
+    }
+
+    /// Closed cause taxonomy for `failed` — mirrors `ProximityPairingError`
+    /// without leaking any of its associated string payloads (those can
+    /// carry the peer's userId/claims).
+    public enum FailureCause: String, Equatable, Sendable {
+        // W-PAIRFB fuzz-check: `LogRedactor.redactStructured`'s fail-closed
+        // residual sweep (`QAudionApp/Services/LogRedactor.swift`) redacts
+        // ANY run of 20+ letters/digits/`+/=_-` with no separator — a plain
+        // camelCase rawValue at or above that length would silently come
+        // back as "***REDACTED***" over the wire, not a privacy problem
+        // (nothing leaks) but a USELESS telemetry attribute (the whole
+        // point of `cause` is to say WHY, on the server, without a phone in
+        // hand). `bluetoothUnavailable`/`authenticationFailed` (auto
+        // rawValue = the case name) are exactly 20 chars — the two explicit
+        // overrides below keep every rawValue at 19 chars or under. Keep
+        // this comment in sync with any new case: check `.rawValue.count`.
+        case bluetoothUnavailable = "bleUnavailable"
+        case identityUnavailable
+        case invalidQrCode
+        case expiredQrCode
+        case timeout
+        case transportFailed
+        case protocolViolation
+        case authenticationFailed = "authFailed"
+        case identityRejected
+        case sessionBusy
+        case peerAborted
+        case userRejected
+        case cryptoFailure
+        case screenCaptured
+        case qrRenderFailed
+        case other
+
+        public init(_ error: ProximityPairingError) {
+            switch error {
+            case .bluetoothUnavailable: self = .bluetoothUnavailable
+            case .identityUnavailable: self = .identityUnavailable
+            case .invalidQrCode: self = .invalidQrCode
+            case .expiredQrCode: self = .expiredQrCode
+            case .timeout: self = .timeout
+            case .transportFailed: self = .transportFailed
+            case .protocolViolation: self = .protocolViolation
+            case .authenticationFailed: self = .authenticationFailed
+            case .identityRejected: self = .identityRejected
+            case .sessionBusy: self = .sessionBusy
+            case .peerAborted: self = .peerAborted
+            case .userRejected: self = .userRejected
+            case .cryptoFailure: self = .cryptoFailure
+            case .cancelled: self = .other
+            }
+        }
+    }
+
+    case started(role: ProximityRole)
+    case failed(cause: FailureCause, stage: Stage)
+    case cancelled(stage: Stage)
 }
 
 public enum ProximityPairingError: Error, Equatable {

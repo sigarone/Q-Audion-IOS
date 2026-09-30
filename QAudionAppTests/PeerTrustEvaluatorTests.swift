@@ -82,6 +82,47 @@ final class PeerTrustEvaluatorTests: XCTestCase {
         XCTAssertNil(reloaded?.presenceFloor)
     }
 
+    /// W-PAIRFB — same edge, same reasoning, for the fields this sweep
+    /// added: an in-person pairing verified the OLD key, so it must not
+    /// survive as a "Verificato di persona" badge for a key that no longer
+    /// applies once the peer's identity actually rotates.
+    func test_acceptNewFingerprint_clearsProximityPairing() {
+        let userId = makeTestUserId()
+        let store = ContactsStore()
+        store.upsert(ContactsStore.StoredContact(
+            userId: userId, displayName: "Test Peer", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: true,
+            proximityPairedAtMs: 1_700_000_000_000, proximityServerConfirmed: true
+        ))
+        XCTAssertNotNil(store.load().first(where: { $0.userId == userId })?.proximityPairedAtMs, "precondition")
+
+        PeerTrustEvaluator.acceptNewFingerprint(peerUserId: userId, newPeerIkEdPub: Data(repeating: 0xEE, count: 32))
+
+        let reloaded = store.load().first(where: { $0.userId == userId })
+        XCTAssertNil(reloaded?.proximityPairedAtMs, "an ACTUAL identity rotation must clear a stale in-person pairing record")
+        XCTAssertNil(reloaded?.proximityServerConfirmed)
+    }
+
+    /// W-PAIRFB — mirrors `test_markVerified_preservesPresenceAuthAndFloor`:
+    /// an ordinary manual safety-number verify of the SAME identity must not
+    /// erase an earlier in-person pairing's own, separate history.
+    func test_markVerified_preservesProximityPairing() {
+        let userId = makeTestUserId()
+        let store = ContactsStore()
+        store.upsert(ContactsStore.StoredContact(
+            userId: userId, displayName: "Test Peer", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false,
+            proximityPairedAtMs: 1_700_000_000_000, proximityServerConfirmed: false
+        ))
+
+        PeerTrustEvaluator.markVerified(peerUserId: userId, method: .voice, fingerprintHex: "somefingerprint")
+
+        let reloaded = store.load().first(where: { $0.userId == userId })
+        XCTAssertEqual(reloaded?.proximityPairedAtMs, 1_700_000_000_000,
+                       "a manual verify is NOT an identity change -- the in-person pairing record must be untouched")
+        XCTAssertEqual(reloaded?.proximityServerConfirmed, false)
+    }
+
     func test_markVerified_preservesPresenceAuthAndFloor() {
         let userId = makeTestUserId()
         let peerIdentityKey = Data(repeating: 0xCC, count: 32)

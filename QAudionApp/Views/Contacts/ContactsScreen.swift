@@ -39,6 +39,10 @@ struct ContactsScreen: View {
     /// rotating pairing QR (docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md).
     @State private var showingQrScanner: Bool = false
     @State private var showingProximityPair: Bool = false
+    /// W-PAIRFB — the in-person pairing final outcome, presented as its own
+    /// clear screen (`ProximityOutcomeResultSheet`) once the pairing sheet
+    /// above dismisses. Non-nil only while that screen is up.
+    @State private var proximityOutcome: ContactsListContainer.ProximityOutcome?
     /// W58: ordinamento corrente della lista TUTTI. Persisted in
     /// UserDefaults così la scelta sopravvive ai riavvi.
     @State private var sortMode: SortMode = SortMode.loadFromDefaults()
@@ -169,6 +173,9 @@ struct ContactsScreen: View {
                                          },
                                          onCompleted: { result in handleProximityPaired(result) })
         }
+        .sheet(item: $proximityOutcome) { outcome in
+            ProximityOutcomeResultSheet(outcome: outcome) { proximityOutcome = nil }
+        }
         .sheet(isPresented: $showingNewContact) {
             // W23.E: full ContactEditor in Add mode.
             // 2026-08-06 fix: this used to only print(draft) + show a
@@ -214,7 +221,7 @@ struct ContactsScreen: View {
             Button {
                 showingProximityPair = true
             } label: {
-                Label("Associa di persona (QR + Bluetooth)", systemImage: "person.2.wave.2")
+                Label(ProximityEntryPointHint.menuTitle, systemImage: "person.2.wave.2")
             }
         } label: {
             Label("Aggiungi contatto", systemImage: "person.badge.plus")
@@ -237,14 +244,16 @@ struct ContactsScreen: View {
 
     /// In-person pairing finished on both phones; its key is already stored.
     /// The container adds the peer only if missing (never rewrites a known
-    /// contact); the sheet that ran it is closed so the result is visible.
+    /// contact); the sheet that ran it is closed and a clear final screen
+    /// (`ProximityOutcomeResultSheet`) distinguishes the three ways it can
+    /// end — audit finding: this used to be a single transient toast that
+    /// looked the same whether the contact was new-and-verified, merely
+    /// re-keyed, or saved without a server check.
     private func handleProximityPaired(_ result: ProximityPairingSummary) {
         let outcome: ContactsListContainer.ProximityOutcome = container.recordProximityPairing(result)
         showingProximityPair = false
         showingQrScanner = false
-        let text: String = outcome.title + " — " + outcome.detail
-        let severity: QAudionSnackbarSeverity = outcome.isError ? .error : .info
-        snackbar?.show(.init(text: text, severity: severity))
+        proximityOutcome = outcome
     }
 
     private func saveNewContact(_ draft: ContactEditorScreen.Draft) {
