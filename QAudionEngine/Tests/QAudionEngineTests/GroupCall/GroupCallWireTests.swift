@@ -25,6 +25,18 @@ final class GroupCallWireTests: XCTestCase {
         XCTAssertEqual(ready.dtlsFingerprint, GroupCallFixtures.fingerprint())
     }
 
+    func testTheJoinTokenIsAnOpaqueStringWhateverItsShape() throws {
+        // Spec 12.2: the server now issues "<pseudonym>:<32 hex>"; the client never parses it.
+        let bound = GroupCallFixtures.pseudoA + ":" + GroupCallFixtures.joinToken
+        var dictionary = GroupCallFixtures.readyDictionary()
+        dictionary["join_token"] = bound
+        XCTAssertEqual(try XCTUnwrap(GroupCallWire.MediaReady.parse(dictionary)).joinToken, bound)
+        dictionary["join_token"] = "opaque/\(GroupCallFixtures.joinToken)=="
+        XCTAssertEqual(try XCTUnwrap(GroupCallWire.MediaReady.parse(dictionary)).joinToken, "opaque/\(GroupCallFixtures.joinToken)==")
+        dictionary["join_token"] = ""
+        XCTAssertNil(GroupCallWire.MediaReady.parse(dictionary), "only an empty token is refused")
+    }
+
     func testMediaReadyNormalisesTheFingerprint() throws {
         let lower = "SHA-256 " + Array(repeating: "ab", count: 32).joined(separator: ":")
         let ready = try XCTUnwrap(GroupCallWire.MediaReady.parse(GroupCallFixtures.readyDictionary(fingerprint: lower)))
