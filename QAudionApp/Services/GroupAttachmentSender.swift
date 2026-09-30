@@ -131,30 +131,40 @@ final class GroupAttachmentSender {
 
         // Single-shot cipher — this type's own doc: "total_chunks is always
         // 1 (single-shot)". Named here (not a bare literal in two places)
-        // so the descriptor field below (step 5) and the download-token
-        // sizing right below (step 4) can never drift apart.
+        // so the descriptor field below (step 5) stays pinned to 1 — the
+        // receiver hard-requires it (`GroupAttachmentReceiver.receive`:
+        // `guard att.totalChunks <= 1 else { throw .badDescriptor(...) }`).
         let totalChunks = 1
 
         // 4. §4 PATH 1 — one capability token per OTHER member. A failure
         //    for one member is logged and skipped (that member simply can't
         //    download); the send does NOT abort for the rest.
         //
-        // W-MAXUSES-PARITY (2026-09-30): size `max_uses` explicitly from
-        // the chunk count instead of leaving it unset (server default of
-        // 10), same fix as `ChatFileAttachmentSender.send`. Numerically a
-        // no-op today — `totalChunks` is always 1 for this single-shot
-        // format, and `computeMaxUses(totalChunks: 1)` floors to the same
-        // 10 the server would already default to — but it stops this call
-        // site from silently relying on that undocumented server default,
-        // and it means a larger max_uses follows automatically without
-        // another fix here if this format ever stops being single-shot.
+        // W-MAXUSES-PARITY (2026-09-30): size `max_uses` from the actual
+        // byte length, NOT from the fixed `totalChunks` above — that field
+        // is the WIRE DESCRIPTOR's chunk count (always 1, see its own doc),
+        // a different thing from "how many nominal 64 KiB units does this
+        // transfer span" that `computeMaxUses` wants. Reusing `totalChunks`
+        // here would peg every group attachment at the 10-use floor
+        // regardless of size, which defeats the point of this fix: this
+        // sender ships arbitrary-size photos/videos/files
+        // (`GroupChatScreen.sendAttachmentOverWire`'s `.file(let url)`
+        // case reads the WHOLE file into `data` with no size cap of its
+        // own), not just small blobs, so a large one needs the same
+        // proportional retry/multi-device headroom the analogous
+        // single-shot `qfile` fix already gives voice notes/photos
+        // (`ChatVoiceNoteSender.chunkCountForMaxUses`, reused here as the
+        // same byte-length-to-nominal-chunk-count proxy — both call sites
+        // are single-shot blobs downloaded via one whole-file GET, see
+        // that helper's own doc).
+        let maxUsesChunks = ChatVoiceNoteSender.chunkCountForMaxUses(byteLength: data.count)
         var dl: [String: GroupDownloadEntry] = [:]
         let recipients = members.filter { $0 != selfId && !$0.isEmpty }
         for member in recipients {
             do {
                 let issued = try await provider.downloadTokenClient.issueToken(
                     fileId: fileId, recipientUserId: member,
-                    maxUses: BCryptoDownloadTokenClient.computeMaxUses(totalChunks: totalChunks).map { Int($0) })
+                    maxUses: BCryptoDownloadTokenClient.computeMaxUses(totalChunks: maxUsesChunks).map { Int($0) })
                 dl[member] = GroupDownloadEntry(
                     tok: issued.tokenHex, exp: issued.expiresAtMs, max: issued.maxUses)
             } catch {
