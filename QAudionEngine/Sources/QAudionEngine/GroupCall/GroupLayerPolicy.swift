@@ -37,7 +37,7 @@ public final class GroupLayerPolicy {
         public init() {}
     }
 
-    public enum Action: Equatable, Sendable {
+    public enum Action: Hashable, Sendable {
         case subscribe(key: String)
         case unsubscribe(key: String)
         /// `from` is the substream last commanded (-1 = none yet).

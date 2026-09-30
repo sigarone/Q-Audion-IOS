@@ -1586,6 +1586,22 @@ final class AppState: ObservableObject {
     /// group call.
     var groupCallKitId: UUID?
 
+    /// Group calls v2 — 1:1 -> group hand-over, make-before-break: the 1:1 leg
+    /// stays up until the group media is connected AND the promoted peer is in
+    /// the group (or a timeout), so a failed group setup never costs the 1:1
+    /// call. Set on both sides (the creator that tapped "+", and the peer that
+    /// accepted the ring); consumed by `finishGroupPromotionIfReady`.
+    struct GroupPromotion {
+        let groupCallId: String
+        /// The 1:1 peer (must show up in the group roster before the hand-over).
+        let peerId: String
+        var mediaConnected = false
+    }
+    var groupPromotion: GroupPromotion?
+    var groupPromotionTimeout: DispatchWorkItem?
+    /// The call id `startGroupCallAudioPath` already ran for (idempotency).
+    var groupAudioPathCallId: String?
+
     /// W-GRPRING — call_ids already accepted or rejected. Guards against a
     /// re-ring when the push and the WS invite race (deliberately NO
     /// server-side `armCallPushAck` delay for groups: one call_id has N
@@ -4159,6 +4175,15 @@ final class AppState: ObservableObject {
             provider.onAudioSessionActivated = { [weak self] source in
                 Task { @MainActor in
                     guard let self = self else { return }
+                    // Group calls v2: the group audio unit starts on the SAME
+                    // activation signal as a 1:1 native call. Forwarded whenever a
+                    // group call is live or ringing under CallKit (the controller
+                    // also remembers it for a join that follows the answer).
+                    let groupLive: Bool = {
+                        if case .idle = self.groupCallControllerState { return self.groupCallKitId != nil }
+                        return true
+                    }()
+                    if groupLive { self.groupCallController?.audioSessionActivated(source: source) }
                     // W-GRPVPIO-CRASH (2026-07-17) — CXProvider's didActivate:
                     // fires for the app's ONE shared AVAudioSession regardless of
                     // WHICH call (1:1 or group) CallKit is reporting — unlike
@@ -4177,7 +4202,10 @@ final class AppState: ObservableObject {
                     // call (set in reportGroupCall.../cleared only in
                     // clearGroupCallKitCall), so it's the right guard here even
                     // without a uuid to compare.
-                    guard self.groupCallKitId == nil else {
+                    // A live group call without a 1:1 leg owns the audio session
+                    // alone; during a 1:1 -> group hand-over both are live and the
+                    // 1:1 handling below still runs.
+                    guard self.groupCallKitId == nil, !(groupLive && !self.isInCall) else {
                         // W-GRPSPKR (2026-07-20, call 694147de) —
                         // CallKitProvider.didActivate just forced plain
                         // `.voiceChat` (no `.defaultToSpeaker`) onto the
@@ -4218,6 +4246,24 @@ final class AppState: ObservableObject {
             provider.onAudioSessionDeactivated = { [weak self] in
                 Task { @MainActor in
                     guard let self = self else { return }
+                    // Group calls v2: tell the group audio unit; a group call with
+                    // no CallKit entry of its own (self-managed, or one that just
+                    // lost the 1:1 CallKit call it was riding) re-asserts the
+                    // session, like the wake-only 1:1 path below.
+                    let groupLive: Bool = {
+                        if case .idle = self.groupCallControllerState { return self.groupCallKitId != nil }
+                        return true
+                    }()
+                    if groupLive {
+                        self.groupCallController?.audioSessionDeactivated()
+                        let groupCallIsLive: Bool = {
+                            if case .idle = self.groupCallControllerState { return false }
+                            return true
+                        }()
+                        if groupCallIsLive && self.groupCallKitId == nil {
+                            self.activateGroupCallAudioSessionSelfManaged()
+                        }
+                    }
                     // W-GRPVPIO-CRASH — same fork as onAudioSessionActivated:
                     // a group call's audio is LiveKit's to manage, never
                     // CallService's.
@@ -5776,6 +5822,10 @@ final class AppState: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.groupCallControllerState = s
+                    // Group calls v2: the audio unit of a group call runs on the
+                    // ONE audio-session policy of 1:1 calls (CallKit's activation is
+                    // the trigger) — see `startGroupCallAudioPath`.
+                    if case .connecting(let callId) = s { self.startGroupCallAudioPath(callId: callId) }
                     // W-GRPSPKR — the group-call surface is hands-free: route
                     // playback to the loudspeaker if the session default left
                     // it on the iPhone earpiece (no-op on iPad/BT/wired — see
@@ -5794,18 +5844,35 @@ final class AppState: ObservableObject {
                 }
             }
             // W-GRPSPKR — re-assert the speaker route as each remote audio
-            // track subscribes: LiveKit's engine start (and a late CallKit
+            // track subscribes: the audio unit's start (and a late CallKit
             // didActivate) reconfigures the shared AVAudioSession AFTER the
             // `.active` hook above ran, silently dropping the override back
-            // to the earpiece. This closure slot was previously unbound
-            // (LiveKit plays remote audio itself; nothing else consumes it)
-            // and the routine no-ops unless the current output route is the
+            // to the earpiece. Remote audio plays through WebRTC's own audio
+            // unit; the routine no-ops unless the current output route is the
             // built-in receiver, so re-firing per track is safe.
             groupController.onRemoteAudioTrack = { [weak self] _, _ in
                 DispatchQueue.main.async { self?.routeGroupCallAudioToSpeaker() }
             }
+            // Spec 2.6: a ring that ends without us (creator hung up, ring timeout,
+            // answered on another device) takes the ring surface down.
+            groupManager.onRingEnded = { [weak self] callId, reason in
+                DispatchQueue.main.async { self?.groupRingEnded(callId: callId, reason: reason) }
+            }
             self.groupCallManager = groupManager
-            self.groupCallViewModel = GroupCallViewModel(manager: groupManager, controller: groupController)
+            let groupViewModel = GroupCallViewModel(manager: groupManager, controller: groupController)
+            self.groupCallViewModel = groupViewModel
+            // `onMediaConnected` is a single slot the view model already uses; chain
+            // the 1:1 -> group hand-over in front of it instead of replacing it.
+            let viewModelMediaHook = groupController.onMediaConnected
+            groupController.onMediaConnected = { [weak self] in
+                viewModelMediaHook?()
+                DispatchQueue.main.async { self?.groupMediaConnected() }
+            }
+            let viewModelParticipantsHook = groupController.onParticipantsChanged
+            groupController.onParticipantsChanged = { [weak self] list in
+                viewModelParticipantsHook?(list)
+                DispatchQueue.main.async { self?.groupRosterChangedForPromotion() }
+            }
             // W-GRPRING cold start: the user accepted a push-woken group call
             // before this socket (and therefore the controller) existed. The
             // accept was latched — consume it now that `join(callId:)` can
@@ -18352,7 +18419,11 @@ final class AppState: ObservableObject {
     /// hand-off, so together they cover the whole window.
     @MainActor
     private func noCallInFlight() -> Bool {
-        evaluateNoCallInFlight(
+        // A live group call (and its CallKit entry) is a call in flight too: the
+        // reaper must not close it after a 1:1 leg ended (hand-over).
+        if groupCallKitId != nil { return false }
+        if case .idle = groupCallControllerState {} else { return false }
+        return evaluateNoCallInFlight(
             callState: callState,
             activeCallKitId: activeCallKitId,
             incomingCallRingVisible: incomingCallRingVisible,
@@ -19920,20 +19991,24 @@ extension AppState {
     /// current 1:1 peer force a silent call-hijack with zero consent, so
     /// every platform's port keeps the ring mandatory).
     ///
-    /// The 1:1 leg is torn down only AFTER `createCall` confirms success
-    /// (non-nil), so a refusal (`GroupCallController` already mid-call)
-    /// leaves the original call untouched.
+    /// The 1:1 leg is torn down only once the group media is connected AND the
+    /// peer is in the group (make-before-break, `completeGroupPromotion`); a
+    /// refusal of `createCall` (`GroupCallController` already mid-call) or a
+    /// group setup that fails leaves the original call untouched.
     @MainActor
     func promoteToGroupCall(newPeerIds: [String]) {
         guard let peer = callContactId, let controller = groupCallController else { return }
         let callType = isVideoCall ? "video" : "audio"
         let activeOneToOneId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
-        guard controller.createCall(
+        guard let groupCallId = controller.createCall(
             invitees: [peer] + newPeerIds,
             callType: callType,
             promotedFromCallId: activeOneToOneId
-        ) != nil else { return }
-        endCall()
+        ) else { return }
+        // Group calls v2 — make-before-break: the 1:1 leg stays up until the group
+        // media is connected and the peer is in the group (`beginGroupPromotion`),
+        // so a group call that cannot be set up never costs the 1:1 call.
+        beginGroupPromotion(groupCallId: groupCallId, peerId: peer)
     }
 
     /// W369: transitional SAS key derivation. Loads the per-pair PSK
@@ -24012,6 +24087,14 @@ extension AppState {
         // the cover dismisses and immediately re-presents (flicker / dropped
         // presentation). The controller's own emission moments later carries the
         // identical value, so this is a no-op then.
+        // Group calls v2: an invite that continues the 1:1 call we are on (same peer,
+        // same call id) is a make-before-break hand-over — the 1:1 leg ends once the
+        // group media is up (armed BEFORE the join so the audio path knows).
+        if !invite.promotedFromCallId.isEmpty,
+           invite.promotedFromCallId == (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+           invite.creatorId == callContactId {
+            beginGroupPromotion(groupCallId: invite.callId, peerId: invite.creatorId)
+        }
         groupCallControllerState = .connecting(callId: invite.callId)
         // In-call chat panel — bind the persisted-group id (if any) BEFORE
         // join, same reasoning as the cold-start branch above: the panel's
@@ -24128,11 +24211,8 @@ extension AppState {
         }
     }
 
-    /// Reject the incoming group call. There is deliberately NO wire message:
-    /// the server has no `group_call_decline` type and the room must stay open
-    /// for the other invitees — rejecting just means we never send
-    /// `group_call_join`. (If a "X ha rifiutato" indicator is ever wanted, it
-    /// needs a NEW server type — flagged, not invented here.)
+    /// Reject the incoming group call: `group_call_decline` (spec 2.6) tells the
+    /// server, the room stays open for the other invitees.
     @MainActor
     func declineIncomingGroupCall() {
         guard let invite = incomingGroupCallInvite else { return }
@@ -24141,7 +24221,10 @@ extension AppState {
         incomingGroupCallInvite = nil
         NotificationCenterService.shared.clearIncomingCall(callId: invite.callId)
         clearGroupCallKitCall(reason: .declined)
-        print("[AppState] W-GRPRING rejected group call \(invite.callId.prefix(8))… (no wire decline — room stays open)")
+        // Spec 2.6: `group_call_decline` removes us from the invitees server-side
+        // (the room stays open for everyone else).
+        groupCallManager?.declineGroupCall(callId: invite.callId)
+        print("[AppState] W-GRPRING declined group call \(invite.callId.prefix(8))…")
     }
 
     /// True when an INCOMING_CALL notification belongs to a GROUP call. Two
@@ -24698,21 +24781,26 @@ extension AppState {
             return existing
         }
         let controller = GroupCallController(manager: manager)
-        // Attach the shared audio capture / playback so the
-        // controller drives them in lockstep with call state.
-        let capture = AudioCapture()
-        let playback = AudioPlayback()
-        controller.attachAudioPipeline(capture: capture, playback: playback)
-        // W-GRPTELEM: group-call SFU A/V telemetry — QAudionEngine cannot
+        // Group calls v2: the media rides WebRTC's own audio unit through the ONE
+        // `RTCPeerConnectionFactory` shared with 1:1 calls, so there is no
+        // capture / playback pipeline to attach any more. The controller asks
+        // for an audio-session activation when it needs one (the unit was
+        // released by the 1:1 call a group call was promoted from).
+        controller.onNeedsAudioSessionActivation = { [weak self] in
+            Task { @MainActor in self?.activateGroupCallAudioSessionSelfManaged() }
+        }
+        // W-GRPTELEM: group-call A/V telemetry — QAudionEngine cannot
         // import QAudionApp, so this closure is the ONLY place
         // `call.media.connected`/`call.media.ended` (emitted by
-        // `LiveKitGroupCallRoom`/`GroupCallController` respectively) get
+        // `GroupCallController`) get
         // routed into `CallMediaTelemetry.shared`, the SAME per-call
         // connected/heartbeat/summary tracker the 1:1 path uses (see that
         // class's kdoc) — reused here rather than duplicated because a
         // device is never in a 1:1 AND a group call at once, so the
         // singleton's one `currentCallId` slot is never actually contended
-        // between the two paths. Everything else passes straight through
+        // between the two paths (a 1:1 -> group promotion overlaps only for the
+        // few seconds of the hand-over). Everything else (the spec section 7
+        // `group.*` events) passes straight through
         // to `TelemetryService`, mirroring `videoTelemetry`'s wiring below.
         controller.groupTelemetry = { kind, callId, attrs in
             guard let cid = callId else {
@@ -24741,6 +24829,152 @@ extension AppState {
         }
         groupCallController = controller
         return controller
+    }
+
+    // MARK: - Group calls v2: audio path, CallKit, 1:1 hand-over
+
+    /// Runs once per call when it becomes `.connecting`: makes sure the shared
+    /// AVAudioSession gets activated, because the group audio unit (WebRTC's own,
+    /// on the ONE `RTCPeerConnectionFactory` shared with 1:1 calls) starts on that
+    /// activation exactly like a 1:1 native call does:
+    ///  * a call CallKit knows (answered ring, or an outgoing call we report
+    ///    here) is activated by CallKit / the provider and forwarded by
+    ///    `provider.onAudioSessionActivated`;
+    ///  * a call without a CallKit entry (foreground accept, CallKit-free mode)
+    ///    is activated by the app itself (`.selfManaged`);
+    ///  * a promoted call still rides the 1:1 leg's audio session: nothing to do
+    ///    until the hand-over (`completeGroupPromotion` -> `oneToOneEnded`).
+    @MainActor
+    func startGroupCallAudioPath(callId: String) {
+        guard groupAudioPathCallId != callId else { return }
+        groupAudioPathCallId = callId
+        guard groupCallKitId == nil, groupPromotion == nil,
+              let controller = groupCallController else { return }
+        if controller.isCreatedLocally && !CallsGate.callKitFreeMode {
+            startOutgoingGroupCallKit(hasVideo: controller.callWantsVideo)
+        } else {
+            activateGroupCallAudioSessionSelfManaged()
+        }
+    }
+
+    /// The app's own activation of the shared audio session for a group call that
+    /// CallKit will not activate (same path as a CallKit-free 1:1 call: the
+    /// provider's locked `RTCAudioSession` activation, which then fires
+    /// `onAudioSessionActivated(.selfManaged)`).
+    @MainActor
+    func activateGroupCallAudioSessionSelfManaged() {
+        #if canImport(CallKit) && os(iOS)
+        guard let provider = callKit as? CallKitProvider else { return }
+        Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: nil) }
+        #endif
+    }
+
+    /// CXStartCallAction for a group call WE created: the provider activates the
+    /// session and `provider.onAudioSessionActivated` forwards it. A refusal (CallKit
+    /// unavailable, another call holding the group slot) falls back to the
+    /// app's own activation, so the call is never silent.
+    @MainActor
+    private func startOutgoingGroupCallKit(hasVideo: Bool) {
+        Task { [weak self] in
+            guard let self = self else { return }
+            do {
+                if let uuid = try await self.callKit?.startOutgoingCall(handle: "Chiamata di gruppo", hasVideo: hasVideo) {
+                    await MainActor.run {
+                        if case .idle = self.groupCallControllerState {
+                            // The call ended while CallKit was answering.
+                            Task { await self.callKit?.reportCallEnded(uuid: uuid, reason: .remoteEnded) }
+                        } else {
+                            self.groupCallKitId = uuid
+                        }
+                    }
+                    return
+                }
+            } catch {
+                RTLog.warn("call", "group call: CallKit startOutgoingCall failed (" + error.localizedDescription + ") - self-managed audio session")
+            }
+            await MainActor.run { self.activateGroupCallAudioSessionSelfManaged() }
+        }
+    }
+
+    /// The group media path is up (the publisher PeerConnection connected).
+    @MainActor
+    func groupMediaConnected() {
+        if let uuid = groupCallKitId, groupCallController?.isCreatedLocally == true {
+            Task { [weak self] in await self?.callKit?.reportCallConnected(uuid: uuid) }
+        }
+        if var promotion = groupPromotion, promotion.groupCallId == groupCallController?.currentCallId {
+            promotion.mediaConnected = true
+            groupPromotion = promotion
+            finishGroupPromotionIfReady()
+        }
+    }
+
+    @MainActor
+    func groupRosterChangedForPromotion() {
+        finishGroupPromotionIfReady()
+    }
+
+    /// Arms the hand-over of a 1:1 call into `groupCallId`. If the group media
+    /// does not come up within 30 s the group call is abandoned and the 1:1 call
+    /// stays; if only the peer never joins, the hand-over still happens (the user
+    /// asked for the group).
+    @MainActor
+    func beginGroupPromotion(groupCallId: String, peerId: String) {
+        groupPromotion = GroupPromotion(groupCallId: groupCallId, peerId: peerId)
+        groupPromotionTimeout?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self, let promotion = self.groupPromotion,
+                  promotion.groupCallId == groupCallId else { return }
+            if promotion.mediaConnected {
+                self.completeGroupPromotion()
+            } else {
+                RTLog.warn("call", "group promotion: media not up in time - keeping the 1:1 call")
+                self.abandonGroupPromotion()
+            }
+        }
+        groupPromotionTimeout = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: item)
+    }
+
+    @MainActor
+    private func finishGroupPromotionIfReady() {
+        guard let promotion = groupPromotion, promotion.mediaConnected else { return }
+        let peerInGroup = groupCallManager?.participants.contains { $0.id == promotion.peerId } ?? false
+        if peerInGroup { completeGroupPromotion() }
+    }
+
+    /// Make-before-break: the group media is up, now the 1:1 leg goes.
+    @MainActor
+    private func completeGroupPromotion() {
+        guard groupPromotion != nil else { return }
+        groupPromotion = nil
+        groupPromotionTimeout?.cancel()
+        groupPromotionTimeout = nil
+        RTLog.info("call", "group promotion: hand-over complete - ending the 1:1 leg")
+        endCall()
+        groupCallController?.oneToOneEnded()
+    }
+
+    /// The group call could not be set up: it is dropped, the 1:1 call goes on.
+    @MainActor
+    private func abandonGroupPromotion() {
+        groupPromotion = nil
+        groupPromotionTimeout?.cancel()
+        groupPromotionTimeout = nil
+        groupCallController?.leave()
+    }
+
+    /// `group_call_ended` for a call we never joined (spec 2.6: creator hung up,
+    /// 45 s ring timeout, answered on another device).
+    @MainActor
+    func groupRingEnded(callId: String, reason: String) {
+        guard incomingGroupCallInvite?.callId == callId else { return }
+        RTLog.info("call", "group ring ended call=" + String(callId.prefix(8)) + " reason=" + String(reason.prefix(16)))
+        stopInAppRingtone()
+        markGroupCallHandled(callId)
+        incomingGroupCallInvite = nil
+        NotificationCenterService.shared.clearIncomingCall(callId: callId)
+        clearGroupCallKitCall(reason: reason == "ring_timeout" ? .unanswered : .remoteEnded)
     }
 }
 

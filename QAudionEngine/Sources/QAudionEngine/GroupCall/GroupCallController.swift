@@ -40,6 +40,7 @@ public final class GroupCallController: @unchecked Sendable {
     private var manager: BCryptoGroupCallManager
     private let backend: GroupMediaBackend?
     private let audio: GroupAudioUnitControlling
+    private let pathMonitor: GroupPathMonitoring
     private let nowMs: () -> Int64
     private let lock = NSLock()
     /// Every `GroupE2eeCoordinator` call runs here (the coordinator is not
@@ -49,6 +50,7 @@ public final class GroupCallController: @unchecked Sendable {
     // MARK: - Per-call state (guarded by `lock`)
 
     private var activeCallId: String?
+    private var createdLocally = false
     private var wantsVideo = false
     private var muted = false
     private var cameraOn = false
@@ -146,10 +148,12 @@ public final class GroupCallController: @unchecked Sendable {
     public init(manager: BCryptoGroupCallManager,
                 backend: GroupMediaBackend? = GroupCallController.defaultBackend(),
                 audio: GroupAudioUnitControlling? = nil,
+                pathMonitor: GroupPathMonitoring? = nil,
                 nowMs: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.manager = manager
         self.backend = backend
         self.audio = audio ?? GroupCallController.defaultAudioUnit()
+        self.pathMonitor = pathMonitor ?? GroupNetworkPathWatcher()
         self.nowMs = nowMs
         self.audio.onNeedsSessionActivation = { [weak self] in self?.onNeedsAudioSessionActivation?() }
         backend?.onMissingKey = { [weak self] pseudonym in
@@ -241,7 +245,7 @@ public final class GroupCallController: @unchecked Sendable {
         ) else {
             return nil
         }
-        beginCall(callId: callId, video: callType == "video")
+        beginCall(callId: callId, video: callType == "video", created: true)
         setState(.connecting(callId: callId))
         return callId
     }
@@ -249,7 +253,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// - Parameter video: whether the invite this joins was a video call; the
     ///   camera is published from the start once the media path is up.
     public func join(callId: String, video: Bool = false) {
-        beginCall(callId: callId, video: video)
+        beginCall(callId: callId, video: video, created: false)
         manager.joinGroupCall(callId: callId)
         setState(.connecting(callId: callId))
     }
@@ -266,6 +270,10 @@ public final class GroupCallController: @unchecked Sendable {
 
     /// Whether the call was created / joined as a video call.
     public var callWantsVideo: Bool { lock.lock(); defer { lock.unlock() }; return wantsVideo }
+    /// This call was created by us (not joined from an invite).
+    public var isCreatedLocally: Bool { lock.lock(); defer { lock.unlock() }; return createdLocally }
+    /// The id of the call this controller is in, if any.
+    public var currentCallId: String? { lock.lock(); defer { lock.unlock() }; return activeCallId }
     /// Both PeerConnections' media path is up right now.
     public var isMediaConnected: Bool { lock.lock(); defer { lock.unlock() }; return mediaConnected }
     /// A media link exists (connecting or connected): the UI gates the camera on it.
@@ -471,12 +479,13 @@ public final class GroupCallController: @unchecked Sendable {
 
     // MARK: - Call lifecycle
 
-    private func beginCall(callId: String, video: Bool) {
+    private func beginCall(callId: String, video: Bool, created: Bool) {
         lock.lock()
         let previousLink = link
         link = nil
         linkGeneration += 1
         activeCallId = callId
+        createdLocally = created
         wantsVideo = video
         muted = false
         cameraOn = false
@@ -501,6 +510,7 @@ public final class GroupCallController: @unchecked Sendable {
         audio.begin()
         if let source = replay { audio.sessionActivated(source: source) }
         startPolicyObservers()
+        pathMonitor.start { [weak self] reason in self?.networkPathChanged(reason: reason) }
     }
 
     private func teardown(reason: String) {
@@ -510,6 +520,7 @@ public final class GroupCallController: @unchecked Sendable {
             return
         }
         activeCallId = nil
+        createdLocally = false
         let oldLink = link
         link = nil
         linkGeneration += 1
@@ -539,6 +550,7 @@ public final class GroupCallController: @unchecked Sendable {
         timeout?.cancel()
         reset?.cancel()
         stopPolicyObservers()
+        pathMonitor.stop()
         oldLink?.close()
         e2eeQueue.async { oldCoordinator?.stop() }
         backend?.endCall()
