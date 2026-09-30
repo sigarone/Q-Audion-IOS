@@ -14,7 +14,15 @@ import WebRTC
 ///  * every receiver cryptor uses the PUBLISHER's pseudonym, and is driven by
 ///    the key index each frame carries;
 ///  * the key provider outlives a media restart (`media_moved` / rejoin keep
-///    the keys, spec §2.5): `detachAll()` drops only the cryptors.
+///    the keys, spec §2.5): `releaseAll()` drops only the cryptors.
+///
+/// **A live cryptor is never disabled (spec §12.1).** On the strict M150 build a
+/// `RTCFrameCryptor` with `enabled == false` PASSES EVERY FRAME THROUGH IN THE
+/// CLEAR, in both directions, cryptors are created disabled, and releasing one
+/// leaves its transformer attached to the sender / receiver. So this class has
+/// no "detach" that flips `enabled`: a cryptor leaves the books only by being
+/// REPLACED (the new binding is attached first) or RELEASED after the
+/// PeerConnection it belongs to has been closed.
 public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
 
     /// participantId of the cryptor bound to a receiver whose stream is not a
@@ -63,9 +71,10 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
 
     // MARK: Keys
 
-    /// `K[M,E]` of `participantId` into ring slot `index`.
+    /// `K[M,E]` of `participantId` into ring slot `index`. The sentinel id of the
+    /// unbound receivers never gets a key, whatever asks for one.
     public func installKey(_ key: Data, index: Int32, participantId: String) {
-        guard key.count == GroupE2ee.keyLength else { return }
+        guard key.count == GroupE2ee.keyLength, participantId != Self.unboundParticipantId else { return }
         keyProvider.setKey(key, with: index, forParticipant: participantId)
     }
 
@@ -81,10 +90,15 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
     // MARK: Attach
 
     /// Creates + enables the cryptor of one of OUR senders. Must run before the
-    /// offer exists. The native init marshals to the signalling thread, so it
-    /// runs with `lock` released (the same discipline as the 1:1 cryptors).
+    /// offer exists, on a sender that already carries its track: a cryptor
+    /// cannot be created without one, and a sender without a cryptor would
+    /// publish in the clear, so `false` (the caller aborts publishing, spec
+    /// §12.9) is the answer for every way this can fail. The native init
+    /// marshals to the signalling thread, so it runs with `lock` released (the
+    /// same discipline as the 1:1 cryptors).
     @discardableResult
     public func attachSender(_ sender: RTCRtpSender, participantId: String) -> Bool {
+        guard sender.track != nil else { return false }
         let id = sender.senderId
         lock.lock()
         if disposed || senders[id] != nil {
@@ -110,7 +124,6 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
         lock.lock()
         constructing.remove(id)
         guard let cryptor = built, !disposed else {
-            built?.enabled = false
             lock.unlock()
             return false
         }
@@ -124,7 +137,12 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
 
     /// Creates + enables the cryptor of one remote receiver for `participantId`
     /// (the publisher's pseudonym). A receiver that a later offer re-assigns to
-    /// ANOTHER publisher gets a fresh cryptor.
+    /// ANOTHER publisher (or to the unbound sentinel) gets a fresh cryptor that is
+    /// attached BEFORE the old one is forgotten: the receiver is never without an
+    /// enabled cryptor, and the old one is never disabled (spec §12.1). If the new
+    /// cryptor cannot be created the old binding stays in place (it can only
+    /// decrypt the OLD publisher's key, so the new stream's frames are dropped)
+    /// and `false` is returned.
     @discardableResult
     public func attachReceiver(_ receiver: RTCRtpReceiver, participantId: String) -> Bool {
         let id = receiver.receiverId
@@ -133,13 +151,9 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
             lock.unlock()
             return false
         }
-        if let existing = receivers[id] {
-            if existing.participantId == participantId {
-                lock.unlock()
-                return true
-            }
-            existing.cryptor.enabled = false
-            receivers[id] = nil
+        if let existing = receivers[id], existing.participantId == participantId {
+            lock.unlock()
+            return true
         }
         guard !constructing.contains(id), let factory = factory else {
             lock.unlock()
@@ -154,52 +168,52 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
         lock.lock()
         constructing.remove(id)
         guard let cryptor = built, !disposed else {
-            built?.enabled = false
             lock.unlock()
             return false
         }
         cryptor.keyIndex = 0
         cryptor.enabled = true
         cryptor.delegate = self
+        // The replaced cryptor is only released (outside the lock), never disabled.
+        let replaced = receivers[id]
         receivers[id] = (participantId: participantId, cryptor: cryptor)
         lock.unlock()
+        _ = replaced
         return true
     }
 
-    public func detachReceiver(receiverId: String) {
-        lock.lock()
-        let entry = receivers.removeValue(forKey: receiverId)
-        lock.unlock()
-        entry?.cryptor.enabled = false
-    }
+    // MARK: Release
 
-    /// Drops the cryptors of OUR senders (the publisher PeerConnection is
-    /// closing) but KEEPS the keys and the receiver cryptors. A disabled sender
-    /// cryptor discards every frame (`discardFrameWhenCryptorNotReady`), so this
-    /// must never run while the publisher PC is meant to keep sending.
-    public func detachSenders() {
+    /// Forgets the cryptors of OUR senders (the publisher PeerConnection has been
+    /// closed) but KEEPS the keys and the receiver cryptors. Nothing is disabled:
+    /// on this build a disabled sender cryptor would let frames through in the
+    /// clear, so a caller closes the PeerConnection FIRST and only then calls
+    /// this. Also clears the stale entries of a previous publisher PeerConnection
+    /// (sender ids repeat) before a new one attaches its own.
+    public func releaseSenders() {
         lock.lock()
         let all = Array(senders.values)
         senders.removeAll()
         lock.unlock()
-        for cryptor in all { cryptor.enabled = false }
+        _ = all
     }
 
-    /// Drops every receiver cryptor (the subscriber PeerConnection is closing)
-    /// but KEEPS the keys and the sender cryptors: a subscriber that is dropped
-    /// on its own (a refused join) must not silence our own published media.
-    public func detachReceivers() {
+    /// Forgets every receiver cryptor (the subscriber PeerConnection has been
+    /// closed) but KEEPS the keys and the sender cryptors: a subscriber that is
+    /// dropped on its own (a refused join) must not touch our own published media.
+    /// Nothing is disabled; close the PeerConnection first.
+    public func releaseReceivers() {
         lock.lock()
         let all = receivers.values.map { $0.cryptor }
         receivers.removeAll()
         lock.unlock()
-        for cryptor in all { cryptor.enabled = false }
+        _ = all
     }
 
-    /// Drops every cryptor (both PeerConnections are closing) but KEEPS the keys.
-    public func detachAll() {
-        detachSenders()
-        detachReceivers()
+    /// Forgets every cryptor (both PeerConnections are closed) but KEEPS the keys.
+    public func releaseAll() {
+        releaseSenders()
+        releaseReceivers()
     }
 
     /// Test seams: what is attached right now.
@@ -208,17 +222,29 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
         return senders.count
     }
 
+    var attachedSenderCryptors: [RTCFrameCryptor] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(senders.values)
+    }
+
     var attachedReceiverParticipants: [String] {
         lock.lock(); defer { lock.unlock() }
         return receivers.values.map { $0.participantId }.sorted()
     }
 
-    /// Final teardown.
+    var attachedReceiverCryptors: [RTCFrameCryptor] {
+        lock.lock(); defer { lock.unlock() }
+        return receivers.values.map { $0.cryptor }
+    }
+
+    /// Final teardown (the call's PeerConnections are closed, or are being
+    /// closed by the same teardown): later attaches are refused and every cryptor
+    /// is released, none is disabled.
     public func dispose() {
         lock.lock()
         disposed = true
         lock.unlock()
-        detachAll()
+        releaseAll()
     }
 }
 
