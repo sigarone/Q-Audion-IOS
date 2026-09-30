@@ -462,6 +462,29 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    func testALayerChangeIsReportedBeforeItsConfigureCanBeSent() async throws {
+        // No stats tick, so nothing but this test evaluates the policy.
+        var config = GroupMediaSession.Config()
+        config.statsIntervalSeconds = 3600
+        config.debounceMs = 10
+        config.transportCheckAttempts = 3
+        config.transportCheckIntervalMs = 10
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], config: config)
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        func layerReports() -> Int { h.telemetryKinds().filter { $0 == GroupTelemetry.Kind.layer }.count }
+        let before = layerReports()
+        h.session.setTile(pseudonym: bob, tile: .fullscreen, visible: true)
+        // Not waited for: the report is emitted by `setTile` itself (never from a background
+        // queue), so it is there by the time `setTile` returns, before any `configure` is sent.
+        XCTAssertEqual(layerReports(), before + 1)
+        h.server.push(["janus": "slowlink", "sender": h.server.handle(forRole: "subscriber") ?? 0, "uplink": false, "nacks": 20])
+        let stepped = await h.waitUntil { layerReports() == before + 2 }
+        XCTAssertTrue(stepped, "a slowlink on the subscriber is a second reported layer change")
+        h.session.close()
+    }
+
     func testALayerChangeThatLandsWhileAConfigureIsInFlightIsStillSent() async throws {
         let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
         h.server.subscriberStreams = bobStreams()

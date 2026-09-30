@@ -653,6 +653,7 @@ public final class GroupMediaSession: @unchecked Sendable {
         lock.lock()
         let actions = policy.evaluate(nowMs: nowMs())
         var changed = false
+        var reports: [GroupTelemetryEvent] = []
         for action in actions {
             switch action {
             case .subscribe, .unsubscribe:
@@ -660,11 +661,15 @@ public final class GroupMediaSession: @unchecked Sendable {
             case .configure(let key, let substream, let temporal, let from, let reason):
                 desiredLayers[key] = (substream: substream, temporal: temporal)
                 appliedLayers[key] = nil
-                emitLocked(.telemetry(GroupTelemetry.layer(mid: key.split(separator: "|").last.map(String.init) ?? key,
-                                                            from: from, to: substream, reason: reason)))
+                reports.append(GroupTelemetry.layer(mid: key.split(separator: "|").last.map(String.init) ?? key,
+                                                    from: from, to: substream, reason: reason))
             }
         }
         lock.unlock()
+        // Reported HERE, in order and before the `configure` it describes can be sent
+        // (it used to hop onto a background queue: a report that arrived after the
+        // request it belongs to, or seconds late on a loaded machine).
+        for report in reports { emit(.telemetry(report)) }
         if changed { scheduleReconcile() } else if !actions.isEmpty { scheduleLayerApply() }
     }
 
@@ -1128,12 +1133,5 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     private func emit(_ event: Event) {
         onEvent?(event)
-    }
-
-    /// `emit` for call sites that hold `lock`: the handler runs later, off the
-    /// lock, so it can never re-enter this object while it is held.
-    private func emitLocked(_ event: Event) {
-        let handler = onEvent
-        DispatchQueue.global(qos: .utility).async { handler?(event) }
     }
 }
