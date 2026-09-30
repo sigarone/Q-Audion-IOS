@@ -45,6 +45,8 @@ public final class GroupCallController: @unchecked Sendable {
     /// How long a refresh request waits for its answer before it is asked again.
     private let iceRefreshRetrySeconds: Double
     private static let iceRefreshMaxAttempts = 3
+    /// A late answer (after the retries) of a refresh is still a refresh, not a new path.
+    private static let iceRefreshAnswerWindowMs: Int64 = 300_000
     private let lock = NSLock()
     /// Every `GroupE2eeCoordinator` call runs here (the coordinator is not
     /// thread-safe, and its send completions come back on this queue).
@@ -82,6 +84,9 @@ public final class GroupCallController: @unchecked Sendable {
     private var iceRefreshPending = false
     private var iceRefreshAttempts = 0
     private var iceRefreshRetry: DispatchWorkItem?
+    /// When the last refresh request went out (0 = none this call): an answer with the
+    /// same media identity within `iceRefreshAnswerWindowMs` of it is applied in place.
+    private var iceRefreshRequestedAtMs: Int64 = 0
     private var videoStoppedByPolicy = false
     private var backgrounded = false
     private var desiredTiles: [String: (tile: GroupLayerPolicy.TileClass, visible: Bool)] = [:]
@@ -528,6 +533,7 @@ public final class GroupCallController: @unchecked Sendable {
         videoStoppedByPolicy = false
         iceRefreshPending = false
         iceRefreshAttempts = 0
+        iceRefreshRequestedAtMs = 0
         let staleRefreshRetry = iceRefreshRetry
         iceRefreshRetry = nil
         desiredTiles.removeAll()
@@ -582,6 +588,7 @@ public final class GroupCallController: @unchecked Sendable {
         congestionReset = nil
         iceRefreshPending = false
         iceRefreshAttempts = 0
+        iceRefreshRequestedAtMs = 0
         let refreshRetry = iceRefreshRetry
         iceRefreshRetry = nil
         _reactionEvents.removeAll()
@@ -783,11 +790,12 @@ public final class GroupCallController: @unchecked Sendable {
             lock.unlock()
             return
         }
-        // The same room, node, pseudonym and certificate while a link exists: this is
-        // the answer of a refresh (the hourly TURN credentials) or a duplicate
-        // hand-out, NOT a new path. It is applied in place; the running media is
-        // never torn down for it.
-        if let live = link, let known = currentReady, Self.sameMedia(known, ready) {
+        // The same room, node, pseudonym and certificate while a link exists, shortly
+        // after we asked for a refresh: this is the answer of the hourly TURN refresh,
+        // NOT a new path. It is applied in place; the running media is never torn
+        // down for it. (Any other hand-out replaces the link, as it always did.)
+        let refreshAnswer = iceRefreshRequestedAtMs > 0 && nowMs() - iceRefreshRequestedAtMs < Self.iceRefreshAnswerWindowMs
+        if refreshAnswer, let live = link, let known = currentReady, Self.sameMedia(known, ready) {
             currentReady = ready
             iceRefreshPending = false
             iceRefreshAttempts = 0
@@ -805,6 +813,7 @@ public final class GroupCallController: @unchecked Sendable {
         }
         iceRefreshPending = false
         iceRefreshAttempts = 0
+        iceRefreshRequestedAtMs = 0
         currentReady = ready
         let timeout = mediaReadyTimeout
         mediaReadyTimeout = nil
@@ -884,6 +893,7 @@ public final class GroupCallController: @unchecked Sendable {
         }
         iceRefreshPending = true
         iceRefreshAttempts += 1
+        iceRefreshRequestedAtMs = nowMs()
         let generation = linkGeneration
         let previous = iceRefreshRetry
         let item = DispatchWorkItem { [weak self] in self?.iceRefreshTimedOut(callId: callId, generation: generation) }

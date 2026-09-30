@@ -52,7 +52,8 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   {reason:"not_member"}`, which ends the media.
 - The per-call TURN credentials live about 2 h: every hour a running call sends a plain
   `group_call_media_join` and applies the answer IN PLACE (a `group_call_media_ready` with the same
-  room, node, pseudonym and certificate while the link exists is never a new path): the new
+  room, node, pseudonym and certificate, within 5 minutes of that request, is the answer of the
+  refresh and never a new path; any other hand-out replaces the link): the new
   `ice_servers` go to both PeerConnections through `setConfiguration`, the fresh `session_token`
   replaces the old one, the media is not touched. An unanswered refresh is asked again after 60 s
   (three attempts a round); a `throttled` answer to it does not cost the live link.
