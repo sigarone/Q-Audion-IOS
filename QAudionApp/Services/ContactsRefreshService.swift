@@ -64,7 +64,7 @@ final class ContactsRefreshService {
         // is destroyed. discover-v2 knows two things about a contact — that the
         // userId exists and which phoneHash resolved to it — while the row also
         // holds a pile of facts this device learned locally and the directory
-        // has no opinion about. Each of those has to be preserved explicitly.
+        // has no opinion about. Each of those has to be preserved (see the copy below).
         //
         // It was already found the hard way once: the avatar pair was added
         // here (2026-07-30, E2EE avatar transport) after a routine refresh kept
@@ -97,29 +97,22 @@ final class ContactsRefreshService {
             uniqueKeysWithValues: store.load().map { ($0.userId, $0) }
         )
         let resolved: [ContactsStore.StoredContact] = entries.map { entry in
-            let existing = existingByUserId[entry.userId]
+            let placeholderName = "Contact \(entry.userId.suffix(6))"  // replaced by phonebook name in caller
+            // Existing row: the directory only gets to set the name placeholder and
+            // the hash it resolved through; `withDisplayName` carries every other
+            // field forward by construction (a hand-listed copy here had dropped
+            // `callVerifiedPeerIdentityKey`, and would drop the next field added).
+            // A nil hash from the directory keeps the stored one.
+            if let existing = existingByUserId[entry.userId] {
+                return existing.withDisplayName(placeholderName, phoneHash: entry.phoneHash)
+            }
             return ContactsStore.StoredContact(
                 userId: entry.userId,
-                displayName: "Contact \(entry.userId.suffix(6))",  // replaced by phonebook name in caller
+                displayName: placeholderName,
                 phoneHash: entry.phoneHash ?? "",
-                avatarUrl: existing?.avatarUrl,
-                lastSeen: existing?.lastSeen,
-                isVerified: existing?.isVerified ?? false,
-                pubkey: existing?.pubkey,
-                verifiedFingerprintHex: existing?.verifiedFingerprintHex,
-                verifiedAtMs: existing?.verifiedAtMs,
-                verificationMethod: existing?.verificationMethod,
-                presenceAuth: existing?.presenceAuth,
-                presenceFloor: existing?.presenceFloor,
-                phoneNumber: existing?.phoneNumber,
-                extension: existing?.`extension`,
-                avatarVersion: existing?.avatarVersion,
-                voiceVerifiedAt: existing?.voiceVerifiedAt,
-                // W-PAIRFB — same reasoning as verifiedAtMs/verificationMethod
-                // above: an in-person pairing's date/outcome is a historical
-                // record, not directory-refreshable state.
-                proximityPairedAtMs: existing?.proximityPairedAtMs,
-                proximityServerConfirmed: existing?.proximityServerConfirmed
+                avatarUrl: nil,
+                lastSeen: nil,
+                isVerified: false
             )
         }
         for c in resolved { store.upsert(c) }

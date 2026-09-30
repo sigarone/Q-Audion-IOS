@@ -413,13 +413,13 @@ final class ContactsStoreTests: XCTestCase {
         }
     }
 
-    // MARK: - PeerTrustEvaluator emergent-clear-on-identity-change contract
-    // (design brief: "rely on it, don't duplicate the logic" — see
-    // PeerTrustEvaluator.acceptNewFingerprint's own doc comment). This pins
-    // the MECHANISM (ContactsStore/StoredContact honour omitted-field-means-
-    // nil), independent of QAudionApp (which has no wired XCTest target —
-    // see QAudionAppTests/PeerTrustEvaluatorTests.swift for the real
-    // call-path pin and why it can't run in this repo today).
+    // MARK: - StoredContact.init omitted-field-means-nil default
+    // Historical pin: `PeerTrustEvaluator.acceptNewFingerprint` used to clear
+    // presenceAuth/presenceFloor by OMITTING them from a hand-written
+    // reconstruction. It now calls `afterIdentityKeyRotation()` (pinned by
+    // `test_afterIdentityKeyRotation_*` below); this only keeps the
+    // underlying `StoredContact.init` default (omitted field => nil, through
+    // the real store) covered.
 
     func test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil() {
         let auth = ContactsStore.PresenceAuth(
@@ -428,8 +428,8 @@ final class ContactsStoreTests: XCTestCase {
             witnessTier: "secure_element"
         )
         seedContact(presenceAuth: auth, presenceFloor: true)
-        // Mirrors PeerTrustEvaluator.acceptNewFingerprint's own reconstruction
-        // EXACTLY: every field threaded through from `existing` EXCEPT
+        // A hand-written reconstruction, as acceptNewFingerprint used to do it:
+        // every field threaded through from `existing` EXCEPT
         // presenceAuth/presenceFloor, which are simply omitted.
         // seedContact(...) above just upserted a contact with userId "u-1"; it is guaranteed present.
         // swiftlint:disable:next force_unwrapping

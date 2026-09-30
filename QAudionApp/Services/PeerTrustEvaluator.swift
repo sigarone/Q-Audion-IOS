@@ -116,48 +116,19 @@ public enum PeerTrustEvaluator {
     public static func markVerified(peerUserId: String, method: TrustVerificationMethod, fingerprintHex: String) {
         let store = ContactsStore()
         guard let existing = store.load().first(where: { $0.userId == peerUserId }) else { return }
-        store.upsert(ContactsStore.StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: true,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: fingerprintHex,
-            verifiedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-            verificationMethod: method.rawValue,
-            // W-ASSURANCE/W-FLOOR — a manual SAS/QR/anti-replay verify is NOT
-            // an identity change (the OPPOSITE: it's confirming the SAME
-            // identity this call already trusts) and must never wipe a
-            // physically-established NFC presence record — that is a
-            // SEPARATE, ranked-but-never-merged trust axis (design brief:
-            // "two things that must never share a widget"). Unlike
-            // `acceptNewFingerprint` below (which deliberately OMITS these two
-            // fields so they clear via the same default-nil mechanism the
-            // verify-tier fields above already rely on), this call site must
-            // explicitly THREAD them through unchanged. See
-            // `PeerTrustEvaluatorTests.test_markVerified_preservesPresenceAuthAndFloor`
-            // (QAudionAppTests).
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            // W-AUTOSAVE — a manual verify is not a phone-number/extension
-            // change either; thread these through unchanged same as
-            // phoneHash/avatarUrl above.
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            // E2EE avatar transport (2026-07-30) — same reasoning as
-            // avatarUrl above: a manual verify confirms the SAME peer,
-            // never touches their cached avatar. Thread through
-            // unchanged so the version-dedup in AvatarAnnounceReceiver
-            // doesn't spuriously re-download an already-cached avatar.
-            avatarVersion: existing.avatarVersion,
-            // W-PAIRFB — a manual safety-number verify (SAS/QR/anti-replay)
-            // confirms the SAME identity an earlier in-person pairing
-            // already vouched for; it must not erase that separate
-            // historical record, same reasoning as presenceAuth above.
-            proximityPairedAtMs: existing.proximityPairedAtMs,
-            proximityServerConfirmed: existing.proximityServerConfirmed
+        // A manual verify confirms the SAME identity this call already trusts,
+        // so it changes the verify pin and nothing else. In particular it must
+        // never wipe the separate trust axes (NFC presence record + floor,
+        // voice / call-verified state, in-person pairing history) — the
+        // contrast with `acceptNewFingerprint` below, which resets exactly the
+        // key-bound ones. `withVerification` guarantees "nothing else" by
+        // construction; see `PeerTrustEvaluatorTests.test_markVerified_*`
+        // (QAudionAppTests) and `ContactsStoreTests.test_withVerification_*`
+        // (QAudionEngineTests).
+        store.upsert(existing.withVerification(
+            fingerprintHex: fingerprintHex,
+            atMs: Int64(Date().timeIntervalSince1970 * 1000),
+            method: method.rawValue
         ))
     }
 
@@ -177,17 +148,18 @@ public enum PeerTrustEvaluator {
     ///
     /// W-ASSURANCE/W-FLOOR (design brief: "cleared unconditionally on any
     /// peer identity change... rely on it, don't duplicate the logic"): the
-    /// `StoredContact(...)` reconstruction below deliberately does NOT pass
-    /// `presenceAuth`/`presenceFloor` — both default to `nil` in
-    /// `StoredContact.init`, so they clear as an EMERGENT side effect of this
-    /// same identity-rotation reconstruction, exactly like
-    /// `verifiedFingerprintHex`/`verifiedAtMs`/`verificationMethod` already do
-    /// on the lines below. Do NOT add explicit `presenceAuth: nil` here — the
-    /// point of this note is that nothing new needs to change; see
-    /// `ContactsStoreTests.test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil`
-    /// (QAudionEngineTests — mechanism pin) and
-    /// `PeerTrustEvaluatorTests.test_acceptNewFingerprint_clearsPresenceAuthAndFloor`
-    /// (QAudionAppTests — real call-path pin).
+    /// whole reset lives in ONE place,
+    /// `StoredContact.afterIdentityKeyRotation()`. It clears exactly the
+    /// key-bound trust facts (verify pin, `presenceAuth`/`presenceFloor`,
+    /// in-person pairing, last call-verified key) and keeps everything else,
+    /// `voiceVerifiedAt` included (a voice match is about the person, not the
+    /// key; Android does not null it on rotation either). This used to be a
+    /// hand-written `StoredContact(...)` that cleared fields by OMITTING them,
+    /// so every field added later was cleared by accident (`voiceVerifiedAt`
+    /// was). See `ContactsStoreTests.test_afterIdentityKeyRotation_*`
+    /// (QAudionEngineTests — the policy pin) and
+    /// `PeerTrustEvaluatorTests.test_acceptNewFingerprint_*` (QAudionAppTests
+    /// — real call-path pin).
     public static func acceptNewFingerprint(peerUserId: String, newPeerIkEdPub: Data) {
         let pinStore = PeerIdentityPinStore()
         pinStore.wipeLegacyOnly(contactId: peerUserId)
@@ -195,37 +167,6 @@ public enum PeerTrustEvaluator {
 
         let store = ContactsStore()
         guard let existing = store.load().first(where: { $0.userId == peerUserId }) else { return }
-        store.upsert(ContactsStore.StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: false,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: nil,
-            verifiedAtMs: nil,
-            verificationMethod: nil,
-            // W-AUTOSAVE — an identity-key rotation is the SAME person with
-            // a new key, not a new phone number/extension; thread these
-            // through unchanged same as phoneHash/avatarUrl above (they are
-            // not identity-key-bound the way presenceAuth/presenceFloor are,
-            // which is why ONLY those two are deliberately omitted here).
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            // E2EE avatar transport (2026-07-30) — same treatment as
-            // avatarUrl above: an identity-key rotation is the same
-            // person with a new key, not a reason to drop their cached
-            // avatar (nor its version, which travels WITH avatarUrl).
-            avatarVersion: existing.avatarVersion,
-            // W-PAIRFB — explicit nil (matches the default, spelled out for
-            // clarity): an in-person pairing verified the OLD key: it must
-            // be cleared on the SAME identity-rotation edge that already
-            // clears verifiedFingerprintHex/verifiedAtMs/verificationMethod
-            // above, for the same reason — a stale "verified in person"
-            // badge for a key that no longer applies would be misleading.
-            proximityPairedAtMs: nil,
-            proximityServerConfirmed: nil
-        ))
+        store.upsert(existing.afterIdentityKeyRotation())
     }
 }

@@ -109,6 +109,10 @@ struct PhoneContactImportView: View {
                     phoneNumber: stored.phoneNumber,
                     extension: existing?.`extension`,
                     avatarVersion: existing?.avatarVersion,
+                    // Call/voice-learned state is never part of a manual
+                    // import row, so it threads through like the trust fields.
+                    voiceVerifiedAt: existing?.voiceVerifiedAt,
+                    callVerifiedPeerIdentityKey: existing?.callVerifiedPeerIdentityKey,
                     proximityPairedAtMs: existing?.proximityPairedAtMs,
                     proximityServerConfirmed: existing?.proximityServerConfirmed
                 )

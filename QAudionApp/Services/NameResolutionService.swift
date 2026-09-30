@@ -487,41 +487,15 @@ final class NameResolutionService: @unchecked Sendable {
             let why = refreshOk ? "chat-activity-refresh"
                 : DisplayName.isPlaceholderName(s.displayName) ? "placeholder" : "bare-extension"
             RTLog.warn("NameResolve", "apply() upsert id=\(id.prefix(8)) before=\"\(s.displayName)\" after=\"\(resolved)\" reason=\(why)")
-            contactsStore.upsert(ContactsStore.StoredContact(
-                userId: id,
-                displayName: resolved,
-                phoneHash: s.phoneHash,
-                avatarUrl: s.avatarUrl,
-                lastSeen: s.lastSeen,
-                isVerified: s.isVerified,
-                pubkey: s.pubkey,
-                verifiedFingerprintHex: s.verifiedFingerprintHex,
-                verifiedAtMs: s.verifiedAtMs,
-                verificationMethod: s.verificationMethod,
-                // W-ASSURANCE/W-FLOOR — this branch only updates displayName
-                // for an EXISTING row; thread these through unchanged same as
-                // every other field above (a routine name-resolution pass
-                // must never silently wipe a contact's NFC presence record).
-                presenceAuth: s.presenceAuth,
-                presenceFloor: s.presenceFloor,
-                // W-AUTOSAVE — same reasoning: `enrichFromCallProfile` (called
-                // just before `apply`, above) may have just written these;
-                // omitting them here would immediately wipe them again on
-                // the very next line of the SAME resolution pass.
-                phoneNumber: s.phoneNumber,
-                extension: s.`extension`,
-                // E2EE avatar transport (2026-07-30) — same reasoning as
-                // presenceAuth/phoneNumber above: this branch only
-                // updates displayName, and `apply()` runs on nearly
-                // every resolved call/message, so omitting this would
-                // wipe a peer's cached-avatar version on the very next
-                // routine name resolution.
-                avatarVersion: s.avatarVersion,
-                // W-PAIRFB — same reasoning: a name resolution pass must
-                // never silently wipe the in-person pairing history.
-                proximityPairedAtMs: s.proximityPairedAtMs,
-                proximityServerConfirmed: s.proximityServerConfirmed
-            ))
+            // This branch only renames an EXISTING row, and `apply()` runs on
+            // nearly every resolved call/message: every other field (verify
+            // pin, NFC presence record, voice/call-verified state, phone
+            // number/extension that `enrichFromCallProfile` may have just
+            // written, cached-avatar version, in-person pairing history)
+            // must survive it. `withDisplayName` guarantees that by
+            // construction; a hand-listed reconstruction here had dropped
+            // `voiceVerifiedAt` and `callVerifiedPeerIdentityKey`.
+            contactsStore.upsert(s.withDisplayName(resolved))
         } else {
             contactsStore.upsert(ContactsStore.StoredContact(
                 userId: id,

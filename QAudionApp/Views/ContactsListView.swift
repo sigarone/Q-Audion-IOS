@@ -215,6 +215,10 @@ final class ContactsListContainer: ObservableObject {
             phoneNumber: existing?.phoneNumber,
             extension: existing?.`extension`,
             avatarVersion: existing?.avatarVersion,
+            // A re-scan confirms a key, it does not reset what this device
+            // learned about the contact from calls or voice learning.
+            voiceVerifiedAt: existing?.voiceVerifiedAt,
+            callVerifiedPeerIdentityKey: existing?.callVerifiedPeerIdentityKey,
             // W-PAIRFB — only the in-person (QR + Bluetooth) pairing flow
             // passes a non-nil `proximityPairedAtMs`; an ordinary static-
             // identity-QR re-scan must not wipe a prior in-person record.
