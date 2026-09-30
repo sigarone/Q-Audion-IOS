@@ -61,6 +61,10 @@ public final class GroupCallController: @unchecked Sendable {
     /// are ignored.
     private var linkGeneration = 0
     private var coordinator: GroupE2eeCoordinator?
+    /// `media_key` envelopes that arrived before this call began (a push-woken accept
+    /// joins asynchronously while the peers already sent their keys): replayed into the
+    /// coordinator of the call they belong to, dropped after 15 s.
+    private var earlyKeys: [(envelope: GroupKeyEnvelope, user: String, atMs: Int64)] = []
     private var recovery = GroupMediaRecoveryPolicy()
     private var speaking = GroupSpeakingDetector()
     private var mediaJoinRequested = false
@@ -462,15 +466,27 @@ public final class GroupCallController: @unchecked Sendable {
         case .malformed(let reason):
             print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) failed: \(reason)")
         case .envelope(let envelope):
-            e2eeQueue.async { [weak self] in
-                guard let coordinator = self?.coordinatorSnapshot() else {
-                    print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) dropped: no active call")
-                    return
-                }
-                coordinator.onEnvelope(envelope, from: fromUserId)
+            lock.lock()
+            let live = coordinator
+            if live == nil, case .mediaKey = envelope {
+                let now = nowMs()
+                earlyKeys.removeAll { now - $0.atMs > Self.earlyKeyTtlMs }
+                if earlyKeys.count >= Self.earlyKeyLimit { earlyKeys.removeFirst() }
+                earlyKeys.append((envelope: envelope, user: fromUserId, atMs: now))
+                lock.unlock()
+                return
             }
+            lock.unlock()
+            guard let coordinator = live else {
+                print("[GroupCallController][telemetry] ctrl envelope from \(fromUserId.prefix(8)) dropped: no active call")
+                return
+            }
+            e2eeQueue.async { coordinator.onEnvelope(envelope, from: fromUserId) }
         }
     }
+
+    private static let earlyKeyTtlMs: Int64 = 15_000
+    private static let earlyKeyLimit = 16
 
     fileprivate func coordinatorSnapshot() -> GroupE2eeCoordinator? {
         lock.lock(); defer { lock.unlock() }
@@ -504,8 +520,14 @@ public final class GroupCallController: @unchecked Sendable {
         let newCoordinator = GroupE2eeCoordinator(
             callId: callId, selfUserId: manager.selfUserId, environment: GroupCallE2eeEnvironment(controller: self, queue: e2eeQueue))
         coordinator = newCoordinator
+        let now = nowMs()
+        let early = earlyKeys.filter { $0.envelope.callId == callId && now - $0.atMs <= Self.earlyKeyTtlMs }
+        earlyKeys.removeAll()
         let replay = lastAudioActivation
         lock.unlock()
+        if !early.isEmpty {
+            e2eeQueue.async { for item in early { newCoordinator.onEnvelope(item.envelope, from: item.user) } }
+        }
         previousLink?.close()
         e2eeQueue.async { previousCoordinator?.stop() }
         backend?.beginCall()

@@ -333,6 +333,20 @@ final class GroupCallControllerTests: XCTestCase {
         h.controller.leave()
     }
 
+    func testAKeyThatArrivesBeforeTheJoinIsKeptAndInstalledOnceTheRosterIsKnown() async {
+        let h = ControllerHarness()
+        // The push-woken accept joins later than the peers' keys arrive.
+        h.controller.onGroupCallControlEnvelope(json: keyEnvelope(epoch: 1, from: 0x51), fromUserId: ControllerHarness.peerB)
+        // A key of ANOTHER call is never replayed into this one.
+        h.controller.onGroupCallControlEnvelope(json: keyEnvelope(epoch: 1, from: 0x52, callId: "other-call"), fromUserId: ControllerHarness.peerB)
+        _ = await h.joinAndConnect(mediaInUpdate: true)
+        let installed = await h.waitUntil { h.backend.keys.contains { $0.participant == ControllerHarness.pseudoB } }
+        XCTAssertTrue(installed)
+        let keys = h.backend.keys.filter { $0.participant == ControllerHarness.pseudoB }
+        XCTAssertEqual(keys.map { $0.key }, [GroupCallFixtures.keyBytes(0x51)])
+        h.controller.leave()
+    }
+
     func testV1EnvelopeAndAKeyFromAStrangerAreDropped() async {
         let h = ControllerHarness()
         _ = await h.joinAndConnect()

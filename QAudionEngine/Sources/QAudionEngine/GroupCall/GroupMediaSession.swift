@@ -473,6 +473,15 @@ public final class GroupMediaSession: @unchecked Sendable {
             link.onState = { [weak self] pcState in self?.pcStateChanged(.sub, pcState) }
             link.onCandidate = { [weak self] candidate in self?.forwardCandidate(handle: newHandle, candidate) }
             lock.lock()
+            // The session may have been closed while `attach` was in flight: a
+            // PeerConnection created now would never be closed by anyone.
+            if closed {
+                lock.unlock()
+                link.onState = nil
+                link.onCandidate = nil
+                link.close()
+                throw JanusClientError.closed
+            }
             subHandle = newHandle
             subscriber = link
             lock.unlock()

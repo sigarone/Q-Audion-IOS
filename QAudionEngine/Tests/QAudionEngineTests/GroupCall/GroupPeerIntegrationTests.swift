@@ -63,9 +63,7 @@ final class GroupPeerIntegrationTests: XCTestCase {
         // Janus' subscriber offer carries no simulcast rids (it switches layers server-side).
         let janusOffer = GroupSdpRules.lines(of: publisherOffer)
             .filter { !$0.hasPrefix("a=rid:") && !$0.hasPrefix("a=simulcast:") && !$0.contains("rtp-stream-id") }
-            .joined(separator: "
-") + "
-"
+            .joined(separator: "\r\n") + "\r\n"
 
         let hub = fixtureHub(factory)
         let subscriber = GroupSubscriberPeer(factory: factory, iceServers: [], cryptors: hub)
