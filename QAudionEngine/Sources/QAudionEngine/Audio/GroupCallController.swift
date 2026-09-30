@@ -1365,10 +1365,27 @@ public final class GroupCallController: @unchecked Sendable {
     /// that method's kdoc for the SDK-source verification.
     @discardableResult
     public func setVideoEnabled(_ enabled: Bool) async -> Bool {
-        let room = lock.withLock { sfuRoom }
-        guard let room = room else { return false }
+        let (room, cid) = lock.withLock { (sfuRoom, activeCallId) }
+        guard let room = room else {
+            // W-GRPVIDEOTELEM (2026-09-30): no SFU room bound at all — the
+            // call fell back to (or never left) the WS-relay mesh, which
+            // has no video pipeline. `GroupCallView.toggleVideo()`'s own
+            // `Task` silently discards this `false`, so without this line
+            // a tap made in this state leaves no trace anywhere: exactly
+            // the silence tonight's group-call incident (call cd87caee)
+            // showed — no "failed" print, no "local video track published",
+            // nothing.
+            print("[GroupCallController][telemetry] call.media.video_toggle stage=no_room code=0 target=\(enabled ? 1 : 0)")
+            groupTelemetry?("call.media.video_toggle", cid, ["stage": "no_room", "target": enabled ? 1 : 0])
+            return false
+        }
         do {
             try await room.setCameraEnabled(enabled)
+            // "published"/"perm_denied" are logged inside
+            // `LiveKitGroupCallRoom.setCameraEnabled` itself — closer to
+            // the actual permission check and SDK call, and the only place
+            // that can tell a permission denial apart from any other
+            // publish failure. Nothing to add on this success path.
             return true
         } catch {
             // W-GRPVIDEOPUBFIX (2026-09-29): used to only print — the user
@@ -1382,6 +1399,18 @@ public final class GroupCallController: @unchecked Sendable {
             // error's free-text description) so both failure points surface
             // one identical, privacy-safe user-facing message.
             print("[GroupCallController] setVideoEnabled(\(enabled)) failed: \(error)")
+            // W-GRPVIDEOTELEM (2026-09-30): a `CameraPermissionError` was
+            // already logged as stage=perm_denied inside
+            // `LiveKitGroupCallRoom.setCameraEnabled`, right at the actual
+            // check — don't re-log it here under the generic "failed"
+            // stage, which is reserved for a real SDK/publish failure.
+            // `onSfuError` below still fires unconditionally either way —
+            // this only affects which telemetry stage gets recorded.
+            if !(error is LiveKitGroupCallRoom.CameraPermissionError) {
+                let code = (error as NSError).code
+                print("[GroupCallController][telemetry] call.media.video_toggle stage=failed code=\(code) target=\(enabled ? 1 : 0)")
+                groupTelemetry?("call.media.video_toggle", cid, ["stage": "failed", "code": code, "target": enabled ? 1 : 0])
+            }
             onSfuError?(LiveKitGroupCallRoom.VideoPublishError.failed(code: (error as NSError).code))
             return false
         }

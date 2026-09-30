@@ -1297,7 +1297,20 @@ class GroupCallViewModel: ObservableObject {
     /// mirrors every other mutation of `participants` in this class.
     private func mergeSfuOnlyParticipants() {
         let known = Set(participants.map(\.id))
-        for identity in sfuPresentIdentities where !known.contains(identity) && identity != selfUserId {
+        // W-GRPSFUGHOST follow-up (2026-09-30): the synthesis decision
+        // itself now lives in `GroupCallRosterReconciliation` (unit-tested
+        // there) — this method's own job is just to apply it and append
+        // the tile. `quarantinedIdentities` is what stops a roster-then-
+        // LiveKit departure (server already dropped them) from being
+        // resurrected off a `sfuPresentIdentities` entry LiveKit hasn't
+        // caught up on yet.
+        let toSynthesize = GroupCallRosterReconciliation.identitiesToSynthesize(
+            sfuPresentIdentities: sfuPresentIdentities,
+            knownParticipantIds: known,
+            quarantined: quarantinedIdentities,
+            selfUserId: selfUserId
+        )
+        for identity in toSynthesize {
             print("[GroupCallViewModel][telemetry] SFU-only participant identity=\(identity.prefix(8)) has no WS-roster tile — synthesizing one from LiveKit presence")
             participants.append(ParticipantUI(
                 id: identity,
@@ -1364,6 +1377,22 @@ class GroupCallViewModel: ObservableObject {
     /// simply supersedes the synthesized entry (same id, so `list.map`'s
     /// own entry wins the position; the merge only appends what's missing).
     private var sfuPresentIdentities: Set<String> = []
+    /// W-GRPSFUGHOST follow-up (2026-09-30): the identity set from the LAST
+    /// WS-roster (`group_call_update`) broadcast, kept independent of
+    /// `participants` itself (which also carries synthesized ghost tiles)
+    /// so `GroupCallRosterReconciliation.shouldRemoveTileOnDisconnect` can
+    /// tell "the roster still claims this identity" apart from "this tile
+    /// only ever existed because LiveKit told us about it". Reset on
+    /// `.ended` alongside `sfuPresentIdentities` — see that reset's kdoc.
+    private var wsRosterIds: Set<String> = []
+    /// W-GRPSFUGHOST follow-up (2026-09-30): identities the WS roster has
+    /// explicitly stopped listing while LiveKit's `sfuPresentIdentities`
+    /// still claims them present (the roster-then-LiveKit ordering — see
+    /// `GroupCallRosterReconciliation`'s kdoc). `mergeSfuOnlyParticipants`
+    /// must not resurrect a tile for anyone in this set off the stale
+    /// `sfuPresentIdentities` entry; only a FRESH LiveKit connect for that
+    /// identity (`onSfuParticipant(_, true)`) clears it again.
+    private var quarantinedIdentities: Set<String> = []
 
     init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
@@ -1406,6 +1435,14 @@ class GroupCallViewModel: ObservableObject {
                 // `activeGroupId` above), so this state must be reset
                 // explicitly rather than relying on per-departure cleanup.
                 self?.sfuPresentIdentities.removeAll()
+                // W-GRPSFUGHOST follow-up (2026-09-30): same long-lived-
+                // ViewModel rationale as `sfuPresentIdentities` above — a
+                // stale `wsRosterIds`/`quarantinedIdentities` from THIS
+                // call must not leak into the next one (a departure
+                // quarantined here could otherwise permanently block a
+                // same-identity ghost tile in a brand-new call).
+                self?.wsRosterIds.removeAll()
+                self?.quarantinedIdentities.removeAll()
             }
         }
         let onParticipants: ([BCryptoGroupCallManager.Participant]) -> Void = { [weak self] list in
@@ -1451,6 +1488,24 @@ class GroupCallViewModel: ObservableObject {
                                   handRaised: self.raisedHandsCache.contains(entry.id),
                                   isRawKeyCapable: entry.isRawKeyCapable)
                 }
+                // W-GRPSFUGHOST follow-up (2026-09-30): update the
+                // roster-then-LiveKit quarantine BEFORE re-merging below —
+                // any identity this fresh roster just stopped listing,
+                // while LiveKit still claims them present, must not be
+                // resurrected by `mergeSfuOnlyParticipants` off the stale
+                // `sfuPresentIdentities` entry (see
+                // `GroupCallRosterReconciliation`'s kdoc). `wsRosterIds`
+                // itself is what `onSfuParticipant`'s disconnect handler
+                // uses to decide whether a departure is a real tile removal
+                // or just a stale-track clear.
+                let newRosterIds = Set(list.map(\.id))
+                self.quarantinedIdentities = GroupCallRosterReconciliation.quarantineAfterRosterUpdate(
+                    currentQuarantine: self.quarantinedIdentities,
+                    sfuPresentIdentities: self.sfuPresentIdentities,
+                    newRosterIds: newRosterIds,
+                    selfUserId: self.selfUserId
+                )
+                self.wsRosterIds = newRosterIds
                 // W-GRPSFUGHOST: a stale/incomplete WS roster (see
                 // `sfuPresentIdentities`' kdoc) must not erase a tile for
                 // someone LiveKit itself confirms is still in the room —
@@ -1522,21 +1577,37 @@ class GroupCallViewModel: ObservableObject {
                         // A participant can leave before the roster/SFU race
                         // above ever resolved for them — drop any pending track
                         // too, so it can't get misattached to a later identity.
-                        // KNOWN RESIDUAL: this only clears tracks, it does NOT
-                        // remove a tile that exists ONLY because
-                        // `mergeSfuOnlyParticipants` synthesized it (no
-                        // per-tile "was this WS-confirmed" provenance is
-                        // tracked) — relies on the WS roster's own eventual
-                        // `group_call_update` to fully drop the tile, same as
-                        // it always has for a roster-known departure. Still
-                        // strictly better than the pre-fix behavior (that
-                        // participant never getting a tile at all).
                         self.sfuPresentIdentities.remove(identity)
+                        // W-GRPSFUGHOST follow-up (2026-09-30): this identity
+                        // is no longer "quarantined" once LiveKit itself
+                        // confirms the departure — keeps the set bounded and
+                        // matches `quarantineAfterRosterUpdate`'s own kdoc
+                        // ("cleared by a fresh LiveKit connect", the mirror
+                        // event of this one).
+                        self.quarantinedIdentities.remove(identity)
                         self.pendingVideoTracks.removeValue(forKey: identity)
                         self.pendingScreenShareTracks.removeValue(forKey: identity)
-                        guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
-                        self.participants[idx].videoTrack = nil
-                        self.participants[idx].screenShareTrack = nil
+                        // FIX (W-GRPSFUGHOST "KNOWN RESIDUAL", 2026-09-30):
+                        // used to only clear tracks, never the tile itself —
+                        // a tile that exists ONLY because
+                        // `mergeSfuOnlyParticipants` synthesized it (the WS
+                        // roster never listed this identity, or just
+                        // stopped) had no other event left to remove it;
+                        // when that identity was also the LAST participant,
+                        // no further roster broadcast ever arrived and the
+                        // ghost tile stayed forever. `wsRosterIds` (the last
+                        // roster snapshot) is what tells the two cases
+                        // apart — see `GroupCallRosterReconciliation.
+                        // shouldRemoveTileOnDisconnect`'s kdoc.
+                        if GroupCallRosterReconciliation.shouldRemoveTileOnDisconnect(
+                            identity: identity, wsRosterIds: self.wsRosterIds
+                        ) {
+                            self.participants.removeAll { $0.id == identity }
+                        } else {
+                            guard let idx = self.participants.firstIndex(where: { $0.id == identity }) else { return }
+                            self.participants[idx].videoTrack = nil
+                            self.participants[idx].screenShareTrack = nil
+                        }
                         return
                     }
                     // W-GRPSFUGHOST: see `sfuPresentIdentities`'/
@@ -1545,6 +1616,15 @@ class GroupCallViewModel: ObservableObject {
                     // the room" signal, tracked independently of whatever the
                     // WS-signaling roster currently believes.
                     self.sfuPresentIdentities.insert(identity)
+                    // W-GRPSFUGHOST follow-up (2026-09-30): a FRESH LiveKit
+                    // connect is the only thing allowed to clear a
+                    // roster-then-LiveKit quarantine (see
+                    // `GroupCallRosterReconciliation.
+                    // quarantineAfterRosterUpdate`'s kdoc) — without this,
+                    // a participant who left and rejoined while the roster
+                    // was still catching up on the first departure could
+                    // stay permanently quarantined.
+                    self.quarantinedIdentities.remove(identity)
                     self.mergeSfuOnlyParticipants()
                 }
             }
@@ -1744,12 +1824,31 @@ class GroupCallViewModel: ObservableObject {
     /// `toggleMute`'s pattern of flipping first) — reverted if the async
     /// LiveKit call actually fails.
     func toggleVideo() {
-        guard let controller = controller else { return }
         // W-GRPCAMSRC — no optimistic flip and no rollback any more: the button
         // renders `selfVideoTrack != nil`, so a failed `setVideoEnabled` simply
         // never moves it. The old optimistic write could also be left stranded
         // by a camera that stopped publishing for a reason other than this call.
         let target = !isVideoEnabled
+        guard let controller = controller else {
+            // W-GRPVIDEOTELEM (2026-09-30): no controller bound at all
+            // (legacy preview path, or a tap racing view teardown) — the
+            // ONE early exit `GroupCallController.setVideoEnabled` can
+            // never itself observe, so it has to be logged right here or
+            // it leaves no trace anywhere. Tonight's group-call incident
+            // (call cd87caee) showed exactly this: no toggle-related log
+            // line at all, so a missed tap was indistinguishable from a
+            // lost one.
+            RTLog.warn("call", "call.media.video_toggle stage=no_controller code=0 target=\(target ? 1 : 0)")
+            return
+        }
+        // W-GRPVIDEOTELEM (2026-09-30): the only record that the tap itself
+        // happened — `GroupCallController.setVideoEnabled` and
+        // `LiveKitGroupCallRoom.setCameraEnabled` each report how the
+        // attempt ended (published/no_room/perm_denied/failed), but none of
+        // them fire at all if this `Task` never runs, so without this
+        // "tap" line a dropped tap is indistinguishable from one the user
+        // never made.
+        RTLog.info("call", "call.media.video_toggle stage=tap code=0 target=\(target ? 1 : 0)")
         Task { _ = await controller.setVideoEnabled(target) }
     }
 
