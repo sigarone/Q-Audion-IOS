@@ -100,10 +100,20 @@ struct CallsSettingsScreen: View {
                     // principle as the "nsnap"/"admgate" RTLog lines this
                     // never touched) without offering a control that no
                     // longer does anything a user could rely on.
-                    kvRow(label: "Audio SRTP standard (WebRTC)",
-                          value: "Attivo",
-                          mono: false)
-                    Text("Protocollo predefinito su tutti i dispositivi aggiornati. Con un dispositivo meno recente che non lo supporta ancora, la chiamata passa automaticamente al protocollo Q-Audion.")
+                    //
+                    // REVIEW FIX (2026-09-30) — bound to
+                    // `CallCapabilities.isNativeSrtpEnabledLocally` instead
+                    // of a hardcoded "Attivo": a hardcoded value would keep
+                    // claiming the path is active even on a device where the
+                    // remote kill switch or the crash-streak safety net has
+                    // actually turned it off, which is exactly the
+                    // diagnostic visibility this row exists to preserve.
+                    // `statusRow` re-reads this on every body evaluation
+                    // (e.g. re-entering this screen), same as the old
+                    // toggle's own seeded `@State` did.
+                    statusRow(label: "Audio SRTP standard (WebRTC)",
+                              active: CallCapabilities.isNativeSrtpEnabledLocally)
+                    Text("Protocollo predefinito su tutti i dispositivi aggiornati. Con un dispositivo meno recente che non lo supporta ancora, o se il percorso e' stato disattivato da remoto o da una protezione automatica anti-crash, la chiamata passa automaticamente al protocollo Q-Audion.")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14)
