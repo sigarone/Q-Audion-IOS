@@ -102,7 +102,17 @@ public final class BCryptoStorageApiImpl: StorageApi {
         let capturedRest = rest
         let tusClient = TusUploadClient(
             session: capturedRest.urlSession,
-            serverUrl: capturedRest.serverUrl,
+            // Item G (2026-09-30 file-transfer plan) — tus create/PATCH
+            // exist only on the node that will store the file. Was
+            // `capturedRest.serverUrl`, which rides whatever the node
+            // selector currently has `config.serverUrl` pointed at; a
+            // DR/failover host has no shared file storage and answers tus
+            // create with 402 ("abbonamento file mancante"). Pinning to
+            // the primary here fixes every caller of this method (avatar,
+            // voice notes, attachments, group attachments, log shipper —
+            // this is the ONLY production `TusUploadClient` construction
+            // site for uploads) in one place.
+            serverUrl: capturedRest.pinnedPrimaryServerUrl,
             getToken: { capturedRest.accessToken },
             // W-TUSAUTHREFRESH (2026-08-29) — without this the tus client
             // had no way to recover from an expired token: it surfaced the
@@ -136,7 +146,10 @@ public final class BCryptoStorageApiImpl: StorageApi {
     /// `downloadTokenClient.downloadCiphertext(fileId:claim:)` directly,
     /// never through this method.
     public func downloadFile(fileId: String) async throws -> Data {
-        return try await rest.get("/api/v1/files/tus/\(fileId)")
+        // Item A-iOS + G (2026-09-30 file-transfer plan) — see
+        // `BCryptoRestClient.getFileEndpoint`'s doc: pins to the primary
+        // node and retries a transient 429/5xx with backoff.
+        return try await rest.getFileEndpoint("/api/v1/files/tus/\(fileId)")
     }
 
     /// W-TUSRESUME — expose the TUS resume primitives (`head`/`resume`)
@@ -150,7 +163,9 @@ public final class BCryptoStorageApiImpl: StorageApi {
         let capturedRest = rest
         return TusUploadClient(
             session: capturedRest.urlSession,
-            serverUrl: capturedRest.serverUrl,
+            // Item G — see the identical note on the other `TusUploadClient`
+            // construction above.
+            serverUrl: capturedRest.pinnedPrimaryServerUrl,
             getToken: { capturedRest.accessToken },
             // W-TUSAUTHREFRESH — same wiring as `uploadFile` above.
             refreshToken: { try await capturedRest.refreshAccessTokenForExternalClient() }

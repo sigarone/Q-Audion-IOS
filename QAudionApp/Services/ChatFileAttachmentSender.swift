@@ -157,8 +157,21 @@ final class ChatFileAttachmentSender {
         var downloadTokenExpiresMs: Int64?
         var downloadTokenMaxUses: Int?
         do {
+            // W-FT1A-A (2026-09-30 file-transfer plan, item A-iOS) — size
+            // `max_uses` explicitly from the chunk count, the way Android's
+            // `TusUploaderHttpImpl.issueDownloadToken` already does, instead
+            // of leaving it unset. Unset falls back to the server's flat
+            // default of 10, which is fine for one small file but gives no
+            // headroom for a retried download (`ChatFileAttachmentReceiver`'s
+            // new retry-with-backoff, item A) or a re-open from another
+            // device. See `BCryptoDownloadTokenClient.computeMaxUses`'s own
+            // doc for why iOS's formula differs from Android's (single
+            // whole-file GET per attempt today, not two ranged reads per
+            // chunk) while staying compatible with today's server either way
+            // — a larger explicit `max_uses` needs no new server behaviour.
             let issued = try await provider.downloadTokenClient.issueToken(
-                fileId: tusFileId, recipientUserId: recipientUserId)
+                fileId: tusFileId, recipientUserId: recipientUserId,
+                maxUses: BCryptoDownloadTokenClient.computeMaxUses(totalChunks: totalChunks).map { Int($0) })
             downloadTokenHex = issued.tokenHex
             downloadTokenExpiresMs = issued.expiresAtMs
             downloadTokenMaxUses = Int(issued.maxUses)

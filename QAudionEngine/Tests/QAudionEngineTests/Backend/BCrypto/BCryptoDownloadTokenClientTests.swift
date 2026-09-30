@@ -59,4 +59,58 @@ final class BCryptoDownloadTokenClientTests: XCTestCase {
         // Verify (visually): claim has no recipient_user_id field —
         // server re-derives it from the JWT bearer.
     }
+
+    // MARK: - Item A-iOS (2026-09-30 file-transfer plan): computeMaxUses KAT
+
+    func test_computeMaxUses_nonPositiveChunkCount_returnsNil() {
+        // Matches Android leaving max_uses unset when the size is unknown
+        // — the server then applies its own default.
+        XCTAssertNil(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: 0))
+        XCTAssertNil(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: -1))
+    }
+
+    func test_computeMaxUses_smallFile_hitsTheFloor() {
+        // 1 chunk (64 KiB): restarts=1, desired=4, floored to the server's
+        // own default-intent floor of 10.
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: 1), 10)
+        // Still under the 64-chunk (4 MiB) threshold for a first extra
+        // restart — same floor.
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: 63), 10)
+    }
+
+    func test_computeMaxUses_scalesWithChunkCount() {
+        // 64 chunks -> 1 extra restart -> restarts=2, desired=8 -> still
+        // floored to 10 (8 < 10).
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: 64), 10)
+        // 128 chunks -> 2 extra restarts -> restarts=3, desired=12 -> above
+        // the floor, so the actual scaled value is returned.
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: 128), 12)
+        // 192 chunks -> 3 extra restarts -> restarts=4, desired=16.
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(totalChunks: 192), 16)
+        // Monotonically non-decreasing in the chunk count.
+        var previous: Int32 = 0
+        for chunks in stride(from: 1, through: 2000, by: 37) {
+            let value = BCryptoDownloadTokenClient.computeMaxUses(totalChunks: chunks) ?? 0
+            XCTAssertGreaterThanOrEqual(value, previous, "must not decrease as chunks grow (chunks=\(chunks))")
+            previous = value
+        }
+    }
+
+    func test_computeMaxUses_largestAllowedFile_wellUnderTheCeiling() {
+        // 5 GiB / 64 KiB = 81 920 chunks (ChatFileAttachmentReceiver's own
+        // DoS guard). Pinned exact value so the formula's real-world output
+        // is on record, not just its shape.
+        let maxRealisticChunks = 81_920
+        let result = BCryptoDownloadTokenClient.computeMaxUses(totalChunks: maxRealisticChunks)
+        XCTAssertEqual(result, 5_124)
+        XCTAssertLessThan(result ?? .max, BCryptoDownloadTokenClient.maxDownloadTokenMaxUses,
+                           "the largest legitimate file must never be clamped by the safety ceiling")
+    }
+
+    func test_computeMaxUses_pathologicalChunkCount_isClampedToTheCeiling() {
+        // A corrupted/absurd chunk count must never overflow into a
+        // negative Int32 or an unbounded value sent to the server.
+        let result = BCryptoDownloadTokenClient.computeMaxUses(totalChunks: Int.max / 2)
+        XCTAssertEqual(result, BCryptoDownloadTokenClient.maxDownloadTokenMaxUses)
+    }
 }

@@ -343,7 +343,8 @@ public final class BCryptoRestClient {
     /// session could verify on-device (no Swift toolchain / iOS device in
     /// this environment) — the orchestrator's live handoff test is what
     /// closes that gap.
-    private func request(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> Data {
+    private func request(_ method: String, path: String, body: Data?, headers: [String: String],
+                          baseUrlOverride: String? = nil) async throws -> Data {
         let id = UUID()
         // W-ASYNCLOCK (2026-08-29) — scoped `withLock` rather than a bare
         // `lock()`/`unlock()` pair. This function is `async`, and manual
@@ -356,7 +357,8 @@ public final class BCryptoRestClient {
         // the critical sections were already suspension-free.
         let generation = netLock.withLock { _networkGeneration }
         let task = Task<Data, Error> {
-            try await self.requestUncancellable(method, path: path, body: body, headers: headers)
+            try await self.requestUncancellable(method, path: path, body: body, headers: headers,
+                                                 baseUrlOverride: baseUrlOverride)
         }
         inFlightLock.withLock {
             inFlightCancellers[id] = (cancel: { task.cancel() }, generation: generation)
@@ -367,9 +369,11 @@ public final class BCryptoRestClient {
         return try await task.value
     }
 
-    private func requestUncancellable(_ method: String, path: String, body: Data?, headers: [String: String]) async throws -> Data {
+    private func requestUncancellable(_ method: String, path: String, body: Data?, headers: [String: String],
+                                       baseUrlOverride: String? = nil) async throws -> Data {
         // First attempt with the currently cached access token.
-        let (data, status) = try await performRequest(method, path: path, body: body, headers: headers)
+        let (data, status, _) = try await performRequest(method, path: path, body: body, headers: headers,
+                                                           baseUrlOverride: baseUrlOverride)
         if (200...299).contains(status) {
             return data
         }
@@ -387,7 +391,8 @@ public final class BCryptoRestClient {
         if status == 401, !isAuthEndpoint {
             let refreshed = try await tryRefreshToken()
             if refreshed {
-                let (retryData, retryStatus) = try await performRequest(method, path: path, body: body, headers: headers)
+                let (retryData, retryStatus, _) = try await performRequest(method, path: path, body: body, headers: headers,
+                                                                            baseUrlOverride: baseUrlOverride)
                 if (200...299).contains(retryStatus) {
                     return retryData
                 }
@@ -406,9 +411,12 @@ public final class BCryptoRestClient {
         // wrong address, not a broken server. Retry once against the pinned
         // primary and leave config.serverUrl alone — this is a per-request
         // redirect, not a decision to abandon the node the selector chose for
-        // everything else.
-        if status == 421, config.serverUrl != primaryServerUrl {
-            let (retryData, retryStatus) = try await performRequest(
+        // everything else. Skipped when this request already targeted the
+        // primary (baseUrlOverride) — a 421 from the primary itself is not
+        // fixed by retrying the primary again.
+        let effectiveBase = baseUrlOverride ?? config.serverUrl
+        if status == 421, effectiveBase != primaryServerUrl {
+            let (retryData, retryStatus, _) = try await performRequest(
                 method, path: path, body: body, headers: headers,
                 baseUrlOverride: primaryServerUrl)
             if (200...299).contains(retryStatus) {
@@ -430,7 +438,7 @@ public final class BCryptoRestClient {
     }
 
     private func performRequest(_ method: String, path: String, body: Data?, headers: [String: String],
-                                baseUrlOverride: String? = nil) async throws -> (Data, Int) {
+                                baseUrlOverride: String? = nil) async throws -> (Data, Int, String?) {
         guard let url = URL(string: (baseUrlOverride ?? config.serverUrl) + path) else { throw BCryptoError.invalidUrl }
         var req = URLRequest(url: url)
         req.httpMethod = method
@@ -441,7 +449,114 @@ public final class BCryptoRestClient {
         // Device attestation is not used for register/login.
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw BCryptoError.httpError(0) }
-        return (data, http.statusCode)
+        return (data, http.statusCode, http.value(forHTTPHeaderField: "Retry-After"))
+    }
+
+    // MARK: - Item A-iOS + G (2026-09-30 file-transfer plan, phase 1a)
+
+    /// POST that always targets the pinned primary node instead of
+    /// `config.serverUrl`. File endpoints (tus create/PATCH/HEAD, and
+    /// `POST /files/issue-token`, which this backs) exist ONLY on the
+    /// node that actually stores the file. The general node selector
+    /// (`ServerSelector`, app layer) can legitimately move
+    /// `config.serverUrl` to a DR/failover host (e.g. a Helsinki
+    /// dev/DR box) for calling/signaling reasons — that host has no
+    /// shared file storage and answers a tus create with 402
+    /// ("abbonamento file mancante"). Every other behaviour (401
+    /// refresh-and-retry, 402 mapping) is identical to
+    /// `post(_:body:headers:)`; this only pins the base URL. Not
+    /// `public` — every current caller (`BCryptoDownloadTokenClient`,
+    /// `BCryptoStorageApiImpl`) lives in this module.
+    func postToPrimary(_ path: String, body: Data?, headers: [String: String] = [:]) async throws -> Data {
+        try await request("POST", path: path, body: body, headers: headers, baseUrlOverride: primaryServerUrl)
+    }
+
+    /// The certificate-pinned primary this client was constructed
+    /// against — see `primaryServerUrl`'s own doc for why it never
+    /// changes after `updateConfig`. Exposed (module-internal only) for
+    /// callers that must reach the primary directly regardless of
+    /// where the selector has since moved `config.serverUrl` (item G).
+    var pinnedPrimaryServerUrl: String { primaryServerUrl }
+
+    /// One request attempt against the pinned primary, refreshing the
+    /// access token once on a 401 — the same single refresh-and-retry
+    /// bound `requestUncancellable` applies, just without its 421/402
+    /// throw-on-status behaviour (the caller, `getFileEndpoint`, needs
+    /// the raw status + `Retry-After` to drive its own retry loop).
+    private func requestFileAttemptFromPrimary(
+        method: String, path: String, headers: [String: String]
+    ) async throws -> (data: Data, status: Int, retryAfter: String?) {
+        let (data, status, retryAfter) = try await performRequest(
+            method, path: path, body: nil, headers: headers, baseUrlOverride: primaryServerUrl)
+        guard status == 401, try await tryRefreshToken() else {
+            return (data, status, retryAfter)
+        }
+        let (retryData, retryStatus, retryRetryAfter) = try await performRequest(
+            method, path: path, body: nil, headers: headers, baseUrlOverride: primaryServerUrl)
+        return (retryData, retryStatus, retryRetryAfter)
+    }
+
+    /// Escalating backoff used when the server sends no usable
+    /// `Retry-After`: 1s, 2s, 4s. Client-side retry pacing only —
+    /// unrelated to the server/desktop progress-based request timeouts
+    /// the 2026-09-30 file-transfer design covers separately.
+    private static let defaultBackoffSecs: [Double] = [1, 2, 4]
+
+    /// Delay before the next attempt of `getFileEndpoint`'s retry loop.
+    /// Honours an RFC 7231 delta-seconds `Retry-After` (the only form
+    /// this server's file endpoints send — never an HTTP-date) when
+    /// present and positive, capped at 30s so a misbehaving/huge value
+    /// can't stall the loop far beyond this client's own 15s
+    /// single-request timeout budget; otherwise falls back to the fixed
+    /// escalating schedule. **Visible for tests.**
+    static func retryDelayNanos(afterHeader: String?, attempt: Int) -> UInt64 {
+        if let afterHeader,
+           let secs = Double(afterHeader.trimmingCharacters(in: .whitespaces)),
+           secs > 0 {
+            return UInt64(min(secs, 30) * 1_000_000_000)
+        }
+        let idx = min(max(attempt, 0), defaultBackoffSecs.count - 1)
+        return UInt64(defaultBackoffSecs[idx] * 1_000_000_000)
+    }
+
+    /// GET dedicated to file downloads (tus recipient-token / owner-direct
+    /// — `BCryptoDownloadTokenClient.downloadCiphertext`,
+    /// `BCryptoStorageApiImpl.downloadFile`). Two departures from
+    /// `get(_:headers:)`:
+    ///   - Always targets the pinned primary node (see `postToPrimary`'s
+    ///     doc for why) instead of `config.serverUrl` (item G).
+    ///   - Retries a transient 429/5xx up to `maxAttempts` times,
+    ///     honouring the server's `Retry-After` header when present
+    ///     (item A: `ChatFileAttachmentReceiver` used to download the
+    ///     whole ciphertext blob in ONE request with no retry and no
+    ///     resume — this is the narrower "don't give up after one
+    ///     shot" fix, NOT the full streaming/ranged-GET rewrite left
+    ///     for phase 1b).
+    /// 401 is refreshed-and-retried first, exactly as every other
+    /// request this client makes. Any non-2xx status left after
+    /// retries throws `BCryptoError`, same mapping as `get(_:headers:)`.
+    /// Not `public` — every current caller lives in this module.
+    func getFileEndpoint(
+        _ path: String,
+        headers: [String: String] = [:],
+        maxAttempts: Int = 4
+    ) async throws -> Data {
+        precondition(maxAttempts >= 1)
+        var lastStatus = 0
+        for attempt in 0..<maxAttempts {
+            let (data, status, retryAfter) = try await requestFileAttemptFromPrimary(
+                method: "GET", path: path, headers: headers)
+            if (200...299).contains(status) { return data }
+            lastStatus = status
+            let isRetryable = status == 429 || (500...599).contains(status)
+            let isLastAttempt = attempt == maxAttempts - 1
+            guard isRetryable, !isLastAttempt else { break }
+            let delay = Self.retryDelayNanos(afterHeader: retryAfter, attempt: attempt)
+            try? await Task.sleep(nanoseconds: delay)
+        }
+        if lastStatus == 401 { throw BCryptoError.unauthorized }
+        if lastStatus == 402 { throw BCryptoError.paymentRequired }
+        throw BCryptoError.httpError(lastStatus)
     }
 
     /// Invoke the installed token refresher at most once per batch of concurrent
