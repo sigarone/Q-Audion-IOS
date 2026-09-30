@@ -1316,6 +1316,91 @@ pseudonyms, not names. A listener can still tell that two devices are exchanging
 traffic and can follow a device between places. That is inherent to routing
 without a server and is not addressed here.
 
+## 10. Group calls v2 (qjanus) — server <-> client wire (2026-09-30)
+
+Group calls (>= 3 participants and every 1:1 promoted to a group) run on **qjanus**, a Janus
+VideoRoom SFU with the Q-Audion DTLS patch. The full normative spec (client Janus protocol,
+E2EE v2, layer policy, amendments) is `docs/GROUP_CALLS_V2.md` in the server repo; this section
+is the server-facing contract every client must honour. There is NO backward compatibility with
+the LiveKit/WS-relay group path: the messages it used are rejected (§10.8).
+
+### 10.1 Roster (unchanged shapes, changed semantics)
+`group_call_create` / `group_call_join` / `group_call_leave` / `group_call_end` /
+`group_call_invite` / `group_call_ended` / reactions, raise hand, mute request keep their v1
+shapes. `supports_group_sender_keys` and `supports_raw_key_aes256` are gone (always true).
+
+`group_call_update` (S->C, members only):
+```
+{ "call_id", "participants":[user_id...], "sender_key_epoch":<uint32>,
+  "media": { "node_id", "pseudonyms": { "<user_id>":"<32 hex>", ... } } }   // media once a node hosts the call
+```
+`sender_key_epoch` is server-authoritative: 1 at create, +1 on EVERY real roster change (join,
+leave, drop after the 20 s grace, kick). An idempotent re-join, a non-member's leave and the
+publication of `media` change nothing. A removed member is evicted at qjanus BEFORE the new epoch
+is broadcast. Pseudonyms are 128-bit random hex, fresh per call and per roster join.
+
+### 10.2 Media join
+`group_call_media_join {call_id}` (C->S, sender must be a participant). Answer, to the requester
+only, either
+```
+group_call_media_ready { call_id, node_id, ws_url, room, pseudonym, session_token, join_token,
+                         dtls_fingerprint, ice_servers:[{urls:[...], username, credential}], ttl_s }
+group_call_media_unavailable { call_id, reason: no_node | room_create_failed | not_member | full }
+```
+`room` is a random 128-bit hex id (never the call id). `session_token` is a Janus core signed
+token valid for `ttl_s` = 600 seconds; `join_token` is the room's per-member `allowed` token.
+`dtls_fingerprint` (`sha-256 AB:CD:...`) is the node's fixed certificate, which the client pins
+against the SDP. `ice_servers` carry per-call TURN credentials (username `<expiry>:<pseudonym>`,
+TTL 2 h). There is no relay fallback: `unavailable` is an error. `group_call_media_join` is
+idempotent for a current participant: sending it again (clients do so hourly to renew the TURN
+credentials) returns the same room, pseudonym and join token with a fresh `session_token` and
+`ice_servers`; nothing is kicked or re-added and the epoch does not move. Repeated requests
+within 250 ms from one member are dropped without an answer.
+
+### 10.3 Session token refresh
+Janus re-validates the signed token on every request, keepalives included, so a client that
+holds a Janus session sends `group_call_media_refresh {call_id}` (C->S) every 300 s and before
+any WebSocket reconnect. The server answers the requester with
+`group_call_media_token {call_id, session_token, ttl_s:600}` (S->C) only if the requester is a
+current member and the room exists; every other case is
+`group_call_media_unavailable {call_id, reason:"not_member"}`. At most one refresh per 5 s per
+member is answered; the excess is dropped without a reply. The client uses the newest token for
+all later Janus requests.
+
+### 10.4 Node failure
+`group_call_media_moved {call_id, node_id}` (S->C, every member but a rejoin's requester) when the
+room moved to another node: tear down both PCs and send `group_call_media_join` again; keys,
+pseudonyms and the epoch are unchanged. `group_call_media_rejoin {call_id, reason}` (C->S) is the
+"my session died" message: same answer as media_join but with a FRESH join token, the previous
+token retired and the previous Janus session of that pseudonym kicked; the server also re-probes
+the node and moves the room only if it really is down.
+
+### 10.5 Decline / ring timeout
+`group_call_decline {call_id}` (C->S): the invitee leaves `Invited`; their devices get
+`group_call_ended {call_id, reason:"declined"}`. After 45 s an invitee that neither joined nor
+declined gets `group_call_ended {reason:"ring_timeout"}` (still invited). When the creator ends the
+call, invitees still ringing get `group_call_ended {reason:"ended"}` too.
+
+### 10.6 Limits
+Participant cap = `lim.group_call_max_participants` of the creator's entitlement (Pro 16),
+default 8, resolved at create; create truncates recipients to cap-1; join at the cap is refused;
+media_join over the cap answers `reason:"full"`. `feat.calls.group` gates create;
+`feat.calls.group_video` gates the establishment of the room (the first member pays, later
+members ride the established room).
+
+### 10.7 Transport and content level (clients)
+DTLS 1.3 only, `TLS_AES_256_GCM_SHA384`, `X25519MLKEM768`, SRTP `AEAD_AES_256_GCM`, checked by
+every client after connect; frames are end-to-end encrypted with the per-sender per-epoch key
+(same frame format as 1:1); keys travel in `qa_grp:2` envelopes over the pairwise sealed control
+channel. See `docs/GROUP_CALLS_V2.md` §4-§5 and §11.
+
+### 10.8 Removed (server answers one `error {code:"unsupported_message"}` per socket, then drops)
+`group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_unavailable`,
+`group_call_forward`, `group_call_frame`, `group_call_subscribe`, `group_call_unsubscribe`,
+`group_call_state`, `group_call_receive`; envelopes `qa_grp:1` (`sender_key_init` /
+`sender_key_rotate`).
+
+Previous: 2026-09-30 (added §10 group calls v2 / qjanus; the LiveKit path is gone).
 Previous: 2026-07-13 (§8.8 documented `audio_relay_degraded`).
 Previous: 2026-07-03 (added §8 mid-call upgrade state machine, glare,
 DTLS/mid invariants, media-readiness + keyframe wire, rail/key-custody
