@@ -42,6 +42,9 @@ public final class GroupCallController: @unchecked Sendable {
     private let audio: GroupAudioUnitControlling
     private let pathMonitor: GroupPathMonitoring
     private let nowMs: () -> Int64
+    /// How long a refresh request waits for its answer before it is asked again.
+    private let iceRefreshRetrySeconds: Double
+    private static let iceRefreshMaxAttempts = 3
     private let lock = NSLock()
     /// Every `GroupE2eeCoordinator` call runs here (the coordinator is not
     /// thread-safe, and its send completions come back on this queue).
@@ -75,6 +78,10 @@ public final class GroupCallController: @unchecked Sendable {
     private var connectedTelemetrySent = false
     private var congestionSteps = 0
     private var congestionReset: DispatchWorkItem?
+    /// An hourly TURN-credential refresh (`group_call_media_join`) is awaiting its answer.
+    private var iceRefreshPending = false
+    private var iceRefreshAttempts = 0
+    private var iceRefreshRetry: DispatchWorkItem?
     private var videoStoppedByPolicy = false
     private var backgrounded = false
     private var desiredTiles: [String: (tile: GroupLayerPolicy.TileClass, visible: Bool)] = [:]
@@ -153,8 +160,10 @@ public final class GroupCallController: @unchecked Sendable {
                 backend: GroupMediaBackend? = GroupCallController.defaultBackend(),
                 audio: GroupAudioUnitControlling? = nil,
                 pathMonitor: GroupPathMonitoring? = nil,
-                nowMs: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+                nowMs: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+                iceRefreshRetrySeconds: Double = 60) {
         self.manager = manager
+        self.iceRefreshRetrySeconds = iceRefreshRetrySeconds
         self.backend = backend
         self.audio = audio ?? GroupCallController.defaultAudioUnit()
         self.pathMonitor = pathMonitor ?? GroupNetworkPathWatcher()
@@ -517,6 +526,10 @@ public final class GroupCallController: @unchecked Sendable {
         connectedTelemetrySent = false
         congestionSteps = 0
         videoStoppedByPolicy = false
+        iceRefreshPending = false
+        iceRefreshAttempts = 0
+        let staleRefreshRetry = iceRefreshRetry
+        iceRefreshRetry = nil
         desiredTiles.removeAll()
         let newCoordinator = GroupE2eeCoordinator(
             callId: callId, selfUserId: manager.selfUserId, environment: GroupCallE2eeEnvironment(controller: self, queue: e2eeQueue))
@@ -529,6 +542,7 @@ public final class GroupCallController: @unchecked Sendable {
         if !early.isEmpty {
             e2eeQueue.async { for item in early { newCoordinator.onEnvelope(item.envelope, from: item.user) } }
         }
+        staleRefreshRetry?.cancel()
         previousLink?.close()
         e2eeQueue.async { previousCoordinator?.stop() }
         backend?.beginCall()
@@ -566,6 +580,10 @@ public final class GroupCallController: @unchecked Sendable {
         mediaReadyTimeout = nil
         let reset = congestionReset
         congestionReset = nil
+        iceRefreshPending = false
+        iceRefreshAttempts = 0
+        let refreshRetry = iceRefreshRetry
+        iceRefreshRetry = nil
         _reactionEvents.removeAll()
         _raisedHands.removeAll()
         let hadConnected = connectedTelemetrySent
@@ -573,6 +591,7 @@ public final class GroupCallController: @unchecked Sendable {
         lock.unlock()
         timeout?.cancel()
         reset?.cancel()
+        refreshRetry?.cancel()
         stopPolicyObservers()
         pathMonitor.stop()
         oldLink?.close()
@@ -620,7 +639,7 @@ public final class GroupCallController: @unchecked Sendable {
         manager.onGroupUpdate = { [weak self] update in self?.handleUpdate(update) }
         manager.onMediaReady = { [weak self] ready in self?.handleMediaReady(ready) }
         manager.onMediaUnavailable = { [weak self] callId, reason in
-            self?.handleTrigger(.mediaUnavailable(reason), forCall: callId)
+            self?.handleMediaUnavailable(callId: callId, reason: reason)
         }
         manager.onMediaMoved = { [weak self] callId, _ in
             self?.handleTrigger(.mediaMoved, forCall: callId)
@@ -764,6 +783,28 @@ public final class GroupCallController: @unchecked Sendable {
             lock.unlock()
             return
         }
+        // The same room, node, pseudonym and certificate while a link exists: this is
+        // the answer of a refresh (the hourly TURN credentials) or a duplicate
+        // hand-out, NOT a new path. It is applied in place; the running media is
+        // never torn down for it.
+        if let live = link, let known = currentReady, Self.sameMedia(known, ready) {
+            currentReady = ready
+            iceRefreshPending = false
+            iceRefreshAttempts = 0
+            let retry = iceRefreshRetry
+            iceRefreshRetry = nil
+            let timeout = mediaReadyTimeout
+            mediaReadyTimeout = nil
+            mediaReadyRetried = false
+            lock.unlock()
+            retry?.cancel()
+            timeout?.cancel()
+            live.updateIceServers(ready.iceServers)
+            live.updateSessionToken(ready.sessionToken)
+            return
+        }
+        iceRefreshPending = false
+        iceRefreshAttempts = 0
         currentReady = ready
         let timeout = mediaReadyTimeout
         mediaReadyTimeout = nil
@@ -809,6 +850,55 @@ public final class GroupCallController: @unchecked Sendable {
                 self?.mediaStartFailed(error, generation: generation, callId: ready.callId)
             }
         }
+    }
+
+    /// Same media identity: everything that pins the PeerConnections to one node and
+    /// one room. Tokens and TURN credentials are allowed to differ (that is a refresh).
+    static func sameMedia(_ a: GroupCallWire.MediaReady, _ b: GroupCallWire.MediaReady) -> Bool {
+        a.room == b.room && a.pseudonym == b.pseudonym && a.nodeId == b.nodeId
+            && a.wsUrl == b.wsUrl && a.dtlsFingerprint == b.dtlsFingerprint
+    }
+
+    /// `group_call_media_unavailable`. A throttled answer to an hourly refresh is not a
+    /// broken media path (the live link stays; the retry timer asks again): only then
+    /// is it ignored, every other reason keeps its meaning.
+    private func handleMediaUnavailable(callId: String, reason: GroupCallWire.UnavailableReason) {
+        lock.lock()
+        let refreshRefused = callId == activeCallId && iceRefreshPending && link != nil && reason.isTransient
+        lock.unlock()
+        if refreshRefused { return }
+        handleTrigger(.mediaUnavailable(reason), forCall: callId)
+    }
+
+    /// Spec 2.3: the per-call TURN credentials live about 2 h. Every hour a plain
+    /// `group_call_media_join` fetches a fresh hand-out; `handleMediaReady` applies
+    /// it in place (desktop parity). Asked again after `iceRefreshRetrySeconds` if
+    /// no answer came, at most `iceRefreshMaxAttempts` times per round.
+    private func requestIceRefresh() {
+        lock.lock()
+        guard let callId = activeCallId, link != nil, iceRefreshAttempts < Self.iceRefreshMaxAttempts else {
+            iceRefreshPending = false
+            iceRefreshAttempts = 0
+            lock.unlock()
+            return
+        }
+        iceRefreshPending = true
+        iceRefreshAttempts += 1
+        let generation = linkGeneration
+        let previous = iceRefreshRetry
+        let item = DispatchWorkItem { [weak self] in self?.iceRefreshTimedOut(callId: callId, generation: generation) }
+        iceRefreshRetry = item
+        lock.unlock()
+        previous?.cancel()
+        manager.requestMediaJoin(callId: callId)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + iceRefreshRetrySeconds, execute: item)
+    }
+
+    private func iceRefreshTimedOut(callId: String, generation: Int) {
+        lock.lock()
+        let stillWaiting = callId == activeCallId && generation == linkGeneration && iceRefreshPending
+        lock.unlock()
+        if stillWaiting { requestIceRefresh() }
     }
 
     /// `group_call_media_token` (spec §11): the fresh Janus session token replaces
@@ -940,6 +1030,8 @@ public final class GroupCallController: @unchecked Sendable {
             handleTrigger(.needsRejoin("kicked"), forCall: cid)
         case .uplinkCongested:
             noteUplinkCongested()
+        case .iceRefresh:
+            requestIceRefresh()
         case .tokenRefresh:
             // Spec §11: ask for a fresh Janus session token. Answered with
             // `group_call_media_token`, or `media_unavailable {not_member}` (which ends

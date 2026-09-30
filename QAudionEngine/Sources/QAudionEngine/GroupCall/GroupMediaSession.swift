@@ -60,6 +60,9 @@ public protocol GroupPeerLink: AnyObject {
     /// The `transport` stats row, for the §4.5 self-check.
     func transportObservation() async -> GroupTransportPolicy.Observed?
     func addRemoteCandidate(_ candidate: GroupIceCandidate?) async
+    /// The refreshed ICE servers (TURN credentials) of a running call: applied to
+    /// the live PeerConnection without touching the media.
+    func updateIceServers(_ servers: [GroupCallWire.IceServer])
     func close()
 }
 
@@ -133,6 +136,10 @@ public final class GroupMediaSession: @unchecked Sendable {
         /// `tokenRefreshSeconds` while the session is up ("periodic"), and once
         /// before the media WebSocket is reconnected ("ws_reconnect").
         case tokenRefresh(String)
+        /// The per-call TURN credentials live about 2 h: the controller refreshes them
+        /// with a plain `group_call_media_join` every `iceRefreshSeconds` and applies
+        /// the answer in place (`updateIceServers`).
+        case iceRefresh
     }
 
     public struct Config: Sendable {
@@ -145,6 +152,8 @@ public final class GroupMediaSession: @unchecked Sendable {
         /// Janus re-validates the signed session token on EVERY request and it
         /// lives 600 s: ask for a fresh one every 300 s (spec §11).
         public var tokenRefreshSeconds: Double = 300
+        /// TURN credentials are valid ~2 h: refreshed hourly (desktop parity).
+        public var iceRefreshSeconds: Double = 3600
         public var transportCheckAttempts = 12
         public var transportCheckIntervalMs: UInt64 = 250
         public var debounceMs: UInt64 = GroupSerialQueue.defaultDebounceMs
@@ -195,6 +204,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     private var pcStates: [GroupTelemetry.PcRole: GroupPcState] = [:]
     private var statsTask: Task<Void, Never>?
     private var tokenRefreshTask: Task<Void, Never>?
+    private var iceRefreshTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var disconnectTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -258,6 +268,7 @@ public final class GroupMediaSession: @unchecked Sendable {
             setState(.active)
             startStatsLoop()
             startTokenRefreshLoop()
+            startIceRefreshLoop()
             // A first connect that never completes is a broken path just like a
             // restart that never completes (spec 4.7): ask for a rejoin.
             armRestartWatchdog(seconds: config.startWatchdogSeconds)
@@ -326,9 +337,10 @@ public final class GroupMediaSession: @unchecked Sendable {
         }
         closed = true
         state = .closed
-        let tasks = [statsTask, tokenRefreshTask, watchdogTask, disconnectTask, reconnectTask]
+        let tasks = [statsTask, tokenRefreshTask, iceRefreshTask, watchdogTask, disconnectTask, reconnectTask]
         statsTask = nil
         tokenRefreshTask = nil
+        iceRefreshTask = nil
         watchdogTask = nil
         disconnectTask = nil
         reconnectTask = nil
@@ -724,6 +736,30 @@ public final class GroupMediaSession: @unchecked Sendable {
         tokenRefreshTask?.cancel()
         tokenRefreshTask = task
         lock.unlock()
+    }
+
+    private func startIceRefreshLoop() {
+        let interval = config.iceRefreshSeconds
+        let task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if Task.isCancelled { return }
+                guard let self = self, !self.isClosed else { return }
+                self.emit(.iceRefresh)
+            }
+        }
+        lock.lock()
+        iceRefreshTask?.cancel()
+        iceRefreshTask = task
+        lock.unlock()
+    }
+
+    /// Fresh TURN credentials for the running PeerConnections (both, when the
+    /// subscriber exists): the media keeps going, only the ICE configuration changes.
+    public func updateIceServers(_ servers: [GroupCallWire.IceServer]) {
+        guard !isClosed else { return }
+        publisher.updateIceServers(servers)
+        currentSubscriber()?.updateIceServers(servers)
     }
 
     private func pollStats() async {

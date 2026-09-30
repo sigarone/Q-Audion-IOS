@@ -143,6 +143,23 @@ final class GroupPeerIntegrationTests: XCTestCase {
         XCTAssertEqual(hub.attachedSenderCount, 0)
     }
 
+    func testRefreshedTurnCredentialsReplaceTheIceServersOfTheLivePeerConnection() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let peer = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
+                                      selfPseudonym: GroupCallFixtures.pseudoA)
+        try await peer.start()
+        let pc = try XCTUnwrap(peer.currentPeerConnection)
+        XCTAssertTrue(pc.configuration.iceServers.isEmpty)
+        peer.updateIceServers([GroupCallWire.IceServer(urls: ["turn:turn.example.invalid:3478"], username: "user-2", credential: "secret-2")])
+        XCTAssertEqual(pc.configuration.iceServers.first?.urlStrings, ["turn:turn.example.invalid:3478"])
+        XCTAssertEqual(pc.configuration.iceServers.first?.username, "user-2")
+        // Nothing else of the group configuration is reset by the refresh.
+        XCTAssertEqual(pc.configuration.bundlePolicy, .maxBundle)
+        XCTAssertEqual(pc.configuration.rtcpMuxPolicy, .require)
+        peer.close()
+        peer.updateIceServers([])      // a closed wrapper ignores it
+    }
+
     func testAWrapperClosedBeforeItStartedNeverBuildsAPeerConnection() async throws {
         let factory = await QAudionPeerConnectionFactory.shared.factory()
         let publisher = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),

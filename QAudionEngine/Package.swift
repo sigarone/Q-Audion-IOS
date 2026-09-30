@@ -321,7 +321,11 @@ let package = Package(
                 .copy("Crypto/Resources/wire_v1.0.0/x25519/ecdh.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/aead_nonce/aead-nonce-derive.json"),
                 .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/keygen.json"),
-                .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/decap.json")
+                .copy("Crypto/Resources/wire_v1.0.0/ml_kem_1024/decap.json"),
+                // Group calls v2 (spec 5.3): byte-exact frame-crypto vectors shared with the
+                // desktop's frame cryptor (two senders, epochs 1..17, key ring wrap). Synthetic
+                // keys only; see GroupE2eeKatTests.
+                .copy("GroupCall/Resources/group-calls-v2-frame-crypto.json")
             ]
         )
     ]

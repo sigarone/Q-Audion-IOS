@@ -37,6 +37,7 @@ final class FakePublisherLink: GroupPublisherLink, @unchecked Sendable {
     func applyAnswer(_ sdp: String) async throws { record("answer") }
     func transportObservation() async -> GroupTransportPolicy.Observed? { observation }
     func addRemoteCandidate(_ candidate: GroupIceCandidate?) async { record("remote-candidate") }
+    func updateIceServers(_ servers: [GroupCallWire.IceServer]) { record("ice=\(servers.first?.username ?? "")") }
     func close() { record("close") }
 }
 
@@ -75,6 +76,7 @@ final class FakeSubscriberLink: GroupSubscriberLink, @unchecked Sendable {
     func inboundStats() async -> GroupSubscriberStats? { stats }
     func transportObservation() async -> GroupTransportPolicy.Observed? { observation }
     func addRemoteCandidate(_ candidate: GroupIceCandidate?) async { record("remote-candidate") }
+    func updateIceServers(_ servers: [GroupCallWire.IceServer]) { record("ice=\(servers.first?.username ?? "")") }
     func close() { record("close") }
 }
 
@@ -878,6 +880,28 @@ final class GroupMediaSessionTests: XCTestCase {
         let afterClose = refreshReasons(h).count
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(refreshReasons(h).count, afterClose, "no refresh once the session is closed")
+    }
+
+    func testTheTurnCredentialsAreRefreshedHourlyAndAppliedToBothPeerConnectionsInPlace() async throws {
+        XCTAssertEqual(GroupMediaSession.Config().iceRefreshSeconds, 3600, "hourly, like the desktop")
+        var config = GroupMediaSession.Config()
+        config.iceRefreshSeconds = 0.05
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], config: config)
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        let due = await h.waitUntil { h.events.contains { if case .iceRefresh = $0 { return true } else { return false } } }
+        XCTAssertTrue(due, "the session asks for a fresh hand-out every interval")
+        let fresh = [GroupCallWire.IceServer(urls: ["turn:turn.example.invalid:3478"], username: "fresh-user", credential: "fresh-secret")]
+        h.session.updateIceServers(fresh)
+        XCTAssertTrue(h.publisher.calls.contains("ice=fresh-user"))
+        XCTAssertTrue(h.subscriber.calls.contains("ice=fresh-user"))
+        XCTAssertEqual(h.publisher.calls.filter { $0 == "offer" }.count, 1, "no renegotiation, no restart")
+        XCTAssertTrue(h.rejoinReasons().isEmpty)
+        h.session.close()
+        let callsAfterClose = h.publisher.calls
+        h.session.updateIceServers(fresh)
+        XCTAssertEqual(h.publisher.calls, callsAfterClose, "nothing is applied to a closed session")
     }
 
     func testTheDefaultRefreshIntervalIsFiveMinutes() {

@@ -50,6 +50,12 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   once more before it reconnects the media WebSocket; the newest token is used for every later
   request. A requester that is no longer a member gets `group_call_media_unavailable
   {reason:"not_member"}`, which ends the media.
+- The per-call TURN credentials live about 2 h: every hour a running call sends a plain
+  `group_call_media_join` and applies the answer IN PLACE (a `group_call_media_ready` with the same
+  room, node, pseudonym and certificate while the link exists is never a new path): the new
+  `ice_servers` go to both PeerConnections through `setConfiguration`, the fresh `session_token`
+  replaces the old one, the media is not touched. An unanswered refresh is asked again after 60 s
+  (three attempts a round); a `throttled` answer to it does not cost the live link.
 
 ## 4. Client Janus protocol
 
@@ -188,3 +194,9 @@ not an error at all (see deviation 1); 8 s request timeout -> one retry, then a 
     direct path, a cold start), never enables a unit the 1:1 leg still holds, takes the unit over
     when the 1:1 leg ends by ANY path, and the app pays the matching deactivation of its own
     self-activation when such a group call ends.
+15. **Cross-platform frame-crypto vectors.** `Tests/QAudionEngineTests/GroupCall/Resources/
+    group-calls-v2-frame-crypto.json` (byte-copy of the desktop's vectors, synthetic keys only) is
+    reproduced by `GroupE2eeKatTests`: HKDF derivation, the frame wire layout with the key index in
+    the trailer, and the key-ring scenarios (wrap at epoch 17, missing key vs decrypt failure,
+    per-participant rings) driven through the real `GroupE2eeCoordinator`. The frame crypto itself is
+    the native FrameCryptor on iOS; the vectors run through the Swift port of the same layout.

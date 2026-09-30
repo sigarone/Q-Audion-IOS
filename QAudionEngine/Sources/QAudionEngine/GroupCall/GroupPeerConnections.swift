@@ -27,7 +27,9 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
     public var onState: ((GroupPcState) -> Void)?
 
     let factory: RTCPeerConnectionFactory
-    let iceServers: [RTCIceServer]
+    /// The ICE servers of the next PeerConnection this wrapper builds, and of the
+    /// live one after a refresh. Guarded by `stateLock`.
+    private var iceServers: [RTCIceServer]
     let stateLock = NSLock()
     var peerConnection: RTCPeerConnection?
     private var closed = false
@@ -51,8 +53,11 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
         // A wrapper closed before it started (the session was torn down while the
         // start was in flight) must never build a PeerConnection nobody closes.
         guard !isClosed else { throw GroupPeerError.notStarted }
+        stateLock.lock()
+        let servers = iceServers
+        stateLock.unlock()
         let configuration = QAudionPeerConnectionFactory.defaultConfiguration(
-            iceServers: iceServers, nativeSrtpEnabledLocally: true)
+            iceServers: servers, nativeSrtpEnabledLocally: true)
         configuration.iceTransportPolicy = .all
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let pc = factory.peerConnection(with: configuration, constraints: constraints, delegate: self) else {
@@ -67,6 +72,23 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
         peerConnection = pc
         stateLock.unlock()
         return pc
+    }
+
+    /// Refreshed TURN credentials (hourly): the same configuration the PeerConnection
+    /// was built with, only `iceServers` differ, so nothing else is reset. Best effort:
+    /// the next restart or rejoin carries fresh credentials anyway. Mirrors the 1:1
+    /// `QAudionPeerConnection.updateIceServers`.
+    public func updateIceServers(_ servers: [GroupCallWire.IceServer]) {
+        let updated = servers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+        stateLock.lock()
+        iceServers = updated
+        let pc = closed ? nil : peerConnection
+        stateLock.unlock()
+        guard let pc = pc else { return }
+        let configuration = QAudionPeerConnectionFactory.defaultConfiguration(
+            iceServers: updated, nativeSrtpEnabledLocally: true)
+        configuration.iceTransportPolicy = .all
+        _ = pc.setConfiguration(configuration)
     }
 
     var currentPeerConnection: RTCPeerConnection? {

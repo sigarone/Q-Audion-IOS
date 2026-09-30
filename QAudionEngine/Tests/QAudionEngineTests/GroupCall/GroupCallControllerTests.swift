@@ -50,6 +50,7 @@ final class FakeMediaLink: GroupMediaLink, @unchecked Sendable {
     func requestPublisherKeyFrame() async { record("keyframe") }
     func networkPathChanged(reason: String) async { record("path=\(reason)") }
     func updateSessionToken(_ token: String) { record("token=\(token)") }
+    func updateIceServers(_ servers: [GroupCallWire.IceServer]) { record("ice=\(servers.first?.username ?? "")") }
     func close() { record("close") }
 
     /// Emits a session event as the real session would.
@@ -138,10 +139,11 @@ final class ControllerHarness: @unchecked Sendable {
     private var _states: [GroupCallController.State] = []
     var controlSendResult = true
 
-    init() {
+    init(iceRefreshRetrySeconds: Double = 60) {
         let ws = BCryptoWebSocketClient(config: BackendConfig(serverUrl: "https://example.invalid"))
         manager = BCryptoGroupCallManager(ws: ws, selfUserId: Self.selfUser, nameResolver: { $0 })
-        controller = GroupCallController(manager: manager, backend: backend, audio: audio, pathMonitor: paths)
+        controller = GroupCallController(manager: manager, backend: backend, audio: audio, pathMonitor: paths,
+                                         iceRefreshRetrySeconds: iceRefreshRetrySeconds)
         manager.sendOverride = { [weak self] type, data in
             self?.lock.lock(); self?._sent.append((type, data)); self?.lock.unlock()
         }
@@ -522,6 +524,87 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_refresh" }.count, 2)
         let refresh = h.sent.first { $0.type == "group_call_media_refresh" }
         XCTAssertEqual(refresh?.data["call_id"] as? String, ControllerHarness.callId)
+        h.controller.leave()
+    }
+
+    // MARK: hourly TURN refresh (desktop parity)
+
+    /// A hand-out of the running call (same room, node, pseudonym, certificate) with fresh credentials.
+    private func refreshedReady(_ h: ControllerHarness, room: String? = nil) -> GroupCallWire.MediaReady {
+        var dictionary = GroupCallFixtures.readyDictionary()
+        dictionary["call_id"] = ControllerHarness.callId
+        dictionary["session_token"] = "fresh-token"
+        dictionary["ice_servers"] = [["urls": ["turn:turn2.example.invalid:3478"], "username": "fresh-user", "credential": "fresh-secret"]]
+        if let room = room { dictionary["room"] = room }
+        return GroupCallWire.MediaReady.parse(dictionary)!
+    }
+
+    func testTheHourlyRefreshAsksForAFreshHandOutWithAPlainMediaJoin() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        let before = h.sentTypes.filter { $0 == "group_call_media_join" }.count
+        link.emit(.iceRefresh)
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, before + 1)
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"), "a plain join, not a rejoin")
+        h.controller.leave()
+    }
+
+    func testTheFreshHandOutIsAppliedInPlaceAndTheMediaIsNotRebuilt() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.iceRefresh)
+        h.manager.onMediaReady?(refreshedReady(h))
+        XCTAssertEqual(h.backend.links.count, 1, "no new link")
+        XCTAssertFalse(link.calls.contains("close"), "the running media is not touched")
+        XCTAssertTrue(link.calls.contains("ice=fresh-user"))
+        XCTAssertTrue(link.calls.contains("token=fresh-token"), "the hand-out carries a fresh session token too")
+        XCTAssertEqual(link.calls.filter { $0.hasPrefix("start") }.count, 1)
+        h.controller.leave()
+    }
+
+    func testAHandOutForAnotherRoomIsANewPathAndRebuildsTheLink() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        h.manager.onMediaReady?(refreshedReady(h, room: String(repeating: "1f", count: 16)))
+        let rebuilt = await h.waitUntil { h.backend.links.count == 2 }
+        XCTAssertTrue(rebuilt)
+        XCTAssertTrue(link.calls.contains("close"), "the old path is closed")
+        h.controller.leave()
+    }
+
+    func testAThrottledAnswerToTheRefreshKeepsTheLiveLinkButAnyOtherRefusalStillEndsIt() async {
+        let h = ControllerHarness()
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.iceRefresh)
+        h.manager.onMediaUnavailable?(ControllerHarness.callId, .throttled)
+        XCTAssertFalse(link.calls.contains("close"), "a rate-limited refresh is not a broken media path")
+        XCTAssertTrue(h.errors.isEmpty)
+        h.manager.onMediaUnavailable?(ControllerHarness.callId, .notMember)
+        let ended = await h.waitUntil { h.errors.contains(.notMember) }
+        XCTAssertTrue(ended, "a refusal that means something is still an error")
+    }
+
+    func testAnUnansweredRefreshIsAskedAgainThreeTimesAtMostThenLeftToTheNextHour() async {
+        let h = ControllerHarness(iceRefreshRetrySeconds: 0.05)
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        let before = h.sentTypes.filter { $0 == "group_call_media_join" }.count
+        link.emit(.iceRefresh)
+        let asked = await h.waitUntil { h.sentTypes.filter { $0 == "group_call_media_join" }.count == before + 3 }
+        XCTAssertTrue(asked)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, before + 3, "three attempts a round")
+        XCTAssertFalse(link.calls.contains("close"), "an unanswered refresh never costs the media")
+        h.controller.leave()
+    }
+
+    func testAnAnsweredRefreshStopsItsRetryTimer() async {
+        let h = ControllerHarness(iceRefreshRetrySeconds: 0.05)
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        let before = h.sentTypes.filter { $0 == "group_call_media_join" }.count
+        link.emit(.iceRefresh)
+        h.manager.onMediaReady?(refreshedReady(h))
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, before + 1)
         h.controller.leave()
     }
 

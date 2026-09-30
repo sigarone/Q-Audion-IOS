@@ -65,11 +65,13 @@ public final class WebRtcGroupMediaBackend: GroupMediaBackend, @unchecked Sendab
                                 token: { sessionToken.value })
         let room = VideoRoomClient(janus: janus, room: ready.room, pseudonym: ready.pseudonym,
                                    joinToken: ready.joinToken)
-        let link = WebRtcGroupMediaLink(publisher: publisher, sessionToken: sessionToken)
+        let link = WebRtcGroupMediaLink(publisher: publisher, sessionToken: sessionToken, iceServers: ready.iceServers)
         let session = GroupMediaSession(
             janus: janus, room: room, publisher: publisher,
             makeSubscriber: { [weak link] in
-                let peer = GroupSubscriberPeer(factory: factory, iceServers: iceServers, cryptors: cryptors)
+                // A subscriber built after an hourly refresh gets the fresh credentials.
+                let servers = link?.currentRtcIceServers() ?? iceServers
+                let peer = GroupSubscriberPeer(factory: factory, iceServers: servers, cryptors: cryptors)
                 peer.onRemoteTrack = { remote in link?.forward(remote) }
                 return peer
             },
@@ -108,10 +110,19 @@ final class WebRtcGroupMediaLink: GroupMediaLink, @unchecked Sendable {
     private let publisher: GroupPublisherPeer
     private let sessionToken: JanusSessionToken
     private var session: GroupMediaSession?
+    private let iceLock = NSLock()
+    private var iceServers: [GroupCallWire.IceServer]
 
-    init(publisher: GroupPublisherPeer, sessionToken: JanusSessionToken) {
+    init(publisher: GroupPublisherPeer, sessionToken: JanusSessionToken, iceServers: [GroupCallWire.IceServer]) {
         self.publisher = publisher
         self.sessionToken = sessionToken
+        self.iceServers = iceServers
+    }
+
+    /// The latest ICE servers as WebRTC objects (for a subscriber built later).
+    func currentRtcIceServers() -> [RTCIceServer] {
+        iceLock.lock(); defer { iceLock.unlock() }
+        return iceServers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
     }
 
     func attach(session: GroupMediaSession) {
@@ -145,6 +156,13 @@ final class WebRtcGroupMediaLink: GroupMediaLink, @unchecked Sendable {
     func requestPublisherKeyFrame() async { await session?.requestPublisherKeyFrame() }
     func networkPathChanged(reason: String) async { await session?.networkPathChanged(reason: reason) }
     func updateSessionToken(_ token: String) { sessionToken.update(token) }
+
+    func updateIceServers(_ servers: [GroupCallWire.IceServer]) {
+        iceLock.lock()
+        iceServers = servers
+        iceLock.unlock()
+        session?.updateIceServers(servers)
+    }
 
     func close() {
         if let session = session {

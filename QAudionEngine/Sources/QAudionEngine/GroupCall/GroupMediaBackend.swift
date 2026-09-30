@@ -64,6 +64,8 @@ public protocol GroupMediaLink: AnyObject {
     /// Swaps in the fresh Janus session token of `group_call_media_token`
     /// (spec §11): every later Janus request, keepalive included, carries it.
     func updateSessionToken(_ token: String)
+    /// Fresh TURN credentials of the running call (answer of the hourly refresh).
+    func updateIceServers(_ servers: [GroupCallWire.IceServer])
     func close()
 }
 
