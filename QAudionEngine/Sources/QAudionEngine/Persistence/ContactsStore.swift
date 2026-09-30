@@ -223,6 +223,45 @@ public final class ContactsStore {
             self.proximityPairedAtMs = proximityPairedAtMs
             self.proximityServerConfirmed = proximityServerConfirmed
         }
+
+        /// Returns a copy of this contact with ONLY `displayName` replaced —
+        /// every other field threads through unchanged. Use this instead of
+        /// hand-writing a `StoredContact(...)` reconstruction at a call site
+        /// that is only supposed to rename a contact: a hand-written
+        /// reconstruction lists every field by name, and a field added to
+        /// this struct after such a call site was last touched is silently
+        /// omitted from it (and therefore silently reset to its default) —
+        /// exactly what happened at `AppState.refreshContactsCache()`'s
+        /// placeholder-name migration pass, which dropped `voiceVerifiedAt`
+        /// and `callVerifiedPeerIdentityKey` on every contact it renamed
+        /// until that call site was switched to this helper. Keeping the
+        /// one full field list here, right next to the struct it mirrors,
+        /// does not make a *future* field immune to the same mistake, but
+        /// it does mean there is only one reconstruction to keep in sync
+        /// instead of one per rename call site.
+        public func withDisplayName(_ newDisplayName: String) -> StoredContact {
+            StoredContact(
+                userId: userId,
+                displayName: newDisplayName,
+                phoneHash: phoneHash,
+                avatarUrl: avatarUrl,
+                lastSeen: lastSeen,
+                isVerified: isVerified,
+                pubkey: pubkey,
+                verifiedFingerprintHex: verifiedFingerprintHex,
+                verifiedAtMs: verifiedAtMs,
+                verificationMethod: verificationMethod,
+                presenceAuth: presenceAuth,
+                presenceFloor: presenceFloor,
+                phoneNumber: phoneNumber,
+                extension: self.`extension`,
+                avatarVersion: avatarVersion,
+                voiceVerifiedAt: voiceVerifiedAt,
+                callVerifiedPeerIdentityKey: callVerifiedPeerIdentityKey,
+                proximityPairedAtMs: proximityPairedAtMs,
+                proximityServerConfirmed: proximityServerConfirmed
+            )
+        }
     }
 
     /// W-ASSURANCE (ship step 6) — ranked, NEVER-MERGED presence/authentication
