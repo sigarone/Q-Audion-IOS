@@ -70,21 +70,6 @@ struct CallsSettingsScreen: View {
     // UserDefaults-backed via CallsGate (not Keychain); read once on appear.
     @State private var callKitFreeMode: Bool = false
 
-    /// W-AUDIOSRTPDEBUGTOGGLE / W-CODECMENUSRTP — mirrors
-    /// `CallCapabilities.audioSrtpDebugOverride` (a plain static var, not
-    /// itself observable) into local SwiftUI state, exactly the pattern
-    /// `SettingsScreen` used before this control moved here. Seeded from
-    /// whatever override is already in force (falling back to the compiled
-    /// default) so re-entering this screen mid-session shows the real
-    /// current state, not a stale default.
-    ///
-    /// W-NATIVESRTPPERSIST (this task) — `audioSrtpDebugOverride` itself is
-    /// now seeded at app launch from the persisted preference
-    /// (`QAudionApp.init()`), so this initial value already reflects a
-    /// previous session's choice, not just this one's.
-    @State private var audioSrtpToggle: Bool =
-        CallCapabilities.audioSrtpDebugOverride ?? CallCapabilities.audioSrtpSendEnabled
-
     init(state: AppState) {
         _container = StateObject(wrappedValue: CallsSettingsContainer())
     }
@@ -99,57 +84,51 @@ struct CallsSettingsScreen: View {
                           value: container.viewModel.codecPreference.rawValue.capitalized,
                           mono: false)
 
-                    // W-CODECMENUSRTP — moved out of the internal-only
-                    // Settings surface so the transport choice is reachable
-                    // in every build, right under the codec it sits
-                    // alongside. Same binding the internal toggle used:
-                    // `CallCapabilities.audioSrtpDebugOverride ??
-                    // audioSrtpSendEnabled`, in-memory only, per-call
-                    // snapshot means a mid-call flip cannot affect the call
-                    // already in progress.
+                    // W-SRTPALWAYSON (2026-09-29/30, owner decision after
+                    // M150 verification) — the "Audio SRTP standard
+                    // (WebRTC)" A/B toggle that used to live here
+                    // (W-CODECMENUSRTP) is removed: native SRTP audio is now
+                    // the unconditional default on every build
+                    // (`CallCapabilities.audioSrtpSendEnabled == true`),
+                    // with no local, manual way left to turn it off — only
+                    // the remote `calls.native_srtp_kill` switch or the
+                    // local crash-streak safety net
+                    // (`CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset`)
+                    // can still disable it. This read-only row replaces the
+                    // toggle so the choice of transport stays visible
+                    // (dev/diagnostic visibility kept, per the same
+                    // principle as the "nsnap"/"admgate" RTLog lines this
+                    // never touched) without offering a control that no
+                    // longer does anything a user could rely on.
                     //
-                    // The row subtitle is kept short because
-                    // `SettingsToggleRow` caps it at `.lineLimit(2)`; the
-                    // full disclosure (and the experimental warning, same
-                    // pattern as "MODALITÀ CHIAMATA (SPERIMENTALE)" below)
-                    // lives in the uncapped `warningHint` underneath.
-                    VStack(spacing: 8) {
-                        SettingsToggleRow(
-                            title: "Audio SRTP standard (WebRTC)",
-                            subtitle: "Sostituisce il protocollo Q-Audion con WebRTC DTLS-SRTP standard, se attivo su entrambi i dispositivi.",
-                            isOn: Binding(
-                                get: { audioSrtpToggle },
-                                set: { newValue in
-                                    audioSrtpToggle = newValue
-                                    CallCapabilities.audioSrtpDebugOverride = newValue
-                                    // W-NATIVESRTPPERSIST (this task) — the
-                                    // toggle now survives a restart: every
-                                    // write here also updates the persisted
-                                    // preference (`QAudionApp.init()` seeds
-                                    // `audioSrtpDebugOverride` from it on the
-                                    // next launch). A crash-streak safety
-                                    // net (`CallCapabilities
-                                    // .registerNativeSrtpCrashAndMaybeAutoReset`)
-                                    // can still force this back to `false`
-                                    // if native calls keep crashing.
-                                    CallCapabilities.savePersistedAudioSrtpOverride(newValue)
-                                    // 2026-09-27 diagnosis (I1) — the toggle
-                                    // change had no trace of its own: the
-                                    // live test could only infer it from
-                                    // whether `nsnap`/`admgate` later showed
-                                    // native=1, one call later. Numeric only,
-                                    // same "audiosrtp event=... value=..."
-                                    // shape as the Android counterpart
-                                    // (AudioCodecSettingsViewModel's
-                                    // `srtpdiag event=override_set`), so the
-                                    // two platforms' logs read the same way
-                                    // side by side.
-                                    RTLog.info("call", "audiosrtp event=override value=\(newValue ? 1 : 0) persisted=1")
-                                }
-                            )
-                        )
-                        warningHint("Funzione sperimentale: se l'audio risulta assente o instabile, disattivala (ha effetto dalla prossima chiamata). Cifra i frame end-to-end; l'impostazione resta salvata dopo il riavvio dell'app.")
-                    }
+                    // REVIEW FIX (2026-09-30) — bound to
+                    // `CallCapabilities.isNativeSrtpEnabledLocally` instead
+                    // of a hardcoded "Attivo": a hardcoded value would keep
+                    // claiming the path is active even on a device where the
+                    // remote kill switch or the crash-streak safety net has
+                    // actually turned it off, which is exactly the
+                    // diagnostic visibility this row exists to preserve.
+                    // `statusRow` re-reads this on every body evaluation
+                    // (e.g. re-entering this screen), same as the old
+                    // toggle's own seeded `@State` did.
+                    // W-NATIVESRTPGUARDBUILD (cross-platform parity round 2,
+                    // 2026-09-30) — when the crash-streak safety net is the
+                    // reason this row reads inactive, say so explicitly
+                    // rather than a bare "Inattivo": the row already exists
+                    // to keep this state visible, and "auto-disabled on this
+                    // version" is a materially different fact from "off by
+                    // remote kill switch" (transient, per-call, not tied to
+                    // a build) for anyone reading it.
+                    statusRow(label: "Audio SRTP standard (WebRTC)",
+                              active: CallCapabilities.isNativeSrtpEnabledLocally,
+                              inactiveLabel: nativeSrtpAutoDisabledForThisBuild
+                                ? "Disattivato automaticamente su questa versione"
+                                : "Inattivo")
+                    Text("Protocollo predefinito su tutti i dispositivi aggiornati. Con un dispositivo meno recente che non lo supporta ancora, o se il percorso e' stato disattivato da remoto o da una protezione automatica anti-crash, la chiamata passa automaticamente al protocollo Q-Audion.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 4)
 
                     SettingsSectionHeader("QUALITÀ CHIAMATA")
                     kvRow(label: "Preset audio",
@@ -240,6 +219,15 @@ struct CallsSettingsScreen: View {
             || !container.viewModel.isAgcEnabled
     }
 
+    /// W-NATIVESRTPGUARDBUILD — true iff the local crash-streak guard is the
+    /// reason native SRTP reads inactive on THIS build (as opposed to, say,
+    /// a future per-call-only signal). Compares the build the guard last
+    /// tripped for against the build running right now — the same check
+    /// `QAudionApp.init()`'s reconcile step makes at launch.
+    private var nativeSrtpAutoDisabledForThisBuild: Bool {
+        CallCapabilities.nativeSrtpGuardTrippedBuild() == CallCapabilities.currentAppBuild()
+    }
+
     // MARK: - kvRow + statusRow + warningHint helpers
 
     private func kvRow(label: String, value: String, mono: Bool) -> some View {
@@ -261,7 +249,7 @@ struct CallsSettingsScreen: View {
         )
     }
 
-    private func statusRow(label: String, active: Bool) -> some View {
+    private func statusRow(label: String, active: Bool, inactiveLabel: String = "Inattivo") -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -271,7 +259,7 @@ struct CallsSettingsScreen: View {
                 Circle()
                     .fill(active ? extras.success : extras.riskHigh)
                     .frame(width: 8, height: 8)
-                Text(active ? "Attivo" : "Inattivo")
+                Text(active ? "Attivo" : inactiveLabel)
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(active ? extras.success : extras.riskHigh)
             }

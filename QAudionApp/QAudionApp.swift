@@ -98,23 +98,62 @@ struct QAudionApp: App {
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
 
-        // W-NATIVESRTPPERSIST (this task) — load the persisted native-SRTP
-        // override BEFORE anything else that could start a call (same
-        // ordering rationale as `CrashReporter.installHandlers()` above,
-        // and the Android counterpart's `QAudionApplication.onCreate`
-        // ordering — spec section B). `nil` (fresh install / explicit
-        // reset) leaves `audioSrtpDebugOverride` at its own default (`nil`
-        // -> compiled OFF), so a fresh install's behavior is unchanged.
+        // W-SRTPALWAYSON (2026-09-29/30, owner decision after live M150
+        // verification — DTLS 1.3/TLS_AES_256_GCM_SHA384, SRTP
+        // AEAD_AES_256_GCM, X25519MLKEM768, 0 handshake failures, 0
+        // crashes) — native SRTP audio is now the unconditional compiled
+        // default (`CallCapabilities.audioSrtpSendEnabled == true`) on
+        // every build; the "Audio SRTP standard (WebRTC)" toggle that used
+        // to live in Settings > Chiamate is gone, and with it the only
+        // LOCAL, MANUAL way to turn this off. An install updating from
+        // before this change may still have that toggle's old choice sitting
+        // in `persistedOverrideKey` — this one-time migration discards it
+        // (whatever it was) so it can never keep native SRTP off after the
+        // update, then never touches that key again. See
+        // `CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()`'s
+        // own doc for why this must run exactly once, before the seed below.
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+
+        // W-NATIVESRTPGUARDBUILD (cross-platform parity round 2, 2026-09-30,
+        // owner decision) — reconcile a PRIOR crash-streak trip against the
+        // build running right now, BEFORE the seed below loads it into
+        // `audioSrtpDebugOverride`. A trip from an OLDER build (the build
+        // has since been updated) is cleared here — native SRTP gets a
+        // fresh 2-crash budget on the new build — while a trip from THIS
+        // SAME build is left untouched. Mirrors Android's
+        // `NativeSrtpCrashGuard.loadPersistedGuardOnInit`.
+        if CallCapabilities.reconcileNativeSrtpGuardForCurrentBuild() {
+            RTLog.warn("call", "native_srtp_guard cleared build_changed=1")
+        }
+
+        // W-NATIVESRTPPERSIST — load whatever is left in the persisted slot
+        // BEFORE anything else that could start a call (same ordering
+        // rationale as `CrashReporter.installHandlers()` above, and the
+        // Android counterpart's `QAudionApplication.onCreate` ordering —
+        // spec section B). Now that the migration above has run (and the
+        // reconcile above has cleared any stale, older-build trip), the
+        // only thing that can ever be sitting here is a `false` the
+        // crash-streak safety net below persisted on a PRIOR launch of
+        // THIS SAME build — `nil` (the normal case: fresh install, no
+        // crash streak has ever fired, or the build just changed) leaves
+        // `audioSrtpDebugOverride` at its own default (`nil` -> compiled
+        // default, i.e. ON).
         CallCapabilities.audioSrtpDebugOverride = CallCapabilities.loadPersistedAudioSrtpOverride()
 
-        // W-NATIVESRTPCRASHGUARD (this task) — a crash (or an OS kill) while
-        // a native-SRTP call was in progress leaves its breadcrumb
+        // W-NATIVESRTPCRASHGUARD — a crash (or an OS kill) while a
+        // native-SRTP call was in progress leaves its breadcrumb
         // call-context in place (`CallService.endCall()` never ran to clear
-        // it). Two such crashes IN A ROW force the toggle back OFF —
-        // persisted AND live — so a broken native path cannot keep
-        // crashing every call the user makes. Must run before any call
-        // path AND before the context is cleared below, and does not need
-        // the stdout tee (`RTLog` records into the ring directly).
+        // it). Two such crashes IN A ROW force native SRTP off for this
+        // device/build — persisted AND live — so a broken native path
+        // cannot keep crashing every call the user makes. This is the one
+        // local safety net that survives the toggle's removal
+        // (W-SRTPALWAYSON): it is automatic, not a manual control, and
+        // there is deliberately no UI to turn it back on again — a device
+        // that trips it stays on the legacy sealed-audio path until a
+        // future build changes that (see the reconcile call above for the
+        // one AUTOMATIC way it comes back). Must run before any call path
+        // AND before the context is cleared below, and does not need the
+        // stdout tee (`RTLog` records into the ring directly).
         // W-MEDIAATACCEPT (option b) — I9/§10: `CrashGuardDecisions
         // .countsTowardStreak` replaces the two raw `.contains` checks —
         // with the media plane no longer built at ring, a crash while
@@ -125,7 +164,7 @@ struct QAudionApp: App {
            let ctx = CrashBreadcrumbs.lastCallContext(),
            CrashGuardDecisions.countsTowardStreak(context: ctx) {
             if CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset() {
-                RTLog.warn("call", "audiosrtp event=override_autoreset reason=crash_streak n=2")
+                RTLog.warn("call", "native_srtp_guard tripped build=\(CallCapabilities.currentAppBuild()) reason=crash_streak n=2")
             }
         }
         // Consumed (whether or not it triggered the guard above) — a stale

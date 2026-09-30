@@ -1,14 +1,17 @@
 import XCTest
 @testable import QAudionEngine
 
-/// W-NATIVESRTPPERSIST (this task) — the persisted native-SRTP override
+/// W-NATIVESRTPPERSIST — the persisted native-SRTP override
 /// (``CallCapabilities/loadPersistedAudioSrtpOverride()`` /
 /// ``CallCapabilities/savePersistedAudioSrtpOverride(_:)``) and the
 /// consecutive-native-crash auto-reset guard
 /// (``CallCapabilities/registerNativeSrtpCrashAndMaybeAutoReset()``).
 /// Mirrors Android's `NativeSrtpPreferenceTest` (three-state read/write +
 /// removal-on-reset) plus the owner-recommended crash-streak behavior from
-/// spec section B.
+/// spec section B. W-SRTPALWAYSON (2026-09-29/30) added the migration
+/// section at the bottom — the Settings toggle that used to be the OTHER
+/// caller of `savePersistedAudioSrtpOverride` is gone, and an install
+/// updating from before that change must not keep whatever it last chose.
 final class CallCapabilitiesNativeSrtpPersistenceTests: XCTestCase {
 
     override func setUp() {
@@ -26,6 +29,8 @@ final class CallCapabilitiesNativeSrtpPersistenceTests: XCTestCase {
         CallCapabilities.resetNativeSrtpCrashStreak()
         CallCapabilities.audioSrtpDebugOverride = nil
         CallCapabilities.endNativeSrtpCallSnapshot()
+        CallCapabilities.resetManualOverrideMigrationFlagForTesting()
+        UserDefaults.standard.removeObject(forKey: "qaudion.calls.nativeSrtpGuardTrippedBuild.v1")
     }
 
     // MARK: - Three-state persistence
@@ -123,5 +128,117 @@ final class CallCapabilitiesNativeSrtpPersistenceTests: XCTestCase {
         XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
         XCTAssertFalse(CallCapabilities.forceNativeSrtpCallSnapshotOff(callId: "call-aaa"))
         XCTAssertNil(CallCapabilities.nativeSrtpCallSnapshot)
+    }
+
+    // MARK: - W-SRTPALWAYSON (2026-09-29/30) — migration away from the toggle
+
+    /// An install updating from before the toggle's removal may still have
+    /// its last manual choice sitting in the persisted slot. The migration
+    /// must discard it unconditionally, whatever it was — a pre-update
+    /// manual "OFF" must never keep native SRTP off after this update.
+    func test_migration_discardsAPreExistingManualValue_regardlessOfWhatItWas() {
+        CallCapabilities.savePersistedAudioSrtpOverride(false) // pre-update manual choice
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride(),
+                     "a pre-existing manual toggle value must not survive the migration")
+    }
+
+    func test_migration_runsOnlyOnce_andNeverClobbersALaterCrashStreakValue() {
+        CallCapabilities.savePersistedAudioSrtpOverride(true) // pre-update manual choice
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride())
+
+        // Simulate the crash-streak safety net legitimately persisting a
+        // fresh `false` on a LATER launch, after the migration already ran
+        // once. A second migration call must be a no-op.
+        CallCapabilities.savePersistedAudioSrtpOverride(false)
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertEqual(CallCapabilities.loadPersistedAudioSrtpOverride(), false,
+                       "the migration must run only once -- it must never wipe a value the crash-streak safety net persists afterward")
+    }
+
+    func test_migration_withNothingPersisted_isANoOp() {
+        CallCapabilities.migrateAwayFromManualAudioSrtpOverrideIfNeeded()
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride())
+    }
+
+    // MARK: - Cross-platform parity round 2 (2026-09-30): build-tied persistence
+    //
+    // Mirrors Android's `NativeSrtpCrashGuardTest` build-tie cases
+    // (`decideGuardOnLoad` / `effectiveStreakForBuild`): trip after two
+    // consecutive crashes, persist across a restart of the SAME build,
+    // auto-clear the moment a DIFFERENT build is seen, "not cleared" on the
+    // same version, and independence from the remote kill switch mechanics.
+
+    func test_twoConsecutiveCrashes_recordsTheTrippingBuild() {
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        let fired = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        XCTAssertTrue(fired)
+        XCTAssertEqual(CallCapabilities.nativeSrtpGuardTrippedBuild(), "100")
+    }
+
+    func test_guardPersistsAcrossARestartOfTheSameBuild() {
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        XCTAssertEqual(CallCapabilities.loadPersistedAudioSrtpOverride(), false)
+
+        // Simulate the next launch of the SAME build: reconcile must be a
+        // no-op, leaving the tripped override in force.
+        let cleared = CallCapabilities.reconcileNativeSrtpGuardForCurrentBuild(currentBuild: "100")
+        XCTAssertFalse(cleared, "a restart of the SAME build must not un-trip the guard")
+        XCTAssertEqual(CallCapabilities.loadPersistedAudioSrtpOverride(), false,
+                       "the override must still be forced off on the same build")
+        XCTAssertEqual(CallCapabilities.nativeSrtpGuardTrippedBuild(), "100")
+    }
+
+    func test_guardIsClearedOnceADifferentBuildIsSeen_andRetriesNativeSrtp() {
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        XCTAssertEqual(CallCapabilities.loadPersistedAudioSrtpOverride(), false)
+
+        let cleared = CallCapabilities.reconcileNativeSrtpGuardForCurrentBuild(currentBuild: "101")
+        XCTAssertTrue(cleared, "a new build must clear a guard tripped by an OLDER build")
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride(),
+                    "clearing must remove the override entirely -- back to the compiled default (native SRTP retried)")
+        XCTAssertNil(CallCapabilities.nativeSrtpGuardTrippedBuild())
+        XCTAssertEqual(CallCapabilities.nativeSrtpCrashStreak(), 0,
+                       "the streak itself must also reset -- the new build gets a FRESH 2-crash budget")
+    }
+
+    func test_neverTripped_reconcileIsANoOp() {
+        XCTAssertFalse(CallCapabilities.reconcileNativeSrtpGuardForCurrentBuild(currentBuild: "100"))
+        XCTAssertNil(CallCapabilities.loadPersistedAudioSrtpOverride())
+    }
+
+    func test_freshStreakOnTheNewBuild_tripsTheGuardAgain() {
+        // Build 100 trips, then build 101 is installed and the guard clears.
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        _ = CallCapabilities.reconcileNativeSrtpGuardForCurrentBuild(currentBuild: "101")
+
+        // A single crash on the new build must not immediately re-trip it.
+        let firstCrashOnNewBuild = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "101")
+        XCTAssertFalse(firstCrashOnNewBuild)
+        XCTAssertEqual(CallCapabilities.nativeSrtpCrashStreak(), 1)
+
+        // A second, consecutive crash on the SAME new build trips it again.
+        let secondCrashOnNewBuild = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "101")
+        XCTAssertTrue(secondCrashOnNewBuild)
+        XCTAssertEqual(CallCapabilities.nativeSrtpGuardTrippedBuild(), "101")
+    }
+
+    func test_guardTripAndReconcile_neverTouchTheRemoteKillSwitchMechanics() {
+        // The crash-streak guard and the per-call snapshot / remote
+        // kill-switch forcing mechanism are independent signals: tripping
+        // (or clearing) one must never touch the other's state.
+        _ = CallCapabilities.beginNativeSrtpCallSnapshot(callId: "call-aaa")
+        XCTAssertEqual(CallCapabilities.nativeSrtpCallSnapshot, true)
+
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        _ = CallCapabilities.registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: "100")
+        _ = CallCapabilities.reconcileNativeSrtpGuardForCurrentBuild(currentBuild: "101")
+
+        XCTAssertEqual(CallCapabilities.nativeSrtpCallSnapshot, true,
+                       "the in-progress call's snapshot must be untouched by the guard tripping or clearing")
     }
 }

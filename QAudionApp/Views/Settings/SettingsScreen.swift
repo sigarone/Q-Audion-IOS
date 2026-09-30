@@ -684,12 +684,13 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
-            // W-CODECMENUSRTP — this A/B switch between audio-srtp-v1 and
-            // the custom protocol moved to Settings > Chiamate > CODEC
-            // (CallsSettingsScreen) so it is reachable outside
-            // QAUDION_DEV_TOOLS builds (App Store guideline 2.1). See
-            // CallCapabilities.audioSrtpDebugOverride for the binding this
-            // single source of truth now lives behind.
+            // W-CODECMENUSRTP — the A/B switch between audio-srtp-v1 and
+            // the custom protocol that used to live in Settings >
+            // Chiamate > CODEC (CallsSettingsScreen) is gone: native SRTP
+            // audio is the unconditional default on every build now
+            // (W-SRTPALWAYSON, 2026-09-29/30 owner decision, see
+            // CallCapabilities.audioSrtpSendEnabled). Nothing to reach from
+            // this dev-tools screen anymore.
 
             // W46: Reset dati locali (UserDefaults wipe non-credenziale).
             // Utile per QA TestFlight per ripartire pulito senza
