@@ -36,19 +36,19 @@ import Security
 public final class ContactsStore {
 
     public struct StoredContact: Codable, Equatable {
-        public let userId: String
-        public let displayName: String
-        public let phoneHash: String  // peppered hash that resolved to userId
-        public let avatarUrl: URL?
-        public let lastSeen: Date?
-        public let isVerified: Bool
+        public private(set) var userId: String
+        public private(set) var displayName: String
+        public private(set) var phoneHash: String  // peppered hash that resolved to userId
+        public private(set) var avatarUrl: URL?
+        public private(set) var lastSeen: Date?
+        public private(set) var isVerified: Bool
         /// Long-term identity public key, when known. Populated by the QR-scan
         /// pairing flow (IdentityQrCode / DeviceLinkBinaryQR carry the pubkey
         /// alongside the userId) and by future discover-v2 results that
         /// include published pubkeys. nil for legacy rows persisted before
         /// this field was added — old JSON decodes with pubkey=nil because
         /// Optional fields are absent-tolerant in Codable synthesis.
-        public let pubkey: Data?
+        public private(set) var pubkey: Data?
         /// Persistent-safety-number fingerprint (SafetyNumber.Result.fingerprintHex,
         /// 60 lowercase hex chars) at the moment the user last marked this
         /// peer verified. nil when never manually verified. Compared against
@@ -58,16 +58,16 @@ public final class ContactsStore {
         /// than keep showing a stale green checkmark. Mirrors Android
         /// `PeerTrustEntity.lastSeenFingerprintHex` semantics (the "verified
         /// pin", not just a boolean).
-        public let verifiedFingerprintHex: String?
+        public private(set) var verifiedFingerprintHex: String?
         /// Wall-clock ms when `verifiedFingerprintHex` was last set. Mirrors
         /// Android `PeerTrustEntity.verifiedAtMs`.
-        public let verifiedAtMs: Int64?
+        public private(set) var verifiedAtMs: Int64?
         /// `TrustVerificationMethod.rawValue` used for the last manual verify
         /// ("in-person" / "qr" / "nfc" / "anti-replay" / "voice"). Stored as a
         /// plain String (not the app-target enum) to keep this engine-module
         /// type decoupled from QAudionApp's UI layer, mirroring Android
         /// `PeerTrustEntity.verificationMethod`.
-        public let verificationMethod: String?
+        public private(set) var verificationMethod: String?
         /// W-ASSURANCE (multi-PSK-mixing SYNTHESIS.md ship step 6) — the
         /// persisted "this contact has been authenticated in person before"
         /// record. `nil` for a contact that has never reached `AssuranceState
@@ -83,7 +83,7 @@ public final class ContactsStore {
         /// record, never the verdict of the CURRENT call. `ContactDetailScreen`
         /// renders THIS field; `InCallScreen` never reads it. See this
         /// project's "two things that must never share a widget" rule.
-        public let presenceAuth: PresenceAuth?
+        public private(set) var presenceAuth: PresenceAuth?
         /// Ship step 8 (W-FLOOR) — per-contact "presence floor". `true` once
         /// this contact has EVER reached `S2` (set alongside `presenceAuth`
         /// itself by `applyAssuranceOutcome`); never cleared by an ordinary
@@ -92,7 +92,7 @@ public final class ContactsStore {
         /// treated identically to `false` everywhere this is read (Optional
         /// so legacy rows persisted before this field existed decode cleanly,
         /// same Optional-absent-tolerant convention as `pubkey` above).
-        public let presenceFloor: Bool?
+        public private(set) var presenceFloor: Bool?
         /// Raw phone number actually observed for this peer — populated
         /// ONLY by (a) the manual phone-book import flow (the user picked
         /// this exact device-contact row, see `PhoneContactImportView`) or
@@ -109,13 +109,13 @@ public final class ContactsStore {
         /// carry `phoneHash`). Never populated by any bulk/background sync
         /// of the whole device address book — only by an actual call or a
         /// user-picked manual import row.
-        public let phoneNumber: String?
+        public private(set) var phoneNumber: String?
         /// PBX short dial extension, as text (e.g. "103"). Populated the
         /// same way, and under the same constraints, as `phoneNumber`
         /// above — learned from a genuine call's server profile fetch
         /// (`PublicUser.extensionNumber`), never bulk-synced. `nil` until
         /// learned.
-        public let `extension`: String?
+        public private(set) var `extension`: String?
         /// E2EE avatar transport (2026-07-30, see
         /// `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md`) — `avatarUrl` above is
         /// now a LOCAL `file://` path to the decrypted avatar cached by
@@ -124,7 +124,7 @@ public final class ContactsStore {
         /// `avatar_announce` actually applied — lets a re-sent announce
         /// (e.g. on every call-connect) be deduped without
         /// re-downloading. `nil` for a contact with no avatar cached yet.
-        public let avatarVersion: Int?
+        public private(set) var avatarVersion: Int?
         /// Feature B ("voce verificata" — per-contact call-time voice
         /// learning). Epoch-ms timestamp of the last time a
         /// `VoiceLearningSession` for THIS contact reached `.completed`
@@ -141,7 +141,7 @@ public final class ContactsStore {
         /// "SAS verificato" row below it — a mislabeled duplicate of a
         /// different signal, not a real one. Mirrors Android's independent
         /// nullable `voiceVerifiedAt` column for the same reason.
-        public let voiceVerifiedAt: Int64?
+        public private(set) var voiceVerifiedAt: Int64?
         /// W-MESHUNKNOWN-IOS (2026-08-20, parity with Android
         /// `ContactEntity.callVerifiedPeerIdentityKeyB64` /
         /// `MeshNodeIdentity.kt`'s kdoc) — raw 32-byte Ed25519 identity key
@@ -164,7 +164,7 @@ public final class ContactsStore {
         /// from ANY call, not an in-person confirmation — and is overwritten
         /// by the next call's key rather than accumulated. `nil` until a
         /// call with this contact has verified a signature at least once.
-        public let callVerifiedPeerIdentityKey: Data?
+        public private(set) var callVerifiedPeerIdentityKey: Data?
         /// W-PAIRFB (in-person pairing feedback) — epoch ms the in-person
         /// (QR + Bluetooth) pairing ceremony (`ProximityPairingSummary`,
         /// docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md) last completed
@@ -179,14 +179,14 @@ public final class ContactsStore {
         /// not run never upgrades that separate trust ladder. Rendered
         /// directly by `ContactDetailScreen`. `nil` for a contact never
         /// paired this way (every contact before this field existed).
-        public let proximityPairedAtMs: Int64?
+        public private(set) var proximityPairedAtMs: Int64?
         /// Whether the server confirmed the claimed account published the
         /// key proved during the pairing at `proximityPairedAtMs` (spec
         /// §12). Meaningless when that is `nil`. Gates the badge's wording
         /// ("Verificato di persona" vs "Chiave di persona salvata") —
         /// never upgrades `isVerified` itself, which keeps its own,
         /// independently-computed value.
-        public let proximityServerConfirmed: Bool?
+        public private(set) var proximityServerConfirmed: Bool?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -224,43 +224,92 @@ public final class ContactsStore {
             self.proximityServerConfirmed = proximityServerConfirmed
         }
 
-        /// Returns a copy of this contact with ONLY `displayName` replaced —
-        /// every other field threads through unchanged. Use this instead of
-        /// hand-writing a `StoredContact(...)` reconstruction at a call site
-        /// that is only supposed to rename a contact: a hand-written
-        /// reconstruction lists every field by name, and a field added to
-        /// this struct after such a call site was last touched is silently
-        /// omitted from it (and therefore silently reset to its default) —
-        /// exactly what happened at `AppState.refreshContactsCache()`'s
-        /// placeholder-name migration pass, which dropped `voiceVerifiedAt`
-        /// and `callVerifiedPeerIdentityKey` on every contact it renamed
-        /// until that call site was switched to this helper. Keeping the
-        /// one full field list here, right next to the struct it mirrors,
-        /// does not make a *future* field immune to the same mistake, but
-        /// it does mean there is only one reconstruction to keep in sync
-        /// instead of one per rename call site.
-        public func withDisplayName(_ newDisplayName: String) -> StoredContact {
-            StoredContact(
-                userId: userId,
-                displayName: newDisplayName,
-                phoneHash: phoneHash,
-                avatarUrl: avatarUrl,
-                lastSeen: lastSeen,
-                isVerified: isVerified,
-                pubkey: pubkey,
-                verifiedFingerprintHex: verifiedFingerprintHex,
-                verifiedAtMs: verifiedAtMs,
-                verificationMethod: verificationMethod,
-                presenceAuth: presenceAuth,
-                presenceFloor: presenceFloor,
-                phoneNumber: phoneNumber,
-                extension: self.`extension`,
-                avatarVersion: avatarVersion,
-                voiceVerifiedAt: voiceVerifiedAt,
-                callVerifiedPeerIdentityKey: callVerifiedPeerIdentityKey,
-                proximityPairedAtMs: proximityPairedAtMs,
-                proximityServerConfirmed: proximityServerConfirmed
-            )
+        // MARK: Field-preserving copies
+        //
+        // The properties above are `private(set)`, so every copy helper below
+        // is written as `var copy = self; copy.field = ...`: a copy carries
+        // EVERY field by construction, and a helper only states what it
+        // changes. Do not hand-write a `StoredContact(...)` reconstruction at
+        // a call site that rebuilds an EXISTING contact: it lists every field
+        // by name, and a field added to this struct after that call site was
+        // last touched is silently omitted from it (and therefore reset to
+        // its default). That is how `voiceVerifiedAt`,
+        // `callVerifiedPeerIdentityKey` and the proximity-pairing pair were
+        // repeatedly wiped by rename / verify / phonebook-sync / QR-rescan
+        // paths, each one fixed a call site at a time until these helpers
+        // existed.
+
+        /// Returns a copy with `displayName` replaced and every other field
+        /// threaded through unchanged. `phoneHash` / `extensionNumber` are
+        /// optional extra overrides for the sites that legitimately change
+        /// them together with the name (phonebook discovery learns a hash,
+        /// the contact editor edits the extension); `nil` means "leave as
+        /// is", never "clear".
+        public func withDisplayName(
+            _ newDisplayName: String,
+            phoneHash newPhoneHash: String? = nil,
+            extensionNumber newExtension: String? = nil
+        ) -> StoredContact {
+            var copy = self
+            copy.displayName = newDisplayName
+            if let hash = newPhoneHash { copy.phoneHash = hash }
+            if let ext = newExtension { copy.`extension` = ext }
+            return copy
+        }
+
+        /// Returns a copy recording a manual "the user compared the safety
+        /// number" verification (SAS / QR / anti-replay / voice / in-person):
+        /// `isVerified` and the three verify-pin fields change, everything
+        /// else is untouched. A manual verify confirms the SAME identity, so
+        /// it must never wipe the separate trust axes (`presenceAuth` /
+        /// `presenceFloor`, `voiceVerifiedAt`, `callVerifiedPeerIdentityKey`,
+        /// the in-person pairing record) or any other field.
+        public func withVerification(
+            fingerprintHex: String,
+            atMs: Int64,
+            method: String
+        ) -> StoredContact {
+            var copy = self
+            copy.isVerified = true
+            copy.verifiedFingerprintHex = fingerprintHex
+            copy.verifiedAtMs = atMs
+            copy.verificationMethod = method
+            return copy
+        }
+
+        /// Returns a copy for the moment the user ACCEPTS a rotated peer
+        /// identity key. Clearing verification here is the correct security
+        /// behaviour, not a bug: a safety-number comparison, an NFC presence
+        /// record and an in-person pairing are all statements about the OLD
+        /// key, and keeping them would make the app vouch for a key nobody
+        /// compared. Exactly these fields are reset:
+        ///   - `isVerified`, `verifiedFingerprintHex`, `verifiedAtMs`,
+        ///     `verificationMethod` (the SAS / manual verify pin)
+        ///   - `presenceAuth`, `presenceFloor` (NFC presence record + floor)
+        ///   - `proximityPairedAtMs`, `proximityServerConfirmed` (in-person
+        ///     pairing badge, verified against the old key)
+        ///   - `callVerifiedPeerIdentityKey` (the identity key the last call
+        ///     verified: by definition the superseded one, and rewritten by
+        ///     the next signature-verified call, so keeping it would only let
+        ///     the mesh radar keep naming a device that advertises the old key)
+        /// Everything else is kept, notably `voiceVerifiedAt`: a voice match
+        /// is a statement about the PERSON's speaker template, not about a
+        /// key, so a key rotation does not invalidate it (same rule as
+        /// Android, where `voiceVerifiedAt` is deliberately not nulled on
+        /// rotation either). Name, avatar, phone number, extension and
+        /// `pubkey` also stay, as they did before this helper existed.
+        public func afterIdentityKeyRotation() -> StoredContact {
+            var copy = self
+            copy.isVerified = false
+            copy.verifiedFingerprintHex = nil
+            copy.verifiedAtMs = nil
+            copy.verificationMethod = nil
+            copy.presenceAuth = nil
+            copy.presenceFloor = nil
+            copy.callVerifiedPeerIdentityKey = nil
+            copy.proximityPairedAtMs = nil
+            copy.proximityServerConfirmed = nil
+            return copy
         }
     }
 
