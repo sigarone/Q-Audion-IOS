@@ -86,6 +86,11 @@ public enum NativeAudioUnitGateDecisions {
         /// A self-managed re-activation while the unit was enabled (the
         /// wake-only path after CallKit released the session): restart it.
         case selfManagedReactivation = 8
+        /// Group calls v2 (`GroupAudioUnitDriver`): the unit of a group call is
+        /// enabled once its audio session is active.
+        case groupEnable = 9
+        /// Group calls v2: the group call ended and released its arm.
+        case groupEnd = 10
     }
 
     /// How long a `.selfExpectingCallKit` activation waits for CallKit's own

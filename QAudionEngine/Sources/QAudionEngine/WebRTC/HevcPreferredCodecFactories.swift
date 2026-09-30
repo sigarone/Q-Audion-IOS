@@ -52,7 +52,19 @@ public final class HevcPreferredVideoEncoderFactory: NSObject, RTCVideoEncoderFa
             return KeyframeForcingVideoEncoder(inner: RTCVideoEncoderH265(codecInfo: info))
         }
         guard let encoder = delegate.createEncoder(info) else { return nil }
-        return KeyframeForcingVideoEncoder(inner: encoder)
+        // Group calls v2 (VP8 simulcast): the software VP8 / VP9 / AV1 encoders are
+        // NATIVE builders (`RTCNativeVideoEncoderBuilder`), which the ObjC->C++ shim
+        // unwraps into the real libvpx encoder — and libvpx does simulcast itself.
+        // Wrapping one in KeyframeForcingVideoEncoder hides the builder behind a
+        // plain RTCVideoEncoder whose calls all land on the builder's unimplemented
+        // stubs: no video at all. Key frames on these codecs come from libwebrtc's
+        // own PLI / FIR handling (and, for a publisher, Janus' `keyframe` configure).
+        switch info.name.uppercased() {
+        case "VP8", "VP9", "AV1":
+            return encoder
+        default:
+            return KeyframeForcingVideoEncoder(inner: encoder)
+        }
     }
 
     public func supportedCodecs() -> [RTCVideoCodecInfo] {
