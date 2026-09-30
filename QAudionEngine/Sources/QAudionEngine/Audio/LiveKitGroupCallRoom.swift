@@ -920,15 +920,48 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// so throwing here (rather than silently no-op'ing) is the correct,
     /// already-wired way to surface the denial.
     public func setCameraEnabled(_ enabled: Bool) async throws {
-        guard let room = room else { return }
+        // W-GRPVIDEOTELEM (2026-09-30): this mid-call toggle path had NO
+        // telemetry at all — `connect()`'s own INITIAL publish (above) has
+        // had "local video track published"/`call.media.video_publish_failed`/
+        // `call.media.camera_permission_denied` since W-GRPVIDEOPUBFIX, but
+        // this method (reached by every toggle after the call is already
+        // up) never printed or emitted anything, success or failure.
+        // Tonight's group-call incident (call cd87caee) showed exactly that
+        // silence: no line here means a missed tap and a lost one look
+        // identical in the logs. `call.media.video_toggle` carries only a
+        // stage name and a numeric code — never the free-text SDK error
+        // description — same privacy discipline as `VideoPublishError`
+        // above.
+        guard let room = room else {
+            print("[GroupCallController][telemetry] call.media.video_toggle stage=no_room code=0 target=\(enabled ? 1 : 0)")
+            return
+        }
         if enabled {
-            guard await ensureCameraAuthorized() else { throw CameraPermissionError.denied }
+            guard await ensureCameraAuthorized() else {
+                // Mirrors connect()'s own `call.media.camera_permission_denied`
+                // for the initial publish — this toggle path had no
+                // equivalent before, so a denial here was indistinguishable
+                // from a tap that never reached this method at all.
+                print("[GroupCallController][telemetry] call.media.video_toggle stage=perm_denied code=0")
+                emitTelemetry("call.media.video_toggle", ["stage": "perm_denied"])
+                throw CameraPermissionError.denied
+            }
         }
         // preferredCodec: .vp8 is set globally via RoomOptions.
         // defaultVideoPublishOptions (see connect()'s RoomOptions
         // construction) — no per-call override needed here.
         _ = try await room.localParticipant.setCamera(enabled: enabled)
         let track = enabled ? room.localParticipant.firstCameraVideoTrack : nil
+        if enabled {
+            // Mirrors connect()'s own "local video track published" line
+            // (see above) — that one only ever covered the INITIAL publish;
+            // this toggle path never had it, so a successful `setCamera`
+            // here left no trace distinguishing it from a call that never
+            // got this far.
+            print("[GroupCallController][telemetry] local video track published identity=\((room.localParticipant.identity?.stringValue ?? "self").prefix(8))…")
+        }
+        print("[GroupCallController][telemetry] call.media.video_toggle stage=published code=0 target=\(enabled ? 1 : 0)")
+        emitTelemetry("call.media.video_toggle", ["stage": "published", "target": enabled ? 1 : 0])
         onLocalVideoTrack?(track)
         if enabled {
             attachStatsReporting(to: track)
@@ -1689,6 +1722,14 @@ public final class LiveKitGroupCallRoom: NSObject, @unchecked Sendable {
     /// always throw `LiveKitUnavailableError` before any camera-specific
     /// failure could occur.
     public enum VideoPublishError: Error, Equatable { case failed(code: Int) }
+    /// W-GRPVIDEOTELEM — stub counterpart of the real class's same-named
+    /// type (see this stub's own doc comment above), so `GroupCallController`
+    /// can reference `LiveKitGroupCallRoom.CameraPermissionError`
+    /// unconditionally (it distinguishes a permission denial from any other
+    /// publish failure when logging `call.media.video_toggle`). Never
+    /// thrown here: this stub's `setCameraEnabled` always throws
+    /// `LiveKitUnavailableError` before any permission check could run.
+    public enum CameraPermissionError: Error { case denied }
 
     public var onRemoteAudioTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
     public var onRemoteVideoTrack: ((_ identity: String, _ track: AnyObject) -> Void)?
