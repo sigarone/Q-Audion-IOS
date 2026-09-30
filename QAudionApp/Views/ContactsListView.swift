@@ -251,10 +251,21 @@ final class ContactsListContainer: ObservableObject {
         /// telemetry `outcome` attribute (`ProximityPairingTelemetry`) and
         /// for the final-screen icon/tone — never for the user-facing text,
         /// which is `title`/`detail` below.
+        ///
+        /// Review fix (W-PAIRFB cross-platform telemetry audit): the raw
+        /// values are the wire strings the `outcome` attribute ships to the
+        /// server and MUST match Android's `ProximityPairingLogic
+        /// .telemetryOutcome` vocabulary (known/added/added_verified/
+        /// not_added, pinned by its own `ProximityPairingLogicTest`) — they
+        /// used to be a separate, iOS-only vocabulary (new_contact/
+        /// existing_contact/saved_unverified), which would have silently
+        /// split every funnel aggregation by platform. The Swift case NAMES
+        /// are unaffected (nothing switches or compares on the raw string
+        /// except telemetry), so this is a wire-format-only change.
         enum Kind: String, Equatable {
-            case newContactVerified = "new_contact"
-            case existingContact = "existing_contact"
-            case savedUnverified = "saved_unverified"
+            case newContactVerified = "added_verified"
+            case existingContact = "known"
+            case savedUnverified = "added"
             case notAdded = "not_added"
         }
         let id = UUID()

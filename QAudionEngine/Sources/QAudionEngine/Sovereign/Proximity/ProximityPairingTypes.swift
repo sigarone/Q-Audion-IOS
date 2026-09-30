@@ -344,9 +344,19 @@ public struct ProximityPairingSummary: Equatable, Sendable {
 /// telemetry event's `attrs`.
 public enum ProximityPairingTelemetryEvent: Equatable, Sendable {
     /// Where in the ceremony a `failed`/`cancelled` event happened.
+    ///
+    /// Review fix (W-PAIRFB cross-platform telemetry audit): explicit
+    /// snake_case raw value on `showingCode` — Android's
+    /// `ProximityPairingViewModel.telemetryStage` wire value for this stage
+    /// is `"showing_code"`; Swift's default synthesized raw value for this
+    /// case would have shipped the literal case name `"showingCode"`
+    /// instead, splitting the `stage` attribute's vocabulary by platform.
+    /// The other four cases already coincide with Android's strings under
+    /// default synthesis (single lowercase words), so only this one needed
+    /// an explicit override.
     public enum Stage: String, Equatable, Sendable {
         case preparing
-        case showingCode
+        case showingCode = "showing_code"
         case connecting
         case exchanging
         case confirming
