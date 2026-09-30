@@ -111,8 +111,19 @@ struct CallsSettingsScreen: View {
                     // `statusRow` re-reads this on every body evaluation
                     // (e.g. re-entering this screen), same as the old
                     // toggle's own seeded `@State` did.
+                    // W-NATIVESRTPGUARDBUILD (cross-platform parity round 2,
+                    // 2026-09-30) — when the crash-streak safety net is the
+                    // reason this row reads inactive, say so explicitly
+                    // rather than a bare "Inattivo": the row already exists
+                    // to keep this state visible, and "auto-disabled on this
+                    // version" is a materially different fact from "off by
+                    // remote kill switch" (transient, per-call, not tied to
+                    // a build) for anyone reading it.
                     statusRow(label: "Audio SRTP standard (WebRTC)",
-                              active: CallCapabilities.isNativeSrtpEnabledLocally)
+                              active: CallCapabilities.isNativeSrtpEnabledLocally,
+                              inactiveLabel: nativeSrtpAutoDisabledForThisBuild
+                                ? "Disattivato automaticamente su questa versione"
+                                : "Inattivo")
                     Text("Protocollo predefinito su tutti i dispositivi aggiornati. Con un dispositivo meno recente che non lo supporta ancora, o se il percorso e' stato disattivato da remoto o da una protezione automatica anti-crash, la chiamata passa automaticamente al protocollo Q-Audion.")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
@@ -208,6 +219,15 @@ struct CallsSettingsScreen: View {
             || !container.viewModel.isAgcEnabled
     }
 
+    /// W-NATIVESRTPGUARDBUILD — true iff the local crash-streak guard is the
+    /// reason native SRTP reads inactive on THIS build (as opposed to, say,
+    /// a future per-call-only signal). Compares the build the guard last
+    /// tripped for against the build running right now — the same check
+    /// `QAudionApp.init()`'s reconcile step makes at launch.
+    private var nativeSrtpAutoDisabledForThisBuild: Bool {
+        CallCapabilities.nativeSrtpGuardTrippedBuild() == CallCapabilities.currentAppBuild()
+    }
+
     // MARK: - kvRow + statusRow + warningHint helpers
 
     private func kvRow(label: String, value: String, mono: Bool) -> some View {
@@ -229,7 +249,7 @@ struct CallsSettingsScreen: View {
         )
     }
 
-    private func statusRow(label: String, active: Bool) -> some View {
+    private func statusRow(label: String, active: Bool, inactiveLabel: String = "Inattivo") -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -239,7 +259,7 @@ struct CallsSettingsScreen: View {
                 Circle()
                     .fill(active ? extras.success : extras.riskHigh)
                     .frame(width: 8, height: 8)
-                Text(active ? "Attivo" : "Inattivo")
+                Text(active ? "Attivo" : inactiveLabel)
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(active ? extras.success : extras.riskHigh)
             }

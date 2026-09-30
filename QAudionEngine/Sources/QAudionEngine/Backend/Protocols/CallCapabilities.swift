@@ -1054,6 +1054,12 @@ public enum CallCapabilities {
     private static let persistedOverrideKey = "qaudion.calls.nativeSrtpOverride.v1"
     private static let nativeCrashStreakKey = "qaudion.calls.nativeSrtpCrashStreak"
 
+    /// Cross-platform parity round 2 (2026-09-30, owner decision) — the
+    /// `CFBundleVersion` that last tripped ``registerNativeSrtpCrashAndMaybeAutoReset()``,
+    /// or absent if the guard has never tripped (or was cleared by a build
+    /// change — see ``reconcileNativeSrtpGuardForCurrentBuild(currentBuild:)``).
+    private static let nativeSrtpGuardTrippedBuildKey = "qaudion.calls.nativeSrtpGuardTrippedBuild.v1"
+
     /// The persisted override, or `nil` if the key was never written (first
     /// run, after ``migrateAwayFromManualAudioSrtpOverrideIfNeeded()`` has
     /// run, or an explicit clear — see ``savePersistedAudioSrtpOverride(_:)``).
@@ -1150,20 +1156,90 @@ public enum CallCapabilities {
     /// W-SRTPALWAYSON (2026-09-29/30) — with the Settings toggle removed,
     /// this is the only remaining LOCAL way native SRTP ever turns off, and
     /// it is deliberately automatic rather than a preference: there is no
-    /// UI left to turn it back on for a device that trips this, by design
-    /// (the owner decision retired every manual control, not just the one
-    /// this replaces).
+    /// UI left to turn it back on for a device that trips this, BY HAND —
+    /// see ``reconcileNativeSrtpGuardForCurrentBuild(currentBuild:)`` for the
+    /// one AUTOMATIC way it comes back.
+    ///
+    /// Cross-platform parity round 2 (2026-09-30, owner decision) — this
+    /// used to be a PERMANENT disable (no code path ever cleared it), which
+    /// was itself an asymmetry against Android's own (at the time
+    /// process-lifetime-only) guard: a structurally incompatible device
+    /// would go dark forever on iOS after its very first two crashes, on
+    /// whatever build happened to be installed at the time. Tying the trip
+    /// to ``currentBuild`` (persisted in ``nativeSrtpGuardTrippedBuildKey``)
+    /// is what makes ``reconcileNativeSrtpGuardForCurrentBuild(currentBuild:)``
+    /// able to tell "still the build that crashed" apart from "a new build
+    /// is installed, worth retrying" the next time the app launches.
+    ///
+    /// - Parameter currentBuild: the build to record as having tripped the
+    ///   guard. Defaults to ``currentAppBuild()``; overridable so tests can
+    ///   exercise the build-tie without touching `Bundle.main`.
     @discardableResult
-    public static func registerNativeSrtpCrashAndMaybeAutoReset() -> Bool {
+    public static func registerNativeSrtpCrashAndMaybeAutoReset(currentBuild: String = currentAppBuild()) -> Bool {
         let next = nativeSrtpCrashStreak() + 1
         if next >= 2 {
             savePersistedAudioSrtpOverride(false)
             audioSrtpDebugOverride = false
+            UserDefaults.standard.set(currentBuild, forKey: nativeSrtpGuardTrippedBuildKey)
             UserDefaults.standard.removeObject(forKey: nativeCrashStreakKey)
             return true
         }
         UserDefaults.standard.set(next, forKey: nativeCrashStreakKey)
         return false
+    }
+
+    /// The current build's `CFBundleVersion`, or `"unknown"` if the app
+    /// bundle carries none (matches every other read site in this codebase,
+    /// e.g. `LogExportService.swift`, `SettingsScreen.swift`).
+    public static func currentAppBuild() -> String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    }
+
+    /// Cross-platform parity round 2 (2026-09-30, owner decision) — reconciles
+    /// a PRIOR trip of ``registerNativeSrtpCrashAndMaybeAutoReset(currentBuild:)``
+    /// against the build running RIGHT NOW. Call once per launch, from
+    /// `QAudionApp.init()`, AFTER ``migrateAwayFromManualAudioSrtpOverrideIfNeeded()``
+    /// and BEFORE seeding ``audioSrtpDebugOverride`` from
+    /// ``loadPersistedAudioSrtpOverride()`` — this only CLEARS the persisted
+    /// override when it decides the guard should release; the existing seed
+    /// line is what actually loads the (now possibly-cleared) value into the
+    /// live var.
+    ///
+    ///  - never tripped (no ``nativeSrtpGuardTrippedBuildKey``) → no-op,
+    ///    returns `false`.
+    ///  - tripped for THIS SAME build → stays in force, untouched, returns
+    ///    `false` (a restart of the same build must not un-trip the guard).
+    ///  - tripped for a DIFFERENT build → the persisted override, the
+    ///    guard-tripped-build marker AND the crash-streak counter are all
+    ///    cleared (a version change is a FRESH 2-crash budget, not "1
+    ///    old-build crash + 1 new-build crash" — mirrors Android's
+    ///    `NativeSrtpCrashGuard.effectiveStreakForBuild`), and this returns
+    ///    `true` so the caller can log the clear.
+    ///
+    /// - Parameter currentBuild: the build to reconcile against. Defaults to
+    ///   ``currentAppBuild()``; overridable so tests can exercise the
+    ///   build-tie without touching `Bundle.main`.
+    /// - Returns: whether the guard was just cleared by a build change.
+    @discardableResult
+    public static func reconcileNativeSrtpGuardForCurrentBuild(currentBuild: String = currentAppBuild()) -> Bool {
+        let defaults = UserDefaults.standard
+        guard let trippedBuild = defaults.string(forKey: nativeSrtpGuardTrippedBuildKey) else {
+            return false
+        }
+        guard trippedBuild != currentBuild else {
+            return false
+        }
+        savePersistedAudioSrtpOverride(nil)
+        defaults.removeObject(forKey: nativeSrtpGuardTrippedBuildKey)
+        resetNativeSrtpCrashStreak()
+        return true
+    }
+
+    /// The build currently recorded as having tripped the guard, or `nil`.
+    /// Exposed for tests; production code only reads it indirectly through
+    /// ``reconcileNativeSrtpGuardForCurrentBuild(currentBuild:)``.
+    public static func nativeSrtpGuardTrippedBuild() -> String? {
+        UserDefaults.standard.string(forKey: nativeSrtpGuardTrippedBuildKey)
     }
 
     /// W-NATIVESRTPSNAPSHOT — the LOCAL side of the capability intersection.
