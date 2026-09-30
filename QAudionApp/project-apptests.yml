@@ -11,10 +11,13 @@
 # QAudionAppTests/ was written without a compiler (see the "not yet wired into
 # a build target" notes in those files) and is not known to build. Add a file
 # here, and its class to the -only-testing list in the workflow, once it has
-# been made to pass. Keep such tests pure: the bundle is hosted by the app, but
-# QAudionEngine is linked into both the app and this bundle, so engine STATIC
-# state (e.g. ContactsStore.testKeyOverride) is not shared between them. Tests
-# that need a ContactsStore or Keychain belong in QAudionEngineTests.
+# been made to pass. QAudionEngine is deliberately NOT a dependency of the
+# bundle: Xcode 26 rejects a static package product linked by two targets
+# ("linked as a static library by QAudionAppTests and QAudionApp ... duplication
+# of library code"), so the bundle imports the engine module from the shared
+# build products and resolves its symbols from the host app (BUNDLE_LOADER).
+# Keep such tests pure; anything needing a ContactsStore or Keychain belongs in
+# QAudionEngineTests.
 
 include:
   - project.yml
@@ -36,9 +39,12 @@ targets:
         SWIFT_VERSION: "5.9"
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/QAudionApp.app/QAudionApp
         BUNDLE_LOADER: $(TEST_HOST)
+        # Engine and its binary/package dependencies are built for the host app;
+        # make their modules and frameworks findable without linking them again.
+        SWIFT_INCLUDE_PATHS: $(inherited) $(BUILT_PRODUCTS_DIR)
+        FRAMEWORK_SEARCH_PATHS: $(inherited) $(BUILT_PRODUCTS_DIR) $(BUILT_PRODUCTS_DIR)/PackageFrameworks
     dependencies:
       - target: QAudionApp
-      - package: QAudionEngine
 
 schemes:
   QAudionAppTests:
