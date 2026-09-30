@@ -462,6 +462,28 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    func testALayerChangeThatLandsWhileAConfigureIsInFlightIsStillSent() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        func substreams() -> [Int] {
+            h.server.bodies(for: "configure").compactMap { ($0["streams"] as? [[String: Any]])?.first?["substream"] as? Int }
+        }
+        _ = await h.waitUntil { substreams().contains(1) }            // the initial grid layer
+        let before = substreams().count
+        h.server.swallowOnce = ["configure"]                          // the next request is answered late (after the retry)
+        h.session.setTile(pseudonym: bob, tile: .fullscreen, visible: true)
+        _ = await h.waitUntil { substreams().count == before + 1 }    // substream 2 is in flight
+        let sub = h.server.handle(forRole: "subscriber") ?? 0
+        h.server.push(["janus": "slowlink", "sender": sub, "uplink": false, "nacks": 20])
+        // The step down must not be recorded as applied by the request that only carried
+        // substream 2: it is sent afterwards.
+        let ok = await h.waitUntil(6) { substreams().count >= before + 3 && substreams().last == 1 }
+        XCTAssertTrue(ok, "layers sent: \(substreams())")
+        h.session.close()
+    }
+
     func testSlowlinkOnThePublisherRaisesUplinkCongestion() async throws {
         let h = SessionHarness()
         try await h.session.start(publishVideo: true)

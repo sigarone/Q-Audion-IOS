@@ -680,6 +680,9 @@ public final class GroupMediaSession: @unchecked Sendable {
         guard let handle = currentSubHandle() else { return }
         lock.lock()
         var pendingKeys: [String] = []
+        // What is actually put on the wire: a layer change that lands while this request
+        // is in flight must not be recorded as applied (it would never be sent).
+        var sent: [String: (substream: Int, temporal: Int)] = [:]
         var configs: [VideoRoomLayerConfig] = []
         for (key, layer) in desiredLayers {
             if let applied = appliedLayers[key], applied.substream == layer.substream, applied.temporal == layer.temporal { continue }
@@ -690,13 +693,14 @@ public final class GroupMediaSession: @unchecked Sendable {
             }) else { continue }
             configs.append(VideoRoomLayerConfig(mid: entry.key, substream: layer.substream, temporal: layer.temporal))
             pendingKeys.append(key)
+            sent[key] = layer
         }
         lock.unlock()
         guard !configs.isEmpty else { return }
         do {
             _ = try await withTimeoutRetry { try await self.room.configureSubscriber(handle: handle, layers: configs) }
             lock.lock()
-            for key in pendingKeys { appliedLayers[key] = desiredLayers[key] }
+            for key in pendingKeys { appliedLayers[key] = sent[key] }
             lock.unlock()
         } catch JanusClientError.plugin(let code, _) where code == 428 {
             // The stream vanished under the request: the roster events tidy up.
