@@ -17,7 +17,7 @@ final class GroupMediaRecoveryPolicyTests: XCTestCase {
 
     func testAFatalJanusErrorIsShown() {
         var policy = GroupMediaRecoveryPolicy()
-        XCTAssertEqual(policy.handle(.fatalJanusError(432), nowMs: 0), .fail(.other("janus_432")))
+        XCTAssertEqual(policy.handle(.fatalJanusError(436), nowMs: 0), .fail(.other("janus_436")))
     }
 
     func testRejoinsBackOffAndAreCappedAtThreeInAMinute() {
