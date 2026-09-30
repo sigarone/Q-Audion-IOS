@@ -1540,8 +1540,8 @@ final class AppState: ObservableObject {
     /// `call_id`), and cleared on accept / reject / call-ended. Non-nil ==
     /// the ring surface is up and we have NOT joined. Accept →
     /// `groupCallController.join(callId:)` (the existing join path); reject
-    /// → we simply never join (there is no `group_call_decline` wire type —
-    /// the server keeps the room open for the other invitees).
+    /// → `group_call_decline` (spec 2.6): we never join and the server takes us
+    /// off the invitees; the room stays open for the others.
     ///
     /// This REPLACES the previous silent auto-join (the invite used to call
     /// `join()` immediately: no ring, no accept/reject — audit gap).
@@ -23846,7 +23846,8 @@ extension AppState {
             return true
         }
         // Busy: in a 1:1 call, ringing for one, or already in a group call.
-        // We simply do not join — there is no `group_call_decline` wire type
+        // We simply do not join (a busy drop sends no `group_call_decline`: the
+        // ring on our other devices and the server's ring timeout deal with it)
         // and the room stays open for the other invitees.
         //
         // W-CALLPROMOTE carve-out: an invite that continues the SAME 1:1

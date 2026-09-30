@@ -295,9 +295,8 @@ struct ContentView: View {
     /// reply into) and a group-specific subtitle. The ringtone is driven by
     /// AppState (`startInAppRingtone`), exactly as for a 1:1 call.
     ///
-    /// Reject deliberately sends NOTHING on the wire: the server has no
-    /// `group_call_decline` type and the room must stay open for the other
-    /// invitees — we simply never send `group_call_join`.
+    /// Reject sends `group_call_decline` (spec 2.6) and never `group_call_join`;
+    /// the room stays open for the other invitees.
     private func incomingGroupCallScreen(
         _ invite: AppState.IncomingGroupCallInvite
     ) -> some View {

@@ -304,6 +304,25 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    func testARemovedStreamComingBackAsActiveFalseIsForgottenBeforeTheNextAnswer() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.subscriber.acceptedStreams.count == 1 }
+        // Bob leaves: Janus re-offers with his mids left in the SDP as active:false, no feed.
+        h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "subscriber") ?? 0,
+                       "plugindata": ["plugin": "janus.plugin.videoroom",
+                                      "data": ["videoroom": "updated", "room": "r", "streams": [
+                                          ["type": "audio", "mindex": 0, "mid": "0", "active": false],
+                                          ["type": "video", "mindex": 1, "mid": "1", "active": false],
+                                      ]]],
+                       "jsep": ["type": "offer", "sdp": FakeJanusServer.sdp(setup: "a=setup:actpass")]])
+        let ok = await h.waitUntil { h.subscriber.acceptedStreams.count == 2 }
+        XCTAssertTrue(ok)
+        XCTAssertTrue(h.subscriber.acceptedStreams[1].isEmpty, "the answer is built without the departed publisher's streams")
+        h.session.close()
+    }
+
     func testAPublisherWhoLeavesIsRemovedWithoutAnUnsubscribeRequest() async throws {
         let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
         h.server.subscriberStreams = bobStreams()
@@ -665,7 +684,7 @@ final class GroupMediaSessionTests: XCTestCase {
         let announce: () -> Void = {
             h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
                            "plugindata": ["plugin": "janus.plugin.videoroom",
-                                          "data": ["videoroom": "event", "publishers": [FakeJanusServer.publisher(id: carol)]]]])
+                                          "data": ["videoroom": "event", "publishers": [FakeJanusServer.publisher(id: self.carol)]]]])
         }
         announce()
         _ = await h.waitUntil { h.server.pluginRequests.filter { $0 == "subscribe" }.count == 1 }

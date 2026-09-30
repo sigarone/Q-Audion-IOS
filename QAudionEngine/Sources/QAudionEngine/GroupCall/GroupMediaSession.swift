@@ -564,7 +564,17 @@ public final class GroupMediaSession: @unchecked Sendable {
         case .attached(let streams), .updated(let streams):
             lock.lock()
             for stream in streams {
-                if stream.feedId != nil { subscriberStreams[stream.mid] = stream }
+                if stream.disabled {
+                    // A removed stream stays in Janus' SDP as `active:false` (often without
+                    // its feed): forget the mapping so the receiver is reported as gone.
+                    if let old = subscriberStreams.removeValue(forKey: stream.mid),
+                       let feed = old.feedId, let feedMid = old.feedMid {
+                        appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+                    }
+                    lastStats[stream.mid] = nil
+                } else if stream.feedId != nil {
+                    subscriberStreams[stream.mid] = stream
+                }
             }
             lock.unlock()
         default:
