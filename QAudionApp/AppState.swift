@@ -4104,6 +4104,13 @@ final class AppState: ObservableObject {
             provider.onMutedChanged = { [weak self] uuid, muted in
                 guard let self = self else { return }
                 await MainActor.run {
+                    // Group calls v2: the system mute of a group call's CallKit entry
+                    // goes through the group screen's own mute path (roster flag +
+                    // the mic on the publisher).
+                    if self.groupCallKitId == uuid {
+                        self.groupCallViewModel?.applyMuteFromSystem(muted)
+                        return
+                    }
                     // Route through AppState.setMuted which forwards to CallService.
                     self.setMuted(muted)
                 }

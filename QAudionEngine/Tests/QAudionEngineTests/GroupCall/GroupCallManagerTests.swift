@@ -132,6 +132,21 @@ final class GroupCallManagerTests: XCTestCase {
         XCTAssertEqual(events.value, ["unavailable:1111:full", "moved:1111:node-b"])
     }
 
+    // MARK: local mute
+
+    func testSetLocalMutedIsIdempotentAndFollowsTheGivenState() {
+        let (manager, _) = makeManager()
+        _ = manager.createGroupCall(recipients: ["user-b"])
+        let notifications = LockedBox(0)
+        manager.onParticipantsChanged = { _ in notifications.mutate { $0 += 1 } }
+        XCTAssertTrue(manager.setLocalMuted(true))
+        XCTAssertTrue(manager.setLocalMuted(true), "a second call changes nothing")
+        XCTAssertEqual(notifications.value, 1)
+        XCTAssertTrue(manager.participants.first { $0.id == "user-self" }?.isMuted ?? false)
+        XCTAssertFalse(manager.setLocalMuted(false))
+        XCTAssertEqual(notifications.value, 2)
+    }
+
     // MARK: speaking
 
     func testSetSpeakingMarksParticipantsAndNotifiesOnlyOnChange() {

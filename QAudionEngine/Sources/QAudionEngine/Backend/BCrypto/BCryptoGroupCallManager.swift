@@ -383,6 +383,24 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         ])
     }
 
+    /// Idempotent form of `toggleMute`: sets the roster mute flag of our own entry and
+    /// returns it. A mute the user did not tap (a peer's mute request, CallKit) must
+    /// not flip the badge back the next time the button is used.
+    @discardableResult
+    public func setLocalMuted(_ muted: Bool) -> Bool {
+        lock.lock()
+        guard let idx = _participants.firstIndex(where: { $0.id == selfUserId }) else {
+            lock.unlock()
+            return muted
+        }
+        let changed = _participants[idx].isMuted != muted
+        _participants[idx].isMuted = muted
+        let list = _participants
+        lock.unlock()
+        if changed { onParticipantsChanged?(list) }
+        return muted
+    }
+
     /// Toggle local mute state
     public func toggleMute() -> Bool {
         lock.lock()

@@ -482,6 +482,7 @@ public final class GroupCallController: @unchecked Sendable {
     private func beginCall(callId: String, video: Bool, created: Bool) {
         lock.lock()
         let previousLink = link
+        let previousCoordinator = coordinator
         link = nil
         linkGeneration += 1
         activeCallId = callId
@@ -506,6 +507,7 @@ public final class GroupCallController: @unchecked Sendable {
         let replay = lastAudioActivation
         lock.unlock()
         previousLink?.close()
+        e2eeQueue.async { previousCoordinator?.stop() }
         backend?.beginCall()
         audio.begin()
         if let source = replay { audio.sessionActivated(source: source) }
@@ -535,7 +537,6 @@ public final class GroupCallController: @unchecked Sendable {
         mediaConnected = false
         congestionSteps = 0
         videoStoppedByPolicy = false
-        backgrounded = false
         desiredTiles.removeAll()
         lastAudioActivation = nil
         let timeout = mediaReadyTimeout

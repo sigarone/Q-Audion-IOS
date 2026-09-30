@@ -1366,15 +1366,9 @@ class GroupCallViewModel: ObservableObject {
                     // callback fires — see that method's kdoc. Here we
                     // only need item 4(b): "update local mute-button UI
                     // state" — this control-bar button's own flag.
-                    // Deliberately NOT also poking `manager.toggleMute()`
-                    // to sync the roster's separate self-entry mute badge:
-                    // `BCryptoGroupCallManager` exposes only a pure
-                    // `toggleMute() -> Bool` (no idempotent setter, no
-                    // current-value getter), so a blind call here could
-                    // flip it back to unmuted if the roster already
-                    // agreed — not worth the risk for a purely cosmetic
-                    // second badge.
-                    self.isMuted = true
+                    // The roster's self-entry mute badge follows through the
+                    // manager's idempotent setter.
+                    self.isMuted = self.manager.setLocalMuted(true)
                     // Item 4(c): one-shot, non-blocking toast — resolve
                     // the requester's display name from the live roster,
                     // falling back to the raw id if it hasn't caught up
@@ -1494,8 +1488,17 @@ class GroupCallViewModel: ObservableObject {
         }
     }
 
+    /// The system (CallKit) asked for a mute state: applied through the same path
+    /// as the button, and only when it changes something.
+    func applyMuteFromSystem(_ muted: Bool) {
+        if isMuted != muted { toggleMute() }
+    }
+
     func toggleMute() {
-        isMuted = manager.toggleMute()
+        // `setLocalMuted` (not `toggleMute`): the roster flag follows OUR state, so a mute
+        // applied by a peer's request or by CallKit can never be flipped back by the
+        // next tap.
+        isMuted = manager.setLocalMuted(!isMuted)
         // The roster flag above is what the OTHER participants see; the real
         // mic switch is the controller's (it gates the published audio track).
         controller?.setMuted(isMuted)
