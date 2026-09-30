@@ -389,6 +389,8 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     }
 
     public func applyAnswer(_ sdp: String) async throws {
+        // Spec §12.8: an answer whose video is not VP8 is refused, not decoded.
+        guard GroupSdpRules.activeVideoSectionsWithoutVp8(in: sdp).isEmpty else { throw GroupPeerError.sdpFailed("video_codec") }
         try await setRemote(RTCSessionDescription(type: .answer, sdp: GroupSdpRules.mungeRemote(sdp)))
     }
 
@@ -565,6 +567,8 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
 
     public func acceptOffer(_ sdp: String, streams: [VideoRoomStream]) async throws -> String {
         guard let pc = currentPeerConnection else { throw GroupPeerError.notStarted }
+        // Spec §12.8: an offer with a video stream that is not VP8 is refused, not decoded.
+        guard GroupSdpRules.activeVideoSectionsWithoutVp8(in: sdp).isEmpty else { throw GroupPeerError.sdpFailed("video_codec") }
         try await setRemote(RTCSessionDescription(type: .offer, sdp: GroupSdpRules.mungeRemote(sdp)))
         stateLock.lock()
         streamsByMid = Dictionary(streams.filter { $0.feedId != nil }.map { ($0.mid, $0) }, uniquingKeysWith: { _, new in new })

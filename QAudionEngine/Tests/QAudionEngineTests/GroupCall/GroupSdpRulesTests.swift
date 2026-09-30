@@ -371,6 +371,30 @@ final class GroupSdpRulesTests: XCTestCase {
         XCTAssertEqual(sections(of: out)[0][0], "m=video 9 UDP/TLS/RTP/SAVPF 96", "an RTX that names no VP8 is not VP8's RTX")
     }
 
+    func testAnActiveVideoSectionWithoutVp8IsReportedAndARejectedOneIsNot() {
+        XCTAssertEqual(GroupSdpRules.activeVideoSectionsWithoutVp8(in: multiCodecSdp()), [],
+                       "every active section has VP8, the port-0 one is rejected")
+        let h264Only = [
+            "v=0",
+            "m=video 9 UDP/TLS/RTP/SAVPF 100 101",
+            "a=mid:7",
+            "a=rtpmap:100 H264/90000",
+            "a=rtpmap:101 rtx/90000",
+            "a=fmtp:101 apt=100",
+            "m=video 0 UDP/TLS/RTP/SAVPF 0",
+            "a=mid:8",
+            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+            "a=mid:9",
+            "a=rtpmap:96 VP8/90000",
+            "m=video 9 UDP/TLS/RTP/SAVPF 102",
+            "a=rtpmap:102 AV1/90000",
+            "",
+        ].joined(separator: "\r\n")
+        XCTAssertEqual(GroupSdpRules.activeVideoSectionsWithoutVp8(in: h264Only), ["7", "?"])
+        XCTAssertEqual(GroupSdpRules.activeVideoSectionsWithoutVp8(in: sdp()), [])
+        XCTAssertEqual(GroupSdpRules.activeVideoSectionsWithoutVp8(in: "v=0\r\nm=audio 9 X 111\r\na=mid:0\r\n"), [])
+    }
+
     func testBothDirectionsAreVp8Only() {
         let local = GroupSdpRules.mungeLocal(multiCodecSdp(), role: .publisherOffer)
         let remote = GroupSdpRules.mungeRemote(multiCodecSdp())

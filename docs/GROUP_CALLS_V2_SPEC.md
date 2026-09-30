@@ -171,7 +171,9 @@ Therefore:
   it (see iOS deviation 18).
 - **12.8 Video codec (L8).** Group PCs offer / accept VP8 only (strip other video codecs + their
   RTX) on all clients: `GroupSdpRules.keepOnlyVp8Video`, applied to local and remote descriptions.
-  An m-line without any VP8 (Janus' rejected `m=video 0 ... 0`) is left alone.
+  A rejected m-line (Janus' `m=video 0 ... 0`) is left alone; an ACTIVE video m-line that offers no
+  VP8 at all cannot be filtered, so the answer / offer that carries it is refused
+  (`GroupSdpRules.activeVideoSectionsWithoutVp8`, `GroupPeerError.sdpFailed("video_codec")`).
 - **12.9 Fail closed on cryptor creation (L9).** Creating a sender cryptor on a sender without a
   track (or any cryptor creation failure, sender or receiver, sentinel included) is an error that
   aborts the negotiation (`GroupPeerError.cryptorFailed`), never a silent no-op.

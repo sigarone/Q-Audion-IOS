@@ -189,6 +189,36 @@ public enum GroupSdpRules {
         return out.joined(separator: "\r\n") + "\r\n"
     }
 
+    /// The mids of the ACTIVE `m=video` sections (port != 0) that offer no VP8 at all.
+    /// `keepOnlyVp8Video` cannot filter such a section (nothing to keep), so a remote
+    /// description that has one is refused by the PeerConnection wrappers instead of
+    /// being applied: a node that answers / offers a video codec we never asked for
+    /// breaks the call, it does not get that codec decoded. A rejected section
+    /// (`m=video 0 ...`) is fine. A section without an `a=mid` is reported as "?".
+    public static func activeVideoSectionsWithoutVp8(in sdp: String) -> [String] {
+        var out: [String] = []
+        var inActiveVideo = false
+        var hasVp8 = false
+        var mid = "?"
+        func close() {
+            if inActiveVideo, !hasVp8 { out.append(mid) }
+        }
+        for line in lines(of: sdp) {
+            if line.hasPrefix("m=") {
+                close()
+                let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                inActiveVideo = line.hasPrefix("m=video") && parts.count > 1 && parts[1] != "0"
+                hasVp8 = false
+                mid = "?"
+            } else if inActiveVideo {
+                if let entry = rtpmapEntry(of: line), entry.name == "VP8" { hasVp8 = true }
+                if line.hasPrefix("a=mid:") { mid = String(line.dropFirst("a=mid:".count)).trimmingCharacters(in: .whitespaces) }
+            }
+        }
+        close()
+        return out
+    }
+
     /// `a=rtpmap:<pt> <NAME>/<rate>[/<ch>]` -> (pt, upper-cased NAME)
     private static func rtpmapEntry(of line: String) -> (pt: String, name: String)? {
         guard line.hasPrefix("a=rtpmap:") else { return nil }
