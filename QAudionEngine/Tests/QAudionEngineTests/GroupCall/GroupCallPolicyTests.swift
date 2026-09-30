@@ -9,9 +9,10 @@ final class GroupMediaRecoveryPolicyTests: XCTestCase {
         XCTAssertTrue(GroupCallMediaError.transportPolicy.isFatal)
     }
 
-    func testARetryableJanusErrorGetsExactlyOneAutomaticMediaJoin() {
+    func testARetryableJanusErrorGetsExactlyOneAutomaticRejoin() {
         var policy = GroupMediaRecoveryPolicy()
-        XCTAssertEqual(policy.handle(.retryableJanusError(433), nowMs: 0), .sendMediaJoin(delayMs: 0))
+        XCTAssertEqual(policy.handle(.retryableJanusError(433), nowMs: 0), .sendMediaRejoin(reason: "janus_433", delayMs: 0),
+                       "a rejoin, not a join: the Janus session it happened on cannot be reused")
         XCTAssertEqual(policy.handle(.retryableJanusError(433), nowMs: 500), .fail(.mediaLost))
     }
 

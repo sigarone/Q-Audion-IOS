@@ -7,7 +7,9 @@ import Foundation
 /// Principles (there is NO relay fallback any more):
 ///  * a security failure (DTLS pin, transport policy) ends the media at once;
 ///  * a Janus error the policy calls retryable gets ONE automatic
-///    `group_call_media_join`, then an error;
+///    `group_call_media_rejoin` (the Janus session it happened on is unusable, and a plain
+///    join could hit Janus 436 while the old participant is still in the room), then an
+///    error;
 ///  * connection loss asks the server for a `group_call_media_rejoin` with a
 ///    short backoff (0.5 / 1 / 2 s), at most three times inside a minute, and
 ///    the counter is forgiven once the media has been stable for 30 s;
@@ -88,10 +90,10 @@ public struct GroupMediaRecoveryPolicy: Sendable {
             if code == 432 { return .fail(.full) }
             return .fail(.other("janus_\(code)"))
 
-        case .retryableJanusError:
+        case .retryableJanusError(let code):
             if retriedJanusError { return .fail(.mediaLost) }
             retriedJanusError = true
-            return .sendMediaJoin(delayMs: 0)
+            return .sendMediaRejoin(reason: "janus_\(code)", delayMs: 0)
 
         case .needsRejoin(let reason):
             rejoinTimes.removeAll { nowMs - $0 > config.rejoinWindowMs }

@@ -44,6 +44,10 @@ public final class GroupCallController: @unchecked Sendable {
     private let nowMs: () -> Int64
     /// How long a refresh request waits for its answer before it is asked again.
     private let iceRefreshRetrySeconds: Double
+    /// How long a `group_call_media_join` / `group_call_media_rejoin` waits for its
+    /// `group_call_media_ready`. The server answers nothing to a member that is over its
+    /// request budget, so an unanswered request is waited out, never hammered.
+    private let mediaReadyTimeoutSeconds: Double
     private static let iceRefreshMaxAttempts = 3
     /// A late answer (after the retries) of a refresh is still a refresh, not a new path.
     private static let iceRefreshAnswerWindowMs: Int64 = 300_000
@@ -76,6 +80,11 @@ public final class GroupCallController: @unchecked Sendable {
     private var mediaJoinRequestedAtMs: Int64 = 0
     private var mediaReadyTimeout: DispatchWorkItem?
     private var mediaReadyRetried = false
+    /// The reason of the `group_call_media_rejoin` whose answer is awaited, nil while a plain
+    /// `group_call_media_join` is. An unanswered request is asked again AS THE SAME KIND: a
+    /// join sent for a Janus session that died can hit Janus 436 (the old participant is
+    /// still in the room), a rejoin makes the server clean that up first.
+    private var rejoinReasonInFlight: String?
     private var mediaConnected = false
     private var connectedTelemetrySent = false
     private var congestionSteps = 0
@@ -172,9 +181,11 @@ public final class GroupCallController: @unchecked Sendable {
                 audio: GroupAudioUnitControlling? = nil,
                 pathMonitor: GroupPathMonitoring? = nil,
                 nowMs: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
-                iceRefreshRetrySeconds: Double = 60) {
+                iceRefreshRetrySeconds: Double = 60,
+                mediaReadyTimeoutSeconds: Double = 10) {
         self.manager = manager
         self.iceRefreshRetrySeconds = iceRefreshRetrySeconds
+        self.mediaReadyTimeoutSeconds = mediaReadyTimeoutSeconds
         self.backend = backend
         self.audio = audio ?? GroupCallController.defaultAudioUnit()
         self.pathMonitor = pathMonitor ?? GroupNetworkPathWatcher()
@@ -555,6 +566,7 @@ public final class GroupCallController: @unchecked Sendable {
         iceRefreshRequestedAtMs = 0
         let staleRefreshRetry = iceRefreshRetry
         iceRefreshRetry = nil
+        rejoinReasonInFlight = nil
         desiredTiles.removeAll()
         let newCoordinator = GroupE2eeCoordinator(
             callId: callId, selfUserId: manager.selfUserId, environment: GroupCallE2eeEnvironment(controller: self, queue: e2eeQueue))
@@ -781,13 +793,14 @@ public final class GroupCallController: @unchecked Sendable {
         }
         mediaJoinRequested = true
         mediaJoinRequestedAtMs = nowMs()
+        rejoinReasonInFlight = nil
         let previousTimeout = mediaReadyTimeout
         let item = DispatchWorkItem { [weak self] in self?.mediaReadyTimedOut(callId: callId) }
         mediaReadyTimeout = item
         lock.unlock()
         previousTimeout?.cancel()
         manager.requestMediaJoin(callId: callId)
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10, execute: item)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + mediaReadyTimeoutSeconds, execute: item)
     }
 
     private func mediaReadyTimedOut(callId: String) {
@@ -798,9 +811,11 @@ public final class GroupCallController: @unchecked Sendable {
         }
         let retried = mediaReadyRetried
         mediaReadyRetried = true
+        let rejoinReason = rejoinReasonInFlight
         lock.unlock()
         if !retried {
-            requestMediaJoin(force: true)
+            // The same kind of request again: a rejoin that got no answer is a rejoin.
+            if let reason = rejoinReason { requestMediaRejoin(reason: reason) } else { requestMediaJoin(force: true) }
         } else {
             handleTrigger(.needsRejoin("media_ready_timeout"), forCall: callId)
         }
@@ -1215,13 +1230,14 @@ public final class GroupCallController: @unchecked Sendable {
         }
         mediaJoinRequested = true
         mediaJoinRequestedAtMs = nowMs()
+        rejoinReasonInFlight = reason
         let previousTimeout = mediaReadyTimeout
         let item = DispatchWorkItem { [weak self] in self?.mediaReadyTimedOut(callId: callId) }
         mediaReadyTimeout = item
         lock.unlock()
         previousTimeout?.cancel()
         manager.requestMediaRejoin(callId: callId, reason: reason)
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10, execute: item)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + mediaReadyTimeoutSeconds, execute: item)
     }
 
     /// A media error the user must see: reported, then the call is left (a camera

@@ -148,11 +148,12 @@ final class ControllerHarness: @unchecked Sendable {
     private var _states: [GroupCallController.State] = []
     var controlSendResult = true
 
-    init(iceRefreshRetrySeconds: Double = 60) {
+    init(iceRefreshRetrySeconds: Double = 60, mediaReadyTimeoutSeconds: Double = 10) {
         let ws = BCryptoWebSocketClient(config: BackendConfig(serverUrl: "https://example.invalid"))
         manager = BCryptoGroupCallManager(ws: ws, selfUserId: Self.selfUser, nameResolver: { $0 })
         controller = GroupCallController(manager: manager, backend: backend, audio: audio, pathMonitor: paths,
-                                         iceRefreshRetrySeconds: iceRefreshRetrySeconds)
+                                         iceRefreshRetrySeconds: iceRefreshRetrySeconds,
+                                         mediaReadyTimeoutSeconds: mediaReadyTimeoutSeconds)
         manager.sendOverride = { [weak self] type, data in
             self?.lock.lock(); self?._sent.append((type, data)); self?.lock.unlock()
         }
@@ -514,12 +515,14 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertTrue(link?.calls.contains("close") ?? false)
     }
 
-    func testRetryableJanusErrorGetsOneAutomaticMediaJoinThenAnError() async {
+    func testRetryableJanusErrorGetsOneAutomaticRejoinThenAnError() async {
         let h = ControllerHarness()
         let link = await h.joinAndConnect()
         link?.emit(.janusFailure(.plugin(code: 428, reason: "no such feed")))
-        let joins = await h.waitUntil { h.sentTypes.filter { $0 == "group_call_media_join" }.count == 2 }
-        XCTAssertTrue(joins)
+        let rejoins = await h.waitUntil { h.sentTypes.filter { $0 == "group_call_media_rejoin" }.count == 1 }
+        XCTAssertTrue(rejoins)
+        XCTAssertEqual(h.sent.first { $0.type == "group_call_media_rejoin" }?.data["reason"] as? String, "janus_428")
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, 1, "no plain join for a session that was torn down")
         h.manager.onMediaReady?(h.ready())
         _ = await h.waitUntil { h.backend.links.count == 2 }
         h.backend.links[1].emit(.janusFailure(.plugin(code: 428, reason: "no such feed")))
@@ -649,6 +652,30 @@ final class GroupCallControllerTests: XCTestCase {
         let ended = await h.waitUntil { h.errors.contains(.notMember) }
         XCTAssertTrue(ended, "the refusal ends the media like any other one")
         XCTAssertTrue(link.calls.contains("close"))
+    }
+
+    func testARejoinThatGetsNoAnswerIsAskedAgainAsARejoinNeverAsAPlainJoin() async {
+        // The server answers nothing to a member over its request budget: the wait ends in
+        // the SAME kind of request, after the timeout (never a tight loop).
+        let h = ControllerHarness(mediaReadyTimeoutSeconds: 0.3)
+        let link = await h.joinAndConnect()
+        link?.emit(.needsRejoin("ws_lost"))
+        let twice = await h.waitUntil(4) { h.sentTypes.filter { $0 == "group_call_media_rejoin" }.count == 2 }
+        XCTAssertTrue(twice)
+        let reasons = h.sent.filter { $0.type == "group_call_media_rejoin" }.map { $0.data["reason"] as? String }
+        XCTAssertEqual(reasons, ["ws_lost", "ws_lost"])
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, 1, "only the very first join of the call")
+        h.controller.leave()
+    }
+
+    func testAFirstJoinThatGetsNoAnswerIsAskedAgainAsAJoin() async {
+        let h = ControllerHarness(mediaReadyTimeoutSeconds: 0.3)
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))
+        let twice = await h.waitUntil(4) { h.sentTypes.filter { $0 == "group_call_media_join" }.count == 2 }
+        XCTAssertTrue(twice)
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
+        h.controller.leave()
     }
 
     func testMediaMovedRequestsANewJoin() async {
