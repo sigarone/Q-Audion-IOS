@@ -55,8 +55,75 @@ public final class BCryptoDownloadTokenClient {
         if let ttl = ttlSeconds { dict["ttl_seconds"] = ttl }
         if let m = maxUses { dict["max_uses"] = m }
         let body = try JSONSerialization.data(withJSONObject: dict)
-        let data = try await rest.post("/api/v1/files/issue-token", body: body)
+        // Item G (2026-09-30 file-transfer plan) — issue-token exists only
+        // on the node that stores `fileId`'s tus record. `rest.post` would
+        // ride whatever `config.serverUrl` the node selector currently has
+        // (a DR/failover host has no shared file storage and would 404/402
+        // here even if the file upload itself somehow reached it), so this
+        // pins the request to the certificate-pinned primary instead —
+        // see `BCryptoRestClient.postToPrimary`'s own doc.
+        let data = try await rest.postToPrimary("/api/v1/files/issue-token", body: body)
         return try IssuedDownloadToken.decode(data)
+    }
+
+    // MARK: - Item A-iOS (2026-09-30 file-transfer plan, phase 1a): max_uses sizing
+
+    /// Retry attempts `BCryptoRestClient.getFileEndpoint` spends on ONE
+    /// download GET before giving up. Kept as a literal (not shared via
+    /// import) rather than referencing that default directly, mirroring
+    /// Android's own `TusUploaderHttpImpl.computeMaxUses`, which keeps its
+    /// mirrored chunk-size constant as a literal for the same reason: a
+    /// stale value here only makes `max_uses` MORE generous, never
+    /// under-provisioned.
+    static let maxDownloadAttemptsPerFile: Int64 = 4
+
+    /// One extra whole-file-download restart of headroom per this many
+    /// 64 KiB chunks (`ChatFileAttachmentSender.defaultChunkSize`): a
+    /// bigger file spends longer on the wire and is proportionally more
+    /// likely to need a fresh whole-file GET beyond `getFileEndpoint`'s
+    /// own in-call retry loop above — the app gets backgrounded and killed
+    /// mid-download, the recipient taps "retry" on a failed chat bubble,
+    /// or a second signed-in device opens the same attachment later. iOS
+    /// has no chunk-level download RESUME yet (that's item E, phase 1b),
+    /// so every one of those restarts re-spends the full attempt budget
+    /// above, not just one more use. 64 chunks = 4 MiB.
+    static let chunksPerExtraRestart: Int64 = 64
+
+    /// Floor — matches the server's own `max_uses = 10` default intent for
+    /// a small file needing its one download plus a couple of re-opens.
+    static let minDownloadTokenMaxUses: Int32 = 10
+
+    /// Ceiling — a safety backstop against a pathological/corrupted
+    /// `totalChunks`, not a value normal traffic is expected to reach: the
+    /// largest file this pipeline accepts (5 GiB — `ChatFileAttachmentReceiver`'s
+    /// own DoS guard) is 81 920 chunks, giving `desired` = 5 124 by this
+    /// formula — comfortably under this cap.
+    static let maxDownloadTokenMaxUses: Int32 = 6_000
+
+    /// Size a file-attachment download token's `max_uses` from the
+    /// ciphertext's chunk count, instead of leaving it unset (server
+    /// default of 10 — fine for one small file, wrong once a transfer
+    /// needs retry/multi-device headroom). Mirrors Android's own
+    /// `computeMaxUses` (`TusUploaderHttpImpl.kt`) rationale — size off
+    /// the transfer, don't rely on the server's flat default — but NOT
+    /// its exact per-chunk-ranged-read formula: iOS downloads the whole
+    /// ciphertext blob in a SINGLE GET per attempt today
+    /// (`ChatFileAttachmentReceiver.receive`), not two ranged reads per
+    /// 64 KiB chunk like Android's streamed receiver, so the cost that
+    /// actually scales here is repeated WHOLE-file restarts, not
+    /// per-chunk reads. Returns `nil` (server default) when
+    /// `totalChunks` is non-positive, matching Android leaving
+    /// `max_uses` unset when the size is unknown.
+    ///
+    /// **Visible for tests** so the sizing is pinned by KAT — same
+    /// convention as Android's own `computeMaxUses`.
+    public static func computeMaxUses(totalChunks: Int) -> Int32? {
+        guard totalChunks > 0 else { return nil }
+        let extraRestarts = Int64(totalChunks) / chunksPerExtraRestart
+        let restarts = 1 + extraRestarts
+        let desired = restarts * maxDownloadAttemptsPerFile
+        let capped = min(max(desired, Int64(minDownloadTokenMaxUses)), Int64(maxDownloadTokenMaxUses))
+        return Int32(capped)
     }
 
     // MARK: - Recipient side
@@ -91,7 +158,14 @@ public final class BCryptoDownloadTokenClient {
         fileId: String,
         claim: DownloadTokenClaim
     ) async throws -> Data {
-        try await rest.get(
+        // Item A-iOS + G (2026-09-30 file-transfer plan) — `getFileEndpoint`
+        // pins this GET to the primary node that actually stores `fileId`
+        // (never a DR/failover host `config.serverUrl` might currently
+        // point at) and retries a transient 429/5xx with backoff,
+        // honouring the server's `Retry-After` — this used to be a single
+        // request with no retry and no resume (the full streaming/ranged
+        // rewrite is item E, phase 1b).
+        try await rest.getFileEndpoint(
             "/api/v1/files/tus/\(fileId)",
             headers: downloadHeaders(claim: claim)
         )

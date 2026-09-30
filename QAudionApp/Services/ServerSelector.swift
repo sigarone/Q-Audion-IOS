@@ -18,6 +18,20 @@ import os
 /// ## Usage
 ///   After login: `await serverSelector.selectBestServer(provider: provider)`
 ///   Background:  `serverSelector.startMonitor(provider: provider)`
+///
+/// ## Item G (2026-09-30 file-transfer plan) — files never follow this selector
+/// This class picks the node for calling/signaling/general REST traffic,
+/// including a legitimate DR/failover move to `fi1.bcrypto.com` — a
+/// dev/build box with no shared file storage that answers a tus create
+/// with 402 ("abbonamento file mancante"). File endpoints (tus
+/// create/PATCH/HEAD, issue-token, download) must NEVER ride whatever this
+/// selector has `provider.config.serverUrl` pointed at; they always target
+/// the certificate-pinned primary the app's `BCryptoRestClient` was
+/// constructed against instead — see `BCryptoRestClient.pinnedPrimaryServerUrl`
+/// / `.postToPrimary` / `.getFileEndpoint`, and their call sites in
+/// `BCryptoStorageApiImpl` and `BCryptoDownloadTokenClient`. That pin is
+/// enforced at the REST/tus client layer precisely so it holds regardless
+/// of anything this selector (or a future one) ever decides.
 @MainActor
 final class ServerSelector {
 
