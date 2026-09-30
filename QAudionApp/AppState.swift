@@ -5912,6 +5912,14 @@ final class AppState: ObservableObject {
                 viewModelMediaHook?()
                 DispatchQueue.main.async { self?.groupMediaConnected() }
             }
+            // Same single-slot chaining: the view model follows the microphone state, the
+            // app layer mirrors it to the system call UI (and to the 1:1 leg while a
+            // hand-over is pending).
+            let viewModelMutedHook = groupController.onMutedChanged
+            groupController.onMutedChanged = { [weak self] muted in
+                viewModelMutedHook?(muted)
+                DispatchQueue.main.async { self?.groupMuteChanged(muted) }
+            }
             let viewModelErrorHook = groupController.onMediaError
             groupController.onMediaError = { [weak self] error in
                 viewModelErrorHook?(error)
@@ -20068,10 +20076,13 @@ extension AppState {
         guard let peer = callContactId, let controller = groupCallController else { return }
         let callType = isVideoCall ? "video" : "audio"
         let activeOneToOneId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+        // A muted 1:1 call stays muted as a group call: the controller applies it before
+        // the group publisher exists, so the microphone is never live, not even briefly.
         guard let groupCallId = controller.createCall(
             invitees: [peer] + newPeerIds,
             callType: callType,
-            promotedFromCallId: activeOneToOneId
+            promotedFromCallId: activeOneToOneId,
+            startMuted: callService.isMuted
         ) else { return }
         // Group calls v2 — make-before-break: the 1:1 leg stays up until the group
         // media is connected and the peer is in the group (`beginGroupPromotion`),
@@ -20335,6 +20346,10 @@ extension AppState {
         // W-MUTEBTNSRC — publish it so every surface follows, including when the
         // change came from CallKit rather than from one of our buttons.
         callMuted = muted
+        // Group calls v2: while a 1:1 -> group hand-over is pending both legs are live
+        // and the system UI only knows the 1:1 CallKit entry, so its mute has to reach
+        // the group publisher too (a no-op when the group already has that state).
+        if groupPromotion != nil { groupCallViewModel?.applyMuteFromSystem(muted) }
     }
 
     /// Feature B ("voce verificata") — manual trigger for
@@ -24212,8 +24227,11 @@ extension AppState {
                   case .connecting(let cid) = self.groupCallControllerState,
                   cid == callId else { return }
             // The SAME join path as before: single source of truth for the WS
-            // `group_call_join` AND the GroupSession crypto bootstrap.
-            controller.join(callId: callId, video: hasVideo)
+            // `group_call_join` AND the GroupSession crypto bootstrap. A hand-over keeps
+            // the mute of the 1:1 leg (read now, at the join, not at the tap).
+            let promotedHere: Bool = self.groupPromotion?.groupCallId == callId
+            let startMuted: Bool = promotedHere && self.callService.isMuted
+            controller.join(callId: callId, video: hasVideo, startMuted: startMuted)
             self.armGroupCallJoinTimeout(callId: callId)
             // W-GRPJOINRETRY (2026-08-04): waiting for authentication (above)
             // closed the STALE-MANAGER race, confirmed live — rebind now
@@ -24987,6 +25005,7 @@ extension AppState {
                             Task { await self.callKit?.reportCallEnded(uuid: uuid, reason: .remoteEnded) }
                         } else {
                             self.groupCallKitId = uuid
+                            self.syncNewGroupCallKitEntryMute(uuid)
                         }
                     }
                     return
@@ -24996,6 +25015,36 @@ extension AppState {
             }
             await MainActor.run { self.activateGroupCallAudioSessionSelfManaged() }
         }
+    }
+
+    /// The group call's microphone state changed (the button, a peer's mute request,
+    /// CallKit, the state a hand-over began with): the system call UI follows it
+    /// (`CXSetMutedCallAction`), exactly like the 1:1 mute button does, and so does the
+    /// 1:1 leg while a hand-over is pending (it still holds the microphone and the only
+    /// CallKit entry). Both mirrors are idempotent and cannot loop: the round trip
+    /// through CallKit comes back as `onMutedChanged`, whose group side
+    /// (`applyMuteFromSystem`) only acts on a change.
+    @MainActor
+    func groupMuteChanged(_ muted: Bool) {
+        // The call is over (the controller clears the mute state on teardown): there is
+        // nothing left to mirror.
+        guard groupCallController?.currentCallId != nil else { return }
+        if let uuid = groupCallKitId {
+            Task { [weak self] in _ = try? await self?.callKit?.setMuted(uuid: uuid, isMuted: muted) }
+        }
+        guard groupPromotion != nil, isInCall else { return }
+        if callService.isMuted != muted { setMuted(muted) }
+        if let uuid = activeCallKitId {
+            Task { [weak self] in _ = try? await self?.callKit?.setMuted(uuid: uuid, isMuted: muted) }
+        }
+    }
+
+    /// A group CallKit entry that appears after the user already muted (CallKit answers
+    /// the start request asynchronously) starts unmuted on its side: tell it.
+    @MainActor
+    private func syncNewGroupCallKitEntryMute(_ uuid: UUID) {
+        guard groupCallController?.isMuted == true else { return }
+        Task { [weak self] in _ = try? await self?.callKit?.setMuted(uuid: uuid, isMuted: true) }
     }
 
     /// The group media path is up (the publisher PeerConnection connected).

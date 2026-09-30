@@ -1357,6 +1357,17 @@ class GroupCallViewModel: ObservableObject {
                     self?.activeSpeakerIds = Set(identities)
                 }
             }
+            // The controller owns the microphone switch: the button, a peer's mute
+            // request, CallKit and the state a call BEGINS with (a muted 1:1 call that
+            // is promoted to a group starts muted) all reach the button and the self
+            // tile through here, and the reset at the end of a call clears a mute this
+            // long-lived view model would otherwise carry into the next call.
+            controller.onMutedChanged = { [weak self] muted in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.isMuted = self.manager.setLocalMuted(muted)
+                }
+            }
             controller.onMuteRequested = { [weak self] requesterId in
                 DispatchQueue.main.async {
                     guard let self = self else { return }

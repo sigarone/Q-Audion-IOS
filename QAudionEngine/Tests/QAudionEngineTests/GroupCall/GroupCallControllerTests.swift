@@ -14,6 +14,9 @@ final class FakeMediaLink: GroupMediaLink, @unchecked Sendable {
     private var _tiles: [String] = []
     var startError: Error?
     var cameraResult: GroupCameraResult = .started
+    /// Runs at the start of every `setMicrophoneEnabled`, before it is recorded: lets a
+    /// test land another call in the middle of the wiring.
+    var beforeMicrophone: ((Bool) -> Void)?
 
     var calls: [String] {
         lock.lock(); defer { lock.unlock() }
@@ -41,7 +44,10 @@ final class FakeMediaLink: GroupMediaLink, @unchecked Sendable {
     func setBackgrounded(_ value: Bool) { record("background=\(value)") }
     func refreshPublisherFilter() { record("refresh-filter") }
     func setPublishVideo(_ on: Bool) async { record("publish-video=\(on)") }
-    func setMicrophoneEnabled(_ enabled: Bool) { record("mic=\(enabled)") }
+    func setMicrophoneEnabled(_ enabled: Bool) {
+        beforeMicrophone?(enabled)
+        record("mic=\(enabled)")
+    }
     func setCameraEnabled(_ enabled: Bool) async -> GroupCameraResult {
         record("camera=\(enabled)")
         return enabled ? cameraResult : .stopped
@@ -68,6 +74,8 @@ final class FakeMediaBackend: GroupMediaBackend, @unchecked Sendable {
     private var _begins = 0
     private var _ends = 0
     var startError: Error?
+    /// Handed to every link made from now on (`FakeMediaLink.beforeMicrophone`).
+    var microphoneHook: ((Bool) -> Void)?
 
     var links: [FakeMediaLink] { lock.lock(); defer { lock.unlock() }; return _links }
     var keys: [(participant: String, index: Int32, key: Data)] { lock.lock(); defer { lock.unlock() }; return _keys }
@@ -86,6 +94,7 @@ final class FakeMediaBackend: GroupMediaBackend, @unchecked Sendable {
     func makeLink(ready: GroupCallWire.MediaReady) async throws -> GroupMediaLink {
         let link = FakeMediaLink()
         link.startError = startError
+        link.beforeMicrophone = microphoneHook
         lock.lock(); _links.append(link); lock.unlock()
         return link
     }
@@ -174,7 +183,8 @@ final class ControllerHarness: @unchecked Sendable {
     static let pseudoB = GroupCallFixtures.pseudoB
     static let pseudoC = GroupCallFixtures.pseudoC
 
-    func update(epoch: UInt32, members: [String]? = nil, withMedia: Bool = true) -> GroupCallWire.Update {
+    func update(epoch: UInt32, members: [String]? = nil, withMedia: Bool = true,
+                callId: String = ControllerHarness.callId) -> GroupCallWire.Update {
         let roster = members ?? [Self.selfUser, Self.peerB]
         var map: [String: String] = [:]
         if withMedia {
@@ -183,7 +193,7 @@ final class ControllerHarness: @unchecked Sendable {
             map[Self.peerC] = Self.pseudoC
             map = map.filter { roster.contains($0.key) }
         }
-        return GroupCallWire.Update(callId: Self.callId, participants: roster, epoch: epoch,
+        return GroupCallWire.Update(callId: callId, participants: roster, epoch: epoch,
                                     nodeId: withMedia ? "node-a" : nil, pseudonyms: map)
     }
 
@@ -204,10 +214,21 @@ final class ControllerHarness: @unchecked Sendable {
 
     /// join -> update (no media yet, or with the pseudonym map) -> media_ready -> link started.
     func joinAndConnect(video: Bool = false, epoch: UInt32 = 1, members: [String]? = nil,
-                        mediaInUpdate: Bool = false) async -> FakeMediaLink? {
-        controller.join(callId: Self.callId, video: video)
+                        mediaInUpdate: Bool = false, startMuted: Bool = false) async -> FakeMediaLink? {
+        controller.join(callId: Self.callId, video: video, startMuted: startMuted)
         manager.onGroupUpdate?(update(epoch: epoch, members: members, withMedia: mediaInUpdate))
         manager.onMediaReady?(ready())
+        _ = await waitUntil { !self.backend.links.isEmpty && self.backend.links[0].calls.contains { $0.hasPrefix("start") } }
+        return backend.links.first
+    }
+
+    /// createCall (the creating side of a 1:1 -> group promotion) -> update -> media_ready
+    /// -> link started. The call id is the one the manager minted.
+    func createAndConnect(startMuted: Bool) async -> FakeMediaLink? {
+        guard let id = controller.createCall(invitees: [Self.peerB], promotedFromCallId: "one-to-one-call",
+                                             startMuted: startMuted) else { return nil }
+        manager.onGroupUpdate?(update(epoch: 1, withMedia: false, callId: id))
+        manager.onMediaReady?(ready(callId: id))
         _ = await waitUntil { !self.backend.links.isEmpty && self.backend.links[0].calls.contains { $0.hasPrefix("start") } }
         return backend.links.first
     }
@@ -699,6 +720,151 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertEqual(requester.value, ControllerHarness.peerB)
         XCTAssertTrue(h.controller.isMuted)
         XCTAssertEqual(link?.calls.last, "mic=false")
+        h.controller.leave()
+    }
+
+    // MARK: mute state (1:1 -> group hand-over, CallKit mirror)
+
+    /// Every mic call of the link that happened before its publisher started: the start
+    /// is what creates the audio track, so these decide whether a frame can ever be live.
+    private func micCallsBeforeStart(_ link: FakeMediaLink?) -> [String] {
+        let calls = link?.calls ?? []
+        guard let start = calls.firstIndex(where: { $0.hasPrefix("start") }) else { return [] }
+        return calls[..<start].filter { $0.hasPrefix("mic=") }
+    }
+
+    func testAPromotedCallStartsMutedAndTheMicrophoneIsNeverLive() async {
+        let h = ControllerHarness()
+        let changes = LockedBox<[Bool]>([])
+        h.controller.onMutedChanged = { muted in changes.mutate { $0.append(muted) } }
+        let link = await h.createAndConnect(startMuted: true)
+        XCTAssertNotNil(link)
+        // The state is the controller's from the first instant, so the button / self tile show it.
+        XCTAssertTrue(h.controller.isMuted)
+        XCTAssertEqual(changes.value, [true])
+        // The publisher was told to stay muted BEFORE it started (its audio track is created
+        // by the start), and never once to be live.
+        XCTAssertEqual(micCallsBeforeStart(link), ["mic=false"])
+        XCTAssertFalse(link?.calls.contains("mic=true") ?? true, "calls: \(link?.calls ?? [])")
+        h.controller.leave()
+    }
+
+    func testJoiningAPromotedCallStartsMutedToo() async {
+        let h = ControllerHarness()
+        let link = await h.joinAndConnect(startMuted: true)
+        XCTAssertNotNil(link)
+        XCTAssertTrue(h.controller.isMuted)
+        XCTAssertEqual(micCallsBeforeStart(link), ["mic=false"])
+        XCTAssertFalse(link?.calls.contains("mic=true") ?? true, "calls: \(link?.calls ?? [])")
+        h.controller.leave()
+    }
+
+    func testAnUnmutedCallKeepsTheMicrophoneLiveAndReportsNoChange() async {
+        let h = ControllerHarness()
+        let changes = LockedBox<[Bool]>([])
+        h.controller.onMutedChanged = { muted in changes.mutate { $0.append(muted) } }
+        let link = await h.joinAndConnect()
+        XCTAssertFalse(h.controller.isMuted)
+        XCTAssertEqual(micCallsBeforeStart(link), ["mic=true"])
+        XCTAssertEqual(changes.value, [])
+        h.controller.leave()
+        XCTAssertEqual(changes.value, [], "nothing to reset: the call never was muted")
+    }
+
+    func testTheStartMuteSurvivesARejoinOfTheMedia() async {
+        let h = ControllerHarness()
+        _ = await h.joinAndConnect(startMuted: true)
+        // A fresh hand-out (rejoin, media moved, ...) replaces the link: its publisher is
+        // wired muted as well, it never comes up live.
+        h.manager.onMediaReady?(h.ready())
+        let rebuilt = await h.waitUntil { h.backend.links.count == 2 && h.backend.links[1].calls.contains { $0.hasPrefix("start") } }
+        XCTAssertTrue(rebuilt)
+        let second = h.backend.links[1]
+        XCTAssertEqual(micCallsBeforeStart(second), ["mic=false"])
+        XCTAssertFalse(second.calls.contains("mic=true"), "calls: \(second.calls)")
+        h.controller.leave()
+    }
+
+    func testUnmutingAPromotedCallOpensTheMicrophoneOnceAndIsReported() async {
+        let h = ControllerHarness()
+        let changes = LockedBox<[Bool]>([])
+        h.controller.onMutedChanged = { muted in changes.mutate { $0.append(muted) } }
+        let link = await h.createAndConnect(startMuted: true)
+        h.controller.setMuted(false)
+        XCTAssertFalse(h.controller.isMuted)
+        XCTAssertEqual(link?.calls.last, "mic=true")
+        XCTAssertEqual(changes.value, [true, false])
+        h.controller.leave()
+    }
+
+    func testTheStartMuteEndsWithTheCallAndDoesNotLeakIntoTheNextOne() async {
+        let h = ControllerHarness()
+        let changes = LockedBox<[Bool]>([])
+        h.controller.onMutedChanged = { muted in changes.mutate { $0.append(muted) } }
+        _ = await h.createAndConnect(startMuted: true)
+        h.controller.leave()
+        // The reset is reported too: the long-lived view model must not carry the mute over.
+        XCTAssertFalse(h.controller.isMuted)
+        XCTAssertEqual(changes.value, [true, false])
+        h.controller.join(callId: ControllerHarness.callId)
+        XCTAssertFalse(h.controller.isMuted)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))
+        h.manager.onMediaReady?(h.ready())
+        let second = await h.waitUntil { h.backend.links.count == 2 && h.backend.links[1].calls.contains { $0.hasPrefix("start") } }
+        XCTAssertTrue(second)
+        XCTAssertEqual(micCallsBeforeStart(h.backend.links[1]), ["mic=true"])
+        XCTAssertEqual(changes.value, [true, false])
+        h.controller.leave()
+    }
+
+    /// The CallKit mirror of the app layer hangs off this one callback: whatever moves the
+    /// microphone (the button, the async switch, a peer's request, CallKit itself, which
+    /// reaches the controller through the same `setMuted`) is reported once per change.
+    func testEveryMuteSourceIsReportedOncePerChange() async {
+        let h = ControllerHarness()
+        let changes = LockedBox<[Bool]>([])
+        h.controller.onMutedChanged = { muted in changes.mutate { $0.append(muted) } }
+        let link = await h.joinAndConnect()
+        h.controller.setMuted(true)
+        h.controller.setMuted(true)
+        XCTAssertEqual(changes.value, [true], "a repeat of the current state is not a change")
+        XCTAssertEqual(link?.calls.last, "mic=false")
+        h.controller.setMuted(false)
+        XCTAssertEqual(changes.value, [true, false])
+        XCTAssertEqual(link?.calls.last, "mic=true")
+        let live = await h.controller.setMicrophoneEnabled(false)
+        XCTAssertTrue(live)
+        XCTAssertEqual(changes.value, [true, false, true])
+        XCTAssertEqual(link?.calls.last, "mic=false")
+        // A peer asks for a mute while already muted: the requester is still told, nothing changes.
+        let requests = LockedBox(0)
+        h.controller.onMuteRequested = { _ in requests.mutate { $0 += 1 } }
+        h.manager.onGroupCallMuteRequestReceived?(ControllerHarness.callId, ControllerHarness.peerB)
+        XCTAssertEqual(requests.value, 1)
+        XCTAssertEqual(changes.value, [true, false, true])
+        h.controller.setMuted(false)
+        h.manager.onGroupCallMuteRequestReceived?(ControllerHarness.callId, ControllerHarness.peerB)
+        XCTAssertEqual(changes.value, [true, false, true, false, true])
+        XCTAssertEqual(link?.calls.last, "mic=false")
+        h.controller.leave()
+        XCTAssertEqual(changes.value, [true, false, true, false, true, false])
+    }
+
+    func testAMuteThatLandsWhileTheLinkIsBeingWiredStillWins() async {
+        let h = ControllerHarness()
+        let fired = LockedBox(false)
+        // The mute arrives after the wiring read "live" and before its apply: the stale apply
+        // would land AFTER the mute's own `setMicrophoneEnabled(false)` and reopen the microphone.
+        h.backend.microphoneHook = { [weak h] enabled in
+            guard enabled, !fired.value else { return }
+            fired.mutate { $0 = true }
+            h?.controller.setMuted(true)
+        }
+        let link = await h.joinAndConnect()
+        XCTAssertTrue(fired.value)
+        XCTAssertTrue(h.controller.isMuted)
+        let mics = micCallsBeforeStart(link)
+        XCTAssertEqual(mics.last, "mic=false", "calls: \(link?.calls ?? [])")
         h.controller.leave()
     }
 

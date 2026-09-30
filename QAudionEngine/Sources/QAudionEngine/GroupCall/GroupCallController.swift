@@ -114,6 +114,12 @@ public final class GroupCallController: @unchecked Sendable {
     /// level: the audio-level RTP extension is not negotiated, spec §4.4).
     public var onActiveSpeakersChanged: (([String]) -> Void)?
     public var onMuteRequested: ((_ requesterId: String) -> Void)?
+    /// The microphone switch changed, whatever moved it: the button, a peer's mute
+    /// request, CallKit, the state a call begins with (a 1:1 -> group hand-over starts
+    /// muted when the 1:1 leg was) or the reset when the call ends. Fired once per
+    /// CHANGE, never for a repeat of the current value, so the app layer can mirror it
+    /// to the roster badge and to the system call UI without looping.
+    public var onMutedChanged: ((_ muted: Bool) -> Void)?
     /// A clear, user-visible media error (spec §2.4 / §8). Fatal ones end the
     /// call right after; a camera problem does not.
     public var onMediaError: ((GroupCallMediaError) -> Void)?
@@ -256,7 +262,10 @@ public final class GroupCallController: @unchecked Sendable {
         groupId: String = "",
         groupName: String = "",
         /// W-CALLPROMOTE: set when this call is a live promotion of a 1:1 call.
-        promotedFromCallId: String = ""
+        promotedFromCallId: String = "",
+        /// The microphone state the call begins with: a promotion carries the mute of
+        /// the 1:1 leg over (see `beginCall`).
+        startMuted: Bool = false
     ) -> String? {
         guard let callId = manager.createGroupCall(
             recipients: invitees, title: title, callType: callType,
@@ -264,15 +273,17 @@ public final class GroupCallController: @unchecked Sendable {
         ) else {
             return nil
         }
-        beginCall(callId: callId, video: callType == "video", created: true)
+        beginCall(callId: callId, video: callType == "video", created: true, startMuted: startMuted)
         setState(.connecting(callId: callId))
         return callId
     }
 
     /// - Parameter video: whether the invite this joins was a video call; the
     ///   camera is published from the start once the media path is up.
-    public func join(callId: String, video: Bool = false) {
-        beginCall(callId: callId, video: video, created: false)
+    /// - Parameter startMuted: the microphone state the call begins with: joining the
+    ///   group a 1:1 call is promoted into carries the mute of the 1:1 leg over.
+    public func join(callId: String, video: Bool = false, startMuted: Bool = false) {
+        beginCall(callId: callId, video: video, created: false, startMuted: startMuted)
         manager.joinGroupCall(callId: callId)
         setState(.connecting(callId: callId))
     }
@@ -302,10 +313,12 @@ public final class GroupCallController: @unchecked Sendable {
 
     public func setMuted(_ muted: Bool) {
         lock.lock()
+        let changed = self.muted != muted
         self.muted = muted
         let current = link
         lock.unlock()
         current?.setMicrophoneEnabled(!muted)
+        if changed { onMutedChanged?(muted) }
     }
 
     public var isMuted: Bool { lock.lock(); defer { lock.unlock() }; return muted }
@@ -510,16 +523,22 @@ public final class GroupCallController: @unchecked Sendable {
 
     // MARK: - Call lifecycle
 
-    private func beginCall(callId: String, video: Bool, created: Bool) {
+    /// `startMuted` is the microphone state of the WHOLE call, rejoins included (the
+    /// link wiring reads `muted` before the publisher exists): a muted 1:1 call that is
+    /// promoted to a group must not open the microphone, not even for one frame, so the
+    /// state is set here, under the same lock that publishes the call id, long before
+    /// any media hand-out can build a link.
+    private func beginCall(callId: String, video: Bool, created: Bool, startMuted: Bool = false) {
         lock.lock()
         let previousLink = link
         let previousCoordinator = coordinator
+        let mutedBefore = muted
         link = nil
         linkGeneration += 1
         activeCallId = callId
         createdLocally = created
         wantsVideo = video
-        muted = false
+        muted = startMuted
         cameraOn = false
         lastUpdate = nil
         currentReady = nil
@@ -545,6 +564,7 @@ public final class GroupCallController: @unchecked Sendable {
         earlyKeys.removeAll()
         let replay = lastAudioActivation
         lock.unlock()
+        if mutedBefore != startMuted { onMutedChanged?(startMuted) }
         if !early.isEmpty {
             e2eeQueue.async { for item in early { newCoordinator.onEnvelope(item.envelope, from: item.user) } }
         }
@@ -571,6 +591,7 @@ public final class GroupCallController: @unchecked Sendable {
         linkGeneration += 1
         let oldCoordinator = coordinator
         coordinator = nil
+        let wasMuted = muted
         muted = false
         cameraOn = false
         wantsVideo = false
@@ -609,6 +630,7 @@ public final class GroupCallController: @unchecked Sendable {
             groupTelemetry?("call.media.ended", endedCallId, ["reason": reason])
         }
         setState(.idle)
+        if wasMuted { onMutedChanged?(false) }
         onReactionEventsChanged?([])
         onRaisedHandsChanged?([])
         onLocalVideoTrack?(nil)
@@ -934,10 +956,25 @@ public final class GroupCallController: @unchecked Sendable {
             guard let self = self, self.isCurrent(generation) else { return }
             self.onLocalVideoTrack?(track)
         }
-        lock.lock()
-        let muted = self.muted
-        lock.unlock()
-        newLink.setMicrophoneEnabled(!muted)
+        applyMicrophoneState(to: newLink)
+    }
+
+    /// Runs BEFORE the publisher exists (`start` creates the audio track with whatever
+    /// this set), so a muted call never has a live microphone. The state is applied and
+    /// then checked again: a mute that lands between the read and the apply (its own
+    /// `setMicrophoneEnabled` already ran on this link, the stale apply here would come
+    /// after it) must win.
+    private func applyMicrophoneState(to target: GroupMediaLink) {
+        while true {
+            lock.lock()
+            let wanted = muted
+            lock.unlock()
+            target.setMicrophoneEnabled(!wanted)
+            lock.lock()
+            let settled = wanted == muted
+            lock.unlock()
+            if settled { return }
+        }
     }
 
     private func isCurrent(_ generation: Int) -> Bool {
