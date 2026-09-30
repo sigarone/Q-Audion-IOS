@@ -208,6 +208,21 @@ final class GroupMediaSessionTests: XCTestCase {
         h.session.close()
     }
 
+    func testPublishDeclaresTheAscendingRidOrderOfTheSimulcastLayers() async throws {
+        let h = SessionHarness()
+        try await h.session.start(publishVideo: true)
+        XCTAssertEqual(h.server.bodies(for: "publish").first?["rid_order"] as? String, "lmh")
+        h.session.close()
+    }
+
+    func testAnActiveFalseStreamIsADisabledStream() {
+        let removed = VideoRoomStream.parse(["type": "video", "mid": "3", "feed_id": "x", "feed_mid": "1", "active": false])
+        XCTAssertEqual(removed?.disabled, true)
+        let live = VideoRoomStream.parse(["type": "video", "mid": "3", "feed_id": "x", "feed_mid": "1", "active": true])
+        XCTAssertEqual(live?.disabled, false)
+        XCTAssertEqual(VideoRoomStream.parse(["type": "audio", "mid": "0", "feed_id": "x", "feed_mid": "0"])?.disabled, false)
+    }
+
     func testAudioOnlyCallPublishesWithVideoOff() async throws {
         let h = SessionHarness()
         try await h.session.start(publishVideo: false)
@@ -250,7 +265,7 @@ final class GroupMediaSessionTests: XCTestCase {
         let join = try XCTUnwrap(h.server.bodies(for: "join").last)
         XCTAssertEqual(join["ptype"] as? String, "subscriber")
         XCTAssertEqual((join["private_id"] as? NSNumber)?.int64Value, 4242)
-        XCTAssertEqual(join["token"] as? String, GroupCallFixtures.joinToken)
+        XCTAssertNil(join["token"], "the subscriber join needs only the private id")
         let streams = try XCTUnwrap(join["streams"] as? [[String: Any]])
         XCTAssertEqual(Set(streams.compactMap { $0["mid"] as? String }), ["0", "1"])
         XCTAssertTrue(streams.allSatisfy { ($0["feed"] as? String) == bob })
@@ -630,12 +645,55 @@ final class GroupMediaSessionTests: XCTestCase {
         h.server.subscriberStreams = bobStreams()
         try await h.session.start(publishVideo: true)
         _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
-        h.server.pluginErrors["subscribe"] = 428
+        h.server.pluginErrors["subscribe"] = 433
         h.server.subscriberStreams += [(feed: carol, feedMid: "0", type: "audio", mid: "2")]
         h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
                        "plugindata": ["plugin": "janus.plugin.videoroom", "data": ["videoroom": "event", "publishers": [FakeJanusServer.publisher(id: carol)]]]])
-        let ok = await h.waitUntil { h.rejoinReasons().contains("janus_428") }
+        let ok = await h.waitUntil { h.rejoinReasons().contains("janus_433") }
         XCTAssertTrue(ok)
+        h.session.close()
+    }
+
+    func testNoSuchFeedOnASubscribeWaitsForThePublishersEventInsteadOfRejoining() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        // Carol was listed a moment before she stopped publishing: 428.
+        h.server.pluginErrors["subscribe"] = 428
+        h.server.subscriberStreams += [(feed: carol, feedMid: "0", type: "audio", mid: "2")]
+        let announce: () -> Void = {
+            h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
+                           "plugindata": ["plugin": "janus.plugin.videoroom",
+                                          "data": ["videoroom": "event", "publishers": [FakeJanusServer.publisher(id: carol)]]]])
+        }
+        announce()
+        _ = await h.waitUntil { h.server.pluginRequests.filter { $0 == "subscribe" }.count == 1 }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(h.rejoinReasons().isEmpty, "a vanished feed is not a broken media path")
+        XCTAssertEqual(h.server.pluginRequests.filter { $0 == "subscribe" }.count, 1, "not retried on its own")
+        // She publishes again: the next publishers event subscribes her.
+        announce()
+        let ok = await h.waitUntil { h.server.pluginRequests.filter { $0 == "subscribe" }.count == 2 }
+        XCTAssertTrue(ok)
+        h.session.close()
+    }
+
+    func testNoSuchFeedOnTheFirstSubscriberJoinDropsThatPeerConnectionAndRetriesOnThePublishersEvent() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
+        h.server.subscriberStreams = bobStreams()
+        h.server.subscriberJoinError = 428
+        try await h.session.start(publishVideo: true)
+        let dropped = await h.waitUntil { h.subscriber.calls.contains("close") }
+        XCTAssertTrue(dropped, "the unusable subscriber (PC + handle) is torn down")
+        XCTAssertTrue(h.rejoinReasons().isEmpty)
+        // Bob (re)appears: a fresh subscriber handle joins and is answered.
+        h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
+                       "plugindata": ["plugin": "janus.plugin.videoroom",
+                                      "data": ["videoroom": "event", "publishers": [FakeJanusServer.publisher(id: bob)]]]])
+        let ok = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        XCTAssertTrue(ok)
+        XCTAssertEqual(h.server.bodies(for: "join").filter { ($0["ptype"] as? String) == "subscriber" }.count, 2)
         h.session.close()
     }
 
@@ -667,6 +725,7 @@ final class GroupMediaSessionTests: XCTestCase {
         XCTAssertEqual(restart["restart"] as? Bool, true)
         let configureJsep = h.server.jsep(for: "configure")
         XCTAssertEqual(configureJsep.first?["type"] as? String, "offer", "publisher: configure restart + a new offer")
+        XCTAssertEqual(restart["rid_order"] as? String, "lmh")
         XCTAssertEqual(h.publisher.calls.filter { $0 == "answer" }.count, 2, "the answer of the restart is applied")
         XCTAssertGreaterThanOrEqual(h.subscriber.acceptedStreams.count, 2, "subscriber: Janus' new offer is answered")
         XCTAssertTrue(h.telemetryKinds().contains(GroupTelemetry.Kind.iceRestart))

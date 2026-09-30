@@ -175,6 +175,10 @@ public final class GroupMediaSession: @unchecked Sendable {
     private var rawPublishers: [String: VideoRoomPublisher] = [:]
     /// Subscribed (feed, feed mid) pairs, as acknowledged by Janus.
     private var subscribed: Set<String> = []
+    /// Feeds Janus answered "no such feed" (428) for: listed a moment before they
+    /// stopped (or before they started) publishing. Not subscribed again until a
+    /// `publishers` event names them.
+    private var unavailableFeeds: Set<String> = []
     /// Subscriber mid -> stream, from the last `attached` / `updated`.
     private var subscriberStreams: [String: VideoRoomStream] = [:]
     private var desiredLayers: [String: (substream: Int, temporal: Int)] = [:]
@@ -341,6 +345,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     private func adoptPublishers(_ list: [VideoRoomPublisher]) {
         lock.lock()
         rawPublishers = [:]
+        unavailableFeeds = []
         for entry in list { rawPublishers[entry.id] = entry }
         let snapshot = applyPublisherFilterLocked()
         lock.unlock()
@@ -351,7 +356,10 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     private func mergePublishers(_ list: [VideoRoomPublisher]) {
         lock.lock()
-        for entry in list where entry.id != room.pseudonym { rawPublishers[entry.id] = entry }
+        for entry in list where entry.id != room.pseudonym {
+            rawPublishers[entry.id] = entry
+            unavailableFeeds.remove(entry.id)
+        }
         let snapshot = applyPublisherFilterLocked()
         lock.unlock()
         emit(.remotePublishers(snapshot))
@@ -362,6 +370,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     private func removePublisher(_ id: String) {
         lock.lock()
         rawPublishers[id] = nil
+        unavailableFeeds.remove(id)
         // Janus drops the departed publisher's streams from the subscriber
         // itself (an unsolicited `updated` + offer): no `unsubscribe` is sent.
         forgetSubscriptionsLocked(of: id)
@@ -416,7 +425,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     /// every video stream the policy wants.
     private func desiredTargetsLocked() -> Set<String> {
         var out = Set<String>()
-        for entry in remotePublishers.values {
+        for entry in remotePublishers.values where !unavailableFeeds.contains(entry.id) {
             for stream in entry.streams where !stream.disabled {
                 let key = Self.key(feed: entry.id, mid: stream.mid)
                 if stream.isAudio || (stream.isVideo && policy.isSubscribed(key: key)) { out.insert(key) }
@@ -453,6 +462,13 @@ public final class GroupMediaSession: @unchecked Sendable {
                 try await unsubscribe(targets: toRemove)
             }
             await applyDesiredLayers()
+        } catch JanusClientError.plugin(let code, _) where code == 428 {
+            // "No such feed": the publisher stopped (or has not started) publishing
+            // between its `publishers` entry and our request. Wait for its next
+            // `publishers` event instead of tearing the whole media path down.
+            lock.lock()
+            for key in toAdd { unavailableFeeds.insert(Self.target(from: key).feed) }
+            lock.unlock()
         } catch {
             handleRequestError(error, context: "subscribe")
         }
@@ -487,7 +503,23 @@ public final class GroupMediaSession: @unchecked Sendable {
             lock.unlock()
             try await link.start()
             handle = newHandle
-            reply = try await withTimeoutRetry { try await self.room.joinSubscriber(handle: newHandle, privateId: privateId, targets: list) }
+            do {
+                reply = try await withTimeoutRetry { try await self.room.joinSubscriber(handle: newHandle, privateId: privateId, targets: list) }
+            } catch {
+                // A refused join leaves the handle unusable: drop the just-built
+                // subscriber (PC and handle) so the next attempt starts clean.
+                lock.lock()
+                let stale = subscriber
+                subscriber = nil
+                subHandle = nil
+                pcStates[.sub] = nil
+                lock.unlock()
+                stale?.onState = nil
+                stale?.onCandidate = nil
+                stale?.close()
+                janus.detach(handle: newHandle)
+                throw error
+            }
         } else {
             reply = try await withTimeoutRetry { try await self.room.subscribe(handle: handle!, targets: list) }
         }
@@ -599,6 +631,8 @@ public final class GroupMediaSession: @unchecked Sendable {
             lock.lock()
             for key in pendingKeys { appliedLayers[key] = desiredLayers[key] }
             lock.unlock()
+        } catch JanusClientError.plugin(let code, _) where code == 428 {
+            // The stream vanished under the request: the roster events tidy up.
         } catch {
             handleRequestError(error, context: "configure")
         }

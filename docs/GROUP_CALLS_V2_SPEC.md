@@ -51,9 +51,14 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   token, keepalive every 25 s, random 128-bit transaction per request, 8 s timeout per request.
 - 4.2 Publisher handle: `join {ptype:"publisher", room, id:pseudonym, display:pseudonym,
   token:join_token}`; create the publisher PC, attach FrameCryptors to every sender BEFORE the
-  offer, then `publish {audio, video, e2ee:true, descriptions}` with the offer.
-- 4.3 Subscriber handle (multistream): `join {ptype:"subscriber", room, private_id, token,
-  streams}`, Janus offers, the client answers (`start`); `subscribe` / `unsubscribe` renegotiate.
+  offer, then `publish {audio, video, e2ee:true, rid_order:"lmh", descriptions}` with the offer
+  (`rid_order` because our SDP lists the rids l, m, h ascending: without it Janus assumes
+  highest-first and substream 0 would be the highest layer; the ICE-restart `configure` carries
+  it too).
+- 4.3 Subscriber handle (multistream): `join {ptype:"subscriber", room, private_id, streams}` (only
+  the private id, no token), Janus offers, the client answers (`start`); `subscribe` /
+  `unsubscribe` renegotiate (`updated` + a new offer; a removed mid stays in the SDP as
+  `active:false`).
   All renegotiations of a PC are strictly serialized (one queue per PC, debounce 150 ms).
   Receiver cryptors use the publisher pseudonym as participant id, attached BEFORE rendering.
 - 4.4 Both PCs: bundle max-bundle, rtcp-mux require, continual gathering. **DTLS pin**: the
@@ -101,8 +106,10 @@ Plus the shared per-call `call.media.connected` / `call.media.ended` pair.
 
 ## 8. Errors (client)
 
-428 / 433 -> one automatic `group_call_media_join`, then an error; 426 / 436 -> error; 8 s request
-timeout -> one retry, then a rejoin.
+Real VideoRoom codes: 426 no room, 428 no feed, 432 room full, 433 unauthorized (also "requires
+e2ee" and a kicked / removed token), 436 id exists. 426 / 433 -> one automatic
+`group_call_media_join`, then an error; 432 -> the `full` error; 436 -> error; 428 on a subscribe is
+not an error at all (see deviation 1); 8 s request timeout -> one retry, then a rejoin.
 
 ## iOS implementation map
 
@@ -121,9 +128,13 @@ timeout -> one retry, then a rejoin.
 
 1. **Janus error codes (section 8).** The spec lists 428/433 as "room / participant not found,
    token" and 426/436 as "unauthorized". The real VideoRoom codes are 426 = no such room,
-   428 = no such feed, 433 = unauthorized (token / room), 436 = user id exists. iOS retries the
-   media join once for 426 / 428 / 433 and for the Janus core codes 403 / 458 / 459 (token refused,
-   session / handle gone: a fresh hand-out repairs them), and shows an error for everything else.
+   428 = no such feed, 432 = room full, 433 = unauthorized (token / room), 436 = user id exists.
+   iOS retries the media join once for 426 / 433 and for the Janus core codes 403 / 458 / 459
+   (token refused, session / handle gone: a fresh hand-out repairs them), shows the `full` error
+   for 432 and an error for everything else. A 428 on a subscribe (the feed stopped, or has not
+   started, publishing between its `publishers` entry and our request) is NOT a broken media
+   path: the feed is skipped until its next `publishers` event, and a first subscriber join that
+   got it drops that (now unusable) subscriber handle + PeerConnection and starts clean next time.
 2. **`group_call_media_unavailable` reason `throttled`.** Besides the four reasons of the spec, the
    client tolerates `throttled` (the server rate-limiting repeated joins of one member): it is
    retried after 2 s (at most 3 times), every other reason is a visible error.
@@ -148,6 +159,9 @@ timeout -> one retry, then a rejoin.
 9. **1:1 -> group hand-over timing.** After the group media is up the 1:1 leg waits for the promoted
    peer to appear in the group; if it has neither joined nor had its ring end after 50 s in total
    (server ring timeout 45 s) the 1:1 leg ends anyway.
-10. **VP8 encoder wrapping.** The 1:1 encoder factory wrapped every encoder in
+10. **Capture height decides the layers.** libwebrtc drops the third simulcast layer for a source
+    below about 720p, so the camera captures the format closest to 1280x720 and a smaller one
+    publishes only l+m (or l): `GroupPublisherPeer.layerCap(forHeight:)`.
+11. **VP8 encoder wrapping.** The 1:1 encoder factory wrapped every encoder in
    `KeyframeForcingVideoEncoder`; native builders (VP8 / VP9 / AV1, libvpx simulcast) cannot be
    wrapped, so those three are now returned unwrapped (H.265, the 1:1 codec, is unchanged).

@@ -73,7 +73,9 @@ public struct VideoRoomStream: Equatable, Sendable {
             feedMid: feedMid,
             codec: object["codec"] as? String,
             description: object["description"] as? String ?? object["feed_description"] as? String,
-            disabled: (object["disabled"] as? NSNumber)?.boolValue ?? false,
+            // Janus keeps a removed stream's mid in the subscriber's SDP as `active:false`.
+            disabled: ((object["disabled"] as? NSNumber)?.boolValue ?? false)
+                || ((object["active"] as? NSNumber)?.boolValue == false),
             simulcast: (object["simulcast"] as? NSNumber)?.boolValue ?? false)
     }
 }
@@ -226,6 +228,9 @@ public struct VideoRoomLayerConfig: Equatable, Sendable {
 
 public final class VideoRoomClient: @unchecked Sendable {
 
+    /// The order of the simulcast rids in our SDP (`GroupPublisherPeer.simulcast`).
+    static let ridOrder = "lmh"
+
     public let janus: JanusClient
     public let room: String
     public let pseudonym: String
@@ -261,6 +266,9 @@ public final class VideoRoomClient: @unchecked Sendable {
                         descriptions: [(mid: String, description: String)]) async throws -> String {
         let reply = try await janus.send(handle: handle, body: [
             "request": "publish", "audio": audio, "video": video, "e2ee": true,
+            // Our SDP lists the simulcast rids ascending (l, m, h): without this Janus
+            // assumes highest-first and substream 0 would be the HIGHEST layer.
+            "rid_order": Self.ridOrder,
             "descriptions": descriptions.map { ["mid": $0.mid, "description": $0.description] },
         ], jsep: JanusJsep(type: "offer", sdp: offer))
         guard let answer = reply.jsep, answer.type == "answer" else { throw JanusClientError.malformed }
@@ -279,6 +287,7 @@ public final class VideoRoomClient: @unchecked Sendable {
         var jsep: JanusJsep?
         if let offer = restartOffer {
             body["restart"] = true
+            body["rid_order"] = Self.ridOrder
             jsep = JanusJsep(type: "offer", sdp: offer)
         }
         let reply = try await janus.send(handle: handle, body: body, jsep: jsep)
@@ -292,8 +301,9 @@ public final class VideoRoomClient: @unchecked Sendable {
     /// Subscriber `join`. The reply is an `attached` event carrying Janus' offer.
     public func joinSubscriber(handle: Int64, privateId: Int64, targets: [VideoRoomSubscribeTarget]) async throws -> JanusMessage {
         try await janus.send(handle: handle, body: [
+            // Only `private_id` (`require_pvtid`): the join token is the publisher's.
             "request": "join", "ptype": "subscriber", "room": room,
-            "private_id": privateId, "token": joinToken,
+            "private_id": privateId,
             "streams": targets.map { $0.dictionary },
         ])
     }

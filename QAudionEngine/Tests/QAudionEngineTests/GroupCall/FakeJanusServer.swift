@@ -22,6 +22,8 @@ final class FakeJanusServer: JanusSocket, @unchecked Sendable {
     var subscriberStreams: [(feed: String, feedMid: String, type: String, mid: String)] = []
     /// request name -> plugin error code, consumed once.
     var pluginErrors: [String: Int] = [:]
+    /// Plugin error code for the next SUBSCRIBER join only (the publisher join is untouched).
+    var subscriberJoinError: Int?
     /// request names whose replies are swallowed (timeout tests).
     var swallow: Set<String> = []
     var swallowOnce: Set<String> = []
@@ -167,6 +169,9 @@ final class FakeJanusServer: JanusSocket, @unchecked Sendable {
                     "videoroom": "joined", "room": body["room"] ?? "", "id": body["id"] ?? "",
                     "private_id": privateId, "publishers": publishersOnJoin,
                 ])
+            } else if let code = subscriberJoinError {
+                subscriberJoinError = nil
+                event(request, handle: handle, data: ["videoroom": "event", "error_code": code, "error": "scripted"])
             } else {
                 event(request, handle: handle, data: [
                     "videoroom": "attached", "room": body["room"] ?? "", "streams": streamObjects(),

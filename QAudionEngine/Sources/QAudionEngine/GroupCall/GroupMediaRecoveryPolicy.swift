@@ -83,6 +83,9 @@ public struct GroupMediaRecoveryPolicy: Sendable {
             return .fail(.transportPolicy)
 
         case .fatalJanusError(let code):
+            // 432: the room is full (VideoRoom `publishers` cap), the same thing the
+            // server's `group_call_media_unavailable` reason `full` says.
+            if code == 432 { return .fail(.full) }
             return .fail(.other("janus_\(code)"))
 
         case .retryableJanusError:

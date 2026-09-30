@@ -84,6 +84,29 @@ final class GroupMediaRecoveryPolicyTests: XCTestCase {
     }
 }
 
+final class GroupMediaRecoveryRoomFullTests: XCTestCase {
+
+    func testJanusRoomFullIsTheFullErrorNotAGenericOne() {
+        var policy = GroupMediaRecoveryPolicy()
+        XCTAssertEqual(policy.handle(.fatalJanusError(432), nowMs: 0), .fail(.full))
+        XCTAssertEqual(policy.handle(.fatalJanusError(436), nowMs: 0), .fail(.other("janus_436")))
+    }
+}
+
+#if canImport(WebRTC)
+final class GroupPublisherLayerCapTests: XCTestCase {
+
+    /// libwebrtc drops the top simulcast layer for a source below about 720p.
+    func testTheCaptureHeightDecidesHowManyLayersItCanFeed() {
+        XCTAssertEqual(GroupPublisherPeer.layerCap(forHeight: 1080), 3)
+        XCTAssertEqual(GroupPublisherPeer.layerCap(forHeight: 720), 3)
+        XCTAssertEqual(GroupPublisherPeer.layerCap(forHeight: 540), 2)
+        XCTAssertEqual(GroupPublisherPeer.layerCap(forHeight: 360), 2)
+        XCTAssertEqual(GroupPublisherPeer.layerCap(forHeight: 240), 1)
+    }
+}
+#endif
+
 final class GroupSpeakingDetectorTests: XCTestCase {
 
     func testAboveThresholdIsSpeakingAndLoudestComesFirst() {

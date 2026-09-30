@@ -134,7 +134,7 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
     public func addRemoteCandidate(_ candidate: GroupIceCandidate?) async {
         guard let pc = currentPeerConnection, let candidate = candidate else { return }
         let ice = RTCIceCandidate(sdp: candidate.candidate, sdpMLineIndex: candidate.sdpMLineIndex, sdpMid: candidate.sdpMid)
-        pc.add(ice) { _ in }
+        try? await pc.add(ice)
     }
 
     /// The `transport` stats row: DTLS version, DTLS cipher, SRTP cipher and the
@@ -221,7 +221,7 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
 /// The publisher PeerConnection (spec §4.2): audio (Opus 60 ms / 32 kbps CBR,
 /// the 1:1 profile) and video (VP8 simulcast l/m/h) transceivers, send-only,
 /// with the frame cryptors attached BEFORE the offer exists.
-public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
+public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unchecked Sendable {
 
     /// Spec §4.4: rid, downscale, fps, bitrate of the three encodings.
     static let simulcast: [(rid: String, scale: Double, fps: Int, maxBps: Int)] = [
@@ -241,6 +241,16 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
     private var capturer: RTCCameraVideoCapturer?
     private var tuning: GroupNativeTuning?
     private var micEnabled = true
+    /// How many of the three simulcast encodings the CAPTURE can feed: libwebrtc drops
+    /// the top layer for a source below ~720p, so a smaller source publishes l,m (or l).
+    private var sourceLayerCap = 3
+
+    /// 720p and up feeds l+m+h (1280x720), 360p and up l+m, anything smaller only l.
+    static func layerCap(forHeight height: Int32) -> Int {
+        if height >= 720 { return 3 }
+        if height >= 360 { return 2 }
+        return 1
+    }
 
     /// Our own camera track (nil while the camera is off), for the self tile.
     public var onLocalVideoTrack: ((RTCVideoTrack?) -> Void)?
@@ -344,6 +354,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
         guard let camera = devices.first(where: { $0.position == .front }) ?? devices.first else { return .noCamera }
         let format = Self.closestFormat(for: camera)
         guard let selected = format else { return .noCamera }
+        sourceLayerCap = Self.layerCap(forHeight: CMVideoFormatDescriptionGetDimensions(selected.formatDescription).height)
         let fps = selected.videoSupportedFrameRateRanges.compactMap { Int($0.maxFrameRate) }.filter { $0 <= 30 }.max() ?? 30
         let newCapturer = RTCCameraVideoCapturer(delegate: source)
         let started: Bool = await withCheckedContinuation { continuation in
@@ -354,6 +365,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
         guard started else { return .noCamera }
         capturer = newCapturer
         video.isEnabled = true
+        setActiveLayers(sourceLayerCap)
         onLocalVideoTrack?(video)
         return .started
         #else
@@ -372,8 +384,9 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
     /// 2 = l+m, 3 = all): the thermal / congestion policy of `GroupPublishPolicy`.
     public func setActiveLayers(_ count: Int) {
         guard let sender = videoSender else { return }
+        let allowed = min(count, sourceLayerCap)
         let parameters = sender.parameters
-        for (index, encoding) in parameters.encodings.enumerated() { encoding.isActive = index < count }
+        for (index, encoding) in parameters.encodings.enumerated() { encoding.isActive = index < allowed }
         sender.parameters = parameters
     }
 
@@ -420,7 +433,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink {
 /// answer. Every receiver gets its frame cryptor (participantId = the
 /// publisher's pseudonym) BEFORE the answer exists, so no frame is ever
 /// rendered without one.
-public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink {
+public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unchecked Sendable {
 
     public enum TrackKind: Sendable { case audio, video }
 
