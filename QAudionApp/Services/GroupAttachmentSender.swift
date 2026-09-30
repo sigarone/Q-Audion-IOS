@@ -129,15 +129,32 @@ final class GroupAttachmentSender {
             throw SendError.uploadFailed(error.localizedDescription)
         }
 
+        // Single-shot cipher — this type's own doc: "total_chunks is always
+        // 1 (single-shot)". Named here (not a bare literal in two places)
+        // so the descriptor field below (step 5) and the download-token
+        // sizing right below (step 4) can never drift apart.
+        let totalChunks = 1
+
         // 4. §4 PATH 1 — one capability token per OTHER member. A failure
         //    for one member is logged and skipped (that member simply can't
         //    download); the send does NOT abort for the rest.
+        //
+        // W-MAXUSES-PARITY (2026-09-30): size `max_uses` explicitly from
+        // the chunk count instead of leaving it unset (server default of
+        // 10), same fix as `ChatFileAttachmentSender.send`. Numerically a
+        // no-op today — `totalChunks` is always 1 for this single-shot
+        // format, and `computeMaxUses(totalChunks: 1)` floors to the same
+        // 10 the server would already default to — but it stops this call
+        // site from silently relying on that undocumented server default,
+        // and it means a larger max_uses follows automatically without
+        // another fix here if this format ever stops being single-shot.
         var dl: [String: GroupDownloadEntry] = [:]
         let recipients = members.filter { $0 != selfId && !$0.isEmpty }
         for member in recipients {
             do {
                 let issued = try await provider.downloadTokenClient.issueToken(
-                    fileId: fileId, recipientUserId: member)
+                    fileId: fileId, recipientUserId: member,
+                    maxUses: BCryptoDownloadTokenClient.computeMaxUses(totalChunks: totalChunks).map { Int($0) })
                 dl[member] = GroupDownloadEntry(
                     tok: issued.tokenHex, exp: issued.expiresAtMs, max: issued.maxUses)
             } catch {
@@ -161,7 +178,7 @@ final class GroupAttachmentSender {
             keyB64: keyBytes.base64EncodedString(),
             filename: filename,
             chunkSize: 262144,
-            totalChunks: 1,
+            totalChunks: totalChunks,
             width: width,
             height: height,
             blurhash: nil,
