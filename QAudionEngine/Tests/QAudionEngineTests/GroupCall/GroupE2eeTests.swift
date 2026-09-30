@@ -109,7 +109,8 @@ final class GroupKeyEnvelopeTests: XCTestCase {
 
     func testMediaKeyRoundTrip() throws {
         let key = Data((0..<32).map { UInt8($0) })
-        let original = GroupKeyEnvelope.mediaKey(callId: "call-1", epoch: 19, index: 3, key: key)
+        let original = GroupKeyEnvelope.mediaKey(callId: "call-1", epoch: 19, index: 3, key: key,
+                                                 pseudonym: GroupCallFixtures.pseudoB)
         let json = try XCTUnwrap(original.encode())
         XCTAssertEqual(GroupKeyEnvelope.parse(json: json), .envelope(original))
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
@@ -118,6 +119,7 @@ final class GroupKeyEnvelopeTests: XCTestCase {
         XCTAssertEqual(object["g"] as? String, "call-1")
         XCTAssertEqual(object["e"] as? Int, 19)
         XCTAssertEqual(object["k"] as? Int, 3)
+        XCTAssertEqual(object["p"] as? String, GroupCallFixtures.pseudoB, "the sender's own pseudonym (spec 12.5)")
         XCTAssertEqual(object["key"] as? String, key.base64EncodedString())
     }
 
@@ -146,14 +148,18 @@ final class GroupKeyEnvelopeTests: XCTestCase {
             return false
         }
         let goodKey = Data(repeating: 7, count: 32).base64EncodedString()
+        let p = GroupCallFixtures.pseudoB
         XCTAssertTrue(malformed("not json"))
         XCTAssertTrue(malformed(#"{"qa_grp":2,"g":"c","e":1}"#), "no type")
-        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","e":1,"k":1,"key":"\#(goodKey)"}"#), "no call id")
-        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","k":1,"key":"\#(goodKey)"}"#), "no epoch")
-        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":17,"k":2,"key":"\#(goodKey)"}"#), "index must be epoch mod 16")
-        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"key":"AAAA"}"#), "key must be 32 bytes")
-        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"key":"***"}"#))
-        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":-1,"k":15,"key":"\#(goodKey)"}"#))
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","e":1,"k":1,"p":"\#(p)","key":"\#(goodKey)"}"#), "no call id")
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","k":1,"p":"\#(p)","key":"\#(goodKey)"}"#), "no epoch")
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":17,"k":2,"p":"\#(p)","key":"\#(goodKey)"}"#), "index must be epoch mod 16")
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"p":"\#(p)","key":"AAAA"}"#), "key must be 32 bytes")
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"p":"\#(p)","key":"***"}"#))
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":-1,"k":15,"p":"\#(p)","key":"\#(goodKey)"}"#))
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"key":"\#(goodKey)"}"#), "the sender's pseudonym is required")
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"p":"not-a-pseudonym","key":"\#(goodKey)"}"#), "a pseudonym is 32 lowercase hex")
+        XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"media_key","g":"c","e":1,"k":1,"p":7,"key":"\#(goodKey)"}"#))
         XCTAssertTrue(malformed(#"{"qa_grp":2,"t":"surprise","g":"c","e":1}"#))
     }
 }
@@ -176,8 +182,10 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         return (GroupE2eeCoordinator(callId: call, selfUserId: selfUser, environment: env, config: config), env)
     }
 
-    private func mediaKey(epoch: UInt32, fill: UInt8) -> GroupKeyEnvelope {
-        .mediaKey(callId: call, epoch: epoch, index: GroupE2ee.keyIndex(forEpoch: epoch), key: Data(repeating: fill, count: 32))
+    /// A `media_key` as `userB` sends it, unless `pseudonym` says otherwise.
+    private func mediaKey(epoch: UInt32, fill: UInt8, pseudonym: String = GroupCallFixtures.pseudoB) -> GroupKeyEnvelope {
+        .mediaKey(callId: call, epoch: epoch, index: GroupE2ee.keyIndex(forEpoch: epoch), key: Data(repeating: fill, count: 32),
+                  pseudonym: pseudonym)
     }
 
     // MARK: own key
@@ -189,7 +197,8 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         let sent = env.parsedSent()
         XCTAssertEqual(Set(sent.map { $0.user }), [userB, userC])
         for item in sent {
-            XCTAssertEqual(item.envelope, .mediaKey(callId: call, epoch: 5, index: 5, key: Data(repeating: 1, count: 32)))
+            XCTAssertEqual(item.envelope, .mediaKey(callId: call, epoch: 5, index: 5, key: Data(repeating: 1, count: 32),
+                                                    pseudonym: GroupCallFixtures.pseudoA))
         }
         XCTAssertTrue(env.sendIndexes.isEmpty, "the send index only moves after the acks or the wait")
         XCTAssertEqual(env.e2eeEvents(), ["key_sent"])
@@ -301,7 +310,7 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         coordinator.onEnvelope(.nack(callId: call, epoch: 6), from: userC)
         let toC = env.parsedSent().filter { $0.user == userC }.map { $0.envelope }
         XCTAssertEqual(toC.count, 1)
-        guard case .mediaKey(_, let epoch, _, _)? = toC.first else { return XCTFail("expected a media key") }
+        guard case .mediaKey(_, let epoch, _, _, _)? = toC.first else { return XCTFail("expected a media key") }
         XCTAssertEqual(epoch, 7)
     }
 
@@ -412,7 +421,10 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         config.pendingLimit = 2
         let (coordinator, env) = make(config: config)
         coordinator.onRoster(epoch: 1, members: [selfUser], pseudonyms: [selfUser: GroupCallFixtures.pseudoA])
-        for i in 0..<5 { coordinator.onEnvelope(mediaKey(epoch: UInt32(2 + i), fill: UInt8(i + 1)), from: "u-\(i)") }
+        for i in 0..<5 {
+            coordinator.onEnvelope(mediaKey(epoch: UInt32(2 + i), fill: UInt8(i + 1), pseudonym: String(repeating: "d\(i)", count: 16)),
+                                   from: "u-\(i)")
+        }
         env.installs.removeAll()
         var all = pseudonyms
         for i in 0..<5 { all["u-\(i)"] = String(repeating: "d\(i)", count: 16) }
@@ -425,7 +437,8 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         coordinator.onRoster(epoch: 1, members: [selfUser, userB], pseudonyms: pseudonyms)
         env.installs.removeAll()
         env.sent.removeAll()
-        coordinator.onEnvelope(.mediaKey(callId: "other", epoch: 1, index: 1, key: Data(repeating: 1, count: 32)), from: userB)
+        coordinator.onEnvelope(.mediaKey(callId: "other", epoch: 1, index: 1, key: Data(repeating: 1, count: 32),
+                                         pseudonym: GroupCallFixtures.pseudoB), from: userB)
         coordinator.onEnvelope(mediaKey(epoch: 1, fill: 1), from: selfUser)
         XCTAssertTrue(env.installs.isEmpty)
         XCTAssertTrue(env.sent.isEmpty)
@@ -498,7 +511,8 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         coordinator.onEnvelope(.nack(callId: call, epoch: 3), from: userB)
         coordinator.onEnvelope(.nack(callId: call, epoch: 3), from: userB)
         XCTAssertEqual(env.parsedSent().count, 1)
-        XCTAssertEqual(env.parsedSent()[0].envelope, .mediaKey(callId: call, epoch: 3, index: 3, key: Data(repeating: 1, count: 32)))
+        XCTAssertEqual(env.parsedSent()[0].envelope, .mediaKey(callId: call, epoch: 3, index: 3, key: Data(repeating: 1, count: 32),
+                                                               pseudonym: GroupCallFixtures.pseudoA))
         env.now += 600
         coordinator.onEnvelope(.nack(callId: call, epoch: 3), from: userB)
         XCTAssertEqual(env.parsedSent().count, 2)

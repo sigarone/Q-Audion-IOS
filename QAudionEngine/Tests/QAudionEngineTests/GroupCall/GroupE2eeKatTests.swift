@@ -243,7 +243,8 @@ final class GroupE2eeKatTests: XCTestCase {
                     let source = try XCTUnwrap(v.cases.first { $0.participantId == scenario.participantId && $0.epoch == epoch },
                                                "\(scenario.name): no vector for epoch \(epoch)")
                     coordinator.onEnvelope(
-                        .mediaKey(callId: "kat-call", epoch: epoch, index: GroupE2ee.keyIndex(forEpoch: epoch), key: source.key),
+                        .mediaKey(callId: "kat-call", epoch: epoch, index: GroupE2ee.keyIndex(forEpoch: epoch), key: source.key,
+                                  pseudonym: owner.participantId),
                         from: owner.user)
                 }
                 // What the coordinator handed to the native key provider since the last step.
@@ -276,7 +277,8 @@ final class GroupE2eeKatTests: XCTestCase {
         env.installs.removeAll()
         for c in v.cases where c.frame == "opus" {
             let user = try XCTUnwrap(v.senders.first { $0.participantId == c.participantId }).user
-            coordinator.onEnvelope(.mediaKey(callId: "kat-call", epoch: c.epoch, index: Int32(c.keyIndex), key: c.key), from: user)
+            coordinator.onEnvelope(.mediaKey(callId: "kat-call", epoch: c.epoch, index: Int32(c.keyIndex), key: c.key,
+                                             pseudonym: c.participantId), from: user)
         }
         XCTAssertEqual(env.installs.count, 34, "17 epochs x 2 senders")
         for c in v.cases where c.frame == "opus" {

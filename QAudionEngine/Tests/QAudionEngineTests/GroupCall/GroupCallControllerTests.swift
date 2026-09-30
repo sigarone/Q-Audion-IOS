@@ -238,9 +238,11 @@ final class ControllerHarness: @unchecked Sendable {
 
 final class GroupCallControllerTests: XCTestCase {
 
-    private func keyEnvelope(epoch: UInt32, from fill: UInt8, callId: String = ControllerHarness.callId) -> String {
+    /// A `media_key` as `peerB` sends it (its own pseudonym in `p`), unless told otherwise.
+    private func keyEnvelope(epoch: UInt32, from fill: UInt8, callId: String = ControllerHarness.callId,
+                             pseudonym: String = ControllerHarness.pseudoB) -> String {
         GroupKeyEnvelope.mediaKey(callId: callId, epoch: epoch, index: GroupE2ee.keyIndex(forEpoch: epoch),
-                                  key: GroupCallFixtures.keyBytes(fill)).encode()!
+                                  key: GroupCallFixtures.keyBytes(fill), pseudonym: pseudonym).encode()!
     }
 
     // MARK: media join / ready
@@ -311,12 +313,13 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertEqual(own?.key.count, 32)
         // The sent envelopes carry exactly that key.
         for entry in h.control {
-            guard case .envelope(.mediaKey(_, let epoch, let index, let key)) = GroupKeyEnvelope.parse(json: entry.json) else {
+            guard case .envelope(.mediaKey(_, let epoch, let index, let key, let pseudonym)) = GroupKeyEnvelope.parse(json: entry.json) else {
                 return XCTFail("not a media_key envelope")
             }
             XCTAssertEqual(epoch, 1)
             XCTAssertEqual(index, 1)
             XCTAssertEqual(key, own?.key)
+            XCTAssertEqual(pseudonym, ControllerHarness.pseudoSelf, "p is the sender's own pseudonym (spec 12.5)")
         }
         h.controller.leave()
     }
