@@ -1335,7 +1335,9 @@ shapes. `supports_group_sender_keys` and `supports_raw_key_aes256` are gone (alw
   "media": { "node_id", "pseudonyms": { "<user_id>":"<32 hex>", ... } } }   // media once a node hosts the call
 ```
 `sender_key_epoch` is server-authoritative: 1 at create, +1 on EVERY real roster change (join,
-leave, drop after the 20 s grace, kick). An idempotent re-join, a non-member's leave and the
+leave, drop after the 20 s grace, kick), and +1 after 30 minutes without any change (periodic
+rekey: the same `group_call_update`, nobody is kicked or admitted; every epoch change restarts
+the 30 minute countdown). An idempotent re-join, a non-member's leave and the
 publication of `media` change nothing. A removed member is evicted at qjanus BEFORE the new epoch
 is broadcast. Pseudonyms are 128-bit random hex, fresh per call and per roster join.
 
@@ -1348,14 +1350,16 @@ group_call_media_ready { call_id, node_id, ws_url, room, pseudonym, session_toke
 group_call_media_unavailable { call_id, reason: no_node | room_create_failed | not_member | full }
 ```
 `room` is a random 128-bit hex id (never the call id). `session_token` is a Janus core signed
-token valid for `ttl_s` = 600 seconds; `join_token` is the room's per-member `allowed` token.
+token valid for `ttl_s` = 600 seconds; `join_token` is the room's per-member `allowed` token, `<pseudonym>:<32 lowercase hex>`
+(qjanus accepts it only for a publisher join whose id is that pseudonym).
 `dtls_fingerprint` (`sha-256 AB:CD:...`) is the node's fixed certificate, which the client pins
 against the SDP. `ice_servers` carry per-call TURN credentials (username `<expiry>:<pseudonym>`,
 TTL 2 h). There is no relay fallback: `unavailable` is an error. `group_call_media_join` is
 idempotent for a current participant: sending it again (clients do so hourly to renew the TURN
 credentials) returns the same room, pseudonym and join token with a fresh `session_token` and
 `ice_servers`; nothing is kicked or re-added and the epoch does not move. Repeated requests
-within 250 ms from one member are dropped without an answer.
+within 250 ms from one member are dropped without an answer, and a user is limited to 20
+media_join / media_rejoin requests per minute across all their calls (the excess is dropped too).
 
 ### 10.3 Session token refresh
 Janus re-validates the signed token on every request, keepalives included, so a client that
@@ -1364,7 +1368,7 @@ any WebSocket reconnect. The server answers the requester with
 `group_call_media_token {call_id, session_token, ttl_s:600}` (S->C) only if the requester is a
 current member and the room exists; every other case is
 `group_call_media_unavailable {call_id, reason:"not_member"}`. At most one refresh per 5 s per
-member is answered; the excess is dropped without a reply. The client uses the newest token for
+member, and 12 per minute per user, is answered; the excess is dropped without a reply. The client uses the newest token for
 all later Janus requests.
 
 ### 10.4 Node failure
