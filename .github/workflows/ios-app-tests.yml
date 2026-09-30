@@ -162,6 +162,21 @@ jobs:
             2>&1 | tee app-tests.log \
           || (echo ""; echo "=== TESTS FAILED -- last 300 lines of app-tests.log ==="; tail -300 app-tests.log; exit 1)
 
+      # The host app tees stdout/stderr, which swallows XCTest's per-case
+      # lines from the step above, so read the result bundle instead and
+      # refuse a "green" run that executed nothing.
+      - name: Check app-target test results
+        run: |
+          set -e
+          xcrun xcresulttool get test-results summary --path /tmp/app-tests.xcresult | tee /tmp/app-tests-summary.json
+          PASSED=$(grep -oE '"passedTests"[^0-9]*[0-9]+' /tmp/app-tests-summary.json | grep -oE '[0-9]+$' | head -1)
+          FAILED=$(grep -oE '"failedTests"[^0-9]*[0-9]+' /tmp/app-tests-summary.json | grep -oE '[0-9]+$' | head -1)
+          echo "passed=${PASSED:-?} failed=${FAILED:-?}"
+          if [ -z "$PASSED" ] || [ "$PASSED" -eq 0 ] || [ "${FAILED:-0}" -ne 0 ]; then
+            echo "::error::app-target tests did not run cleanly (passed=${PASSED:-?} failed=${FAILED:-?})"
+            exit 1
+          fi
+
       - name: Upload logs
         if: always()
         continue-on-error: true
