@@ -113,4 +113,45 @@ final class BCryptoDownloadTokenClientTests: XCTestCase {
         let result = BCryptoDownloadTokenClient.computeMaxUses(totalChunks: Int.max / 2)
         XCTAssertEqual(result, BCryptoDownloadTokenClient.maxDownloadTokenMaxUses)
     }
+
+    // MARK: - computeMaxUses(byteLength:) — single-shot blobs (voice note,
+    // group attachment, avatar). ChatVoiceNoteSenderMaxUsesTests in the app
+    // target pins the sender-side delegate; the arithmetic itself is covered
+    // here, by the engine job that runs on every PR.
+
+    func test_chunkCount_nonPositiveByteLength_isZero() {
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: 0), 0)
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: -1), 0)
+    }
+
+    func test_chunkCount_roundsUpToTheNextWholeChunk() {
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: 1), 1)
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: 65_536), 1)
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: 65_537), 2)
+        // ~180 KB voice note: 2 * 65 536 < 184 320 <= 3 * 65 536.
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: 184_320), 3)
+        XCTAssertEqual(BCryptoDownloadTokenClient.chunkCount(forByteLength: 128 * 65_536), 128)
+    }
+
+    func test_chunkCount_hugeByteLength_doesNotOverflow() {
+        XCTAssertGreaterThan(BCryptoDownloadTokenClient.chunkCount(forByteLength: Int.max), 0)
+    }
+
+    func test_computeMaxUsesByteLength_unknownSize_returnsNil() {
+        XCTAssertNil(BCryptoDownloadTokenClient.computeMaxUses(byteLength: 0))
+        XCTAssertNil(BCryptoDownloadTokenClient.computeMaxUses(byteLength: -5))
+    }
+
+    func test_computeMaxUsesByteLength_avatarSizedBlob_hitsTheFloor() {
+        // A JPEG avatar is a few hundred KB at most: well under the 4 MiB
+        // threshold for a first extra restart, so it floors to the same 10 the
+        // server would default to, now requested explicitly.
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(byteLength: 300_000), 10)
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(byteLength: 184_320), 10)
+    }
+
+    func test_computeMaxUsesByteLength_largeBlob_scalesAboveTheFloor() {
+        // 8 MiB = 128 chunks: same value the totalChunks KAT pins for 128.
+        XCTAssertEqual(BCryptoDownloadTokenClient.computeMaxUses(byteLength: 128 * 65_536), 12)
+    }
 }

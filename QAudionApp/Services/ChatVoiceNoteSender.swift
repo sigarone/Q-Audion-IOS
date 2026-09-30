@@ -85,10 +85,13 @@ final class ChatVoiceNoteSender {
     /// note/photo).
     ///
     /// **Visible for tests** so the sizing is pinned by KAT — same
-    /// convention as `BCryptoDownloadTokenClient.computeMaxUses`.
+    /// convention as `BCryptoDownloadTokenClient.computeMaxUses`. The
+    /// arithmetic itself lives in the engine
+    /// (`BCryptoDownloadTokenClient.chunkCount(forByteLength:)`), where CI
+    /// runs its KAT; this stays as the sender-side name existing call sites
+    /// (and `ChatVoiceNoteSenderMaxUsesTests`) use.
     static func chunkCountForMaxUses(byteLength: Int) -> Int {
-        guard byteLength > 0 else { return 0 }
-        return (byteLength + ChatFileAttachmentSender.defaultChunkSize - 1) / ChatFileAttachmentSender.defaultChunkSize
+        BCryptoDownloadTokenClient.chunkCount(forByteLength: byteLength)
     }
 
     /// Encrypt + upload + mint token → return the JSON marker text ready
