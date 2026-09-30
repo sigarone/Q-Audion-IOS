@@ -23,8 +23,19 @@ import QAudionEngine
 ///      parsing — acceptable for the realistic content sizes this pipeline
 ///      serves today (photos, voice notes, general files) and consistent
 ///      with every other iOS attachment receiver, all of which already
-///      single-shot download. A true streaming receiver is a follow-up if
-///      multi-GB "generic file" sends turn out to need it.
+///      single-shot download. A true streaming receiver (item E of the
+///      2026-09-30 file-transfer plan) is left for phase 1b.
+///
+///      W-FT1A-AG (2026-09-30, items A-iOS + G) — this single GET now goes
+///      through `BCryptoRestClient.getFileEndpoint` (reached via
+///      `downloadTokenClient.downloadCiphertext` / `storageApi.downloadFile`
+///      below), which (a) always targets the node that actually stores the
+///      file, never wherever the general node selector has since moved to,
+///      and (b) retries a transient 429/5xx with backoff, honouring the
+///      server's `Retry-After` — this used to be exactly one attempt, ever,
+///      with no resume. `describeDownloadFailure` below turns whatever is
+///      left after those retries into a message that names the failure
+///      class instead of `BCryptoError`'s generic bridged-NSError text.
 ///   4. Parse sequential `ChunkRecord`s (8 B header: u32BE chunkIdx +
 ///      u32BE ciphertextLen, then ciphertext), verify the chunk index
 ///      matches the expected sequence (anti-reorder), and
@@ -204,7 +215,7 @@ final class ChatFileAttachmentReceiver {
                 blob = try await provider.storageApi.downloadFile(fileId: envelope.tusFileId)
             }
         } catch {
-            throw ReceiveError.downloadFailed(error.localizedDescription)
+            throw ReceiveError.downloadFailed(Self.describeDownloadFailure(error))
         }
 
         // Parse + decrypt sequential ChunkRecords.
@@ -306,6 +317,30 @@ final class ChatFileAttachmentReceiver {
     }
 
     // MARK: - Helpers
+
+    /// W-FT1A-A (2026-09-30 file-transfer plan) — a clear, status-based
+    /// message for a failed attachment download. `BCryptoError` is not
+    /// `LocalizedError`, so `error.localizedDescription` on it renders as
+    /// an opaque bridged-NSError string ("The operation couldn't be
+    /// completed…"), not something a user or a support log can act on —
+    /// this is the "clear error message" half of item A's receiver fix
+    /// (the retry-with-backoff half lives in `BCryptoRestClient
+    /// .getFileEndpoint`, which this error is thrown AFTER exhausting).
+    /// Never includes the fileId, filename, or any token material — only
+    /// the failure class, matching this codebase's no-sensitive-values
+    /// logging rule.
+    private static func describeDownloadFailure(_ error: Error) -> String {
+        switch error {
+        case BCryptoError.httpError(let code):
+            return "il server ha risposto con codice \(code) dopo i tentativi di ripetizione"
+        case BCryptoError.paymentRequired:
+            return "il nodo che ospita il file richiede un account Pro"
+        case BCryptoError.unauthorized:
+            return "sessione scaduta — riprova ad accedere"
+        default:
+            return String(describing: error)
+        }
+    }
 
     private static func beUInt32(_ d: Data, at offset: Int) -> UInt32 {
         let base = d.startIndex
