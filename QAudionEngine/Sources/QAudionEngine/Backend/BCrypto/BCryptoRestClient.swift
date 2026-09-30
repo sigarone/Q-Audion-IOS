@@ -473,10 +473,15 @@ public final class BCryptoRestClient {
 
     /// The certificate-pinned primary this client was constructed
     /// against — see `primaryServerUrl`'s own doc for why it never
-    /// changes after `updateConfig`. Exposed (module-internal only) for
-    /// callers that must reach the primary directly regardless of
-    /// where the selector has since moved `config.serverUrl` (item G).
-    var pinnedPrimaryServerUrl: String { primaryServerUrl }
+    /// changes after `updateConfig`. `public` (not module-internal
+    /// anymore) since `AppState.filesServerUrl` (QAudionApp) also reads
+    /// this now, for the same reason the in-module callers
+    /// (`BCryptoDownloadTokenClient`, `BCryptoStorageApiImpl`) do: legacy
+    /// `/api/v1/files/{id}` avatar/thumbnail URLs must keep pointing at
+    /// the node that actually stores the file even after `ServerSelector`
+    /// moves `serverUrl` to a failover node with no shared storage
+    /// (item G).
+    public var pinnedPrimaryServerUrl: String { primaryServerUrl }
 
     /// One request attempt against the pinned primary, refreshing the
     /// access token once on a 401 — the same single refresh-and-retry

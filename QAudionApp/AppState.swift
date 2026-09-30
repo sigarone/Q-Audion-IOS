@@ -2327,6 +2327,35 @@ final class AppState: ObservableObject {
     /// `https://api.qaudion.com` was a placeholder that broke real
     /// logins; it's been wiped.
     @Published var serverUrl: String = PinnedServerHost.url
+
+    /// The certificate-pinned primary host for legacy `/api/v1/files/{id}`
+    /// avatar/thumbnail downloads — NOT `serverUrl`. `ServerSelector` can
+    /// legitimately move `serverUrl` to a DR/failover node for calling/
+    /// signaling reasons (see `BCryptoRestClient.pinnedPrimaryServerUrl`'s
+    /// own doc); that node has no shared file storage, so a file URL built
+    /// from `serverUrl` 404s/402s once a failover happens. Callers that
+    /// build a `/api/v1/files/{id}` URL should read this instead of
+    /// `serverUrl` — everything else (calling, WS, profile…) keeps using
+    /// `serverUrl` unchanged.
+    ///
+    /// Falls back to `serverUrl` only when there is no live provider yet
+    /// (e.g. before first connect) — nothing else to pin against at that
+    /// point. Selection logic factored into `Self.resolveFilesServerUrl`
+    /// so it's testable as a pure function (see
+    /// `AppStateFilesServerUrlTests`).
+    var filesServerUrl: String {
+        Self.resolveFilesServerUrl(
+            pinnedPrimary: liveProvider?.getRestClient().pinnedPrimaryServerUrl,
+            fallback: serverUrl)
+    }
+
+    /// Pure selection rule behind `filesServerUrl`: prefer the pinned
+    /// primary, fall back to the general `serverUrl` only when there is no
+    /// pinned value (no live provider yet).
+    static func resolveFilesServerUrl(pinnedPrimary: String?, fallback: String) -> String {
+        pinnedPrimary ?? fallback
+    }
+
     @Published var connectionStatus: String = "not_configured"  // "connected", "connecting", "error", "not_configured"
     @Published var backendMode: String = "bcrypto_only"  // "bcrypto_only" — only the BCrypto backend is supported
 
