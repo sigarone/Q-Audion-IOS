@@ -20,13 +20,11 @@ import XCTest
 /// this selection logic is a pure function testable without a live
 /// provider, network, or server config.
 ///
-/// NOTE (not yet wired into a build target): same gap `HeroPresenceLabelTests`
-/// /`PeerTrustEvaluatorTests` document — this repo has no `QAudionAppTests`
-/// XCTest target in `QAudionApp/project.yml` today, only `QAudionEngine`
-/// ships a runnable `swift test` / `xcodebuild test` harness. Written
-/// against that gap (a small, mechanical `project.yml` addition later)
-/// rather than left untested — this session has no macOS/Xcode/Swift
-/// toolchain available to validate either the test or a project.yml change.
+/// Wired into CI: this file is on the include list of
+/// `QAudionApp/project-apptests.yml` (an app-hosted unit-test bundle limited to
+/// the files listed there) and runs in `.github/workflows/ios-app-tests.yml`.
+/// The rest of `QAudionAppTests/` still has no target. Keep this file pure: it
+/// must not need a Keychain or engine static state.
 ///
 /// `@MainActor` on the class (review fix, 2026-09-30): `AppState` itself
 /// is `@MainActor`, which isolates ALL of its members, including static

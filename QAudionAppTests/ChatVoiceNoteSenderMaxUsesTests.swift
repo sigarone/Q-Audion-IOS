@@ -10,14 +10,13 @@ import QAudionEngine
 /// no real per-chunk split to read a count off (single-shot
 /// `FileTransfer.upload`/`resumeUpload` blob — see the helper's own doc).
 ///
-/// Same gap `DisplayNameTests.swift`/`PeerTrustEvaluatorTests.swift` already
-/// document: no `QAudionAppTests` target is wired in `QAudionApp/project.yml`
-/// yet, and no Xcode/Swift toolchain is available in this session (Windows,
-/// no macOS/Xcode) to compile or run this file. Written against that gap
-/// rather than left unwritten — UNVERIFIED BY COMPILATION, reviewed
-/// carefully by hand against `ChatVoiceNoteSender.swift`'s actual
-/// implementation and against `BCryptoDownloadTokenClientTests`' own
-/// `computeMaxUses` KAT instead.
+/// Wired into CI: this file is on the include list of
+/// `QAudionApp/project-apptests.yml` (an app-hosted unit-test bundle limited to
+/// the files listed there) and runs in `.github/workflows/ios-app-tests.yml`.
+/// The rest of `QAudionAppTests/` still has no target. The arithmetic under
+/// test also has its own engine KATs (`BCryptoDownloadTokenClientTests`,
+/// `chunkCount(forByteLength:)`), so this file only pins the sender-side
+/// delegate plus the end-to-end sizing through `computeMaxUses`.
 ///
 /// `@MainActor` on the class (not just the methods under test): both
 /// `ChatVoiceNoteSender` and `ChatFileAttachmentSender` are themselves

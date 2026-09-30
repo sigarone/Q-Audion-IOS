@@ -1,0 +1,52 @@
+# XcodeGen spec used ONLY by .github/workflows/ios-app-tests.yml.
+#
+# QAudionApp/project.yml (the spec ios-testflight.yml archives from) has no
+# test target, so everything under QAudionAppTests/ has never been compiled or
+# run. This overlay includes that spec unchanged and adds a unit-test bundle
+# hosted by the app, restricted to the files listed under `includes` below.
+# Nothing here reaches a release build, and the committed project.yml stays
+# untouched.
+#
+# The bundle compiles ONLY the listed files on purpose: the rest of
+# QAudionAppTests/ was written without a compiler (see the "not yet wired into
+# a build target" notes in those files) and is not known to build. Add a file
+# here, and its class to the -only-testing list in the workflow, once it has
+# been made to pass. Keep such tests pure: the bundle is hosted by the app, but
+# QAudionEngine is linked into both the app and this bundle, so engine STATIC
+# state (e.g. ContactsStore.testKeyOverride) is not shared between them. Tests
+# that need a ContactsStore or Keychain belong in QAudionEngineTests.
+
+include:
+  - project.yml
+
+targets:
+  QAudionAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionAppTests
+        includes:
+          - AppStateFilesServerUrlTests.swift
+          - ChatVoiceNoteSenderMaxUsesTests.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.tests
+        SWIFT_VERSION: "5.9"
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/QAudionApp.app/QAudionApp
+        BUNDLE_LOADER: $(TEST_HOST)
+    dependencies:
+      - target: QAudionApp
+      - package: QAudionEngine
+
+schemes:
+  QAudionAppTests:
+    build:
+      targets:
+        QAudionApp: all
+        QAudionAppTests: [test]
+    test:
+      config: Debug
+      targets:
+        - QAudionAppTests

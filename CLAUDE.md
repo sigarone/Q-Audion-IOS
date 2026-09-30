@@ -509,9 +509,10 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 5. **Treat Apple emails after upload as canonical**. The publish step reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
 7. **New testable logic (parsing, policy, formatting, decision functions) goes into `QAudionEngine`**, where
-   `engine-tests.yml` runs `QAudionEngineTests` on pushes to main/develop and on PRs. `QAudionAppTests/` is not wired into any
-   build target (`QAudionApp/project.yml` declares no unit-test target and no workflow runs that folder), so
-   app-level tests do not run today; keep the app side a thin call into the engine.
+   `engine-tests.yml` runs `QAudionEngineTests` on pushes to main/develop and on PRs. `QAudionAppTests/` has no target in
+   `QAudionApp/project.yml`; only the files listed in `QAudionApp/project-apptests.yml` are compiled and run (by
+   `.github/workflows/ios-app-tests.yml`, which also compile-checks the whole app on PRs). The rest of that folder was
+   written without a compiler and does not run, so keep the app side a thin call into the engine.
 
 ### 13. Swift type-checker timeout traps (Xcode 26.4)
 

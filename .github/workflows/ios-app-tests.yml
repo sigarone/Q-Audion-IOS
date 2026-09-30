@@ -1,0 +1,175 @@
+# GitHub Actions -- compile QAudionApp on every relevant PR and run the
+# app-target unit tests that have a wired target.
+#
+# Why this exists (2026-09-30): engine-tests.yml is the only workflow that
+# runs on PRs, and it only builds the QAudionEngine Swift package. Nothing
+# compiled QAudionApp (the SwiftUI app, ~all of AppState / the views / the
+# senders) until a v* tag hit ios-testflight.yml or someone dispatched
+# ios-ui-smoke.yml by hand, so an app-side compile error surfaced at release
+# time. And QAudionAppTests/ had no target at all in QAudionApp/project.yml,
+# so none of those tests ever ran.
+#
+# Step 1 is the ios-ui-smoke.yml build recipe (Simulator, Debug, ad-hoc
+# signing, QAudionPacketTunnel embed stripped from a LOCAL project.yml copy).
+# Step 2 regenerates the project from QAudionApp/project-apptests.yml, which
+# includes project.yml unchanged and adds an app-hosted unit-test bundle
+# restricted to an explicit list of test files (the rest of QAudionAppTests/
+# was written without a compiler and is not known to build). Extend both that
+# list and the -only-testing list below together.
+#
+# Runs on public-repo runners (free); no signing secrets, no network to any
+# real backend: the tests are pure.
+
+name: iOS App Build + App Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'QAudionApp/**'
+      - 'QAudionAppTests/**'
+      - 'QAudionEngine/**'
+      - 'QAudionIntents/**'
+      - 'QAudionBroadcastExtension/**'
+      - '.github/workflows/ios-app-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-app-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app-build-and-tests:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '26'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Same pattern as ios-testflight.yml / ios-ui-smoke.yml.
+      - name: Select Xcode
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
+
+      - name: Cache SPM packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      # QAudionPacketTunnel is DEVICE-ONLY (libwg-go.a has no Simulator
+      # slice) -- see ios-ui-smoke.yml for the full history. Stripped from a
+      # LOCAL copy of project.yml for this CI checkout only; the committed
+      # file and ios-testflight.yml's real device build are never touched.
+      - name: Strip QAudionPacketTunnel (Simulator lane only)
+        run: |
+          set -e
+          sed -i.bak \
+            -e '/- target: QAudionPacketTunnel/,+1d' \
+            QAudionApp/project.yml
+          rm QAudionApp/project.yml.bak
+          if grep -qE "target: QAudionPacketTunnel" QAudionApp/project.yml; then
+            echo "::error::sed failed to remove the PacketTunnel dependency lines"
+            exit 1
+          fi
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (release spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      # Ad-hoc local signing, not CODE_SIGNING_ALLOWED=NO: see the note above
+      # the same step in ios-ui-smoke.yml (entitlements must be embedded or
+      # the app crashes on Siri authorization at launch).
+      - name: Build QAudionApp for Simulator (compile check)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath /tmp/dd-ios-app \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee build-sim.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-sim.log ==="; tail -300 build-sim.log; exit 1)
+
+      - name: Generate Xcode project (with the app-test target)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-apptests.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -30
+
+      # -only-testing repeats the file list in project-apptests.yml on
+      # purpose: a class that is added there but forgotten here (or the other
+      # way round) should fail loudly instead of silently not running.
+      - name: Run app-target unit tests
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionAppTests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath /tmp/dd-ios-app \
+            -parallel-testing-enabled NO \
+            -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
+            -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \
+            -resultBundlePath /tmp/app-tests.xcresult \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee app-tests.log \
+          || (echo ""; echo "=== TESTS FAILED -- last 300 lines of app-tests.log ==="; tail -300 app-tests.log; exit 1)
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-app-tests-logs-${{ github.run_number }}
+          path: |
+            QAudionApp/build-sim.log
+            QAudionApp/app-tests.log
+          retention-days: 7
+          if-no-files-found: ignore
