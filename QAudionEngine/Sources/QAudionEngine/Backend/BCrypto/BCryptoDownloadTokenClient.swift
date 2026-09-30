@@ -126,6 +126,29 @@ public final class BCryptoDownloadTokenClient {
         return Int32(capped)
     }
 
+    /// The nominal unit `computeMaxUses(totalChunks:)` counts in — mirrors
+    /// `ChatFileAttachmentSender.defaultChunkSize` (64 KiB) in QAudionApp, kept
+    /// as a literal here for the same reason `chunksPerExtraRestart` is (a
+    /// stale value only shifts the size proxy slightly, never breaks a send).
+    static let nominalChunkBytes: Int = 65_536
+
+    /// Number of nominal 64 KiB units a blob of `byteLength` bytes spans,
+    /// rounded up; `0` for a non-positive length. For senders that upload a
+    /// single-shot blob (voice notes, group attachments, avatars) and so have
+    /// no real chunk split to read a count off, but still want
+    /// `computeMaxUses` sized off the transfer instead of the server's flat
+    /// default.
+    public static func chunkCount(forByteLength byteLength: Int) -> Int {
+        guard byteLength > 0 else { return 0 }
+        return (byteLength - 1) / nominalChunkBytes + 1
+    }
+
+    /// `computeMaxUses(totalChunks:)` for a single-shot blob of `byteLength`
+    /// bytes. `nil` (server default) when the length is not positive.
+    public static func computeMaxUses(byteLength: Int) -> Int32? {
+        computeMaxUses(totalChunks: chunkCount(forByteLength: byteLength))
+    }
+
     // MARK: - Recipient side
 
     /// Build the three required headers for `GET /api/v1/files/{id}`

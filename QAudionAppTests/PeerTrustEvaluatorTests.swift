@@ -146,4 +146,48 @@ final class PeerTrustEvaluatorTests: XCTestCase {
         XCTAssertEqual(reloaded?.presenceAuth, auth, "a manual SAS/QR verify is NOT an identity change -- presenceAuth must be untouched")
         XCTAssertEqual(reloaded?.presenceFloor, true)
     }
+
+    /// A manual verify must not reset what voice learning and completed calls
+    /// recorded (both used to be dropped by a hand-listed reconstruction).
+    /// The policy itself is pinned by `ContactsStoreTests
+    /// .test_withVerification_*` in QAudionEngineTests; this is the call-path
+    /// pin.
+    func test_markVerified_preservesVoiceAndCallVerifiedFields() {
+        let userId = makeTestUserId()
+        let store = ContactsStore()
+        let callKey = Data(repeating: 0x22, count: 32)
+        store.upsert(ContactsStore.StoredContact(
+            userId: userId, displayName: "Test Peer", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: callKey
+        ))
+
+        PeerTrustEvaluator.markVerified(peerUserId: userId, method: .qr, fingerprintHex: "somefingerprint")
+
+        let reloaded = store.load().first(where: { $0.userId == userId })
+        XCTAssertEqual(reloaded?.voiceVerifiedAt, 222)
+        XCTAssertEqual(reloaded?.callVerifiedPeerIdentityKey, callKey)
+    }
+
+    /// Key rotation: a voice match is about the person and survives; the
+    /// last call-verified key is the superseded one and is cleared. See
+    /// `StoredContact.afterIdentityKeyRotation()` for the reasoning.
+    func test_acceptNewFingerprint_keepsVoiceVerified_clearsCallVerifiedKey() {
+        let userId = makeTestUserId()
+        let store = ContactsStore()
+        store.upsert(ContactsStore.StoredContact(
+            userId: userId, displayName: "Test Peer", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: true,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32)
+        ))
+
+        PeerTrustEvaluator.acceptNewFingerprint(peerUserId: userId, newPeerIkEdPub: Data(repeating: 0x99, count: 32))
+
+        let reloaded = store.load().first(where: { $0.userId == userId })
+        XCTAssertEqual(reloaded?.isVerified, false)
+        XCTAssertEqual(reloaded?.voiceVerifiedAt, 222, "a voice match is not bound to the identity key")
+        XCTAssertNil(reloaded?.callVerifiedPeerIdentityKey, "the last call-verified key is the superseded one")
+    }
 }

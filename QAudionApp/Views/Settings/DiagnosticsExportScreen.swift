@@ -343,7 +343,7 @@ struct DiagnosticsExportScreen: View {
                     Text("Copia + condividi col maintainer. Lui può scaricare il dump via:")
                         .font(.system(size: 10))
                         .foregroundStyle(scheme.onSurfaceVariant)
-                    Text("curl -H \"Authorization: Bearer <admin>\" \(appState.serverUrl)/api/v1/files/\(id)")
+                    Text("curl -H \"Authorization: Bearer <admin>\" \(appState.filesServerUrl)/api/v1/files/\(id)")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .textSelection(.enabled)

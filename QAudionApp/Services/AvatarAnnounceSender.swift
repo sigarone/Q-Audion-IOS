@@ -121,9 +121,16 @@ final class AvatarAnnounceSender {
 
         let issued: IssuedDownloadToken
         do {
+            // W-MAXUSES-PARITY (2026-09-30): size `max_uses` from the blob
+            // instead of leaving it unset (server default of 10), same as the
+            // file / voice-note / group-attachment senders. An avatar is
+            // small, so today this floors to the same 10 the server already
+            // defaulted to; the explicit call keeps this sender from silently
+            // relying on that default and tracks the size if avatars grow.
             issued = try await provider.downloadTokenClient.issueToken(
                 fileId: fileId,
-                recipientUserId: recipientUserId
+                recipientUserId: recipientUserId,
+                maxUses: BCryptoDownloadTokenClient.computeMaxUses(byteLength: avatarJpegBytes.count).map { Int($0) }
             )
         } catch {
             throw SendError.tokenIssueFailed(error.localizedDescription)

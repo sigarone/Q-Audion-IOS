@@ -64,6 +64,36 @@ final class ChatVoiceNoteSender {
         self.appState = appState
     }
 
+    // MARK: - W-MAXUSES-PARITY (2026-09-30): max_uses sizing
+
+    /// Size a `qfile` download token's `max_uses` from the plaintext byte
+    /// length, mirroring the fix already applied to
+    /// `ChatFileAttachmentSender.send` — that sender mints its token from
+    /// `totalChunks`, a REAL count of 64 KiB `FileAttachmentWireFormat`
+    /// chunks it actually split the plaintext into for its own per-chunk
+    /// AEAD. The legacy `qfile` marker built here has no such split — it's
+    /// a single-shot `FileTransfer.upload`/`resumeUpload` blob, and
+    /// `baseMarker.qfile` only carries a plain byte `size` — so there is no
+    /// existing chunk count to read off. `BCryptoDownloadTokenClient
+    /// .computeMaxUses` only cares about `totalChunks` as a proxy for "how
+    /// many nominal `ChatFileAttachmentSender.defaultChunkSize` (64 KiB)
+    /// units does this transfer span" (see that function's own doc: it
+    /// sizes for repeated WHOLE-file GET restarts, not per-chunk reads), so
+    /// this reconstructs that same proxy from `byteLength` instead of
+    /// leaving `max_uses` unset (server default of 10 — no headroom for a
+    /// retried download or a re-open from another device on a large voice
+    /// note/photo).
+    ///
+    /// **Visible for tests** so the sizing is pinned by KAT — same
+    /// convention as `BCryptoDownloadTokenClient.computeMaxUses`. The
+    /// arithmetic itself lives in the engine
+    /// (`BCryptoDownloadTokenClient.chunkCount(forByteLength:)`), where CI
+    /// runs its KAT; this stays as the sender-side name existing call sites
+    /// (and `ChatVoiceNoteSenderMaxUsesTests`) use.
+    static func chunkCountForMaxUses(byteLength: Int) -> Int {
+        BCryptoDownloadTokenClient.chunkCount(forByteLength: byteLength)
+    }
+
     /// Encrypt + upload + mint token → return the JSON marker text ready
     /// to be encrypted as the plaintext of a normal `msg_send`.
     ///
@@ -312,7 +342,10 @@ final class ChatVoiceNoteSender {
         do {
             issued = try await provider.downloadTokenClient.issueToken(
                 fileId: baseMarker.qfile.fileId,
-                recipientUserId: recipientUserId
+                recipientUserId: recipientUserId,
+                maxUses: BCryptoDownloadTokenClient.computeMaxUses(
+                    totalChunks: Self.chunkCountForMaxUses(byteLength: baseMarker.qfile.size)
+                ).map { Int($0) }
             )
         } catch {
             throw Error.tokenIssueFailed(error.localizedDescription)
@@ -495,7 +528,10 @@ final class ChatVoiceNoteSender {
         do {
             issued = try await provider.downloadTokenClient.issueToken(
                 fileId: baseMarker.qfile.fileId,
-                recipientUserId: state.recipientUserId
+                recipientUserId: state.recipientUserId,
+                maxUses: BCryptoDownloadTokenClient.computeMaxUses(
+                    totalChunks: Self.chunkCountForMaxUses(byteLength: baseMarker.qfile.size)
+                ).map { Int($0) }
             )
         } catch {
             throw Error.tokenIssueFailed(error.localizedDescription)

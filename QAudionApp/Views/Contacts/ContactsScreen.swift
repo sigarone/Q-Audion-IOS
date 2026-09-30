@@ -276,16 +276,28 @@ struct ContactsScreen: View {
                     }
                     return
                 }
-                let contact = ContactsStore.StoredContact(
-                    userId: profile.userId,
-                    displayName: draft.displayName,
-                    phoneHash: "",
-                    avatarUrl: nil,
-                    lastSeen: nil,
-                    isVerified: false,
-                    extension: draft.extensionText
-                )
-                ContactsStore().upsert(contact)
+                // `upsert` is a full-row replace, and this is reachable for an
+                // account the address book already holds (adding a known
+                // contact again by its extension): a bare row here would wipe
+                // that contact's verification, pubkey, avatar and every other
+                // local fact. For a known account only the typed name and
+                // extension change.
+                let store = ContactsStore()
+                let contact: ContactsStore.StoredContact
+                if let existing = store.load().first(where: { $0.userId == profile.userId }) {
+                    contact = existing.withDisplayName(draft.displayName, extensionNumber: draft.extensionText)
+                } else {
+                    contact = ContactsStore.StoredContact(
+                        userId: profile.userId,
+                        displayName: draft.displayName,
+                        phoneHash: "",
+                        avatarUrl: nil,
+                        lastSeen: nil,
+                        isVerified: false,
+                        extension: draft.extensionText
+                    )
+                }
+                store.upsert(contact)
                 await MainActor.run {
                     snackbar?.show(.init(
                         text: String(localized: "contacts.contact_saved", defaultValue: "Contatto \(draft.displayName) salvato in rubrica.", comment: "Snackbar — a new contact was successfully saved to the address book; %@ is their display name"),

@@ -1054,7 +1054,7 @@ struct GroupChatScreen: View {
                 // Fase 1C — same "serverUrl + /api/v1/files/{fileId}"
                 // convention `AvatarUploader` uses for the profile avatar.
                 avatarUrl: entry.avatarRef.flatMap {
-                    URL(string: "\(appState.serverUrl)/api/v1/files/\($0)")
+                    URL(string: "\(appState.filesServerUrl)/api/v1/files/\($0)")
                 })
         }
         // Fase 2 — registry not populated yet (invite not accepted, or

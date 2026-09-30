@@ -413,13 +413,13 @@ final class ContactsStoreTests: XCTestCase {
         }
     }
 
-    // MARK: - PeerTrustEvaluator emergent-clear-on-identity-change contract
-    // (design brief: "rely on it, don't duplicate the logic" — see
-    // PeerTrustEvaluator.acceptNewFingerprint's own doc comment). This pins
-    // the MECHANISM (ContactsStore/StoredContact honour omitted-field-means-
-    // nil), independent of QAudionApp (which has no wired XCTest target —
-    // see QAudionAppTests/PeerTrustEvaluatorTests.swift for the real
-    // call-path pin and why it can't run in this repo today).
+    // MARK: - StoredContact.init omitted-field-means-nil default
+    // Historical pin: `PeerTrustEvaluator.acceptNewFingerprint` used to clear
+    // presenceAuth/presenceFloor by OMITTING them from a hand-written
+    // reconstruction. It now calls `afterIdentityKeyRotation()` (pinned by
+    // `test_afterIdentityKeyRotation_*` below); this only keeps the
+    // underlying `StoredContact.init` default (omitted field => nil, through
+    // the real store) covered.
 
     func test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil() {
         let auth = ContactsStore.PresenceAuth(
@@ -428,8 +428,8 @@ final class ContactsStoreTests: XCTestCase {
             witnessTier: "secure_element"
         )
         seedContact(presenceAuth: auth, presenceFloor: true)
-        // Mirrors PeerTrustEvaluator.acceptNewFingerprint's own reconstruction
-        // EXACTLY: every field threaded through from `existing` EXCEPT
+        // A hand-written reconstruction, as acceptNewFingerprint used to do it:
+        // every field threaded through from `existing` EXCEPT
         // presenceAuth/presenceFloor, which are simply omitted.
         // seedContact(...) above just upserted a contact with userId "u-1"; it is guaranteed present.
         // swiftlint:disable:next force_unwrapping
@@ -442,6 +442,259 @@ final class ContactsStoreTests: XCTestCase {
         let reloaded = store.load().first(where: { $0.userId == "u-1" })
         XCTAssertNil(reloaded?.presenceAuth, "identity-change reconstruction must clear presenceAuth as an emergent side effect of omission")
         XCTAssertNil(reloaded?.presenceFloor)
+    }
+
+    // MARK: - withDisplayName (AppState.refreshContactsCache field-drop fix,
+    // 2026-09-30)
+    //
+    // AppState.refreshContactsCache()'s placeholder-name migration pass used
+    // to reconstruct StoredContact by hand, listing every field by name —
+    // and silently dropped voiceVerifiedAt/callVerifiedPeerIdentityKey (both
+    // added to this struct after that call site was last updated) back to
+    // nil on every contact the pass renamed. Fixed by switching that call
+    // site to `withDisplayName(_:)`, defined right next to StoredContact,
+    // which threads every field it doesn't touch through by construction.
+    // This pins withDisplayName's own contract directly (the mechanism);
+    // `refreshContactsCache` itself lives on `AppState`, which — unlike
+    // `PeerTrustEvaluator`'s free functions — has no injection points and
+    // cannot practically be instantiated in a unit test, and QAudionApp has
+    // no wired XCTest target in this repo today regardless (see
+    // `test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil`
+    // above / QAudionAppTests/PeerTrustEvaluatorTests.swift for the same
+    // caveat), so there is no real call-path pin to add alongside this one.
+
+    func test_withDisplayName_replacesOnlyDisplayName_everyOtherFieldThreadsThrough() {
+        let auth = ContactsStore.PresenceAuth(
+            tier: .nfcPresent, keyFingerprint: "fp", peerIdentityKey: peerKeyA,
+            firstConfirmedCallId: "call-1", firstConfirmedAt: 1_000, confirmedCallCount: 1,
+            witnessTier: "secure_element"
+        )
+        let full = ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Interno 103", phoneHash: "abc",
+            avatarUrl: URL(string: "file:///avatar.jpg"), lastSeen: Date(timeIntervalSince1970: 500),
+            isVerified: true,
+            pubkey: Data(repeating: 0x11, count: 32),
+            verifiedFingerprintHex: String(repeating: "ab", count: 30),
+            verifiedAtMs: 111,
+            verificationMethod: "qr",
+            presenceAuth: auth,
+            presenceFloor: true,
+            phoneNumber: "+391234567890",
+            extension: "103",
+            avatarVersion: 7,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32),
+            proximityPairedAtMs: 333,
+            proximityServerConfirmed: true
+        )
+        let renamed = full.withDisplayName("Mario Rossi")
+        XCTAssertEqual(renamed.displayName, "Mario Rossi")
+        XCTAssertEqual(renamed.userId, full.userId)
+        XCTAssertEqual(renamed.phoneHash, full.phoneHash)
+        XCTAssertEqual(renamed.avatarUrl, full.avatarUrl)
+        XCTAssertEqual(renamed.lastSeen, full.lastSeen)
+        XCTAssertEqual(renamed.isVerified, full.isVerified)
+        XCTAssertEqual(renamed.pubkey, full.pubkey)
+        XCTAssertEqual(renamed.verifiedFingerprintHex, full.verifiedFingerprintHex)
+        XCTAssertEqual(renamed.verifiedAtMs, full.verifiedAtMs)
+        XCTAssertEqual(renamed.verificationMethod, full.verificationMethod)
+        XCTAssertEqual(renamed.presenceAuth, full.presenceAuth)
+        XCTAssertEqual(renamed.presenceFloor, full.presenceFloor)
+        XCTAssertEqual(renamed.phoneNumber, full.phoneNumber)
+        XCTAssertEqual(renamed.`extension`, full.`extension`)
+        XCTAssertEqual(renamed.avatarVersion, full.avatarVersion)
+        // The two fields this fix specifically targets — refreshContactsCache
+        // used to silently reset both of these to nil on every renamed contact.
+        XCTAssertEqual(renamed.voiceVerifiedAt, full.voiceVerifiedAt,
+                        "voiceVerifiedAt must survive a displayName-only rewrite")
+        XCTAssertEqual(renamed.callVerifiedPeerIdentityKey, full.callVerifiedPeerIdentityKey,
+                        "callVerifiedPeerIdentityKey must survive a displayName-only rewrite")
+        XCTAssertEqual(renamed.proximityPairedAtMs, full.proximityPairedAtMs)
+        XCTAssertEqual(renamed.proximityServerConfirmed, full.proximityServerConfirmed)
+    }
+
+    /// Same contract as the test above, but round-tripped through the real
+    /// store (encrypt/decrypt included) rather than asserted on the two
+    /// in-memory structs directly — same shape as
+    /// `test_reconstructingStoredContactWithoutPresenceFields_clearsThemToNil`
+    /// above but for the OPPOSITE outcome: these two fields must survive.
+    func test_withDisplayName_thenUpsert_preservesVoiceAndCallVerifiedFields() {
+        store.upsert(ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Interno 103", phoneHash: "abc",
+            avatarUrl: nil, lastSeen: nil, isVerified: false,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32)
+        ))
+        // Just upserted above with userId "u-1"; guaranteed present.
+        // swiftlint:disable:next force_unwrapping
+        let existing = store.load().first(where: { $0.userId == "u-1" })!
+        store.upsert(existing.withDisplayName("Mario Rossi"))
+        let reloaded = store.load().first(where: { $0.userId == "u-1" })
+        XCTAssertEqual(reloaded?.displayName, "Mario Rossi")
+        XCTAssertEqual(reloaded?.voiceVerifiedAt, 222)
+        XCTAssertEqual(reloaded?.callVerifiedPeerIdentityKey, Data(repeating: 0x22, count: 32))
+    }
+
+    // MARK: - Field-preserving copy helpers (every rebuild site, 2026-09-30)
+    //
+    // `withDisplayName(_:phoneHash:extensionNumber:)`, `withVerification` and
+    // `afterIdentityKeyRotation` are what the app's rebuild-an-existing-
+    // contact call sites use (NameResolutionService, ContactDetailScreen,
+    // ContactsScreen, PhonebookSyncCoordinator, ContactsRefreshService,
+    // PeerTrustEvaluator.markVerified / acceptNewFingerprint). The app target
+    // has no CI-run XCTest target, so the policy is pinned HERE: for each
+    // helper, exactly the intended fields change and nothing else does.
+
+    /// A contact with EVERY field populated, so a helper that forgets a field
+    /// shows up as a difference instead of a nil == nil non-event.
+    private func fullyPopulatedContact() -> ContactsStore.StoredContact {
+        let auth = ContactsStore.PresenceAuth(
+            tier: .nfcPresent, keyFingerprint: "fp", peerIdentityKey: peerKeyA,
+            firstConfirmedCallId: "call-1", firstConfirmedAt: 1_000, confirmedCallCount: 2,
+            witnessTier: "secure_element"
+        )
+        return ContactsStore.StoredContact(
+            userId: "u-1", displayName: "Interno 103", phoneHash: "hash-old",
+            avatarUrl: URL(string: "file:///avatar.jpg"), lastSeen: Date(timeIntervalSince1970: 500),
+            isVerified: false,
+            pubkey: Data(repeating: 0x11, count: 32),
+            verifiedFingerprintHex: String(repeating: "ab", count: 30),
+            verifiedAtMs: 111,
+            verificationMethod: "qr",
+            presenceAuth: auth,
+            presenceFloor: true,
+            phoneNumber: "+390000000000",
+            extension: "103",
+            avatarVersion: 7,
+            voiceVerifiedAt: 222,
+            callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32),
+            proximityPairedAtMs: 333,
+            proximityServerConfirmed: true
+        )
+    }
+
+    /// Labels of every stored property whose value differs between `a` and
+    /// `b`, via reflection: a field added to `StoredContact` later is compared
+    /// automatically, with no per-field assertion to forget to add.
+    private func changedFields(_ a: ContactsStore.StoredContact, _ b: ContactsStore.StoredContact) -> Set<String> {
+        var out = Set<String>()
+        for (x, y) in zip(Mirror(reflecting: a).children, Mirror(reflecting: b).children)
+        where "\(x.value)" != "\(y.value)" {
+            out.insert(x.label ?? "?")
+        }
+        return out
+    }
+
+    /// Guard for the tests below: they are only meaningful while the fixture
+    /// populates every field. When `StoredContact` gains a field this fails
+    /// until the fixture (and the helpers' intent) is updated on purpose.
+    func test_copyHelperFixture_populatesEveryStoredField() {
+        let children = Mirror(reflecting: fullyPopulatedContact()).children
+        XCTAssertEqual(children.count, 19,
+                       "StoredContact gained or lost a field: extend fullyPopulatedContact() and decide, per helper, whether the new field is preserved or cleared")
+        for child in children {
+            XCTAssertNotEqual("\(child.value)", "nil",
+                              "fixture leaves \(child.label ?? "?") nil, so a helper dropping it would go unnoticed")
+        }
+    }
+
+    func test_withDisplayName_changesOnlyTheName() {
+        let full = fullyPopulatedContact()
+        XCTAssertEqual(changedFields(full, full.withDisplayName("Mario Rossi")), ["displayName"])
+    }
+
+    func test_withDisplayName_optionalOverrides_changeOnlyWhatIsPassed() {
+        let full = fullyPopulatedContact()
+        XCTAssertEqual(
+            changedFields(full, full.withDisplayName("Mario Rossi", phoneHash: "hash-new")),
+            ["displayName", "phoneHash"])
+        XCTAssertEqual(
+            changedFields(full, full.withDisplayName("Mario Rossi", extensionNumber: "205")),
+            ["displayName", "extension"])
+        // nil means "leave as is", never "clear": a discovery entry that
+        // carries no hash must not blank the stored one.
+        let kept = full.withDisplayName("Mario Rossi", phoneHash: nil, extensionNumber: nil)
+        XCTAssertEqual(kept.phoneHash, "hash-old")
+        XCTAssertEqual(kept.`extension`, "103")
+    }
+
+    func test_withVerification_setsTheVerifyPinAndNothingElse() {
+        let full = fullyPopulatedContact()
+        let verified = full.withVerification(fingerprintHex: String(repeating: "cd", count: 30), atMs: 999, method: "anti-replay")
+        XCTAssertTrue(verified.isVerified)
+        XCTAssertEqual(verified.verifiedFingerprintHex, String(repeating: "cd", count: 30))
+        XCTAssertEqual(verified.verifiedAtMs, 999)
+        XCTAssertEqual(verified.verificationMethod, "anti-replay")
+        XCTAssertEqual(
+            changedFields(full, verified),
+            ["isVerified", "verifiedFingerprintHex", "verifiedAtMs", "verificationMethod"])
+        // The independent trust axes a manual verify must never touch.
+        XCTAssertEqual(verified.voiceVerifiedAt, 222)
+        XCTAssertEqual(verified.callVerifiedPeerIdentityKey, Data(repeating: 0x22, count: 32))
+        XCTAssertEqual(verified.presenceAuth, full.presenceAuth)
+        XCTAssertEqual(verified.presenceFloor, true)
+        XCTAssertEqual(verified.proximityPairedAtMs, 333)
+    }
+
+    /// Key rotation clears exactly the key-bound trust facts (verify pin, NFC
+    /// presence + floor, in-person pairing, last call-verified key) and keeps
+    /// the rest, in particular `voiceVerifiedAt`, which is about the person
+    /// and not about a key.
+    func test_afterIdentityKeyRotation_clearsKeyBoundVerificationAndKeepsTheRest() {
+        let seed = fullyPopulatedContact()
+            .withVerification(fingerprintHex: String(repeating: "ab", count: 30), atMs: 111, method: "qr")
+        XCTAssertTrue(seed.isVerified, "precondition")
+
+        let rotated = seed.afterIdentityKeyRotation()
+
+        XCTAssertFalse(rotated.isVerified)
+        XCTAssertNil(rotated.verifiedFingerprintHex)
+        XCTAssertNil(rotated.verifiedAtMs)
+        XCTAssertNil(rotated.verificationMethod)
+        XCTAssertNil(rotated.presenceAuth)
+        XCTAssertNil(rotated.presenceFloor)
+        XCTAssertNil(rotated.proximityPairedAtMs)
+        XCTAssertNil(rotated.proximityServerConfirmed)
+        XCTAssertNil(rotated.callVerifiedPeerIdentityKey)
+        XCTAssertEqual(
+            changedFields(seed, rotated),
+            ["isVerified", "verifiedFingerprintHex", "verifiedAtMs", "verificationMethod",
+             "presenceAuth", "presenceFloor", "proximityPairedAtMs", "proximityServerConfirmed",
+             "callVerifiedPeerIdentityKey"],
+            "a rotation must reset exactly these fields and no others")
+        // Kept on purpose.
+        XCTAssertEqual(rotated.voiceVerifiedAt, 222, "a voice match is about the person, not the key")
+        XCTAssertEqual(rotated.pubkey, seed.pubkey)
+        XCTAssertEqual(rotated.displayName, seed.displayName)
+        XCTAssertEqual(rotated.avatarUrl, seed.avatarUrl)
+        XCTAssertEqual(rotated.avatarVersion, seed.avatarVersion)
+        XCTAssertEqual(rotated.phoneNumber, seed.phoneNumber)
+        XCTAssertEqual(rotated.`extension`, seed.`extension`)
+    }
+
+    /// Same contract as the tests above, through the real store
+    /// (encrypt/decrypt included), the way `PeerTrustEvaluator.markVerified`
+    /// and `acceptNewFingerprint` persist the result.
+    func test_verificationHelpers_roundTripThroughTheStore() {
+        store.upsert(fullyPopulatedContact())
+        // Just upserted above with userId "u-1"; guaranteed present.
+        // swiftlint:disable:next force_unwrapping
+        let existing = store.load().first(where: { $0.userId == "u-1" })!
+
+        store.upsert(existing.withVerification(fingerprintHex: String(repeating: "ef", count: 30), atMs: 5, method: "voice"))
+        // Just upserted again with the same userId; guaranteed present.
+        // swiftlint:disable:next force_unwrapping
+        let verified = store.load().first(where: { $0.userId == "u-1" })!
+        XCTAssertTrue(verified.isVerified)
+        XCTAssertEqual(verified.voiceVerifiedAt, 222)
+        XCTAssertEqual(verified.callVerifiedPeerIdentityKey, Data(repeating: 0x22, count: 32))
+        XCTAssertEqual(verified.proximityPairedAtMs, 333)
+
+        store.upsert(verified.afterIdentityKeyRotation())
+        let rotated = store.load().first(where: { $0.userId == "u-1" })
+        XCTAssertEqual(rotated?.isVerified, false)
+        XCTAssertNil(rotated?.callVerifiedPeerIdentityKey)
+        XCTAssertEqual(rotated?.voiceVerifiedAt, 222)
     }
 
     // MARK: - W-AUTOSAVE — insertIfAbsentOrFillBlanks

@@ -696,7 +696,7 @@ struct ChatListScreen: View {
                 lastActivity: last?.ts ?? e.joinedAt,
                 unread: GroupMessageStore.shared.unreadCount(forGroupHex: e.id),
                 avatarUrl: e.avatarRef.flatMap {
-                    URL(string: "\(appState.serverUrl)/api/v1/files/\($0)")
+                    URL(string: "\(appState.filesServerUrl)/api/v1/files/\($0)")
                 })
         }
         .sorted { $0.lastActivity > $1.lastActivity }

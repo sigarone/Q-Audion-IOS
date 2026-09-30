@@ -291,22 +291,31 @@ final class PhonebookSyncCoordinator {
                 ?? entry.phoneNumber.flatMap { pn in normalized.first(where: { $0.phone == pn }) }
             guard let info else { continue }
             let uid = entry.userId
-            // E2EE avatar transport (2026-07-30) — this upsert is a
-            // full-row replace (pre-existing bulk-discovery semantics,
-            // unrelated fields unchanged), which would otherwise wipe
-            // an already-cached avatar for a peer we've been talking to
-            // before this sync ever runs. Preserve just the avatar
-            // pair — everything else keeps today's overwrite behavior.
-            let existingAvatar = contactsStore.load().first(where: { $0.userId == uid })
-            let stored = ContactsStore.StoredContact(
-                userId: uid,
-                displayName: info.name,
-                phoneHash: entry.phoneHash ?? "",
-                avatarUrl: existingAvatar?.avatarUrl,
-                lastSeen: nil,
-                isVerified: false,
-                avatarVersion: existingAvatar?.avatarVersion
-            )
+            // This upsert is a full-row replace. For a contact we already
+            // hold, discovery only tells us the phonebook name and the hash it
+            // resolved through; everything else in the row is local knowledge
+            // the directory has no opinion about and must survive a sync:
+            // verification (isVerified, verify pin, NFC presence, in-person
+            // pairing), pubkey, voice/call-verified state, phone number,
+            // extension, cached avatar. The old version of this block rebuilt
+            // the row with only the avatar pair carried over, so every
+            // phonebook refresh un-verified and stripped every contact it
+            // matched. `withDisplayName` copies the row and changes just the
+            // name and (when discovery reported one) the hash. A brand-new
+            // contact still gets the bare row.
+            let stored: ContactsStore.StoredContact
+            if let existing = contactsStore.load().first(where: { $0.userId == uid }) {
+                stored = existing.withDisplayName(info.name, phoneHash: entry.phoneHash)
+            } else {
+                stored = ContactsStore.StoredContact(
+                    userId: uid,
+                    displayName: info.name,
+                    phoneHash: entry.phoneHash ?? "",
+                    avatarUrl: nil,
+                    lastSeen: nil,
+                    isVerified: false
+                )
+            }
             contactsStore.upsert(stored)
             results.append(ResolvedMatch(
                 userId: uid,
