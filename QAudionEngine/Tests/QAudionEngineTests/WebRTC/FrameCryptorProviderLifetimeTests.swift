@@ -75,6 +75,19 @@ final class FrameCryptorProviderLifetimeTests: XCTestCase {
         }
     }
 
+    /// The native build now propagates `discard_frame_when_cryptor_not_ready` (it used to drop the
+    /// value): every provider must pass it explicitly as TRUE, so a frame is never rendered or
+    /// forwarded without a key (1:1 audio, 1:1 video, group).
+    func testEveryProviderDiscardsFramesWhileTheCryptorHasNoKey() throws {
+        for file in ["WebRTC/NativeAudioFrameCryptor.swift", "WebRTC/NativeVideoFrameCryptor.swift", "GroupCall/GroupFrameCryptorHub.swift"] {
+            let text = try source(file)
+            let start = try XCTUnwrap(text.range(of: "self.keyProvider = RTCFrameCryptorKeyProvider("), file)
+            let call = String(text[start.upperBound...].prefix(900))
+            XCTAssertEqual(occurrences(of: "discardFrameWhenCryptorNotReady: true", in: call), 1, file)
+            XCTAssertEqual(occurrences(of: "discardFrameWhenCryptorNotReady: false", in: text), 0, file)
+        }
+    }
+
     /// The PeerConnection hands out ONE cryptor per kind and only drops it in `close()`.
     func testPeerConnectionCachesCryptorsAndDropsThemOnlyInClose() throws {
         let text = try source("WebRTC/QAudionPeerConnection.swift")
