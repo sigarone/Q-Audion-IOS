@@ -2187,6 +2187,13 @@ public final class QAudionPeerConnection: NSObject {
         // preferences even against a peer that sends unmunged defaults.
         let baseMunged = AudioSdpPolicy.apply(sdp)
         let munged = NativeAudioSdpPolicy.apply(baseMunged, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
+        // Check (a) again on the EXACT text that is applied: the policies above only rewrite audio
+        // attributes, but what libwebrtc receives is what must carry the pinned fingerprint.
+        guard DtlsFingerprint.checkSdp(munged, expected: fpPeer) else {
+            reportDtlsFailure(stage: "sdp_remote")
+            completion(WebRTCError.dtlsFingerprint("sdp_remote"))
+            return
+        }
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
         pc.setRemoteDescription(desc, completionHandler: completion)
@@ -2376,6 +2383,13 @@ public final class QAudionPeerConnection: NSObject {
         }
         pc.statistics { [weak self] report in
             guard let self = self else { return }
+            // A newer transition to `connected` superseded this attempt while its stats call was in
+            // flight: that snapshot may pre-date the transition (a different DTLS session), so it must
+            // never open the gate the newer generation just closed. The newer attempt decides.
+            self.dtlsStateLock.lock()
+            let stillCurrent = (generation == self._dtlsStatsGeneration)
+            self.dtlsStateLock.unlock()
+            guard stillCurrent else { return }
             var records: [DtlsFingerprint.StatsRecord] = []
             for (_, stat) in report.statistics {
                 let type = stat.type

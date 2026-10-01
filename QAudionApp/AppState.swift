@@ -13888,7 +13888,20 @@ final class AppState: ObservableObject {
         }
         // Already decided (verified/wrong, or the 5000ms deadline already fired
         // `.absent`) — a late/duplicate KCMAC must not re-open the verdict.
-        guard !state.resultRecorded else { return }
+        guard !state.resultRecorded else {
+            // A re-key round: the peer's MAC for the NEXT round can overtake that round's own
+            // handshake completion on this side, i.e. arrive while only the previous (decided)
+            // round's state exists. Dropping it would let the next round's 5 s window expire and
+            // end a healthy call. A duplicate of the DECIDED round's own MAC verifies against that
+            // round and is dropped; anything else is held (one per call) for the next round's
+            // state, where it is verified fail-closed.
+            if callContactId == senderId,
+               !Self.isDuplicateOfDecidedKcMac(raw: raw, state: state) {
+                kcEarlyInbound[key] = (raw: raw, senderId: senderId)
+                print("[AppState] KCMAC early (next round) — held until the key-confirmation state exists callId=\(callId.prefix(8))…")
+            }
+            return
+        }
         guard let kcKey = state.kcKey, let transcript = state.transcript else {
             // `handleKcMacReady` already failed this call (no transcript to verify against).
             return
@@ -13923,6 +13936,18 @@ final class AppState: ObservableObject {
         state.resultRecorded = true
         state.deadlineTask?.cancel()
         emitKeyConfirmationTelemetry(callId: callId, state: state)
+    }
+
+    /// True when `raw` (a `KCMAC:` payload) is the peer's valid MAC for the round `state` already
+    /// decided, i.e. a retransmit of that round's own message.
+    private static func isDuplicateOfDecidedKcMac(raw: String, state: KeyConfirmationCallState) -> Bool {
+        guard let kcKey = state.kcKey, let transcript = state.transcript,
+              let bytes = Data(base64Encoded: raw), bytes.count == 33 else { return false }
+        let expectedPeerRole: UInt8 = state.isInitiator ? 0x02 : 0x01
+        guard bytes[bytes.startIndex] == expectedPeerRole else { return false }
+        let mac = Data(bytes.suffix(from: bytes.index(after: bytes.startIndex)))
+        return KeyConfirmation.verify(
+            received: mac, kcKey: kcKey, asInitiator: !state.isInitiator, transcript: transcript)
     }
 
     /// W-KCMAC/W-ASSURANCE/W-FLOOR/W-NFCBADGE — compute `AssuranceState.decide()`'s
@@ -17273,7 +17298,14 @@ final class AppState: ObservableObject {
                 // G7 — feeds a cryptor: assert against THIS outgoing call's
                 // own id (the same one the W369 transitional seed above was
                 // tagged with).
-                if let key = self.callPqcSessionKey(forCallId: nativeSrtpOutgoingCallId) {
+                // Transcript v5: the slot still holds the W369 TRANSITIONAL key (derived from the
+                // per-pair PSK or a deterministic fallback of the two user ids) until the real
+                // handshake key is counted (`callPqcRekeyEpoch >= 0`). The 1:1 frame keys derive
+                // from the session key and are the only thing between the media and a DTLS
+                // terminator, so a key that is not bound to the signed transcript must never
+                // reach the controller: the real key arrives through the push path.
+                if self.callPqcRekeyEpoch >= 0,
+                   let key = self.callPqcSessionKey(forCallId: nativeSrtpOutgoingCallId) {
             controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
             controller.pqcSessionKey = key
         }
